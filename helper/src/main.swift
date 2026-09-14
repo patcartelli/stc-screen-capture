@@ -167,6 +167,19 @@ final class App {
                 self.stop(reason: "stream-stopped")
             }
         }
+        // STC-370: a window-scope take's own window resizing or closing ends
+        // the take the same way — through App.stop(), never through the
+        // session's own stop() directly, for the identical reason onStreamDied
+        // is wired this way rather than calling session.stop() from inside
+        // CaptureSession: App.stop() is what resets App.state and sends the
+        // client its "stopped" reply.
+        session.onWindowChanged = { [weak self, weak session] reason in
+            DispatchQueue.main.async {
+                guard let self, let session,
+                      self.state == .recording, self.capture === session else { return }
+                self.stop(reason: reason)
+            }
+        }
         session.start(request: request) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }

@@ -130,6 +130,18 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// nothing ends the take until the user presses Stop. Called on SCK's
     /// delegate queue; the handler dispatches to main itself.
     var onStreamDied: ((Error) -> Void)?
+    /// Fired when a window-scope take's own window resizes or closes
+    /// mid-take (STC-370) — the window-watch twin of `onStreamDied`, same
+    /// reason: a `CaptureSession` must never call its OWN `stop()` directly,
+    /// because `App.stop()` is what actually resets `App.state` and sends
+    /// the client its `"stopped"` reply. Calling `session.stop()` here
+    /// instead would tear the capture down correctly but leave `App`
+    /// believing a recording is still live forever. Carries the reason
+    /// string ("window-resized"/"window-closed") rather than an `Error`,
+    /// since there is nothing to describe beyond which one happened. Called
+    /// off main (the watcher's own queue); the handler dispatches to main
+    /// itself, same as `onStreamDied`.
+    var onWindowChanged: ((String) -> Void)?
     /// How long a `start` may take before it is answered with `start-timeout`.
     /// Covers the WHOLE request — content enumeration included (STC-258).
     /// `helper/test/capture.test.ts` bounds its own waits above this; if this
@@ -411,11 +423,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             case .resized:
                 IO.send("warning", ["code": "window-resized-during-recording",
                                     "detail": "stopping cleanly — a window-scope take cannot change size mid-file"])
-                self.stop(reason: "window-resized")
+                self.onWindowChanged?("window-resized")
             case .gone:
                 IO.send("warning", ["code": "window-closed-during-recording",
                                     "detail": "stopping cleanly — the captured window is no longer on screen"])
-                self.stop(reason: "window-closed")
+                self.onWindowChanged?("window-closed")
             }
         }
         // Same race as the cursor sampler and the camera (HIGH 1's shape): a
@@ -449,7 +461,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
               fault == "window-resized" || fault == "window-closed" else { return }
         IO.log("STC_CAPTURE_FAULT=\(fault): the window watcher will report this in \(Self.windowFaultDelaySeconds) s")
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.windowFaultDelaySeconds) { [weak self] in
-            self?.stop(reason: fault)
+            self?.onWindowChanged?(fault)
         }
     }
 

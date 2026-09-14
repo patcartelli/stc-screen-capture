@@ -81,6 +81,16 @@ function reasonsInSwift(): string[] {
     const lits = [
       ...src.matchAll(/(?:stop|shutdown)\(reason:\s*"([^"]*)"/g),
       ...src.matchAll(/reason:\s*String\s*=\s*"([^"]*)"/g),
+      // STC-370: onWindowChanged carries a reason to App.stop(reason:) through
+      // a callback rather than a literal stop(reason: "…") call — the same
+      // shape onStreamDied already has, except onStreamDied's reason
+      // ("stream-stopped") is a literal at ITS call site (App.stop(reason:
+      // "stream-stopped")) while a window watch has two DIFFERENT reasons
+      // depending on what happened, so the literals live where they are
+      // DECIDED (onWindowChanged?("window-resized") in Capture.swift) rather
+      // than at the generic App.stop(reason: reason) call site that relays
+      // whichever one arrives.
+      ...src.matchAll(/onWindowChanged\?\(\s*"([^"]*)"\s*\)/g),
     ].map((m) => m[1]!);
     for (const lit of lits) {
       if (!lit.includes("\\(")) { out.add(lit); continue; }
