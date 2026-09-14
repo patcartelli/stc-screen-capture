@@ -1,15 +1,16 @@
 # STC-370 — region and window scope for recordings: what to run on the Mac
 
-Written on a Linux session with no `swiftc` and no ScreenCaptureKit, so
-**nothing below has run against a real display, a real window, or real
-hardware.** The Swift is compiled for the first time by CI or by `helper/build.sh`
-on a Mac. Every claim about how ScreenCaptureKit actually behaves — whether a
-window filter really follows a moving window, whether a resize changes frame
-dimensions mid-stream or simply keeps delivering the old ones, whether
-`CGWindowListCopyWindowInfo` reliably reports a closed window as absent rather
-than stale — is a *design decision made from documentation and the still
-path's own experience (STC-289)*, not a measurement. This runbook is what
-turns each one into a measurement.
+Written on a Linux session with no `swiftc` and no ScreenCaptureKit, so none
+of it had run against a real display, a real window, or real hardware when
+first written. **§§1-4 below are now RUN AND CONFIRMED on real hardware
+(2026-09-14, macOS, run manually against `helper/build/stc-helper` — not
+through this repo's own automated session).** Region capture, window capture,
+a real mid-take resize, a real mid-take close, and a real plain move were all
+driven by hand; results are recorded under each section rather than left as
+predictions. One design assumption from the original write-up was WRONG in
+the specific reason it predicted (§3b) — corrected below rather than quietly
+fixed, because a documented prediction that turned out wrong is worth more
+on the record than smoothed over.
 
 ## What changed
 
@@ -29,12 +30,14 @@ turns each one into a measurement.
   (`CaptureSession.windowWatchIntervalSeconds`) via `CGWindowListCopyWindowInfo`.
   A size change past half a point ends the take cleanly with
   `stop.reason: "window-resized"`; the window no longer being found ends it
-  with `"window-closed"`. A pure move is ignored — the design decision is
-  that `SCContentFilter(desktopIndependentWindow:)` follows the window as it
-  moves, so the frames should keep arriving at the same pixel size. **This is
-  the one claim in this ticket a Mac can prove wrong outright** — if a real
-  window move causes SCK to reframe or resize its output, the watcher's
-  "moves are safe" assumption is false and needs revisiting.
+  with `"window-closed"` — **though in practice, on hardware, an outright
+  close is normally caught first by the pre-existing stream-death path
+  (`"stream-stopped"`, STC-306) rather than this poll; see §3b.** A pure move
+  is ignored — the design decision is that
+  `SCContentFilter(desktopIndependentWindow:)` follows the window as it
+  moves, so the frames should keep arriving at the same pixel size. **This
+  was the one claim in this ticket a Mac could prove wrong outright, and it
+  held** — see §4.
 - `chooseDisplayForWindow` (which display a window belongs to) is now shared
   between the still path and the recording path, replacing a second inline
   copy that used to live in `Still.swift`.
@@ -62,7 +65,7 @@ None of that proves the SCK calls themselves work. That is what is left.
 ```
 mkdir -p /tmp/stc-region && \
 (echo '{"cmd":"start","dir":"/tmp/stc-region","region":{"x":100,"y":100,"width":800,"height":600},"seq":1}'; \
- sleep 3; echo '{"cmd":"stop","seq":2}') | helper/build/stc-helper 3>&1 | jq .
+ sleep 3; echo '{"cmd":"stop","seq":2}'; sleep 1) | helper/build/stc-helper 3>&1 | jq .
 ```
 
 Expect `started` naming a `capture` roughly 800×600 (times the display's
@@ -72,6 +75,19 @@ stops, `cat /tmp/stc-region/anchors.json | jq .scope` should show
 and `.version` should be `3`. Open `display.mp4` — it must show only the
 800×600 region of the screen, positioned where you asked, with no scaling
 artifacts.
+
+**CONFIRMED 2026-09-14.** `capture` came back 1600×1200 (800×600 at this
+machine's 2x backing scale, matching `captureSize`'s even-floor rule
+exactly), `scope`/`version` matched, and the video showed only that region,
+correctly positioned, no scaling artifacts. **Also found, unrelated to
+region/window scope itself:** the exact `(echo start; sleep N; echo stop) |
+helper` shell idiom this runbook uses loses the take entirely if the pipe
+closes right behind the `stop` line — the process can exit before the async
+teardown writes `anchors.json`/finalises `display.mp4` (confirmed: a
+`display.mp4` existed on disk but QuickTime refused to open it — no `moov`
+atom, because `finishWriting()` never got to run). Filed as STC-376. Every
+command below adds `; sleep 1` after the `stop` line for exactly this
+reason — do not drop it when adapting these commands.
 
 ## 2. Window scope, by hand
 
@@ -84,7 +100,7 @@ Pick an `id` for a real window (Finder, a browser, anything titled). Then:
 ```
 mkdir -p /tmp/stc-window && \
 (echo "{\"cmd\":\"start\",\"dir\":\"/tmp/stc-window\",\"windowId\":<ID>,\"seq\":1}"; \
- sleep 3; echo '{"cmd":"stop","seq":2}') | helper/build/stc-helper 3>&1 | jq .
+ sleep 3; echo '{"cmd":"stop","seq":2}'; sleep 1) | helper/build/stc-helper 3>&1 | jq .
 ```
 
 Expect `anchors.json`'s `scope.window.id` to match, `scope.window.bounds` to
@@ -92,6 +108,10 @@ match the window's real on-screen size, and `display.mp4` to show **only**
 that window — alpha is not the point here (that is the still path's
 `window-only` mode; a recording still writes an opaque frame), but the
 window's content should fill the frame with no desktop bleeding in around it.
+
+**CONFIRMED 2026-09-14** on a real Finder window: capture size, `scope.window`
+(id/app/title/bounds), and the video all matched — content filled the frame,
+no desktop around the edges.
 
 ## 3. The mid-take window watcher
 
@@ -104,9 +124,30 @@ is the step that tests the "moves are safe, resizes are not" design decision
 for real — if SCK behaved differently before this fires (delivering
 oddly-sized or torn frames), that shows up in the video.
 
+**CONFIRMED 2026-09-14, twice.** A deliberate corner-drag resize was caught
+within ~300 ms (well under the 1 Hz poll interval — it happened to land
+right behind a tick), `stop.reason` was `"window-resized"`, and the video
+played back cleanly with no corruption. Separately, an ACCIDENTAL resize
+(grabbed while trying to test a plain move, see §4) was caught identically —
+useful corroboration that detection isn't a fluke of one careful test.
+
 **3b — close, for real.** Start a window-scope recording, then quit or close
 the window's app. Expect the same clean stop, with `stop.reason:
 "window-closed"`.
+
+**PARTIALLY WRONG, CORRECTED 2026-09-14.** The take does stop cleanly — but
+`stop.reason` came back `"stream-stopped"`, not `"window-closed"`.
+`SCStream` itself dies (`didStopWithError`, the pre-existing STC-306 path)
+faster than this ticket's 1 Hz poll can notice the window is gone, so for an
+outright close the OLD mechanism wins the race and answers first; the new
+`window-closed` poll path never got a chance to fire. The take was still
+intact — sidecars correct (`scope.window` present and right), video played
+fine up to the close — so the SAFETY property holds; only the diagnosed
+REASON differs from what this ticket predicted. `window-closed` is not proven
+dead code: it should still be the path that fires for a window that
+disappears from `CGWindowListCopyWindowInfo`'s on-screen list WITHOUT killing
+the stream — minimising is the obvious candidate, and it was not tested here.
+If you get a spare minute, minimising instead of closing would settle that.
 
 **3c — the grant test's fault-injected version, which needs no manual
 resize/close at all:**
@@ -132,15 +173,21 @@ note above. If the take instead glitches, freezes on the old position, or
 stops, that decision was wrong and `decideWindowWatch`/the watcher need a
 size-AND-position check, not size alone.
 
-## Open questions only a Mac can answer
+**CONFIRMED 2026-09-14.** A pure move (position only, confirmed no resize)
+ran uninterrupted for the full recording — no unsolicited `warning` or
+`stopped`, stats kept incrementing normally until the take was ended by
+hand. `SCContentFilter(desktopIndependentWindow:)` does follow the window as
+it moves with no code needed here, as designed.
 
-- Does `SCContentFilter(desktopIndependentWindow:)` really follow a moving
-  window with no code needed here at all (§4), or does it need something
-  this ticket did not add?
-- Does a resize actually arrive as the watcher expects — a window whose
-  reported bounds changed size — or does ScreenCaptureKit itself notice
-  first and do something (freeze, distort, silently keep the old frame
-  size) that the polling watcher is too slow to catch cleanly?
-- Is 1 Hz (`windowWatchIntervalSeconds`) fast enough that a resize is caught
-  before very many wrong-sized or corrupted frames could even exist, or does
-  this need to be faster?
+## What is still open
+
+- **Minimising a window mid-take is untested.** §3b found that an outright
+  close is normally caught by the pre-existing stream-death path
+  (`"stream-stopped"`) before the 1 Hz poll gets a chance to say
+  `"window-closed"`. Minimising should be the case where the poll IS the
+  primary detector, since the stream plausibly keeps running while the
+  window is merely off-screen — but this was not tried.
+- 1 Hz (`windowWatchIntervalSeconds`) proved fast enough in practice (a
+  resize was caught in ~300 ms, well inside the interval, on the sample
+  size tested here — two resizes, one deliberate and one accidental). Not
+  stress-tested against a rapid resize-drag or a very large window.
