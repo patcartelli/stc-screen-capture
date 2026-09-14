@@ -56,6 +56,10 @@ contextBridge.exposeInMainWorld("recorder", {
     ipcRenderer.invoke("recorder:pickCaptureTarget", kind),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),
+  // STC-375: fire-and-forget, not invoke — nothing awaits an answer, and the
+  // pill's width can change several times a minute (a digit added to the
+  // timer). `send` rather than `invoke` is what keeps that cheap.
+  reportPillWidth: (px: number) => ipcRenderer.send("pill:contentWidth", px),
   // Share (STC-242) moved to the editor window with the rest of the player —
   // see `editor-preload.ts`. This window has no take open to publish.
   on: (event: string, cb: (payload: any) => void) => {

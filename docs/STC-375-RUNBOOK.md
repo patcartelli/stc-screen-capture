@@ -30,10 +30,24 @@ and back. That is this file's job.
 - `collapsePill` hides the traffic-light buttons (`setWindowButtonVisibility`)
   since there is no room for them in a 26px strip; `restorePill` brings them
   back.
-- The pill's own CONTENT — the dot, the live timer, the hatched level meter —
-  has no view yet. Until it does, the collapsed width is `MIN_PILL_WIDTH_PX`
-  (a fixed floor), not a real measurement of anything. That is stated in code
-  at the call site in `createWindow()`, not hidden.
+- **CONFIRMED ON HARDWARE, 2026-09-14**: a real Mac run showed the window
+  really does collapse to a pill-shaped 26px window (rounded corners, the
+  traffic light visible) — the mechanics above work. But the renderer had no
+  way to know its own window had shrunk, so it went on laying out the WHOLE
+  instrument UI at full size into that 26px viewport: visibly clipped
+  controls (screenshot on the PR), not a pill. Fixed the same day.
+- The pill now has real content: a live dot, the `mm:ss`/`h:mm:ss` timer
+  (`formatElapsedTimer`, driven by the same `elapsedMs` heartbeat field the
+  debug table already used), and the hatched level meter — see `#pill` in
+  `index.html`, wired up in `renderer.ts`. `collapsePill`/`restorePill` send
+  a `pill:state` IPC event so the page can hide everything else
+  (`body.pill-collapsed`) and, deliberately, keep `#pill` itself reachable as
+  a `<button>`: it is the ONLY way to stop a recording once collapsed, since
+  no hotkey covers it (`hotkeys.ts`'s `CAPTURE_ACTIONS` is stills only).
+  The collapsed WIDTH is now a real measurement too — `#pill` stays laid out
+  off-screen even while not collapsed so a `ResizeObserver` can report its
+  true content width to main (`pill:contentWidth`), replacing the
+  `MIN_PILL_WIDTH_PX` floor this file originally shipped with.
 
 ## 0. Build and the no-hardware checks
 
@@ -45,8 +59,10 @@ npm run typecheck && npm test
 `npm test` covers `app/test/pill.test.ts` (12 pure assertions: sizing clamp,
 the collapse/restore transition, the mm:ss/h:mm:ss timer format) and
 `app/test/pill.e2e.test.ts` (2 assertions: the real window's `resizable`/
-`alwaysOnTop` flags toggle on Record and un-toggle on both Stop and an
-unsolicited end). Nothing here needs a grant.
+`alwaysOnTop` flags toggle on Record and un-toggle on both the pill's own
+Stop click and an unsolicited end; the pill's DOM content — dot, meter,
+a moving timer — is real, and clicking it actually stops the take). Nothing
+here needs a grant.
 
 ## 1. Does it actually look like a pill
 
@@ -55,15 +71,22 @@ Launch the app normally (`npm run app:start`) and press Record.
 - Does the window really shrink to something pill-shaped, or does
   `titleBarStyle: "hidden"` leave a gap where the old title strip was —
   particularly at 26px tall, which is short even for an inset traffic-light
-  cluster? This is the specific thing this Linux sandbox could not check at
-  all (no WM to honour the resize), so this is the FIRST real look.
+  cluster? **CONFIRMED 2026-09-14: yes, a real pill shape, rounded corners
+  and all.**
 - Are the traffic lights actually hidden while collapsed, and do they come
   back looking normal (not misplaced, not needing a hover to reappear) once
   restored?
-- Content: there is no pill view yet, so the collapsed window right now is
-  just a bare, empty, 26px-tall strip at `MIN_PILL_WIDTH_PX` — this is
-  expected and not a bug to report. The dot/timer/meter is separate,
-  unscoped visual work.
+- The content: a red dot, the live timer, a hatched meter. Does the dot's
+  pulse read as "recording," or is it too subtle/too fast/too slow to
+  notice at 8px? Does the hatched meter read as "not live" (the point of
+  hatching it rather than drawing a fake level), or does it just look
+  broken? Is the whole pill legible against whatever is likely to be behind
+  it (light desktop backgrounds especially, since the pill itself is always
+  dark)?
+- Click the pill itself. It should stop the recording and restore the
+  window — the only reachable control while collapsed, by design (see
+  "What changed" above). Does clicking it feel like clicking a button, or
+  does the whole-pill hit target feel accidental / too easy to trigger?
 
 ## 2. Restore geometry
 

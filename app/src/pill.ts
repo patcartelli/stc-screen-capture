@@ -1,4 +1,4 @@
-import type { SupervisorState } from "./supervisor.js";
+import type { SupervisorState } from "./supervisor-state.js";
 
 /**
  * The floating pill's decisions (STC-375) — no DOM, no Electron.
@@ -8,6 +8,11 @@ import type { SupervisorState } from "./supervisor.js";
  * what the pill IS lives here, exercised with no window and no timer;
  * `pill-window.ts` owns the real `BrowserWindow` and the real resize calls
  * this module only describes.
+ *
+ * Also imported by `renderer.ts` now (`formatElapsedTimer`, for the pill's
+ * own timer readout), which is WHY the `SupervisorState` type comes from
+ * `supervisor-state.ts` rather than `supervisor.ts` — the same node-drag
+ * trap `library-items.ts` was split out of `library.ts` to avoid.
  *
  * ## The pill is not a new window
  *

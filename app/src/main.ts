@@ -60,6 +60,20 @@ const HELPER = process.env.STC_HELPER_BIN
 let win: BrowserWindow | undefined;
 let sup: HelperSupervisor | undefined;
 /**
+ * STC-375: the pill's real, renderer-measured content width — reported by
+ * `#pill`'s ResizeObserver (renderer.ts) over `pill:contentWidth`, fire-
+ * and-forget. `getContentWidthPx` below reads this SYNCHRONOUSLY when a
+ * heartbeat triggers a collapse; IPC has no synchronous request the other
+ * direction, so a cache kept current by the renderer's own pushes is the
+ * only way main can have a real number ready at the moment it needs one.
+ * Starts at the floor, matching what the window collapses to before the
+ * page has ever measured anything.
+ */
+let pillContentWidthPx = MIN_PILL_WIDTH_PX;
+ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
+  if (typeof px === "number" && Number.isFinite(px) && px > 0) pillContentWidthPx = px;
+});
+/**
  * The take each WINDOW may currently read, set only by preview:open.
  *
  * Keyed by `sender.id` rather than a single variable (STC-373): with the
@@ -142,12 +156,7 @@ function createWindow(): void {
   // a destroyed window is not a live one.
   if (sup) {
     const detachPill = attachPillToSupervisor(win, sup, {
-      // The pill has no view yet to measure real content from — that is
-      // unfinished visual work (the dot, the live timer, the hatched meter),
-      // not part of this wiring. Collapsing to the floor keeps the mechanism
-      // honest rather than a fabricated per-character width; swap this for a
-      // renderer-measured value once the pill's view exists.
-      getContentWidthPx: () => MIN_PILL_WIDTH_PX,
+      getContentWidthPx: () => pillContentWidthPx,
     });
     win.once("closed", detachPill);
   }

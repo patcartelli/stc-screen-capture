@@ -36,8 +36,10 @@ import { makeTakeFolder } from "./_take-fixture.js";
  *
  * What IS verified here: the mechanism actually fires, driven by the real
  * heartbeat and not the click (traps 1 and 3), toggles the two properties
- * that do not need a window manager, and does the same thing whether the
- * user stops the take or the helper ends it unsolicited.
+ * that do not need a window manager, does the same thing whether the user
+ * stops the take or the helper ends it unsolicited, and that the pill's own
+ * content (dot, live timer, hatched meter, and its Stop click) is real DOM
+ * state rather than a static placeholder.
  */
 const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
@@ -65,18 +67,18 @@ async function chrome(): Promise<{ resizable: boolean; alwaysOnTop: boolean }> {
 }
 
 /**
- * Whether the page has hidden its normal content in favour of the plain
- * dark strip. Real reported bug (screenshot, on a real Mac): the mechanism
- * above worked — a genuine 26px pill-shaped window — but the FULL instrument
- * UI was rendered clipped inside it, because the renderer had no way to know
- * its own window had shrunk. This is the one part of "does it look like a
- * pill" that IS checkable without a window manager: DOM state, not pixels.
+ * Whether the page has hidden its normal content in favour of the pill.
+ * Real reported bug (screenshot, on a real Mac): the mechanism above worked
+ * — a genuine 26px pill-shaped window — but the FULL instrument UI was
+ * rendered clipped inside it, because the renderer had no way to know its
+ * own window had shrunk. This is the one part of "does it look like a pill"
+ * that IS checkable without a window manager: DOM state, not pixels.
  */
 const isPillCollapsed = (win: Page): Promise<boolean> =>
   win.evaluate(() => document.body.classList.contains("pill-collapsed"));
 
 describe("the pill's collapse mechanism", () => {
-  test("Record locks resizing and floats the window; Stop undoes both", async () => {
+  test("Record locks resizing and floats the window; the pill's own Stop undoes both", async () => {
     const { win } = await launch();
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     expect(await chrome()).toEqual({ resizable: true, alwaysOnTop: false });
@@ -89,7 +91,23 @@ describe("the pill's collapse mechanism", () => {
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: false, alwaysOnTop: true });
     await expect.poll(() => isPillCollapsed(win), { timeout: 5_000 }).toBe(true);
 
-    await win.click("#record");
+    // #record itself is hidden now (index.html); #pill is the only reachable
+    // control, and it must actually contain the dot/timer/meter and a real,
+    // moving elapsed time — not just be present.
+    await expect.poll(() => win.isVisible("#record"), { timeout: 5_000 }).toBe(false);
+    expect(await win.isVisible("#pill")).toBe(true);
+    expect(await win.locator("#pill-dot").count()).toBe(1);
+    expect(await win.locator("#pill-meter").count()).toBe(1);
+    const timer1 = await win.textContent("#pill-timer");
+    expect(timer1).toMatch(/^\d{2}:\d{2}$/);
+    await expect.poll(() => win.textContent("#pill-timer"), { timeout: 5_000 })
+      .not.toBe(timer1);
+
+    // The pill itself is the Stop control — clicking it must do exactly what
+    // clicking #record would have, since it shares that click handler
+    // (renderer.ts). A real user has no other way to end this take: there
+    // is no hotkey for it (hotkeys.ts's CAPTURE_ACTIONS is stills only).
+    await win.click("#pill");
     await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: true, alwaysOnTop: false });
     await expect.poll(() => isPillCollapsed(win), { timeout: 5_000 }).toBe(false);

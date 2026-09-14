@@ -74,6 +74,8 @@ declare const recorder: {
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
   on(event: string, cb: (p: any) => void): () => void;
+  /** STC-375: the pill's measured content width, fire-and-forget. */
+  reportPillWidth(px: number): void;
 };
 
 import {
@@ -83,6 +85,7 @@ import {
 } from "./hotkeys.js";
 import { renderLibrary, type LibraryCallbacks } from "./library-view.js";
 import type { LibraryItem, LibraryList } from "./library-items.js";
+import { formatElapsedTimer } from "./pill.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
@@ -93,6 +96,25 @@ const recordBtn = $("record") as HTMLButtonElement;
 const stillBtn = $("capturestill") as HTMLButtonElement;
 const cameraBox = $("camera") as HTMLInputElement;
 let recording = false;
+
+// STC-375: the pill. It is only ever shown (body.pill-collapsed) while
+// recording, and its one job is to be the only thing that can stop that
+// recording — see index.html's #pill comment for why it must be a button.
+// Sharing #record's own click handler, rather than reimplementing start/stop
+// here, is what keeps there being exactly one place that decides what a
+// click on "the recording is running, end it" does.
+const pillBtn = $("pill") as HTMLButtonElement;
+const pillTimer = $("pill-timer");
+pillBtn.addEventListener("click", () => recordBtn.click());
+// #pill stays laid out off-screen even while not collapsed (index.html) so
+// its real content width is always measurable — this is what lets the
+// window collapse to the pill's actual content-width (pill-window.ts's
+// getContentWidthPx) instead of a fixed guess. Only its own content
+// (the timer digit count) can change that width; a ResizeObserver reports
+// it exactly when it does, rather than main polling for it.
+new ResizeObserver(() => {
+  recorder.reportPillWidth(Math.ceil(pillBtn.getBoundingClientRect().width));
+}).observe(pillBtn);
 
 /**
  * Opt-in, default off, sticky. The stored preference is the authority — main
@@ -539,6 +561,12 @@ recorder.on("helper:stats", (s) => {
   // take with no pointer motion still reads as one.
   $("cursorEvents").textContent = s.cursorEvents ?? "—";
   $("elapsed").textContent = s.elapsedMs != null ? `${(s.elapsedMs / 1000).toFixed(1)}s` : "—";
+  // The pill's own timer (STC-375) — same heartbeat, same elapsedMs, just
+  // formatted the way a small always-on-top strip needs rather than the
+  // debug table's one-decimal seconds. Harmless to update while #pill is
+  // off-screen: it is what makes "digit count changed" something the
+  // ResizeObserver above can ever see.
+  if (s.elapsedMs != null) pillTimer.textContent = formatElapsedTimer(s.elapsedMs);
 });
 
 /**

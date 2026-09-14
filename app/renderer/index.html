@@ -234,27 +234,60 @@
        goes on laying out the whole instrument at its normal size into a 26px
        viewport — clipped controls, not a pill.
 
-       Hides everything except #record (still reachable as #record-row's one
-       visible child, filling its width) — not a stray exception, a load-
-       bearing one: there is no hotkey and no other control that can stop a
-       recording (CAPTURE_ACTIONS in hotkeys.ts is stills only), so hiding
-       the button that reads "Stop" while collapsed would make an in-progress
-       take unstoppable from the window at all. Nothing else has an excuse to
-       stay: the profile sheet, the scope picker, the debug table, the take
-       grid all go, including the sheet if it happened to be open — a sliver
-       of a slide-over panel in a 26px window is its own kind of broken.
+       #pill is the whole pill: dot, live timer, hatched meter, and (this is
+       the load-bearing part) the only thing that can stop a recording once
+       collapsed — there is no hotkey for it (CAPTURE_ACTIONS in hotkeys.ts
+       is stills only) — so it is a <button>, not a <div>, and shares
+       #record's click handler (renderer.ts). Dark always (#0b0b0c/#f5f5f5,
+       matching pill.ts's PILL_THEME — the one color pairing in this app that
+       cannot be a shared token, since CSS cannot import a TS module): the
+       ticket's own reasoning is that this surface floats over someone else's
+       window for the length of a session, where light chrome has nothing
+       reliable to sit against, so it does not follow STC-372's light/dark
+       tokens the rest of the window does.
 
-       There is no real pill CONTENT view yet (the dot/timer/meter is
-       unscoped visual work — see pill.ts's header); #0b0b0c matches pill.ts's
-       PILL_THEME.background — the one color pairing in this app that cannot
-       be a shared token, since CSS cannot import a TS module. */
+       #pill stays in the layout (`position: fixed`, off-screen) even while
+       NOT collapsed, rather than `display: none` — a hidden element cannot
+       be measured, and `renderer.ts`'s ResizeObserver needs its real content
+       width to report to main (`pill:contentWidth`) so the window collapses
+       to the pill's actual content-width rather than a guess. It becomes
+       part of the visible page only under `.pill-collapsed`.
+
+       Everything else in #record-row is hidden when collapsed — the still-
+       capture button, the camera checkbox, the Profile button, the state
+       readout — and every OTHER row in the body (profile sheet included, if
+       it happened to be open: a sliver of a slide-over panel in a 26px
+       window is its own kind of broken). */
     body.pill-collapsed { background: #0b0b0c; overflow: hidden; padding: 0; margin: 0; }
     body.pill-collapsed > *:not(#record-row) { display: none; }
-    body.pill-collapsed #record-row > *:not(#record) { display: none; }
+    body.pill-collapsed #record-row > *:not(#pill) { display: none; }
     body.pill-collapsed #record-row { margin: 0; }
-    body.pill-collapsed #record {
-      width: 100%; margin: 0; border: none; border-radius: 0;
-      background: transparent; color: #f5f5f5;
+
+    #pill {
+      position: fixed; top: -9999px; left: -9999px; visibility: hidden;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 0 10px; height: 26px; box-sizing: border-box;
+      background: #0b0b0c; color: #f5f5f5; font: 12px/1 var(--font-mono);
+      border: none; border-radius: 13px; cursor: pointer;
+    }
+    body.pill-collapsed #pill {
+      position: static; top: auto; left: auto; visibility: visible;
+      width: 100%; height: 100%;
+    }
+    #pill-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex: none;
+      background: #ff3b30; animation: pill-live-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pill-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+    #pill-timer { flex: none; font-variant-numeric: tabular-nums; }
+    /* The level meter: hatched, NEVER a live reading — no audio capture
+       exists anywhere in the helper (mic deferred since phase 1), and the
+       ticket is explicit that drawing one "at a plausible level where it
+       would read as live" would be a lie. A static diagonal-stripe fill is
+       the one pattern that cannot be mistaken for a moving bar. */
+    #pill-meter {
+      width: 18px; height: 8px; border-radius: 2px; flex: none;
+      background: repeating-linear-gradient(45deg, #3a3a3c 0 2px, transparent 2px 4px);
     }
   </style>
 </head>
@@ -262,6 +295,11 @@
   <h1>stc recorder</h1>
   <div class="row" id="record-row">
     <button id="record">Record</button>
+    <button id="pill" aria-label="Stop recording">
+      <span id="pill-dot" aria-hidden="true"></span>
+      <span id="pill-timer">00:00</span>
+      <span id="pill-meter" aria-hidden="true"></span>
+    </button>
     <button id="capturestill" title="Select a region or a window and capture one frame">Capture still</button>
     <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
     <button id="profile" title="Still-capture preferences and shortcuts">Profile</button>
