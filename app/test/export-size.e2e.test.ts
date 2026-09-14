@@ -1,14 +1,14 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { exportManifestName } from "../src/share.js";
+import { launchApp, openEditorFromLibrary, openExportDialog, inkiness } from "./_editor-fixture.js";
 
 /** The committed fixture's take name — `makeTakeFolder`'s own default. */
 const TAKE_NAME = "2026-08-24_10-00-00";
 
-const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
@@ -34,29 +34,25 @@ function takeWithCapture(width: number, height: number, project?: unknown) {
   return { dir, takeDir };
 }
 
-async function openTake(dir: string) {
-  // The bundle is built once in vitest.global-setup.ts.
-  app = await electron.launch({
-    args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: dir },
-  });
-  const win = await app.firstWindow();
-  await win.waitForLoadState("domcontentloaded");
-  await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
-  await win.click("#takes >> text=Preview");
-  await expect.poll(() => win.isVisible("#player"), { timeout: 30_000 }).toBe(true);
-  return win;
+/** Open the take in the editor, with the export dialog (STC-373) — where `#outsize` lives now — open. */
+async function openTake(dir: string): Promise<Page> {
+  const { app: a, win } = await launchApp(dir);
+  app = a;
+  const editorWin = await openEditorFromLibrary(a, win);
+  await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+  await openExportDialog(editorWin);
+  return editorWin;
 }
 
 /** Every option's id, label, disabled state and whether it is the selection. */
-const options = (win: any) => win.evaluate(() => {
+const options = (win: Page) => win.evaluate(() => {
   const sel = document.getElementById("outsize") as HTMLSelectElement;
   return [...sel.options].map((o) => ({
     id: o.value, label: o.textContent ?? "", disabled: o.disabled, selected: o.value === sel.value,
   }));
 });
 
-const stageSize = (win: any) => win.evaluate(() => {
+const stageSize = (win: Page) => win.evaluate(() => {
   const c = document.getElementById("stage") as HTMLCanvasElement;
   return { width: c.width, height: c.height };
 });
@@ -70,13 +66,13 @@ const readProject = (takeDir: string) =>
 const readManifest = (takeDir: string) =>
   JSON.parse(readFileSync(join(takeDir, exportManifestName(TAKE_NAME)), "utf8"));
 
-describe("export size (STC-335)", () => {
+describe("export size (STC-335), inside the editor's export dialog (STC-373)", () => {
   test("a take offers its capture size and the presets, refusing the one that upscales", async () => {
     const { dir } = takeWithCapture(1920, 1080);
     const win = await openTake(dir);
 
     const opts = await options(win);
-    expect(opts.map((o: any) => o.id)).toEqual(["capture", "embed-1x", "embed-2x"]);
+    expect(opts.map((o) => o.id)).toEqual(["capture", "embed-1x", "embed-2x"]);
     expect(opts[0]).toMatchObject({ selected: true, disabled: false });
     expect(opts[0]!.label).toContain("1920×1080");
     expect(opts[1]).toMatchObject({ id: "embed-1x", disabled: false });
@@ -121,17 +117,25 @@ describe("export size (STC-335)", () => {
     // The round trip through projectForWrite and parseProject. Without it the
     // setting is a UI state that looks persisted until someone checks.
     const { dir, takeDir } = takeWithCapture(1920, 1080);
-    const win = await openTake(dir);
+    const { app: a, win: mainWin } = await launchApp(dir);
+    app = a;
+    let win = await openEditorFromLibrary(a, mainWin);
+    await expect.poll(() => inkiness(win), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await openExportDialog(win);
+
     await win.selectOption("#outsize", "embed-1x");
     await expect.poll(() => readProject(takeDir).output.width, { timeout: 20_000 }).toBe(1232);
 
+    const closed = win.waitForEvent("close");
+    await win.click("#closeexport");
     await win.click("#closepreview");
-    await expect.poll(() => win.isVisible("#player"), { timeout: 20_000 }).toBe(false);
-    await win.click("#takes >> text=Preview");
-    await expect.poll(() => win.isVisible("#player"), { timeout: 30_000 }).toBe(true);
+    await closed;
+    win = await openEditorFromLibrary(a, mainWin);
+    await expect.poll(() => inkiness(win), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await openExportDialog(win);
 
     const opts = await options(win);
-    expect(opts.find((o: any) => o.selected)!.id).toBe("embed-1x");
+    expect(opts.find((o) => o.selected)!.id).toBe("embed-1x");
     expect(await stageSize(win)).toEqual({ width: 1232, height: 694 });
   }, 90_000);
 
@@ -148,13 +152,13 @@ describe("export size (STC-335)", () => {
     const win = await openTake(dir);
 
     const opts = await options(win);
-    const sel = opts.find((o: any) => o.selected)!;
+    const sel = opts.find((o) => o.selected)!;
     expect(sel.id).toBe("custom");
     expect(sel.label).toContain("1600×900");
     expect(await stageSize(win)).toEqual({ width: 1600, height: 900 });
     // Still offered the real options beside it, so it is a choice rather than
     // a dead end.
-    expect(opts.map((o: any) => o.id)).toEqual(["custom", "capture", "embed-1x", "embed-2x"]);
+    expect(opts.map((o) => o.id)).toEqual(["custom", "capture", "embed-1x", "embed-2x"]);
   }, 60_000);
 });
 
@@ -165,7 +169,7 @@ describe("export size, the things that assumed it could not vary (STC-337)", () 
     // the select and the canvas then showed a size `project.json` did not have,
     // and it reverted on the next open with no further word.
     //
-    // The failure is REAL rather than injected: `recorder.closePreview()`
+    // The failure is REAL rather than injected: `window.editor.closePreview()`
     // clears main's `openTake` while the renderer's player is untouched, so the
     // next `preview:writeProject` refuses with "no take is open" through the
     // actual IPC. A fault flag would have tested the flag.
@@ -173,7 +177,7 @@ describe("export size, the things that assumed it could not vary (STC-337)", () 
     const win = await openTake(dir);
     expect(await stageSize(win)).toEqual({ width: 1920, height: 1080 });
 
-    await win.evaluate(() => (window as any).recorder.closePreview());
+    await win.evaluate(() => (window as any).editor.closePreview());
     await win.selectOption("#outsize", "embed-1x");
 
     await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
@@ -182,7 +186,7 @@ describe("export size, the things that assumed it could not vary (STC-337)", () 
     // the control the user is looking at, and the picture.
     expect(existsSync(join(takeDir, "project.json"))).toBe(false);
     const opts = await options(win);
-    expect(opts.find((o: any) => o.selected)!.id).toBe("capture");
+    expect(opts.find((o) => o.selected)!.id).toBe("capture");
     expect(await stageSize(win)).toEqual({ width: 1920, height: 1080 });
   }, 60_000);
 

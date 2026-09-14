@@ -128,15 +128,22 @@ describe("opening a take that cannot be read", () => {
 
     const win = await launch(dir);
     await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
-    await win.click("#takes >> text=Preview");
+    // Opening now means the editor window (STC-373); it opens regardless of
+    // whether the take turns out to be readable, since main has no way to
+    // know that before the renderer tries.
+    const [editorWin] = await Promise.all([
+      app!.waitForEvent("window"),
+      win.click("#takes >> text=Preview"),
+    ]);
+    await editorWin.waitForLoadState("domcontentloaded");
 
     // loadSession writes careful error messages; they must reach the user
     // rather than becoming an unhandled rejection nobody sees.
-    await expect.poll(() => win.locator("#alert").isVisible(), { timeout: 30_000 }).toBe(true);
-    expect(await win.textContent("#alert")).toMatch(/could not open|no frames|unreadable|failed/i);
+    await expect.poll(() => editorWin.locator("#alert").isVisible(), { timeout: 30_000 }).toBe(true);
+    expect(await editorWin.textContent("#alert")).toMatch(/could not open|no frames|unreadable|failed/i);
 
-    // The player must not be left half-open, and the app must stay usable.
-    expect(await win.isVisible("#player")).toBe(false);
+    // The main window (and its library) must stay usable regardless.
+    await editorWin.close();
     expect(await win.locator("#takes >> text=Preview").isEnabled()).toBe(true);
   }, 120_000);
 });

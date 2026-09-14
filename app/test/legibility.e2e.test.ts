@@ -1,8 +1,9 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { launchApp, openEditorFromLibrary, openExportDialog, inkiness } from "./_editor-fixture.js";
 
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
@@ -32,23 +33,20 @@ function takeWithDisplay(pointWidth: number, project?: unknown) {
   return { dir, takeDir };
 }
 
-async function openTake(dir: string, extraEnv: Record<string, string> = {}) {
-  app = await electron.launch({
-    args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: dir, ...extraEnv },
-  });
-  const win = await app.firstWindow();
-  await win.waitForLoadState("domcontentloaded");
-  await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
-  await win.click("#takes >> text=Preview");
-  await expect.poll(() => win.isVisible("#player"), { timeout: 30_000 }).toBe(true);
-  return win;
+/** Open the take in the editor, with its export dialog (legibility lives there now) already open. */
+async function openTake(dir: string, extraEnv: Record<string, string> = {}): Promise<Page> {
+  const launched = await launchApp(dir, extraEnv);
+  app = launched.app;
+  const editorWin = await openEditorFromLibrary(app, launched.win);
+  await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+  await openExportDialog(editorWin);
+  return editorWin;
 }
 
-const sentence = (win: any) => win.textContent("#legibility");
-const isWarning = (win: any) =>
+const sentence = (win: Page) => win.textContent("#legibility");
+const isWarning = (win: Page) =>
   win.evaluate(() => document.getElementById("legibility")!.classList.contains("warn"));
-const stageSize = (win: any) => win.evaluate(() => {
+const stageSize = (win: Page) => win.evaluate(() => {
   const c = document.getElementById("stage") as HTMLCanvasElement;
   return { width: c.width, height: c.height };
 });
@@ -57,12 +55,12 @@ const stageSize = (win: any) => win.evaluate(() => {
  * What the canvas is DISPLAYED at, which is a different question from what it
  * is rendered at — and the one a canvas-size assertion cannot ask.
  */
-const stageCssWidth = (win: any) => win.evaluate(() =>
+const stageCssWidth = (win: Page) => win.evaluate(() =>
   Math.round(document.getElementById("stage")!.getBoundingClientRect().width));
 const readProject = (takeDir: string) =>
   JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8"));
 
-describe("legibility at embed width (STC-318)", () => {
+describe("legibility at embed width (STC-318), inside the editor's export dialog (STC-373)", () => {
   test("a retina-width display reads the figure and does not warn", async () => {
     // 13 * 1232 / 1728 = 9.27px, over the 9px threshold.
     const { dir } = takeWithDisplay(1728);
@@ -75,12 +73,14 @@ describe("legibility at embed width (STC-318)", () => {
     // 13 * 1232 / 3840 = 4.17px. No font setting rescues this: it would need
     // 28pt. The answer is zoom or a smaller logical display, decided at
     // capture time — which is why this figure is worth having before the
-    // recording rather than after it.
+    // recording rather than after it. Warns, but does NOT block the export
+    // button (STC-373's own scope line).
     const { dir } = takeWithDisplay(3840);
     const win = await openTake(dir);
     expect(await sentence(win)).toContain("renders at 4.2px");
     expect(await sentence(win)).toContain("hard to read");
     expect(await isWarning(win)).toBe(true);
+    expect(await win.isEnabled("#export")).toBe(true);
   }, 60_000);
 
   test("the text size is per take and persists", async () => {
@@ -195,6 +195,8 @@ describe("legibility at embed width (STC-318)", () => {
     await expect.poll(() => stageSize(win), { timeout: 20_000 })
       .toEqual({ width: 1232, height: 694 });
 
+    // Save frame is a transport-bar action, outside the export dialog.
+    await win.click("#closeexport");
     await win.click("#saveframe");
     await expect.poll(() => existsSync(log) ? readFileSync(log, "utf8") : "",
                       { timeout: 20_000 }).toContain("export-still");
@@ -218,31 +220,34 @@ describe("legibility at embed width (STC-318)", () => {
     // fresh player whose `viewSize` is null and a checkbox reading OFF, on a
     // canvas still displayed at the old embed width.
     //
-    // Measured before the fix on this exact take: 1232 CSS px in a 465 px
-    // column, so the picture overflowed the player and scrolled — the toggle's
-    // effect with the toggle off, which is the same class of lie the pin was
-    // added to remove.
-    //
     // A canvas-SIZE assertion cannot see it, for the third time in this file:
     // the re-opened player renders at the export size perfectly correctly. It
     // is only what the element is DISPLAYED at that is wrong.
     const { dir } = takeWithDisplay(1728);
-    const win = await openTake(dir);
-    const before = await stageCssWidth(win);
+    const launched = await launchApp(dir);
+    app = launched.app;
+    let editorWin = await openEditorFromLibrary(app, launched.win);
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await openExportDialog(editorWin);
+    const before = await stageCssWidth(editorWin);
 
-    await win.check("#vieweye");
-    await expect.poll(() => stageCssWidth(win), { timeout: 20_000 }).toBe(1232);
+    await editorWin.check("#vieweye");
+    await expect.poll(() => stageCssWidth(editorWin), { timeout: 20_000 }).toBe(1232);
 
     // Closed with the toggle ON, which is the whole point — closing it with
-    // the toggle off passes with no fix at all.
-    await win.click("#closepreview");
-    await expect.poll(() => win.isVisible("#player"), { timeout: 20_000 }).toBe(false);
-    await win.click("#takes >> text=Preview");
-    await expect.poll(() => win.isVisible("#player"), { timeout: 30_000 }).toBe(true);
+    // the toggle off passes with no fix at all. `#closepreview` is outside
+    // the (modal) export dialog, so the dialog has to close first.
+    const closed = editorWin.waitForEvent("close");
+    await editorWin.click("#closeexport");
+    await editorWin.click("#closepreview");
+    await closed;
+    editorWin = await openEditorFromLibrary(app, launched.win);
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await openExportDialog(editorWin);
 
     // The checkbox was always right; it is the canvas that disagreed with it.
-    expect(await win.isChecked("#vieweye")).toBe(false);
-    expect(await stageCssWidth(win)).toBe(before);
+    expect(await editorWin.isChecked("#vieweye")).toBe(false);
+    expect(await stageCssWidth(editorWin)).toBe(before);
     // Not merely "it changed": 1232 is what it was wrongly stuck at, so a fix
     // that cleared the pin to some third width would pass a weaker check.
     expect(before).not.toBe(1232);
@@ -253,12 +258,10 @@ describe("legibility at embed width (STC-318)", () => {
     // Resizing the canvas while still calling render() with the export's
     // output is a plausible half-fix: the video still fills the frame, so it
     // looks right — and the cursor lands at the export's coordinates, drawn at
-    // the export's scale, into a smaller canvas. My first version of this test
-    // passed with exactly that mutation in place.
+    // the export's scale, into a smaller canvas.
     //
     // The discriminator is the cursor's position as a FRACTION of the canvas.
     // It is a property of the take, so it must not change with the view size.
-    // Under the mutation it scales by 1728/1232 — a 40% shift.
     //
     // The fixture makes this cheap: the video is a flat colour and the cursor
     // is the only near-white thing in the frame.
@@ -270,7 +273,10 @@ describe("legibility at embed width (STC-318)", () => {
       // steady, and it is a real project option rather than a test-only mode.
       cursor: { style: "circle", scale: 8 },
     }, null, 2));
-    const win = await openTake(dir);
+    const launched = await launchApp(dir);
+    app = launched.app;
+    const win = await openEditorFromLibrary(app, launched.win);
+    await expect.poll(() => inkiness(win), { timeout: 30_000 }).toBeGreaterThan(0.2);
     await win.fill("#scrub", "150");
     await win.dispatchEvent("#scrub", "input");
     await new Promise((r) => setTimeout(r, 1500));
@@ -293,6 +299,7 @@ describe("legibility at embed width (STC-318)", () => {
     expect(atExport!.n).toBeGreaterThan(200);
     expect(atExport!.w).toBe(1728);
 
+    await openExportDialog(win);
     await win.check("#vieweye");
     await expect.poll(() => stageSize(win), { timeout: 20_000 })
       .toEqual({ width: 1232, height: 694 });
@@ -305,12 +312,7 @@ describe("legibility at embed width (STC-318)", () => {
     // smaller canvas; the mutation shifts it by ~40% of the width.
     expect(atView!.x).toBeCloseTo(atExport!.x, 2);
     expect(atView!.y).toBeCloseTo(atExport!.y, 2);
-    // ...and the SIZE, which is the louder half of the same claim. The cursor
-    // is drawn at `cursor.scale * sx`, and `sx` is output.width/pointWidth —
-    // so its ink must stay the same FRACTION of the canvas. Under the mutation
-    // it is drawn at the export's scale into a smaller canvas and the fraction
-    // jumps by (1728/1232)^2, near enough double. The centroid alone caught
-    // that by 2.7x; this catches it by an order of magnitude more.
+    // ...and the SIZE, which is the louder half of the same claim.
     const inkFraction = (c: { n: number; w: number }, h: number) => c.n / (c.w * h);
     const exportInk = inkFraction(atExport!, 972);
     const viewInk = inkFraction(atView!, 693);

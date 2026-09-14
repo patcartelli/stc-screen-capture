@@ -12,31 +12,23 @@
  * (0..299) at 60 fps. Frame numbers below are that take's, not magic.
  */
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication } from "playwright";
 import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
-import { makeTakeFolder } from "./_take-fixture.js";
 import { MIN_TRIM_FRAMES, formatTimecode } from "../src/scrubber.js";
+import { launchWithTakeInEditor, openExportDialog } from "./_editor-fixture.js";
 
-const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
 const LAST_FRAME = 299;
 
+/** The timeline moved to its own window (STC-373) — everything below drives `editorWin`. */
 async function openPreview() {
-  const { dir, takeDir } = makeTakeFolder();
-  app = await electron.launch({
-    args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: dir },
-  });
-  const win = await app.firstWindow();
-  await win.waitForLoadState("domcontentloaded");
-  await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
-  await win.click("#takes >> text=Preview");
-  await expect.poll(() => win.isVisible("#player"), { timeout: 30_000 }).toBe(true);
-  await expect.poll(() => win.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
-  return { win, takeDir };
+  const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+  app = a;
+  await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
+  return { win: editorWin, takeDir };
 }
 
 /** The playhead, read off the control whose value IS the frame (rule 1). */
@@ -193,6 +185,8 @@ describe("the keyboard grammar (rule 8), through real keystrokes", () => {
     const { win } = await openPreview();
     await seekTo(win, 120);
     const before = await win.textContent("#triminfo");
+    // #textpt lives in the export dialog now (STC-373).
+    await openExportDialog(win);
     await win.click("#textpt");
     await win.fill("#textpt", "");
     await win.type("#textpt", "13");

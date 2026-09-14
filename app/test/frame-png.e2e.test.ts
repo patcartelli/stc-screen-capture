@@ -1,8 +1,8 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { makeTakeFolder } from "./_take-fixture.js";
+import { launchWithTakeInEditor } from "./_editor-fixture.js";
 
 /**
  * STC-298: the frame the playhead is on, as a PNG, copied or saved.
@@ -24,24 +24,23 @@ import { makeTakeFolder } from "./_take-fixture.js";
  * the pixels survive the whole trip out of the canvas, across IPC, through a
  * temp file and back out of ImageIO, which is the path every still in the app
  * takes.
+ *
+ * The frame-grab moved to the editor's own window with the rest of the player
+ * (STC-373) — `openTake()` hands back both, since the last test still renames
+ * the take from the main window's library.
  */
-const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
-async function openTake() {
-  const { dir, takeDir } = makeTakeFolder();
-  app = await electron.launch({ args: [root], cwd: root, env: { ...process.env, STC_RECORDINGS_DIR: dir } });
-  const win = await app.firstWindow();
-  await win.waitForLoadState("domcontentloaded");
-  await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
-  await win.click("#takes >> text=Preview");
-  await expect.poll(() => win.isVisible("#player"), { timeout: 30_000 }).toBe(true);
-  return { win, takeDir };
+async function openTake(): Promise<{ win: Page; mainWin: Page; takeDir: string }> {
+  const { app: a, win: mainWin, editorWin, takeDir } = await launchWithTakeInEditor();
+  app = a;
+  await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
+  return { win: editorWin, mainWin, takeDir };
 }
 
 /** Decodes a PNG in the page and compares it to the stage, pixel by pixel. */
-async function pngMatchesStage(win: any, pngBase64: string): Promise<{ same: boolean; width: number; height: number; differing: number }> {
+async function pngMatchesStage(win: Page, pngBase64: string): Promise<{ same: boolean; width: number; height: number; differing: number }> {
   return win.evaluate(async (b64: string) => {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
@@ -58,7 +57,7 @@ async function pngMatchesStage(win: any, pngBase64: string): Promise<{ same: boo
   }, pngBase64);
 }
 
-describe("the current preview frame as a PNG", () => {
+describe("the current preview frame as a PNG, from the editor window (STC-373)", () => {
   test("Save frame writes a PNG beside the take that is pixel-identical to the stage", async () => {
     const { win, takeDir } = await openTake();
     await win.fill("#scrub", "131");
@@ -115,14 +114,15 @@ describe("the current preview frame as a PNG", () => {
   }, 120_000);
 
   test("the keyboard shortcut saves too, and does not fire inside the label input", async () => {
-    const { win, takeDir } = await openTake();
+    const { win, mainWin, takeDir } = await openTake();
     await win.keyboard.press("Control+Shift+S");
     await expect.poll(() => win.textContent("#framestatus"), { timeout: 20_000 }).toMatch(/^Saved frame at/);
     expect(readdirSync(takeDir).filter((f) => f.startsWith("frame-"))).toHaveLength(1);
-    // Inside a text field the shortcut belongs to the field.
-    await win.click("#takes >> text=Rename");
-    await win.focus(".labelinput");
-    await win.keyboard.press("Control+Shift+S");
+    // Inside a text field the shortcut belongs to the field. The label input
+    // is the main window's library, not the editor's.
+    await mainWin.click("#takes >> text=Rename");
+    await mainWin.focus(".labelinput");
+    await mainWin.keyboard.press("Control+Shift+S");
     await new Promise((r) => setTimeout(r, 500));
     expect(readdirSync(takeDir).filter((f) => f.startsWith("frame-"))).toHaveLength(1);
   }, 120_000);

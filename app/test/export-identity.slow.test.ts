@@ -76,11 +76,17 @@ async function launchWithTake() {
     args: [root, ...SOFTWARE_RENDER_ARGS], cwd: root,
     env: { ...process.env, STC_RECORDINGS_DIR: dir },
   });
-  const win = await app.firstWindow();
+  const mainWin = await app.firstWindow();
+  await mainWin.waitForLoadState("domcontentloaded");
+  await expect.poll(() => mainWin.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
+  // The take player is the editor's own window now (STC-373).
+  const [win] = await Promise.all([
+    app.waitForEvent("window"),
+    mainWin.click("#takes >> text=Preview"),
+  ]);
   await win.waitForLoadState("domcontentloaded");
-  await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
-  await win.click("#takes >> text=Preview");
-  await expect.poll(() => win.isVisible("#player"), { timeout: 30_000 }).toBe(true);
+  await win.click("#openexport");
+  await win.waitForSelector("#exportdialog[open]", { timeout: 10_000 });
   return { win, takeDir };
 }
 
