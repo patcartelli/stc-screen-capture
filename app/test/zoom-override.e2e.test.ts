@@ -38,16 +38,52 @@ function readProject(takeDir: string): any {
 const blockClass = (win: any): Promise<string> =>
   win.evaluate(() => document.querySelector(".zoomblock")!.className);
 
+/**
+ * `#stage`'s box right after selecting a block cannot be trusted directly:
+ * revealing `#overridebar` (previously `hidden`, taking no space) reflows
+ * the column it shares with `#stage` and can resize the canvas over one or
+ * more frames — the same class of race STC-378 found in this exact window
+ * (a `BrowserWindow` created with no `show: false` has no guarantee its
+ * content view has settled by the time a synchronous read runs). Poll until
+ * two reads 120ms apart agree, mirroring `redaction.e2e.test.ts`'s own
+ * `settledCanvasBox` — the proven-on-hardware precedent for this same shape
+ * of drag test.
+ */
+async function settledStageBox(
+  win: any, ms = 10_000,
+): Promise<{ x: number; y: number; width: number; height: number }> {
+  const read = () => win.locator("#stage").boundingBox();
+  const start = Date.now();
+  let last = await read();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 120));
+    const now = await read();
+    if (last && now && now.x === last.x && now.y === last.y
+        && now.width === last.width && now.height === last.height && now.width > 0) {
+      return now;
+    }
+    if (Date.now() - start > ms) {
+      throw new Error(`#stage never settled: ${JSON.stringify({ last, now })}`);
+    }
+    last = now;
+  }
+}
+
 /** Drag on the stage from one FRACTIONAL point to another (0..1 of its box). */
 async function dragOnStage(
   win: any, from: { x: number; y: number }, to: { x: number; y: number },
 ): Promise<void> {
-  const box = await win.locator("#stage").boundingBox();
+  await expect.poll(() => win.isVisible("#rectoverlay"), { timeout: 10_000 }).toBe(true);
+  const box = await settledStageBox(win);
   const p = (f: { x: number; y: number }) => ({ x: box.x + f.x * box.width, y: box.y + f.y * box.height });
   const a = p(from), b = p(to);
   await win.mouse.move(a.x, a.y);
   await win.mouse.down();
-  await win.mouse.move(b.x, b.y, { steps: 4 });
+  // Two moves, not one: a single move can be coalesced with the press
+  // (redaction.e2e.test.ts's own precedent for the same reason), and this is
+  // testing that a DRAG is followed rather than that a click lands.
+  await win.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2);
+  await win.mouse.move(b.x, b.y);
   await win.mouse.up();
 }
 
