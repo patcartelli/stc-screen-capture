@@ -75,20 +75,28 @@ async function settledRectoverlayBox(
   }
 }
 
-/** Drag on the stage from one FRACTIONAL point to another (0..1 of its box). */
+/**
+ * Two independent fixes (settle #stage's box; then measure #rectoverlay's
+ * own box instead) both failed IDENTICALLY on real hardware, and the second
+ * one's own diagnostic never fired — meaning the two boxes AGREE there, so
+ * geometry is not the problem. Rather than guess a fourth time, instrument
+ * #rectoverlay's real pointer events directly and report what actually
+ * arrived: this is ground truth from the page itself, not an inference.
+ */
 async function dragOnStage(
   win: any, from: { x: number; y: number }, to: { x: number; y: number },
 ): Promise<void> {
   await expect.poll(() => win.isVisible("#rectoverlay"), { timeout: 10_000 }).toBe(true);
   const box = await settledRectoverlayBox(win);
-  // Diagnostic only, kept cheap: if a drag still fails to register on real
-  // hardware, this is what tells us whether #stage and #rectoverlay actually
-  // disagree, rather than guessing a third time.
-  const stageBox = await win.locator("#stage").boundingBox();
-  if (stageBox && (Math.abs(stageBox.x - box.x) > 1 || Math.abs(stageBox.y - box.y) > 1
-      || Math.abs(stageBox.width - box.width) > 1 || Math.abs(stageBox.height - box.height) > 1)) {
-    console.error("#stage and #rectoverlay boxes disagree:", { stageBox, rectoverlayBox: box });
-  }
+  await win.evaluate(() => {
+    const el = document.getElementById("rectoverlay")!;
+    const counts = { down: 0, move: 0, up: 0, cancel: 0 };
+    (window as any).__dragCounts = counts;
+    el.addEventListener("pointerdown", () => { counts.down++; });
+    el.addEventListener("pointermove", () => { counts.move++; });
+    el.addEventListener("pointerup", () => { counts.up++; });
+    el.addEventListener("pointercancel", () => { counts.cancel++; });
+  });
   const p = (f: { x: number; y: number }) => ({ x: box.x + f.x * box.width, y: box.y + f.y * box.height });
   const a = p(from), b = p(to);
   await win.mouse.move(a.x, a.y);
@@ -99,6 +107,14 @@ async function dragOnStage(
   await win.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2);
   await win.mouse.move(b.x, b.y);
   await win.mouse.up();
+  const counts = await win.evaluate(() => (window as any).__dragCounts);
+  const overrideboxState = await win.evaluate(() => {
+    const el = document.getElementById("overridebox")!;
+    return { hidden: el.hasAttribute("hidden"), style: el.getAttribute("style") };
+  });
+  console.error("dragOnStage diagnostic:", {
+    from, to, box, computedPoints: { a, b }, pointerEventCounts: counts, overrideboxState,
+  });
 }
 
 describe("selecting a block", () => {
