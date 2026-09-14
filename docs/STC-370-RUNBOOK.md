@@ -146,8 +146,23 @@ fine up to the close — so the SAFETY property holds; only the diagnosed
 REASON differs from what this ticket predicted. `window-closed` is not proven
 dead code: it should still be the path that fires for a window that
 disappears from `CGWindowListCopyWindowInfo`'s on-screen list WITHOUT killing
-the stream — minimising is the obvious candidate, and it was not tested here.
-If you get a spare minute, minimising instead of closing would settle that.
+the stream.
+
+**Minimising, tried as the candidate for that (2026-09-14): still not
+`"window-closed"`.** ⌘M on the recorded window (no access to its traffic
+lights) stopped the take with `stop.reason: "window-resized"`, take intact.
+`CGWindowListCopyWindowInfo` still finds a minimised window rather than
+dropping it — it is not "gone" the way a closed window is — but its reported
+bounds collapse during/after the genie effect, which the watcher correctly
+reads as a size change rather than a disappearance. So between the two ways
+a window commonly "goes away" mid-take, close answers `"stream-stopped"` and
+minimise answers `"window-resized"` — **`"window-closed"` was not observed
+in either.** The safety property (the take always stops cleanly) held both
+times; it's specifically the third named reason that has no confirmed
+trigger yet. It may still be reachable — an app force-quit in a way that
+doesn't tear down the stream the way an orderly close does is one
+possibility nobody has tried — but it is no longer the assumed common case
+this ticket's own design section originally implied.
 
 **3c — the grant test's fault-injected version, which needs no manual
 resize/close at all:**
@@ -181,13 +196,15 @@ it moves with no code needed here, as designed.
 
 ## What is still open
 
-- **Minimising a window mid-take is untested.** §3b found that an outright
-  close is normally caught by the pre-existing stream-death path
-  (`"stream-stopped"`) before the 1 Hz poll gets a chance to say
-  `"window-closed"`. Minimising should be the case where the poll IS the
-  primary detector, since the stream plausibly keeps running while the
-  window is merely off-screen — but this was not tried.
+- **No hardware trigger for `"window-closed"` has been found**, despite
+  trying the two obvious candidates (§3b: an orderly close answers
+  `"stream-stopped"`; minimising answers `"window-resized"`). The take stops
+  cleanly either way, so this is not a safety gap — but the specific reason
+  string may be effectively unreachable in normal use, which is worth
+  knowing if anything downstream (the eventual UI, an analytics count)
+  plans to distinguish it from the other two.
 - 1 Hz (`windowWatchIntervalSeconds`) proved fast enough in practice (a
   resize was caught in ~300 ms, well inside the interval, on the sample
-  size tested here — two resizes, one deliberate and one accidental). Not
-  stress-tested against a rapid resize-drag or a very large window.
+  size tested here — two resizes, one deliberate and one accidental, plus
+  the minimise). Not stress-tested against a rapid resize-drag or a very
+  large window.
