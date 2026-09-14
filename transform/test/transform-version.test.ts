@@ -23,7 +23,7 @@ const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
  * one symmetric spring — so the fingerprint moved because an input already
  * declared to it changed value, not because a new input was added.
  */
-const PINNED_FINGERPRINT = "9bc2e797";
+const PINNED_FINGERPRINT = "b465a7aa";
 
 describe("the transform version is honest about what it renders", () => {
   test("the fingerprint of every pixel-deciding constant is pinned to this version", () => {

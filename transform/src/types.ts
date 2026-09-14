@@ -7,6 +7,7 @@
  * three names here and letting them drift from the table that defines them.
  */
 import type { ZoomPreset } from "./zoom.js";
+import type { Changes } from "./changes.js";
 
 /** Mirrors schema/events-1.schema.json and events-2.schema.json. All times are session-relative integer ns. */
 export interface MoveEvent {
@@ -223,6 +224,8 @@ export interface Session {
   events: SessionEvent[];
   frames: number[];
   cameraFrames?: number[];
+  /** the frame-difference sidecar (STC-322), absent on every take today — nothing here can run the browser decode pass that writes it. Auto-zoom stage 2 (STC-326) falls back to cursor clustering when this is absent. */
+  changes?: Changes;
 }
 
 /** Cursor simulation state at a given 120 Hz tick. Positions in event space (global points). */

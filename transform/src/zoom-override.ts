@@ -172,9 +172,10 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
  * Clamp a UV rect so it lies entirely within the 0..1 frame, preserving its
  * size where possible (only shrinking when the size itself exceeds 1, which
  * a click-default clamped by `rectFromGesture` below can never produce, but
- * a hand-edited project.json could).
+ * a hand-edited project.json could). Exported for `zoom-change.ts` (STC-326),
+ * whose derived crops need the identical rule rather than a second copy of it.
  */
-function clampRectToFrame(r: Rect): Rect {
+export function clampRectToFrame(r: Rect): Rect {
   const width = Math.min(1, r.width);
   const height = Math.min(1, r.height);
   return {

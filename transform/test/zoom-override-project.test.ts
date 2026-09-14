@@ -145,11 +145,16 @@ describe("render reads overrides", () => {
   const projectWith = (overrides: Project["overrides"]): Project =>
     ({ ...defaultProject(1920, 1080), overrides });
 
-  test("with no override, the crop stays the whole frame at every amount — unchanged from stage 1", () => {
+  test("with no override, an empty overrides array applies no override — stage 2 (STC-326) still can and does move the crop", () => {
     const p = projectWith([]);
-    for (const t of [1700 * MS, 3000 * MS, 4500 * MS, 6000 * MS]) {
-      expect(render(p, session, t).zoom.crop).toEqual({ x: 0, y: 0, width: 1, height: 1 });
-    }
+    const fs = render(p, session, 3000 * MS); // well inside the hold, spring settled
+    expect(fs.zoom.amount).toBeGreaterThan(0.95);
+    // This file's own concern is only that the EMPTY array behaves like no
+    // override at all — not this file's TARGET. Stage 2's own answer (a
+    // real crop now, not the whole frame) is proven in
+    // zoom-change-render.test.ts, not restated here.
+    expect(fs.zoom.crop).not.toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    expect(fs.zoom.crop.x).not.toBeCloseTo(TARGET.x, 1);
   });
 
   test("deep inside the window (amount near 1), the crop is close to the override's target", () => {
@@ -173,7 +178,11 @@ describe("render reads overrides", () => {
     const p = projectWith([{ kind: "geometry", windowId: "999999999", rect: TARGET }]);
     const fs = render(p, session, 3000 * MS);
     expect(fs.zoom.amount).toBeGreaterThan(0.95);
-    expect(fs.zoom.crop).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    // Not the mismatched override's target — whatever crop this window
+    // shows came from stage 2's own fallback (STC-326), not from an
+    // override for a window this take does not have.
+    expect(fs.zoom.crop.x).not.toBeCloseTo(TARGET.x, 1);
+    expect(fs.zoom.crop.width).not.toBeCloseTo(TARGET.width, 1);
   });
 
   test("mid-transition, the crop is a real blend, not a snap between the two extremes", () => {

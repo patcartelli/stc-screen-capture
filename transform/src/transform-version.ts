@@ -4,6 +4,11 @@ import { ZOOM_HOLD_NS, ZOOM_LEAD_NS, ZOOM_MERGE_GAP_NS, ZOOM_PRESETS } from "./z
 import {
   CURSOR_SHAPES, DEFAULT_CURSOR_SHAPE, OUTLINE_PT, CLICK_HIGHLIGHT_PT, CIRCLE_PT, artFor,
 } from "./cursor-art.js";
+import {
+  BURST_LEAD_NS, BURST_TRAIL_NS, CELL_ACTIVE_FRACTION, AMBIENT_FRAME_FRACTION, BURST_CONCENTRATION,
+  MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION, VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION,
+  CURSOR_DEAD_ZONE_UV,
+} from "./zoom-change.js";
 
 /**
  * Which transform made the pixels (STC-308).
@@ -72,8 +77,24 @@ import {
  * caught resolving the merge conflict rather than by any test — the same
  * shape of collision CLAUDE.md already records for STC-325) — version 5 is
  * what STC-330 actually ships as.
+ *
+ * ## Version 6: a window with no manual tuning can crop itself now (STC-326)
+ *
+ * Stage 2 supplies the automatic target version 3's own note deferred:
+ * `zoom-change.ts`'s `deriveZoomCrop` reads `session.changes` (the
+ * frame-difference sidecar, STC-322) when it covers a window, or falls back
+ * to greedy dead-zone clustering of the window's own cursor positions when it
+ * does not — true of every take today, since nothing here can run the
+ * browser pass that writes `changes.json`. `render.ts` calls it only when a
+ * window has no MANUAL override (STC-330 still wins), so this is the first
+ * version where a take with no overrides at all can still show the picture
+ * moving. Every threshold the classifier and the fallback use is declared to
+ * `transformFingerprint` below — the same "declare now, not once STC-326
+ * lands" reasoning version 3's own note already gave for `ZOOM_PRESETS`, now
+ * paid off, because THIS is the version those constants start reaching real
+ * pixels for a take with no overrides.
  */
-export const TRANSFORM_VERSION = 5;
+export const TRANSFORM_VERSION = 6;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -82,6 +103,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 3, since: "2026-09-09", changed: "auto-zoom stage 1 (STC-325): windows from clicks and held-button moves (300 ms lead, 2500 ms hold, 2500 ms merge) drive a critically damped 120 Hz spring, and project-4's zoom.enabled/intensity/preset choose whether and how hard. NO PIXEL MOVES at this version — the crop is the whole frame until STC-326 supplies a target — so the bump records that the derivation runs and that a document can now change it, not that the picture changed (#108, #112)" },
   { version: 4, since: "2026-09-14", changed: "asymmetric zoom shoulders (STC-371): standard and snappy push in at omega×√2 and release at omega÷√2 instead of one symmetric spring; calm is unchanged. Still no export pixel moves — the crop is still the whole frame until STC-326 — but the editor's Zoom lane curve (which samples render()'s own zoom.amount) already shows the new shape, and the fingerprint moved because ZOOM_PRESETS did" },
   { version: 5, since: "2026-09-14", changed: "manual zoom override, phase 1 (STC-330): project-6's overrides table gives a derived window a tuned crop rect and/or easing preset; render() blends the crop toward that target as zoom.amount eases (spaces.ts's lerpRect). Windows sharing a resolved easing are grouped and simmed independently, composed by max (zoom-override.ts). The FIRST version where the picture actually moves for a real take — a window with no override still crops to the whole frame, but one with an override now renders different pixels than the same take without it" },
+  { version: 6, since: "2026-09-14", changed: "auto-zoom stage 2 (STC-326): a window with no manual override now derives its own crop via zoom-change.ts's deriveZoomCrop — the change track (session.changes) when it covers the window, greedy dead-zone cursor clustering otherwise (the fallback every take hits today, since no changes.json exists yet). A trusted null (everything changed, nothing did, or the union was barely tighter than the full frame) still crops to the whole frame; anything else blends toward a real target the same way a manual override does. The FIRST version where a take with NO overrides at all can render different pixels than the same take with auto-zoom off" },
 ];
 
 /**
@@ -95,12 +117,17 @@ export function transformFingerprint(): string {
     SIM_HZ, EXPORT_FPS, OMEGA, CHECKPOINT_INTERVAL,
     OUTLINE_PT, CLICK_HIGHLIGHT_PT, CIRCLE_PT, DEFAULT_CURSOR_SHAPE,
     art: CURSOR_SHAPES.map((s) => [s, artFor(s).path]),
-    // Auto-zoom's constants shape `zoom.amount` already and reach the pixels
-    // the moment STC-326 gives the crop a target. Declared NOW rather than
-    // then: a constant that changes the render but not the hash is exactly
-    // what this guard exists to prevent, and the stubbed window is the only
-    // one in which they could be retuned unnoticed.
+    // Auto-zoom's constants shape `zoom.amount` and reach the pixels for any
+    // window a manual override or stage 2 supplies a target for.
     zoom: { ZOOM_LEAD_NS, ZOOM_HOLD_NS, ZOOM_MERGE_GAP_NS, ZOOM_PRESETS },
+    // Stage 2's own thresholds (STC-326) — every one of them decides whether
+    // and how a window with no manual override crops itself, for every take
+    // rendered today (the cursor-clustering fallback needs no changes.json).
+    zoomChange: {
+      BURST_LEAD_NS, BURST_TRAIL_NS, CELL_ACTIVE_FRACTION, AMBIENT_FRAME_FRACTION,
+      BURST_CONCENTRATION, MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION,
+      VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION, CURSOR_DEAD_ZONE_UV,
+    },
   };
   const text = JSON.stringify(inputs);
   let h = 0x811c9dc5;
