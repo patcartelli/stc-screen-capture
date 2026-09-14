@@ -76,27 +76,27 @@ async function settledRectoverlayBox(
 }
 
 /**
- * Two independent fixes (settle #stage's box; then measure #rectoverlay's
- * own box instead) both failed IDENTICALLY on real hardware, and the second
- * one's own diagnostic never fired — meaning the two boxes AGREE there, so
- * geometry is not the problem. Rather than guess a fourth time, instrument
- * #rectoverlay's real pointer events directly and report what actually
- * arrived: this is ground truth from the page itself, not an inference.
+ * FOUND (2026-09-14, real hardware, via pointer-event instrumentation this
+ * function used to carry): `.zoomblock` is a `<button>`, clicking it moves
+ * focus to it, and it sits at the BOTTOM of the editor's timeline while
+ * `#stage` sits at the TOP — on a window whose content is taller than its
+ * viewport (true on the real CI window size, not under this sandbox's Xvfb
+ * display), Chromium scrolls the newly-focused button into view, which
+ * scrolls #stage/#rectoverlay PARTLY OFF THE TOP (`getBoundingClientRect()`
+ * returned `y: -150`). Every failing drag's start point landed at a
+ * NEGATIVE viewport y — off-screen, so `mouse.down()` there hit nothing
+ * (`pointerdown` count: 0, confirmed directly). The one gesture that kept
+ * passing targeted dead centre (0.5, 0.5), which happened to still clear
+ * zero. `scrollIntoViewIfNeeded` before measuring is the fix, and it is
+ * unconditional rather than reasoned about, because the same trap applies
+ * however layout got that way on a given machine.
  */
 async function dragOnStage(
   win: any, from: { x: number; y: number }, to: { x: number; y: number },
 ): Promise<void> {
   await expect.poll(() => win.isVisible("#rectoverlay"), { timeout: 10_000 }).toBe(true);
+  await win.locator("#rectoverlay").scrollIntoViewIfNeeded();
   const box = await settledRectoverlayBox(win);
-  await win.evaluate(() => {
-    const el = document.getElementById("rectoverlay")!;
-    const counts = { down: 0, move: 0, up: 0, cancel: 0 };
-    (window as any).__dragCounts = counts;
-    el.addEventListener("pointerdown", () => { counts.down++; });
-    el.addEventListener("pointermove", () => { counts.move++; });
-    el.addEventListener("pointerup", () => { counts.up++; });
-    el.addEventListener("pointercancel", () => { counts.cancel++; });
-  });
   const p = (f: { x: number; y: number }) => ({ x: box.x + f.x * box.width, y: box.y + f.y * box.height });
   const a = p(from), b = p(to);
   await win.mouse.move(a.x, a.y);
@@ -107,14 +107,6 @@ async function dragOnStage(
   await win.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2);
   await win.mouse.move(b.x, b.y);
   await win.mouse.up();
-  const counts = await win.evaluate(() => (window as any).__dragCounts);
-  const overrideboxState = await win.evaluate(() => {
-    const el = document.getElementById("overridebox")!;
-    return { hidden: el.hasAttribute("hidden"), style: el.getAttribute("style") };
-  });
-  console.error("dragOnStage diagnostic:", {
-    from, to, box, computedPoints: { a, b }, pointerEventCounts: counts, overrideboxState,
-  });
 }
 
 describe("selecting a block", () => {
