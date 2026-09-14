@@ -36,11 +36,12 @@ final class App {
     /// own hooked into it — `shutdown()` is the one caller that needs this:
     /// calling `stop()` again while `state == .stopping` would hit its
     /// "not recording" guard and answer immediately, since `.stopping` is
-    /// neither `.recording` nor `.starting`. Guarded by its own lock because
-    /// `shutdown()` can run on the signal-handling queue (SIGINT/SIGTERM/
-    /// SIGHUP, see `installSignalHandlers`) rather than main, while
-    /// `notifyIdle()` always runs on main from inside `stop()`'s own
-    /// completion.
+    /// neither `.recording` nor `.starting`. `shutdown()`'s own body (the one
+    /// caller of `addIdleWaiter`) is marshalled onto main now — see its own
+    /// doc comment — so `notifyIdle()` (always called from `stop()`'s
+    /// completion, also on main) never actually races `addIdleWaiter` in
+    /// practice; this lock is kept anyway, cheaply, so neither is load-
+    /// bearing on staying on main forever.
     private let idleWaitersLock = NSLock()
     private var idleWaiters: [() -> Void] = []
 
@@ -507,6 +508,20 @@ final class App {
     /// Reproduced live before this fix, not merely reasoned about.
     /// Now a THIRD case: wait on `idleWaiters` for whichever stop is already
     /// running, rather than starting a redundant second one.
+    ///
+    /// **Review on #139**: `state`/`sessionDir`/`capture` are main-queue-owned
+    /// everywhere else — `IO.readCommands` already dispatches `handle(stop)`
+    /// and the stdin-EOF shutdown onto main, and `stop()`'s own completions
+    /// re-dispatch onto main before touching them. `installSignalHandlers`
+    /// was the one caller that did not: SIGINT/SIGTERM/SIGHUP fire on their
+    /// own `DispatchSourceSignal` queue, and the body below used to read
+    /// `state` and (on the `else` branch) run `stop()`'s synchronous half —
+    /// `state = .stopping`, `sessionDir`/`capture` reads and writes — from
+    /// there, concurrently with whatever main was doing. Pre-existing (the
+    /// code before this ticket called `stop(reason:completion:)` directly
+    /// from here too, with the same lack of marshalling), but this ticket is
+    /// already rewriting this exact body, so it is marshalled onto main now
+    /// rather than left as the one remaining off-main writer.
     func shutdown(reason: String, exitCode: Int32, seq: Int? = nil) {
         IO.log("shutdown: \(reason)")
         shutdownLock.lock()
@@ -517,29 +532,32 @@ final class App {
         // process is exiting exactly once, on the first call's own terms.
         guard first else { return }
 
-        guard state != .idle else {
-            IO.send("bye", seq: seq, ["reason": reason])
-            exit(exitCode)
-        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.state != .idle else {
+                IO.send("bye", seq: seq, ["reason": reason])
+                exit(exitCode)
+            }
 
-        let answerLock = NSLock()
-        var answered = false
-        let finish: () -> Void = {
-            answerLock.lock()
-            if answered { answerLock.unlock(); return }
-            answered = true
-            answerLock.unlock()
-            IO.send("bye", seq: seq, ["reason": reason])
-            exit(exitCode)
-        }
-        DispatchQueue.global().asyncAfter(
-            deadline: .now() + CaptureSession.stopTimeoutSeconds + Self.shutdownBackstopMarginSeconds
-        ) { finish() }
+            let answerLock = NSLock()
+            var answered = false
+            let finish: () -> Void = {
+                answerLock.lock()
+                if answered { answerLock.unlock(); return }
+                answered = true
+                answerLock.unlock()
+                IO.send("bye", seq: seq, ["reason": reason])
+                exit(exitCode)
+            }
+            DispatchQueue.global().asyncAfter(
+                deadline: .now() + CaptureSession.stopTimeoutSeconds + Self.shutdownBackstopMarginSeconds
+            ) { finish() }
 
-        if state == .stopping {
-            addIdleWaiter(finish)
-        } else {
-            stop(reason: reason) { finish() }
+            if self.state == .stopping {
+                self.addIdleWaiter(finish)
+            } else {
+                self.stop(reason: reason) { finish() }
+            }
         }
     }
 }
