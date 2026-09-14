@@ -39,7 +39,18 @@
 
     #stage { width: 100%; height: auto; background: #000; border-radius: 6px; display: block; }
     #stage[data-vieweye] { width: var(--vieweye-w); max-width: none; }
-    #stagewrap { overflow-x: auto; }
+    #stagewrap { overflow-x: auto; position: relative; }
+
+    /* The manual-override rect tool (STC-330): drawn over #stage while a
+       zoom block is selected, in the same box #stage occupies — #stage
+       always fills #stagewrap at its own natural size, so `inset: 0` tracks
+       it with no separate measurement. Hidden (not just empty) when no
+       block is selected, so a stray pointerdown over the preview can never
+       start a drag nobody asked for. */
+    #rectoverlay { position: absolute; inset: 0; cursor: crosshair; }
+    #rectoverlay[hidden] { display: none; }
+    #overridebox { position: absolute; border: 1.5px solid var(--zoom);
+                   background: rgba(216,138,59,.12); pointer-events: none; }
 
     .transport { display: flex; align-items: center; gap: 10px; }
     #clock { min-width: 132px; font-size: 12px; opacity: .75; }
@@ -59,10 +70,23 @@
        #timeline itself, which already reflects this transform — so the
        existing scrubber/trim arithmetic (app/src/scrubber.ts) needs no
        span-aware rewrite. */
-    #timeline, #ruler-content, #clip-canvas-wrap, #zoom-canvas-wrap {
+    #timeline, #ruler-content, #clip-canvas-wrap, #zoom-canvas-wrap, #override-blocks {
       position: absolute; left: 0; top: 0; width: 100%; height: 100%;
       transform-origin: 0 0;
     }
+    /* One invisible button per derived zoom window (STC-330), positioned as a
+       fraction of FULL duration exactly like .kept/.cut-head — the shared
+       transform on #override-blocks does the pan/zoom, so these percentages
+       never need to know the visible span. The silhouette itself is drawn
+       into #zoom-curve (a filled area now, not a stroked line); this layer
+       only carries the click target and the selection/hover ring. */
+    .zoomblock { position: absolute; top: 0; height: 100%; min-width: 6px;
+                 background: transparent; border: none; padding: 0; margin: 0;
+                 cursor: pointer; border-radius: 3px; }
+    .zoomblock:hover { background: rgba(216,138,59,.15); }
+    .zoomblock.selected { outline: 1.5px solid var(--zoom); outline-offset: -1.5px; }
+    .zoomblock.overridden::after { content: ""; position: absolute; left: 2px; right: 2px;
+                                    bottom: 1px; height: 2px; background: var(--zoom); border-radius: 1px; }
     .timeline .bar { position: absolute; left: 0; right: 0; top: 12px; height: 4px;
                      background: var(--line); border-radius: 2px; pointer-events: none; }
     .timeline .kept { position: absolute; top: 0; height: 4px;
@@ -103,6 +127,14 @@
     #triminfo, #framestatus { opacity: .7; }
     #framestatus[hidden] { display: none; }
 
+    /* The selected block's own controls (STC-330) — a preset picker and a
+       clear action, shown only while a block is selected. Sits where the
+       trim/frame bars do rather than floating over the preview, so it never
+       covers the rect the user is trying to look at. */
+    .overridebar { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .overridebar[hidden] { display: none; }
+    #overridehint { opacity: .7; }
+
     /* ── the export dialog: legibility + the viewer's eye, one place ────── */
     dialog#exportdialog { border: 1px solid var(--line); border-radius: 10px;
                           padding: 16px; background: var(--surface); color: inherit;
@@ -128,7 +160,13 @@
 <body>
   <div id="alert"></div>
 
-  <div id="stagewrap"><canvas id="stage"></canvas></div>
+  <div id="stagewrap">
+    <canvas id="stage"></canvas>
+    <!-- STC-330: shown only while a zoom block is selected; drawing a new
+         rect always shows the UNZOOMED frame (see editor.ts) so a pointer
+         pixel maps 1:1 to capture UV with no crop math to invert. -->
+    <div id="rectoverlay" hidden><div id="overridebox" hidden></div></div>
+  </div>
 
   <div class="transport">
     <button id="playpause">Play</button>
@@ -142,9 +180,14 @@
     The timeline (STC-373): a ruler over two lanes sharing one [a, b] span.
     Clip is pointer activity (app/src/timeline-activity.ts), weighted for
     clicks/drags — not frame difference, see the ticket's own note. Zoom is
-    the derived auto-zoom automation curve, read-only in v1 (the override
-    lane is STC-328/330/331). Pan lives on the ruler; zoom anchors on the
-    pointer; the trim handles own the Clip lane's drag.
+    the derived auto-zoom automation curve — still sampled straight from
+    render()'s own zoom.amount (timeline-activity.ts's zoomCurve), drawn as a
+    FILLED area now rather than a stroked line so it reads as one block per
+    derived window (STC-330). #override-blocks lays one invisible button over
+    each window for click-to-select and the selected/overridden rings;
+    #zoom-curve stays the only thing that draws a pixel. Pan lives on the
+    ruler; zoom anchors on the pointer; the trim handles own the Clip lane's
+    drag.
   -->
   <div class="timelinewrap">
     <div id="ruler"><div id="ruler-content"></div></div>
@@ -165,6 +208,7 @@
     <div class="laneviewport zoom">
       <span class="lanelabel">Zoom</span>
       <div id="zoom-canvas-wrap"><canvas id="zoom-curve"></canvas></div>
+      <div id="override-blocks"></div>
     </div>
   </div>
 
@@ -178,6 +222,20 @@
     <button id="markout">Out</button>
     <button id="resettrim">Full take</button>
     <span id="triminfo" class="mono"></span>
+  </div>
+
+  <!-- STC-330: appears only while a Zoom block is selected. -->
+  <div class="overridebar" id="overridebar" hidden>
+    <span id="overridehint">Drag a rect on the preview to zoom into it</span>
+    <label for="overridepreset">Ease</label>
+    <select id="overridepreset">
+      <option value="">Project default</option>
+      <option value="calm">Calm</option>
+      <option value="standard">Standard</option>
+      <option value="snappy">Snappy</option>
+    </select>
+    <button id="overrideclear" disabled>Remove override</button>
+    <button id="overridedone">Done</button>
   </div>
 
   <div class="sharebar">

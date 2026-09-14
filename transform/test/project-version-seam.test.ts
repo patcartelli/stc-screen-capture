@@ -121,7 +121,7 @@ describe("isProjectVersion", () => {
   });
 
   test("refuses everything else, including the near misses", () => {
-    for (const v of [0, 6, -1, 1.5, "1", null, undefined, NaN, [1]]) {
+    for (const v of [0, 7, -1, 1.5, "1", null, undefined, NaN, [1]]) {
       expect(isProjectVersion(v), `${JSON.stringify(v)}`).toBe(false);
     }
     for (const v of PROJECT_VERSIONS) expect(isProjectVersion(v)).toBe(true);

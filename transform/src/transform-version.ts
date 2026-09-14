@@ -45,7 +45,7 @@ import {
  *
  * So version 3 says: the derivation runs, and a document can change it. It
  * does NOT claim the picture moved, and TRANSFORM_HISTORY says so in as many
- * words. STC-326 bumps again when the picture does move.
+ * words.
  *
  * ## Version 4 is the same guard, for the same stubbed window (STC-371)
  *
@@ -57,8 +57,23 @@ import {
  * whole frame, so no export pixel moves, but the fingerprint changes the
  * moment the numbers inside that object do, and this file's own rule is
  * "never update the fingerprint alone."
+ *
+ * ## Version 5: the picture moves, for a window someone has TUNED (STC-330)
+ *
+ * STC-330's manual override table gives a WINDOW's crop a real target for
+ * the first time — `zoom.crop` is no longer always the whole frame, and
+ * `render()` now blends it toward that target as `zoom.amount` eases in and
+ * out (`lerpRect`, spaces.ts). This is still not stage 2 (STC-326): nothing
+ * DERIVES a target on its own, so an un-overridden window still crops to the
+ * whole frame at every amount. But a take with even one manual override now
+ * genuinely renders different pixels than one without, which version 4's own
+ * promise ("still no export pixel moves") can no longer make. This landed as
+ * a SEPARATE PR from STC-371's version 4 (both claimed "4" independently,
+ * caught resolving the merge conflict rather than by any test — the same
+ * shape of collision CLAUDE.md already records for STC-325) — version 5 is
+ * what STC-330 actually ships as.
  */
-export const TRANSFORM_VERSION = 4;
+export const TRANSFORM_VERSION = 5;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -66,6 +81,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 2, since: "2026-09-02", changed: "macOS pointer artwork (arrow, I-beam, crosshair, pointing hand) drawn from events-2 cursor-shape events; circle kept as project.cursor.style \"circle\" (#65)" },
   { version: 3, since: "2026-09-09", changed: "auto-zoom stage 1 (STC-325): windows from clicks and held-button moves (300 ms lead, 2500 ms hold, 2500 ms merge) drive a critically damped 120 Hz spring, and project-4's zoom.enabled/intensity/preset choose whether and how hard. NO PIXEL MOVES at this version — the crop is the whole frame until STC-326 supplies a target — so the bump records that the derivation runs and that a document can now change it, not that the picture changed (#108, #112)" },
   { version: 4, since: "2026-09-14", changed: "asymmetric zoom shoulders (STC-371): standard and snappy push in at omega×√2 and release at omega÷√2 instead of one symmetric spring; calm is unchanged. Still no export pixel moves — the crop is still the whole frame until STC-326 — but the editor's Zoom lane curve (which samples render()'s own zoom.amount) already shows the new shape, and the fingerprint moved because ZOOM_PRESETS did" },
+  { version: 5, since: "2026-09-14", changed: "manual zoom override, phase 1 (STC-330): project-6's overrides table gives a derived window a tuned crop rect and/or easing preset; render() blends the crop toward that target as zoom.amount eases (spaces.ts's lerpRect). Windows sharing a resolved easing are grouped and simmed independently, composed by max (zoom-override.ts). The FIRST version where the picture actually moves for a real take — a window with no override still crops to the whole frame, but one with an override now renders different pixels than the same take without it" },
 ];
 
 /**

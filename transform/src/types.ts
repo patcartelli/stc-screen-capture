@@ -137,9 +137,41 @@ export interface Zoom {
   preset: ZoomPreset;
 }
 
+/**
+ * A manual override of one derived zoom window (project-6, STC-330).
+ *
+ * A discriminated union with ONE variant so far — later phases (STC-329,
+ * STC-331) add variants, never migrations, per STC-328's own schema note.
+ * `kind: "geometry"` is the only one this phase writes or reads; a document
+ * naming another kind is from a later build this one does not have yet, and
+ * is carried through unread rather than refused (see `zoom-override.ts`).
+ *
+ * `windowId` is the derived window's `startNs`, AS A STRING — deliberately
+ * not the number itself, so it reads as an opaque identity rather than a
+ * time a caller might be tempted to do arithmetic on. Stage 1's merge rule
+ * (`ZOOM_MERGE_GAP_NS`) guarantees two windows in one take never share a
+ * `startNs`, which is what makes this safe to use as a key with no
+ * collision handling.
+ *
+ * **Take-local by design.** An override matches only the exact derivation
+ * it was authored against — re-record from scratch and stage 1 derives a
+ * new window list with new `startNs` values, so old overrides simply stop
+ * matching anything. That is a deliberate simplification (STC-328), not a
+ * bug: there is no cross-recording matching, no fuzzy tolerance, no
+ * orphaned-override UX to design.
+ *
+ * `rect` is UV over the CAPTURE — the same space `ZoomState.crop` and a
+ * redaction both live in (STC-314) — so it moves with the picture rather
+ * than the canvas and needs no units of its own. `easing`, when present,
+ * overrides the project's own `zoom.preset` for JUST this window; absent
+ * means this window plays at the project's preset like every other one.
+ */
+export type ZoomOverride =
+  | { kind: "geometry"; windowId: string; rect: { x: number; y: number; width: number; height: number }; easing?: ZoomPreset };
+
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5;
+  version: 1 | 2 | 3 | 4 | 5 | 6;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -171,6 +203,13 @@ export interface Project {
    * the render does not care about.
    */
   zoom?: Zoom;
+  /**
+   * Manual zoom overrides (project-6, STC-330). Absent on documents written
+   * before project-6; `parseProject` fills `[]`, so nothing downstream has
+   * to tell "no overrides" from "older than overrides" — the same reasoning
+   * `zoom` already follows.
+   */
+  overrides?: ZoomOverride[];
 }
 
 /**

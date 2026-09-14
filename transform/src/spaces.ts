@@ -224,6 +224,27 @@ export function snapRectEdges(r: Rect): Rect {
   };
 }
 
+/**
+ * Linear interpolation between two rects, component-wise. `t` is not
+ * clamped — a caller driving this from an eased amount (STC-325's spring is
+ * critically damped and never overshoots in practice, but is not clamped by
+ * design either) gets exactly what it asked for rather than a silently
+ * different curve.
+ *
+ * Used to blend a zoom's crop between the whole frame and a target rect as
+ * `amount` goes 0..1 (STC-330) — the general form any future automatic
+ * target (STC-326) needs too, so it lives here rather than in zoom-specific
+ * code.
+ */
+export function lerpRect(a: Rect, b: Rect, t: number): Rect {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    width: a.width + (b.width - a.width) * t,
+    height: a.height + (b.height - a.height) * t,
+  };
+}
+
 /** A global point in display-local points: the same units, the display's origin. */
 export function toDisplayLocal(p: Point, displayOrigin: Point): Point {
   return { x: p.x - displayOrigin.x, y: p.y - displayOrigin.y };

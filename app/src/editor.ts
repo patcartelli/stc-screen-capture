@@ -58,6 +58,9 @@ import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, legibility, legibilitySentence, zoomFactorForCrop,
 } from "@transform/legibility";
 import { TRANSFORM_VERSION } from "@transform/transform-version";
+import { zoomWindows, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
+import { windowId, overrideFor, rectFromGesture } from "@transform/zoom-override";
+import type { Rect } from "@transform/spaces";
 import {
   clampTrimFrame, decideKey, formatReadout, formatShuttle, frameAtFraction, frameToNs,
   fractionOfFrame, lastFrame, nsToFrame, rubberBandPx, tickStrideFrames, type ScrubAction,
@@ -314,22 +317,192 @@ function drawZoomLane(): void {
     LANE_BUCKETS,
   );
   const style = getComputedStyle(document.documentElement).getPropertyValue("--zoom").trim() || "#d88a3b";
-  ctx.strokeStyle = style || "#d88a3b";
-  ctx.lineWidth = 1.5;
+  // STC-330: a FILLED area, not a stroked line — the same sampled curve now
+  // reads as one trapezoid per derived window (ease-in ramp, flat top,
+  // ease-out ramp), with #override-blocks laying the click targets over it.
+  // Nothing about the sampling changed; only how it is drawn.
+  ctx.fillStyle = style || "#d88a3b";
   ctx.beginPath();
+  ctx.moveTo(0, h);
   for (let i = 0; i < curve.length; i++) {
     const x = (i / (curve.length - 1)) * w;
     // amount is not clamped to [0, 1] (zoom.ts's own note) — draw whatever
     // comes back, clipped to the lane's own height rather than pretending it
     // cannot exceed 1.
     const y = h - Math.max(0, Math.min(1, curve[i]!)) * (h - 2) - 1;
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    ctx.lineTo(x, y);
   }
-  ctx.stroke();
+  ctx.lineTo(w, h);
+  ctx.closePath();
+  ctx.fill();
 }
 
-function redrawLanes(): void { drawClipLane(); drawZoomLane(); }
+function redrawLanes(): void { drawClipLane(); drawZoomLane(); layoutOverrideBlocks(); }
 window.addEventListener("resize", redrawLanes);
+
+// ---- manual zoom override (STC-330) — the block lane's editing half -------
+//
+// Selecting a block puts the preview into an EDIT mode: the player is made
+// to draw the UNZOOMED frame for as long as editing lasts (by temporarily
+// removing this window's own entry from the LIVE project.overrides it
+// reads — PreviewPlayer holds that object by reference and re-reads it on
+// every draw, so no second render path is needed), which is what lets a
+// pointer pixel on #stage map straight to capture UV with no crop to invert.
+// The rect and preset are held in a DRAFT until committed, so entering edit
+// mode to just look and then leaving with no drag restores the original
+// override exactly rather than deleting it as a side effect.
+
+let editingWindowId: string | null = null;
+let draftRect: Rect | null = null;
+let draftEasing: ZoomPreset | "" = "";
+let dragAnchorUv: { x: number; y: number } | null = null;
+
+function overridesWithout(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
+  return (overrides ?? []).filter((o) => o.windowId !== id);
+}
+
+function aspectWH(): number {
+  return openCapture && openCapture.height > 0 ? openCapture.width / openCapture.height : 1;
+}
+
+/**
+ * Client coordinates → CAPTURE UV. Valid only while editing, because that is
+ * the one time #stage is guaranteed to be showing the whole frame at every
+ * amount (see the header above) — a canvas pixel otherwise sits inside
+ * whatever crop is currently playing, which this does not attempt to invert.
+ */
+function stageUv(clientX: number, clientY: number): { x: number; y: number } {
+  const r = ($("stage") as HTMLCanvasElement).getBoundingClientRect();
+  return {
+    x: r.width > 0 ? Math.max(0, Math.min(1, (clientX - r.left) / r.width)) : 0,
+    y: r.height > 0 ? Math.max(0, Math.min(1, (clientY - r.top) / r.height)) : 0,
+  };
+}
+
+function drawOverrideBox(rect: Rect | null): void {
+  const box = $("overridebox") as HTMLElement;
+  if (!rect) { box.setAttribute("hidden", ""); return; }
+  box.removeAttribute("hidden");
+  box.style.left = `${rect.x * 100}%`;
+  box.style.top = `${rect.y * 100}%`;
+  box.style.width = `${rect.width * 100}%`;
+  box.style.height = `${rect.height * 100}%`;
+}
+
+function layoutOverrideBlocks(): void {
+  const container = $("override-blocks") as HTMLElement;
+  container.replaceChildren();
+  if (!player || !openSession) return;
+  const d = player.durationNs || 1;
+  for (const w of zoomWindows(openSession.events)) {
+    const id = windowId(w);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "zoomblock";
+    if (id === editingWindowId) btn.classList.add("selected");
+    // The window being edited reads its OWN draft, not project.overrides —
+    // that field has this window's entry removed for as long as editing
+    // lasts (see the header above), so reading it here would show the dot
+    // vanishing the instant a block is opened rather than when it is empty.
+    const overridden = id === editingWindowId ? !!draftRect : !!overrideFor(openProject?.overrides, w);
+    if (overridden) btn.classList.add("overridden");
+    btn.style.left = `${(w.startNs / d) * 100}%`;
+    btn.style.width = `${Math.max(0, ((w.endNs - w.startNs) / d) * 100)}%`;
+    btn.setAttribute("aria-label", `Zoom window at ${fmtClock(w.startNs)}`);
+    btn.addEventListener("click", () => {
+      const p = id === editingWindowId ? closeOverrideEditor() : selectWindow(w);
+      void p.catch((e: any) => alertUser(String(e?.message ?? e)));
+    });
+    container.appendChild(btn);
+  }
+}
+
+/** Writes the current draft into project.overrides (replacing any prior
+ *  entry for this window) and persists — an empty draft means "no override". */
+async function commitDraft(): Promise<void> {
+  if (!openProject || !editingWindowId) return;
+  const withoutThis = overridesWithout(openProject.overrides, editingWindowId);
+  openProject.overrides = draftRect
+    ? [...withoutThis, {
+        kind: "geometry" as const, windowId: editingWindowId, rect: draftRect,
+        ...(draftEasing ? { easing: draftEasing } : {}),
+      }]
+    : withoutThis;
+  await persistProject();
+}
+
+async function closeOverrideEditor(): Promise<void> {
+  if (editingWindowId) await commitDraft();
+  editingWindowId = null;
+  draftRect = null;
+  draftEasing = "";
+  dragAnchorUv = null;
+  ($("overridebar") as HTMLElement).setAttribute("hidden", "");
+  ($("rectoverlay") as HTMLElement).setAttribute("hidden", "");
+  drawOverrideBox(null);
+  layoutOverrideBlocks();
+}
+
+async function selectWindow(w: ZoomWindow): Promise<void> {
+  if (!player || !openProject) return;
+  if (editingWindowId) await commitDraft(); // switching straight from one block to another
+  const id = windowId(w);
+  editingWindowId = id;
+  const existing = overrideFor(openProject.overrides, w);
+  draftRect = existing?.rect ?? null;
+  draftEasing = existing?.easing ?? "";
+  openProject.overrides = overridesWithout(openProject.overrides, id);
+  ($("overridepreset") as HTMLSelectElement).value = draftEasing;
+  ($("overrideclear") as HTMLButtonElement).disabled = !draftRect;
+  ($("overridebar") as HTMLElement).removeAttribute("hidden");
+  ($("rectoverlay") as HTMLElement).removeAttribute("hidden");
+  drawOverrideBox(draftRect);
+  layoutOverrideBlocks();
+  const mid = Math.min(player.durationNs, Math.round((w.startNs + w.endNs) / 2));
+  await player.seek(mid);
+}
+
+$("rectoverlay").addEventListener("pointerdown", (e) => {
+  if (!editingWindowId) return;
+  const pe = e as PointerEvent;
+  (pe.currentTarget as HTMLElement).setPointerCapture(pe.pointerId);
+  dragAnchorUv = stageUv(pe.clientX, pe.clientY);
+  // A bare pointerdown with no move is already a valid gesture — the click
+  // default (rectFromGesture's own a === b case) — so the box appears
+  // immediately rather than waiting for a move that may never come.
+  draftRect = rectFromGesture(dragAnchorUv, dragAnchorUv, aspectWH());
+  drawOverrideBox(draftRect);
+});
+$("rectoverlay").addEventListener("pointermove", (e) => {
+  if (!dragAnchorUv) return;
+  const pe = e as PointerEvent;
+  draftRect = rectFromGesture(dragAnchorUv, stageUv(pe.clientX, pe.clientY), aspectWH());
+  drawOverrideBox(draftRect);
+});
+const endOverrideDrag = () => {
+  if (!dragAnchorUv) return;
+  dragAnchorUv = null;
+  ($("overrideclear") as HTMLButtonElement).disabled = !draftRect;
+  layoutOverrideBlocks(); // the "overridden" dot follows a fresh drag immediately, not just on Done
+};
+$("rectoverlay").addEventListener("pointerup", endOverrideDrag);
+$("rectoverlay").addEventListener("pointercancel", endOverrideDrag);
+
+$("overridepreset").addEventListener("change", () => {
+  draftEasing = ($("overridepreset") as HTMLSelectElement).value as ZoomPreset | "";
+});
+$("overrideclear").addEventListener("click", () => {
+  draftRect = null;
+  void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+$("overridedone").addEventListener("click", () => {
+  void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !editingWindowId) return;
+  e.preventDefault();
+  void closeOverrideEditor().catch((err: any) => alertUser(String(err?.message ?? err)));
+});
 
 // ---- export size --------------------------------------------------------
 
@@ -551,6 +724,13 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 async function closeTake(): Promise<void> {
   exportAbort?.abort();
   $("framestatus").setAttribute("hidden", "");
+  // Not commitDraft()+closeOverrideEditor(): the take (and its project) are
+  // going away regardless, and persisting a draft against a project about to
+  // be discarded would be a write nobody asked for. Just drop the state.
+  editingWindowId = null;
+  draftRect = null;
+  draftEasing = "";
+  dragAnchorUv = null;
   player?.close();
   player = undefined;
   openSession = undefined;

@@ -26,8 +26,9 @@ import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
  * swiftshader for far simpler drawing. Taking the old call when the crop is
  * the whole frame makes "auto-zoom stage 1 changes no pixels" true by
  * CONSTRUCTION rather than by a measurement that might not hold on the next
- * Chromium. The nine-argument path goes live with STC-326, which changes the
- * picture on purpose.
+ * Chromium. The nine-argument path goes live the moment ANY window's crop is
+ * not the whole frame — first reachable by a MANUAL override (STC-330), on
+ * purpose, ahead of stage 2's automatic targets (STC-326).
  *
  * The crop is UV over the CAPTURE, so it is converted against the frame's own
  * size through spaces.ts — the one owner (STC-314).

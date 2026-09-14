@@ -1,4 +1,4 @@
-import type { Pip, Project, Trim, Zoom } from "./types.js";
+import type { Pip, Project, Trim, Zoom, ZoomOverride } from "./types.js";
 import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
 import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
@@ -84,6 +84,10 @@ export function defaultProject(
     // that a field added in the parse body would never reach.
     zoom: { ...DEFAULT_ZOOM },
     textPt: DEFAULT_TEXT_PT,
+    // Always an array, never undefined — the same "no consumer has to tell
+    // 'none' from 'older document'" reasoning `zoom` already follows
+    // (STC-295 first stated it for `decoration.annotations`).
+    overrides: [],
   };
   // A recorded camera track is part of the take, so a take that has one shows
   // its PiP without needing an edit document to say so.
@@ -144,6 +148,7 @@ export function parseProject(
   // the rule every field in this parser follows.
   project.textPt = typeof doc.textPt === "number" && doc.textPt > 0 && doc.textPt <= 144
     ? doc.textPt : DEFAULT_TEXT_PT;
+  project.overrides = cleanOverrides(doc.overrides);
   return project;
 }
 
@@ -199,8 +204,40 @@ function isDefaultZoom(z: Zoom): boolean {
     && z.preset === DEFAULT_ZOOM.preset;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 {
-  // Highest first: a document needing v5 needs it whatever its zoom says.
+/**
+ * Each override's own fields, on their own terms — the same rule `cleanZoom`
+ * follows. An entry missing `windowId`/`rect`, or naming a `kind` this build
+ * does not know (a later phase's variant, read by an OLDER build than wrote
+ * it), is dropped rather than crashing the whole array: one bad entry must
+ * not cost every other tuned window. `easing`, if present, is validated
+ * against `ZOOM_PRESET_NAMES` and dropped alone if it does not match —
+ * exactly the same "a name this build does not have is a build nobody
+ * chose" reasoning `zoom.preset` already follows.
+ */
+function cleanOverrides(v: unknown): ZoomOverride[] {
+  if (!Array.isArray(v)) return [];
+  const out: ZoomOverride[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const d = raw as Record<string, unknown>;
+    if (d.kind !== "geometry") continue;
+    if (typeof d.windowId !== "string" || !d.windowId) continue;
+    const r = d.rect;
+    if (!r || typeof r !== "object") continue;
+    const rd = r as Record<string, unknown>;
+    if (![rd.x, rd.y, rd.width, rd.height].every((n) => typeof n === "number" && Number.isFinite(n))) continue;
+    const rect = { x: rd.x as number, y: rd.y as number, width: rd.width as number, height: rd.height as number };
+    const entry: ZoomOverride = { kind: "geometry", windowId: d.windowId, rect };
+    if (ZOOM_PRESET_NAMES.includes(d.easing as never)) entry.easing = d.easing as Zoom["preset"];
+    out.push(entry);
+  }
+  return out;
+}
+
+function versionFor(project: Project): 3 | 4 | 5 | 6 {
+  // Highest first: a document needing v6 needs it whatever its zoom or
+  // textPt say.
+  if (project.overrides && project.overrides.length > 0) return 6;
   if (project.textPt !== undefined && project.textPt !== DEFAULT_TEXT_PT) return 5;
   const z = project.zoom;
   if (!z) return 3;
@@ -224,10 +261,12 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (!isFullTake(project, durationNs) && project.trim) out.trim = project.trim;
   // Only when it says something v3 cannot: writing the default block into
   // every document would push every take to v4 for a setting nobody touched.
-  // v5 is a superset of v4: a document that needs v5 for its text size must
-  // still carry a non-default zoom if it has one, or the setting is silently
-  // dropped by the very write that promoted the version.
+  // v5 and v6 are each supersets of what came before: a document that needs
+  // v6 for its overrides must still carry a non-default zoom or a non-default
+  // textPt if it has one, or that setting is silently dropped by the very
+  // write that promoted the version.
   if (version >= 4 && project.zoom && !isDefaultZoom(project.zoom)) out.zoom = project.zoom;
-  if (version === 5) out.textPt = project.textPt;
+  if (version >= 5) out.textPt = project.textPt;
+  if (version === 6) out.overrides = project.overrides;
   return out;
 }
