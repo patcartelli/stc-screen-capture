@@ -18,13 +18,12 @@ const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
  * TRANSFORM_VERSION, add a TRANSFORM_HISTORY entry saying what changed, then
  * update this fingerprint. Never update the fingerprint alone.
  *
- * It last moved at version 3, and NOT because a constant changed: the
- * fingerprint gained four inputs it never had. Auto-zoom's constants are
- * declared to it while the crop is still the whole frame, because the stubbed
- * window is precisely the one in which someone could retune the presets,
- * change what every export's zoom does, and have nothing notice.
+ * It last moved at version 4 (STC-371): `ZOOM_PRESETS` itself changed —
+ * standard and snappy now push in and release at different omegas instead of
+ * one symmetric spring — so the fingerprint moved because an input already
+ * declared to it changed value, not because a new input was added.
  */
-const PINNED_FINGERPRINT = "ff15c883";
+const PINNED_FINGERPRINT = "9bc2e797";
 
 describe("the transform version is honest about what it renders", () => {
   test("the fingerprint of every pixel-deciding constant is pinned to this version", () => {

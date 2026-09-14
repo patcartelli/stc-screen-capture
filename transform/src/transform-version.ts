@@ -46,14 +46,26 @@ import {
  * So version 3 says: the derivation runs, and a document can change it. It
  * does NOT claim the picture moved, and TRANSFORM_HISTORY says so in as many
  * words. STC-326 bumps again when the picture does move.
+ *
+ * ## Version 4 is the same guard, for the same stubbed window (STC-371)
+ *
+ * The three easing presets stopped being one spring run both ways: standard
+ * and snappy now push in faster than they release (each preset's shipped
+ * omega ×/÷ `Math.SQRT2`, picked by which way `createZoomSim`'s target is
+ * pulling), and calm stays symmetric. `ZOOM_PRESETS` was already declared to
+ * `transformFingerprint` for exactly this reason — the crop is still the
+ * whole frame, so no export pixel moves, but the fingerprint changes the
+ * moment the numbers inside that object do, and this file's own rule is
+ * "never update the fingerprint alone."
  */
-export const TRANSFORM_VERSION = 3;
+export const TRANSFORM_VERSION = 4;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
   { version: 1, since: "2026-08-24", changed: "placeholder circle cursor; 120 Hz spring, OMEGA 30, checkpoints every 1024 ticks" },
   { version: 2, since: "2026-09-02", changed: "macOS pointer artwork (arrow, I-beam, crosshair, pointing hand) drawn from events-2 cursor-shape events; circle kept as project.cursor.style \"circle\" (#65)" },
   { version: 3, since: "2026-09-09", changed: "auto-zoom stage 1 (STC-325): windows from clicks and held-button moves (300 ms lead, 2500 ms hold, 2500 ms merge) drive a critically damped 120 Hz spring, and project-4's zoom.enabled/intensity/preset choose whether and how hard. NO PIXEL MOVES at this version — the crop is the whole frame until STC-326 supplies a target — so the bump records that the derivation runs and that a document can now change it, not that the picture changed (#108, #112)" },
+  { version: 4, since: "2026-09-14", changed: "asymmetric zoom shoulders (STC-371): standard and snappy push in at omega×√2 and release at omega÷√2 instead of one symmetric spring; calm is unchanged. Still no export pixel moves — the crop is still the whole frame until STC-326 — but the editor's Zoom lane curve (which samples render()'s own zoom.amount) already shows the new shape, and the fingerprint moved because ZOOM_PRESETS did" },
 ];
 
 /**
