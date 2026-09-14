@@ -376,18 +376,37 @@ describe("the export grid on the track (rule 9)", () => {
     const { win } = await openPreview();
     const ticks = await win.evaluate(() => {
       const el = document.getElementById("ticks") as HTMLElement;
+      const ruler = document.getElementById("ruler")!.getBoundingClientRect();
+      const timeline = document.getElementById("timeline")!.getBoundingClientRect();
+      const laneviewport = document.querySelector(".laneviewport.clip")!.getBoundingClientRect();
       return {
         hidden: el.hasAttribute("hidden"),
         px: parseFloat(el.style.getPropertyValue("--tick-px")),
-        trackPx: document.getElementById("timeline")!.getBoundingClientRect().width,
+        trackPx: timeline.width,
+        // STC-379: this is unreproducible from Linux (18/18 local runs pass,
+        // including this one, and a bounded requestAnimationFrame retry in
+        // updateTicks() did not fix master's CI failure either) — so on a
+        // failure here, the values below are the diagnosis, printed via
+        // `expect`'s message argument since Vitest only shows the field that
+        // actually failed otherwise. If trackPx here (measured fresh, AFTER
+        // openTakeOrThrow has fully returned) is healthy while `hidden` is
+        // true, the width was bad only at some EARLIER moment `updateTicks()`
+        // ran and nothing re-measured after — a staleness bug, not a
+        // persistently zero width. If it's still <= 0 here, the CSS chain
+        // itself (`.laneviewport`'s flex-stretched width) is not resolving
+        // on a real Mac the way it does under Xvfb.
+        rulerWidth: ruler.width,
+        laneviewportWidth: laneviewport.width,
+        bodyWidth: document.body.getBoundingClientRect().width,
+        innerWidth: window.innerWidth,
       };
     });
-    expect(ticks.hidden).toBe(false);
+    expect(ticks.hidden, `ticks: ${JSON.stringify(ticks)}`).toBe(false);
     // Whatever stride was chosen, it must clear the legibility floor — the
     // point of rule 9 is that ticks are never sub-pixel hatching.
-    expect(ticks.px).toBeGreaterThanOrEqual(6);
+    expect(ticks.px, `ticks: ${JSON.stringify(ticks)}`).toBeGreaterThanOrEqual(6);
     // ...and it must be a stride over THIS take rather than a fixed number:
     // 300 frames over the track, so a tick is at most the whole track.
-    expect(ticks.px).toBeLessThanOrEqual(ticks.trackPx);
+    expect(ticks.px, `ticks: ${JSON.stringify(ticks)}`).toBeLessThanOrEqual(ticks.trackPx);
   }, 60_000);
 });
