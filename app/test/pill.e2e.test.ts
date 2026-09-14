@@ -64,28 +64,50 @@ async function chrome(): Promise<{ resizable: boolean; alwaysOnTop: boolean }> {
   return handle.evaluate((w) => ({ resizable: w.isResizable(), alwaysOnTop: w.isAlwaysOnTop() }));
 }
 
+/**
+ * Whether the page has hidden its normal content in favour of the plain
+ * dark strip. Real reported bug (screenshot, on a real Mac): the mechanism
+ * above worked — a genuine 26px pill-shaped window — but the FULL instrument
+ * UI was rendered clipped inside it, because the renderer had no way to know
+ * its own window had shrunk. This is the one part of "does it look like a
+ * pill" that IS checkable without a window manager: DOM state, not pixels.
+ */
+const isPillCollapsed = (win: Page): Promise<boolean> =>
+  win.evaluate(() => document.body.classList.contains("pill-collapsed"));
+
 describe("the pill's collapse mechanism", () => {
   test("Record locks resizing and floats the window; Stop undoes both", async () => {
     const { win } = await launch();
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     expect(await chrome()).toEqual({ resizable: true, alwaysOnTop: false });
+    expect(await isPillCollapsed(win)).toBe(false);
 
     await win.click("#record");
     await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Stop");
     // Driven by the heartbeat (500ms in this app), not the click — the poll
     // is what proves that, not an assumption about timing.
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: false, alwaysOnTop: true });
+    await expect.poll(() => isPillCollapsed(win), { timeout: 5_000 }).toBe(true);
 
     await win.click("#record");
     await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: true, alwaysOnTop: false });
+    await expect.poll(() => isPillCollapsed(win), { timeout: 5_000 }).toBe(false);
   }, 120_000);
 
   test("a take the helper ends on its own also undoes the collapse", async () => {
     // STC-306: a display stream dying mid-take ends it unsolicited, through
     // the same `recording-ended` path a user's own Stop produces. The pill
     // must not depend on which path got there — trap 3 in pill.ts's header.
-    const { win } = await launch({ STC_FAKE_STREAM_DEATH_MS: "300" });
+    //
+    // The death must land AFTER at least one heartbeat (500ms in this app):
+    // attachPillToSupervisor only ever learns "recording" from the stats
+    // heartbeat or recording-ended, and endRecording() resets sup.state to
+    // "idle" before recording-ended fires — so a death faster than one
+    // heartbeat interval means no heartbeat ever observes "recording" at
+    // all, and there is nothing to collapse or restore. 900ms clears that
+    // with margin.
+    const { win } = await launch({ STC_FAKE_STREAM_DEATH_MS: "900" });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
 
     await win.click("#record");

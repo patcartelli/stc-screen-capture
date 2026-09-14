@@ -48,6 +48,14 @@ import { PILL_HEIGHT_PX, clampPillWidth, decidePillAction, type PillWindowState 
  * display's own work area — a pure function cannot know how wide a real
  * screen is, and a pill wider than the display it floats over is not
  * "content-width," it is broken.
+ *
+ * Also tells the renderer (`pill:state`, STC-375's actual first Mac finding)
+ * — without it the page has no way to learn its own window shrank, and goes
+ * on laying out the full instrument UI into a 26px viewport: not "a pill
+ * with no content yet" but visibly clipped controls, which reads as broken
+ * rather than as unfinished. `index.html`'s `body.pill-collapsed` rule hides
+ * everything except the Record/Stop button — deliberately kept reachable,
+ * since nothing else in the app can stop a recording (no hotkey covers it).
  */
 export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number): Rectangle {
   if (win.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 };
@@ -59,6 +67,7 @@ export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number)
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   setButtonsVisible(win, false);
+  sendPillState(win, "collapsed");
   return previousBounds;
 }
 
@@ -73,6 +82,12 @@ export function restorePill(win: BrowserWindow, bounds: Rectangle): void {
   win.setResizable(true);
   win.setBounds(bounds);
   setButtonsVisible(win, true);
+  sendPillState(win, "expanded");
+}
+
+function sendPillState(win: BrowserWindow, state: PillWindowState): void {
+  if (win.isDestroyed()) return;
+  win.webContents.send("pill:state", { collapsed: state === "collapsed" });
 }
 
 /**

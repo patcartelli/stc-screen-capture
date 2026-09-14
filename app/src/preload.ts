@@ -65,7 +65,12 @@ contextBridge.exposeInMainWorld("recorder", {
                       // A capture the window did not ask for — a hotkey or the
                       // menu bar (STC-292). The shot is on disk either way;
                       // this is only so an open window stays truthful.
-                      "still:captured"];
+                      "still:captured",
+                      // STC-375: the window just collapsed to (or restored
+                      // from) the pill. The renderer has no other way to know
+                      // its own window shrank — `pill-window.ts` drives the
+                      // resize from main, not from anything in this page.
+                      "pill:state"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);

@@ -594,6 +594,15 @@ recorder.on("helper:camera-started", (l) => {
 
 recorder.on("helper:respawned", () => setState("recovered — helper restarted"));
 recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The recorder keeps failing to start. Restart the app."); });
+
+// STC-375: the window just collapsed to the pill, or restored from it. With
+// no listener the page never learns its own window shrank, and lays out the
+// full instrument UI into a 26px viewport — visibly clipped controls, not a
+// pill. `body.pill-collapsed` (index.html) hides everything in favour of a
+// plain dark strip.
+recorder.on("pill:state", (s: { collapsed: boolean }) => {
+  document.body.classList.toggle("pill-collapsed", s.collapsed);
+});
 /**
  * Camera failures the user must actually see. Every one of these was already
  * being emitted and silently dropped: the handler below matched exactly one

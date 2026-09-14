@@ -226,11 +226,41 @@
     #profilesheet h1 { font-size: 13px; }
     #profilesheet-head { justify-content: space-between; }
     #profileclose { padding: 3px 9px; font-size: 14px; line-height: 1; }
+
+    /* ── the pill (STC-375) ──────────────────────────────────────────────
+       Record collapses this real window to a 26px-tall pill (pill-window.ts);
+       the renderer only learns about it via the `pill:state` IPC event
+       (renderer.ts), which toggles this class on <body>. Without it the page
+       goes on laying out the whole instrument at its normal size into a 26px
+       viewport — clipped controls, not a pill.
+
+       Hides everything except #record (still reachable as #record-row's one
+       visible child, filling its width) — not a stray exception, a load-
+       bearing one: there is no hotkey and no other control that can stop a
+       recording (CAPTURE_ACTIONS in hotkeys.ts is stills only), so hiding
+       the button that reads "Stop" while collapsed would make an in-progress
+       take unstoppable from the window at all. Nothing else has an excuse to
+       stay: the profile sheet, the scope picker, the debug table, the take
+       grid all go, including the sheet if it happened to be open — a sliver
+       of a slide-over panel in a 26px window is its own kind of broken.
+
+       There is no real pill CONTENT view yet (the dot/timer/meter is
+       unscoped visual work — see pill.ts's header); #0b0b0c matches pill.ts's
+       PILL_THEME.background — the one color pairing in this app that cannot
+       be a shared token, since CSS cannot import a TS module. */
+    body.pill-collapsed { background: #0b0b0c; overflow: hidden; padding: 0; margin: 0; }
+    body.pill-collapsed > *:not(#record-row) { display: none; }
+    body.pill-collapsed #record-row > *:not(#record) { display: none; }
+    body.pill-collapsed #record-row { margin: 0; }
+    body.pill-collapsed #record {
+      width: 100%; margin: 0; border: none; border-radius: 0;
+      background: transparent; color: #f5f5f5;
+    }
   </style>
 </head>
 <body>
   <h1>stc recorder</h1>
-  <div class="row">
+  <div class="row" id="record-row">
     <button id="record">Record</button>
     <button id="capturestill" title="Select a region or a window and capture one frame">Capture still</button>
     <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
