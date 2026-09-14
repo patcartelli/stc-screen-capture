@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   clampPillWidth, decidePillAction, formatElapsedTimer,
-  MIN_PILL_WIDTH_PX, METER_MODE, RESIZE_STYLE, PILL_HEIGHT_PX, RESTORED_WIDTH_PX,
+  MIN_PILL_WIDTH_PX, METER_MODE, RESIZE_STYLE, PILL_HEIGHT_PX,
 } from "../src/pill.js";
 
 describe("clampPillWidth", () => {
@@ -56,9 +56,8 @@ describe("formatElapsedTimer", () => {
 });
 
 describe("constants the design fixes", () => {
-  it("matches the ticket's own pseudocode numbers", () => {
+  it("matches the ticket's own pseudocode number for the pill's height", () => {
     expect(PILL_HEIGHT_PX).toBe(26);
-    expect(RESTORED_WIDTH_PX).toBe(360);
   });
 
   it("only ever draws the meter hatched — no audio capture exists to back a live one", () => {

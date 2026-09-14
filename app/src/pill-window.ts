@@ -1,9 +1,6 @@
-import { BrowserWindow, screen } from "electron";
+import { BrowserWindow, screen, type Rectangle } from "electron";
 import type { HelperSupervisor } from "./supervisor.js";
-import {
-  PILL_HEIGHT_PX, RESTORED_WIDTH_PX, clampPillWidth, decidePillAction,
-  type PillWindowState,
-} from "./pill.js";
+import { PILL_HEIGHT_PX, clampPillWidth, decidePillAction, type PillWindowState } from "./pill.js";
 
 /**
  * The pill's real window mechanics (STC-375). `pill.ts` decides WHAT the
@@ -11,21 +8,30 @@ import {
  * split `overlay-session.ts` and `thumbnail-window.ts` make for their own
  * windowed interactions.
  *
- * SCAFFOLD, not yet wired into `main.ts` — see `pill.ts`'s header for why.
- * Every function here operates on a `BrowserWindow` handed to it rather than
- * one it creates and owns, so it can be pointed at the app's real main
- * window once STC-374 has stripped it down to capture + grid, without this
- * file changing.
+ * SCAFFOLD, still not wired into `main.ts` — see `pill.ts`'s header for the
+ * open question that is blocking it (the main window is framed, and the
+ * ticket's design assumes it is not).
+ *
+ * ## "Restore" means the window's OWN remembered bounds, not a fixed size
+ *
+ * The ticket's pseudocode restores to a fixed `360 x instrumentHeight`,
+ * centred on the display. That doesn't fit the window STC-374 actually
+ * shipped: `main.ts`'s `createWindow()` makes a normal, resizable,
+ * user-positioned window (520x680 by default, no `resizable: false`), not a
+ * fixed-size instrument panel. Restoring a resizable window to a hardcoded
+ * size the user never chose would silently discard any resize or move they
+ * had done before recording — arguably a worse bug than the one this ticket
+ * is fixing. So `collapsePill` remembers the window's bounds immediately
+ * before shrinking it, and `restorePill` is handed those bounds back rather
+ * than a literal — "restore" means "exactly as it was," which also already
+ * IS "on the display it was on" and needs no separate centring step.
  */
-
-export interface PillGeometry {
-  /** The instrument's height, once STC-374 has settled it — not guessed here. */
-  instrumentHeight: number;
-}
 
 /**
  * The ticket's own pseudocode, in order: measure the content, lock resizing,
  * shrink to the pill, float above everything, and survive a Space switch.
+ * Returns the window's bounds from just before the shrink, so the caller can
+ * hand them back to `restorePill` later.
  *
  * `"screen-saver"` is the level `overlay-session.ts` already uses.
  * `setVisibleOnAllWorkspaces` is what stops the pill vanishing on a Space
@@ -38,37 +44,31 @@ export interface PillGeometry {
  * screen is, and a pill wider than the display it floats over is not
  * "content-width," it is broken.
  */
-export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number): void {
-  if (win.isDestroyed()) return;
-  const workArea = screen.getDisplayMatching(win.getBounds()).workArea;
+export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number): Rectangle {
+  if (win.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 };
+  const previousBounds = win.getBounds();
+  const workArea = screen.getDisplayMatching(previousBounds).workArea;
   const width = Math.min(clampPillWidth(measuredContentWidthPx), workArea.width);
   win.setResizable(false);
   win.setSize(width, PILL_HEIGHT_PX);
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  return previousBounds;
 }
 
 /**
- * The ticket's own pseudocode for the way back: come off always-on-top
- * before growing, restore the instrument's size, unlock resizing, and
- * centre on the display the pill was actually sitting on — not the primary
- * display, which the take may not have been running on at all.
+ * The way back: come off always-on-top before growing (so the OS is not
+ * asked to reflow an always-on-top window mid-resize), unlock resizing, and
+ * put the window back exactly where `collapsePill` found it.
  */
-export function restorePill(win: BrowserWindow, geometry: PillGeometry): void {
+export function restorePill(win: BrowserWindow, bounds: Rectangle): void {
   if (win.isDestroyed()) return;
-  const workArea = screen.getDisplayMatching(win.getBounds()).workArea;
   win.setAlwaysOnTop(false);
-  win.setSize(RESTORED_WIDTH_PX, geometry.instrumentHeight);
   win.setResizable(true);
-  win.setBounds({
-    x: Math.round(workArea.x + (workArea.width - RESTORED_WIDTH_PX) / 2),
-    y: Math.round(workArea.y + (workArea.height - geometry.instrumentHeight) / 2),
-    width: RESTORED_WIDTH_PX,
-    height: geometry.instrumentHeight,
-  });
+  win.setBounds(bounds);
 }
 
-export interface AttachOptions extends PillGeometry {
+export interface AttachOptions {
   /** How wide the pill's real content measures right now (renderer-supplied). */
   getContentWidthPx: () => number;
 }
@@ -90,6 +90,10 @@ export interface AttachOptions extends PillGeometry {
  * cannot outlive a recording that has already ended.
  *
  * Returns an unsubscribe function; the caller owns the window's lifetime.
+ * A caller must re-attach after replacing `win` — STC-292 made the main
+ * window closable and re-creatable (menu-bar-first), and this does not
+ * survive that on its own; `main.ts` would call this again inside its own
+ * `createWindow()`.
  */
 export function attachPillToSupervisor(
   win: BrowserWindow,
@@ -97,15 +101,18 @@ export function attachPillToSupervisor(
   opts: AttachOptions,
 ): () => void {
   let current: PillWindowState = "expanded";
+  let expandedBounds: Rectangle | undefined;
 
   const reconcile = (): void => {
     if (win.isDestroyed()) return;
     const action = decidePillAction(current, sup.state);
     if (action === "collapse") {
-      collapsePill(win, opts.getContentWidthPx());
+      expandedBounds = collapsePill(win, opts.getContentWidthPx());
       current = "collapsed";
     } else if (action === "restore") {
-      restorePill(win, opts);
+      // expandedBounds is always set here: the only path to "collapsed" is
+      // through the branch above, which always sets it first.
+      if (expandedBounds) restorePill(win, expandedBounds);
       current = "expanded";
     }
   };

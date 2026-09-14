@@ -20,16 +20,31 @@ import type { SupervisorState } from "./supervisor.js";
  * window once STC-374 has stripped that window down to capture + grid;
  * nothing here decides which window that is.
  *
- * ## SCAFFOLD, not yet wired in
+ * ## SCAFFOLD, still not wired in — STC-374 landed, but the window it
+ * strips down is not the window this ticket assumes
  *
- * STC-375 depends on STC-374 (instrument strip) landing first — collapsing a
- * window that still shows still-capture prefs and the shortcuts editor has
- * "little point" (the ticket's own words), because `restore()` would bring
- * all of that back with it. STC-374 was still Backlog (blocked on STC-370,
- * which has an open PR) when this was written, so this module and
- * `pill-window.ts` are built and tested in isolation, not wired into
- * `main.ts`'s real window. Wiring it up is the small remaining step once
- * STC-374 merges.
+ * STC-374 (instrument strip) merged 2026-09-14, which removes the original
+ * blocker — the main window at rest now shows only capture + grid, so
+ * `restore()` no longer brings back still-capture prefs or the shortcuts
+ * editor. But `main.ts`'s `createWindow()` (unchanged by STC-374) makes a
+ * normal, resizable, user-positioned window with native chrome — a title
+ * bar reading "stc recorder", traffic lights, no `frame: false` — while this
+ * ticket's design opens with "one frameless `BrowserWindow`." Those are not
+ * the same window. Collapsing a TITLED window to 26px tall is not a resize
+ * a native title bar can absorb; the content area would go to zero or
+ * negative while the title bar itself stayed, which is not "the pill,"
+ * it is a broken window.
+ *
+ * Making the main window frameless would fix that, but it is a visible,
+ * permanent chrome change to the app's primary window — no native close/
+ * minimize/traffic-lights anywhere, not just while recording — and it cuts
+ * against STC-373's own explicit choice of "conventional (traffic lights,
+ * resizable)" chrome for its sibling editor window. That is a call for
+ * whoever owns the window-chrome decision, not one to make silently while
+ * wiring up a scaffold. So `pill.ts` and `pill-window.ts` are built,
+ * correctness-fixed against the REAL STC-374 window (see `pill-window.ts`'s
+ * header for the bounds-remembering fix that came from actually looking at
+ * `createWindow()`), and still not called from `main.ts`.
  *
  * ## Trap 1 and 3 from the ticket, encoded rather than trusted
  *
@@ -46,9 +61,13 @@ import type { SupervisorState } from "./supervisor.js";
 
 export type PillWindowState = "expanded" | "collapsed";
 
-/** The ticket's own pseudocode numbers. */
+/**
+ * The ticket's own pseudocode number for the pill's height — the one
+ * dimension that stays fixed regardless of which window this ends up being.
+ * The restored size is NOT a fixed constant; see `pill-window.ts`'s header
+ * for why "restore" means the window's own remembered bounds instead.
+ */
 export const PILL_HEIGHT_PX = 26;
-export const RESTORED_WIDTH_PX = 360;
 
 /** A pill narrower than this could not hold the dot and a timer at all. */
 export const MIN_PILL_WIDTH_PX = 96;
