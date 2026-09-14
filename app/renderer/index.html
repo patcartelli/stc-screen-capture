@@ -2,79 +2,174 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
   <title>stc recorder</title>
   <style>
-    :root { color-scheme: light dark; font: 13px/1.5 -apple-system, system-ui, sans-serif; }
-    body { margin: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+    /* ── instrument visual language (STC-372) ───────────────────────────────
+       A restyle only: renderer.ts and library-view.ts reach the document
+       exclusively through getElementById, so nothing below changes an id, a
+       class a script branches on, or the <body> markup — only color, type
+       and the token system that drives them. See STC-369 for the type ramp
+       this ticket's surfaces don't yet draw from, and STC-374/375 for what
+       the main window becomes next. */
+
+    @font-face {
+      font-family: 'Geist';
+      src: url('fonts/Geist-Regular.woff2') format('woff2');
+      font-weight: 400; font-style: normal; font-display: swap;
+    }
+    @font-face {
+      font-family: 'Geist';
+      src: url('fonts/Geist-Medium.woff2') format('woff2');
+      font-weight: 500; font-style: normal; font-display: swap;
+    }
+    @font-face {
+      font-family: 'Geist';
+      src: url('fonts/Geist-SemiBold.woff2') format('woff2');
+      font-weight: 600; font-style: normal; font-display: swap;
+    }
+    @font-face {
+      font-family: 'Geist Mono';
+      src: url('fonts/GeistMono-Regular.woff2') format('woff2');
+      font-weight: 400; font-style: normal; font-display: swap;
+    }
+    @font-face {
+      font-family: 'Geist Mono';
+      src: url('fonts/GeistMono-Medium.woff2') format('woff2');
+      font-weight: 500; font-style: normal; font-display: swap;
+    }
+
+    :root {
+      color-scheme: light dark;
+      --font-sans: 'Geist', -apple-system, system-ui, sans-serif;
+      --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+      /* Light tokens. There is no in-app theme switch — prefers-color-scheme
+         below is the only signal, same as the color-scheme line already was. */
+      --bg: #f6f6f4;
+      --surface: #ffffff;
+      --surface-hover: #eeeeeb;
+      --border: rgba(15, 15, 12, .14);
+      --border-strong: rgba(15, 15, 12, .30);
+      --text: #171714;
+      --text-dim: rgba(23, 23, 20, .62);
+      --text-faint: rgba(23, 23, 20, .40);
+      --accent: #3b6fe0;
+      --accent-soft: rgba(59, 111, 224, .14);
+      --rec: #d33a3a;
+      --rec-soft: rgba(211, 58, 58, .12);
+      --warn: #b9502c;
+      --warn-soft: rgba(185, 80, 44, .12);
+      --focus: #4f86ff;
+
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #131315;
+        --surface: #1c1c1f;
+        --surface-hover: #26262a;
+        --border: rgba(255, 255, 255, .12);
+        --border-strong: rgba(255, 255, 255, .26);
+        --text: #f1f1ee;
+        --text-dim: rgba(241, 241, 238, .64);
+        --text-faint: rgba(241, 241, 238, .42);
+        --accent: #7aa2ff;
+        --accent-soft: rgba(122, 162, 255, .18);
+        --rec: #ff6b6b;
+        --rec-soft: rgba(255, 107, 107, .16);
+        --warn: #e0925a;
+        --warn-soft: rgba(224, 146, 90, .16);
+        --focus: #7aa2ff;
+      }
+    }
+
+    body { margin: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px;
+           background: var(--bg); color: var(--text); }
     h1 { font-size: 15px; font-weight: 600; margin: 0; }
-    button { font: inherit; padding: 8px 18px; border-radius: 7px; border: 1px solid rgba(128,128,128,.4); background: transparent; cursor: pointer; }
+    /* 500 is a deliberate middle weight — body text is 400, headings are
+       600, and a control (this rule, and .shortcut .keys below) reads as a
+       control rather than as either. */
+    button { font: inherit; font-weight: 500; padding: 8px 18px; border-radius: 7px;
+              border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); cursor: pointer; }
+    button:hover:not([disabled]) { background: var(--surface-hover); }
+    button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     button[disabled] { opacity: .4; cursor: default; }
-    #record { font-weight: 600; }
+    #record { font-weight: 600; border-color: var(--rec); color: var(--rec); }
+    #record:hover:not([disabled]) { background: var(--rec-soft); }
     .row { display: flex; gap: 10px; align-items: center; }
-    #state { font-variant-numeric: tabular-nums; opacity: .75; }
-    table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-dim); }
+    table { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     td { padding: 2px 14px 2px 0; }
-    td:first-child { opacity: .6; }
-    #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid rgba(200,80,60,.5);
-             background: rgba(200,80,60,.1); display: none; white-space: pre-wrap; }
+    td:first-child { color: var(--text-dim); font-family: var(--font-sans); }
+    #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid var(--warn);
+             background: var(--warn-soft); display: none; white-space: pre-wrap; }
     #alert.show { display: block; }
-    h2 { font-size: 13px; font-weight: 600; margin: 4px 0 0; opacity: .7; }
+    h2 { font-size: 13px; font-weight: 600; margin: 4px 0 0; color: var(--text-dim); }
     .take { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
-            padding: 7px 0; border-top: 1px solid rgba(128,128,128,.22); }
-    .take .meta { opacity: .6; font-variant-numeric: tabular-nums; font-size: 12px; }
+            padding: 7px 0; border-top: 1px solid var(--border); }
+    .take .meta { color: var(--text-dim); font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 12px; }
     .take button { padding: 3px 10px; font-size: 12px; }
-    .broken { color: #c2553c; font-size: 12px; padding: 6px 0; }
+    .broken { color: var(--warn); font-size: 12px; padding: 6px 0; }
 
     /* ── the library grid (STC-294) ─────────────────────────────────────── */
     .libfilters { display: flex; gap: 6px; padding: 2px 0 10px; }
-    .libfilters .chip { padding: 3px 12px; font-size: 12px; border-radius: 999px; opacity: .75; }
-    .libfilters .chip.on { opacity: 1; font-weight: 600;
-                           border-color: rgba(128,128,128,.75);
-                           background: rgba(128,128,128,.14); }
+    .libfilters .chip { padding: 3px 12px; font-size: 12px; border-radius: 999px; color: var(--text-dim);
+                         border: 1px solid transparent; }
+    .libfilters .chip.on { color: var(--text); font-weight: 600;
+                           border-color: var(--border-strong);
+                           background: var(--surface-hover); }
     /* auto-fill, so a narrow window reflows rather than scrolling sideways. */
     .libgrid { display: grid; gap: 14px;
                grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
     .libtile { display: flex; flex-direction: column; gap: 7px;
-               border: 1px solid rgba(128,128,128,.22); border-radius: 9px;
+               border: 1px solid var(--border); border-radius: 9px; background: var(--surface);
                padding: 9px; min-width: 0; }
     /* A fixed aspect box, so the grid does not reflow as pictures land — 500
        tiles each nudging their neighbours is the jank the 60 fps criterion is
        about, and reserving the space costs nothing. */
     .libthumb { aspect-ratio: 16 / 10; border-radius: 6px; overflow: hidden;
-                background: rgba(128,128,128,.13); display: flex;
+                background: var(--surface-hover); display: flex;
                 align-items: center; justify-content: center; }
     .libthumb img { max-width: 100%; max-height: 100%; display: block; }
     /* The checkerboard reads as "transparent" rather than "white", which for a
        window capture with real alpha is the difference between seeing the
        shape and thinking the shot has a white background. */
     .libthumb.empty { background-image:
-        linear-gradient(45deg, rgba(128,128,128,.10) 25%, transparent 25%),
-        linear-gradient(-45deg, rgba(128,128,128,.10) 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, rgba(128,128,128,.10) 75%),
-        linear-gradient(-45deg, transparent 75%, rgba(128,128,128,.10) 75%);
+        linear-gradient(45deg, var(--border) 25%, transparent 25%),
+        linear-gradient(-45deg, var(--border) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--border) 75%),
+        linear-gradient(-45deg, transparent 75%, var(--border) 75%);
       background-size: 14px 14px;
       background-position: 0 0, 0 7px, 7px -7px, -7px 0; }
     .libbody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .libbadge { align-self: flex-start; font-size: 10px; letter-spacing: .04em;
                 text-transform: uppercase; padding: 1px 7px; border-radius: 999px;
-                background: rgba(128,128,128,.18); opacity: .8; }
+                background: var(--surface-hover); color: var(--text-dim); }
     /* Coloured from the badge's own TEXT, so this stylesheet is the only place
        that knows there are two kinds — and the view module still does not. */
-    .libbadge[data-badge="Still"] { background: rgba(90,140,220,.22); }
+    .libbadge[data-badge="Still"] { background: var(--accent-soft); color: var(--accent); }
     .libtitle { font-size: 12px; font-weight: 600; overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
-    .libtile .meta { opacity: .6; font-size: 11px; font-variant-numeric: tabular-nums;
+    .libtile .meta { color: var(--text-dim); font-size: 11px; font-family: var(--font-mono); font-variant-numeric: tabular-nums;
                      overflow: hidden; text-overflow: ellipsis; }
     .libactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; }
     .libactions button { padding: 2px 9px; font-size: 11px; }
-    .libactions button.delete { border-color: rgba(200,80,60,.45); }
-    .libempty { opacity: .5; padding: 6px 0; }
-    #empty { opacity: .5; padding: 6px 0; }
-    .stamp { opacity: .45; font-size: 11px; margin-left: 6px; }
+    .libactions button.delete { border-color: var(--rec); color: var(--rec); }
+    .libempty { color: var(--text-faint); padding: 6px 0; }
+    #empty { color: var(--text-faint); padding: 6px 0; }
+    .stamp { color: var(--text-faint); font-size: 11px; margin-left: 6px; }
     .labelinput { font: inherit; padding: 2px 6px; border-radius: 5px;
-                  border: 1px solid rgba(128,128,128,.5); background: transparent; width: 200px; }
-    .take button.delete { border-color: rgba(200,80,60,.45); }
+                  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); width: 200px; }
+    .take button.delete { border-color: var(--rec); color: var(--rec); }
+    /* The take player's CSS (transport, timeline, trim, export, legibility,
+       share, frame-grab) moved to app/renderer/editor.html with the rest of
+       the player (STC-373) — the reskin (#135) restyled it here first, and
+       this branch's own removal of #player and everything under it wins the
+       conflict rather than reintroducing a restyled copy of a section that
+       no longer exists in this window. */
     /* still capture preferences: the destination folder (STC-293) and the
        post-capture floating thumbnail (STC-296). The DECORATED still itself
        is composited and exported from the thumbnail's own window now — see
@@ -83,20 +178,20 @@
                 font-size: 12px; flex-wrap: wrap; }
     .stillrow label { display: flex; align-items: center; gap: 4px; }
     .stillrow button { padding: 3px 10px; font-size: 12px; }
-    #stilldest { opacity: .75; overflow: hidden; text-overflow: ellipsis;
+    #stilldest { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
                  white-space: nowrap; max-width: 260px; direction: rtl; }
     .shortcut { display: flex; align-items: baseline; gap: 10px; padding: 5px 0;
-                border-top: 1px solid rgba(128,128,128,.22); }
+                border-top: 1px solid var(--border); }
     .shortcut .name { min-width: 150px; }
-    .shortcut .keys { font: inherit; min-width: 88px; text-align: center; padding: 3px 10px;
-                      font-size: 12px; font-variant-numeric: tabular-nums; }
-    .shortcut .keys.listening { border-color: rgba(90,140,220,.9); }
+    .shortcut .keys { font: inherit; font-weight: 500; min-width: 88px; text-align: center; padding: 3px 10px;
+                      font-size: 12px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .shortcut .keys.listening { border-color: var(--accent); color: var(--accent); }
     .shortcut .clear { padding: 3px 8px; font-size: 12px; }
-    .shortcut .why { font-size: 12px; color: #c2553c; flex: 1; }
-    .shortcut .why.ok { color: inherit; opacity: .5; }
+    .shortcut .why { font-size: 12px; color: var(--warn); flex: 1; }
+    .shortcut .why.ok { color: var(--text-dim); opacity: 1; }
     #shortcutfoot { display: flex; gap: 10px; align-items: baseline; padding-top: 8px; }
     #shortcutfoot button { padding: 3px 10px; font-size: 12px; }
-    #shortcuthint { font-size: 12px; opacity: .55; }
+    #shortcuthint { font-size: 12px; color: var(--text-faint); }
   </style>
 </head>
 <body>
