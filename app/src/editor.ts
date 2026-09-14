@@ -216,10 +216,38 @@ function updateTrimUI(): void {
     : `${fmtClock(w.startNs)}–${fmtClock(w.endNs)} · ${fmtClock(w.endNs - w.startNs)} · ${est}`;
 }
 
-/** The export grid on the track (STC-338 rule 9). See renderer.ts's original for the reasoning. */
+/**
+ * The export grid on the track (STC-338 rule 9). See renderer.ts's original
+ * for the reasoning.
+ *
+ * STC-378: a freshly created editor `BrowserWindow` is not guaranteed to have
+ * given its content view a final layout size by the time `openTakeOrThrow`'s
+ * boot sequence reaches this call — reproduced live and reproducibly on CI's
+ * macOS runner (`#ticks` stuck `hidden` after the very first take opened in a
+ * take), never once under Xvfb here despite repeated local runs, which is
+ * presumably why STC-373 didn't catch it: this sandbox's window manager lays
+ * a window out immediately on creation. The existing `resize` listener below
+ * only self-heals if a genuine LATER resize follows, which an explicitly
+ * `width`/`height`-constructed `BrowserWindow` need not ever produce. So a
+ * non-positive width is not trusted on the first read: it gets a bounded
+ * number of retries on successive animation frames — each one guarantees a
+ * real layout/paint has happened since the last — before `#ticks` is
+ * believed to have nothing legible to draw. Same family as STC-338's
+ * "a measurement that cannot fail loudly will fail quietly and plausibly":
+ * the fix there was to measure after a known reveal; there is no single
+ * known reveal here, so this measures again rather than trusting one read.
+ */
+const MAX_TICK_LAYOUT_RETRIES = 5;
+let tickLayoutRetriesLeft = MAX_TICK_LAYOUT_RETRIES;
 function updateTicks(): void {
   const ticks = $("ticks") as HTMLElement;
   const width = $("timeline").getBoundingClientRect().width;
+  if (width <= 0 && player && tickLayoutRetriesLeft > 0) {
+    tickLayoutRetriesLeft--;
+    requestAnimationFrame(updateTicks);
+    return;
+  }
+  tickLayoutRetriesLeft = MAX_TICK_LAYOUT_RETRIES;
   const stride = player ? tickStrideFrames(player.durationNs, width) : null;
   if (!player || stride === null || width <= 0) {
     ticks.setAttribute("hidden", "");

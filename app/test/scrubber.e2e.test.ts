@@ -390,4 +390,43 @@ describe("the export grid on the track (rule 9)", () => {
     // 300 frames over the track, so a tick is at most the whole track.
     expect(ticks.px).toBeLessThanOrEqual(ticks.trackPx);
   }, 60_000);
+
+  // STC-378: a fresh editor window's content view is not guaranteed to have
+  // its final layout size on the very first synchronous read — reproduced
+  // live on CI's macOS runner (never under Xvfb here, so this injects the
+  // exact failure condition directly rather than relying on the race
+  // actually happening). #timeline's OWN getBoundingClientRect is made to
+  // report a 0-width rect exactly once, simulating the read updateTicks()
+  // takes before the window has been laid out; a real resize then triggers
+  // updateTicks() again the way the app's own boot sequence would call it a
+  // first time. Without the retry this fix adds, one bad read commits
+  // #ticks to `hidden` forever — this is a live discriminator, not a
+  // decoration: it was watched failing before the retry was added.
+  test("a transient zero-width layout read does not permanently hide the ticks (STC-378)", async () => {
+    const { win } = await openPreview();
+    await win.evaluate(() => {
+      const el = document.getElementById("timeline")!;
+      const real = el.getBoundingClientRect.bind(el);
+      let armed = true;
+      el.getBoundingClientRect = () => {
+        if (armed) {
+          armed = false;
+          const r = real();
+          return { ...r, width: 0, right: r.left, toJSON: r.toJSON } as DOMRect;
+        }
+        return real();
+      };
+      window.dispatchEvent(new Event("resize"));
+    });
+    // The recovery is driven by requestAnimationFrame, not a timer, so wait
+    // out a handful of real frames rather than a fixed setTimeout.
+    await win.evaluate(() => new Promise<void>((resolve) => {
+      let n = 0;
+      const tick = () => { if (++n > 10) resolve(); else requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+    }));
+    const hidden = await win.evaluate(() =>
+      document.getElementById("ticks")!.hasAttribute("hidden"));
+    expect(hidden).toBe(false);
+  }, 60_000);
 });
