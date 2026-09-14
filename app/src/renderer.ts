@@ -201,6 +201,8 @@ const windowSourceLabel = $("window-source-label");
 const regionSourceLabel = $("region-source-label");
 const pickWindowBtn = $("pickwindow") as HTMLButtonElement;
 const pickRegionBtn = $("pickregion") as HTMLButtonElement;
+const clearWindowBtn = $("clearwindow") as HTMLButtonElement;
+const clearRegionBtn = $("clearregion") as HTMLButtonElement;
 
 let currentScope: ScopeSettingsView = { kind: "display", region: null, windowId: null, windowLabel: null };
 
@@ -224,8 +226,33 @@ function renderScope(): void {
   regionSourceLabel.textContent = currentScope.region
     ? `${Math.round(currentScope.region.width)} × ${Math.round(currentScope.region.height)}`
     : "No area chosen";
-  if (!recording) recordBtn.disabled = !scopeHasTarget();
+  // Clearing an already-empty pick is a no-op the button should not invite —
+  // the STC-374 runbook's finding was that there was no way BACK to this
+  // state at all, not that the button needed to always be live.
+  if (!recording) {
+    clearWindowBtn.disabled = currentScope.windowId == null;
+    clearRegionBtn.disabled = currentScope.region == null;
+    recordBtn.disabled = !scopeHasTarget();
+  }
 }
+
+/** Forgets a chosen window or area without opening the picker — the gap the
+ * STC-374 runbook found: `kind` stays put (Window/Area scope does not fall
+ * back to Screen), only the target and its cosmetic label reset. */
+async function clearSource(kind: "region" | "window"): Promise<void> {
+  const patch = kind === "region"
+    ? { region: null }
+    : { windowId: null, windowLabel: null };
+  try {
+    const saved = await recorder.setSettings({ scope: { ...currentScope, ...patch } });
+    currentScope = saved.scope;
+  } catch (e) {
+    alertUser(`Could not clear the ${kind === "region" ? "area" : "window"}: ${String(e)}`);
+  }
+  renderScope();
+}
+clearWindowBtn.addEventListener("click", () => void clearSource("window"));
+clearRegionBtn.addEventListener("click", () => void clearSource("region"));
 
 scopeSel.addEventListener("change", async () => {
   const kind = scopeSel.value as ScopeSettingsView["kind"];
@@ -279,6 +306,10 @@ function lockSettings(locked: boolean): void {
   scopeSel.disabled = locked;
   pickWindowBtn.disabled = locked;
   pickRegionBtn.disabled = locked;
+  // Locked, these stay disabled outright; unlocked, renderScope() puts them
+  // back to whatever "is there something to clear" actually says.
+  if (locked) { clearWindowBtn.disabled = true; clearRegionBtn.disabled = true; }
+  else renderScope();
 }
 // ---- profile sheet (STC-374) ------------------------------------------------
 //

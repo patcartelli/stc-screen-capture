@@ -195,4 +195,56 @@ describe("the scope picker", () => {
       .toBe("Finder — Downloads");
     await expect.poll(() => second.win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
   }, 180_000);
+
+  // The runbook's finding (2026-09-14): once a window or area was chosen,
+  // there was no way BACK to "nothing chosen" without reopening the picker
+  // and making a new one.
+  test("Clear forgets a chosen window without reopening the picker", async () => {
+    const { win } = await launch();
+    await win.selectOption("#scope", "window");
+    expect(await win.isDisabled("#clearwindow")).toBe(true);
+
+    await win.click("#pickwindow");
+    const overlay = await overlayWindow();
+    await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
+    await send(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
+    await expect.poll(() => win.textContent("#window-source-label"), { timeout: 15_000 })
+      .toBe("Finder — Downloads");
+    await expect.poll(() => win.isEnabled("#clearwindow"), { timeout: 10_000 }).toBe(true);
+
+    await win.click("#clearwindow");
+    await expect.poll(() => win.textContent("#window-source-label"), { timeout: 10_000 })
+      .toBe("No window chosen");
+    expect(await win.isDisabled("#record")).toBe(true);
+    expect(await win.isDisabled("#clearwindow")).toBe(true);
+    // The scope stays Window — clearing forgets the target, not the mode.
+    expect(await win.inputValue("#scope")).toBe("window");
+  }, 120_000);
+
+  test("Clear forgets a chosen area without reopening the picker", async () => {
+    const { win } = await launch();
+    await win.selectOption("#scope", "region");
+    expect(await win.isDisabled("#clearregion")).toBe(true);
+
+    await win.click("#pickregion");
+    const overlay = await overlayWindow();
+    const b = await primaryBounds();
+    const from = { x: b.x + 100, y: b.y + 80 };
+    const to = { x: from.x + 200, y: from.y + 100 };
+    await send(overlay, { t: "pointerdown", at: from });
+    await send(overlay, { t: "pointermove", at: to });
+    await send(overlay, { t: "pointerup", at: to });
+    await awaitConfirmable(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => win.textContent("#region-source-label"), { timeout: 15_000 })
+      .toBe("200 × 100");
+    await expect.poll(() => win.isEnabled("#clearregion"), { timeout: 10_000 }).toBe(true);
+
+    await win.click("#clearregion");
+    await expect.poll(() => win.textContent("#region-source-label"), { timeout: 10_000 })
+      .toBe("No area chosen");
+    expect(await win.isDisabled("#record")).toBe(true);
+    expect(await win.isDisabled("#clearregion")).toBe(true);
+    expect(await win.inputValue("#scope")).toBe("region");
+  }, 120_000);
 });

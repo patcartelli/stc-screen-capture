@@ -84,10 +84,13 @@ skip) and "Capture shortcuts" underneath.
 - Press Record with a Window or Area scope picked. Confirm the recording
   really is scoped to that window/area — not the whole display — by
   watching it happen and then opening the export.
-- Does re-picking (clicking "Choose window…"/"Choose area…" again while one
-  is already chosen) feel like the obvious way to change your mind, or does
-  it need its own affordance (a way to see/clear the current pick without
-  reopening the overlay)?
+- **RUN 2026-09-14: confirmed working**, and found the one real gap in this
+  section — there was no way back to "nothing chosen" without reopening the
+  picker. Fixed the same day: a **Clear** button next to each source control
+  (`#clearwindow`/`#clearregion`) forgets the pick without touching Scope.
+  Re-picking (clicking "Choose window…"/"Choose area…" again) still works as
+  the way to change your mind to a DIFFERENT target; Clear is for "nothing"
+  rather than "something else".
 - Cancel a pick (Escape inside the overlay) with nothing previously chosen,
   and confirm Record stays correctly disabled and the source control still
   reads "No … chosen" — nothing should silently fall back to Screen.
