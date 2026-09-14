@@ -105,3 +105,10 @@ still capture already has, or does anything about doing it for a recording
 (rather than a one-shot still) feel like it needs different wording or a
 different affordance (e.g. "this window will be recorded until you stop",
 since a recording is open-ended in a way a still is not)?
+
+**RUN 2026-09-14: confirmed through this app's own picker, not just STC-370's
+hand-crafted IPC.** A resize stops the recording; a plain move does not
+interrupt it — exactly the behaviour STC-370's own hardware run already
+established for `windowId` scope, now verified end to end starting from the
+"Choose window…" button rather than a raw `start` command. All four sections
+of this runbook are RUN.
