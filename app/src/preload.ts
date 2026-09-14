@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld("recorder", {
   reopenStill: (dir: string) => ipcRenderer.invoke("still:reopen", dir),
   duplicateStill: (dir: string) => ipcRenderer.invoke("still:duplicate", dir),
   start: () => ipcRenderer.invoke("recorder:start"),
+  // STC-374: choose what a recording scopes to — a region or a window — via
+  // the same overlay `captureStill` uses. Persisted main-side; this only asks
+  // for the pick and reports what was stored.
+  pickCaptureTarget: (kind: "region" | "window") =>
+    ipcRenderer.invoke("recorder:pickCaptureTarget", kind),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),
   // Share (STC-242) moved to the editor window with the rest of the player —

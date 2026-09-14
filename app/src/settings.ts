@@ -82,7 +82,51 @@ export interface Settings {
    * video go when it leaves", not "what does the encode look like".
    */
   share: ShareSettings;
+  /**
+   * What a RECORDING captures (STC-370's region/window capability, wired to
+   * the window's scope picker by STC-374): the whole display named by
+   * `displayId` above, a region of one, or a single window. Its own block
+   * rather than a fourth top-level field, because a region and a window each
+   * carry more than one value and "source stays a separate control from the
+   * profile" (the ticket's own words) still means scope and source are one
+   * idea together.
+   *
+   * Sticky, the same as `displayId`: a chosen window or area stays chosen
+   * across launches and across `kind` changes, so flipping the scope picker
+   * back and forth does not forget what was picked. `start` refuses rather
+   * than silently falling back to the whole display when `kind` asks for a
+   * region or window and nothing has been picked yet — the same rule STC-247
+   * already set for a stale `displayId`.
+   */
+  scope: ScopeSettings;
 }
+
+export interface ScopeRegion {
+  /** display-local points, resolved against THIS display — the same shape
+   * `capture-still`'s own crop carries, and the same reason: a region means
+   * nothing without knowing which display it is local to. */
+  displayId: number;
+  x: number; y: number; width: number; height: number;
+}
+
+export interface ScopeSettings {
+  kind: "display" | "region" | "window";
+  /** Set only when `kind` is "region". */
+  region: ScopeRegion | null;
+  /** Set only when `kind` is "window", as a CGWindowID. */
+  windowId: number | null;
+  /**
+   * Cosmetic only — never sent to the helper. A window can close or another
+   * app can retitle it between now and the next `start`; this is what the
+   * source control shows until the user re-picks, not a claim that the
+   * window still exists.
+   */
+  windowLabel: string | null;
+}
+
+export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
+  kind: "display", region: null, windowId: null, windowLabel: null,
+};
 
 export interface ShareSettings {
   /**
@@ -146,6 +190,7 @@ export const DEFAULT_SETTINGS: Settings = {
   still: { ...DEFAULT_STILL_SETTINGS },
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
   share: { ...DEFAULT_SHARE_SETTINGS },
+  scope: { ...DEFAULT_SCOPE_SETTINGS },
 };
 
 /**
@@ -213,6 +258,46 @@ function cleanDisplayId(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
 }
 
+/** A CGWindowID is a non-negative integer. */
+function cleanWindowId(v: unknown): number | null {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
+}
+
+/**
+ * A region needs a display to be local to AND four finite, positive-sized
+ * numbers — same shape and same rule `parseRect` enforces on the helper side.
+ * Any other shape is "nothing picked" rather than a half-trusted rectangle.
+ */
+function cleanScopeRegion(v: unknown): ScopeRegion | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const d = v as Record<string, unknown>;
+  const displayId = cleanDisplayId(d.displayId);
+  const { x, y, width, height } = d;
+  if (displayId == null) return null;
+  if (![x, y, width, height].every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  if ((width as number) <= 0 || (height as number) <= 0) return null;
+  return { displayId, x: x as number, y: y as number, width: width as number, height: height as number };
+}
+
+/**
+ * Same rule as every other block here: an unknown shape falls back whole.
+ *
+ * `kind` is kept even when its target is not — "window scope, nothing picked
+ * yet" is a real, showable state (the source control renders "Choose
+ * window…"), not an error to paper over here. `recorder:start` is where a
+ * scope with no target is refused, not this function.
+ */
+function cleanScope(v: unknown): ScopeSettings {
+  const d = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
+  const kind = d.kind === "region" || d.kind === "window" ? d.kind : "display";
+  return {
+    kind,
+    region: cleanScopeRegion(d.region),
+    windowId: cleanWindowId(d.windowId),
+    windowLabel: typeof d.windowLabel === "string" ? d.windowLabel : null,
+  };
+}
+
 /**
  * A stored binding is trusted only as far as it still parses.
  *
@@ -266,6 +351,7 @@ export function readSettings(dir: string): Settings {
     still: cleanStill(doc.still),
     thumbnail: cleanThumbnail(doc.thumbnail),
     share: cleanShare(doc.share),
+    scope: cleanScope(doc.scope),
   };
 }
 
@@ -288,6 +374,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     still: { ...current.still, ...(patch.still ?? {}) },
     thumbnail: { ...current.thumbnail, ...(patch.thumbnail ?? {}) },
     share: { ...current.share, ...(patch.share ?? {}) },
+    scope: { ...current.scope, ...(patch.scope ?? {}) },
   };
   const clean: Settings = {
     camera: merged.camera === true,
@@ -296,6 +383,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),
     share: cleanShare(merged.share),
+    scope: cleanScope(merged.scope),
     // Not `=== true`: the default is ON, so an absent or malformed value must
     // fall back to on rather than to silence. The camera's `=== true` is the
     // opposite case for the opposite reason — it defaults off because it turns

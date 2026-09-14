@@ -291,20 +291,37 @@ ipcMain.handle("recorder:status", async () => ({
 
 ipcMain.handle("recorder:start", async () => {
   if (!sup) throw new Error("supervisor not running");
+  // Read from the stored preference, NOT passed up from the renderer. Main
+  // already owns these settings, and a renderer-supplied value would be a
+  // second source of truth for what turns on a physical camera and what the
+  // helper is told to point at.
+  const { camera, displayId, scope } = readSettings(app.getPath("userData"));
+  const startParams: Record<string, unknown> = { camera };
+  if (scope.kind === "region" && scope.region) {
+    const { displayId: regionDisplayId, x, y, width, height } = scope.region;
+    startParams.displayId = regionDisplayId;
+    startParams.region = { x, y, width, height };
+  } else if (scope.kind === "window" && scope.windowId != null) {
+    startParams.windowId = scope.windowId;
+  } else if (scope.kind === "display") {
+    // displayId only when one was picked: absent means "the helper's first",
+    // and the helper refuses an id it cannot find (display-not-found) rather
+    // than recording another screen (STC-247).
+    if (displayId != null) startParams.displayId = displayId;
+  } else {
+    // The scope picker asks for a region or a window and nothing has been
+    // picked yet — refused here, before the helper is ever touched, on the
+    // same rule STC-247 already set for a stale displayId: a picker must not
+    // have its choice silently swapped for another.
+    return { ok: false, code: "no-capture-target" };
+  }
   const root = takesRoot(process.env);
   const existing = existsSync(root) ? readdirSync(root) : [];
   // The helper creates the directory itself, and removes it again if the start
   // fails — so a denied grant leaves nothing behind on the user's Desktop.
   const dir = newTakeDir(process.env, new Date(), existing);
   try {
-    // Read from the stored preference, NOT passed up from the renderer. Main
-    // already owns this setting, and a renderer-supplied flag would be a second
-    // source of truth for the thing that turns on a physical camera.
-    const { camera, displayId } = readSettings(app.getPath("userData"));
-    // displayId only when one was picked: absent means "the helper's first",
-    // and the helper refuses an id it cannot find (display-not-found) rather
-    // than recording another screen (STC-247).
-    const r = await sup.startRecording(dir, { camera, ...(displayId != null ? { displayId } : {}) });
+    const r = await sup.startRecording(dir, startParams);
     return { ok: true, dir, info: r };
   } catch (e: any) {
     // A missing Screen Recording grant is the common case and is actionable —
@@ -312,6 +329,59 @@ ipcMain.handle("recorder:start", async () => {
     return { ok: false, code: e?.code ?? "start-failed", detail: e?.detail ?? String(e?.message ?? e) };
   }
 });
+
+/**
+ * Choose what a RECORDING scopes to (STC-370's region/window capability,
+ * wired to the window now) — a region or a window, through the same overlay
+ * `capture-still` uses (STC-290). Persists the pick as the sticky `scope`
+ * preference; a take does not need re-choosing every time it runs, the same
+ * way a chosen display stays chosen (STC-247).
+ *
+ * Guarded the same way `captureStill` is: one overlay at a time, and never
+ * while a take is already running — the scope a live recording is using
+ * cannot be changed out from under it.
+ */
+async function pickCaptureTarget(kind: "region" | "window"):
+  Promise<{ ok: boolean; cancelled?: boolean; scope?: Settings["scope"] }> {
+  if (!sup) return { ok: false };
+  if (sup.state === "recording" || capturing || overlayIsOpen()) return { ok: false };
+
+  let windows: WindowInfo[] = [];
+  try {
+    const r = await sup.listWindows();
+    windows = ((r.windows as any[]) ?? []).map((w) => ({
+      id: w.id, app: w.app, title: w.title,
+      bounds: { x: w.x, y: w.y, width: w.width, height: w.height },
+    }));
+  } catch {
+    // Without a Screen Recording grant the helper cannot enumerate anything.
+    // Region mode needs no window list, so the overlay still opens; window
+    // mode will simply offer nothing to click, same as still capture.
+  }
+
+  const { outcome } = await openOverlay({
+    windows, mode: kind, dist: here, renderer: join(here, "..", "renderer"),
+  });
+  if (outcome.kind === "cancelled") return { ok: true, cancelled: true };
+
+  // Trust what the overlay actually produced, not the mode it was opened in —
+  // the mode toggle inside it still works, the same reasoning
+  // `selectRegionOrWindow` already follows for still capture.
+  const scope: Settings["scope"] = outcome.kind === "region"
+    ? { kind: "region", windowId: null, windowLabel: null,
+        region: { displayId: outcome.displayId, ...outcome.crop } }
+    : { kind: "window", region: null, windowId: outcome.windowId,
+        windowLabel: (() => {
+          const w = windows.find((x) => x.id === outcome.windowId);
+          const label = [w?.app, w?.title].filter(Boolean).join(" — ");
+          return label || `Window ${outcome.windowId}`;
+        })() };
+  const saved = writeSettings(app.getPath("userData"), { scope });
+  return { ok: true, scope: saved.scope };
+}
+
+ipcMain.handle("recorder:pickCaptureTarget", async (_e, kind: string) =>
+  kind === "region" || kind === "window" ? pickCaptureTarget(kind) : { ok: false });
 
 /**
  * Select, then capture one frame (STC-290 handing off to STC-289), or capture a
