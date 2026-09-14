@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "stc:changes-1",
+  "title": "stc changes (frame-difference sidecar), v1",
+  "description": "STC-322: a coarse per-frame, per-cell change-magnitude grid over a take's display track, written once by a post-recording pass. Raw change only — no events joined in. The temporal filter (change near an event vs. ambient) is auto-zoom stage 2's job and lives in the transform, where fixtures can test it; a sidecar that depended on two inputs (video AND events) would need regenerating whenever either changed. Cells are a REDUCTION (every source pixel visited once), not a point-sampled raster — see docs/STC-320-WGSL-PORT.md for why that distinction is load-bearing: a point sample misses a two-pixel text caret 8 times out of 10. Frame 0 (no predecessor) is still present, with an all-zero grid, so a consumer can index by frame position without special-casing it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "gridWidth", "gridHeight", "threshold", "frames"],
+  "properties": {
+    "version": { "const": 1 },
+    "gridWidth": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "cells per row; 64 in the reference implementation (transform/src/frame-diff-rule.ts GRID_W)"
+    },
+    "gridHeight": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "cells per column; 36 in the reference implementation (GRID_H)"
+    },
+    "threshold": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "the per-pixel luma-delta threshold a change had to clear, 0..1 (study one's page default is 0.08)"
+    },
+    "frames": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/frame" }
+    }
+  },
+  "definitions": {
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "cells", "changedFraction"],
+      "properties": {
+        "t": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "this frame's PTS, session-relative integer ns — matches Session.frames / demux.ts's framesNs, not a frame index"
+        },
+        "cells": {
+          "type": "array",
+          "description": "row-major from the top-left, gridWidth * gridHeight entries, each the fraction (0..1) of that cell's pixels that changed since the PREVIOUS frame",
+          "items": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "changedFraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "changed pixels over total pixels across the whole frame, exact (not the mean of cells, which would misweight uneven tiles at edge cells) — free from the same reduction, kept so a consumer wanting a single scalar (a sparkline, same as STC-319's study page) need not re-derive grid geometry"
+        }
+      }
+    }
+  }
+}

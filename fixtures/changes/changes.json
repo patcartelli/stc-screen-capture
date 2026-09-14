@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "gridWidth": 4,
+  "gridHeight": 3,
+  "threshold": 0.08,
+  "frames": [
+    {
+      "t": 0,
+      "cells": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "changedFraction": 0
+    },
+    {
+      "t": 16666667,
+      "cells": [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+      "changedFraction": 0.0833
+    },
+    {
+      "t": 33333334,
+      "cells": [0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 0, 0],
+      "changedFraction": 0.0208
+    }
+  ]
+}
