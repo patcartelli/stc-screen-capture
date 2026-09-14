@@ -107,3 +107,15 @@ A Mac, doing three things in order:
 
 The GLSL half is the part that could be built without a Mac, and it is done.
 The rules are the part that cannot be, and they are not.
+
+## Re-checked 2026-09-14 — still blocked, nothing to correct
+
+Re-verified against a fresh clone of `patcartelli/studio-cartelli` rather than
+trusting this document's own account of five days ago:
+`public/lab/videos/` holds nothing but `.gitkeep`, `src/data/lab-demos.ts`'s
+`network` entry is still `published: false`, and `/lab/frame-diff.astro`'s
+`ASSET_BASE` still points at the synthetic stand-in — none of it has moved.
+STC-313's recording is still the actual gate, exactly as stated above. The
+runbook in "What session two needs" is confirmed accurate and executable as
+written; there is nothing here for a non-Mac session to do beyond restating
+that fact.
