@@ -249,5 +249,75 @@ check("no displays at all is none, with or without a request",
 check("no displays, no request, still none",
       chooseDisplay(requested: nil, available: []), DisplayChoice.noDisplays)
 
+
+// ── which display a window belongs to (STC-370) ─────────────────────────────
+// Shared with Still.swift's window shots — a shot and a take of the same
+// window must never disagree about which display it belongs to.
+let dispA: (id: CGDirectDisplayID, bounds: CGRect) = (1, CGRect(x: 0, y: 0, width: 1920, height: 1080))
+let dispB: (id: CGDirectDisplayID, bounds: CGRect) = (2, CGRect(x: 1920, y: 0, width: 1280, height: 720))
+check("a midpoint inside the first display picks it",
+      chooseDisplayForWindow(midpoint: CGPoint(x: 500, y: 500), displays: [dispA, dispB]) == dispA.id, true)
+check("a midpoint inside the second display picks it, wherever it sits in the list",
+      chooseDisplayForWindow(midpoint: CGPoint(x: 2000, y: 100), displays: [dispB, dispA]) == dispB.id, true)
+check("a midpoint in neither display's bounds falls back to the first in the list",
+      chooseDisplayForWindow(midpoint: CGPoint(x: -500, y: -500), displays: [dispA, dispB]) == dispA.id, true)
+check("no displays at all is nil, not a crash",
+      chooseDisplayForWindow(midpoint: CGPoint(x: 0, y: 0), displays: []) == nil, true)
+
+
+// ── what a `start` request means (STC-370) ──────────────────────────────────
+func parseStart(_ cmd: [String: Any]) -> String {
+    switch parseStartRequest(cmd) {
+    case .success(let r):
+        let d = r.displayId.map(String.init) ?? "-"
+        let w = r.windowId.map(String.init) ?? "-"
+        let rg = r.region.map { "\($0.x),\($0.y),\($0.width),\($0.height)" } ?? "-"
+        return "ok:dir=\(r.dir):display=\(d):window=\(w):region=\(rg):camera=\(r.camera)"
+    case .failure(let e):
+        return "err:\(e.code)"
+    }
+}
+
+check("dir is required", parseStart(["cmd": "start"]), "err:missing-dir")
+check("an empty dir is missing", parseStart(["dir": ""]), "err:missing-dir")
+check("no scope fields at all keeps phase-1 behaviour: whole display, none requested",
+      parseStart(["dir": "/tmp/x"]), "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false")
+check("a displayId alone is the phase-1 display scope",
+      parseStart(["dir": "/tmp/x", "displayId": 7]), "ok:dir=/tmp/x:display=7:window=-:region=-:camera=false")
+check("camera is carried alongside any scope",
+      parseStart(["dir": "/tmp/x", "camera": true]), "ok:dir=/tmp/x:display=-:window=-:region=-:camera=true")
+check("a region on its own display is a region scope",
+      parseStart(["dir": "/tmp/x", "displayId": 3,
+                  "region": ["x": 10, "y": 20, "width": 300, "height": 200]]),
+      "ok:dir=/tmp/x:display=3:window=-:region=10.0,20.0,300.0,200.0:camera=false")
+check("a windowId alone is a window scope",
+      parseStart(["dir": "/tmp/x", "windowId": 42]),
+      "ok:dir=/tmp/x:display=-:window=42:region=-:camera=false")
+check("region and windowId together is refused — pick one scope",
+      parseStart(["dir": "/tmp/x", "windowId": 42,
+                  "region": ["x": 0, "y": 0, "width": 1, "height": 1]]),
+      "err:region-and-window")
+check("a malformed region is refused, not silently dropped",
+      parseStart(["dir": "/tmp/x", "region": ["x": 0, "y": 0, "width": -1, "height": 1]]),
+      "err:bad-region")
+check("a malformed windowId is refused, not silently ignored (unlike a malformed displayId)",
+      parseStart(["dir": "/tmp/x", "windowId": -1]), "err:bad-window-id")
+check("a malformed displayId falls back to the phase-1 default rather than being refused",
+      parseStart(["dir": "/tmp/x", "displayId": -1]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false")
+
+
+// ── what a window-scope take does about its window mid-take (STC-370) ──────
+check("no size change at all is unchanged",
+      decideWindowWatch(initial: (800, 600), current: (800, 600)), WindowWatchDecision.unchanged)
+check("sub-tolerance jitter reads as unchanged, not a resize",
+      decideWindowWatch(initial: (800, 600), current: (800.2, 599.8)), WindowWatchDecision.unchanged)
+check("a width change past tolerance is a resize",
+      decideWindowWatch(initial: (800, 600), current: (900, 600)), WindowWatchDecision.resized)
+check("a height change past tolerance is a resize",
+      decideWindowWatch(initial: (800, 600), current: (800, 500)), WindowWatchDecision.resized)
+check("the window no longer being found is gone, not resized",
+      decideWindowWatch(initial: (800, 600), current: nil), WindowWatchDecision.gone)
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
 exit(failures == 0 ? 0 : 1)

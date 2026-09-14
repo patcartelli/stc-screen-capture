@@ -86,13 +86,28 @@ describe("listTakes — anchors version support (STC-262)", () => {
       .toEqual(transform.slice().sort());
   });
 
+  // STC-370: a region/window-scope take writes v3 with a `scope` block. The
+  // scanner must not have gone stale the same way it did for v2 (STC-262) —
+  // this is the positive half of that same lesson, not only "not rejected".
+  test("a v3 take with a scope block is listed, not rejected as unsupported", async () => {
+    makeTake("2026-08-27_12-00-00", {
+      anchors: v2Anchors({ version: 3, scope: { kind: "region", region: { x: 0, y: 0, width: 640, height: 480 } } }),
+    });
+    const { takes, invalid } = await listTakes(env());
+    expect(invalid, JSON.stringify(invalid)).toEqual([]);
+    expect(takes.length).toBe(1);
+    expect(takes[0]!.name).toBe("2026-08-27_12-00-00");
+  });
+
   test("a version this build does not know is still rejected, by name", async () => {
-    // Widening must not become "accept anything".
-    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 3 }) });
+    // Widening must not become "accept anything". Version 4, not 3: STC-370
+    // made 3 a real, supported version (a region/window take's scope block),
+    // so it is no longer a stand-in for "unknown future version".
+    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 4 }) });
     const { takes, invalid } = await listTakes(env());
     expect(takes).toEqual([]);
     expect(invalid.length).toBe(1);
-    expect(invalid[0]!.reason).toMatch(/version 3 is not supported/);
+    expect(invalid[0]!.reason).toMatch(/version 4 is not supported/);
   });
 });
 

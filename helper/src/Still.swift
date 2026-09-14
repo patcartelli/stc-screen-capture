@@ -268,8 +268,14 @@ final class StillCapture {
             // The window's display is the one under its centre; a window
             // straddling two displays is attributed to whichever holds more of
             // its middle, and its bounds are expressed in THAT display's points.
+            // `chooseDisplayForWindow` (CaptureDecisions.swift) is shared with
+            // the recording path's window scope (STC-370) so a shot and a
+            // take of the same window cannot disagree about which display it
+            // belongs to.
             let mid = CGPoint(x: win.frame.midX, y: win.frame.midY)
-            let display = content.displays.first { CGDisplayBounds($0.displayID).contains(mid) }
+            let displayIds = content.displays.map { ($0.displayID, CGDisplayBounds($0.displayID)) }
+            let display = chooseDisplayForWindow(midpoint: mid, displays: displayIds)
+                .flatMap { dispId in content.displays.first { $0.displayID == dispId } }
                 ?? content.displays[0]
             geometry = displayGeometry(id: display.displayID,
                                        pointWidth: display.width, pointHeight: display.height)

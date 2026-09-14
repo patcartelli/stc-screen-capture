@@ -303,3 +303,138 @@ func chooseDisplay(requested: CGDirectDisplayID?, available: [CGDirectDisplayID]
         ? .display(requested)
         : .notFound(requested: requested, available: available)
 }
+
+/// Which display a window belongs to: whichever display's bounds contain the
+/// window's midpoint, or the first display if none do (a window can sit in a
+/// gap between displays, or the caller's own list can be stale by the time
+/// this runs). Shared by the still path (`Still.swift`, STC-289) and the
+/// recording path (`Capture.swift`, STC-370) so a shot and a take of the same
+/// window are never attributed to different displays — this codebase's
+/// repeated "two implementations of one rule" defect, avoided rather than
+/// produced a second time.
+func chooseDisplayForWindow(midpoint: CGPoint, displays: [(id: CGDirectDisplayID, bounds: CGRect)]) -> CGDirectDisplayID? {
+    (displays.first { $0.bounds.contains(midpoint) } ?? displays.first)?.id
+}
+
+
+// ── what a `start` request means (STC-370) ─────────────────────────────────
+
+/// A recording's capture scope: the whole display (phase-1 behaviour,
+/// unchanged), a region of one in display-local points, or one window — the
+/// same three shapes `StillRequest`/`StillKind` already give a still
+/// (STC-289). `region`/`windowId` reuse `StillRect` and the still path's
+/// `number`/`id32`/`parseRect` (StillDecisions.swift) rather than a second
+/// copy of "what a rect looks like in a JSON command".
+struct StartRequest: Equatable {
+    let dir: String
+    /// nil means SCK's first display — phase-1 behaviour, unchanged. Ignored
+    /// for a window scope, which finds its own display from the window.
+    let displayId: CGDirectDisplayID?
+    /// display-local points. Resolved against a real display only once
+    /// `SCShareableContent` answers (`resolveCaptureTarget`, Capture.swift) —
+    /// this function does not know whether the rectangle overlaps anything.
+    let region: StillRect?
+    let windowId: UInt32?
+    let camera: Bool
+}
+
+enum StartRequestError: Error, Equatable, CustomStringConvertible {
+    case missingDir
+    case regionAndWindow
+    case badRegion(String)
+    case badWindowId(String)
+
+    var code: String {
+        switch self {
+        case .missingDir:      return "missing-dir"
+        case .regionAndWindow: return "region-and-window"
+        case .badRegion:       return "bad-region"
+        case .badWindowId:     return "bad-window-id"
+        }
+    }
+    var description: String {
+        switch self {
+        case .missingDir: return "start requires \"dir\""
+        case .regionAndWindow:
+            return "a start request must not carry both \"region\" and \"windowId\" — pick one scope"
+        case .badRegion(let why):
+            return "region must be {x, y, width, height} in display-local points with positive size: \(why)"
+        case .badWindowId(let why):
+            return "windowId must be a CGWindowID (non-negative integer): \(why)"
+        }
+    }
+}
+
+/// What `start` means, or exactly why it cannot be — the recording-path twin
+/// of `parseStillRequest`. Deliberately does not check the region or window
+/// against reality: that needs `SCShareableContent`, which is only available
+/// once the async lookup `start()` begins has answered
+/// (`resolveCaptureTarget`, Capture.swift).
+func parseStartRequest(_ cmd: [String: Any]) -> Result<StartRequest, StartRequestError> {
+    guard let dir = cmd["dir"] as? String, !dir.isEmpty else { return .failure(.missingDir) }
+
+    var displayId: CGDirectDisplayID? = nil
+    if let raw = cmd["displayId"] {
+        // A malformed displayId (negative, non-numeric) is treated the same
+        // as none given, same latitude parseStillRequest gives excludeWindowIds:
+        // this is phase-1's own fallback-to-first-display behaviour, not a new
+        // refusal, and chooseDisplay/resolveCaptureTarget answer for a
+        // well-formed but absent display honestly (display-not-found).
+        displayId = id32(raw)
+    }
+
+    var region: StillRect? = nil
+    if let r = cmd["region"] {
+        switch parseRect(r) {
+        case .success(let rect): region = rect
+        case .failure(let e): return .failure(.badRegion(e.description))
+        }
+    }
+
+    var windowId: UInt32? = nil
+    if let raw = cmd["windowId"] {
+        guard let wid = id32(raw) else { return .failure(.badWindowId("\(raw)")) }
+        windowId = wid
+    }
+
+    guard !(region != nil && windowId != nil) else { return .failure(.regionAndWindow) }
+
+    let camera = cmd["camera"] as? Bool ?? false
+    return .success(StartRequest(dir: dir, displayId: displayId, region: region,
+                                 windowId: windowId, camera: camera))
+}
+
+
+// ── what a window-scope take does about its window mid-take (STC-370) ──────
+
+enum WindowWatchDecision: Equatable {
+    case unchanged
+    case resized
+    case gone
+}
+
+/// What a window-scope take should do about its window's current state,
+/// compared with what was recorded when the take started.
+///
+/// A MOVE alone changes nothing: `SCContentFilter(desktopIndependentWindow:)`
+/// follows the window as it moves, so frames keep arriving at the same pixel
+/// size wherever the window now sits. A RESIZE is the case that matters —
+/// `AVAssetWriter` cannot change output dimensions mid-file, the same
+/// constraint a display reconfiguration already ends a take for — so a
+/// window-scope take whose window changed size must end cleanly rather than
+/// silently deliver frames of the wrong size (or none). A window that is no
+/// longer found (closed, minimised, or its app quit) has nothing left to
+/// capture.
+///
+/// Compares width and height only, in points, with a half-point tolerance:
+/// ScreenCaptureKit's own bounds read back with a fraction of a point of
+/// jitter between two reads of the SAME, unresized window, and a decision
+/// that fired on that noise would end perfectly good takes.
+func decideWindowWatch(initial: (width: Double, height: Double),
+                       current: (width: Double, height: Double)?) -> WindowWatchDecision {
+    guard let current else { return .gone }
+    let tolerance = 0.5
+    let changed = abs(current.width - initial.width) > tolerance
+                || abs(current.height - initial.height) > tolerance
+    return changed ? .resized : .unchanged
+}

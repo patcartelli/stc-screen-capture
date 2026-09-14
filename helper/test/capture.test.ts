@@ -137,6 +137,43 @@ describe("capture — behaviour without a Screen Recording grant", () => {
     expect(st.state, "a refused start must leave the helper idle").toBe("idle");
   }, 90_000);
 
+  // STC-370: a malformed scope answers before ScreenCaptureKit is ever
+  // touched (parseStartRequest runs first in App.start), so these run
+  // regardless of whether this machine has a Screen Recording grant — the
+  // same reason capture-still's own request-validation tests need no grant.
+  test("region and windowId together is refused, never picking one silently", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({
+      cmd: "start", dir: session(), seq: 1,
+      windowId: 42, region: { x: 0, y: 0, width: 100, height: 100 },
+    });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 1), 10_000, "start outcome");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("region-and-window");
+    h.send({ cmd: "status", seq: 2 });
+    const st = await waitFor(() => h.fd3.find((l) => l.seq === 2), 10_000, "status");
+    expect(st.state, "a refused start must leave the helper idle").toBe("idle");
+  }, 30_000);
+
+  test("a region with non-positive size is refused, not silently clamped", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "start", dir: session(), seq: 1, region: { x: 0, y: 0, width: 0, height: 100 } });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 1), 10_000, "start outcome");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("bad-region");
+  }, 30_000);
+
+  test("a windowId that is not a valid CGWindowID is refused, not treated as absent", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "start", dir: session(), seq: 1, windowId: -1 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 1), 10_000, "start outcome");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("bad-window-id");
+  }, 30_000);
+
   test("a denied start leaves the helper idle and retryable, not wedged", async () => {
     if (await probeGranted()) return;
     const h = spawnHelper();
