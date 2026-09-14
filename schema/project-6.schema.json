@@ -1,0 +1,215 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "stc:project-6",
+  "title": "stc project (edit document), v6",
+  "description": "Everything the user can change after recording. render(project, session, t) is a pure function of this document plus the session data. v6 adds `overrides`: manual zoom overrides (STC-330) — a discriminated union, one 'geometry' variant so far, keyed by a derived window's startNs (as a string). An override's rect is UV over the CAPTURE, the same space a redaction lives in; its easing, when present, replaces the project's own zoom.preset for just that window. Absent on every document written before project-6; parseProject fills []. Later manual-override phases (STC-329, STC-331) add union variants here, not migrations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "output",
+    "cursor",
+    "transform"
+  ],
+  "properties": {
+    "version": {
+      "const": 6
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fps",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "fps": {
+          "enum": [
+            60
+          ],
+          "description": "export samples every other 120 Hz sim tick; only 60 supported in phase 1"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3840
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2160
+        }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "style",
+        "scale"
+      ],
+      "properties": {
+        "style": {
+          "enum": [
+            "default",
+            "circle"
+          ],
+          "description": "default is the macOS pointer set (STC-239); circle is the phase-1 placeholder, kept as an option"
+        },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 8
+        }
+      }
+    },
+    "pip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "corner",
+        "widthPct",
+        "marginPx"
+      ],
+      "description": "Fixed-corner picture-in-picture. Absent means no PiP.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "corner": {
+          "enum": [
+            "bottom-right"
+          ],
+          "description": "only corner implemented in phase 3"
+        },
+        "widthPct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "description": "fraction of output width; 0.125 gives 480px on a 3840px canvas"
+        },
+        "marginPx": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "trim": {
+      "type": "object",
+      "description": "Non-destructive in/out. Absent means the full take. Session-relative integer ns; endNs must be greater than startNs.",
+      "additionalProperties": false,
+      "required": [
+        "startNs",
+        "endNs"
+      ],
+      "properties": {
+        "startNs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "endNs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "description": "Which transform renders this edit. TRANSFORM_HISTORY in transform/src/transform-version.ts says what each number drew; a change to any constant that reaches the pixels bumps it.",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "zoom": {
+      "type": "object",
+      "description": "Auto-zoom settings (STC-325). Absent on every document written before project-4; parseProject fills the default.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Scales the eased amount. 1 is the preset's full travel; 0 is indistinguishable from off."
+        },
+        "preset": {
+          "enum": [
+            "calm",
+            "standard",
+            "snappy"
+          ],
+          "description": "Must equal ZOOM_PRESET_NAMES in transform/src/zoom.ts — a test holds the two together."
+        }
+      },
+      "required": [
+        "enabled",
+        "intensity",
+        "preset"
+      ],
+      "additionalProperties": false
+    },
+    "textPt": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 144,
+      "description": "The recorded application’s base text size in POINTS on the captured display. Points, not pixels: the legibility figure is textPt * embedWidth / display.pointWidth, and backingScale cancels. Absent means DEFAULT_TEXT_PT (13) in transform/src/legibility.ts."
+    },
+    "overrides": {
+      "type": "array",
+      "description": "Manual zoom overrides (STC-330). Absent means none. windowId matches a derived window's startNs (transform/src/zoom.ts's ZoomWindow), as a string — stage 1's merge rule guarantees uniqueness within one take. x+width and y+height must each be <= 1; that sum constraint is not expressible here and is the loader's job (transform/src/trim.ts's cleanOverrides), same as recording.ts's endNs > startNs.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "windowId",
+          "rect"
+        ],
+        "properties": {
+          "kind": {
+            "const": "geometry"
+          },
+          "windowId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rect": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "description": "UV over the CAPTURE (0..1), not the output — the same space a redaction lives in.",
+            "properties": {
+              "x": { "type": "number", "minimum": 0, "maximum": 1 },
+              "y": { "type": "number", "minimum": 0, "maximum": 1 },
+              "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+              "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+            }
+          },
+          "easing": {
+            "enum": [
+              "calm",
+              "standard",
+              "snappy"
+            ],
+            "description": "Replaces the project's own zoom.preset for JUST this window. Absent means this window plays at the project's preset."
+          }
+        }
+      }
+    }
+  }
+}

@@ -45,15 +45,27 @@ import {
  *
  * So version 3 says: the derivation runs, and a document can change it. It
  * does NOT claim the picture moved, and TRANSFORM_HISTORY says so in as many
- * words. STC-326 bumps again when the picture does move.
+ * words. Version 4 (STC-330, below) is where it first does.
+ *
+ * ## Version 4: the picture moves, for a window someone has TUNED
+ *
+ * STC-330's manual override table gives a WINDOW's crop a real target for
+ * the first time — `zoom.crop` is no longer always the whole frame, and
+ * `render()` now blends it toward that target as `zoom.amount` eases in and
+ * out (`lerpRect`, spaces.ts). This is still not stage 2 (STC-326): nothing
+ * DERIVES a target on its own, so an un-overridden window still crops to the
+ * whole frame at every amount. But a take with even one manual override now
+ * genuinely renders different pixels than one without, which version 3's own
+ * promise ("it does NOT claim the picture moved") can no longer make.
  */
-export const TRANSFORM_VERSION = 3;
+export const TRANSFORM_VERSION = 4;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
   { version: 1, since: "2026-08-24", changed: "placeholder circle cursor; 120 Hz spring, OMEGA 30, checkpoints every 1024 ticks" },
   { version: 2, since: "2026-09-02", changed: "macOS pointer artwork (arrow, I-beam, crosshair, pointing hand) drawn from events-2 cursor-shape events; circle kept as project.cursor.style \"circle\" (#65)" },
   { version: 3, since: "2026-09-09", changed: "auto-zoom stage 1 (STC-325): windows from clicks and held-button moves (300 ms lead, 2500 ms hold, 2500 ms merge) drive a critically damped 120 Hz spring, and project-4's zoom.enabled/intensity/preset choose whether and how hard. NO PIXEL MOVES at this version — the crop is the whole frame until STC-326 supplies a target — so the bump records that the derivation runs and that a document can now change it, not that the picture changed (#108, #112)" },
+  { version: 4, since: "2026-09-14", changed: "manual zoom override, phase 1 (STC-330): project-6's overrides table gives a derived window a tuned crop rect and/or easing preset; render() blends the crop toward that target as zoom.amount eases (spaces.ts's lerpRect). Windows sharing a resolved easing are grouped and simmed independently, composed by max (zoom-override.ts). The FIRST version where the picture actually moves for a real take — a window with no override still crops to the whole frame, but one with an override now renders different pixels than the same take without it" },
 ];
 
 /**
