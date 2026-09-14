@@ -20,31 +20,32 @@ import type { SupervisorState } from "./supervisor.js";
  * window once STC-374 has stripped that window down to capture + grid;
  * nothing here decides which window that is.
  *
- * ## SCAFFOLD, still not wired in — STC-374 landed, but the window it
- * strips down is not the window this ticket assumes
+ * ## Wired into `main.ts`'s real window (2026-09-14)
  *
- * STC-374 (instrument strip) merged 2026-09-14, which removes the original
- * blocker — the main window at rest now shows only capture + grid, so
+ * STC-374 (instrument strip) merged first, removing the original "little
+ * point" blocker — the main window at rest now shows only capture + grid, so
  * `restore()` no longer brings back still-capture prefs or the shortcuts
- * editor. But `main.ts`'s `createWindow()` (unchanged by STC-374) makes a
- * normal, resizable, user-positioned window with native chrome — a title
- * bar reading "stc recorder", traffic lights, no `frame: false` — while this
- * ticket's design opens with "one frameless `BrowserWindow`." Those are not
- * the same window. Collapsing a TITLED window to 26px tall is not a resize
- * a native title bar can absorb; the content area would go to zero or
- * negative while the title bar itself stayed, which is not "the pill,"
- * it is a broken window.
+ * editor. That still left a real fork: `main.ts`'s `createWindow()`
+ * (unchanged by STC-374) made a normal window with native chrome — a title
+ * bar reading "stc recorder", traffic lights — while this ticket's design
+ * opens with "one frameless `BrowserWindow`." A titled window cannot be
+ * shrunk to 26px; the title-bar strip does not go away just because the
+ * content area does.
  *
- * Making the main window frameless would fix that, but it is a visible,
- * permanent chrome change to the app's primary window — no native close/
- * minimize/traffic-lights anywhere, not just while recording — and it cuts
- * against STC-373's own explicit choice of "conventional (traffic lights,
- * resizable)" chrome for its sibling editor window. That is a call for
- * whoever owns the window-chrome decision, not one to make silently while
- * wiring up a scaffold. So `pill.ts` and `pill-window.ts` are built,
- * correctness-fixed against the REAL STC-374 window (see `pill-window.ts`'s
- * header for the bounds-remembering fix that came from actually looking at
- * `createWindow()`), and still not called from `main.ts`.
+ * Decided (not decided here — flagged on the PR and the ticket, answered by
+ * the ticket owner): `titleBarStyle: "hidden"`, not a fully frameless
+ * window. The native traffic lights stay, drawn as an inset overlay instead
+ * of inside a title-bar strip, so the content view can fill the window down
+ * to 26px; `pill-window.ts` additionally hides the buttons themselves while
+ * collapsed (`setWindowButtonVisibility`), since there is no room for them
+ * in a pill. This is the smaller of the two options that were on the table —
+ * it does not touch the app's chrome everywhere the way a fully frameless
+ * window would, only removes the drawn title strip.
+ *
+ * The pill's own CONTENT (the dot, the live timer, the hatched meter) still
+ * has no view — that is unfinished visual work, not part of this wiring.
+ * `main.ts` collapses to `MIN_PILL_WIDTH_PX` rather than a real measured
+ * content width until that view exists; see the comment at its call site.
  *
  * ## Trap 1 and 3 from the ticket, encoded rather than trusted
  *

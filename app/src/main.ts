@@ -37,6 +37,8 @@ import {
   afterCapture as showThumbnailsAfterCapture, closeThumbnail,
 } from "./thumbnail-window.js";
 import { openEditor } from "./editor-window.js";
+import { attachPillToSupervisor } from "./pill-window.js";
+import { MIN_PILL_WIDTH_PX } from "./pill.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -125,9 +127,30 @@ function createWindow(): void {
   setDockVisible(true);
   win = new BrowserWindow({
     width: 520, height: 680, title: "stc recorder",
+    // STC-375 (Pill): a fully frameless window was the other option on the
+    // table and was passed over — see pill.ts's header. "hidden" keeps the
+    // native traffic lights as an inset overlay (no drawn title strip), which
+    // is what lets Record collapse the window to a 26px pill at all.
+    titleBarStyle: "hidden",
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(join(here, "..", "renderer", "index.html"));
+  // STC-375: collapse/restore is driven by the supervisor's own confirmed
+  // state (traps 1 and 3 in pill.ts's header), never by the Record click.
+  // Re-attached on every createWindow() call, since STC-292 made the main
+  // window closable and re-creatable (menu-bar-first) and a stale listener on
+  // a destroyed window is not a live one.
+  if (sup) {
+    const detachPill = attachPillToSupervisor(win, sup, {
+      // The pill has no view yet to measure real content from — that is
+      // unfinished visual work (the dot, the live timer, the hatched meter),
+      // not part of this wiring. Collapsing to the floor keeps the mechanism
+      // honest rather than a fabricated per-character width; swap this for a
+      // renderer-measured value once the pill's view exists.
+      getContentWidthPx: () => MIN_PILL_WIDTH_PX,
+    });
+    win.once("closed", detachPill);
+  }
 }
 
 /**

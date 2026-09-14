@@ -8,9 +8,14 @@ import { PILL_HEIGHT_PX, clampPillWidth, decidePillAction, type PillWindowState 
  * split `overlay-session.ts` and `thumbnail-window.ts` make for their own
  * windowed interactions.
  *
- * SCAFFOLD, still not wired into `main.ts` — see `pill.ts`'s header for the
- * open question that is blocking it (the main window is framed, and the
- * ticket's design assumes it is not).
+ * Wired into `main.ts`'s real window (2026-09-14): the chrome question in
+ * `pill.ts`'s header is resolved as `titleBarStyle: "hidden"` — the main
+ * window keeps its native traffic lights as an inset overlay rather than
+ * going fully frameless, so `collapsePill`/`restorePill` also toggle their
+ * visibility (`setButtonsVisible`): a 26px pill has no real room for a
+ * title-bar button cluster, and macOS's own `hiddenInset` windows already
+ * establish that hiding them while a window is this small is normal rather
+ * than surprising.
  *
  * ## "Restore" means the window's OWN remembered bounds, not a fixed size
  *
@@ -53,6 +58,7 @@ export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number)
   win.setSize(width, PILL_HEIGHT_PX);
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  setButtonsVisible(win, false);
   return previousBounds;
 }
 
@@ -66,6 +72,21 @@ export function restorePill(win: BrowserWindow, bounds: Rectangle): void {
   win.setAlwaysOnTop(false);
   win.setResizable(true);
   win.setBounds(bounds);
+  setButtonsVisible(win, true);
+}
+
+/**
+ * `setWindowButtonVisibility` is macOS-only and only meaningful on a
+ * `titleBarStyle: "hidden"`/`"hiddenInset"` window (the traffic lights are
+ * drawn as an inset overlay rather than inside a title-bar strip, so they
+ * are the one thing left to hide separately when the content shrinks under
+ * them). Guarded the same way `setDockVisible` guards an activation-policy
+ * change in `main.ts`: a chrome cosmetic is never worth a crash, and this
+ * runs on every CI platform this repo tests on, most of which do not have
+ * the method at all.
+ */
+function setButtonsVisible(win: BrowserWindow, visible: boolean): void {
+  try { win.setWindowButtonVisibility?.(visible); } catch { /* cosmetic only */ }
 }
 
 export interface AttachOptions {
