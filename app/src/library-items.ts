@@ -221,7 +221,7 @@ export function applyFilter(items: readonly LibraryItem[], id: string): LibraryI
  * imports only node builtins, while the transform is bundled for the renderer.
  * `app/test/take-list.test.ts` pins them together instead.
  */
-export const SUPPORTED_ANCHORS_VERSIONS: readonly number[] = [1, 2];
+export const SUPPORTED_ANCHORS_VERSIONS: readonly number[] = [1, 2, 3];
 
 /** The cached decorated thumbnail, beside the document it was rendered from. */
 export const THUMBNAIL_FILE = "thumb.png";
