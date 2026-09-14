@@ -37,6 +37,8 @@ import {
   afterCapture as showThumbnailsAfterCapture, closeThumbnail,
 } from "./thumbnail-window.js";
 import { openEditor } from "./editor-window.js";
+import { attachPillToSupervisor } from "./pill-window.js";
+import { MIN_PILL_WIDTH_PX } from "./pill.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -57,6 +59,20 @@ const HELPER = process.env.STC_HELPER_BIN
 
 let win: BrowserWindow | undefined;
 let sup: HelperSupervisor | undefined;
+/**
+ * STC-375: the pill's real, renderer-measured content width — reported by
+ * `#pill`'s ResizeObserver (renderer.ts) over `pill:contentWidth`, fire-
+ * and-forget. `getContentWidthPx` below reads this SYNCHRONOUSLY when a
+ * heartbeat triggers a collapse; IPC has no synchronous request the other
+ * direction, so a cache kept current by the renderer's own pushes is the
+ * only way main can have a real number ready at the moment it needs one.
+ * Starts at the floor, matching what the window collapses to before the
+ * page has ever measured anything.
+ */
+let pillContentWidthPx = MIN_PILL_WIDTH_PX;
+ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
+  if (typeof px === "number" && Number.isFinite(px) && px > 0) pillContentWidthPx = px;
+});
 /**
  * The take each WINDOW may currently read, set only by preview:open.
  *
@@ -125,9 +141,25 @@ function createWindow(): void {
   setDockVisible(true);
   win = new BrowserWindow({
     width: 520, height: 680, title: "stc recorder",
+    // STC-375 (Pill): a fully frameless window was the other option on the
+    // table and was passed over — see pill.ts's header. "hidden" keeps the
+    // native traffic lights as an inset overlay (no drawn title strip), which
+    // is what lets Record collapse the window to a 26px pill at all.
+    titleBarStyle: "hidden",
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(join(here, "..", "renderer", "index.html"));
+  // STC-375: collapse/restore is driven by the supervisor's own confirmed
+  // state (traps 1 and 3 in pill.ts's header), never by the Record click.
+  // Re-attached on every createWindow() call, since STC-292 made the main
+  // window closable and re-creatable (menu-bar-first) and a stale listener on
+  // a destroyed window is not a live one.
+  if (sup) {
+    const detachPill = attachPillToSupervisor(win, sup, {
+      getContentWidthPx: () => pillContentWidthPx,
+    });
+    win.once("closed", detachPill);
+  }
 }
 
 /**
