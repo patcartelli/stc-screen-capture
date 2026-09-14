@@ -129,10 +129,18 @@ final class App {
         guard state == .idle else {
             IO.send("error", seq: seq, ["code": "bad-state", "detail": "cannot start while \(state.rawValue)"]); return
         }
-        guard let dir = cmd["dir"] as? String, !dir.isEmpty else {
-            IO.send("error", seq: seq, ["code": "missing-dir", "detail": "start requires \"dir\""]); return
+        // STC-370: what to capture — the whole display (unchanged), a region
+        // of one, or a window — is parsed once, the same way capture-still's
+        // request is (parseStillRequest). Answers before touching
+        // ScreenCaptureKit, so a malformed request costs no grant and no time.
+        let request: StartRequest
+        switch parseStartRequest(cmd) {
+        case .failure(let e):
+            IO.send("error", seq: seq, ["code": e.code, "detail": e.description]); return
+        case .success(let r):
+            request = r
         }
-        let url = URL(fileURLWithPath: dir)
+        let url = URL(fileURLWithPath: request.dir)
         // Noted before creating: a session dir we made and never wrote to gets
         // cleaned up on failure, so a denied grant does not litter the user's
         // recordings folder with empty takes. A pre-existing dir is never touched.
@@ -144,8 +152,6 @@ final class App {
         sessionDir = url
         startedAtNs = Clock.nowNs()
 
-        let displayId = (cmd["displayId"] as? Int).map { CGDirectDisplayID($0) }
-        let wantCamera = cmd["camera"] as? Bool ?? false
         let session = CaptureSession(dir: url, t0Ns: startedAtNs)
         capture = session
         // STC-306: a stream that dies after `started` ends the take the way a
@@ -161,7 +167,7 @@ final class App {
                 self.stop(reason: "stream-stopped")
             }
         }
-        session.start(displayId: displayId, camera: wantCamera) { [weak self] result in
+        session.start(request: request) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {

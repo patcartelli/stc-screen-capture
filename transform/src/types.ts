@@ -55,9 +55,30 @@ export interface Pip {
   marginPx: number;
 }
 
-/** Mirrors schema/anchors-1.schema.json and schema/anchors-2.schema.json. */
+/**
+ * Mirrors the optional `scope` block in schema/anchors-3.schema.json
+ * (STC-370). Absent (or `kind: "display"`) means the whole display — the
+ * only shape a v1/v2 document can carry, and what an untouched take still
+ * writes at v2 (`anchorsDocument` emits the minimum version that can express
+ * the document). `region`/`window` are display-local points, the same
+ * convention shot-1's `crop`/`window` already use.
+ */
+export type CaptureScope =
+  | { kind: "display" }
+  | { kind: "region"; region: { x: number; y: number; width: number; height: number } }
+  | {
+      kind: "window";
+      window: {
+        id: number;
+        app?: string;
+        title?: string;
+        bounds: { x: number; y: number; width: number; height: number };
+      };
+    };
+
+/** Mirrors schema/anchors-1.schema.json, anchors-2.schema.json and anchors-3.schema.json. */
 export interface Anchors {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {
@@ -72,6 +93,8 @@ export interface Anchors {
   };
   capture: { width: number; height: number; codec: "h264" };
   camera?: CameraTrack;
+  /** STC-370. Absent means the whole display, the same as v1/v2. */
+  scope?: CaptureScope;
   files: { display: string; camera?: string };
   /**
    * `reason` is a plain string, not a union, ON PURPOSE (STC-311).

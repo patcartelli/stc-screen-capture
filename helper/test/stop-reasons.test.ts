@@ -97,13 +97,21 @@ function reasonsInSwift(): string[] {
   return [...out].sort();
 }
 
+// anchors-3, not anchors-2: STC-370 added "window-resized"/"window-closed",
+// reachable only from a window-scope take, which always writes version 3
+// (anchorsDocument emits the MINIMUM version that can express the document —
+// AnchorsDoc.swift). anchors-3's `stop.reason` enum is anchors-2's own enum
+// PLUS those two families, never a narrower rewrite of it, so validating the
+// full set the Swift can produce against the superset schema is the same
+// claim this file always made, extended rather than duplicated. A reason
+// from BEFORE STC-370 still validates identically against either schema.
 const validateReason = (() => {
-  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-2.schema.json"), "utf8"));
+  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-3.schema.json"), "utf8"));
   const ajv = new Ajv({ allErrors: true, strict: true });
   return ajv.compile(schema.properties.stop.properties.reason);
 })();
 
-describe("stop.reason — the helper and anchors-2 agree (STC-311)", () => {
+describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by STC-370)", () => {
   test("every reason the Swift can write is accepted by the schema", () => {
     const reasons = reasonsInSwift();
     // A guard on the guard: if the regexes stopped matching, this test would
@@ -112,11 +120,12 @@ describe("stop.reason — the helper and anchors-2 agree (STC-311)", () => {
     // narrowing of the search without pinning it to an exact number.
     expect(reasons).toEqual(expect.arrayContaining([
       "user", "quit", "stdin-closed", "stopped-during-start", "signal-15",
+      "window-resized", "window-closed",
     ]));
-    expect(reasons.length).toBeGreaterThanOrEqual(7);
+    expect(reasons.length).toBeGreaterThanOrEqual(9);
 
     for (const r of reasons) {
-      expect(validateReason(r), `the helper can write stop.reason "${r}", which anchors-2 refuses`).toBe(true);
+      expect(validateReason(r), `the helper can write stop.reason "${r}", which anchors-3 refuses`).toBe(true);
     }
   });
 
@@ -125,7 +134,7 @@ describe("stop.reason — the helper and anchors-2 agree (STC-311)", () => {
     // was given, so the suffix is not a fixed list of five: a shutdown whose
     // writer wedges writes `quit-timeout` or `signal-15-timeout`.
     for (const r of reasonsInSwift()) {
-      expect(validateReason(`${r}-timeout`), `"${r}-timeout" is reachable but anchors-2 refuses it`).toBe(true);
+      expect(validateReason(`${r}-timeout`), `"${r}-timeout" is reachable but anchors-3 refuses it`).toBe(true);
     }
   });
 
@@ -134,7 +143,7 @@ describe("stop.reason — the helper and anchors-2 agree (STC-311)", () => {
     // cannot produce must still be refused, or this file proves nothing.
     for (const bad of ["banana", "", "signal", "signal-", "signal-abc", "signal-15-timeou",
                        "user-timeout-timeout", "USER", " user"]) {
-      expect(validateReason(bad), `anchors-2 accepts "${bad}", which the helper never writes`).toBe(false);
+      expect(validateReason(bad), `anchors-3 accepts "${bad}", which the helper never writes`).toBe(false);
     }
   });
 });

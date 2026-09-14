@@ -59,12 +59,14 @@ function checkFrameOffset(what: string, measuredNs: number | undefined, demuxedF
 export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   const { anchors, events } = input;
 
-  // v1 and v2 differ only by additions the transform treats as optional
-  // (camera track, pip geometry), so v1 loads as a v2 with both absent. The
-  // helper does not emit v2 until increment 3; refusing v1 here would break
-  // every grant test in the gap.
-  if (anchors?.version !== 1 && anchors?.version !== 2) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1 or 2)`);
+  // v1, v2 and v3 differ only by additions the transform treats as optional
+  // (camera track, pip geometry, and now `scope` for a region/window take —
+  // STC-370), so an older document loads as a v3 with the newer fields
+  // absent. `scope` absent means the whole display, same as v1/v2 always
+  // meant; nothing here reads it yet (that is STC-374's picker and whatever
+  // consumes it), so v3 is accepted on the same terms v2 was.
+  if (anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3) {
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2 or 3)`);
   }
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.

@@ -42,6 +42,22 @@ struct CaptureGeometryDoc {
     let width: Int, height: Int, firstFrameNs: Int
 }
 
+/// The recording's capture scope (STC-370): the whole display (phase-1
+/// behaviour), a region of one, or one window. Mirrors `StillKind` /
+/// `StillWindowInfo` (StillDecisions.swift) deliberately — a shot and a take
+/// of the same window must describe it the same way, not two formats that
+/// happen to agree today.
+struct CaptureScopeDoc {
+    enum Kind: String { case display, region, window }
+    let kind: Kind
+    /// display-local points, when kind == .region
+    let region: StillRect?
+    /// when kind == .window
+    let window: StillWindowInfo?
+
+    static let display = CaptureScopeDoc(kind: .display, region: nil, window: nil)
+}
+
 /// What the camera track turned out to be. `nil` means no camera on this take.
 struct CameraTrack {
     let present: Bool
@@ -70,12 +86,21 @@ struct CameraTrack {
 /// `requested` are independent: `requested: true, camera: nil` is exactly the
 /// STC-286 case (a camera opened and delivered zero frames), and still
 /// produces `present:false` — this fix must not silence that.
+///
+/// `scope` decides the version emitted: `.display` (phase-1 behaviour) stays
+/// version 2 with no `scope` block at all — every existing consumer of a v2
+/// document keeps working unchanged, because a whole-display take looks
+/// exactly as it always has. `.region`/`.window` write version 3 with a
+/// `scope` block. This is the same "emit the minimum version that can
+/// express the document" rule `projectForWrite`/`shotForWrite` already use:
+/// an untouched shape does not pay for a feature it does not use.
 func anchorsDocument(timebase: (numer: Int, denom: Int),
                      t0Ns: UInt64,
                      display: DisplayGeometry,
                      capture: CaptureGeometryDoc,
                      camera: CameraTrack?,
                      requested: Bool,
+                     scope: CaptureScopeDoc = .display,
                      stopReason: String,
                      stopTNs: Int) -> [String: Any] {
     var files: [String: Any] = ["display": "display.mp4"]
@@ -95,8 +120,9 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
             ]
         }
     }
+    let version = scope.kind == .display ? 2 : 3
     var doc: [String: Any] = [
-        "version": 2,
+        "version": version,
         "timebase": ["numer": timebase.numer, "denom": timebase.denom],
         // String on purpose: boot-relative ns crosses 2^53 at ~104 days of
         // uptime, and a JSON number would round.
@@ -113,6 +139,17 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     ]
     if let cameraBlock {
         doc["camera"] = cameraBlock
+    }
+    if scope.kind != .display {
+        var scopeBlock: [String: Any] = ["kind": scope.kind.rawValue]
+        if let r = scope.region { scopeBlock["region"] = r.json }
+        if let w = scope.window {
+            var wb: [String: Any] = ["id": w.id, "bounds": w.bounds.json]
+            if let app = w.app, !app.isEmpty { wb["app"] = app }
+            if let title = w.title, !title.isEmpty { wb["title"] = title }
+            scopeBlock["window"] = wb
+        }
+        doc["scope"] = scopeBlock
     }
     return doc
 }

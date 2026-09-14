@@ -70,6 +70,16 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private var pointW = 0, pointH = 0, pixelW = 0, pixelH = 0
     private var originX = 0.0, originY = 0.0
     private var captureW = 0, captureH = 0
+    /// What this take is scoped to (STC-370): the whole display by default,
+    /// set from the resolved `CaptureTarget` in `begin()`. Read by
+    /// `writeSidecars` to decide anchors.json's version and `scope` block.
+    private var captureScope: CaptureScopeDoc = .display
+    /// Polls a window-scope take's own window for a resize or a close
+    /// (STC-370) — ScreenCaptureKit has no delegate callback for either, the
+    /// way it does for the stream dying. Guarded by `lock`, same reason as
+    /// `camera`/`cursorRunLoop`: a stop() that arrives before this is stored
+    /// must not be outlived by it.
+    private var windowWatcher: DispatchSourceTimer?
 
     private let lock = NSLock()
     private var events: [[String: Any]] = []
@@ -157,7 +167,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - start
 
-    func start(displayId: CGDirectDisplayID?, camera wantCamera: Bool,
+    func start(request: StartRequest,
                completion: @escaping (Result<[String: Any], Error>) -> Void) {
         // The backstop is armed HERE, before the first callback API is called,
         // so it covers the whole request rather than only the part after
@@ -187,30 +197,97 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.finishStart(.failure(CaptureError.noDisplays(underlying: err)))
                 return
             }
-            // STC-247: which display is a decision (CaptureDecisions.swift),
-            // and a requested display that is not there is an ERROR — the
-            // old fallback to `displays[0]` recorded the wrong screen and
-            // said nothing, which an app with a display picker cannot have.
-            let ids = content.displays.map { $0.displayID }
-            switch chooseDisplay(requested: displayId, available: ids) {
-            case .noDisplays:
-                self.finishStart(.failure(CaptureError.noDisplays(underlying: err)))
-            case .notFound(let requested, let available):
-                self.finishStart(.failure(CaptureError.displayNotFound(requested: requested, available: available)))
-            case .display(let id):
-                guard let display = content.displays.first(where: { $0.displayID == id }) else {
-                    self.finishStart(.failure(CaptureError.noDisplays(underlying: err)))
-                    return
-                }
-                self.begin(display: display, camera: wantCamera)
+            // STC-370: what to capture (whole display / region / window) is a
+            // decision (resolveCaptureTarget, below), the recording path's
+            // twin of Still.swift's `capture(content:)` switch. A requested
+            // display or window that is not there is an ERROR, same as
+            // STC-247 already made display selection — a picker that offers a
+            // choice must not have that choice silently swapped for another.
+            switch self.resolveCaptureTarget(request, content: content) {
+            case .failure(let e):
+                self.finishStart(.failure(e))
+            case .success(let target):
+                self.begin(target: target, camera: request.camera)
             }
+        }
+    }
+
+    /// A resolved place to point `SCStream` at, plus everything about it that
+    /// anchors.json and the writer need. `sourceRect` is set only for a
+    /// region scope — a display filter cropped in place; a window filter's
+    /// own bounds already are the region, the way `Still.swift`'s does.
+    private struct CaptureTarget {
+        let filter: SCContentFilter
+        let geometry: DisplayGeometry
+        let sourceRect: CGRect?
+        let pixelSize: (width: Int, height: Int)
+        let scope: CaptureScopeDoc
+    }
+
+    /// STC-370: resolves a `StartRequest`'s scope against real
+    /// `SCShareableContent` — the async step `parseStartRequest` cannot do,
+    /// since it runs before content is fetched. Mirrors `Still.swift`'s
+    /// `capture(content:)` switch over `StillKind` deliberately: a display
+    /// scope reuses `chooseDisplay` (STC-247) and, for a region, `resolveCrop`
+    /// / `framePixelSize` (STC-289); a window scope reuses
+    /// `chooseDisplayForWindow` (also shared with `Still.swift`, STC-370).
+    private func resolveCaptureTarget(_ request: StartRequest,
+                                      content: SCShareableContent) -> Result<CaptureTarget, CaptureError> {
+        if let wid = request.windowId {
+            guard let win = content.windows.first(where: { $0.windowID == wid }) else {
+                return .failure(.windowNotFound(requested: wid))
+            }
+            let mid = CGPoint(x: win.frame.midX, y: win.frame.midY)
+            let displays = content.displays.map { ($0.displayID, CGDisplayBounds($0.displayID)) }
+            guard let dispId = chooseDisplayForWindow(midpoint: mid, displays: displays),
+                  let display = content.displays.first(where: { $0.displayID == dispId })
+            else { return .failure(.noDisplays(underlying: nil)) }
+            let geometry = displayGeometry(id: display.displayID, pointWidth: display.width, pointHeight: display.height)
+            let bounds = StillRect(x: Double(win.frame.minX) - geometry.originX,
+                                   y: Double(win.frame.minY) - geometry.originY,
+                                   width: Double(win.frame.width), height: Double(win.frame.height))
+            let info = StillWindowInfo(id: Int(win.windowID),
+                                       app: win.owningApplication?.applicationName,
+                                       title: win.title, bounds: bounds)
+            let filter = SCContentFilter(desktopIndependentWindow: win)
+            let pixelSize = framePixelSize(points: bounds, backingScale: geometry.backingScale)
+            return .success(CaptureTarget(filter: filter, geometry: geometry, sourceRect: nil,
+                                          pixelSize: pixelSize,
+                                          scope: CaptureScopeDoc(kind: .window, region: nil, window: info)))
+        }
+
+        let ids = content.displays.map { $0.displayID }
+        switch chooseDisplay(requested: request.displayId, available: ids) {
+        case .noDisplays:
+            return .failure(.noDisplays(underlying: nil))
+        case .notFound(let requested, let available):
+            return .failure(.displayNotFound(requested: requested, available: available))
+        case .display(let id):
+            guard let display = content.displays.first(where: { $0.displayID == id }) else {
+                return .failure(.noDisplays(underlying: nil))
+            }
+            let geometry = displayGeometry(id: display.displayID, pointWidth: display.width, pointHeight: display.height)
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            guard let region = request.region else {
+                return .success(CaptureTarget(filter: filter, geometry: geometry, sourceRect: nil,
+                                              pixelSize: (geometry.pixelWidth, geometry.pixelHeight),
+                                              scope: .display))
+            }
+            guard case .region(let resolved) = resolveCrop(region, pointWidth: geometry.pointWidth,
+                                                            pointHeight: geometry.pointHeight) else {
+                return .failure(.cropOutsideDisplay)
+            }
+            let pixelSize = framePixelSize(points: resolved, backingScale: geometry.backingScale)
+            return .success(CaptureTarget(filter: filter, geometry: geometry, sourceRect: resolved.cgRect,
+                                          pixelSize: pixelSize,
+                                          scope: CaptureScopeDoc(kind: .region, region: resolved, window: nil)))
         }
     }
 
     /// Takes no completion: `start` owns it and every path below answers through
     /// `finishStart`, which is call-once. Handing this a second reference to the
     /// same completion is how a request gets answered twice.
-    private func begin(display: SCDisplay, camera wantCamera: Bool) {
+    private func begin(target: CaptureTarget, camera wantCamera: Bool) {
         // Recorded before anything can fail below: writeSidecars must know
         // whether a camera was ever asked for, independent of whether this
         // particular start succeeds at opening one.
@@ -229,14 +306,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 actual: SCFrameStatus.complete.rawValue)))
             return
         }
-        displayID = display.displayID
-        // Measured by the same function the still path uses (AnchorsDoc.swift),
-        // so anchors.json and shot.json describe one display the same way.
-        let g = displayGeometry(id: displayID, pointWidth: display.width, pointHeight: display.height)
+        let g = target.geometry
+        displayID = CGDirectDisplayID(g.id)
         pointW = g.pointWidth; pointH = g.pointHeight
         pixelW = g.pixelWidth; pixelH = g.pixelHeight
         originX = g.originX; originY = g.originY
-        (captureW, captureH) = captureSize(pixelW, pixelH)
+        captureScope = target.scope
+        (captureW, captureH) = captureSize(target.pixelSize.width, target.pixelSize.height)
 
         // No backstop is armed here: start() armed one covering this whole
         // request before it called SCShareableContent (STC-258). Arming a
@@ -272,7 +348,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
         do {
             try setupWriter()
-            try startStream(display: display) { [weak self] err in
+            try startStream(filter: target.filter, sourceRect: target.sourceRect) { [weak self] err in
                 guard let self else { return }
                 if let err {
                     // The tap outlives nothing: this start is over and no
@@ -295,6 +371,14 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     if wantCamera {
                         self.startCameraAsync()
                     }
+                    // STC-370: a window-scope take polls its own window, since
+                    // SCK has no delegate for "this window resized/closed" the
+                    // way it has one for the stream dying.
+                    if target.scope.kind == .window, let w = target.scope.window {
+                        self.startWindowWatcher(windowId: UInt32(w.id),
+                                                initialSize: (w.bounds.width, w.bounds.height))
+                        self.armWindowFault()
+                    }
                     self.finishStart(.success(self.describe()))
                     self.armStreamDeathFault()
                 }
@@ -303,6 +387,84 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             CFMachPortInvalidate(tap)
             finishStart(.failure(error))
         }
+    }
+
+    /// How often a window-scope take polls its window's bounds (STC-370).
+    /// ScreenCaptureKit has a delegate for the STREAM dying (`didStopWithError`,
+    /// used for STC-306) but none for "this window resized" or "this window
+    /// closed" — `Watchers.swift`'s display-reconfiguration callback has no
+    /// window equivalent either. 1 Hz, the heartbeat's own cadence: a resize
+    /// is not time-critical to catch, only to catch at all before the take's
+    /// file ends up an unusable mix of sizes.
+    static let windowWatchIntervalSeconds: Double = 1.0
+
+    private func startWindowWatcher(windowId: UInt32, initialSize: (width: Double, height: Double)) {
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        t.schedule(deadline: .now() + Self.windowWatchIntervalSeconds,
+                  repeating: Self.windowWatchIntervalSeconds)
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            let current = Self.currentWindowSize(windowId: windowId)
+            switch decideWindowWatch(initial: initialSize, current: current) {
+            case .unchanged:
+                return
+            case .resized:
+                IO.send("warning", ["code": "window-resized-during-recording",
+                                    "detail": "stopping cleanly — a window-scope take cannot change size mid-file"])
+                self.stop(reason: "window-resized")
+            case .gone:
+                IO.send("warning", ["code": "window-closed-during-recording",
+                                    "detail": "stopping cleanly — the captured window is no longer on screen"])
+                self.stop(reason: "window-closed")
+            }
+        }
+        // Same race as the cursor sampler and the camera (HIGH 1's shape): a
+        // stop() that arrived before this timer was stored must not be
+        // outlived by it. Storing under the same lock stop() reads, checking
+        // stoppingBegan first, means the race either finds nothing stored (so
+        // stop() cancels nothing, fine — nothing is running) or this loses
+        // the race and cancels the timer itself before it is ever resumed.
+        lock.lock()
+        if stoppingBegan {
+            lock.unlock()
+            t.cancel()
+            return
+        }
+        windowWatcher = t
+        lock.unlock()
+        t.resume()
+    }
+
+    /// `STC_CAPTURE_FAULT=window-resized` / `=window-closed`: shortly after a
+    /// successful window-scope start, the watcher's reaction fires as though
+    /// a real resize/close had been detected — the same "watched firing, not
+    /// reasoned about" idiom as `STC_CAPTURE_FAULT=stream-died`, for a window
+    /// change this codebase has no way to script deterministically (there is
+    /// no API to resize another app's window on demand the way a fault can
+    /// be injected in-process). Driven by
+    /// helper/test/region-window-scope.grant.test.ts.
+    static let windowFaultDelaySeconds: Double = 0.5
+    private func armWindowFault() {
+        guard let fault = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"],
+              fault == "window-resized" || fault == "window-closed" else { return }
+        IO.log("STC_CAPTURE_FAULT=\(fault): the window watcher will report this in \(Self.windowFaultDelaySeconds) s")
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.windowFaultDelaySeconds) { [weak self] in
+            self?.stop(reason: fault)
+        }
+    }
+
+    /// The window's current bounds, in points, via Quartz Window Services
+    /// directly rather than another `SCShareableContent` round trip — this
+    /// fires every second for the life of the take, and that API is async.
+    /// nil means the window is no longer on screen: closed, minimised, or its
+    /// owning app quit.
+    private static func currentWindowSize(windowId: UInt32) -> (width: Double, height: Double)? {
+        guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(windowId)) as? [[String: Any]],
+              let info = list.first(where: { ($0[kCGWindowNumber as String] as? Int) == Int(windowId) }),
+              let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+              let w = boundsDict["Width"] as? Double, let h = boundsDict["Height"] as? Double
+        else { return nil }
+        return (w, h)
     }
 
     /// Call-once. Later callers are no-ops, so a stream that fails after a
@@ -452,7 +614,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// against itself and only unwedges when the timeout fires. That cost a
     /// flat 10 s on every start, which AVAssetWriter then baked into the file
     /// as a 10 s empty edit.
-    private func startStream(display: SCDisplay, completion: @escaping (Error?) -> Void) throws {
+    private func startStream(filter: SCContentFilter, sourceRect: CGRect?,
+                             completion: @escaping (Error?) -> Void) throws {
         let cfg = SCStreamConfiguration()
         cfg.width = captureW
         cfg.height = captureH
@@ -463,12 +626,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // The transform composites the cursor from events.json, so the captured
         // pixels must not already contain one — otherwise every export shows two.
         cfg.showsCursor = false
+        // STC-370: a region scope crops a display filter in place, the same
+        // knob the still path already uses for a display-crop shot. A window
+        // filter's own bounds already are the region, so sourceRect is nil.
+        if let sourceRect {
+            cfg.sourceRect = sourceRect
+        }
         // macOS 14+, absent from the 13.3 SDK headers but present at runtime
         // (PHASE-0 §7). Explicit width/height governs output size regardless.
         if cfg.responds(to: Selector(("setCaptureResolution:"))) {
             cfg.setValue(3, forKey: "captureResolution")
         }
-        let filter = SCContentFilter(display: display, excludingWindows: [])
         let s = SCStream(filter: filter, configuration: cfg, delegate: self)
         try s.addStreamOutput(self, type: .screen,
                               sampleHandlerQueue: DispatchQueue(label: "stc.capture.screen"))
@@ -782,11 +950,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         stoppingBegan = true
         let cam = camera
         let cursorRL = cursorRunLoop
+        let winWatcher = windowWatcher
+        windowWatcher = nil
         lock.unlock()
 
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let tapRunLoop { CFRunLoopStop(tapRunLoop) }
         if let cursorRL { CFRunLoopStop(cursorRL) }
+        // A window-resize/close stop() call arrives FROM this timer's own
+        // handler; cancelling it here is a no-op for that path (it has
+        // already fired) and closes the watcher for every other stop reason.
+        winWatcher?.cancel()
 
         let answerLock = NSLock()
         var answered = false
@@ -897,6 +1071,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                                         firstFrameNs: Int(firstFramePtsNs)),
             camera: camTrack,
             requested: wantCamera,
+            scope: captureScope,
             stopReason: reason,
             stopTNs: Int(Clock.nowNs() - t0Ns))
         write(doc, to: "anchors.json")
@@ -922,6 +1097,12 @@ enum CaptureError: Error, CustomStringConvertible {
     /// STC-315: `CGEvent.tapCreate` returned nil, so this take could carry no
     /// cursor track. Refusing is the policy, not a fallback — see `begin()`.
     case eventTapUnavailable
+    /// STC-370: `start` named a windowId SCK's on-screen list does not have —
+    /// closed, on another space, or never existed.
+    case windowNotFound(requested: UInt32)
+    /// STC-370: a region scope's rectangle does not overlap the display it
+    /// was resolved against at all. Mirrors `StillError.cropOutsideDisplay`.
+    case cropOutsideDisplay
 
     var description: String {
         switch self {
@@ -941,6 +1122,10 @@ enum CaptureError: Error, CustomStringConvertible {
             return "cursor input could not be recorded (CGEvent.tapCreate returned nil) — "
                  + "Input Monitoring is the usual cause. The cursor is never only in the "
                  + "video, so a take with no cursor track is not started at all."
+        case .windowNotFound(let id):
+            return "no on-screen window with id \(id) — it may have closed, or never existed"
+        case .cropOutsideDisplay:
+            return "the region does not overlap the display it was resolved against"
         }
     }
     var code: String {
@@ -953,6 +1138,8 @@ enum CaptureError: Error, CustomStringConvertible {
         case .frameStatusMismatch: return "frame-status-mismatch"
         case .displayNotFound: return "display-not-found"
         case .eventTapUnavailable: return "event-tap-unavailable"
+        case .windowNotFound: return "window-not-found"
+        case .cropOutsideDisplay: return "crop-outside-display"
         }
     }
 }
