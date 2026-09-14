@@ -76,17 +76,23 @@ Launch the app normally (`npm run app:start`) and press Record.
 - Are the traffic lights actually hidden while collapsed, and do they come
   back looking normal (not misplaced, not needing a hover to reappear) once
   restored?
-- The content: a red dot, the live timer, a hatched meter. Does the dot's
-  pulse read as "recording," or is it too subtle/too fast/too slow to
-  notice at 8px? Does the hatched meter read as "not live" (the point of
-  hatching it rather than drawing a fake level), or does it just look
-  broken? Is the whole pill legible against whatever is likely to be behind
-  it (light desktop backgrounds especially, since the pill itself is always
-  dark)?
-- Click the pill itself. It should stop the recording and restore the
-  window — the only reachable control while collapsed, by design (see
-  "What changed" above). Does clicking it feel like clicking a button, or
-  does the whole-pill hit target feel accidental / too easy to trigger?
+- The content: a red dot, the live timer, a hatched meter, a stop icon.
+  **CONFIRMED 2026-09-14: dot, timer and meter all read correctly on first
+  look.** One real gap found and fixed the same day: nothing visible said
+  what clicking the pill actually DOES — the `aria-label` is for a screen
+  reader, not an eye — so `#pill-stop`, a small filled square (the
+  QuickTime/Zoom/OBS stop glyph), was added after the dot/timer/meter.
+  **CONFIRMED 2026-09-14 (second look): looks good.**
+  Still open: does the dot's pulse read as "recording," or is it too
+  subtle/fast/slow at 8px? Does the hatched meter read as "not live" (the
+  point of hatching it), or does it just look broken? Is the whole pill
+  legible against whatever is likely to be behind it (light desktop
+  backgrounds especially, since the pill itself is always dark)?
+- Click the pill itself. **CONFIRMED 2026-09-14: clicking it does stop the
+  recording and restore the window** — the only reachable control while
+  collapsed, by design (see "What changed" above). Still open: does the
+  whole-pill hit target feel accidental / too easy to trigger, now that the
+  stop icon makes intent explicit rather than implicit?
 
 ## 2. Restore geometry
 
