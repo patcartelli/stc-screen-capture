@@ -19,6 +19,10 @@ describe("anchors document", () => {
     const out = await runSwiftHarness({
       label: "anchors",
       sources: [
+        // StillDecisions.swift for StillRect/StillWindowInfo — CaptureScopeDoc
+        // (STC-370) mirrors shot-1's kind/crop/window shapes on purpose and
+        // reuses their types rather than a second copy.
+        "helper/src/StillDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -59,5 +63,44 @@ describe("anchors document", () => {
       const d = extractJSON(out, marker);
       expect(validate(d), `${marker} ${JSON.stringify(validate.errors, null, 2)}`).toBe(true);
     }
+  });
+
+  // STC-370: a region/window-scope take writes version 3 with a `scope`
+  // block — a document shape anchors-2 cannot express at all (it has no
+  // `scope` property), so these validate against anchors-3 instead. A
+  // whole-display take is unaffected by this ticket and keeps validating
+  // against anchors-2 above.
+  test("region and window scope documents validate against anchors-3, whole-display stays v2", async () => {
+    const out = await runSwiftHarness({
+      label: "anchors",
+      sources: [
+        "helper/src/StillDecisions.swift",
+        "helper/src/AnchorsDoc.swift",
+        "helper/test/anchors/main.swift",
+      ],
+    });
+    expect(out, out).toContain("ALL PASS");
+
+    const ajv3 = new Ajv({ allErrors: true, strict: true });
+    const validate3 = ajv3.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-3.schema.json"), "utf8")),
+    );
+
+    const region = extractJSON(out, "JSON-SCOPE-REGION:");
+    expect(validate3(region), JSON.stringify(validate3.errors, null, 2)).toBe(true);
+    expect((region as { version: number }).version).toBe(3);
+
+    const window = extractJSON(out, "JSON-SCOPE-WINDOW:");
+    expect(validate3(window), JSON.stringify(validate3.errors, null, 2)).toBe(true);
+    expect((window as { version: number }).version).toBe(3);
+
+    // A v3-shaped document (this schema's own `const: 3`) must still refuse
+    // a v2 document — the version bump is not a widening that now accepts
+    // everything the old schema did too.
+    const ajv2 = new Ajv({ allErrors: true, strict: true });
+    const validate2 = ajv2.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-2.schema.json"), "utf8")),
+    );
+    expect(validate2(region), "anchors-2 must refuse a v3, region-scope document").toBe(false);
   });
 }, 60_000);

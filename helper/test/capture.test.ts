@@ -137,6 +137,43 @@ describe("capture — behaviour without a Screen Recording grant", () => {
     expect(st.state, "a refused start must leave the helper idle").toBe("idle");
   }, 90_000);
 
+  // STC-370: a malformed scope answers before ScreenCaptureKit is ever
+  // touched (parseStartRequest runs first in App.start), so these run
+  // regardless of whether this machine has a Screen Recording grant — the
+  // same reason capture-still's own request-validation tests need no grant.
+  test("region and windowId together is refused, never picking one silently", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({
+      cmd: "start", dir: session(), seq: 1,
+      windowId: 42, region: { x: 0, y: 0, width: 100, height: 100 },
+    });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 1), 10_000, "start outcome");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("region-and-window");
+    h.send({ cmd: "status", seq: 2 });
+    const st = await waitFor(() => h.fd3.find((l) => l.seq === 2), 10_000, "status");
+    expect(st.state, "a refused start must leave the helper idle").toBe("idle");
+  }, 30_000);
+
+  test("a region with non-positive size is refused, not silently clamped", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "start", dir: session(), seq: 1, region: { x: 0, y: 0, width: 0, height: 100 } });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 1), 10_000, "start outcome");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("bad-region");
+  }, 30_000);
+
+  test("a windowId that is not a valid CGWindowID is refused, not treated as absent", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "start", dir: session(), seq: 1, windowId: -1 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 1), 10_000, "start outcome");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("bad-window-id");
+  }, 30_000);
+
   test("a denied start leaves the helper idle and retryable, not wedged", async () => {
     if (await probeGranted()) return;
     const h = spawnHelper();
@@ -153,4 +190,46 @@ describe("capture — behaviour without a Screen Recording grant", () => {
     // Budget: probeGranted + two starts (START_BOUND_MS each) + the status
     // wait, so ~100 s of waits in the worst case. Same rule as above.
   }, 150_000);
+});
+
+// STC-376. `state` becomes `.starting` (and `capture` is assigned)
+// SYNCHRONOUSLY inside `App.start`, before ScreenCaptureKit is ever asked
+// anything — so this race lives entirely in the gap before
+// `SCShareableContent` resolves and needs no grant at all, granted or not.
+describe("shutdown vs. an in-flight stop (STC-376)", () => {
+  // `IO.readCommands` dispatches each parsed line onto the main queue with
+  // its own `DispatchQueue.main.async`, in the order the lines were read —
+  // so three commands sent with no waits between them run `handle(start)`,
+  // `handle(stop)`, `handle(quit)` back to back on main, strictly in that
+  // order. `handle(stop)` sets `state = .stopping` synchronously before its
+  // own teardown (writing the sidecars, finishing display.mp4) goes async;
+  // `handle(quit)` then calls `shutdown()` while that teardown is still in
+  // flight. The old guard (`state == .recording || .starting`) treated
+  // `.stopping` as neither case and exited immediately — `bye`, then
+  // `exit()` — before the in-flight stop's own async completion had
+  // written anything. Reproduced live on real hardware via the shell idiom
+  // `docs/STC-370-RUNBOOK.md` uses (`stop` with the pipe closing right
+  // behind it, STC-376's own discovery); this drives the identical
+  // interleaving deterministically, through an explicit `quit` rather than
+  // stdin closing, so it needs no sleep and no grant.
+  test("stop immediately followed by quit does not exit before the stop's own teardown finishes", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    const dir = session();
+    h.send({ cmd: "start", dir, seq: 1 });
+    h.send({ cmd: "stop", seq: 2 });
+    h.send({ cmd: "quit", seq: 3 });
+    const bye = await waitFor(() => find(h.fd3, "bye"), START_BOUND_MS, "bye");
+    expect(bye.reason).toBe("quit");
+    // The stop this raced against must still have answered — not been
+    // silently abandoned by an early exit.
+    const stopped = h.fd3.find((l) => l.seq === 2);
+    expect(stopped?.ev, JSON.stringify(stopped)).toBe("stopped");
+    // And its teardown must have actually RUN, not merely been about to:
+    // `writeSidecars` completes before `stopped` is even sent (finishUp
+    // calls it before invoking its own completion), so both files must
+    // already be on disk by the time the process is allowed to exit.
+    expect(existsSync(join(dir, "events.json"))).toBe(true);
+    expect(existsSync(join(dir, "anchors.json"))).toBe(true);
+  }, 60_000);
 });

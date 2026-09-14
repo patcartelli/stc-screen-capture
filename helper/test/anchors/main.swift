@@ -115,5 +115,57 @@ do {
     printJSON(d, marker: "JSON-STOP-SIGNAL-TIMEOUT:")
 }
 
+// 7. STC-370: a region-scope take. `scope.kind != .display` bumps the
+//    version to 3 and writes a `scope` block — the "emit the minimum
+//    version" rule, same as project/shot: a whole-display take (blocks 1-6
+//    above) never sees this and stays version 2.
+do {
+    let region = StillRect(x: 100, y: 50, width: 800, height: 600)
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            scope: CaptureScopeDoc(kind: .region, region: region, window: nil),
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 3, "a region-scope take must write version 3")
+    let scope = d["scope"] as? [String: Any]
+    check(scope?["kind"] as? String == "region", "scope.kind must be region")
+    let r = scope?["region"] as? [String: Any]
+    check(r?["x"] as? Double == 100 && r?["y"] as? Double == 50
+          && r?["width"] as? Double == 800 && r?["height"] as? Double == 600,
+          "scope.region must be written verbatim")
+    check(scope?["window"] == nil, "a region scope must not carry a window block")
+    printJSON(d, marker: "JSON-SCOPE-REGION:")
+}
+
+// 8. STC-370: a window-scope take.
+do {
+    let window = StillWindowInfo(id: 42, app: "Safari", title: "Example — Safari",
+                                 bounds: StillRect(x: 10, y: 20, width: 1024, height: 768))
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            scope: CaptureScopeDoc(kind: .window, region: nil, window: window),
+                            stopReason: "window-closed", stopTNs: 5_000_000_000)
+    check(d["version"] as? Int == 3, "a window-scope take must write version 3")
+    let scope = d["scope"] as? [String: Any]
+    check(scope?["kind"] as? String == "window", "scope.kind must be window")
+    let w = scope?["window"] as? [String: Any]
+    check(w?["id"] as? Int == 42, "scope.window.id must be written verbatim")
+    check(w?["app"] as? String == "Safari", "scope.window.app must be written verbatim")
+    check(scope?["region"] == nil, "a window scope must not carry a region block")
+    check((d["stop"] as? [String: Any])?["reason"] as? String == "window-closed",
+          "window-closed is a real stop reason a window scope can write")
+    printJSON(d, marker: "JSON-SCOPE-WINDOW:")
+}
+
+// 9. A whole-display take stays version 2 with NO scope block at all — the
+//    default `scope: CaptureScopeDoc = .display` parameter, exercised by
+//    every earlier block in this file, must not have silently regressed.
+do {
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 2, "a whole-display take must still write version 2")
+    check(d["scope"] == nil, "a whole-display take must not carry a scope block at all")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

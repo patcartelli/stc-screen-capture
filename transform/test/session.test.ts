@@ -40,7 +40,7 @@ describe("loadSession", () => {
 
   test("rejects a schema version it was not written for", async () => {
     await expect(loadSession({
-      anchors: offsetAnchors({ version: 3 as any }),
+      anchors: offsetAnchors({ version: 4 as any }),
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
     })).rejects.toThrow(SessionLoadError);
@@ -90,9 +90,10 @@ describe("loadSession", () => {
   });
 });
 
-describe("loader accepts v1 and v2 anchors", () => {
-  // The helper does not emit v2 until increment 3. A loader that demanded v2
-  // would break every grant test in the gap between increments.
+describe("loader accepts v1, v2 and v3 anchors", () => {
+  // The helper does not emit v2 until increment 3, and does not emit v3
+  // until STC-370 (only for a region/window take). A loader that demanded
+  // the latest version would break every grant test in the gap.
   test("a version 1 anchors document still loads", async () => {
     const s = await loadSession({
       anchors: offsetAnchors({ version: 1 }),
@@ -111,12 +112,29 @@ describe("loader accepts v1 and v2 anchors", () => {
     expect(s).toBeDefined();
   });
 
-  test("a version 3 anchors document is rejected by name", async () => {
-    await expect(loadSession({
-      anchors: offsetAnchors({ version: 3 as any }),
+  // STC-370: a region/window-scope take writes v3 with a `scope` block; an
+  // absent `scope` (a whole-display v3 document, which the helper never
+  // actually writes — display-scope stays v2 — but nothing here should
+  // depend on that) means the same thing an absent one always meant.
+  test("a version 3 anchors document loads, scope included", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors({
+        version: 3,
+        scope: { kind: "region", region: { x: 10, y: 20, width: 300, height: 200 } },
+      } as any),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 3 is not supported/);
+    });
+    expect(s).toBeDefined();
+    expect((s.anchors as any).scope).toEqual({ kind: "region", region: { x: 10, y: 20, width: 300, height: 200 } });
+  });
+
+  test("a version 4 anchors document is rejected by name", async () => {
+    await expect(loadSession({
+      anchors: offsetAnchors({ version: 4 as any }),
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/version 4 is not supported/);
   });
 
   test("a version 2 events document loads, cursor events included", async () => {

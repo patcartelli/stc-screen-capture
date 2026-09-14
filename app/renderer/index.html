@@ -100,6 +100,13 @@
     #record { font-weight: 600; border-color: var(--rec); color: var(--rec); }
     #record:hover:not([disabled]) { background: var(--rec-soft); }
     .row { display: flex; gap: 10px; align-items: center; }
+    /* `.row`'s `display: flex` and the UA stylesheet's `[hidden] { display:
+       none }` are equal specificity, and an author rule wins THAT tie
+       regardless of source order — so a `.row` element toggled via `hidden`
+       (the window/region source controls, STC-374) would stay visibly flexed.
+       Restated explicitly, and !important because nothing here should ever
+       need to out-rank "this element is hidden". */
+    [hidden] { display: none !important; }
     #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-dim); }
     table { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     td { padding: 2px 14px 2px 0; }
@@ -192,6 +199,33 @@
     #shortcutfoot { display: flex; gap: 10px; align-items: baseline; padding-top: 8px; }
     #shortcutfoot button { padding: 3px 10px; font-size: 12px; }
     #shortcuthint { font-size: 12px; color: var(--text-faint); }
+
+    /* ── capture scope (STC-370/STC-374) ─────────────────────────────────
+       The scope picker (Screen/Window/Area) and the "source" control beside
+       it — a display for Screen, a chosen window or area for the other two.
+       Exactly one of #display-label / #window-source / #region-source is
+       visible at a time; renderer.ts toggles `hidden` on the other two. */
+    .sourcelabel { color: var(--text-dim); font-size: 12px; max-width: 220px;
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ── the profile sheet (STC-374) ──────────────────────────────────────
+       A panel INSIDE this window, not a fourth window — slides in from the
+       right over the take grid rather than opening as its own surface. Holds
+       what used to sit in the main flow: still-capture prefs and the
+       shortcuts editor. `[hidden]` is not used here (it forces display:none,
+       which cannot transition) — visibility is the `.open` class alone. */
+    #profilesheet {
+      position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 92vw);
+      background: var(--surface); border-left: 1px solid var(--border);
+      box-shadow: -12px 0 28px rgba(0, 0, 0, .16);
+      transform: translateX(100%); transition: transform .18s ease;
+      padding: 20px; box-sizing: border-box; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 16px; z-index: 10;
+    }
+    #profilesheet.open { transform: translateX(0); }
+    #profilesheet h1 { font-size: 13px; }
+    #profilesheet-head { justify-content: space-between; }
+    #profileclose { padding: 3px 9px; font-size: 14px; line-height: 1; }
   </style>
 </head>
 <body>
@@ -200,41 +234,30 @@
     <button id="record">Record</button>
     <button id="capturestill" title="Select a region or a window and capture one frame">Capture still</button>
     <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
-    <label id="display-label">Display <select id="display"><option value="">Automatic</option></select></label>
+    <button id="profile" title="Still-capture preferences and shortcuts">Profile</button>
     <span id="state">starting…</span>
+  </div>
+  <div class="row">
+    <label>Scope <select id="scope">
+      <option value="display">Screen</option>
+      <option value="window">Window</option>
+      <option value="region">Area</option>
+    </select></label>
+    <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
+    <span id="window-source" class="row" hidden>
+      <span id="window-source-label" class="sourcelabel">No window chosen</span>
+      <button id="pickwindow">Choose window…</button>
+      <button id="clearwindow" title="Forget the chosen window">Clear</button>
+    </span>
+    <span id="region-source" class="row" hidden>
+      <span id="region-source-label" class="sourcelabel">No area chosen</span>
+      <button id="pickregion">Choose area…</button>
+      <button id="clearregion" title="Forget the chosen area">Clear</button>
+    </span>
   </div>
   <div id="stillstatus" hidden></div>
   <div id="alert"></div>
 
-  <h2>Still capture</h2>
-  <!--
-    The destination folder (STC-293) and the post-capture floating thumbnail's
-    preferences (STC-296). The decorated still itself — style, redact, copy,
-    save — is the thumbnail's own compact panel now (app/renderer/thumbnail.html,
-    "the whole still UI in v1"); nothing here previews or exports a shot.
-  -->
-  <div class="stillrow">
-    <span>Saving to</span>
-    <span id="stilldest">beside the shot</span>
-    <button id="stillchoosedest">Change…</button>
-    <button id="stillcleardest">Beside the shot</button>
-  </div>
-  <div class="stillrow">
-    <label>Panel corner <select id="thumbcorner">
-      <option value="bottom-right">Bottom right</option>
-      <option value="bottom-left">Bottom left</option>
-      <option value="top-right">Top right</option>
-      <option value="top-left">Top left</option>
-    </select></label>
-    <label title="Never less than 3 seconds">Closes after
-      <input id="thumbtimeout" type="number" min="3" max="60" step="1" style="width:3.5em">s</label>
-    <label>then <select id="thumbsettle">
-      <option value="save">Save</option>
-      <option value="copy">Copy</option>
-    </select></label>
-    <label title="Skip the panel entirely and copy every capture straight to the clipboard">
-      <input type="checkbox" id="thumbskip"> Skip it — straight to clipboard</label>
-  </div>
   <table>
     <tbody>
       <tr><td>helper pid</td><td id="pid">—</td></tr>
@@ -247,17 +270,61 @@
       <tr><td>elapsed</td><td id="elapsed">—</td></tr>
     </tbody>
   </table>
-  <h2>Capture shortcuts</h2>
-  <div id="shortcuts"></div>
-  <div id="shortcutfoot">
-    <button id="resetshortcuts">Restore defaults</button>
-    <label id="shutter-label" title="Play the system camera-shutter sound when a still is captured">
-      <input type="checkbox" id="shuttersound" checked> Shutter sound</label>
-    <span id="shortcuthint">Work with the app in the background. Click a shortcut, then press the keys.</span>
-  </div>
 
   <h2 id="lib-heading">Recordings</h2>
   <div id="takes"></div>
+
+  <!--
+    The profile sheet (STC-374): still-capture prefs and the shortcuts editor,
+    moved out of the main flow behind the Profile button. Nothing in here
+    changed behaviour — only where it lives.
+  -->
+  <aside id="profilesheet">
+    <div class="row" id="profilesheet-head">
+      <h1>Profile</h1>
+      <button id="profileclose" aria-label="Close">×</button>
+    </div>
+
+    <h2>Still capture</h2>
+    <!--
+      The destination folder (STC-293) and the post-capture floating
+      thumbnail's preferences (STC-296). The decorated still itself — style,
+      redact, copy, save — is the thumbnail's own compact panel now
+      (app/renderer/thumbnail.html, "the whole still UI in v1"); nothing here
+      previews or exports a shot.
+    -->
+    <div class="stillrow">
+      <span>Saving to</span>
+      <span id="stilldest">beside the shot</span>
+      <button id="stillchoosedest">Change…</button>
+      <button id="stillcleardest">Beside the shot</button>
+    </div>
+    <div class="stillrow">
+      <label>Panel corner <select id="thumbcorner">
+        <option value="bottom-right">Bottom right</option>
+        <option value="bottom-left">Bottom left</option>
+        <option value="top-right">Top right</option>
+        <option value="top-left">Top left</option>
+      </select></label>
+      <label title="Never less than 3 seconds">Closes after
+        <input id="thumbtimeout" type="number" min="3" max="60" step="1" style="width:3.5em">s</label>
+      <label>then <select id="thumbsettle">
+        <option value="save">Save</option>
+        <option value="copy">Copy</option>
+      </select></label>
+      <label title="Skip the panel entirely and copy every capture straight to the clipboard">
+        <input type="checkbox" id="thumbskip"> Skip it — straight to clipboard</label>
+    </div>
+
+    <h2>Capture shortcuts</h2>
+    <div id="shortcuts"></div>
+    <div id="shortcutfoot">
+      <button id="resetshortcuts">Restore defaults</button>
+      <label id="shutter-label" title="Play the system camera-shutter sound when a still is captured">
+        <input type="checkbox" id="shuttersound" checked> Shutter sound</label>
+      <span id="shortcuthint">Work with the app in the background. Click a shortcut, then press the keys.</span>
+    </div>
+  </aside>
   <script src="../dist/renderer.js"></script>
 </body>
 </html>

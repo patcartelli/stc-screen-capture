@@ -105,19 +105,25 @@ enum StillRequestError: Error, Equatable, CustomStringConvertible {
 /// harness's dictionary literals are exactly that), so it is accepted by name.
 /// CI's first run of the harness found this: `crop-on-window` came back as
 /// `bad-crop` for a crop written as integers.
-private func number(_ v: Any?) -> Double? {
+///
+/// Not `private`: STC-370's `parseStartRequest` (CaptureDecisions.swift)
+/// parses the same shapes for a recording's region/window scope and reuses
+/// this rather than keeping a second copy.
+func number(_ v: Any?) -> Double? {
     if let d = v as? Double, d.isFinite { return d }
     if let i = v as? Int { return Double(i) }
     return nil
 }
 
 /// A display or window id: a non-negative integer that fits the CG types.
-private func id32(_ v: Any?) -> UInt32? {
+/// Shared with `parseStartRequest`, same reason as `number` above.
+func id32(_ v: Any?) -> UInt32? {
     guard let i = v as? Int, i >= 0, i <= Int(UInt32.max) else { return nil }
     return UInt32(i)
 }
 
-private func parseRect(_ v: Any) -> Result<StillRect, StillRequestError> {
+/// Shared with `parseStartRequest`, same reason as `number` above.
+func parseRect(_ v: Any) -> Result<StillRect, StillRequestError> {
     guard let o = v as? [String: Any],
           let x = number(o["x"]), let y = number(o["y"]),
           let w = number(o["width"]), let h = number(o["height"])

@@ -30,6 +30,20 @@ final class App {
     /// invariant, broken by the fix itself under a double signal.
     private let shutdownLock = NSLock()
     private var shuttingDown = false
+    /// Fired once, whenever `state` next becomes `.idle`, by whichever
+    /// `stop()` teardown is CURRENTLY in flight (STC-376). Exists for a
+    /// caller that finds a stop already running and has no completion of its
+    /// own hooked into it — `shutdown()` is the one caller that needs this:
+    /// calling `stop()` again while `state == .stopping` would hit its
+    /// "not recording" guard and answer immediately, since `.stopping` is
+    /// neither `.recording` nor `.starting`. `shutdown()`'s own body (the one
+    /// caller of `addIdleWaiter`) is marshalled onto main now — see its own
+    /// doc comment — so `notifyIdle()` (always called from `stop()`'s
+    /// completion, also on main) never actually races `addIdleWaiter` in
+    /// practice; this lock is kept anyway, cheaply, so neither is load-
+    /// bearing on staying on main forever.
+    private let idleWaitersLock = NSLock()
+    private var idleWaiters: [() -> Void] = []
 
     func boot() {
         installSignalHandlers()
@@ -129,10 +143,18 @@ final class App {
         guard state == .idle else {
             IO.send("error", seq: seq, ["code": "bad-state", "detail": "cannot start while \(state.rawValue)"]); return
         }
-        guard let dir = cmd["dir"] as? String, !dir.isEmpty else {
-            IO.send("error", seq: seq, ["code": "missing-dir", "detail": "start requires \"dir\""]); return
+        // STC-370: what to capture — the whole display (unchanged), a region
+        // of one, or a window — is parsed once, the same way capture-still's
+        // request is (parseStillRequest). Answers before touching
+        // ScreenCaptureKit, so a malformed request costs no grant and no time.
+        let request: StartRequest
+        switch parseStartRequest(cmd) {
+        case .failure(let e):
+            IO.send("error", seq: seq, ["code": e.code, "detail": e.description]); return
+        case .success(let r):
+            request = r
         }
-        let url = URL(fileURLWithPath: dir)
+        let url = URL(fileURLWithPath: request.dir)
         // Noted before creating: a session dir we made and never wrote to gets
         // cleaned up on failure, so a denied grant does not litter the user's
         // recordings folder with empty takes. A pre-existing dir is never touched.
@@ -144,8 +166,6 @@ final class App {
         sessionDir = url
         startedAtNs = Clock.nowNs()
 
-        let displayId = (cmd["displayId"] as? Int).map { CGDirectDisplayID($0) }
-        let wantCamera = cmd["camera"] as? Bool ?? false
         let session = CaptureSession(dir: url, t0Ns: startedAtNs)
         capture = session
         // STC-306: a stream that dies after `started` ends the take the way a
@@ -161,7 +181,20 @@ final class App {
                 self.stop(reason: "stream-stopped")
             }
         }
-        session.start(displayId: displayId, camera: wantCamera) { [weak self] result in
+        // STC-370: a window-scope take's own window resizing or closing ends
+        // the take the same way — through App.stop(), never through the
+        // session's own stop() directly, for the identical reason onStreamDied
+        // is wired this way rather than calling session.stop() from inside
+        // CaptureSession: App.stop() is what resets App.state and sends the
+        // client its "stopped" reply.
+        session.onWindowChanged = { [weak self, weak session] reason in
+            DispatchQueue.main.async {
+                guard let self, let session,
+                      self.state == .recording, self.capture === session else { return }
+                self.stop(reason: reason)
+            }
+        }
+        session.start(request: request) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
@@ -309,6 +342,7 @@ final class App {
             IO.send("stopped", seq: seq, ["dir": dir as Any, "elapsedMs": elapsed, "reason": reason])
             sessionDir = nil; state = .idle
             completion?()
+            notifyIdle()
             return
         }
         session.stop(reason: reason) { [weak self] stats in
@@ -320,8 +354,24 @@ final class App {
                 self?.sessionDir = nil
                 self?.state = .idle
                 completion?()
+                self?.notifyIdle()
             }
         }
+    }
+
+    /// See `idleWaiters`'s own doc comment (STC-376).
+    private func notifyIdle() {
+        idleWaitersLock.lock()
+        let waiters = idleWaiters
+        idleWaiters = []
+        idleWaitersLock.unlock()
+        for w in waiters { w() }
+    }
+
+    private func addIdleWaiter(_ f: @escaping () -> Void) {
+        idleWaitersLock.lock()
+        idleWaiters.append(f)
+        idleWaitersLock.unlock()
     }
 
     /// Periodic stats make thermal throttling observable rather than inferred.
@@ -441,6 +491,37 @@ final class App {
     /// bound on itself — so this backstop is not the normal path, only what
     /// keeps the process from hanging forever if `stop` is wedged badly
     /// enough that even ITS OWN backstop cannot run.
+    ///
+    /// **STC-376**: `state == .stopping` — a stop already in flight, started
+    /// by something else (an explicit `stop` command, `onStreamDied`,
+    /// `onWindowChanged`, a display reconfiguration) — used to fall through
+    /// the old two-way guard below as neither "recording/starting" (so it
+    /// would have exited immediately, before that teardown had written
+    /// anything) nor a case `stop()` itself would wait for if called again
+    /// (`.stopping` is not `.recording`/`.starting` either, so a second call
+    /// would hit `stop()`'s own "not recording" guard and answer at once).
+    /// The exact shape that produces: a client sends `stop` and closes the
+    /// pipe right behind it — `IO.readCommands` dispatches `handle(stop)`
+    /// and the stdin-EOF shutdown onto main in immediate succession — and
+    /// the process could exit with `anchors.json`/`events.json` never
+    /// written, sometimes even before `display.mp4` got its `moov` atom.
+    /// Reproduced live before this fix, not merely reasoned about.
+    /// Now a THIRD case: wait on `idleWaiters` for whichever stop is already
+    /// running, rather than starting a redundant second one.
+    ///
+    /// **Review on #139**: `state`/`sessionDir`/`capture` are main-queue-owned
+    /// everywhere else — `IO.readCommands` already dispatches `handle(stop)`
+    /// and the stdin-EOF shutdown onto main, and `stop()`'s own completions
+    /// re-dispatch onto main before touching them. `installSignalHandlers`
+    /// was the one caller that did not: SIGINT/SIGTERM/SIGHUP fire on their
+    /// own `DispatchSourceSignal` queue, and the body below used to read
+    /// `state` and (on the `else` branch) run `stop()`'s synchronous half —
+    /// `state = .stopping`, `sessionDir`/`capture` reads and writes — from
+    /// there, concurrently with whatever main was doing. Pre-existing (the
+    /// code before this ticket called `stop(reason:completion:)` directly
+    /// from here too, with the same lack of marshalling), but this ticket is
+    /// already rewriting this exact body, so it is marshalled onto main now
+    /// rather than left as the one remaining off-main writer.
     func shutdown(reason: String, exitCode: Int32, seq: Int? = nil) {
         IO.log("shutdown: \(reason)")
         shutdownLock.lock()
@@ -451,25 +532,33 @@ final class App {
         // process is exiting exactly once, on the first call's own terms.
         guard first else { return }
 
-        guard state == .recording || state == .starting else {
-            IO.send("bye", seq: seq, ["reason": reason])
-            exit(exitCode)
-        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.state != .idle else {
+                IO.send("bye", seq: seq, ["reason": reason])
+                exit(exitCode)
+            }
 
-        let answerLock = NSLock()
-        var answered = false
-        let finish: () -> Void = {
-            answerLock.lock()
-            if answered { answerLock.unlock(); return }
-            answered = true
-            answerLock.unlock()
-            IO.send("bye", seq: seq, ["reason": reason])
-            exit(exitCode)
+            let answerLock = NSLock()
+            var answered = false
+            let finish: () -> Void = {
+                answerLock.lock()
+                if answered { answerLock.unlock(); return }
+                answered = true
+                answerLock.unlock()
+                IO.send("bye", seq: seq, ["reason": reason])
+                exit(exitCode)
+            }
+            DispatchQueue.global().asyncAfter(
+                deadline: .now() + CaptureSession.stopTimeoutSeconds + Self.shutdownBackstopMarginSeconds
+            ) { finish() }
+
+            if self.state == .stopping {
+                self.addIdleWaiter(finish)
+            } else {
+                self.stop(reason: reason) { finish() }
+            }
         }
-        DispatchQueue.global().asyncAfter(
-            deadline: .now() + CaptureSession.stopTimeoutSeconds + Self.shutdownBackstopMarginSeconds
-        ) { finish() }
-        stop(reason: reason) { finish() }
     }
 }
 
