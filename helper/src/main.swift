@@ -30,6 +30,11 @@ final class App {
     /// invariant, broken by the fix itself under a double signal.
     private let shutdownLock = NSLock()
     private var shuttingDown = false
+    /// Completions waiting on the CURRENTLY in-flight `stop` — its own caller's,
+    /// plus any `shutdown` (STC-376) that arrives while one is already under
+    /// way. Always touched on the main queue, same as `state`. Drained and
+    /// reset to empty the moment that stop's teardown actually finishes.
+    private var stopWaiters: [() -> Void] = []
 
     func boot() {
         installSignalHandlers()
@@ -321,13 +326,14 @@ final class App {
             return
         }
         state = .stopping
+        if let completion { stopWaiters.append(completion) }
         let dir = sessionDir?.path
         let elapsed = (Clock.nowNs() - startedAtNs) / 1_000_000
 
         guard let session = capture else {
             IO.send("stopped", seq: seq, ["dir": dir as Any, "elapsedMs": elapsed, "reason": reason])
             sessionDir = nil; state = .idle
-            completion?()
+            drainStopWaiters()
             return
         }
         session.stop(reason: reason) { [weak self] stats in
@@ -338,9 +344,18 @@ final class App {
                 self?.capture = nil
                 self?.sessionDir = nil
                 self?.state = .idle
-                completion?()
+                self?.drainStopWaiters()
             }
         }
+    }
+
+    /// Fires and clears every completion waiting on the stop that just
+    /// finished — the caller's own (if any) plus every `shutdown` that joined
+    /// it (STC-376) — so the next take starts with none left over.
+    private func drainStopWaiters() {
+        let waiters = stopWaiters
+        stopWaiters = []
+        for w in waiters { w() }
     }
 
     /// Periodic stats make thermal throttling observable rather than inferred.
@@ -470,7 +485,30 @@ final class App {
         // process is exiting exactly once, on the first call's own terms.
         guard first else { return }
 
-        guard state == .recording || state == .starting else {
+        // `state`/`stopWaiters` are otherwise touched only on the main queue
+        // (`stop()`, and the CaptureSession callbacks that already marshal
+        // onto it before calling it) — but a signal's own handler runs on a
+        // background queue (installSignalHandlers), so without this hop the
+        // check just below could read `state` out from under an in-flight
+        // `stop()`. `stdin-closed` already arrives via `DispatchQueue.main.async`
+        // (Protocol.swift), so this is a no-op hop for that path.
+        DispatchQueue.main.async { [weak self] in self?.beginShutdown(reason: reason, exitCode: exitCode, seq: seq) }
+    }
+
+    /// STC-376: `stop()` sets `state = .stopping` SYNCHRONOUSLY, before its
+    /// async teardown (`session.stop` → `writeSidecars`/`finishWriting`) has
+    /// run. The old guard here only recognised `.recording`/`.starting`, so a
+    /// `shutdown` landing in that window — the exact `echo stop` immediately
+    /// followed by closing the pipe idiom several runbooks use — took the
+    /// bye-and-exit path below and killed the process before the sidecars or
+    /// `display.mp4`'s `moov` atom were ever written. Widening the guard to
+    /// include `.stopping` is only half the fix: calling `stop()` again here
+    /// would just hit ITS OWN guard (state is `.stopping`, not `.recording`/
+    /// `.starting`) and answer "not recording" with nothing to wait on, which
+    /// is a different way of exiting too early. `stopWaiters` lets this JOIN
+    /// the stop already under way instead of starting a second one.
+    private func beginShutdown(reason: String, exitCode: Int32, seq: Int?) {
+        guard state == .recording || state == .starting || state == .stopping else {
             IO.send("bye", seq: seq, ["reason": reason])
             exit(exitCode)
         }
@@ -488,7 +526,12 @@ final class App {
         DispatchQueue.global().asyncAfter(
             deadline: .now() + CaptureSession.stopTimeoutSeconds + Self.shutdownBackstopMarginSeconds
         ) { finish() }
-        stop(reason: reason) { finish() }
+
+        if state == .stopping {
+            stopWaiters.append(finish)
+        } else {
+            stop(reason: reason) { finish() }
+        }
     }
 }
 
