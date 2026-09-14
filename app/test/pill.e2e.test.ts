@@ -92,12 +92,16 @@ describe("the pill's collapse mechanism", () => {
     await expect.poll(() => isPillCollapsed(win), { timeout: 5_000 }).toBe(true);
 
     // #record itself is hidden now (index.html); #pill is the only reachable
-    // control, and it must actually contain the dot/timer/meter and a real,
-    // moving elapsed time — not just be present.
+    // control, and it must actually contain the dot/timer/meter/stop-icon and
+    // a real, moving elapsed time — not just be present.
     await expect.poll(() => win.isVisible("#record"), { timeout: 5_000 }).toBe(false);
     expect(await win.isVisible("#pill")).toBe(true);
     expect(await win.locator("#pill-dot").count()).toBe(1);
     expect(await win.locator("#pill-meter").count()).toBe(1);
+    // The stop icon (added after the first hardware look reported nothing
+    // visible said what clicking the pill does) — a distinct visual glyph,
+    // not just the aria-label a screen reader would get.
+    expect(await win.locator("#pill-stop").count()).toBe(1);
     const timer1 = await win.textContent("#pill-timer");
     expect(timer1).toMatch(/^\d{2}:\d{2}$/);
     await expect.poll(() => win.textContent("#pill-timer"), { timeout: 5_000 })
