@@ -1,0 +1,225 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <title>stc editor</title>
+  <style>
+    @font-face { font-family: "Geist"; font-weight: 400; src: url("fonts/Geist-Regular.woff2") format("woff2"); }
+    @font-face { font-family: "Geist"; font-weight: 500; src: url("fonts/Geist-Medium.woff2") format("woff2"); }
+    @font-face { font-family: "Geist"; font-weight: 600; src: url("fonts/Geist-SemiBold.woff2") format("woff2"); }
+    @font-face { font-family: "Geist Mono"; font-weight: 400; src: url("fonts/GeistMono-Regular.woff2") format("woff2"); }
+    @font-face { font-family: "Geist Mono"; font-weight: 500; src: url("fonts/GeistMono-Medium.woff2") format("woff2"); }
+
+    :root {
+      color-scheme: light dark;
+      font: 13px/1.5 "Geist", -apple-system, system-ui, sans-serif;
+      --bg: #fff; --surface: #f4f4f5; --text: #111; --muted: #666;
+      --line: rgba(128,128,128,.28); --accent: #3b6fe0; --warn: #b34;
+      --clip: #6a8fd8; --zoom: #d88a3b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #17181a; --surface: #202226; --text: #eee; --muted: #999;
+               --line: rgba(255,255,255,.16); }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+           display: flex; flex-direction: column; gap: 10px; }
+    button { font: inherit; padding: 6px 14px; border-radius: 7px;
+             border: 1px solid var(--line); background: transparent; color: inherit;
+             cursor: pointer; }
+    button[disabled] { opacity: .4; cursor: default; }
+    select, input { font: inherit; color: inherit; background: var(--surface);
+                    border: 1px solid var(--line); border-radius: 5px; }
+    .mono { font-family: "Geist Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+    #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid rgba(200,80,60,.5);
+             background: rgba(200,80,60,.1); display: none; white-space: pre-wrap; }
+    #alert.show { display: block; }
+
+    #stage { width: 100%; height: auto; background: #000; border-radius: 6px; display: block; }
+    #stage[data-vieweye] { width: var(--vieweye-w); max-width: none; }
+    #stagewrap { overflow-x: auto; }
+
+    .transport { display: flex; align-items: center; gap: 10px; }
+    #clock { min-width: 132px; font-size: 12px; opacity: .75; }
+    #shuttle { min-width: 32px; font-size: 12px; font-weight: 600; opacity: .85; }
+
+    /* ── the timeline: a ruler and two lanes over one shared [a, b] span ─── */
+    .timelinewrap { display: flex; flex-direction: column; gap: 2px; }
+    #ruler { position: relative; height: 18px; overflow: hidden; cursor: grab;
+             border-bottom: 1px solid var(--line); }
+    #ruler:active { cursor: grabbing; }
+    .laneviewport { position: relative; overflow: hidden; height: 30px;
+                    border-bottom: 1px solid var(--line); }
+    .laneviewport.zoom { height: 22px; }
+    /* The FULL-DURATION content, transformed to show only the visible span
+       (STC-373: "pan lives on the ruler, zoom anchors on the pointer"). Every
+       frame<->px conversion in editor.ts reads getBoundingClientRect() of
+       #timeline itself, which already reflects this transform — so the
+       existing scrubber/trim arithmetic (app/src/scrubber.ts) needs no
+       span-aware rewrite. */
+    #timeline, #ruler-content, #clip-canvas-wrap, #zoom-canvas-wrap {
+      position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+      transform-origin: 0 0;
+    }
+    .timeline .bar { position: absolute; left: 0; right: 0; top: 12px; height: 4px;
+                     background: var(--line); border-radius: 2px; pointer-events: none; }
+    .timeline .kept { position: absolute; top: 0; height: 4px;
+                      background: var(--clip); border-radius: 2px; }
+    .timeline .ticks { position: absolute; left: 0; right: 0; top: 8px; height: 12px;
+                       pointer-events: none; opacity: .5;
+                       background-image: repeating-linear-gradient(to right,
+                         currentColor 0 1px, transparent 1px var(--tick-px, 12px));
+                       -webkit-mask-image: linear-gradient(to bottom, #000 0 4px, transparent 4px);
+                       mask-image: linear-gradient(to bottom, #000 0 4px, transparent 4px); }
+    .timeline .ticks[hidden] { display: none; }
+    .timeline .cut { position: absolute; top: 10px; height: 8px; pointer-events: none;
+                     background: repeating-linear-gradient(-45deg,
+                       var(--line) 0 2px, transparent 2px 5px); }
+    .timeline .handle { position: absolute; top: 4px; width: 10px; height: 20px;
+                        margin-left: -5px; padding: 0; border-radius: 2px; z-index: 3;
+                        cursor: ew-resize; background: currentColor;
+                        transition: transform .12s ease, background-color .12s ease; }
+    .timeline .handle.in { border-radius: 2px 0 0 2px; }
+    .timeline .handle.out { border-radius: 0 2px 2px 0; }
+    .timeline .handle.held { background: var(--warn); transform: scaleX(1.6); }
+    .timeline .handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .timeline #scrub { position: absolute; left: 0; right: 0; width: 100%; top: 0;
+                       height: 30px; margin: 0; background: none; z-index: 2;
+                       -webkit-appearance: none; appearance: none; }
+    .timeline #scrub::-webkit-slider-runnable-track { height: 4px; background: transparent; }
+    .timeline #scrub::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+                       width: 3px; height: 20px; margin-top: -8px; border-radius: 1px;
+                       background: currentColor; }
+    .timeline #scrub:active::-webkit-slider-thumb { height: 24px; margin-top: -10px; }
+    .timeline #scrub:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #clip-activity, #zoom-curve { display: block; width: 100%; height: 100%; }
+    .lanelabel { position: absolute; left: 4px; top: 2px; font-size: 10px;
+                 text-transform: uppercase; letter-spacing: .04em; opacity: .5;
+                 pointer-events: none; z-index: 4; }
+
+    .trimbar, .framebar { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    #triminfo, #framestatus { opacity: .7; }
+    #framestatus[hidden] { display: none; }
+
+    /* ── the export dialog: legibility + the viewer's eye, one place ────── */
+    dialog#exportdialog { border: 1px solid var(--line); border-radius: 10px;
+                          padding: 16px; background: var(--surface); color: inherit;
+                          width: min(420px, 90vw); }
+    dialog#exportdialog::backdrop { background: rgba(0,0,0,.35); }
+    .dialogrow { display: flex; align-items: center; gap: 8px; font-size: 12px;
+                margin-top: 8px; flex-wrap: wrap; }
+    .dialogrow:first-child { margin-top: 0; }
+    #embedwidth { width: 5.5em; }
+    #textpt { width: 4em; }
+    #legibility { opacity: .8; }
+    #legibility.warn { opacity: 1; color: var(--warn); font-weight: 600; }
+    #exportbar { display: flex; align-items: center; gap: 10px; }
+    #exportbar[hidden] { display: none; }
+    #exportprogress { flex: 1; }
+    #exportstatus { font-size: 12px; opacity: .75; min-width: 130px; }
+    .dialogfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+    .sharebar { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    #sharestatus { opacity: .75; }
+  </style>
+</head>
+<body>
+  <div id="alert"></div>
+
+  <div id="stagewrap"><canvas id="stage"></canvas></div>
+
+  <div class="transport">
+    <button id="playpause">Play</button>
+    <span id="clock" class="mono">0:00:00 / 0:00:00</span>
+    <span id="shuttle" class="mono"></span>
+    <button id="openexport">Export…</button>
+    <button id="closepreview">Close</button>
+  </div>
+
+  <!--
+    The timeline (STC-373): a ruler over two lanes sharing one [a, b] span.
+    Clip is pointer activity (app/src/timeline-activity.ts), weighted for
+    clicks/drags — not frame difference, see the ticket's own note. Zoom is
+    the derived auto-zoom automation curve, read-only in v1 (the override
+    lane is STC-328/330/331). Pan lives on the ruler; zoom anchors on the
+    pointer; the trim handles own the Clip lane's drag.
+  -->
+  <div class="timelinewrap">
+    <div id="ruler"><div id="ruler-content"></div></div>
+    <div class="laneviewport clip">
+      <span class="lanelabel">Clip</span>
+      <div id="clip-canvas-wrap"><canvas id="clip-activity"></canvas></div>
+      <div class="timeline" id="timeline">
+        <div class="bar"><div class="kept" id="kept"></div></div>
+        <div class="cut" id="cut-head"></div>
+        <div class="cut" id="cut-tail"></div>
+        <div class="ticks" id="ticks" hidden></div>
+        <button type="button" class="handle in" id="trim-in" aria-label="In point"></button>
+        <button type="button" class="handle out" id="trim-out" aria-label="Out point"></button>
+        <!-- STC-338 rule 1: the value is an export frame index, not a time. -->
+        <input id="scrub" type="range" min="0" max="0" value="0" step="1" aria-label="Playhead">
+      </div>
+    </div>
+    <div class="laneviewport zoom">
+      <span class="lanelabel">Zoom</span>
+      <div id="zoom-canvas-wrap"><canvas id="zoom-curve"></canvas></div>
+    </div>
+  </div>
+
+  <div class="framebar">
+    <button id="copyframe" title="Copy the current frame as an image (⌘⇧C)">Copy frame</button>
+    <button id="saveframe" title="Save the current frame as a PNG beside the recording (⌘⇧S)">Save frame</button>
+    <span id="framestatus" hidden></span>
+  </div>
+  <div class="trimbar">
+    <button id="markin">In</button>
+    <button id="markout">Out</button>
+    <button id="resettrim">Full take</button>
+    <span id="triminfo" class="mono"></span>
+  </div>
+
+  <div class="sharebar">
+    <button id="share" title="Copy this take's export into the site folder">Share to site</button>
+    <button id="sharedest">Site folder…</button>
+    <button id="revealshared" title="Show the published file in Finder">Show published</button>
+    <span id="sharestatus"></span>
+  </div>
+
+  <dialog id="exportdialog">
+    <div class="dialogrow">
+      <label for="outsize">Export size</label>
+      <select id="outsize"></select>
+      <span id="outsizenote" class="mono"></span>
+    </div>
+    <div class="dialogrow">
+      <label for="embedtarget">Shown at</label>
+      <select id="embedtarget"></select>
+      <input id="embedwidth" type="number" min="80" max="4096" step="1"
+             aria-label="Embed width in CSS pixels">
+      <label for="textpt">Text</label>
+      <input id="textpt" type="number" min="1" max="144" step="0.5"
+             aria-label="Base text size in points">
+    </div>
+    <div class="dialogrow">
+      <label title="Draw the preview at the embed width, 1:1 — what the viewer actually sees">
+        <input id="vieweye" type="checkbox"> Viewer's eye
+      </label>
+      <!-- Warns below 9pt; never blocks (STC-373's own scope line). -->
+      <span id="legibility" class="mono"></span>
+    </div>
+    <div class="dialogrow" id="exportbar" hidden>
+      <progress id="exportprogress" max="1000" value="0"></progress>
+      <span id="exportstatus" class="mono"></span>
+      <button id="cancelexport">Cancel</button>
+    </div>
+    <div class="dialogfoot">
+      <button id="export">Export</button>
+      <button id="closeexport">Close</button>
+    </div>
+  </dialog>
+
+  <script src="../dist/editor.js"></script>
+</body>
+</html>

@@ -13,14 +13,11 @@ contextBridge.exposeInMainWorld("recorder", {
   takes: () => ipcRenderer.invoke("recorder:takes"),
   labelTake: (dir: string, label: string) => ipcRenderer.invoke("take:label", dir, label),
   deleteTake: (dir: string) => ipcRenderer.invoke("take:delete", dir),
-  openPreview: (dir: string) => ipcRenderer.invoke("preview:open", dir),
-  closePreview: () => ipcRenderer.invoke("preview:close"),
-  readTakeFile: (name: string) => ipcRenderer.invoke("preview:read", name),
-  takeFileSize: (name: string) => ipcRenderer.invoke("preview:size", name),
-  readTakeChunk: (name: string, offset: number, length: number) =>
-    ipcRenderer.invoke("preview:chunk", name, offset, length),
-  writeProject: (bytes: ArrayBuffer) => ipcRenderer.invoke("preview:writeProject", bytes),
-  writeExport: (name: string, bytes: ArrayBuffer) => ipcRenderer.invoke("export:write", name, bytes),
+  // The take player now lives in its own window (STC-373) — this opens it
+  // rather than an in-page preview. `openPreview`/`closePreview`/`writeProject`
+  // /`writeExport` and the rest of the old in-page player's channels moved to
+  // `editor-preload.ts`, which is the only bridge that still calls them.
+  openEditor: (dir: string, name: string) => ipcRenderer.invoke("editor:open", dir, name),
   // `action` is STC-292's: the hotkey and the menu bar ask for a specific
   // capture mode, the button asks for none.
   captureStill: (action?: string) => ipcRenderer.invoke("still:capture", action),
@@ -54,13 +51,8 @@ contextBridge.exposeInMainWorld("recorder", {
   start: () => ipcRenderer.invoke("recorder:start"),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),
-  // Share (STC-242). `publish` takes no arguments on purpose: the take is the
-  // one main already has open, and the destination and slug are read from
-  // settings inside main — a renderer that could pass either could make this
-  // process copy a file to a path of its choosing.
-  publish: () => ipcRenderer.invoke("share:publish"),
-  chooseShareDestination: () => ipcRenderer.invoke("share:chooseDestination"),
-  revealPublished: () => ipcRenderer.invoke("share:reveal"),
+  // Share (STC-242) moved to the editor window with the rest of the player —
+  // see `editor-preload.ts`. This window has no take open to publish.
   on: (event: string, cb: (payload: any) => void) => {
     const channels = ["helper:ready", "helper:stats", "helper:respawned",
                       "helper:gave-up", "helper:recording-lost", "helper:recording-ended",

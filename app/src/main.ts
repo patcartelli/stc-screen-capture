@@ -1,5 +1,6 @@
 import {
   app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage,
+  type IpcMainInvokeEvent,
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
@@ -35,6 +36,7 @@ import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail,
 } from "./thumbnail-window.js";
+import { openEditor } from "./editor-window.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -55,8 +57,35 @@ const HELPER = process.env.STC_HELPER_BIN
 
 let win: BrowserWindow | undefined;
 let sup: HelperSupervisor | undefined;
-/** The take the renderer may currently read, set only by preview:open. */
-let openTake: string | undefined;
+/**
+ * The take each WINDOW may currently read, set only by preview:open.
+ *
+ * Keyed by `sender.id` rather than a single variable (STC-373): with the
+ * editor as its own window, the main window's library and the editor can
+ * both be alive at once, and a single `openTake` would let either one clobber
+ * the other's idea of what is open. Entries are removed when their sender is
+ * destroyed, so a closed window cannot leave a stale entry for a later
+ * `webContents.id` to inherit.
+ */
+const openTakes = new Map<number, string>();
+const cleanedUpSenders = new WeakSet<Electron.WebContents>();
+
+function getOpenTake(e: IpcMainInvokeEvent): string | undefined {
+  return openTakes.get(e.sender.id);
+}
+
+function setOpenTake(e: IpcMainInvokeEvent, dir: string): void {
+  openTakes.set(e.sender.id, dir);
+  if (!cleanedUpSenders.has(e.sender)) {
+    cleanedUpSenders.add(e.sender);
+    e.sender.once("destroyed", () => openTakes.delete(e.sender.id));
+  }
+}
+
+function clearOpenTake(e: IpcMainInvokeEvent): void {
+  openTakes.delete(e.sender.id);
+}
+
 let tray: TrayHandle | undefined;
 let shortcuts: Shortcuts = { ...DEFAULT_SHORTCUTS };
 let shortcutReport: ShortcutReport[] = [];
@@ -655,22 +684,40 @@ ipcMain.handle("take:delete", async (_e, dir: string) => {
   });
   if (response !== 0) return { deleted: false };
 
-  if (openTake === dir) openTake = undefined;
+  // A window with this take open no longer has anywhere valid to write.
+  for (const [sid, d] of openTakes) if (d === dir) openTakes.delete(sid);
   await shell.trashItem(dir);
   return { deleted: true };
 });
 
-ipcMain.handle("preview:open", async (_e, dir: string) => {
+ipcMain.handle("preview:open", async (e, dir: string) => {
   if (!insideTakesRoot(process.env, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
-  openTake = dir;
+  setOpenTake(e, dir);
   return true;
 });
 
-ipcMain.handle("preview:close", async () => { openTake = undefined; });
+ipcMain.handle("preview:close", async (e) => { clearOpenTake(e); });
 
-ipcMain.handle("preview:writeProject", async (_e, bytes: ArrayBuffer) => {
+/**
+ * Open the editor window on a take (STC-373) — the library's "Preview" action
+ * for a recording, which used to open the main window's own in-page player.
+ *
+ * A FUNCTION the main window's preload calls, the same shape `still:capture`
+ * already is: the window that gets created is `editor-window.ts`'s concern,
+ * not something the renderer reaches with its own `BrowserWindow`.
+ */
+ipcMain.handle("editor:open", async (_e, dir: string, name: string) => {
+  if (!insideTakesRoot(process.env, dir)) {
+    throw new Error("refusing to open a path outside the recordings folder");
+  }
+  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer") });
+  return true;
+});
+
+ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
+  const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
   const text = Buffer.from(bytes).toString("utf8");
   let doc: any;
@@ -691,7 +738,8 @@ ipcMain.handle("preview:writeProject", async (_e, bytes: ArrayBuffer) => {
   return true;
 });
 
-ipcMain.handle("export:write", async (_e, name: string, bytes: ArrayBuffer) => {
+ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
+  const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
   // The renderer chooses a filename; constrain it to a leaf name with a known
   // extension so it cannot traverse out of the take directory.
@@ -1027,14 +1075,16 @@ ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown) =
   return { ok: true, redactions: next.decoration.redactions.length };
 });
 
-ipcMain.handle("preview:read", async (_e, name: string) => {
+ipcMain.handle("preview:read", async (e, name: string) => {
+  const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
   if (!TAKE_FILES.has(name)) throw new Error(`refusing to read "${name}"`);
   const buf = await readFile(join(openTake, name));
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 });
 
-ipcMain.handle("preview:size", async (_e, name: string) => {
+ipcMain.handle("preview:size", async (e, name: string) => {
+  const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
   if (!TAKE_FILES.has(name)) throw new Error(`refusing to stat "${name}"`);
   return (await stat(join(openTake, name))).size;
@@ -1048,7 +1098,8 @@ ipcMain.handle("preview:size", async (_e, name: string) => {
  * that peak, not the transfer (835 ms, fast), is what limits how long a take
  * can be. Slices land directly in a destination the renderer allocated once.
  */
-ipcMain.handle("preview:chunk", async (_e, name: string, offset: number, length: number) => {
+ipcMain.handle("preview:chunk", async (e, name: string, offset: number, length: number) => {
+  const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
   if (!TAKE_FILES.has(name)) throw new Error(`refusing to read "${name}"`);
   if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(length) || length <= 0) {
@@ -1109,10 +1160,11 @@ ipcMain.handle("share:chooseDestination", async () => {
  * intended operation — a dialog on every republish would be friction charged
  * for doing what was asked.
  */
-ipcMain.handle("share:publish", async (): Promise<{
+ipcMain.handle("share:publish", async (e): Promise<{
   ok: boolean; plan: PublishPlan["kind"]; message?: string;
   file?: string; name?: string; replaced?: boolean; snippet?: string;
 }> => {
+  const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
   const { share } = readSettings(app.getPath("userData"));
   const takeName = basename(openTake);

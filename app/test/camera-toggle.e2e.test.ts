@@ -115,10 +115,15 @@ describe("the camera toggle", () => {
   test("a camera take with no project.json still previews its PiP", async () => {
 
     // t = 0.4 x 5 s = 2.0 s, inside the camera track (1.035 s - 3.024 s).
-    const sampleAt = async (win: any) => {
-      await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-26");
-      await win.click("#takes >> text=Preview");
-      await expect.poll(() => win.isVisible("#player"), { timeout: 30_000 }).toBe(true);
+    // The take player is the editor's own window now (STC-373) — the sample
+    // is taken from THAT window's stage, not the library window's.
+    const sampleAt = async (mainWin: any) => {
+      await expect.poll(() => mainWin.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-26");
+      const [win] = await Promise.all([
+        app!.waitForEvent("window"),
+        mainWin.click("#takes >> text=Preview"),
+      ]);
+      await win.waitForLoadState("domcontentloaded");
       await win.fill("#scrub", "120");
       await win.dispatchEvent("#scrub", "input");
       await expect.poll(() => win.textContent("#clock"), { timeout: 30_000 }).toMatch(/^0:02:00 /);

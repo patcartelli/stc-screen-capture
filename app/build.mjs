@@ -16,4 +16,9 @@ await build({ ...common, entryPoints: ["app/src/overlay.ts"], outfile: "app/dist
 // smaller bridge, for the same reason the overlay's is separate.
 await build({ ...common, entryPoints: ["app/src/thumbnail-preload.ts"], outfile: "app/dist/thumbnail-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/thumbnail-renderer.ts"], outfile: "app/dist/thumbnail-renderer.js", format: "iife", platform: "browser" });
+// The editor (STC-373) — preview/trim/export/legibility/share's own window,
+// its own smaller bridge, for the same reason the overlay's and the
+// thumbnail's are separate.
+await build({ ...common, entryPoints: ["app/src/editor-preload.ts"], outfile: "app/dist/editor-preload.cjs", format: "cjs" });
+await build({ ...common, entryPoints: ["app/src/editor.ts"], outfile: "app/dist/editor.js", format: "iife", platform: "browser" });
 console.log("app built -> app/dist/");

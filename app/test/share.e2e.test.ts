@@ -1,10 +1,11 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { exportManifestName, exportMediaName } from "../src/share.js";
+import { openEditorFromLibrary, inkiness } from "./_editor-fixture.js";
 
 /**
  * STC-242 — share, end to end through the real handlers.
@@ -14,20 +15,19 @@ import { exportManifestName, exportMediaName } from "../src/share.js";
  * handler that reads the wrong settings block, a preload method wired to the
  * wrong channel, a copy that lands somewhere other than where the plan said.
  *
- * It drives `window.recorder` directly rather than clicking, for the reason
- * STC-292 records: a UI-driven test can only ever reach the first refusal it
- * meets, so a main-side guard tested through the UI can be satisfied by a
- * renderer-side one and prove nothing. The final test here goes at the IPC on
- * purpose.
+ * Share moved to the editor's own window and bridge with the rest of the
+ * player (STC-373) — `publish`/`revealPublished` are driven through
+ * `window.editor` in the EDITOR window now, not `window.recorder` in the
+ * main one. `setSettings` stays on the main window's bridge, since general
+ * preferences did not move.
  */
-
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
 const TAKE = "2026-08-24_10-00-00";
 
-interface Launched { win: Page; recordings: string; takeDir: string; site: string }
+interface Launched { win: Page; editorWin: Page; recordings: string; takeDir: string; site: string }
 
 /**
  * The site folder is seeded on DISK rather than chosen through the picker.
@@ -56,27 +56,22 @@ async function launch(opts: { withExport?: boolean; slug?: string } = {}): Promi
     args: [root, `--user-data-dir=${userData}`], cwd: root,
     env: { ...process.env, STC_RECORDINGS_DIR: recordings },
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState("domcontentloaded");
-  // `attached`, not the default `visible`. The share row lives inside
-  // `#player`, which is hidden until the renderer's own open path runs — and
-  // these tests deliberately drive `window.recorder` rather than the UI, so
-  // that path never runs here and a visibility wait can only ever time out.
-  // Waiting for it attached is what this needs it for: proof the preload is
-  // in place before the first `evaluate`.
-  await win.waitForSelector("#share", { state: "attached" });
-  // Publishing acts on the OPEN take — main holds it, so the preview has to be
-  // opened for there to be one. Main-side only; the DOM is not involved.
-  await win.evaluate((d) => (window as any).recorder.openPreview(d), takeDir);
-  return { win, recordings, takeDir, site };
+  const mainWin = await app.firstWindow();
+  await mainWin.waitForLoadState("domcontentloaded");
+  await mainWin.waitForSelector("#takes >> text=Preview", { timeout: 20_000 });
+  // Publishing acts on the take the EDITOR has open (STC-373) — opening it is
+  // what makes there be one.
+  const editorWin = await openEditorFromLibrary(app, mainWin);
+  await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+  return { win: mainWin, editorWin, recordings, takeDir, site };
 }
 
-const publish = (win: Page) => win.evaluate(() => (window as any).recorder.publish());
+const publish = (win: Page) => win.evaluate(() => (window as any).editor.publish());
 
 describe("share to the site folder", () => {
   test("copies the export under the SLUG's name, not the take's", async () => {
-    const { win, site } = await launch();
-    const r = await publish(win);
+    const { editorWin, site } = await launch();
+    const r = await publish(editorWin);
     expect(r.ok, JSON.stringify(r)).toBe(true);
     expect(r.name).toBe("network.mp4");
     // The whole point: the published name carries no timestamp, so the page
@@ -96,18 +91,18 @@ describe("share to the site folder", () => {
    * should learn from the app rather than from `git status`.
    */
   test("re-publishing replaces, and says that it replaced", async () => {
-    const { win, site } = await launch();
-    expect((await publish(win)).replaced).toBe(false);
+    const { editorWin, site } = await launch();
+    expect((await publish(editorWin)).replaced).toBe(false);
     writeFileSync(join(site, "network.mp4"), Buffer.from("older-video"));
-    const second = await publish(win);
+    const second = await publish(editorWin);
     expect(second.ok).toBe(true);
     expect(second.replaced).toBe(true);
     expect(readFileSync(join(site, "network.mp4"), "utf8")).toBe("fake-mp4-bytes");
   }, 60_000);
 
   test("refuses, with the reason, when the take has not been exported", async () => {
-    const { win, site } = await launch({ withExport: false });
-    const r = await publish(win);
+    const { editorWin, site } = await launch({ withExport: false });
+    const r = await publish(editorWin);
     expect(r.ok).toBe(false);
     expect(r.plan).toBe("no-export");
     expect(r.message).toMatch(/export/i);
@@ -117,8 +112,8 @@ describe("share to the site folder", () => {
   }, 60_000);
 
   test("offers a snippet carrying the dimensions the export actually encoded", async () => {
-    const { win } = await launch();
-    const r = await publish(win);
+    const { editorWin } = await launch();
+    const r = await publish(editorWin);
     expect(r.snippet).toContain("src: '/lab/videos/network.mp4'");
     // 1920x1080 comes from the MANIFEST, not from the project as it now
     // stands — the project is editable after an export.
@@ -127,17 +122,17 @@ describe("share to the site folder", () => {
   }, 60_000);
 
   test("with no manifest, the snippet says so rather than pasting a zero", async () => {
-    const { win, takeDir } = await launch();
+    const { editorWin, takeDir } = await launch();
     writeFileSync(join(takeDir, exportManifestName(TAKE)), "not json");
-    const r = await publish(win);
+    const r = await publish(editorWin);
     expect(r.ok).toBe(true);
     expect(r.snippet).toContain("{width}");
     expect(r.snippet).not.toContain('width="0"');
   }, 60_000);
 
   test("reveal reports honestly when nothing has been published", async () => {
-    const { win } = await launch();
-    const r = await win.evaluate(() => (window as any).recorder.revealPublished());
+    const { editorWin } = await launch();
+    const r = await editorWin.evaluate(() => (window as any).editor.revealPublished());
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/nothing published/i);
   }, 60_000);
@@ -150,7 +145,8 @@ describe("share to the site folder", () => {
    * `still.destination` already follows. STC-292's lesson is that testing this
    * through the preferences UI would prove nothing: whichever guard is met
    * first is the only one exercised, and a renderer-side check would satisfy
-   * the assertion with main's own guard removed.
+   * the assertion with main's own guard removed. `setSettings` is the main
+   * window's own bridge method — it did not move to the editor.
    */
   test("the renderer cannot set the site folder through setSettings", async () => {
     const { win, site } = await launch();
