@@ -39,20 +39,26 @@ const blockClass = (win: any): Promise<string> =>
   win.evaluate(() => document.querySelector(".zoomblock")!.className);
 
 /**
- * `#stage`'s box right after selecting a block cannot be trusted directly:
- * revealing `#overridebar` (previously `hidden`, taking no space) reflows
- * the column it shares with `#stage` and can resize the canvas over one or
- * more frames — the same class of race STC-378 found in this exact window
- * (a `BrowserWindow` created with no `show: false` has no guarantee its
- * content view has settled by the time a synchronous read runs). Poll until
- * two reads 120ms apart agree, mirroring `redaction.e2e.test.ts`'s own
- * `settledCanvasBox` — the proven-on-hardware precedent for this same shape
- * of drag test.
+ * The FIRST fix here settled `#stage`'s own box and it was not enough — the
+ * same 6 tests failed identically on the next real-hardware run, which rules
+ * out a plain reflow race (that fix already waits for `#rectoverlay` to be
+ * visible and for the box to stop moving). The remaining suspect is the box
+ * itself: `#rectoverlay` is `position: absolute; inset: 0` of `#stagewrap`,
+ * not of `#stage` — editor.html's own comment claims "`#stage` always fills
+ * `#stagewrap` at its own natural size, so `inset: 0` tracks it", which is
+ * exactly the kind of invariant that can silently stop holding (a scrollbar,
+ * a constrained window height on a real display this sandbox cannot
+ * reproduce) without anything here noticing. Rather than trust that claim a
+ * second time, measure the element pointer events actually land on —
+ * `#rectoverlay` itself — so a click computed from it can never miss it,
+ * whatever `#stage`'s own box turns out to be. Still settled the same way
+ * `redaction.e2e.test.ts`'s `settledCanvasBox` is, since the reflow race is
+ * real even if it was not the whole story.
  */
-async function settledStageBox(
+async function settledRectoverlayBox(
   win: any, ms = 10_000,
 ): Promise<{ x: number; y: number; width: number; height: number }> {
-  const read = () => win.locator("#stage").boundingBox();
+  const read = () => win.locator("#rectoverlay").boundingBox();
   const start = Date.now();
   let last = await read();
   for (;;) {
@@ -63,7 +69,7 @@ async function settledStageBox(
       return now;
     }
     if (Date.now() - start > ms) {
-      throw new Error(`#stage never settled: ${JSON.stringify({ last, now })}`);
+      throw new Error(`#rectoverlay never settled: ${JSON.stringify({ last, now })}`);
     }
     last = now;
   }
@@ -74,7 +80,15 @@ async function dragOnStage(
   win: any, from: { x: number; y: number }, to: { x: number; y: number },
 ): Promise<void> {
   await expect.poll(() => win.isVisible("#rectoverlay"), { timeout: 10_000 }).toBe(true);
-  const box = await settledStageBox(win);
+  const box = await settledRectoverlayBox(win);
+  // Diagnostic only, kept cheap: if a drag still fails to register on real
+  // hardware, this is what tells us whether #stage and #rectoverlay actually
+  // disagree, rather than guessing a third time.
+  const stageBox = await win.locator("#stage").boundingBox();
+  if (stageBox && (Math.abs(stageBox.x - box.x) > 1 || Math.abs(stageBox.y - box.y) > 1
+      || Math.abs(stageBox.width - box.width) > 1 || Math.abs(stageBox.height - box.height) > 1)) {
+    console.error("#stage and #rectoverlay boxes disagree:", { stageBox, rectoverlayBox: box });
+  }
   const p = (f: { x: number; y: number }) => ({ x: box.x + f.x * box.width, y: box.y + f.y * box.height });
   const a = p(from), b = p(to);
   await win.mouse.move(a.x, a.y);
