@@ -198,43 +198,44 @@ describe("the embed snippet", () => {
 /**
  * The drift guard, and the reason this file reaches for the filesystem.
  *
- * The export names were built inline in `renderer.ts` as template literals,
- * and STC-242's publish path — in the MAIN process — has to find that exact
- * file afterwards. That is one filename rule with two authors in two
- * processes, which CLAUDE.md records this repo fixing four times in a single
- * session under "one value, two copies".
+ * The export names were built inline as template literals, and STC-242's
+ * publish path — in the MAIN process — has to find that exact file
+ * afterwards. That is one filename rule with two authors in two processes,
+ * which CLAUDE.md records this repo fixing four times in a single session
+ * under "one value, two copies". The export moved from `renderer.ts` to
+ * `editor.ts` with the rest of the player (STC-373); the guard moved with it.
  *
  * A test that only checked `exportMediaName` would pass just as well with the
- * literal back in the renderer, so this greps the real file. The controls
+ * literal back in the editor, so this greps the real file. The controls
  * matter more than the assertion (STC-294's lesson): the pattern is proven to
  * fire against the literal it is meant to catch, so an empty result means the
  * second copy is gone rather than that the regex never worked.
  */
 describe("the export filename lives in exactly one place", () => {
   const root = join(__dirname, "..", "..");
-  const renderer = readFileSync(join(root, "app", "src", "renderer.ts"), "utf8");
+  const editor = readFileSync(join(root, "app", "src", "editor.ts"), "utf8");
   /** The shape of the old inline literal: `export-${…}.mp4` or `.json`. */
   const INLINE = /`export-\$\{[^`]*\}\.(mp4|json)`/g;
 
   test("the pattern can fire", () => {
-    const planted = "const name = `export-${openTakeName}.mp4`;";
+    const planted = "const name = `export-${takeName}.mp4`;";
     expect(planted.match(INLINE)).toHaveLength(1);
     expect("`export-${n}.json`".match(INLINE)).toHaveLength(1);
   });
 
-  test("and does not fire on the renderer as it stands", () => {
+  test("and does not fire on the editor as it stands", () => {
     // Comments are blanked first: this file's own explanation of the rule
     // mentions the literal, and a guard that flags a file for DISCUSSING the
     // rule it keeps is a guard someone turns off (STC-294).
-    const code = renderer
+    const code = editor
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");
     expect(code.match(INLINE) ?? []).toEqual([]);
   });
 
-  test("and the renderer uses the shared functions instead", () => {
-    expect(renderer).toContain("exportMediaName(openTakeName)");
-    expect(renderer).toContain("exportManifestName(openTakeName)");
+  test("and the editor uses the shared functions instead", () => {
+    expect(editor).toContain("exportMediaName(takeName)");
+    expect(editor).toContain("exportManifestName(takeName)");
   });
 
   test("the two names agree on the stem, so they land beside each other", () => {
