@@ -22,14 +22,22 @@ const statsIntervalMs = i >= 0 ? Math.max(1, Number(argv[i + 1]) || 2000) : 2000
 
 let state = "idle";
 let session = null;
+// STC-375: real wall-clock elapsed time, not a constant. The pill's own
+// timer (renderer.ts) reads this off the same heartbeat every other stat
+// field comes from, and a stand-in reporting 0 forever cannot exercise
+// "the timer actually moves" — the one property that test needs.
+let recordingStartedAt = null;
 
 /** fd3 = reliable: responses and lifecycle. */
 const send = (ev, o = {}) => writeSync(3, JSON.stringify({ ev, ...o }) + "\n");
 /** stdout = lossy: stats only. */
 const stat = (o) => process.stdout.write(JSON.stringify({ ev: "stats", ...o }) + "\n");
 
-setInterval(() => stat({ state, ...(state === "recording" ? { elapsedMs: 0 } : {}) }),
-            statsIntervalMs).unref?.();
+setInterval(() => stat({
+  state,
+  ...(state === "recording" && recordingStartedAt != null
+    ? { elapsedMs: Date.now() - recordingStartedAt } : {}),
+}), statsIntervalMs).unref?.();
 
 let buf = "";
 process.stdin.on("data", (chunk) => {
@@ -91,6 +99,7 @@ process.stdin.on("data", (chunk) => {
         }
         state = "recording";
         session = cmd.dir ?? null;
+        recordingStartedAt = Date.now();
         send("started", { seq, session });
         // STC-287. The real helper opens the camera OFF the critical path, so
         // `started` goes out first and the camera reports separately, a beat
@@ -136,6 +145,7 @@ process.stdin.on("data", (chunk) => {
             const dir = session;
             state = "idle";
             session = null;
+            recordingStartedAt = null;
             send("stopped", { dir, elapsedMs: deathMs, reason: "stream-stopped" });
           }, deathMs);
         }
@@ -149,6 +159,7 @@ process.stdin.on("data", (chunk) => {
         setTimeout(() => {
           state = "idle";
           session = null;
+          recordingStartedAt = null;
           send("stopped", { seq, reason: "requested" });
         }, delay);
         break;

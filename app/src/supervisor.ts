@@ -1,4 +1,5 @@
 import { HelperClient, type HelperLine, type SpawnOptions } from "./helper-client.js";
+import type { SupervisorState } from "./supervisor-state.js";
 
 /**
  * Keeps a helper process alive and makes its death legible.
@@ -8,7 +9,10 @@ import { HelperClient, type HelperLine, type SpawnOptions } from "./helper-clien
  * than quietly returning to an idle-looking state that implies nothing was lost.
  */
 
-export type SupervisorState = "starting" | "idle" | "recording" | "failed" | "stopped";
+// Re-exported from supervisor-state.ts (STC-375) so every existing import of
+// `SupervisorState` from here keeps working — this file is still where the
+// type conceptually belongs, just not where it is safe to physically live.
+export type { SupervisorState };
 
 export interface SupervisorOptions extends SpawnOptions {
   /** restarts tolerated inside `restartWindowMs` before giving up */

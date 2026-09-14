@@ -56,6 +56,10 @@ contextBridge.exposeInMainWorld("recorder", {
     ipcRenderer.invoke("recorder:pickCaptureTarget", kind),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),
+  // STC-375: fire-and-forget, not invoke — nothing awaits an answer, and the
+  // pill's width can change several times a minute (a digit added to the
+  // timer). `send` rather than `invoke` is what keeps that cheap.
+  reportPillWidth: (px: number) => ipcRenderer.send("pill:contentWidth", px),
   // Share (STC-242) moved to the editor window with the rest of the player —
   // see `editor-preload.ts`. This window has no take open to publish.
   on: (event: string, cb: (payload: any) => void) => {
@@ -65,7 +69,12 @@ contextBridge.exposeInMainWorld("recorder", {
                       // A capture the window did not ask for — a hotkey or the
                       // menu bar (STC-292). The shot is on disk either way;
                       // this is only so an open window stays truthful.
-                      "still:captured"];
+                      "still:captured",
+                      // STC-375: the window just collapsed to (or restored
+                      // from) the pill. The renderer has no other way to know
+                      // its own window shrank — `pill-window.ts` drives the
+                      // resize from main, not from anything in this page.
+                      "pill:state"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);
