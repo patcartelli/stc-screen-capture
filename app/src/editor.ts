@@ -216,6 +216,28 @@ function updateTrimUI(): void {
     : `${fmtClock(w.startNs)}–${fmtClock(w.endNs)} · ${fmtClock(w.endNs - w.startNs)} · ${est}`;
 }
 
+/**
+ * How many animation frames a zero-width `#timeline` measurement gets
+ * retried before it is trusted (STC-379).
+ *
+ * master's CI failed this exact test deterministically (3/3 checked runs)
+ * starting at the commit that introduced this editor window, while 5+ runs
+ * here under Xvfb never reproduced it — a gap consistent with (not proven to
+ * be) real macOS window creation reporting a fresh `BrowserWindow`'s content
+ * at zero width on the very first synchronous layout query, before the OS
+ * has finished handing the window its real size, then correcting itself on
+ * a later frame with no DOM event this code was listening for in between —
+ * the existing `resize` listener only re-measures once `player` already
+ * exists, and by then the window's first, wrong size may be the only one it
+ * ever announces. This retry is the fix for THAT theory; CI on a real Mac is
+ * what actually confirms or refutes it, which this sandbox cannot do.
+ * Bounded, not indefinite: a window that is genuinely too narrow must still
+ * hide the ticks — that refusal is rule 9's own point — so this only
+ * postpones the verdict long enough for a transient zero to resolve itself.
+ */
+const TICK_WIDTH_RETRY_FRAMES = 5;
+let tickWidthRetriesLeft = 0;
+
 /** The export grid on the track (STC-338 rule 9). See renderer.ts's original for the reasoning. */
 function updateTicks(): void {
   const ticks = $("ticks") as HTMLElement;
@@ -223,6 +245,10 @@ function updateTicks(): void {
   const stride = player ? tickStrideFrames(player.durationNs, width) : null;
   if (!player || stride === null || width <= 0) {
     ticks.setAttribute("hidden", "");
+    if (player && width <= 0 && tickWidthRetriesLeft > 0) {
+      tickWidthRetriesLeft--;
+      requestAnimationFrame(updateTicks);
+    }
     return;
   }
   ticks.removeAttribute("hidden");
@@ -501,6 +527,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
   openDisplay = { pointWidth: anchors.display.pointWidth };
   player = new PreviewPlayer($("stage") as HTMLCanvasElement, session, project);
+  tickWidthRetriesLeft = TICK_WIDTH_RETRY_FRAMES;
   const scrub = $("scrub") as HTMLInputElement;
   scrub.max = String(lastFrame(player.durationNs));
   scrub.value = "0";
