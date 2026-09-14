@@ -235,17 +235,17 @@ describe("render reads the settings", () => {
   });
 
   /**
-   * The safety property, unchanged by any setting: while stage 2 is stubbed
-   * the crop is the whole frame, so none of these choices can move a pixel.
-   * `gate:identity` is the same claim on real pixels.
+   * Stage 2 (STC-326) is no longer stubbed — an ENABLED zoom's crop moving is
+   * now stage 2's own claim, proven in `zoom-change-render.test.ts`. What
+   * survives here is the half that was always about THIS file's settings
+   * rather than about stage 2 existing: `enabled: false` forces amount to a
+   * flat zero (asserted above), and `lerpRect(FULL_FRAME_UV, anything, 0)`
+   * is `FULL_FRAME_UV` regardless of what target stage 2 or a manual
+   * override would otherwise supply — so a disabled zoom cannot move a pixel
+   * no matter how interesting the window's own signal is.
    */
-  test("no setting moves the crop while stage 2 is stubbed", () => {
-    for (const zoom of [
-      DEFAULT_ZOOM, { ...DEFAULT_ZOOM, enabled: false },
-      { ...DEFAULT_ZOOM, intensity: 0.3 }, { ...DEFAULT_ZOOM, preset: "snappy" as const },
-    ]) {
-      expect(render(project(zoom), session, 2000 * MS).zoom.crop)
-        .toEqual({ x: 0, y: 0, width: 1, height: 1 });
-    }
+  test("disabled zoom keeps the crop at the full frame regardless of what stage 2 would otherwise derive", () => {
+    expect(render(project({ ...DEFAULT_ZOOM, enabled: false }), session, 2000 * MS).zoom.crop)
+      .toEqual({ x: 0, y: 0, width: 1, height: 1 });
   });
 });

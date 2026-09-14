@@ -7,7 +7,8 @@ import {
 import {
   ZOOM_PRESETS, createZoomSim, zoomWindows, type ZoomPreset, type ZoomSim, type ZoomWindow,
 } from "./zoom.js";
-import { groupByEasing, nearestWindow, resolvedCrop } from "./zoom-override.js";
+import { groupByEasing, nearestWindow, resolvedCrop, windowId } from "./zoom-override.js";
+import { deriveZoomCrop } from "./zoom-change.js";
 import { DEFAULT_ZOOM } from "./trim.js";
 import { createCursorSim, type CursorSim } from "./cursor.js";
 
@@ -53,11 +54,13 @@ export interface FrameState {
  * `amount` — a caller (the compositor) draws exactly this rect and does not
  * need to know a target or a blend happened.
  *
- * **Automatic targets (stage 2, STC-326) are not built.** A window with no
- * MANUAL override (STC-330's `overrides` table) still crops to the whole
- * frame at every amount — the derivation runs and a document can change it,
- * but nothing derives a rectangle on its own yet. STC-326 supplies that;
- * until then, `crop` moves only for a window someone has explicitly tuned.
+ * **Automatic targets (stage 2, STC-326) are live.** A window with no MANUAL
+ * override (STC-330's `overrides` table) now falls back to `zoom-change.ts`'s
+ * `deriveZoomCrop` — the change track when `session.changes` covers the
+ * window, cursor clustering otherwise (true of every take today, since
+ * nothing here can run the browser pass that writes `changes.json`). Only a
+ * window where NEITHER a manual override NOR stage 2 supplies a target
+ * still crops to the whole frame at every amount.
  */
 export interface ZoomState {
   amount: number;
@@ -131,6 +134,27 @@ const windowsCache = new WeakMap<Session, ZoomWindow[]>();
  */
 const zoomCache = new WeakMap<Session, Map<string, Map<ZoomPreset, ZoomSim>>>();
 
+/**
+ * Stage 2's derived crop (STC-326), memoised per window — it is a pure
+ * function of the window, `session.changes` and the display block, none of
+ * which change during a render session, so computing it once per window
+ * rather than once per render call is a memo and not a behaviour change.
+ * Keyed on `windowId` (the window's own `startNs` as a string) rather than
+ * on the window object itself, matching `zoom-override.ts`'s own reasoning
+ * for the same key.
+ */
+const derivedCropCache = new WeakMap<Session, Map<string, Rect | null>>();
+
+function derivedCropFor(session: Session, window: ZoomWindow): Rect | null {
+  let byWindow = derivedCropCache.get(session);
+  if (!byWindow) { byWindow = new Map(); derivedCropCache.set(session, byWindow); }
+  const id = windowId(window);
+  if (!byWindow.has(id)) {
+    byWindow.set(id, deriveZoomCrop(window, session.changes, session.anchors.display));
+  }
+  return byWindow.get(id)!;
+}
+
 function windowsFor(session: Session): ZoomWindow[] {
   let windows = windowsCache.get(session);
   if (!windows) {
@@ -184,14 +208,18 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
     for (const groupSim of groupSims.values()) zoomAmount = Math.max(zoomAmount, groupSim.amountAt(tick));
     zoomAmount *= zoom.intensity;
   }
-  // Without an override this is a no-op on the pixels by construction: a
-  // window may be found, but with no matching override `resolvedCrop` is
-  // undefined, the target falls back to the whole frame, and lerping the
-  // whole frame toward itself is the whole frame at every `zoomAmount` —
-  // the same guarantee stage 1 shipped with, now resting on the lerp rather
-  // than on `crop` being a hardcoded constant.
+  // Three tiers, in order: a MANUAL override (STC-330) always wins; failing
+  // that, stage 2's DERIVED crop (STC-326) — itself possibly null, which is
+  // a TRUSTED "don't zoom" answer (everything changed, nothing did, or the
+  // union was barely tighter than the full frame) and must not fall through
+  // to the full frame by accident; failing both, the full frame. A window
+  // with neither a manual override nor a usable derived crop is therefore
+  // still a no-op on the pixels by construction: lerping the whole frame
+  // toward itself is the whole frame at every `zoomAmount`.
   const nearWindow = nearestWindow(windows, tNs);
-  const zoomTarget = (nearWindow && resolvedCrop(project.overrides, nearWindow)) || FULL_FRAME_UV;
+  const zoomTarget = nearWindow
+    ? resolvedCrop(project.overrides, nearWindow) ?? derivedCropFor(session, nearWindow) ?? FULL_FRAME_UV
+    : FULL_FRAME_UV;
 
   return {
     tick,

@@ -1,5 +1,6 @@
 import { demuxTrack, type DemuxedVideo } from "./demux.js";
 import type { Anchors, Session, SessionEvent } from "./types.js";
+import type { Changes } from "./changes.js";
 
 /**
  * Turns a recorded session on disk into the Session the transform consumes.
@@ -20,6 +21,8 @@ export interface SessionInput {
   events: { version: number; events: SessionEvent[] };
   displayMp4: ArrayBuffer;
   cameraMp4?: ArrayBuffer;
+  /** already-parsed (parseChanges), same as anchors/events — this loader reads data, not paths. Absent on every take today (STC-322's browser pass has never run on a real recording). */
+  changes?: Changes;
 }
 
 export interface LoadedSession extends Session {
@@ -113,6 +116,7 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     events: [...events.events].sort((a, b) => a.t - b.t),
     frames: video.framesNs,
     cameraFrames: cameraVideo?.framesNs,
+    changes: input.changes,
     video,
     cameraVideo,
   };
