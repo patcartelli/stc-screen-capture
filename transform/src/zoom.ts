@@ -172,29 +172,62 @@ const DT = 1 / SIM_HZ;
 export const ZOOM_CHECKPOINT_INTERVAL = 1024;
 
 /**
- * A named easing, as a stiffness/damping pair.
+ * One shoulder of a zoom's spring: a stiffness/damping pair.
  *
  * `omega` is stiffness in rad/s; `zeta` is the damping ratio, where 1 is
  * critically damped — the cursor's spring is the zeta = 1 case of this one,
  * written out (`cursor.ts` folds it into a `2 * OMEGA` term). Anything under 1
- * overshoots, and a zoom that overshoots reads as a bounce, so every preset
+ * overshoots, and a zoom that overshoots reads as a bounce, so every shoulder
  * here is exactly 1 and the field exists to make that a stated choice rather
  * than an assumption baked into the arithmetic.
- *
- * **The three numbers are reasoned, not seen.** Settling time for a critically
- * damped spring is about 4.7 / omega, so these are roughly 780 ms, 470 ms and
- * 260 ms. They were chosen on a machine with no screen and are the one thing
- * in this file expected to change once someone has watched a real take —
- * STC-325 says to tune them on the Music Network take, which should barely
- * zoom, and on a form fixture, which should. Treat them the way STC-291's
- * presets are treated: real parameters, provisional values.
  */
-export interface ZoomEasing { omega: number; zeta: number }
+export interface ZoomShoulder { omega: number; zeta: number }
 
+/**
+ * A named easing: separate shoulders for pushing IN (the target is 1) and
+ * releasing OUT (the target is 0) — STC-371.
+ *
+ * Every preset used to be one spring run both ways, so a push and its release
+ * were mirror images. Decided by looking at the geometry in a preview rather
+ * than by reasoning about it: standard and snappy should lean — arrive faster
+ * than they leave — and calm should not, because an even move is the point of
+ * a calm preset.
+ *
+ * The ratio (`×`/`÷` `Math.SQRT2`) is applied ABOUT each preset's shipped
+ * omega, not on top of it, so a preset keeps the overall speed it already had
+ * and only redistributes it between push and release:
+ *
+ * ```
+ *               shipped   in            out
+ * calm          ω 6       ω 6           ω 6      (unchanged, symmetric)
+ * standard      ω 10      ω 10·√2       ω 10/√2
+ * snappy        ω 18      ω 18·√2       ω 18/√2
+ * ```
+ *
+ * `createZoomSim`'s `step` picks a shoulder by which way the TARGET is
+ * pulling (`target === 1 ? easing.in : easing.out`), not by comparing state
+ * to target. At zeta 1 there is no overshoot so the two ways of asking agree
+ * today, but a future preset that overshoots would flip mid-settle on a state
+ * comparison and not on the target — a rule that changes meaning when a
+ * constant changes is a class this repo has already paid for twice.
+ *
+ * **The numbers are reasoned, not seen.** Settling time for a critically
+ * damped spring is about 4.7 / omega, so calm is still ~780 ms both ways;
+ * standard is ~250 ms in / ~483 ms out; snappy is ~142 ms in / ~267 ms out.
+ * Chosen on a machine with no screen and, like the shipped omegas before
+ * them, the one thing here expected to change once someone has watched a
+ * real take. Treat them the way STC-291's presets are treated: real
+ * parameters, provisional values.
+ */
+export interface ZoomEasing { in: ZoomShoulder; out: ZoomShoulder }
+
+const SQRT2 = Math.SQRT2;
+
+/** calm is unchanged and symmetric; standard and snappy lean (STC-371). */
 export const ZOOM_PRESETS = {
-  calm: { omega: 6, zeta: 1 },
-  standard: { omega: 10, zeta: 1 },
-  snappy: { omega: 18, zeta: 1 },
+  calm: { in: { omega: 6, zeta: 1 }, out: { omega: 6, zeta: 1 } },
+  standard: { in: { omega: 10 * SQRT2, zeta: 1 }, out: { omega: 10 / SQRT2, zeta: 1 } },
+  snappy: { in: { omega: 18 * SQRT2, zeta: 1 }, out: { omega: 18 / SQRT2, zeta: 1 } },
 } as const satisfies Record<string, ZoomEasing>;
 
 export type ZoomPreset = keyof typeof ZOOM_PRESETS;
@@ -229,8 +262,10 @@ export function createZoomSim(
 
   function step(s: State, n: number): State {
     const target = inWindow(windows, tickTimeNs(n)) ? 1 : 0;
-    const a = easing.omega * easing.omega * (target - s.z)
-            - 2 * easing.zeta * easing.omega * s.v;
+    // Keyed on the target, not on `target > s.z` — see ZoomEasing's header.
+    const shoulder = target === 1 ? easing.in : easing.out;
+    const a = shoulder.omega * shoulder.omega * (target - s.z)
+            - 2 * shoulder.zeta * shoulder.omega * s.v;
     const v = s.v + a * DT;
     return { z: s.z + v * DT, v };
   }

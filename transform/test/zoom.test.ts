@@ -138,14 +138,16 @@ describe("the easing spring", () => {
     const open = tickOf(windows[0]!.startNs);
     expect(sim.amountAt(0)).toBe(0);
     // Flat zero right up to the tick before the window, then moving. It is
-    // already 0.0069 at `open` itself and that is correct rather than sloppy:
-    // tickOf gives the tick CONTAINING startNs, and one 120 Hz step at
-    // omega 10 from rest is omega^2 * dt^2 = 100/14400. An assertion of ~0
-    // there was this test being wrong about its own model.
+    // already ~0.0139 at `open` itself and that is correct rather than
+    // sloppy: tickOf gives the tick CONTAINING startNs, and one 120 Hz step
+    // from rest uses the PUSH-IN shoulder (STC-371) — Standard's is
+    // omega 10*sqrt2, so the step is omega^2 * dt^2 = 200/14400. An
+    // assertion of ~0 there was this test being wrong about its own model.
     expect(sim.amountAt(open - 1)).toBe(0);
     expect(sim.amountAt(open)).toBeGreaterThan(0);
-    expect(sim.amountAt(open)).toBeLessThan(0.01);
-    // one second in, Standard (~470 ms settle) is essentially all the way there
+    expect(sim.amountAt(open)).toBeLessThan(0.02);
+    // one second in, Standard's push-in (~330 ms settle, leaning faster than
+    // the shipped 470 ms) is essentially all the way there
     expect(sim.amountAt(tickOf(windows[0]!.startNs + 1000 * MS))).toBeGreaterThan(0.99);
   });
 
@@ -172,6 +174,32 @@ describe("the easing spring", () => {
     };
     expect(half("snappy")).toBeLessThan(half("standard"));
     expect(half("standard")).toBeLessThan(half("calm"));
+  });
+
+  test("standard and snappy lean — push in faster than they release; calm does not (STC-371)", () => {
+    // One isolated window: amount rises from rest at the window's start (the
+    // "in" shoulder) and falls back from ~1 at the window's end (the "out"
+    // shoulder). Half-life in each direction is the discriminator.
+    const halfLife = (name: keyof typeof ZOOM_PRESETS, edge: "in" | "out") => {
+      const sim = createZoomSim(windows, ZOOM_PRESETS[name]);
+      const from = tickOf(edge === "in" ? windows[0]!.startNs : windows[0]!.endNs);
+      for (let n = from; n < from + 4000; n++) {
+        const a = sim.amountAt(n);
+        if (edge === "in" ? a >= 0.5 : a <= 0.5) return n - from;
+      }
+      return Infinity;
+    };
+
+    for (const name of ["standard", "snappy"] as const) {
+      const inHalf = halfLife(name, "in");
+      const outHalf = halfLife(name, "out");
+      expect(inHalf, `${name} in`).toBeLessThan(outHalf);
+    }
+    // Calm is the one preset the ticket says must NOT lean: within a tick of
+    // itself either way, which is the symmetric case's whole point.
+    const calmIn = halfLife("calm", "in");
+    const calmOut = halfLife("calm", "out");
+    expect(Math.abs(calmIn - calmOut), `calm in ${calmIn}, out ${calmOut}`).toBeLessThanOrEqual(1);
   });
 
   test("SEEK EQUALS STEP, bit for bit, across checkpoint boundaries", () => {

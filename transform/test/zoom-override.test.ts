@@ -3,7 +3,7 @@ import {
   windowId, overrideFor, resolvedCrop, resolvedEasingName, groupByEasing, nearestWindow,
   rectFromGesture, DEFAULT_OVERRIDE_RECT_FRACTION, MIN_DRAG_UV,
 } from "../src/zoom-override.js";
-import { createZoomSim, type ZoomWindow } from "../src/zoom.js";
+import { createZoomSim, ZOOM_PRESETS, type ZoomWindow } from "../src/zoom.js";
 import type { ZoomOverride } from "../src/types.js";
 
 const MS = 1_000_000;
@@ -96,10 +96,10 @@ describe("groupByEasing", () => {
    */
   test("composing group sims by max agrees with the single-sim answer when no easing is overridden", () => {
     const windows = [w(1000 * MS, 3500 * MS), w(8000 * MS, 10500 * MS)];
-    const singleSim = createZoomSim(windows, { omega: 10, zeta: 1 });
+    const singleSim = createZoomSim(windows, ZOOM_PRESETS.standard);
     const groups = groupByEasing(windows, undefined, "standard");
     expect(groups.size).toBe(1);
-    const groupSim = createZoomSim(groups.get("standard")!, { omega: 10, zeta: 1 });
+    const groupSim = createZoomSim(groups.get("standard")!, ZOOM_PRESETS.standard);
     for (let t = 0; t < 12000 * MS; t += 250 * MS) {
       const n = Math.floor(t / (1_000_000_000 / 120));
       expect(groupSim.amountAt(n)).toBeCloseTo(singleSim.amountAt(n), 12);
