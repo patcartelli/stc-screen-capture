@@ -111,6 +111,18 @@ interface DisplayGeom { originX: number; originY: number; pointWidth: number; po
  * The three-tier floor/pad/clamp every candidate crop goes through, whether
  * it came from the change track or the cursor fallback — one place so the
  * two signals cannot silently apply different rules to the same numbers.
+ *
+ * Width and height are clamped to the SAME final value, not independently.
+ * A UV rect's pixel aspect ratio is (uvWidth/uvHeight) times the frame's own
+ * — so anything other than uvWidth === uvHeight is a crop whose proportions
+ * differ from the frame's, and `compositor.ts` always stretches whatever
+ * rect it is given to fill the full (frame-proportioned) output. A bare
+ * click's dead zone and padding are symmetric, so this was invisible until a
+ * real take's asymmetric cluster (a drag, or two clicks in different spots
+ * merged into one window) produced a non-square UV rect and the picture
+ * visibly squished. Using the LARGER of the two padded dimensions for both
+ * axes keeps the bbox fully covered before the viewport clamp can still
+ * crop it tighter, exactly as a single shared dimension already did.
  */
 function finishCrop(bbox: Rect): Rect | null {
   if (Math.min(bbox.width, bbox.height) >= MIN_ZOOM_DELTA_FRACTION) return null;
@@ -124,9 +136,9 @@ function finishCrop(bbox: Rect): Rect | null {
 
   const cx = padded.x + padded.width / 2;
   const cy = padded.y + padded.height / 2;
-  const width = Math.min(VIEWPORT_MAX_FRACTION, Math.max(VIEWPORT_MIN_FRACTION, padded.width));
-  const height = Math.min(VIEWPORT_MAX_FRACTION, Math.max(VIEWPORT_MIN_FRACTION, padded.height));
-  const clamped: Rect = { x: cx - width / 2, y: cy - height / 2, width, height };
+  const size = Math.min(VIEWPORT_MAX_FRACTION,
+    Math.max(VIEWPORT_MIN_FRACTION, Math.max(padded.width, padded.height)));
+  const clamped: Rect = { x: cx - size / 2, y: cy - size / 2, width: size, height: size };
 
   return clampRectToFrame(clamped);
 }

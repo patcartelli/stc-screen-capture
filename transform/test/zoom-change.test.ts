@@ -79,6 +79,10 @@ describe("deriveZoomCrop — the change track", () => {
     const c = centerOf(crop!);
     expect(c.x).toBeGreaterThan(0.35);
     expect(c.x).toBeLessThan(0.65);
+    // Same row, different columns — a wide, one-cell-tall union, which is
+    // exactly the asymmetric shape that used to clamp width and height to
+    // different final values and visibly distort the picture.
+    expect(crop!.width).toBeCloseTo(crop!.height, 9);
   });
 
   test("everything changes (a video, a page scrolling): don't zoom", () => {
@@ -173,6 +177,30 @@ describe("deriveZoomCrop — the cursor-clustering fallback", () => {
     // so its centre sits at the drag's own midpoint (0.4), not at either end.
     const c = centerOf(crop!);
     expect(c.x).toBeCloseTo(0.4, 1);
+  });
+
+  test("an asymmetric cluster still produces a crop with equal UV width and height", () => {
+    // Same drag as above — wide, zero raw height — which is exactly the
+    // shape that squished the picture on a real take before this was fixed:
+    // width and height used to be clamped into [0.5, 0.7] INDEPENDENTLY, so
+    // a bbox with very different extents on each axis could clamp to two
+    // different final values. A UV rect's pixel aspect ratio is
+    // (uvWidth/uvHeight) times the frame's own, and compositor.ts always
+    // stretches whatever rect it is given to fill the (frame-proportioned)
+    // output — so uvWidth !== uvHeight is a crop that visibly distorts the
+    // picture the instant it is drawn, on ANY display, square or not.
+    const w: ZoomWindow = {
+      startNs: 1700 * MS, endNs: 6000 * MS,
+      events: [
+        { t: 2000 * MS, kind: "down", x: 200, y: 500, button: 0 },
+        { t: 2100 * MS, kind: "move", x: 400, y: 500 },
+        { t: 2200 * MS, kind: "move", x: 600, y: 500 },
+        { t: 2300 * MS, kind: "up", x: 600, y: 500, button: 0 },
+      ],
+    };
+    const crop = deriveZoomCrop(w, undefined, DISPLAY);
+    expect(crop).not.toBeNull();
+    expect(crop!.width).toBeCloseTo(crop!.height, 9);
   });
 
   test("a point already inside the current cluster does not grow it (the dead zone itself)", () => {
