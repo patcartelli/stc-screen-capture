@@ -180,7 +180,7 @@ check("remainingFraction of an empty rect is 0, not NaN",
 check("subtractRect leaves an untouched rect alone",
       subtractRect([full], StillRect(x: 900, y: 900, width: 10, height: 10)), [full])
 check("subtractRect removes a fully-covering cut entirely",
-      subtractRect([full], StillRect(x: 0, y: 0, width: 1920, height: 1080)), [])
+      subtractRect([full], StillRect(x: 0, y: 0, width: 1920, height: 1080)), [] as [StillRect])
 
 // ── shape names ─────────────────────────────────────────────────────────────
 // Classification itself is STC-309's (`classifyCursor`, covered by
