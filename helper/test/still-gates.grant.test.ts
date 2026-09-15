@@ -138,15 +138,16 @@ describe("STC-301 gate 3: capture latency", () => {
     await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
 
     // Several, because one measurement is an anecdote — and the FIRST is
-    // reported apart from the rest: `SCShareableContent` enumeration and the
-    // ObjC-runtime lookup both happen once, so a cold first call is a
-    // different number from the steady state and averaging them hides both.
+    // reported apart from the rest: `SCShareableContent` enumeration happens
+    // once, so a cold first call is a different number from the steady state
+    // and averaging them hides both.
     const timings: number[] = [];
     for (let i = 0; i < 5; i++) {
       const t0 = performance.now();
       const r = await h.request({ cmd: "capture-still", dir: tmpDir("stc-lat-") });
       const wall = performance.now() - t0;
       expect(r.ev, JSON.stringify(r)).toBe("still");
+      process.stderr.write(`[gate 3] sample ${i}: wall ${wall.toFixed(1)} ms, timing ${JSON.stringify(r.timing)}\n`);
       timings.push(wall);
     }
     h.kill();
