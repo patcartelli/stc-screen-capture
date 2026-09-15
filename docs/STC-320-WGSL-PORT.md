@@ -159,3 +159,24 @@ Measured here, not inferred, and useful next time something needs a GPU:
   `gate*` family is blocked on **H.264 decoding**, not on WebGL, so a check
   that builds its own frames in-page can run here even though the gates
   cannot.
+
+## Re-checked 2026-09-14 — still unverified, and CI will not fix that on its own
+
+Re-verified against a fresh clone of `studio-cartelli` rather than trusting
+this document's own account: `tests/frame-diff-wgsl.spec.ts` and
+`src/lib/frame-diff-crosscheck.ts` are unchanged since the port landed (PR
+#524, 2026-09-10) — no commit has touched either file since.
+
+One thing worth adding rather than just restating: **`studio-cartelli`'s own
+CI cannot close this gap either.** Its Playwright job (`.github/workflows/
+ci.yml`) runs on `ubuntu-latest` — a GitHub-hosted runner with no GPU
+passthrough — so a future green CI run on this file is not evidence the WGSL
+leg ran; it is evidence the leg skipped again. Checked the merge run itself
+(studio-cartelli run 34854914533, PR #524's merge to `main`, 2026-09-14
+14:19 UTC): green, 1451 passed / 104 skipped, same shape as every other run
+on that workflow. Nothing about *this* gap will be settled by a tick going
+green in the ordinary course of CI — it needs a person, on a real GPU, to
+run the one command above by hand.
+
+Nothing to correct in the runbook above; it is still accurate and still
+unexecuted.
