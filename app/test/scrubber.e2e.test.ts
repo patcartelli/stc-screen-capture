@@ -28,6 +28,11 @@ async function openPreview() {
   const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
   app = a;
   await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
+  // STC-378: wait for updateTicks() retries to complete — #ticks might be hidden
+  // if the timeline width measurement hasn't completed yet.
+  await expect.poll(() => editorWin.evaluate(() =>
+    !document.getElementById("ticks")?.hasAttribute("hidden")
+  ), { timeout: 5_000 }).toBe(true);
   return { win: editorWin, takeDir };
 }
 
