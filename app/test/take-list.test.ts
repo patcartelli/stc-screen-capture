@@ -99,15 +99,28 @@ describe("listTakes — anchors version support (STC-262)", () => {
     expect(takes[0]!.name).toBe("2026-08-27_12-00-00");
   });
 
+  // STC-233: a mic-requested take writes v4 with a `mic` block. Same lesson
+  // as the v3/scope test above, one version up.
+  test("a v4 take with a mic block is listed, not rejected as unsupported", async () => {
+    makeTake("2026-08-27_13-00-00", {
+      anchors: v2Anchors({ version: 4, mic: { present: false } }),
+    });
+    const { takes, invalid } = await listTakes(env());
+    expect(invalid, JSON.stringify(invalid)).toEqual([]);
+    expect(takes.length).toBe(1);
+    expect(takes[0]!.name).toBe("2026-08-27_13-00-00");
+  });
+
   test("a version this build does not know is still rejected, by name", async () => {
-    // Widening must not become "accept anything". Version 4, not 3: STC-370
-    // made 3 a real, supported version (a region/window take's scope block),
-    // so it is no longer a stand-in for "unknown future version".
-    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 4 }) });
+    // Widening must not become "accept anything". Version 5, not 4: STC-233
+    // made 4 a real, supported version (a mic-requested take's mic block),
+    // so it is no longer a stand-in for "unknown future version" — the same
+    // thing already happened once to 3 (STC-370).
+    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 5 }) });
     const { takes, invalid } = await listTakes(env());
     expect(takes).toEqual([]);
     expect(invalid.length).toBe(1);
-    expect(invalid[0]!.reason).toMatch(/version 4 is not supported/);
+    expect(invalid[0]!.reason).toMatch(/version 5 is not supported/);
   });
 });
 

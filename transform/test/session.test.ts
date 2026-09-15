@@ -39,8 +39,10 @@ describe("loadSession", () => {
   });
 
   test("rejects a schema version it was not written for", async () => {
+    // 4 used to be that version; STC-233 made it real (a mic-requested take).
+    // 99 is not, and never will be by accident.
     await expect(loadSession({
-      anchors: offsetAnchors({ version: 4 as any }),
+      anchors: offsetAnchors({ version: 99 as any }),
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
     })).rejects.toThrow(SessionLoadError);
@@ -90,10 +92,11 @@ describe("loadSession", () => {
   });
 });
 
-describe("loader accepts v1, v2 and v3 anchors", () => {
-  // The helper does not emit v2 until increment 3, and does not emit v3
-  // until STC-370 (only for a region/window take). A loader that demanded
-  // the latest version would break every grant test in the gap.
+describe("loader accepts v1 through v4 anchors", () => {
+  // The helper does not emit v2 until increment 3, does not emit v3 until
+  // STC-370 (only for a region/window take), and does not emit v4 until
+  // STC-233 (only when a mic was requested). A loader that demanded the
+  // latest version would break every grant test in the gap.
   test("a version 1 anchors document still loads", async () => {
     const s = await loadSession({
       anchors: offsetAnchors({ version: 1 }),
@@ -129,12 +132,30 @@ describe("loader accepts v1, v2 and v3 anchors", () => {
     expect((s.anchors as any).scope).toEqual({ kind: "region", region: { x: 10, y: 20, width: 300, height: 200 } });
   });
 
-  test("a version 4 anchors document is rejected by name", async () => {
-    await expect(loadSession({
-      anchors: offsetAnchors({ version: 4 as any }),
+  // STC-233: a mic-requested take writes v4 with a `mic` block; an absent
+  // `mic` (a v4 document with no mic block at all, which the helper never
+  // actually writes — a mic-less take stays at whatever version its scope
+  // already implies — but nothing here should depend on that) means the
+  // same thing an absent one always meant: no mic on this take.
+  test("a version 4 anchors document loads, mic included", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors({
+        version: 4,
+        mic: { present: false },
+      } as any),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 4 is not supported/);
+    });
+    expect(s).toBeDefined();
+    expect((s.anchors as any).mic).toEqual({ present: false });
+  });
+
+  test("a version 5 anchors document is rejected by name", async () => {
+    await expect(loadSession({
+      anchors: offsetAnchors({ version: 5 as any }),
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/version 5 is not supported/);
   });
 
   test("a version 2 events document loads, cursor events included", async () => {
@@ -245,5 +266,57 @@ describe("loading a camera track", () => {
       displayMp4: mp4("fixtures/offset/display.mp4"),
     });
     expect(s.cameraFrames).toBeUndefined();
+  });
+});
+
+/**
+ * STC-233. Mirrors "loading a camera track" above, except for the one test
+ * that needs a real committed track (`fixtures/pip/camera.mp4`) — no
+ * `mic.m4a` fixture exists in this checkout, the same gap CLAUDE.md already
+ * records for a synthetic `fixtures/pip/camera.mp4`: producing one needs
+ * macOS, ffmpeg, and a matching sample-table. Until one exists, only the
+ * validation paths that never touch the file itself are testable here; a
+ * real demux needs a Mac.
+ */
+describe("loading a mic track", () => {
+  const micAnchors = (over: any = {}) => offsetAnchors({
+    version: 4,
+    mic: {
+      present: true, device: "Fixture Mic", sampleRate: 48000, channels: 1,
+      firstFramePtsNs: 1_035_500_000, lastFramePtsNs: 3_024_500_000,
+    },
+    files: { display: "display.mp4", mic: "mic.m4a" },
+    ...over,
+  });
+
+  test("a session claiming a mic but given no mic.m4a is refused", async () => {
+    // Silently loading it as mic-less would leave the export dropping the
+    // audio track for a take that has one, which looks like a rendering bug.
+    await expect(loadSession({
+      anchors: micAnchors(),
+      events: { version: 1, events: [] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/no mic\.m4a was supplied/i);
+  });
+
+  // The other direction: a mic file with no anchors block means the two
+  // sources disagree about what was recorded, and guessing which is right is
+  // worse than refusing — the same reasoning as the camera's own check.
+  test("a mic.m4a supplied for a take that claims no mic is refused", async () => {
+    await expect(loadSession({
+      anchors: offsetAnchors({ version: 4, mic: { present: false } } as any),
+      events: { version: 1, events: [] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+      micM4a: mp4("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
+    })).rejects.toThrow(/a mic\.m4a was supplied/i);
+  });
+
+  test("a v4 session with no mic still loads", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors({ version: 4, mic: { present: false } } as any),
+      events: { version: 1, events: [] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    });
+    expect(s.micAudio).toBeUndefined();
   });
 });

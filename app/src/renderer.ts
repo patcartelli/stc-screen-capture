@@ -4,6 +4,10 @@ interface DisplayInfo {
   pointW: number; pointH: number; pixelW: number; pixelH: number;
   originX?: number; originY?: number;
 }
+/** STC-233. Mirrors Watchers.enumerateDevices's own "mics" shape. */
+interface MicInfo {
+  name: string; uid: string; bluetooth: boolean;
+}
 interface StillSettingsView {
   format: string; quality: number; scale: string;
   stripMetadata: boolean; template: string; destination: string | null;
@@ -23,6 +27,8 @@ interface ScopeSettingsView {
 interface AppSettings {
   camera: boolean;
   displayId: number | null;
+  /** STC-233. null means no mic — never "automatic". */
+  micDeviceUid: string | null;
   /** STC-292. */
   shutterSound: boolean;
   /** STC-293. */
@@ -45,7 +51,7 @@ interface StillResult {
 declare const recorder: {
   getSettings: () => Promise<AppSettings>;
   setSettings: (p: Partial<AppSettings>) => Promise<AppSettings>;
-  devices(): Promise<{ displays?: DisplayInfo[]; stalled?: boolean; detail?: string }>;
+  devices(): Promise<{ displays?: DisplayInfo[]; mics?: MicInfo[]; stalled?: boolean; detail?: string }>;
   status(): Promise<{ state: string; pid?: number }>;
   takes(): Promise<{ takes: Take[]; invalid: { name: string; reason: string }[] }>;
   library(filter?: string): Promise<LibraryList>;
@@ -208,6 +214,71 @@ displaySel.addEventListener("change", async () => {
 });
 
 /**
+ * Which microphone to record (STC-233). "Off" is the default AND the only
+ * automatic choice — unlike the display picker's "Automatic", there is no
+ * safe "whichever mic is default": the settled decision (phase 0) forbids
+ * taking one without the user naming it explicitly, because auto-grabbing a
+ * Bluetooth mic once stalled capture and wedged CoreAudio system-wide. A
+ * stored uid whose device is gone is shown as such, the same "(not
+ * connected)" treatment the display picker already gives a missing display —
+ * `start` would refuse that device (mic-not-found) rather than silently
+ * recording another one, and the picker should not hide that before Record
+ * is even pressed.
+ */
+const micSel = $("mic") as HTMLSelectElement;
+let storedMicUid: string | null = null;
+
+function micLabel(m: MicInfo): string {
+  return m.bluetooth ? `${m.name} (Bluetooth)` : m.name;
+}
+
+async function refreshMics(): Promise<void> {
+  let mics: MicInfo[] = [];
+  try {
+    const r = await recorder.devices();
+    mics = Array.isArray(r.mics) ? r.mics : [];
+  } catch {
+    mics = [];
+  }
+  const wanted = storedMicUid;
+  micSel.replaceChildren();
+  const off = document.createElement("option");
+  off.value = ""; off.textContent = "Off";
+  micSel.append(off);
+  for (const m of mics) {
+    const o = document.createElement("option");
+    o.value = m.uid; o.textContent = micLabel(m);
+    micSel.append(o);
+  }
+  if (wanted != null && !mics.some((m) => m.uid === wanted)) {
+    const o = document.createElement("option");
+    o.value = wanted; o.textContent = "Mic (not connected)";
+    micSel.append(o);
+  }
+  micSel.value = wanted ?? "";
+}
+
+void (async () => {
+  try {
+    storedMicUid = (await recorder.getSettings()).micDeviceUid;
+  } catch {
+    storedMicUid = null;
+  }
+  await refreshMics();
+})();
+
+micSel.addEventListener("change", async () => {
+  const chosen = micSel.value === "" ? null : micSel.value;
+  try {
+    const saved = await recorder.setSettings({ micDeviceUid: chosen });
+    storedMicUid = saved.micDeviceUid;
+  } catch (e) {
+    alertUser(`Could not save the mic setting: ${String(e)}`);
+  }
+  await refreshMics();
+});
+
+/**
  * What a recording captures (STC-370's region/window capability, wired to the
  * window by STC-374): Screen (the existing display picker), Window, or Area.
  * Source is a genuinely separate control from Profile — the ticket's own
@@ -325,6 +396,7 @@ void (async () => {
 function lockSettings(locked: boolean): void {
   cameraBox.disabled = locked;
   displaySel.disabled = locked;
+  micSel.disabled = locked;
   scopeSel.disabled = locked;
   pickWindowBtn.disabled = locked;
   pickRegionBtn.disabled = locked;
@@ -515,6 +587,7 @@ recordBtn.addEventListener("click", async () => {
         // off the critical path, so there IS a window where it is neither
         // absent nor live, and that window is the whole complaint (STC-287).
         setCamera(cameraBox.checked ? "opening…" : "off");
+        setMic(storedMicUid != null ? "opening…" : "off");
       // The device is opened at start and closed at stop, so the setting must
       // not appear changeable mid-take — it would misdescribe the recording.
       lockSettings(true);
@@ -540,8 +613,9 @@ recordBtn.addEventListener("click", async () => {
 recorder.on("helper:ready", (l) => {
   $("pid").textContent = String(l.pid ?? "—");
   // A (re)started helper can enumerate; a respawned one may see a different
-  // set of displays than the last one did.
+  // set of displays (or mics) than the last one did.
   void refreshDisplays();
+  void refreshMics();
   if (!recording) setState("idle");
   // Not unconditionally `false`: a window or area scope with nothing picked
   // yet must stay disabled through a helper respawn, the same as it is on
@@ -620,6 +694,13 @@ recorder.on("helper:camera-started", (l) => {
   setCamera(String(l.device ?? "live"));
 });
 
+/** STC-233: the mic's own lifecycle readout, same reasoning as the camera's. */
+function setMic(text: string): void { $("mic-state").textContent = text; }
+
+recorder.on("helper:mic-started", (l) => {
+  setMic(String(l.device ?? "live"));
+});
+
 recorder.on("helper:respawned", () => setState("recovered — helper restarted"));
 recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The recorder keeps failing to start. Restart the app."); });
 
@@ -652,6 +733,23 @@ const CAMERA_FAULTS: Record<string, string> = {
     "The camera opened but is not sending any frames, so this take will have no " +
     "picture-in-picture. A closed laptop lid, a covered lens, or another app using " +
     "the camera all look like this.",
+};
+
+/**
+ * STC-233: the mic's own failures, same shape as CAMERA_FAULTS and the same
+ * reason — every one of these was already emitted by the helper and would
+ * otherwise be silently dropped by the generic handler below.
+ */
+const MIC_FAULTS: Record<string, string> = {
+  "mic-not-found": "The chosen microphone is no longer available, so this take has no audio.",
+  "mic-not-authorized": "Microphone access is not authorized, so this take has no audio.",
+  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no audio.",
+  "mic-device-input-failed": "The microphone could not be opened, so this take has no audio.",
+  "mic-input-refused": "The microphone could not be opened, so this take has no audio.",
+  "mic-writer-failed": "Recording the microphone failed, so this take has no audio.",
+  "mic-no-frames":
+    "The microphone opened but is not sending any audio, so this take will have no " +
+    "sound. Another app holding the device is the usual cause.",
 };
 
 /**
@@ -708,6 +806,12 @@ recorder.on("helper:warning", (l) => {
     // just the code.
     setCamera(code === "camera-no-frames" ? "no frames" : `failed — ${code}`);
     alertUser(l.detail ? `${camera}\n\n${l.detail}` : camera);
+    return;
+  }
+  const mic = MIC_FAULTS[code];
+  if (mic) {
+    setMic(code === "mic-no-frames" ? "no frames" : `failed — ${code}`);
+    alertUser(l.detail ? `${mic}\n\n${l.detail}` : mic);
     return;
   }
   // Everything else is shown too. This handler used to match a handful of

@@ -1,4 +1,5 @@
 import { demuxTrack, type DemuxedVideo } from "./demux.js";
+import { demuxAudioTrack, type DemuxedAudio } from "./demux-audio.js";
 import type { Anchors, Session, SessionEvent } from "./types.js";
 import type { Changes } from "./changes.js";
 
@@ -21,6 +22,8 @@ export interface SessionInput {
   events: { version: number; events: SessionEvent[] };
   displayMp4: ArrayBuffer;
   cameraMp4?: ArrayBuffer;
+  /** STC-233. mic.m4a, when anchors.mic.present is true. */
+  micM4a?: ArrayBuffer;
   /** already-parsed (parseChanges), same as anchors/events — this loader reads data, not paths. Absent on every take today (STC-322's browser pass has never run on a real recording). */
   changes?: Changes;
 }
@@ -28,6 +31,8 @@ export interface SessionInput {
 export interface LoadedSession extends Session {
   video: DemuxedVideo;
   cameraVideo?: DemuxedVideo;
+  /** STC-233. Present only when anchors.mic.present is true and micM4a was supplied. */
+  micAudio?: DemuxedAudio;
 }
 
 /**
@@ -62,14 +67,15 @@ function checkFrameOffset(what: string, measuredNs: number | undefined, demuxedF
 export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   const { anchors, events } = input;
 
-  // v1, v2 and v3 differ only by additions the transform treats as optional
-  // (camera track, pip geometry, and now `scope` for a region/window take —
-  // STC-370), so an older document loads as a v3 with the newer fields
-  // absent. `scope` absent means the whole display, same as v1/v2 always
-  // meant; nothing here reads it yet (that is STC-374's picker and whatever
-  // consumes it), so v3 is accepted on the same terms v2 was.
-  if (anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2 or 3)`);
+  // v1 through v4 differ only by additions the transform treats as optional
+  // (camera track, pip geometry, `scope` for a region/window take — STC-370,
+  // and now a `mic` block — STC-233), so an older document loads as a v4
+  // with the newer fields absent. `scope` absent means the whole display,
+  // same as v1/v2 always meant; nothing here reads it yet (that is STC-374's
+  // picker and whatever consumes it), so every version is accepted on the
+  // same terms v2 was.
+  if (anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 && anchors?.version !== 4) {
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3 or 4)`);
   }
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.
@@ -96,6 +102,21 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     );
   }
 
+  // STC-233: identical reasoning to the camera check above, one track over.
+  const claimsMic = anchors.mic?.present === true;
+  if (claimsMic && !input.micM4a) {
+    throw new SessionLoadError(
+      "anchors.mic.present is true but no mic.m4a was supplied for this take. " +
+      "Refusing to silently drop the audio.",
+    );
+  }
+  if (input.micM4a && !claimsMic) {
+    throw new SessionLoadError(
+      "a mic.m4a was supplied but anchors.mic.present is not true — the anchors and " +
+      "the file disagree about whether this take has a mic track.",
+    );
+  }
+
   const video = await demuxTrack(input.displayMp4, "display.mp4");
   if (video.framesNs.length === 0) {
     throw new SessionLoadError("display.mp4 contains no frames");
@@ -111,6 +132,15 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     checkFrameOffset("camera.mp4", anchors.camera!.firstFramePtsNs, cameraVideo.framesNs[0]!);
   }
 
+  let micAudio: DemuxedAudio | undefined;
+  if (claimsMic && input.micM4a) {
+    micAudio = await demuxAudioTrack(input.micM4a, "mic.m4a");
+    if (micAudio.framesNs.length === 0) {
+      throw new SessionLoadError("mic.m4a contains no samples");
+    }
+    checkFrameOffset("mic.m4a", anchors.mic!.firstFramePtsNs, micAudio.framesNs[0]!);
+  }
+
   return {
     anchors,
     events: [...events.events].sort((a, b) => a.t - b.t),
@@ -119,5 +149,6 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     changes: input.changes,
     video,
     cameraVideo,
+    micAudio,
   };
 }

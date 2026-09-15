@@ -32,6 +32,7 @@ import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
+import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
 import type { WindowInfo } from "./selection.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
@@ -132,7 +133,7 @@ let lastStillFile: string | undefined;
 // loaded from file://, and Chromium refuses cross-origin fetches from a file
 // origin to any non-http scheme. Serving the app itself over a custom scheme
 // would fix that, but IPC removes the origin question altogether.
-const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "project.json"]);
+const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "project.json"]);
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -215,6 +216,9 @@ function startSupervisor(): void {
   // evidence the camera worked was a PiP appearing ~1.4 s into playback, which
   // reads as a glitch rather than as the camera starting.
   sup.on("helper:camera-started", (l) => send("helper:camera-started", l));
+  // STC-233: same reasoning, one device over — the mic also opens off the
+  // critical path (MicCapture.swift) and reports separately once it resolves.
+  sup.on("helper:mic-started", (l) => send("helper:mic-started", l));
 }
 
 app.whenReady().then(() => {
@@ -264,6 +268,7 @@ app.on("before-quit", (e) => {
   globalShortcut.unregisterAll();
   tray?.destroy();
   tray = undefined;
+  hideScopeIndicator();
   closeThumbnail()
     .catch(() => {})
     .then(() => closeOverlay())
@@ -309,7 +314,14 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
     const { destination: _mainsAlone, ...rest } = clean.share;
     clean.share = rest as Partial<Settings>["share"];
   }
-  return writeSettings(app.getPath("userData"), clean);
+  const saved = writeSettings(app.getPath("userData"), clean);
+  // STC-381: a kind change or Clear cancels an in-progress flash (a pick
+  // followed immediately by changing your mind) — this is the only door
+  // `renderer.ts` uses to write `scope` (a kind change, `clearSource`), so
+  // gating on `clean.scope` being present catches every real case. A fresh
+  // pick starts its OWN flash from `pickCaptureTarget`, below.
+  if (clean.scope) hideScopeIndicator();
+  return saved;
 });
 
 ipcMain.handle("recorder:devices", async () => {
@@ -323,13 +335,21 @@ ipcMain.handle("recorder:status", async () => ({
 }));
 
 ipcMain.handle("recorder:start", async () => {
+  // STC-381: before anything else, even the `no-capture-target` refusal
+  // below — a flash still on screen (Record pressed right after a pick)
+  // must never survive into a live take, whether or not the take starts.
+  hideScopeIndicator();
   if (!sup) throw new Error("supervisor not running");
   // Read from the stored preference, NOT passed up from the renderer. Main
   // already owns these settings, and a renderer-supplied value would be a
   // second source of truth for what turns on a physical camera and what the
   // helper is told to point at.
-  const { camera, displayId, scope } = readSettings(app.getPath("userData"));
+  const { camera, displayId, micDeviceUid, scope } = readSettings(app.getPath("userData"));
   const startParams: Record<string, unknown> = { camera };
+  // Only when a device is actually picked (STC-233) — an absent field is
+  // "no mic" to the helper's own parseStartRequest, and there is no
+  // automatic mic the way there is an automatic display.
+  if (micDeviceUid != null) startParams.micDeviceUid = micDeviceUid;
   if (scope.kind === "region" && scope.region) {
     const { displayId: regionDisplayId, x, y, width, height } = scope.region;
     startParams.displayId = regionDisplayId;
@@ -410,16 +430,24 @@ async function pickCaptureTarget(kind: "region" | "window"):
   // Trust what the overlay actually produced, not the mode it was opened in —
   // the mode toggle inside it still works, the same reasoning
   // `selectRegionOrWindow` already follows for still capture.
+  const pickedWindow = outcome.kind === "window"
+    ? windows.find((x) => x.id === outcome.windowId) : undefined;
   const scope: Settings["scope"] = outcome.kind === "region"
     ? { kind: "region", windowId: null, windowLabel: null,
         region: { displayId: outcome.displayId, ...outcome.crop } }
     : { kind: "window", region: null, windowId: outcome.windowId,
         windowLabel: (() => {
-          const w = windows.find((x) => x.id === outcome.windowId);
-          const label = [w?.app, w?.title].filter(Boolean).join(" — ");
+          const label = [pickedWindow?.app, pickedWindow?.title].filter(Boolean).join(" — ");
           return label || `Window ${outcome.windowId}`;
         })() };
   const saved = writeSettings(app.getPath("userData"), { scope });
+  // STC-381: confirm the fresh pick with a brief outline, then get out of
+  // the way — CONFIRMED ON HARDWARE that showing it persistently on every
+  // main-window focus reads as naggy rather than helpful, so this is now
+  // the ONLY place the indicator is ever shown. `pickedWindow` is already in
+  // hand from the `windows` list fetched above, so this needs no second
+  // helper round trip for a fresh bounds lookup.
+  flashScopeIndicator({ scope: saved.scope, liveWindow: pickedWindow, rendererDir: join(here, "..", "renderer") });
   return { ok: true, scope: saved.scope };
 }
 
