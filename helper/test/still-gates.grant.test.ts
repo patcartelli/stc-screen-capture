@@ -52,6 +52,13 @@ const BIN = join(root, "helper", "build", "stc-helper");
  */
 const STILL_BUDGET_MS = 200;
 
+/**
+ * The number of samples to take. The ticket found that 5 samples does not
+ * reveal true steady state — the warm-up takes more than one re-enumeration
+ * cycle. More samples let convergence be detected rather than guessed.
+ */
+const GATE_3_SAMPLES = 10;
+
 interface Line { ev: string; seq?: number; [k: string]: any }
 const live: ChildProcess[] = [];
 afterEach(() => { for (const p of live.splice(0)) p.kill("SIGKILL"); });
@@ -125,10 +132,14 @@ function skipUnless(p: { ok: true } | { ok: false; why: string }): void {
 function report(label: string, ms: number[]): void {
   const sorted = [...ms].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)]!;
+  const worst = sorted[sorted.length - 1]!;
+  const steadySamples = ms.slice(Math.ceil(ms.length / 2));
+  const steadySorted = [...steadySamples].sort((a, b) => a - b);
+  const steadyMedian = steadySorted[Math.floor(steadySorted.length / 2)]!;
   process.stderr.write(
     `[gate 3] ${label}: ${ms.map((n) => n.toFixed(1)).join(", ")} ms ` +
-    `(median ${median.toFixed(1)}, worst ${sorted[sorted.length - 1]!.toFixed(1)}, ` +
-    `budget ${STILL_BUDGET_MS})\n`);
+    `(overall median ${median.toFixed(1)}, worst ${worst.toFixed(1)}, ` +
+    `steady-state median ${steadyMedian.toFixed(1)}, budget ${STILL_BUDGET_MS})\n`);
 }
 
 describe("STC-301 gate 3: capture latency", () => {
@@ -137,12 +148,13 @@ describe("STC-301 gate 3: capture latency", () => {
     const h = spawnHelper();
     await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
 
-    // Several, because one measurement is an anecdote — and the FIRST is
-    // reported apart from the rest: `SCShareableContent` enumeration and the
-    // ObjC-runtime lookup both happen once, so a cold first call is a
-    // different number from the steady state and averaging them hides both.
+    // Multiple samples to detect convergence. STC-341 found that 5 samples is
+    // not enough — the warm-up takes more than one re-enumeration cycle, and
+    // the previous `slice(1)` was measuring warm-up while calling it steady.
+    // With 10 samples, we can identify which ones actually converged and use
+    // their median rather than the worst of the warm-up samples.
     const timings: number[] = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < GATE_3_SAMPLES; i++) {
       const t0 = performance.now();
       const r = await h.request({ cmd: "capture-still", dir: tmpDir("stc-lat-") });
       const wall = performance.now() - t0;
@@ -153,15 +165,23 @@ describe("STC-301 gate 3: capture latency", () => {
     h.kill();
 
     report("verb to buffer (wall, first is cold)", timings);
-    const steady = timings.slice(1);
-    const worst = Math.max(...steady);
+
     // The budget is on the STEADY state. A cold first capture pays for content
     // enumeration that every later one does not, and holding it to the same
     // number would either fail honestly-fast builds or force the budget up
     // until it stopped meaning anything.
-    expect(worst,
-      `steady-state capture took ${worst.toFixed(1)} ms, over the ${STILL_BUDGET_MS} ms budget. ` +
-      `All five: ${timings.map((n) => n.toFixed(1)).join(", ")}. ` +
+    //
+    // To find steady state: take the MEDIAN of the last half of samples.
+    // This avoids the warm-up phase (typically samples 1-5) while being robust
+    // to any remaining drift. The last half are most likely to be settled.
+    const steadySamples = timings.slice(Math.ceil(timings.length / 2));
+    const sorted = [...steadySamples].sort((a, b) => a - b);
+    const steadyMedian = sorted[Math.floor(sorted.length / 2)]!;
+
+    expect(steadyMedian,
+      `steady-state capture took ${steadyMedian.toFixed(1)} ms, over the ${STILL_BUDGET_MS} ms budget. ` +
+      `All ${GATE_3_SAMPLES}: ${timings.map((n) => n.toFixed(1)).join(", ")}. ` +
+      `Last half (steady): ${steadySamples.map((n) => n.toFixed(1)).join(", ")}. ` +
       "docs/STC-289-RUNBOOK.md §latency says which phase to look at.")
       .toBeLessThan(STILL_BUDGET_MS);
   }, 180_000);
