@@ -44,18 +44,20 @@ import { resolveIndicatorTarget, type IndicatorTarget } from "./scope-indicator.
  */
 
 /**
- * How long the flash stays fully visible before it starts fading. Started
- * at a flat 2000ms hold with a hard cut at the end; both were tried on real
- * hardware. The hold read as lingering (shortened from 2000 to this), and
- * the hard cut read as buggy rather than intentional — an outline that is
- * there one frame and gone the next looks like a rendering glitch, not a UI
- * choice. `FLASH_FADE_MS` is the fix for the second half. Total time on
+ * How long the flash stays fully visible before it starts fading. Both
+ * numbers here have already moved from real-hardware feedback: a flat
+ * 2000ms hold with a hard cut at the end read as lingering AND (once
+ * shortened) the hard cut itself read as buggy — an outline present one
+ * frame and gone the next looks like a rendering glitch, not a UI choice.
+ * `FLASH_FADE_MS` fixed the cut; this was then judged too brief on its own
+ * — held only long enough to look like a misclick rather than a deliberate
+ * confirmation — and lengthened alongside a slower fade. Total time on
  * screen is `FLASH_HOLD_MS + FLASH_FADE_MS`. `docs/STC-381-RUNBOOK.md` is
  * where a further Mac judgement on either number belongs.
  */
-export const FLASH_HOLD_MS = 200;
+export const FLASH_HOLD_MS = 450;
 /** How long the fade-to-transparent takes, once the hold above ends. */
-export const FLASH_FADE_MS = 250;
+export const FLASH_FADE_MS = 350;
 /** Roughly 60fps — smooth enough to read as a fade rather than a stepped
  * dimming, without waking the process more often than it needs to. */
 const FADE_STEP_MS = 16;

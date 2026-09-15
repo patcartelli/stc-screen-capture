@@ -10,7 +10,7 @@ or Record. It cannot show what the outline actually LOOKS like, whether the
 fade reads as smooth, or whether the timing feels right. That is this file's
 job.
 
-## This design has moved three times already, each time from real-hardware feedback
+## This design has moved four times already, each time from real-hardware feedback
 
 1. **The FIRST cut** showed the outline on every main-window focus, for as
    long as Scope stayed Window/Area — the ticket's own "Decided approach".
@@ -21,17 +21,21 @@ job.
 3. **The THIRD cut** shortened the hold to 450ms with a hard cut at the end.
    Read as buggy — an outline present one frame and gone the next looks like
    a rendering glitch, not an intentional dismissal.
-4. **What ships now**: hold briefly (`FLASH_HOLD_MS`, 200ms), then FADE to
-   transparent (`FLASH_FADE_MS`, 250ms) via `BrowserWindow.setOpacity()`
-   stepped from the main process — no renderer script, `scope-indicator.html`
-   is still static. Total time on screen: 450ms, same order of magnitude as
-   cut 3, but ending smoothly instead of cutting.
+4. **The FOURTH cut** added a fade (`FLASH_FADE_MS`) instead of the hard cut,
+   but held only 200ms first — too brief on its own, reading as a misclick
+   rather than a deliberate confirmation.
+5. **What ships now**: hold at full opacity for `FLASH_HOLD_MS` (450ms —
+   long enough to clearly register, not just flicker), then FADE to
+   transparent over `FLASH_FADE_MS` (350ms — slower than the fourth cut's
+   250) via `BrowserWindow.setOpacity()` stepped from the main process — no
+   renderer script, `scope-indicator.html` is still static. Total time on
+   screen: 800ms.
 
 Each of these was a live product call made watching the app run, not a
 request written down in advance — which is also why this file keeps getting
 rewritten rather than just amended. If you find yourself wanting to change
 this again, that is expected; say what you changed and why, the same way the
-last three changes are recorded here.
+last four changes are recorded here.
 
 ## What changed
 
@@ -63,12 +67,14 @@ last three changes are recorded here.
 5. **Expect**: Scope → Screen never shows an outline at all — nothing to
    confirm, since the whole display is already unambiguous.
 6. Judge the two constants in `scope-indicator-window.ts`:
-   - `FLASH_HOLD_MS` (200): long enough to register before it starts fading?
-   - `FLASH_FADE_MS` (250): does the fade itself look smooth (macOS's own
+   - `FLASH_HOLD_MS` (450): long enough to register as deliberate rather than
+     a misclick before it starts fading?
+   - `FLASH_FADE_MS` (350): does the fade itself look smooth (macOS's own
      `setOpacity` may or may not interpolate at the OS level — this steps it
-     manually from JS, so stutter here is informative, not a given)?
+     manually from JS, so stutter here is informative, not a given), and is
+     it slow enough to actually watch happen?
    Change either if wrong, and say what you changed it to and why — this is
-   the third round of exactly that.
+   the fourth round of exactly that.
 
 ## §2 — cancelled early, correctly, whether mid-hold or mid-fade
 
