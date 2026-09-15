@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync } from "node:fs";
 import { readFile, writeFile, stat, open, copyFile, rm } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
+import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
@@ -363,6 +364,20 @@ ipcMain.handle("recorder:start", async () => {
 });
 
 /**
+ * The helper's raw `windows` reply, turned into what the overlay wants.
+ * `fullyVisible` (STC-380) defaults to `false` — treating a field the helper
+ * did not send as "cannot be picked" is the direction that fails safe, not
+ * the one that fails open.
+ */
+function windowsFromReply(r: HelperLine): WindowInfo[] {
+  return ((r.windows as any[]) ?? []).map((w) => ({
+    id: w.id, app: w.app, title: w.title,
+    bounds: { x: w.x, y: w.y, width: w.width, height: w.height },
+    fullyVisible: Boolean(w.fullyVisible),
+  }));
+}
+
+/**
  * Choose what a RECORDING scopes to (STC-370's region/window capability,
  * wired to the window now) — a region or a window, through the same overlay
  * `capture-still` uses (STC-290). Persists the pick as the sticky `scope`
@@ -380,11 +395,7 @@ async function pickCaptureTarget(kind: "region" | "window"):
 
   let windows: WindowInfo[] = [];
   try {
-    const r = await sup.listWindows();
-    windows = ((r.windows as any[]) ?? []).map((w) => ({
-      id: w.id, app: w.app, title: w.title,
-      bounds: { x: w.x, y: w.y, width: w.width, height: w.height },
-    }));
+    windows = windowsFromReply(await sup.listWindows());
   } catch {
     // Without a Screen Recording grant the helper cannot enumerate anything.
     // Region mode needs no window list, so the overlay still opens; window
@@ -534,11 +545,7 @@ async function selectRegionOrWindow(
 ): Promise<{ kind: string; params: CaptureParams } | undefined> {
   let windows: WindowInfo[] = [];
   try {
-    const r = await sup!.listWindows();
-    windows = ((r.windows as any[]) ?? []).map((w) => ({
-      id: w.id, app: w.app, title: w.title,
-      bounds: { x: w.x, y: w.y, width: w.width, height: w.height },
-    }));
+    windows = windowsFromReply(await sup!.listWindows());
   } catch {
     // Without a Screen Recording grant the helper cannot enumerate anything.
     // The overlay still opens — region mode needs no window list — and the
