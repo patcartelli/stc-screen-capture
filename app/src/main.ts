@@ -131,7 +131,7 @@ let lastStillFile: string | undefined;
 // loaded from file://, and Chromium refuses cross-origin fetches from a file
 // origin to any non-http scheme. Serving the app itself over a custom scheme
 // would fix that, but IPC removes the origin question altogether.
-const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "project.json"]);
+const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "project.json"]);
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -214,6 +214,9 @@ function startSupervisor(): void {
   // evidence the camera worked was a PiP appearing ~1.4 s into playback, which
   // reads as a glitch rather than as the camera starting.
   sup.on("helper:camera-started", (l) => send("helper:camera-started", l));
+  // STC-233: same reasoning, one device over — the mic also opens off the
+  // critical path (MicCapture.swift) and reports separately once it resolves.
+  sup.on("helper:mic-started", (l) => send("helper:mic-started", l));
 }
 
 app.whenReady().then(() => {
@@ -327,8 +330,12 @@ ipcMain.handle("recorder:start", async () => {
   // already owns these settings, and a renderer-supplied value would be a
   // second source of truth for what turns on a physical camera and what the
   // helper is told to point at.
-  const { camera, displayId, scope } = readSettings(app.getPath("userData"));
+  const { camera, displayId, micDeviceUid, scope } = readSettings(app.getPath("userData"));
   const startParams: Record<string, unknown> = { camera };
+  // Only when a device is actually picked (STC-233) — an absent field is
+  // "no mic" to the helper's own parseStartRequest, and there is no
+  // automatic mic the way there is an automatic display.
+  if (micDeviceUid != null) startParams.micDeviceUid = micDeviceUid;
   if (scope.kind === "region" && scope.region) {
     const { displayId: regionDisplayId, x, y, width, height } = scope.region;
     startParams.displayId = regionDisplayId;

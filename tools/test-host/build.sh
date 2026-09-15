@@ -26,6 +26,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
   <key>NSCameraUsageDescription</key><string>STC records a camera picture-in-picture alongside the screen.</string>
+  <key>NSMicrophoneUsageDescription</key><string>STC records a microphone track alongside the screen.</string>
 </dict></plist>
 PLIST
 swiftc -O -sdk "$(xcrun --show-sdk-path)" -target arm64-apple-macos13.0 \

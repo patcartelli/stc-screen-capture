@@ -42,9 +42,13 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
     const cameraMp4 = anchors.files.camera
       ? await fetch(`${dir}/${anchors.files.camera}`).then((r) => r.arrayBuffer())
       : undefined;
+    // STC-233: same reasoning as cameraMp4 above.
+    const micM4a = anchors.files.mic
+      ? await fetch(`${dir}/${anchors.files.mic}`).then((r) => r.arrayBuffer())
+      : undefined;
 
     mark("identity: loadSession (demux + VideoDecoder.configure)");
-    const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4 });
+    const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a });
 
     // The take's OWN document, passed THROUGH parseProject — never used
     // verbatim, and never replaced by a literal assembled here.

@@ -167,5 +167,68 @@ do {
     check(d["scope"] == nil, "a whole-display take must not carry a scope block at all")
 }
 
+// 10. STC-233: a mic requested but yielding no track — the audio twin of
+//     block 2, and the same reason: present:false must still say so rather
+//     than fabricating measurements. micRequested bumps the version to 4,
+//     the same "emit the minimum version" rule scope already follows one
+//     version down.
+do {
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            mic: nil, micRequested: true,
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 4, "a mic-requested take must write version 4")
+    let mic = d["mic"] as? [String: Any]
+    check(mic != nil, "a requested mic must always write a mic block")
+    check(mic?["present"] as? Bool == false, "a requested mic with no track must record present:false")
+    check(mic?["device"] == nil, "a mic with no track must not invent measurements")
+    let files = d["files"] as? [String: Any]
+    check(files?["mic"] == nil, "files.mic must be absent when the mic produced no track")
+    printJSON(d, marker: "JSON-MIC-REQUESTED-NO-FRAMES:")
+}
+
+// 11. A present mic records its measurements and its file.
+do {
+    let track = MicTrack(present: true, device: "Fixture Mic", sampleRate: 48000, channels: 1,
+                         firstFramePtsNs: 12_000_000, lastFramePtsNs: 19_500_000_000)
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            mic: track, micRequested: true,
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 4, "a take with a real mic track must write version 4")
+    let mic = d["mic"] as? [String: Any]
+    check(mic?["present"] as? Bool == true, "present mic must record present:true")
+    check(mic?["device"] as? String == "Fixture Mic", "device name must be recorded")
+    check(mic?["sampleRate"] as? Int == 48000, "sample rate")
+    check(mic?["channels"] as? Int == 1, "channels")
+    check(mic?["firstFramePtsNs"] as? Int == 12_000_000, "first sample pts")
+    check(mic?["lastFramePtsNs"] as? Int == 19_500_000_000, "last sample pts")
+    let files = d["files"] as? [String: Any]
+    check(files?["mic"] as? String == "mic.m4a", "files.mic must name the file")
+    printJSON(d, marker: "JSON-WITH-MIC:")
+}
+
+// 12. Camera AND mic together, on a region scope: version must be the MAX
+//     of what scope alone implies (3) and what mic alone implies (4) — 4,
+//     never a silent narrowing back to 3 because scope was computed first.
+do {
+    let camTrack = CameraTrack(present: true, device: "Fixture Camera", width: 1280, height: 720,
+                               firstFramePtsNs: 1_000_000_000, lastFramePtsNs: 3_000_000_000,
+                               frameIntervalNs: 17_000_000)
+    let micTrack = MicTrack(present: true, device: "Fixture Mic", sampleRate: 44100, channels: 2,
+                            firstFramePtsNs: 5_000_000, lastFramePtsNs: 3_010_000_000)
+    let region = StillRect(x: 0, y: 0, width: 640, height: 360)
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: camTrack, requested: true,
+                            mic: micTrack, micRequested: true,
+                            scope: CaptureScopeDoc(kind: .region, region: region, window: nil),
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 4, "camera + mic + region scope together must still write version 4")
+    check(d["camera"] != nil, "camera block must still be present alongside mic")
+    check(d["mic"] != nil, "mic block must still be present alongside camera")
+    check(d["scope"] != nil, "scope block must still be present at version 4")
+    printJSON(d, marker: "JSON-VERSION-4-EVERYTHING:")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

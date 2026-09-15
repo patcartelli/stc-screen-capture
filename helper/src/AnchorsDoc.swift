@@ -71,6 +71,19 @@ struct CameraTrack {
     let frameIntervalNs: Int
 }
 
+/// What the mic track turned out to be (STC-233). `nil` means no mic on this
+/// take. Mirrors `CameraTrack`'s shape deliberately — `width`/`height` become
+/// `sampleRate`/`channels`, and there is no `frameIntervalNs`: audio has no
+/// discrete frame the transform holds between, only a continuous track it
+/// muxes in unmodified.
+struct MicTrack {
+    let present: Bool
+    let device: String
+    let sampleRate: Int, channels: Int
+    let firstFramePtsNs: Int
+    let lastFramePtsNs: Int
+}
+
 /// Builds anchors.json.
 ///
 /// Pure on purpose: the shape of this document is a contract with the transform,
@@ -94,12 +107,20 @@ struct CameraTrack {
 /// `scope` block. This is the same "emit the minimum version that can
 /// express the document" rule `projectForWrite`/`shotForWrite` already use:
 /// an untouched shape does not pay for a feature it does not use.
+///
+/// `micRequested` raises the floor to version 4 (STC-233), the same way scope
+/// raises it to 3 — a `mic` block is new to anchors-4 and an older reader
+/// (which validates `additionalProperties: false`) must never be handed one
+/// it cannot express. A take with no mic requested writes whatever version
+/// its scope already implies, unchanged.
 func anchorsDocument(timebase: (numer: Int, denom: Int),
                      t0Ns: UInt64,
                      display: DisplayGeometry,
                      capture: CaptureGeometryDoc,
                      camera: CameraTrack?,
                      requested: Bool,
+                     mic: MicTrack? = nil,
+                     micRequested: Bool = false,
                      scope: CaptureScopeDoc = .display,
                      stopReason: String,
                      stopTNs: Int) -> [String: Any] {
@@ -120,7 +141,23 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
             ]
         }
     }
-    let version = scope.kind == .display ? 2 : 3
+    var micBlock: [String: Any]?
+    if micRequested {
+        micBlock = ["present": false]
+        if let m = mic, m.present {
+            files["mic"] = "mic.m4a"
+            micBlock = [
+                "present": true,
+                "device": m.device,
+                "sampleRate": m.sampleRate,
+                "channels": m.channels,
+                "firstFramePtsNs": m.firstFramePtsNs,
+                "lastFramePtsNs": m.lastFramePtsNs,
+            ]
+        }
+    }
+    var version = scope.kind == .display ? 2 : 3
+    if micRequested { version = max(version, 4) }
     var doc: [String: Any] = [
         "version": version,
         "timebase": ["numer": timebase.numer, "denom": timebase.denom],
@@ -139,6 +176,9 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     ]
     if let cameraBlock {
         doc["camera"] = cameraBlock
+    }
+    if let micBlock {
+        doc["mic"] = micBlock
     }
     if scope.kind != .display {
         var scopeBlock: [String: Any] = ["kind": scope.kind.rawValue]
