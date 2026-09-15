@@ -22,55 +22,6 @@ import ObjectiveC
 /// corners with transparency behind them: a crop out of a display capture is
 /// always an opaque rectangle with the desktop baked in.
 ///
-/// ## The API is reached through the Objective-C runtime, on purpose
-///
-/// `SCScreenshotManager` is macOS 14+ and the helper builds against the 13.3
-/// SDK (`helper/build.sh`; no Xcode.app on the machine that ships this), where
-/// the class does not exist in any header. The runtime has it — this is the same
-/// situation `captureResolution` is in, already handled by KVC in Capture.swift.
-/// `ScreenshotAPI` looks the class up by name and calls the one class method
-/// through its IMP, so the file compiles against 13.3 AND against CI's SDK 15.
-/// The cost is stated plainly: a misspelt selector is not a compile error, it is
-/// `still-unsupported` at runtime — which is why `ScreenshotAPI.available` is
-/// checked first and why `still.grant.test.ts` is the test that proves the call.
-///
-/// Every request is answered exactly once, within `timeoutSeconds`, by whichever
-/// path gets there first (the `start`/`stop` rule): SCShareableContent and the
-/// screenshot completion are both callback APIs, and this codebase's question
-/// for each is what happens when it stays silent.
-enum ScreenshotAPI {
-    static let className = "SCScreenshotManager"
-    /// `+[SCScreenshotManager captureImageWithFilter:configuration:completionHandler:]`
-    /// — Swift's `captureImage(contentFilter:configuration:completionHandler:)`.
-    static let selectorName = "captureImageWithFilter:configuration:completionHandler:"
-
-    private typealias CaptureImageIMP = @convention(c) (
-        AnyObject, Selector, AnyObject, AnyObject,
-        @escaping @convention(block) (CGImage?, NSError?) -> Void
-    ) -> Void
-
-    /// True when the running OS has the class AND the method. Both are checked:
-    /// a class that exists without the selector (a future rename) must read as
-    /// unsupported, not crash on an unrecognised-selector trap.
-    static var available: Bool {
-        guard let cls = NSClassFromString(className) else { return false }
-        return class_getClassMethod(cls, NSSelectorFromString(selectorName)) != nil
-    }
-
-    /// Returns false — without calling `completion` — when the API is absent.
-    static func captureImage(filter: SCContentFilter, configuration: SCStreamConfiguration,
-                             completion: @escaping (CGImage?, Error?) -> Void) -> Bool {
-        guard let cls = NSClassFromString(className) else { return false }
-        let sel = NSSelectorFromString(selectorName)
-        guard let method = class_getClassMethod(cls, sel) else { return false }
-        let fn = unsafeBitCast(method_getImplementation(method), to: CaptureImageIMP.self)
-        let block: @convention(block) (CGImage?, NSError?) -> Void = { image, error in
-            completion(image, error)
-        }
-        fn(cls as AnyObject, sel, filter, configuration, block)
-        return true
-    }
-}
 
 /// Sets a 14+ `SCStreamConfiguration` property the 13.3 headers do not declare.
 /// Returns whether the running OS took it, so a caller can say which knobs
@@ -109,7 +60,7 @@ enum StillError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .unsupported:
-            return "\(ScreenshotAPI.className) is not available — macOS 14 or newer is required for stills"
+            return "SCScreenshotManager is not available — macOS 14 or newer is required for stills"
         case .noDisplays(let e):
             return "no displays available — Screen Recording permission is the usual cause (\(e.map { "\($0)" } ?? "no error"))"
         case .noSuchDisplay(let id): return "no display with id \(id)"
@@ -203,7 +154,6 @@ final class StillCapture {
             self.finish(.failure(.timedOut(lastStep: s)))
         }
 
-        guard ScreenshotAPI.available else { finish(.failure(.unsupported)); return }
 
         at("content")
         SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { [weak self] content, err in
@@ -316,16 +266,15 @@ final class StillCapture {
 
         at("capture")
         let capturedAtNs = Clock.nowNs()
-        let issued = ScreenshotAPI.captureImage(filter: filter, configuration: cfg) { [weak self] image, error in
+        SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg) { [weak self] image, error in
             guard let self else { return }
             self.mark("captureMs")
             guard let image else { self.finish(.failure(.captureFailed(error))); return }
             DispatchQueue.global(qos: .userInitiated).async {
                 self.write(image: image, capturedAtNs: capturedAtNs, geometry: geometry,
-                           crop: crop, window: window, cursor: cursor)
+                        crop: crop, window: window, cursor: cursor)
             }
         }
-        if !issued { finish(.failure(.unsupported)) }
     }
 
     private func sampleCursor(display: DisplayGeometry) -> StillCursorSample? {
