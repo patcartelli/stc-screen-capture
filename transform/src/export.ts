@@ -121,8 +121,7 @@ export async function exportSession(
       const frame = idx === null ? null : await source.frameAt(idx);
       const cameraFrame = fs.pip && cameraSource ? await cameraSource.frameAt(fs.pip.frameIndex) : null;
       peakBuffered = Math.max(peakBuffered, source.bufferedCount + (cameraSource?.bufferedCount ?? 0));
-      composite(ctx, frame as unknown as ImageBitmap | null,
-                cameraFrame as unknown as ImageBitmap | null, fs, width, height);
+      composite(ctx, frame, cameraFrame, fs, width, height);
 
       if (wantHash) {
         const rgba = ctx.getImageData(0, 0, width, height).data;

@@ -1,4 +1,4 @@
-import { render } from "@transform/render";
+import { render, FULL_FRAME_UV } from "@transform/render";
 import { tickTimeNs, frameIndexAt } from "@transform/time";
 import { mark } from "./mark.js";
 import { loadSession } from "@transform/session";
@@ -107,20 +107,38 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
     let pipFrames = 0;
     let pipDrawnFrames = 0;
 
+    // The same trap the PiP-blind check exists for, one layer over: two sinks
+    // that both fail to draw a crop (STC-326/330's compositor bug — a raw
+    // VideoFrame has no `.width`/`.height`, so the crop's pixel rect came out
+    // NaN and `drawImage` silently drew nothing) still hash IDENTICALLY to
+    // each other, and this gate's own mismatch count stays 0. Found only by
+    // watching a real take, not by this gate — `ZOOM_BLIND_THRESHOLD` is well
+    // into a transition (past finishCrop's floor, never near the settle-time
+    // edges) so a frame counted here has a crop that visibly differs from the
+    // full frame if the compositor is drawing it at all.
+    const ZOOM_BLIND_THRESHOLD = 0.5;
+    const zoomFullFrame = { amount: 0, crop: FULL_FRAME_UV };
+    const zoomBlindCtx = mkCtx();
+    const zoomBlindHash = new Map<number, string>();
+
     for (const k of ks) {
       const t = tickTimeNs(2 * k);
       const fs = render(project, session, t);
       const idx = frameIndexAt(session.frames, t);
       const frame = idx === null ? null : await fwd.frameAt(idx);
       const cam = fs.pip && fwdCam ? await fwdCam.frameAt(fs.pip.frameIndex) : null;
-      composite(fwdCtx, frame as unknown as ImageBitmap | null,
-                cam as unknown as ImageBitmap | null, fs, width, height);
+      composite(fwdCtx, frame, cam, fs, width, height);
       exportHash.set(k, await hashCanvas(fwdCtx, width, height));
 
-      composite(blindCtx, frame as unknown as ImageBitmap | null, null, fs, width, height);
+      composite(blindCtx, frame, null, fs, width, height);
       blindHash.set(k, await hashCanvas(blindCtx, width, height));
       if (fs.pip) pipFrames++;
       if (fs.pip && cam) pipDrawnFrames++;
+
+      if (fs.zoom.amount > ZOOM_BLIND_THRESHOLD) {
+        composite(zoomBlindCtx, frame, cam, { ...fs, zoom: zoomFullFrame }, width, height);
+        zoomBlindHash.set(k, await hashCanvas(zoomBlindCtx, width, height));
+      }
     }
     fwd.close();
     fwdCam?.close();
@@ -138,8 +156,7 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
         idx === null ? null : seek.frameAt(idx),
         fs.pip && seekCam ? seekCam.frameAt(fs.pip.frameIndex) : null,
       ]);
-      composite(prevCtx, frame as unknown as ImageBitmap | null,
-                cam as unknown as ImageBitmap | null, fs, width, height);
+      composite(prevCtx, frame, cam, fs, width, height);
       const h = await hashCanvas(prevCtx, width, height);
       if (h !== exportHash.get(k)) mismatches.push(`frame ${k} (t=${(t / 1e6).toFixed(1)}ms)`);
     }
@@ -155,11 +172,18 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       if (exportHash.get(k) === blindHash.get(k)) pipBlindMismatches++;
     }
 
+    // Frames that ARE meaningfully zoomed but look the same as full-frame.
+    let zoomBlindMismatches = 0;
+    for (const k of zoomBlindHash.keys()) {
+      if (exportHash.get(k) === zoomBlindHash.get(k)) zoomBlindMismatches++;
+    }
+
     return {
       samples: ks.length, mismatches, peakBuffered: stats.peakBuffered,
       decoderGenerations: stats.decoderGenerations, totalOut,
       cameraPresent: !!session.cameraVideo,
       pipFrames, pipDrawnFrames, pipBlindMismatches,
+      zoomFrames: zoomBlindHash.size, zoomBlindMismatches,
     };
   } catch (e: any) {
     return { fatal: String(e?.stack ?? e) };

@@ -81,6 +81,25 @@ Open `frame.png` from a full-display shot taken with the pointer in the middle o
   captureMs` the PNG encode. If content enumeration dominates, caching the display list against
   the display watcher is the next optimisation.
 
+  **MEASURED 2026-09-15 (STC-383), and the guess above was wrong about which phase to
+  suspect.** On a 6016x3384 display (20.4 MP), content enumeration is ~30 ms and fine; the
+  **PNG encode is ~137-141 ms, ~55-60% of the whole request**, dominating both the
+  enumeration and the screenshot (~65-73 ms). So caching the display list is not the next
+  optimisation — it would buy ~12%.
+
+  The "200 ms from verb to buffer" holds and is not the problem: `captureMs` is 92-101 ms
+  there. What does not fit in 200 ms is verb to **answer**, at 250-253 ms, because the encode
+  and shot.json come after the buffer. STC-301's gate 3 used to conflate the two and failed
+  consistently on hardware as a result; it now carries a budget for each, and
+  `docs/STC-301-GATES.md` → "Reading gate 3's output" has the full breakdown and the reasoning.
+
+  PNG encode cost scales with frame AREA, so none of these numbers transfer to a much larger or
+  smaller display without re-measuring. There is no cheap lever on the encode itself: ImageIO
+  has no compression-level knob for PNG (`kCGImageDestinationLossyCompressionQuality` is
+  ignored for it, `kCGImagePropertyPNGCompressionFilter` is a filter hint). Making this
+  materially faster means changing the capture format or taking the write off the reply's
+  critical path, neither of which is free — see STC-383 for why neither was done.
+
 ## 4. Not covered here
 
 - **HDR/EDR displays** (acceptance list): no knob is set for them; a still of an HDR display
