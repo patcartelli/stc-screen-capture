@@ -17,6 +17,31 @@ import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
  * rasterizers they differ (CLAUDE.md, the rasterization-backend trap).
  */
 /**
+ * A decoded frame reaches the compositor as either shape: the gates decode
+ * everything up front through `decodeAll()` into real `ImageBitmap`s, while
+ * both real sinks (`export.ts`'s `ForwardFrameSource`, `preview.ts`'s
+ * `SeekingFrameSource`) stream a raw `VideoFrame` per WebCodecs' own memory
+ * discipline (PHASE-0 §4b — never buffer a VideoFrame). The two do not share
+ * a `.width`/`.height`: `ImageBitmap` has them, `VideoFrame` does not (it has
+ * `codedWidth`/`codedHeight` and `displayWidth`/`displayHeight` instead) — so
+ * a cast from one to the other, which every real caller used to do to satisfy
+ * this file's old `ImageBitmap`-only signature, typechecked a lie. Found by
+ * watching a real take: any crop narrower than the full frame read
+ * `frame.width` as `undefined`, `uvRectToPixels` propagated `NaN` all the way
+ * through, and `drawImage` with a non-finite source rect draws nothing per
+ * spec — no exception, the canvas simply keeps its black fill. `gate:identity`
+ * never caught it because the gate's own harness is the ImageBitmap path, not
+ * the one either real sink runs.
+ */
+type DecodedFrame = ImageBitmap | VideoFrame;
+
+function frameSize(frame: DecodedFrame): { width: number; height: number } {
+  return "displayWidth" in frame
+    ? { width: frame.displayWidth, height: frame.displayHeight }
+    : { width: frame.width, height: frame.height };
+}
+
+/**
  * The display frame, cropped to the zoom's rectangle.
  *
  * The full-frame case takes the FIVE-argument `drawImage` rather than the
@@ -35,7 +60,7 @@ import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
  */
 function drawSource(
   ctx: OffscreenCanvasRenderingContext2D,
-  frame: ImageBitmap,
+  frame: DecodedFrame,
   fs: FrameState,
   width: number,
   height: number,
@@ -45,14 +70,15 @@ function drawSource(
     ctx.drawImage(frame, 0, 0, width, height);
     return;
   }
-  const src = uvRectToPixels(c, { x: 0, y: 0, width: frame.width, height: frame.height });
+  const { width: fw, height: fh } = frameSize(frame);
+  const src = uvRectToPixels(c, { x: 0, y: 0, width: fw, height: fh });
   ctx.drawImage(frame, src.x, src.y, src.width, src.height, 0, 0, width, height);
 }
 
 export function composite(
   ctx: OffscreenCanvasRenderingContext2D,
-  frame: ImageBitmap | null,
-  camera: ImageBitmap | null,
+  frame: DecodedFrame | null,
+  camera: DecodedFrame | null,
   fs: FrameState,
   width: number,
   height: number,

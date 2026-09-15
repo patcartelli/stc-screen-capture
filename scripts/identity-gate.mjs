@@ -118,6 +118,20 @@ try {
       console.log(`PiP actually changes the pixels on all ${r.pipFrames} frames that have one`);
     }
   }
+
+  // The zoom-crop analogue of the PiP-blind check above: two sinks that both
+  // fail to draw a crop still hash identically to EACH OTHER, so identity
+  // alone cannot catch it (STC-326/330's `frame.width` bug — found only by
+  // watching a real take, not by this gate, until this check existed).
+  console.log(`zoom: ${r.zoomFrames} sampled frame(s) meaningfully zoomed`);
+  if (r.zoomFrames > 0) {
+    if (r.zoomBlindMismatches > 0) {
+      fail(`${r.zoomBlindMismatches} of ${r.zoomFrames} zoomed frames are byte-identical with the ` +
+           `crop forced to the full frame — the crop is not actually changing the pixels`);
+    } else {
+      console.log(`the zoom crop actually changes the pixels on all ${r.zoomFrames} zoomed frame(s)`);
+    }
+  }
 } catch (e) {
   // A bound firing means the machine did not service the pipeline; anything
   // else thrown here is ours. Asked of the error, not matched against its text.
