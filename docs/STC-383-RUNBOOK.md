@@ -8,8 +8,8 @@ this file.
 
 The finding, in one line: gate 3 was holding STC-289's "200 ms from verb to
 **buffer**" against the wall clock of verb to **answer**, which also carries a
-PNG encode that is ~57% of the request on a large display. It now budgets each
-quantity separately. Full reasoning in `docs/STC-301-GATES.md` → "Reading gate
+PNG encode that is ~55-60% of the request on a large display. It now budgets
+each quantity separately, and takes STC-341's better steady-state statistic. Full reasoning in `docs/STC-301-GATES.md` → "Reading gate
 3's output"; the phase measurements are in `docs/STC-289-RUNBOOK.md` §latency.
 
 ```
@@ -31,8 +31,8 @@ Expected, on the 6016x3384 machine this was diagnosed on:
 [gate 3] sample 1: wall 250.9 ms | content enum 30.6 | screenshot 68.1 | PNG encode 139.2 | shot.json 0.3 || verb-to-buffer 98.7
 ...
 [gate 3] frame encoded: 6016x3384 px (20.4 MP) — the PNG encode scales with this area, ...
-[gate 3] verb to buffer (captureMs, first is cold): 181.9, 98.7, ... (median ..., worst 181.9, budget 200)
-[gate 3] verb to answer (wall, first is cold): 336.9, 250.9, ... (median ..., worst 336.9, budget 400)
+[gate 3] verb to buffer (captureMs, early ones warm up): 181.9, 98.7, ... (overall median ..., worst 181.9, STEADY median ~98 of ..., budget 200)
+[gate 3] verb to answer (wall, early ones warm up): 336.9, 250.9, ... (overall median ..., worst 336.9, STEADY median ~251 of ..., budget 400)
 ```
 
 **What must be true:**
@@ -47,20 +47,39 @@ Expected, on the 6016x3384 machine this was diagnosed on:
    the rest of this change needs rethinking rather than accepting.
 3. **PNG encode is the largest phase.** If content enumeration or the
    screenshot dominates instead on your machine, say so — the conclusion in
-   both doc files is written from four steady-state samples on one display.
+   both doc files is written from one display's steady state. STC-341's
+   hardware disagrees about the *screenshot* phase (it measured ~145 ms where
+   this one measures ~65-73) while agreeing closely about the encode
+   (~133 vs ~137-141), so the encode's dominance is the better-supported half
+   of the claim.
 
-**What is NOT a failure:** the first sample being much larger than the rest.
-Both budgets are applied to samples 1–4 only; the cold call pays for
-`SCShareableContent` enumeration that no later call does.
+**What is NOT a failure:** the early samples being larger than the rest. Both
+budgets are applied to the median of the SETTLED HALF (samples 5–9 of 10), not
+to the whole run: the first call pays for `SCShareableContent` enumeration that
+no later one does, and STC-341 measured a second warming phase after it
+(334.3 → 232.3, 232.1 → 209.8, 209.9). STC-383's own run shows no such second
+phase, which is exactly why the statistic has to be robust to it either way.
 
 ## §2 — the numbers against the two budgets
 
 The interesting comparison is not pass/fail, it is headroom:
 
-| | budget | expected worst steady | headroom |
+| | budget | expected steady median | headroom |
 |---|---|---|---|
-| verb to buffer (`captureMs`) | 200 ms | ~101 ms | ~2x |
-| verb to answer (wall) | 400 ms | ~252 ms | ~1.6x |
+| verb to buffer (`captureMs`) | 200 ms | ~98 ms | ~2x |
+| verb to answer (wall) | 400 ms | ~251 ms | ~1.6x |
+
+**Both of those are from ONE display (6016x3384), and the buffer figure is the
+one to hold loosely.** STC-341's run on different hardware (5120x2880 source,
+3840x2160 capture) reported a `captureMs` of **187 ms** — inside the 200 ms
+budget by 13 ms, not by a factor of two. That reading is from a single
+full-display still and so reads as a COLD sample (STC-383's own cold
+`captureMs` was 181.9 against a 92-101 steady), which would put its steady
+value far below 200. But that is an inference, not a measurement: nobody has
+recorded a steady-state `captureMs` on that display. **If your run shows the
+buffer budget with materially less headroom than the table claims, the table
+is what is wrong, and it is worth saying so rather than treating 200 as
+comfortable.**
 
 If **verb to buffer** comes back anywhere near 200, that is a real regression
 in the screenshot or in content enumeration and the split has bought us a

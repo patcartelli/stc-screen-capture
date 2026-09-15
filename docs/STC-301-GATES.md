@@ -141,11 +141,12 @@ three times (STC-250, STC-258, STC-259). Per gate:
   sitting underneath it — observed failing 1 run in 5, with the test body green,
   before the bound went in and 6 of 6 after.
 * **5** — pure arithmetic over a frozen document. No canvas at all.
-* **3** — the budget is on the STEADY state, not the cold first call, which
-  pays for `SCShareableContent` enumeration every later call does not. Five
-  measurements, all printed. Since STC-383 there are **two** budgets, on two
-  different quantities; see "Reading gate 3's output" below for why one number
-  could not do both jobs.
+* **3** — the budget is on the STEADY state, not the warming calls that pay for
+  `SCShareableContent` enumeration and whatever settles after it. Ten
+  measurements, all printed, with both budgets applied to the median of the
+  settled half. Since STC-383 there are **two** budgets, on two different
+  quantities; see "Reading gate 3's output" below for why one number could not
+  do both jobs, and why the statistic had to change at the same time.
 * **6** — the recording is given 2 s either side of the still so the comparison
   is against steady-state frames rather than the first-frame ramp.
 
@@ -157,12 +158,13 @@ be visible rather than binary. Real output, from the machine described below:
 ```
 [gate 3] sample 1: wall 250.9 ms | content enum 30.6 | screenshot 68.1 | PNG encode 139.2 | shot.json 0.3 || verb-to-buffer 98.7
 [gate 3] frame encoded: 6016x3384 px (20.4 MP) — the PNG encode scales with this area, ...
-[gate 3] verb to buffer (captureMs, first is cold): 181.9, 98.7, 101.1, 91.7, 99.6 ms (median 99.6, worst 181.9, budget 200)
-[gate 3] verb to answer (wall, first is cold): 336.9, 250.9, 250.8, 252.4, 251.0 ms (median 251.0, worst 336.9, budget 400)
+[gate 3] verb to buffer (captureMs, early ones warm up): 181.9, 98.7, 101.1, 91.7, 99.6, … ms (overall median …, worst 181.9, STEADY median …, budget 200)
+[gate 3] verb to answer (wall, early ones warm up): 336.9, 250.9, 250.8, 252.4, 251.0, … ms (overall median …, worst 336.9, STEADY median …, budget 400)
 ```
 
-The first number of each series being much larger is expected and is not a
-failure — the budgets are applied to the rest.
+The early numbers of each series being larger is expected and is not a
+failure — the budgets are applied to the settled half (see "…and why the
+statistic changed too" below).
 
 ### Why there are two budgets (STC-383)
 
@@ -203,6 +205,39 @@ would have lost the slice's only latency check. Both halves are kept instead:
 scales with frame area, and the gate prints the frame's dimensions and
 megapixels for exactly that reason. On a materially larger display than
 6016x3384, revisit the constant rather than assuming it transferred.
+
+### …and why the statistic changed too (STC-341)
+
+STC-341 was filed against this same gate six days before STC-383, from
+different hardware (5120x2880 source, 3840x2160 capture), and found the OTHER
+half of the same failure. The assertion was `max(timings.slice(1))`, on the
+stated reasoning that only the first call pays for content enumeration. That
+run disagreed with the model:
+
+```
+334.3  →  232.3, 232.1  →  209.8, 209.9
+```
+
+Three phases, not two. Something is still warming after the first call, so
+`slice(1)` was measuring warm-up and calling it steady — and because the
+assertion took the **max**, the run was judged on sample 2, the least settled
+of the four. The same file also printed a median and asserted on a max, so a
+reader chasing the printed number was chasing a different one from the one that
+failed.
+
+STC-383's own run shows **no** second warming phase (samples 1-4 flat within
+1% on both series). The two runs genuinely disagree, and that disagreement is
+the argument for the statistic rather than against it: it has to be right
+whether or not a second phase exists on the machine in front of you. So both
+budgets are applied to the **median of the settled half** over ten samples
+(`steadyMedian`, one function because both series use it), the worst and
+overall median are still printed, and the report line now names the statistic
+the budget actually uses.
+
+**Neither fix alone gets this gate green on both machines**, which is why they
+landed together: on STC-341's numbers the better statistic still yields ~210 ms
+against a 200 ms wall budget, and on STC-383's numbers the old statistic still
+yields 252.4 ms against it. The quantity was wrong *and* the statistic was.
 
 Not taken: a faster PNG encode. ImageIO exposes no compression-level knob for
 PNG — `kCGImageDestinationLossyCompressionQuality` is ignored for it and
