@@ -259,8 +259,7 @@ export class PreviewPlayer {
       ]);
       if (this.closed) return;
       composite(this.ctx as unknown as OffscreenCanvasRenderingContext2D,
-                frame as unknown as ImageBitmap | null,
-                cameraFrame as unknown as ImageBitmap | null, fs,
+                frame, cameraFrame, fs,
                 this.effectiveOutput.width, this.effectiveOutput.height);
       this.renderedFrames++;
       if (cameraFrame) this.cameraRenderedFrames++;
