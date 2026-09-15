@@ -76,7 +76,7 @@ started, and must never let a take that is missing something look like a take th
 
 | decision | status | evidence |
 |---|---|---|
-| macOS 26 floor; no compatibility scaffolding for older targets | **drifted, deliberate — by toolchain** | no Xcode on the dev machine: `swiftc` 5.8 with the 13.3 SDK, `helper/build.sh` targets macOS 13.0, and `captureResolution` is reached by KVC (`Capture.swift`) because the 13.3 headers lack it. That KVC and the 13.0 target are exactly the scaffolding to delete when Xcode lands. **Open:** when |
+| macOS 26 floor; no compatibility scaffolding for older targets | **holds for the floor; one KVC pattern remains out of scope** | Xcode installed; `helper/build.sh` targets macOS 26.0; `captureResolution`'s KVC in `Capture.swift` and the `SCScreenshotManager` Objective-C runtime/IMP lookup in `Still.swift` — the two scaffolds STC-317 named — are gone, replaced by a typed property and a direct call. `Still.swift`'s own `setIfSupported` (a generalized KVC helper for `ignoreShadowsSingleWindow`/`shouldBeOpaque`/its own `captureResolution`) is the same species of scaffold and was deliberately left out of this ticket's scope, not silently claimed gone. Verified on hardware: signing identity and TCC grants (Screen Recording, Input Monitoring, Camera) survived the rebuild; `npm run test:capture` green except STC-383 (a pre-existing capture-latency finding, control-verified against the old scaffolding on the same machine — unrelated to this change) |
 | Compositing in WebGPU/WGSL; no GLSL fallback | **not yet built** | Canvas 2D (`compositor.ts`, 47 lines). There is no GLSL either, so nothing to remove. The pre-encode hash will change when this lands; survivable because the gates compare within one backend |
 | Electron shell; renderer is sandboxed and never sees a path or node | **holds** | `preload.ts` enumerates every channel; `tsconfig.browser.json` makes `process` a type error in the renderer |
 | Signing: a stable identity (self-signed dev cert now, Developer ID later) because ad-hoc revokes TCC on every rebuild | **holds** | PHASE-1 → Signing |
@@ -126,7 +126,7 @@ decision against, only a decision about order.
 
 ## Open questions for the author
 
-1. **Xcode and the macOS 26 floor.** The helper builds against the 13.3 SDK because there is no Xcode. Is the floor a target for when Xcode lands, or a requirement now?
+1. ~~**Xcode and the macOS 26 floor.** The helper builds against the 13.3 SDK because there is no Xcode. Is the floor a target for when Xcode lands, or a requirement now?~~ **Answered: a requirement now** (STC-317) — Xcode is installed, the target is macOS 26.0, and both of the ticket's named scaffolds are removed.
 2. ~~**Cursor telemetry as a hard requirement.** A missing Input Monitoring grant currently warns and records video only. Refuse to start instead?~~ **Answered: refuse to start** (STC-315). The successor question is narrower and still open — a tap that dies *mid-take* is re-enabled rather than ending the take; see the Cursor row above.
 3. **`recording.json` vs `project-3`.** Is `recording.json` a new file beside `anchors`/`events`/`project`, or the successor to `project.json`? The segments array needs an owner.
 4. **WebGPU and SolidJS timing.** Both are decided; neither has a phase. Review §7 orders them after the segments schema and auto-zoom. Agree?

@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build
 
-swiftc -O -sdk "$(xcrun --show-sdk-path)" -target arm64-apple-macos13.0 \
+swiftc -O -sdk "$(xcrun --show-sdk-path)" -target arm64-apple-macos26.0 \
   -o build/stc-helper src/*.swift
 
 # Signing identity. A STABLE identity is what keeps TCC grants alive across rebuilds; ad-hoc

@@ -646,9 +646,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         // macOS 14+, absent from the 13.3 SDK headers but present at runtime
         // (PHASE-0 §7). Explicit width/height governs output size regardless.
-        if cfg.responds(to: Selector(("setCaptureResolution:"))) {
-            cfg.setValue(3, forKey: "captureResolution")
-        }
+        cfg.captureResolution = .automatic
         let s = SCStream(filter: filter, configuration: cfg, delegate: self)
         try s.addStreamOutput(self, type: .screen,
                               sampleHandlerQueue: DispatchQueue(label: "stc.capture.screen"))

@@ -147,6 +147,7 @@ describe("STC-301 gate 3: capture latency", () => {
       const r = await h.request({ cmd: "capture-still", dir: tmpDir("stc-lat-") });
       const wall = performance.now() - t0;
       expect(r.ev, JSON.stringify(r)).toBe("still");
+      process.stderr.write(`[gate 3] sample ${i}: wall ${wall.toFixed(1)} ms, timing ${JSON.stringify(r.timing)}\n`);
       timings.push(wall);
     }
     h.kill();
