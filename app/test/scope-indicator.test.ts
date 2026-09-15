@@ -54,7 +54,7 @@ describe("resolveIndicatorTarget: window scope", () => {
 
   it("draws the window's LIVE bounds, on the display they currently sit on", () => {
     const live: WindowInfo = { id: 42, app: "Finder", title: "Documents",
-      bounds: { x: 1990, y: 60, width: 400, height: 300 } };
+      bounds: { x: 1990, y: 60, width: 400, height: 300 }, fullyVisible: true };
     expect(resolveIndicatorTarget(scope, DISPLAYS, live)).toEqual({
       displayId: 2,
       rect: { x: 1990, y: 60, width: 400, height: 300 },
@@ -63,7 +63,7 @@ describe("resolveIndicatorTarget: window scope", () => {
 
   it("does not draw when the scope is window but nothing has been picked yet", () => {
     const empty: ScopeSettings = { kind: "window", region: null, windowId: null, windowLabel: null };
-    const live: WindowInfo = { id: 42, bounds: { x: 0, y: 0, width: 100, height: 100 } };
+    const live: WindowInfo = { id: 42, bounds: { x: 0, y: 0, width: 100, height: 100 }, fullyVisible: true };
     expect(resolveIndicatorTarget(empty, DISPLAYS, live)).toBeNull();
   });
 
@@ -72,19 +72,19 @@ describe("resolveIndicatorTarget: window scope", () => {
   });
 
   it("does not draw a DIFFERENT window than the one the scope names", () => {
-    const wrong: WindowInfo = { id: 7, bounds: { x: 0, y: 0, width: 100, height: 100 } };
+    const wrong: WindowInfo = { id: 7, bounds: { x: 0, y: 0, width: 100, height: 100 }, fullyVisible: true };
     expect(resolveIndicatorTarget(scope, DISPLAYS, wrong)).toBeNull();
   });
 
   it("does not draw when the window's centre falls on no known display", () => {
     // Off in space — neither display's bounds contain its centre.
-    const live: WindowInfo = { id: 42, bounds: { x: 5000, y: 5000, width: 100, height: 100 } };
+    const live: WindowInfo = { id: 42, bounds: { x: 5000, y: 5000, width: 100, height: 100 }, fullyVisible: true };
     expect(resolveIndicatorTarget(scope, DISPLAYS, live)).toBeNull();
   });
 
   it("picks the display the window's CENTRE falls on, not its top-left corner", () => {
     // Straddles the bezel: origin on display A, centre on display B.
-    const live: WindowInfo = { id: 42, bounds: { x: 1800, y: 100, width: 400, height: 200 } };
+    const live: WindowInfo = { id: 42, bounds: { x: 1800, y: 100, width: 400, height: 200 }, fullyVisible: true };
     const target = resolveIndicatorTarget(scope, DISPLAYS, live);
     expect(target?.displayId).toBe(2);
   });

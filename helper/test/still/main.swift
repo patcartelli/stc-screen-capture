@@ -145,6 +145,43 @@ check("display above main: a pointer on main is absent for it", loc(700, 500, on
 check("exactly on the far edge is outside (half-open, like CGRect.contains)",
       loc(1920, 500, on: main), "absent")
 
+// ── window visibility (STC-380) ─────────────────────────────────────────────
+let d0 = StillRect(x: 0, y: 0, width: 1920, height: 1080)
+let full = StillRect(x: 100, y: 100, width: 400, height: 300)
+check("a window well inside one display, nothing in front, is fully visible",
+      isFullyVisible(full, displays: [d0], occluders: []), true)
+check("a window entirely off every display is not",
+      isFullyVisible(StillRect(x: 5000, y: 5000, width: 400, height: 300), displays: [d0], occluders: []),
+      false)
+check("a window mostly off the display edge is not",
+      isFullyVisible(StillRect(x: 1800, y: 100, width: 400, height: 300), displays: [d0], occluders: []),
+      false)
+check("a window flush against the far edge, exactly on it, is fully visible (no slack needed)",
+      isFullyVisible(StillRect(x: 1520, y: 100, width: 400, height: 300), displays: [d0], occluders: []), true)
+check("a window spanning two displays, fully covered by their union, is fully visible",
+      isFullyVisible(StillRect(x: 1800, y: 100, width: 400, height: 300),
+                     displays: [d0, StillRect(x: 1920, y: 0, width: 1920, height: 1080)], occluders: []), true)
+check("a window entirely covered by one window in front is not",
+      isFullyVisible(full, displays: [d0], occluders: [StillRect(x: 0, y: 0, width: 1920, height: 1080)]), false)
+check("a window covered by TWO windows together, neither alone covering it, is not",
+      isFullyVisible(full, displays: [d0],
+                     occluders: [StillRect(x: 100, y: 100, width: 200, height: 300),
+                                 StillRect(x: 300, y: 100, width: 200, height: 300)]),
+      false)
+check("a window with an occluder that misses it entirely is unaffected",
+      isFullyVisible(full, displays: [d0], occluders: [StillRect(x: 900, y: 900, width: 100, height: 100)]), true)
+check("a sliver poking out from under an occluder is not enough to count as fully visible",
+      isFullyVisible(full, displays: [d0],
+                     occluders: [StillRect(x: 100, y: 100, width: 395, height: 300)]), false)
+check("a window behind is not consulted (occluders here empty on purpose)",
+      isFullyVisible(full, displays: [d0], occluders: []), true)
+check("remainingFraction of an empty rect is 0, not NaN",
+      remainingFraction(StillRect(x: 0, y: 0, width: 0, height: 0), subtracting: []), 0.0)
+check("subtractRect leaves an untouched rect alone",
+      subtractRect([full], StillRect(x: 900, y: 900, width: 10, height: 10)), [full])
+check("subtractRect removes a fully-covering cut entirely",
+      subtractRect([full], StillRect(x: 0, y: 0, width: 1920, height: 1080)), [] as [StillRect])
+
 // ── shape names ─────────────────────────────────────────────────────────────
 // Classification itself is STC-309's (`classifyCursor`, covered by
 // decisions/main.swift); a still only needs the list it writes from to be the
