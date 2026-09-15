@@ -7,9 +7,9 @@ acceptance criteria. So this document is the point of view, not a build.
 **The model in §1 is Patrick's, stated 2026-09-15**, and §2's decisions are his
 answers to the open questions a first draft of this study raised. They are
 recorded as settled, not as options. The code reading in §3 and the
-recommendation in §4 are mine.
+recommendation in §4 are mine; §5 records a further decision he made on 2026-09-15.
 
-Everything about the code below was read on Linux; §7 says what only a Mac can
+Everything about the code below was read on Linux; §8 says what only a Mac can
 settle. File references are to `master` at the time of writing.
 
 ---
@@ -36,7 +36,7 @@ when you can't name your subjects up front.
 **Every still is destined for annotation, a deck, or a case study.** That is the
 whole still column, and it is why stills have decoration presets, redaction and
 annotation while video has none — an asymmetry the first draft flagged as odd
-and which the model explains rather than excuses. See §6 for whether video
+and which the model explains rather than excuses. See §7 for whether video
 should acquire any of it.
 
 ---
@@ -49,7 +49,7 @@ A first draft raised three tensions. All three are now decided.
 UI element" — a clip sent to a developer to show that something needs fixing, at
 the scale of a single dropdown. This is a genuinely different destination from
 every other cell, and it is the one purpose in the matrix that is *disposable*:
-sent once, not kept. See §6 for the one implication that has not been decided.
+sent once, not kept. See §7 for the one implication that has not been decided.
 
 **A window resize ending the take is fine, and not a defect.** `windowId` scope
 stops the recording when the window resizes past half a point (STC-370,
@@ -160,7 +160,83 @@ So: one axis, one label, one set of words — and the still keeps asking.
 
 ---
 
-## 5. The Scope-and-stills question, answered
+## 5. The doors, and where scope comes from
+
+Added 2026-09-15, after Patrick compared this against **CleanShot X's**
+menu-bar dropdown.
+
+### What CleanShot does
+
+Its capture group is one flat list with no divider between the stills and the
+video — Capture Area (⇧⌘4), Capture Fullscreen (⇧⌘3), Capture Window,
+Scrolling Capture, Self-Timer, Capture Text (OCR), **Record Screen** — under an
+All-In-One entry (⇧⌘5) at the top.
+
+Two things in that structure matter here.
+
+**Stills bake scope into the verb; video does not.** Capture Area / Fullscreen /
+Window each carry their own hotkey. "Record Screen" has no scope in its name and
+no hotkey at all — one entry that asks afterwards.
+
+**All-In-One is their answer to this ticket's own third option** ("should they be
+presented as two distinct modes rather than two buttons in one row"). Their
+answer is *neither exclusively*: specific verbs for when you know what you want,
+plus one unified entry for when you do not.
+
+### The rule that falls out
+
+**The door decides whether scope is asked or assumed.**
+
+- **Main window** — the scope control is visible and sticky, sitting right
+  there. Record just goes.
+- **Menu bar or hotkey** — there is no window in front of you, so scope has to
+  come from somewhere: baked into the verb (the stills, today) or asked at
+  invocation (video).
+
+This is stronger than §3D, which only observed that the doors are asymmetric
+three-to-one. The asymmetry is not the defect; the defect is that video has no
+door at all from the menu bar or a hotkey. Giving it one that ASKS closes the
+gap without pretending the two capture types are the same shape.
+
+### Decided
+
+**The menu bar and hotkey path gets ONE "Record Screen" entry, and it asks.**
+Patrick's framing, 2026-09-15: a recording is worth an interruption in a way a
+screenshot is not — *"I'm okay with it being a little less instant and having an
+interruption to say, okay cool, you want to record video? How do you want to
+record it?"*
+
+Rejected, with reasons, so they are not re-proposed:
+
+- **Three scoped video verbs** (Record Screen / Window / Area, each hotkeyed)
+  would make the vocabulary perfectly symmetric — and gives six hotkeys and no
+  pause before committing to a take. Symmetry is not the goal; §3C says the two
+  types are not peers.
+- **One entry using the sticky scope, starting immediately** gives the menu bar
+  no clue what scope you are about to get. A recording that begins in the wrong
+  frame is expensive in a way a wrong screenshot is not.
+- **All-In-One is not adopted now.** It is a real option and worth revisiting,
+  but it is a larger build and the ticket's question is answerable without it.
+
+### CleanShot's hotkey defaults are not available to us
+
+It binds ⇧⌘3 / ⇧⌘4 / ⇧⌘5, and `hotkeys.ts`'s `SYSTEM_CLAIMED`
+(`hotkeys.ts:127-131`) refuses all of those in every spelling — STC-292's
+decision. CleanShot can take them because it *replaces* macOS's own screenshot
+tool; this app does not. The hyperkey row (⌃⌥⇧⌘1/2/3) exists for exactly that
+reason, and any video binding comes from there rather than from CleanShot's.
+
+### Why the omission was invisible
+
+`trayTemplate` is `CAPTURE_ACTIONS.map(...)` (`tray-menu.ts:53`), and
+`CAPTURE_ACTIONS` is `["region", "window", "display"]` — stills, by
+construction. Nothing was ever *left out* of the menu; the menu simply **is**
+the stills list. Adding video means it stops being a map over that constant,
+which is the small structural change the build will start with.
+
+---
+
+## 6. The Scope-and-stills question, answered
 
 Asked directly and deferred to this writeup, so it is answered here.
 
@@ -180,7 +256,7 @@ not seed one yet.**
 
 ---
 
-## 6. Open, and deliberately not decided
+## 7. Open, and deliberately not decided
 
 **Decoration for video.** Stills have background/padding/shadow presets
 (STC-291), redaction (STC-297) and annotation (STC-295) because they are
@@ -200,7 +276,7 @@ and nothing here depends on answering it.
 
 ---
 
-## 7. What needs a Mac
+## 8. What needs a Mac
 
 Read off code on Linux. A Mac is the only instrument for:
 
