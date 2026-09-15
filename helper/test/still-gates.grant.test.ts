@@ -34,6 +34,17 @@ import { parseShot } from "../../transform/src/shot.js";
  * for drift to be visible rather than binary — a check that only speaks when it
  * fails cannot show a trend.
  *
+ * STC-383 split that into TWO numbers with two budgets, because one assertion
+ * was covering two quantities and could only ever be right about one of them.
+ * The ticket's own words are "from verb to buffer", and the wall clock of the
+ * whole request is verb to ANSWER — the PNG encode and shot.json come after the
+ * buffer. On a 6016x3384 display the encode alone is ~140 ms of a ~250 ms
+ * request, so the wall failed a 200 ms budget consistently on hardware while
+ * the buffer sat at 92-101 ms. Raising the one number would have made it stop
+ * meaning what STC-289 wrote; dropping it would have lost the only latency
+ * check this slice has. So: 200 ms stays, on `captureMs`, and what the user
+ * waits gets its own stated budget beside it.
+ *
  * ## Gate 6 — capture during recording
  *
  * > "A still taken mid-recording produces a valid shot and leaves the
@@ -49,8 +60,55 @@ const BIN = join(root, "helper", "build", "stc-helper");
  * buffer". Taken as 200 ms rather than a tighter number invented here — the
  * point of a budget is that it was agreed before the measurement, and a
  * threshold chosen after seeing the result measures nothing.
+ *
+ * STC-383 did NOT change this number. What changed is WHICH number it is
+ * asserted against. It used to be checked against the wall clock of the whole
+ * request, and the budget's own words are "verb to BUFFER" — the wall also
+ * carries the PNG encode and the shot.json write, which happen after the
+ * buffer is in hand. So the gate was holding a 200 ms budget to a quantity the
+ * budget never named, and on a 6016x3384 display it failed consistently on
+ * hardware while `captureMs` — verb to buffer, literally — sat at 92-101 ms,
+ * comfortably inside. `docs/STC-289-RUNBOOK.md` §latency had already drawn
+ * exactly this distinction for the neighbouring phase, calling `contentMs`
+ * "not the ticket's number but IS what the user waits".
+ *
+ * This is now asserted against `timing.captureMs` from the reply, which is the
+ * quantity STC-289 wrote down.
  */
 const STILL_BUDGET_MS = 200;
+
+/**
+ * What the USER waits: verb to answer, PNG encode and shot.json included.
+ *
+ * A SEPARATE budget rather than a loosened one (STC-383). The 200 ms above is
+ * STC-289's, agreed before any measurement, and it still means what it said.
+ * This one is new, and being new it can only be calibrated from measurement —
+ * so the derivation is stated here rather than left as a round number someone
+ * later has to reverse-engineer.
+ *
+ * Measured on the one machine gate 3 has ever run on (2026-09-15, 6016x3384
+ * display, ~20.4 MP): steady-state wall of 250.9, 250.8, 252.4, 251.0 ms on
+ * the STC-317 build and 252.4, 252.0, 250.2, 252.5 ms on a master control
+ * build — a spread under 1% across two builds and two sessions. 400 ms is that
+ * worst case plus ~60%: headroom for a loaded machine and a somewhat larger
+ * display, and still inside the range where a shutter feels immediate.
+ *
+ * It is deliberately NOT tight, and the reason is worth keeping. The tight
+ * instrument here is the 200 ms on `captureMs`; drift in the ENCODE is watched
+ * by the per-phase numbers this gate prints on success, not by this bound. A
+ * doubling of the PNG encode alone would land near 392 ms and would NOT fail
+ * this assertion — which is precisely why the breakdown is printed every run
+ * rather than only on failure. A single end-to-end number cannot be both a
+ * gross-regression backstop and a precision instrument, and pretending
+ * otherwise is how a bound gets tightened until it flakes and is then deleted.
+ *
+ * KNOWN LIMITATION, stated rather than buried: the PNG encode scales with the
+ * frame's AREA, so this number is about a ~20 MP display. The gate prints the
+ * frame's dimensions and megapixels so a reader can see at a glance whether
+ * the budget is still about their hardware. On a materially larger display,
+ * revisit this constant rather than assuming it transferred.
+ */
+const STILL_END_TO_END_MS = 400;
 
 interface Line { ev: string; seq?: number; [k: string]: any }
 const live: ChildProcess[] = [];
@@ -122,17 +180,59 @@ function skipUnless(p: { ok: true } | { ok: false; why: string }): void {
 }
 
 /** Printed so a run shows the number, not just a verdict. */
-function report(label: string, ms: number[]): void {
+function report(label: string, ms: number[], budget: number): void {
   const sorted = [...ms].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)]!;
   process.stderr.write(
     `[gate 3] ${label}: ${ms.map((n) => n.toFixed(1)).join(", ")} ms ` +
     `(median ${median.toFixed(1)}, worst ${sorted[sorted.length - 1]!.toFixed(1)}, ` +
-    `budget ${STILL_BUDGET_MS})\n`);
+    `budget ${budget})\n`);
+}
+
+/**
+ * Reads a phase out of the reply's `timing` map, REQUIRING a number rather
+ * than defaulting to one.
+ *
+ * Gate 6 below already paid for this lesson: its first draft read the frame
+ * counts off `anchors.capture` with `?? 0`, and `anchors-2` carries no such
+ * fields — so every assertion compared 0 to 0 and passed however badly the
+ * recording had gone. The same shape here would be worse, because a budget
+ * compared against `undefined` does not obviously read as broken. If a
+ * checkpoint in `helper/src/Still.swift` is renamed or dropped, this gate must
+ * say so loudly instead of quietly measuring nothing.
+ */
+function timingMs(reply: Line, key: string): number {
+  const v = (reply.timing as Record<string, unknown> | undefined)?.[key];
+  if (typeof v !== "number") {
+    throw new Error(
+      `the still reply carries no numeric timing.${key}, so this gate cannot see the ` +
+      `phase it budgets. Check the mark() calls in helper/src/Still.swift. Reply: ` +
+      JSON.stringify(reply));
+  }
+  return v;
+}
+
+/**
+ * The encoded frame's pixel size, straight off the reply.
+ *
+ * STC-383 asked for "the actual pixel dimensions of the PNG being encoded",
+ * and it needs no helper change at all: `capture-still` has always returned
+ * the whole shot document (`Still.swift` → `reply["shot"] = doc`), and
+ * `shotDocument` carries `frame.width`/`frame.height`. The gate simply never
+ * printed it. Required rather than defaulted, for the reason above.
+ */
+function frameSize(reply: Line): { width: number; height: number } {
+  const f = (reply.shot as { frame?: { width?: unknown; height?: unknown } } | undefined)?.frame;
+  if (typeof f?.width !== "number" || typeof f?.height !== "number") {
+    throw new Error(
+      "the still reply carries no numeric shot.frame.width/height, so this gate cannot " +
+      `say what size frame it just timed. Reply: ${JSON.stringify(reply)}`);
+  }
+  return { width: f.width, height: f.height };
 }
 
 describe("STC-301 gate 3: capture latency", () => {
-  test("capture-still answers within the STC-289 budget, and says how fast", async () => {
+  test("capture-still is inside both budgets, and says where the time went", async () => {
     skipUnless(await probe());
     const h = spawnHelper();
     await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
@@ -141,29 +241,79 @@ describe("STC-301 gate 3: capture latency", () => {
     // reported apart from the rest: `SCShareableContent` enumeration and the
     // ObjC-runtime lookup both happen once, so a cold first call is a
     // different number from the steady state and averaging them hides both.
-    const timings: number[] = [];
+    const walls: number[] = [];
+    const buffers: number[] = [];
+    let frame = { width: 0, height: 0 };
     for (let i = 0; i < 5; i++) {
       const t0 = performance.now();
       const r = await h.request({ cmd: "capture-still", dir: tmpDir("stc-lat-") });
       const wall = performance.now() - t0;
       expect(r.ev, JSON.stringify(r)).toBe("still");
-      process.stderr.write(`[gate 3] sample ${i}: wall ${wall.toFixed(1)} ms, timing ${JSON.stringify(r.timing)}\n`);
-      timings.push(wall);
+
+      // Broken out rather than dumped as raw JSON (STC-383). The old line
+      // printed the `timing` map verbatim, and every reader then had to
+      // subtract the cumulative marks by hand against the runbook to find out
+      // where the time went — which is how a PNG encode sat at 55-60% of the
+      // total, unnoticed, through every previous run of this gate.
+      const contentMs = timingMs(r, "contentMs");
+      const captureMs = timingMs(r, "captureMs");
+      const writeMs = timingMs(r, "writeMs");
+      const totalMs = timingMs(r, "totalMs");
+      frame = frameSize(r);
+
+      process.stderr.write(
+        `[gate 3] sample ${i}: wall ${wall.toFixed(1)} ms` +
+        ` | content enum ${contentMs.toFixed(1)}` +
+        ` | screenshot ${(captureMs - contentMs).toFixed(1)}` +
+        ` | PNG encode ${(writeMs - captureMs).toFixed(1)}` +
+        ` | shot.json ${(totalMs - writeMs).toFixed(1)}` +
+        ` || verb-to-buffer ${captureMs.toFixed(1)}\n`);
+      walls.push(wall);
+      buffers.push(captureMs);
     }
     h.kill();
 
-    report("verb to buffer (wall, first is cold)", timings);
-    const steady = timings.slice(1);
-    const worst = Math.max(...steady);
-    // The budget is on the STEADY state. A cold first capture pays for content
-    // enumeration that every later one does not, and holding it to the same
-    // number would either fail honestly-fast builds or force the budget up
+    // What was being encoded, so neither budget below is read as a property of
+    // the code alone. The PNG encode scales with frame AREA: on the 6016x3384
+    // display this gate first ran on, it was ~140 ms of a ~250 ms request.
+    const megapixels = (frame.width * frame.height) / 1e6;
+    process.stderr.write(
+      `[gate 3] frame encoded: ${frame.width}x${frame.height} px ` +
+      `(${megapixels.toFixed(1)} MP) — the PNG encode scales with this area, so both ` +
+      "budgets below are about a display size as much as about the code\n");
+
+    report("verb to buffer (captureMs, first is cold)", buffers, STILL_BUDGET_MS);
+    report("verb to answer (wall, first is cold)", walls, STILL_END_TO_END_MS);
+
+    // Both budgets are on the STEADY state. A cold first capture pays for
+    // content enumeration that every later one does not, and holding it to the
+    // same number would either fail honestly-fast builds or force the budget up
     // until it stopped meaning anything.
-    expect(worst,
-      `steady-state capture took ${worst.toFixed(1)} ms, over the ${STILL_BUDGET_MS} ms budget. ` +
-      `All five: ${timings.map((n) => n.toFixed(1)).join(", ")}. ` +
-      "docs/STC-289-RUNBOOK.md §latency says which phase to look at.")
+    const steadyBuffer = buffers.slice(1);
+    const steadyWall = walls.slice(1);
+    const worstBuffer = Math.max(...steadyBuffer);
+    const worstWall = Math.max(...steadyWall);
+
+    // Half one: STC-289's own budget, against STC-289's own quantity. This is
+    // the tight instrument, and it is unchanged at 200 ms.
+    expect(worstBuffer,
+      `steady-state verb-to-buffer took ${worstBuffer.toFixed(1)} ms, over the ` +
+      `${STILL_BUDGET_MS} ms STC-289 budget. All five: ` +
+      `${buffers.map((n) => n.toFixed(1)).join(", ")}. ` +
+      "This is the screenshot plus content enumeration and excludes the PNG encode, so " +
+      "docs/STC-289-RUNBOOK.md §latency's first two phases are where to look.")
       .toBeLessThan(STILL_BUDGET_MS);
+
+    // Half two: what the user actually waits. A gross-regression backstop —
+    // see STILL_END_TO_END_MS on why it is deliberately not tight, and read the
+    // per-sample breakdown above for drift inside it.
+    expect(worstWall,
+      `steady-state verb-to-answer took ${worstWall.toFixed(1)} ms, over the ` +
+      `${STILL_END_TO_END_MS} ms end-to-end budget. All five: ` +
+      `${walls.map((n) => n.toFixed(1)).join(", ")}, on a ${megapixels.toFixed(1)} MP frame. ` +
+      "The per-sample breakdown above says which phase grew; if it is the PNG encode and " +
+      "the frame is much larger than ~20 MP, the budget is the thing to revisit (STC-383).")
+      .toBeLessThan(STILL_END_TO_END_MS);
   }, 180_000);
 });
 

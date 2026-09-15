@@ -143,24 +143,88 @@ three times (STC-250, STC-258, STC-259). Per gate:
 * **5** — pure arithmetic over a frozen document. No canvas at all.
 * **3** — the budget is on the STEADY state, not the cold first call, which
   pays for `SCShareableContent` enumeration every later call does not. Five
-  measurements, all printed.
+  measurements, all printed. Since STC-383 there are **two** budgets, on two
+  different quantities; see "Reading gate 3's output" below for why one number
+  could not do both jobs.
 * **6** — the recording is given 2 s either side of the still so the comparison
   is against steady-state frames rather than the first-frame ramp.
 
 ## Reading gate 3's output
 
 It prints on success as well as failure, because the ticket asks for drift to
-be visible rather than binary:
+be visible rather than binary. Real output, from the machine described below:
 
 ```
-[gate 3] verb to buffer (wall, first is cold): 412.7, 61.2, 58.9, 60.4, 57.8 ms (median 60.4, worst 412.7, budget 200)
+[gate 3] sample 1: wall 250.9 ms | content enum 30.6 | screenshot 68.1 | PNG encode 139.2 | shot.json 0.3 || verb-to-buffer 98.7
+[gate 3] frame encoded: 6016x3384 px (20.4 MP) — the PNG encode scales with this area, ...
+[gate 3] verb to buffer (captureMs, first is cold): 181.9, 98.7, 101.1, 91.7, 99.6 ms (median 99.6, worst 181.9, budget 200)
+[gate 3] verb to answer (wall, first is cold): 336.9, 250.9, 250.8, 252.4, 251.0 ms (median 251.0, worst 336.9, budget 400)
 ```
 
-The first number being much larger is expected and is not a failure — the
-budget is applied to the rest. If the STEADY numbers climb toward 200,
-`docs/STC-289-RUNBOOK.md` §latency says which phase to look at:
-`captureMs - contentMs` is the screenshot, `contentMs` is display enumeration,
-`writeMs - captureMs` the PNG encode.
+The first number of each series being much larger is expected and is not a
+failure — the budgets are applied to the rest.
+
+### Why there are two budgets (STC-383)
+
+This gate used to hold ONE budget — STC-289's 200 ms — against the wall clock
+of the whole request, and it **failed consistently on real hardware**, on both
+this code and a `master` control build. The diagnosis was not a slow machine.
+
+STC-289's budget is worded "well under 200 ms from verb to **buffer**". The
+wall clock is verb to **answer**: it also carries the PNG encode and the
+shot.json write, which happen after the buffer is in hand. Those are different
+quantities, and on a large display they are very different numbers:
+
+| phase | steady-state | share |
+|---|---|---|
+| `SCShareableContent` enumeration | ~30 ms | 12% |
+| the screenshot itself | ~65-73 ms | 28% |
+| **PNG encode** | **~137-141 ms** | **~55-60%** |
+| shot.json | <1 ms | — |
+| **verb to buffer** (`captureMs`) | **92-101 ms** | inside the 200 ms budget |
+| **verb to answer** (wall) | **250-253 ms** | over it |
+
+So the gate was failing a budget that its own subject was comfortably meeting,
+because the number being measured was not the number that had been agreed.
+Raising the 200 would have made it stop meaning what STC-289 wrote; deleting it
+would have lost the slice's only latency check. Both halves are kept instead:
+
+* **`captureMs` < 200 ms** — STC-289's budget, unchanged, on STC-289's quantity.
+  This is the tight instrument.
+* **wall < 400 ms** — new, and calibrated rather than guessed: the worst steady
+  state observed was 252.5 ms across two builds and two sessions, with a spread
+  under 1%, so 400 is that plus ~60%. A gross-regression backstop, deliberately
+  not tight — drift inside it is watched by the per-phase breakdown printed
+  every run, not by the bound. A doubling of the PNG encode alone would land
+  near 392 ms and would NOT fail it, which is stated in the constant's own
+  comment rather than left for someone to discover.
+
+**The 400 is about a display size as much as about the code.** PNG encode
+scales with frame area, and the gate prints the frame's dimensions and
+megapixels for exactly that reason. On a materially larger display than
+6016x3384, revisit the constant rather than assuming it transferred.
+
+Not taken: a faster PNG encode. ImageIO exposes no compression-level knob for
+PNG — `kCGImageDestinationLossyCompressionQuality` is ignored for it and
+`kCGImagePropertyPNGCompressionFilter` is a filter hint, not a level — so that
+route means changing the capture format (a `shot-1` schema change) or answering
+the reply before the write finishes (every caller expects `frame.png` to exist
+on return). Neither is worth it to move a number that was measuring the wrong
+thing.
+
+If a steady number does climb, `docs/STC-289-RUNBOOK.md` §latency says which
+phase to look at; the gate now prints the subtraction rather than leaving it to
+the reader.
+
+### A note on the example that used to be here
+
+This section previously showed `412.7, 61.2, 58.9, 60.4, 57.8 ms` as gate 3's
+output. Those steady numbers are about a sixth of `captureMs` alone on the only
+machine this gate has ever run on. STC-301 was written on Linux and gates 3/6
+have always needed a Mac, so that line was illustrative and never measured —
+and it reads exactly like a record of a passing run, which is how "the budget
+was calibrated against *something*" went unquestioned until STC-383. **The
+numbers above are real.** If you replace them, replace them with real ones.
 
 ## The gate that is not a gate
 
