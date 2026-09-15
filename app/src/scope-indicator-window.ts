@@ -44,12 +44,16 @@ import { resolveIndicatorTarget, type IndicatorTarget } from "./scope-indicator.
  */
 
 /**
- * How long the flash stays up once shown. Not tuned against anything — a
- * first guess pending a Mac look at whether it reads as too quick to
- * register or lingering. `docs/STC-381-RUNBOOK.md` is where that judgement
- * belongs once someone has looked.
+ * How long the flash stays up once shown. Started at 2000ms; tried on real
+ * hardware and reported as lingering rather than a confirmation — the
+ * overlay's own highlight already shows the target while picking, so this
+ * only needs to register the moment the pick landed, not hold long enough
+ * to be read at leisure. Shortened to a near-instant blink rather than
+ * removed outright, so a fresh pick still gets SOME visible confirmation
+ * that it took. `docs/STC-381-RUNBOOK.md` is where a further Mac judgement
+ * on this number belongs.
  */
-export const FLASH_HOLD_MS = 2000;
+export const FLASH_HOLD_MS = 450;
 
 let indicatorWin: BrowserWindow | undefined;
 let flashTimer: NodeJS.Timeout | undefined;

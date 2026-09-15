@@ -27,8 +27,9 @@ the persistent one this file used to describe.
 - `app/src/scope-indicator-window.ts` (mechanics, rewritten) has exactly one
   entry point that ever shows anything: `flashScopeIndicator`, called once
   from `pickCaptureTarget` right after a fresh pick resolves. It shows the
-  outline for `FLASH_HOLD_MS` (2000, untuned — see §1) then hides itself with
-  no further input. There is no focus/blur wiring to the main window at all
+  outline for `FLASH_HOLD_MS` (450ms — shortened from an original 2000ms
+  after that read as lingering on real hardware; see §1) then hides itself
+  with no further input. There is no focus/blur wiring to the main window at all
   now. `hideScopeIndicator` cancels an in-progress flash early — called from
   `recorder:setSettings` on any scope-affecting write (a kind change, a
   Clear) and as the very first line inside `recorder:start`.
@@ -43,16 +44,16 @@ the persistent one this file used to describe.
    (or the only display if not).
 3. **Expect**: the moment the pick resolves (the overlay closes), a thin blue
    (or light-blue in dark mode) outline appears around exactly that window,
-   on the display it is actually on — then fades from view on its own a
-   couple of seconds later with no click, no refocus, nothing.
+   on the display it is actually on — then disappears again almost at once
+   (currently `FLASH_HOLD_MS` = 450ms) with no click, no refocus, nothing.
 4. Repeat for Scope → Area with a drawn region.
 5. **Expect**: Scope → Screen never shows an outline at all — nothing to
    confirm, since the whole display is already unambiguous.
-6. Judge `FLASH_HOLD_MS` (currently 2000): does it disappear before you've
-   had a chance to actually look, or does it linger annoyingly? This is the
-   one number in this ticket most likely to need retuning from a real look —
-   change the constant in `scope-indicator-window.ts` if so, and say what you
-   changed it to and why.
+6. Judge `FLASH_HOLD_MS` (currently 450, down from an original 2000 that
+   read as lingering): does it now register as a confirmation at all, or is
+   it too quick to actually see? This has already moved once from real
+   feedback and may need to again — change the constant in
+   `scope-indicator-window.ts` if so, and say what you changed it to and why.
 
 ## §2 — cancelled early, correctly
 
