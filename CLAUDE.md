@@ -1934,11 +1934,18 @@ reachable via KVC (`setValue(3, forKey: "captureResolution")`, verified in phase
   to any parallel work filed under a different one, which is exactly what a duplicate FILING of
   one bug produces. One `list_pull_requests` is the whole check, and the file titles alone
   ("Fix gate 3 steady-state detection") would have said it.
-  What it cost was nothing, because both were still open and neither had merged — and reviewing
-  the other PR for what it got RIGHT (STC-325's own lesson) turned out to be the load-bearing
-  move: the two diagnoses were **different halves of one fix**, and each alone leaves the gate
-  red on the other machine's data. Verified numerically against both datasets before folding,
-  rather than assumed. A duplicate ticket is also a signal in itself: the same bug filed twice,
+  **#156 then MERGED while its work was being folded in here**, roughly half an hour after the
+  collision was spotted — so the window in which this was cheap to fix was about that wide, and
+  the cost of missing it was a merge conflict in the one file both touched rather than a lost
+  session. Resolving it was mechanical only because the fold had already happened: every
+  master-only line in the conflict was #156's INLINE implementation of the same statistic this
+  branch had already extracted, checked line by line before taking `--ours` rather than assumed.
+  Had the fold not happened first, the same merge would have been a choice between two correct
+  diagnoses under time pressure.
+  Reviewing the other PR for what it got RIGHT (STC-325's own lesson) was the load-bearing move:
+  the two diagnoses were **different halves of one fix**, and each alone leaves the gate red on
+  the other machine's data. Verified numerically against both datasets before folding, rather
+  than assumed. A duplicate ticket is also a signal in itself: the same bug filed twice,
   from two machines, by the same person, is evidence the original report was incomplete rather
   than evidence somebody forgot.
   Same session, two smaller lessons worth keeping. **A worked example in a doc is read as a
