@@ -36,8 +36,20 @@ function readProject(takeDir: string): any {
   return JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8"));
 }
 
-/** A click on the lane's own empty background — never on a block, never on #manualdraft. */
+/**
+ * A click on the lane's own empty background — never on a block, never on
+ * #manualdraft.
+ *
+ * `scrollIntoViewIfNeeded()` before measuring is load-bearing, not
+ * decoration: `zoom-override.e2e.test.ts`'s own `dragOnStage` needed the
+ * identical fix for the identical reason (CLAUDE.md's STC-330 entry has the
+ * full account) — on the real CI window's content height (taller than its
+ * viewport, unlike this sandbox's Xvfb display), a lane below the preview
+ * can sit off-screen until something scrolls it into view, and a click at
+ * an off-screen y lands on nothing.
+ */
 async function clickEmptyLane(win: Page, fraction = CLICK_FRACTION): Promise<void> {
+  await win.locator("#override-blocks").scrollIntoViewIfNeeded();
   const box = await win.locator("#override-blocks").boundingBox();
   if (!box) throw new Error("#override-blocks has no box");
   await win.mouse.click(box.x + fraction * box.width, box.y + box.height / 2);
@@ -45,6 +57,7 @@ async function clickEmptyLane(win: Page, fraction = CLICK_FRACTION): Promise<voi
 
 /** Drags a manual window's own edge handle by a fraction of the FULL lane width. */
 async function dragManualHandle(win: Page, which: "start" | "end", toFraction: number): Promise<void> {
+  await win.locator(`#manualhandle-${which}`).scrollIntoViewIfNeeded();
   const laneBox = await win.locator("#override-blocks").boundingBox();
   const handle = await win.locator(`#manualhandle-${which}`).boundingBox();
   if (!laneBox || !handle) throw new Error("lane or handle has no box");
