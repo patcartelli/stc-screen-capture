@@ -65,7 +65,7 @@ contextBridge.exposeInMainWorld("recorder", {
   on: (event: string, cb: (payload: any) => void) => {
     const channels = ["helper:ready", "helper:stats", "helper:respawned",
                       "helper:gave-up", "helper:recording-lost", "helper:recording-ended",
-                      "helper:warning", "helper:camera-started",
+                      "helper:warning", "helper:camera-started", "helper:mic-started",
                       // A capture the window did not ask for — a hotkey or the
                       // menu bar (STC-292). The shot is on disk either way;
                       // this is only so an open window stays truthful.

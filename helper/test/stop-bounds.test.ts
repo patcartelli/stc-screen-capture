@@ -44,6 +44,7 @@ describe("the stop chain (STC-259 step 3)", () => {
   // anything, and a failure at collection time is reported as a broken file
   // rather than as the named assertion that caught it.
   const cameraMs = () => swiftConstant("helper/src/CameraCapture.swift", "stopTimeoutSeconds");
+  const micMs = () => swiftConstant("helper/src/MicCapture.swift", "stopTimeoutSeconds");
   const displayMs = () => swiftConstant("helper/src/Capture.swift", "stopTimeoutSeconds");
   const shutdownMarginMs = () => swiftConstant("helper/src/main.swift", "shutdownBackstopMarginSeconds");
 
@@ -54,6 +55,14 @@ describe("the stop chain (STC-259 step 3)", () => {
   test("the camera teardown answers before the display teardown gives up", () => {
     expect(cameraMs()).toBeGreaterThan(0);
     expect(cameraMs()).toBeLessThan(displayMs());
+  });
+
+  // STC-233: the mic is a second optional subsystem entered into the SAME
+  // DispatchGroup as the camera, so it needs the identical property for the
+  // identical reason.
+  test("the mic teardown answers before the display teardown gives up", () => {
+    expect(micMs()).toBeGreaterThan(0);
+    expect(micMs()).toBeLessThan(displayMs());
   });
 
   // The outermost link. Every wait here is bounded and each answers exactly
