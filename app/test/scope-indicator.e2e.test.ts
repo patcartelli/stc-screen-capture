@@ -4,7 +4,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
-import { FLASH_HOLD_MS } from "../src/scope-indicator-window.js";
+import { FLASH_HOLD_MS, FLASH_FADE_MS } from "../src/scope-indicator-window.js";
+
+/** Total time the flash's window can exist, hold plus fade, before it
+ * destroys itself with no further input. Any test proving an EARLY cancel
+ * asserts well inside this, or a natural expiry could pass the same test. */
+const NATURAL_LIFETIME_MS = FLASH_HOLD_MS + FLASH_FADE_MS;
 
 /**
  * The scope indicator's confirmation flash, wired through the real app
@@ -16,25 +21,30 @@ import { FLASH_HOLD_MS } from "../src/scope-indicator-window.js";
  * `_fake-helper.mjs` — same arrangement `scope-picker.e2e.test.ts` already
  * uses for picking a window/area.
  *
- * ## The design this replaces
+ * ## The design this replaces — twice
  *
  * The first cut showed the outline on every main-window focus, for as long
- * as Scope stayed Window/Area. CONFIRMED ON HARDWARE (2026-09-15) to read as
- * naggy rather than helpful, once actually lived with — the ticket's own
- * "Open" question, answered by using the thing. What survives is narrower: a
- * brief flash right after a pick, confirming what was just chosen, gone on
- * its own a couple of seconds later with no further input.
+ * as Scope stayed Window/Area. CONFIRMED ON HARDWARE to read as naggy rather
+ * than helpful, once actually lived with — the ticket's own "Open" question,
+ * answered by using the thing. Redesigned to a brief flash right after a
+ * pick; tried at a 2000ms hold and STILL read as lingering, then tried with
+ * a hard cut at the end of a much shorter hold and read as buggy — an
+ * outline gone between one frame and the next looks like a glitch, not a
+ * choice. What survives: hold briefly, then FADE out (`FLASH_FADE_MS`),
+ * rather than either lingering or cutting.
  *
  * ## What this CANNOT check here, and why
  *
  * Same limit `pill.e2e.test.ts` already documents for this sandbox: Xvfb has
  * no window manager, so this does not assert the indicator's exact
- * on-screen geometry — that is `docs/STC-381-RUNBOOK.md`'s. What IS
- * verified: a window backed by `scope-indicator.html` appears the instant a
- * window or area is picked, disappears on its own after `FLASH_HOLD_MS`
- * with no further input, and is cancelled early by a scope change, a Clear,
- * or Record — all driven through the real `pickCaptureTarget`/
- * `recorder:setSettings`/`recorder:start` handlers, not stubbed.
+ * on-screen geometry OR judge whether the fade looks smooth — that is
+ * `docs/STC-381-RUNBOOK.md`'s. What IS verified: a window backed by
+ * `scope-indicator.html` appears the instant a window or area is picked,
+ * exists no longer than `FLASH_HOLD_MS + FLASH_FADE_MS` with no further
+ * input, and is cancelled well before that natural lifetime by a scope
+ * change, a Clear, or Record — all driven through the real
+ * `pickCaptureTarget`/`recorder:setSettings`/`recorder:start` handlers, not
+ * stubbed.
  */
 const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
@@ -105,7 +115,7 @@ describe("the scope indicator's confirmation flash", () => {
     const win = await launch();
     await pickWindowScope(win);
     await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
-    await expect.poll(hasIndicatorWindow, { timeout: FLASH_HOLD_MS + 5_000 }).toBe(false);
+    await expect.poll(hasIndicatorWindow, { timeout: NATURAL_LIFETIME_MS + 5_000 }).toBe(false);
   }, 120_000);
 
   test("picking an area flashes the outline too", async () => {
@@ -126,15 +136,21 @@ describe("the scope indicator's confirmation flash", () => {
     await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
   }, 120_000);
 
+  // The three tests below assert well INSIDE `NATURAL_LIFETIME_MS`, not just
+  // eventually — a timeout at or beyond it would pass just as well for a
+  // flash that was never cancelled at all and simply ran out its own clock,
+  // proving nothing about the cancel path each one exists to check.
+  const WELL_BEFORE_NATURAL_EXPIRY_MS = NATURAL_LIFETIME_MS - 150;
+
   test("a scope change right after a pick cancels the flash early", async () => {
     const win = await launch();
     await pickWindowScope(win);
     await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
 
-    // Switching to Area (nothing picked yet) well before FLASH_HOLD_MS would
-    // have elapsed — the flash must go at once, not run out its own clock.
+    // Switching to Area (nothing picked yet) — the flash must go at once,
+    // not run out its own hold-then-fade.
     await win.selectOption("#scope", "region");
-    await expect.poll(hasIndicatorWindow, { timeout: 2_000 }).toBe(false);
+    await expect.poll(hasIndicatorWindow, { timeout: WELL_BEFORE_NATURAL_EXPIRY_MS }).toBe(false);
   }, 120_000);
 
   test("Clear right after a pick cancels the flash early", async () => {
@@ -143,7 +159,7 @@ describe("the scope indicator's confirmation flash", () => {
     await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
 
     await win.click("#clearwindow");
-    await expect.poll(hasIndicatorWindow, { timeout: 2_000 }).toBe(false);
+    await expect.poll(hasIndicatorWindow, { timeout: WELL_BEFORE_NATURAL_EXPIRY_MS }).toBe(false);
   }, 120_000);
 
   test("Record right after a pick cancels the flash before a take can start", async () => {
@@ -152,9 +168,9 @@ describe("the scope indicator's confirmation flash", () => {
     await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
 
     await win.click("#record");
-    // Bounded by IPC dispatch latency, not by FLASH_HOLD_MS or anything the
+    // Bounded by IPC dispatch latency, not by the hold/fade or anything the
     // fake helper does — `hideScopeIndicator` runs synchronously as the very
     // first line inside `recorder:start`.
-    await expect.poll(hasIndicatorWindow, { timeout: 2_000 }).toBe(false);
+    await expect.poll(hasIndicatorWindow, { timeout: WELL_BEFORE_NATURAL_EXPIRY_MS }).toBe(false);
   }, 120_000);
 });

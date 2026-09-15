@@ -19,12 +19,12 @@ import { resolveIndicatorTarget, type IndicatorTarget } from "./scope-indicator.
  * with. What people actually wanted was narrower: confirm what was just
  * picked, then get out of the way. So `flashScopeIndicator` is the only way
  * this ever shows — called once, from `pickCaptureTarget`, right after the
- * overlay resolves a fresh window or area — and it hides itself again after
- * `FLASH_HOLD_MS` with no further input. There is no focus/blur wiring to
- * the main window at all now, which is also why this module no longer needs
- * a `HelperSupervisor` or `BrowserWindow` reference of its own:
- * `pickCaptureTarget` already refuses to run while a take is live, so
- * nothing here can fire during a recording by construction.
+ * overlay resolves a fresh window or area — and it hides itself again, with
+ * a fade rather than a hard cut, with no further input. There is no
+ * focus/blur wiring to the main window at all now, which is also why this
+ * module no longer needs a `HelperSupervisor` or `BrowserWindow` reference
+ * of its own: `pickCaptureTarget` already refuses to run while a take is
+ * live, so nothing here can fire during a recording by construction.
  *
  * ## One window, not one per display
  *
@@ -44,26 +44,46 @@ import { resolveIndicatorTarget, type IndicatorTarget } from "./scope-indicator.
  */
 
 /**
- * How long the flash stays up once shown. Started at 2000ms; tried on real
- * hardware and reported as lingering rather than a confirmation — the
- * overlay's own highlight already shows the target while picking, so this
- * only needs to register the moment the pick landed, not hold long enough
- * to be read at leisure. Shortened to a near-instant blink rather than
- * removed outright, so a fresh pick still gets SOME visible confirmation
- * that it took. `docs/STC-381-RUNBOOK.md` is where a further Mac judgement
- * on this number belongs.
+ * How long the flash stays fully visible before it starts fading. Started
+ * at a flat 2000ms hold with a hard cut at the end; both were tried on real
+ * hardware. The hold read as lingering (shortened from 2000 to this), and
+ * the hard cut read as buggy rather than intentional — an outline that is
+ * there one frame and gone the next looks like a rendering glitch, not a UI
+ * choice. `FLASH_FADE_MS` is the fix for the second half. Total time on
+ * screen is `FLASH_HOLD_MS + FLASH_FADE_MS`. `docs/STC-381-RUNBOOK.md` is
+ * where a further Mac judgement on either number belongs.
  */
-export const FLASH_HOLD_MS = 450;
+export const FLASH_HOLD_MS = 200;
+/** How long the fade-to-transparent takes, once the hold above ends. */
+export const FLASH_FADE_MS = 250;
+/** Roughly 60fps — smooth enough to read as a fade rather than a stepped
+ * dimming, without waking the process more often than it needs to. */
+const FADE_STEP_MS = 16;
 
 let indicatorWin: BrowserWindow | undefined;
-let flashTimer: NodeJS.Timeout | undefined;
+let holdTimer: NodeJS.Timeout | undefined;
+let fadeInterval: NodeJS.Timeout | undefined;
 
-/** Destroys whatever is on screen and cancels any pending auto-hide. Safe
- * to call whether or not a flash is currently showing. */
+/** Destroys whatever is on screen and cancels any pending hold or fade.
+ * Safe to call whether or not a flash is currently showing. */
 export function hideScopeIndicator(): void {
-  if (flashTimer !== undefined) { clearTimeout(flashTimer); flashTimer = undefined; }
+  if (holdTimer !== undefined) { clearTimeout(holdTimer); holdTimer = undefined; }
+  if (fadeInterval !== undefined) { clearInterval(fadeInterval); fadeInterval = undefined; }
   if (indicatorWin && !indicatorWin.isDestroyed()) indicatorWin.destroy();
   indicatorWin = undefined;
+}
+
+/** Steps the window's opacity down to 0 over `FLASH_FADE_MS`, then
+ * destroys it. Electron's `setOpacity` is a plain property, not an
+ * animation — this is what makes it read as a fade instead of a cut. */
+function startFade(w: BrowserWindow): void {
+  const start = Date.now();
+  fadeInterval = setInterval(() => {
+    if (w.isDestroyed()) { hideScopeIndicator(); return; }
+    const elapsed = Date.now() - start;
+    if (elapsed >= FLASH_FADE_MS) { hideScopeIndicator(); return; }
+    w.setOpacity(1 - elapsed / FLASH_FADE_MS);
+  }, FADE_STEP_MS);
 }
 
 function showIndicator(target: IndicatorTarget, rendererDir: string): void {
@@ -85,7 +105,11 @@ function showIndicator(target: IndicatorTarget, rendererDir: string): void {
   w.setIgnoreMouseEvents(true, { forward: true });
   w.setAlwaysOnTop(true, "screen-saver");
   w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  w.once("ready-to-show", () => { if (!w.isDestroyed()) w.showInactive(); });
+  w.once("ready-to-show", () => {
+    if (w.isDestroyed()) return;
+    w.setOpacity(1);
+    w.showInactive();
+  });
   w.loadFile(join(rendererDir, "scope-indicator.html"));
 }
 
@@ -104,11 +128,12 @@ export interface FlashOptions {
 }
 
 /**
- * Show the outline around `opts.scope`'s target for `FLASH_HOLD_MS`, then
- * hide it automatically. The only caller is `pickCaptureTarget`, right after
- * a fresh pick resolves — never on focus, never on a timer of its own
- * outside this one. Cancels and replaces any flash already in progress
- * (a second pick before the first flash finished).
+ * Show the outline around `opts.scope`'s target, hold it for
+ * `FLASH_HOLD_MS`, then fade it out over `FLASH_FADE_MS` and destroy it.
+ * The only caller is `pickCaptureTarget`, right after a fresh pick resolves
+ * — never on focus, never on a timer of its own outside this one. Cancels
+ * and replaces any flash already in progress (a second pick before the
+ * first flash finished).
  */
 export function flashScopeIndicator(opts: FlashOptions): void {
   hideScopeIndicator();
@@ -116,5 +141,6 @@ export function flashScopeIndicator(opts: FlashOptions): void {
   const target = resolveIndicatorTarget(opts.scope, displays, opts.liveWindow);
   if (!target) return;
   showIndicator(target, opts.rendererDir);
-  flashTimer = setTimeout(() => hideScopeIndicator(), FLASH_HOLD_MS);
+  const w = indicatorWin!;
+  holdTimer = setTimeout(() => { holdTimer = undefined; startFade(w); }, FLASH_HOLD_MS);
 }
