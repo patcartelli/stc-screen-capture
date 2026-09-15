@@ -31,9 +31,7 @@ import { HelperSupervisor } from "./supervisor.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
-import {
-  attachScopeIndicator, scopeIndicatorScopeChanged, hideScopeIndicatorForRecording, closeScopeIndicator,
-} from "./scope-indicator-window.js";
+import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
 import type { WindowInfo } from "./selection.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
@@ -162,13 +160,6 @@ function createWindow(): void {
       getContentWidthPx: () => pillContentWidthPx,
     });
     win.once("closed", detachPill);
-    // STC-381: re-attached on every createWindow() call for the same reason
-    // the pill is — a stale listener on a destroyed window is not a live one.
-    const detachIndicator = attachScopeIndicator(win, sup, {
-      rendererDir: join(here, "..", "renderer"),
-      getScope: () => readSettings(app.getPath("userData")).scope,
-    });
-    win.once("closed", detachIndicator);
   }
 }
 
@@ -273,7 +264,7 @@ app.on("before-quit", (e) => {
   globalShortcut.unregisterAll();
   tray?.destroy();
   tray = undefined;
-  closeScopeIndicator();
+  hideScopeIndicator();
   closeThumbnail()
     .catch(() => {})
     .then(() => closeOverlay())
@@ -320,11 +311,12 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
     clean.share = rest as Partial<Settings>["share"];
   }
   const saved = writeSettings(app.getPath("userData"), clean);
-  // STC-381: a scope kind change or clear must hide (or re-target) the
-  // indicator immediately, not wait for the next focus. This is the only
-  // door `renderer.ts` uses to write `scope` (a kind change, `clearSource`),
-  // so gating on `clean.scope` being present catches every real case.
-  if (clean.scope) scopeIndicatorScopeChanged();
+  // STC-381: a kind change or Clear cancels an in-progress flash (a pick
+  // followed immediately by changing your mind) — this is the only door
+  // `renderer.ts` uses to write `scope` (a kind change, `clearSource`), so
+  // gating on `clean.scope` being present catches every real case. A fresh
+  // pick starts its OWN flash from `pickCaptureTarget`, below.
+  if (clean.scope) hideScopeIndicator();
   return saved;
 });
 
@@ -340,10 +332,9 @@ ipcMain.handle("recorder:status", async () => ({
 
 ipcMain.handle("recorder:start", async () => {
   // STC-381: before anything else, even the `no-capture-target` refusal
-  // below — the indicator is a pre-recording affordance only, and Record
-  // having been pressed is reason enough for it to go, whether or not the
-  // take actually starts.
-  hideScopeIndicatorForRecording();
+  // below — a flash still on screen (Record pressed right after a pick)
+  // must never survive into a live take, whether or not the take starts.
+  hideScopeIndicator();
   if (!sup) throw new Error("supervisor not running");
   // Read from the stored preference, NOT passed up from the renderer. Main
   // already owns these settings, and a renderer-supplied value would be a
@@ -421,21 +412,24 @@ async function pickCaptureTarget(kind: "region" | "window"):
   // Trust what the overlay actually produced, not the mode it was opened in —
   // the mode toggle inside it still works, the same reasoning
   // `selectRegionOrWindow` already follows for still capture.
+  const pickedWindow = outcome.kind === "window"
+    ? windows.find((x) => x.id === outcome.windowId) : undefined;
   const scope: Settings["scope"] = outcome.kind === "region"
     ? { kind: "region", windowId: null, windowLabel: null,
         region: { displayId: outcome.displayId, ...outcome.crop } }
     : { kind: "window", region: null, windowId: outcome.windowId,
         windowLabel: (() => {
-          const w = windows.find((x) => x.id === outcome.windowId);
-          const label = [w?.app, w?.title].filter(Boolean).join(" — ");
+          const label = [pickedWindow?.app, pickedWindow?.title].filter(Boolean).join(" — ");
           return label || `Window ${outcome.windowId}`;
         })() };
   const saved = writeSettings(app.getPath("userData"), { scope });
-  // STC-381: if the main window is (or already is again) focused by the time
-  // the overlay resolves, show the fresh pick at once rather than waiting
-  // for a blur/refocus round trip; otherwise this is a no-op and the next
-  // real focus event draws it.
-  scopeIndicatorScopeChanged();
+  // STC-381: confirm the fresh pick with a brief outline, then get out of
+  // the way — CONFIRMED ON HARDWARE that showing it persistently on every
+  // main-window focus reads as naggy rather than helpful, so this is now
+  // the ONLY place the indicator is ever shown. `pickedWindow` is already in
+  // hand from the `windows` list fetched above, so this needs no second
+  // helper round trip for a fresh bounds lookup.
+  flashScopeIndicator({ scope: saved.scope, liveWindow: pickedWindow, rendererDir: join(here, "..", "renderer") });
   return { ok: true, scope: saved.scope };
 }
 

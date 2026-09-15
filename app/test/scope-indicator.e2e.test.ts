@@ -4,33 +4,37 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { FLASH_HOLD_MS } from "../src/scope-indicator-window.js";
 
 /**
- * The persistent scope indicator, wired through the real app (STC-381).
+ * The scope indicator's confirmation flash, wired through the real app
+ * (STC-381).
  *
  * `scope-indicator.test.ts` proves the pure decision (`resolveIndicatorTarget`)
- * with no window; this drives the real `attachScopeIndicator` main.ts wires
- * up, against the control-plane stand-in `_fake-helper.mjs` — same arrangement
- * `scope-picker.e2e.test.ts` already uses for picking a window/area.
+ * with no window; this drives the real `flashScopeIndicator` `main.ts` calls
+ * from `pickCaptureTarget`, against the control-plane stand-in
+ * `_fake-helper.mjs` — same arrangement `scope-picker.e2e.test.ts` already
+ * uses for picking a window/area.
+ *
+ * ## The design this replaces
+ *
+ * The first cut showed the outline on every main-window focus, for as long
+ * as Scope stayed Window/Area. CONFIRMED ON HARDWARE (2026-09-15) to read as
+ * naggy rather than helpful, once actually lived with — the ticket's own
+ * "Open" question, answered by using the thing. What survives is narrower: a
+ * brief flash right after a pick, confirming what was just chosen, gone on
+ * its own a couple of seconds later with no further input.
  *
  * ## What this CANNOT check here, and why
  *
  * Same limit `pill.e2e.test.ts` already documents for this sandbox: Xvfb has
- * no window manager, so real OS-mediated focus changes and `setBounds` do not
- * reliably round-trip (`getBounds()` can read back unchanged). So this file
- * does not click through the desktop to focus/blur the window, and it does
- * not assert the indicator's exact on-screen geometry — that is
- * `docs/STC-381-RUNBOOK.md`'s, once someone writes it, not this file's.
- * Instead it emits `focus`/`blur` on the real `BrowserWindow` directly
- * (`win.emit("focus")`), which is not a simulation of the DOM event but the
- * exact call Electron's own native layer makes when it fires one for real —
- * the listeners `attachScopeIndicator` installs cannot tell the difference.
- * What IS verified: a second window backed by `scope-indicator.html` appears
- * on focus (and only when there is a resolved window/area target — never for
- * Screen scope), disappears on blur, disappears on a scope/clear change even
- * while still focused, and disappears immediately on Record — all driven
- * through the real `recorder:setSettings`/`pickCaptureTarget`/`recorder:start`
- * handlers, not stubbed.
+ * no window manager, so this does not assert the indicator's exact
+ * on-screen geometry — that is `docs/STC-381-RUNBOOK.md`'s. What IS
+ * verified: a window backed by `scope-indicator.html` appears the instant a
+ * window or area is picked, disappears on its own after `FLASH_HOLD_MS`
+ * with no further input, and is cancelled early by a scope change, a Clear,
+ * or Record — all driven through the real `pickCaptureTarget`/
+ * `recorder:setSettings`/`recorder:start` handlers, not stubbed.
  */
 const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
@@ -51,10 +55,6 @@ async function launch(): Promise<Page> {
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#scope");
-  // The indicator refuses to draw while `sup.state` is "starting" — wait past
-  // the fake helper's own `ready`/first heartbeat the same way the scope
-  // picker tests wait for #record to become enabled.
-  await win.waitForFunction(() => (window as any).recorder !== undefined);
   return win;
 }
 
@@ -76,18 +76,8 @@ function hasIndicatorWindow(): Promise<boolean> {
     BrowserWindow.getAllWindows().some((w) => w.webContents.getURL().includes("scope-indicator.html")));
 }
 
-function focusMainWindow(): Promise<void> {
-  return app!.evaluate(({ BrowserWindow }) => {
-    const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes("index.html"));
-    w?.emit("focus");
-  });
-}
-
-function blurMainWindow(): Promise<void> {
-  return app!.evaluate(({ BrowserWindow }) => {
-    const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes("index.html"));
-    w?.emit("blur");
-  });
+async function primaryBounds(): Promise<{ x: number; y: number; width: number; height: number }> {
+  return app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
 }
 
 /** Picks the stand-in's Finder window (id 4711, 100,100,400x300 on display 1). */
@@ -103,61 +93,68 @@ async function pickWindowScope(win: Page): Promise<void> {
     .toBe("Finder — Downloads");
 }
 
-describe("the persistent scope indicator", () => {
-  test("never appears for Screen scope, even focused", async () => {
+describe("the scope indicator's confirmation flash", () => {
+  test("never appears for Screen scope — there is nothing to pick", async () => {
     const win = await launch();
     expect(await win.inputValue("#scope")).toBe("display");
-    await focusMainWindow();
     await sleep(300);
     expect(await hasIndicatorWindow()).toBe(false);
   }, 120_000);
 
-  test("appears on focus once a window is chosen, and disappears on blur", async () => {
+  test("picking a window flashes the outline, and it clears itself with no further input", async () => {
     const win = await launch();
     await pickWindowScope(win);
-
-    await focusMainWindow();
-    await expect.poll(hasIndicatorWindow, { timeout: 10_000 }).toBe(true);
-
-    await blurMainWindow();
-    await expect.poll(hasIndicatorWindow, { timeout: 10_000 }).toBe(false);
+    await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
+    await expect.poll(hasIndicatorWindow, { timeout: FLASH_HOLD_MS + 5_000 }).toBe(false);
   }, 120_000);
 
-  test("disappears immediately on a scope change, even while still focused", async () => {
+  test("picking an area flashes the outline too", async () => {
     const win = await launch();
-    await pickWindowScope(win);
-    await focusMainWindow();
-    await expect.poll(hasIndicatorWindow, { timeout: 10_000 }).toBe(true);
-
-    // Switching to Area (region, nothing picked yet) is a scope change with
-    // no resolved target — the outline must go at once, not wait for a blur.
     await win.selectOption("#scope", "region");
-    await expect.poll(hasIndicatorWindow, { timeout: 10_000 }).toBe(false);
+    await win.click("#pickregion");
+    const overlay = await overlayWindow();
+    const b = await primaryBounds();
+    const from = { x: b.x + 100, y: b.y + 80 };
+    const to = { x: from.x + 200, y: from.y + 100 };
+    await send(overlay, { t: "pointerdown", at: from });
+    await send(overlay, { t: "pointermove", at: to });
+    await send(overlay, { t: "pointerup", at: to });
+    await expect.poll(() => overlay.textContent("#size"), { timeout: 15_000 }).toBeTruthy();
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => win.textContent("#region-source-label"), { timeout: 10_000 })
+      .toBe("200 × 100");
+    await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
   }, 120_000);
 
-  test("disappears immediately on Clear, even while still focused", async () => {
+  test("a scope change right after a pick cancels the flash early", async () => {
     const win = await launch();
     await pickWindowScope(win);
-    await focusMainWindow();
-    await expect.poll(hasIndicatorWindow, { timeout: 10_000 }).toBe(true);
+    await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
+
+    // Switching to Area (nothing picked yet) well before FLASH_HOLD_MS would
+    // have elapsed — the flash must go at once, not run out its own clock.
+    await win.selectOption("#scope", "region");
+    await expect.poll(hasIndicatorWindow, { timeout: 2_000 }).toBe(false);
+  }, 120_000);
+
+  test("Clear right after a pick cancels the flash early", async () => {
+    const win = await launch();
+    await pickWindowScope(win);
+    await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
 
     await win.click("#clearwindow");
-    await expect.poll(hasIndicatorWindow, { timeout: 10_000 }).toBe(false);
+    await expect.poll(hasIndicatorWindow, { timeout: 2_000 }).toBe(false);
   }, 120_000);
 
-  test("is gone the moment Record is pressed — never present once a take starts", async () => {
+  test("Record right after a pick cancels the flash before a take can start", async () => {
     const win = await launch();
     await pickWindowScope(win);
-    await focusMainWindow();
-    await expect.poll(hasIndicatorWindow, { timeout: 10_000 }).toBe(true);
+    await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(true);
 
     await win.click("#record");
-    // A short poll rather than an immediate check: the click still has to
-    // cross the IPC round trip to reach `recorder:start`. Once it does,
-    // `hideScopeIndicatorForRecording` runs synchronously as the very first
-    // thing inside the handler, before the helper is ever touched — so this
-    // is bounded by IPC dispatch latency, not by anything the fake helper
-    // does, and should clear in well under a second.
-    await expect.poll(hasIndicatorWindow, { timeout: 5_000 }).toBe(false);
+    // Bounded by IPC dispatch latency, not by FLASH_HOLD_MS or anything the
+    // fake helper does — `hideScopeIndicator` runs synchronously as the very
+    // first line inside `recorder:start`.
+    await expect.poll(hasIndicatorWindow, { timeout: 2_000 }).toBe(false);
   }, 120_000);
 });
