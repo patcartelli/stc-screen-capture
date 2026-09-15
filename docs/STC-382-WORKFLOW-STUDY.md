@@ -218,6 +218,12 @@ Rejected, with reasons, so they are not re-proposed:
 - **All-In-One is not adopted now.** It is a real option and worth revisiting,
   but it is a larger build and the ticket's question is answerable without it.
 
+The build is **STC-388**, not this study — a menu-bar "Record Screen" item and a
+bindable hotkey for it, where the structural work is that `CAPTURE_ACTIONS`,
+`Shortcuts` and `planShortcuts` must admit a non-still action, not the menu row
+itself. Whether a Record hotkey toggles or needs a separate Stop is decided
+there: today **no hotkey can stop a recording** (STC-375).
+
 ### CleanShot's hotkey defaults are not available to us
 
 It binds ⇧⌘3 / ⇧⌘4 / ⇧⌘5, and `hotkeys.ts`'s `SYSTEM_CLAIMED`
