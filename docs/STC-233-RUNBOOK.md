@@ -115,6 +115,35 @@ app's measured camera<->mic tolerance (1.8 ms median). **Re-verify §4
 fresh too** — the take that surfaced this never got past opening in the
 editor, so export-with-audio is still unreached.
 
+**Third thing found and fixed here, same day, once the PTS-rounding fix
+let a take open far enough to hit it**: the editor refused a real
+camera+mic take (audio recorded fine, both anchors blocks present) with
+`mic.m4a frame-time offset disagreement: helper measured 568894376 ns,
+file yields 0 ns (568.9 ms apart)`. Diagnosed from the actual file rather
+than reasoned about blind — a throwaway diagnostic script
+(`scripts/inspect-mic-track.mjs`, never merged) dumped the same take's
+`display.mp4` and `mic.m4a` side by side. `display.mp4`'s video track
+carried a real two-entry edit list (an empty edit for the ~216ms startup
+gap, then the actual content) — exactly what `demux.ts` expects.
+`mic.m4a`'s `trak.edts` was entirely **absent**, even though
+`MicCapture.swift` retimes every sample buffer to an exact session-relative
+PTS before appending it: `AVAssetWriter`'s real-time AAC pipeline resets
+the track's own timeline to whichever sample it first receives rather than
+preserving that PTS as a recoverable offset. So `session.ts`'s
+`checkFrameOffset` — right for display/camera, where the file DOES recover
+the gap — was structurally unable to pass for mic: the file's own first
+sample always lands near its own zero regardless of how late the mic
+actually opened, so it would throw on every take with a mic, not just this
+one. Fixed by no longer cross-checking mic's offset against the file at
+all; `anchors.mic.firstFramePtsNs` is now trusted as the sole origin and
+every demuxed mic timestamp is **rebased** onto it (`rebaseMicAudio` in
+`session.ts`), measured against the file's own first sample rather than
+assumed to be exactly 0 — self-correcting if a future macOS version starts
+writing a real edit list for audio. **Re-verify §4 yet again** — no take
+has ever gotten past opening in the editor with a correct mic offset, so
+export-with-audio, sync, and trimmed-export clipping are all still
+completely unreached.
+
 ## §4 — export with audio, and LISTEN to it
 
 This is the part that matters most and is the least reasoned-about, because

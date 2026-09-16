@@ -1,8 +1,9 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadSession, SessionLoadError } from "../src/session.js";
+import { loadSession, rebaseMicAudio, SessionLoadError } from "../src/session.js";
 import type { Anchors } from "../src/types.js";
+import type { DemuxedAudio } from "../src/demux-audio.js";
 
 const root = join(__dirname, "..", "..");
 const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
@@ -318,5 +319,57 @@ describe("loading a mic track", () => {
       displayMp4: mp4("fixtures/offset/display.mp4"),
     });
     expect(s.micAudio).toBeUndefined();
+  });
+});
+
+/**
+ * STC-233. Pins the actual bug fix (`mic.m4a frame-time offset
+ * disagreement`, reported on real hardware 2026-09-16): mic.m4a's own
+ * sample table cannot carry the session-start gap the way display.mp4/
+ * camera.mp4 do — confirmed by inspecting a real take's mic.m4a, whose
+ * `trak.edts` was undefined while the same take's display.mp4 had a real
+ * two-entry edit list. `loadSession` no longer checks the demuxed audio's
+ * offset against anchors (that always failed); it rebases onto anchors
+ * instead. No real mic.m4a fixture exists in this checkout (needs macOS +
+ * ffmpeg, same gap as fixtures/pip/camera.mp4), so this exercises the pure
+ * rebase function directly against a synthetic DemuxedAudio.
+ */
+describe("rebaseMicAudio", () => {
+  const synthetic = (framesNs: number[]): DemuxedAudio => ({
+    framesNs,
+    codec: "mp4a.40.2",
+    sampleRate: 48000,
+    numberOfChannels: 1,
+    description: new Uint8Array([0]),
+    chunks: framesNs.map((ns) => ({ timestampUs: Math.round(ns / 1000), data: new Uint8Array([0]) })),
+  });
+
+  test("shifts every sample so the first lands exactly on the measured origin", () => {
+    // The confirmed real shape: the file's own first sample is 0 (no edit
+    // list recovers the true gap), while the helper measured a real
+    // warm-up delay.
+    const raw = synthetic([0, 21_333_333, 42_666_667]);
+    const out = rebaseMicAudio(raw, 568_894_376);
+    expect(out.framesNs[0]).toBe(568_894_376);
+    // relative spacing between samples is preserved, not just the first one
+    expect(out.framesNs[1]! - out.framesNs[0]!).toBe(raw.framesNs[1]! - raw.framesNs[0]!);
+    expect(out.framesNs[2]! - out.framesNs[0]!).toBe(raw.framesNs[2]! - raw.framesNs[0]!);
+  });
+
+  test("chunks[].timestampUs stays exactly Math.round(framesNs / 1000), demux-audio.ts's own invariant since STC-394", () => {
+    const raw = synthetic([0, 21_333_333]);
+    const out = rebaseMicAudio(raw, 568_894_376);
+    expect(out.chunks[0]!.timestampUs).toBe(Math.round(out.framesNs[0]! / 1000));
+    expect(out.chunks[1]!.timestampUs).toBe(Math.round(out.framesNs[1]! / 1000));
+  });
+
+  test("is a no-op if the file's own first sample already equals the measured origin", () => {
+    // Self-correcting property: if a future macOS version starts writing a
+    // real edit list for audio, the shift should come out near zero rather
+    // than double-counting an offset the file already recovered.
+    const raw = synthetic([568_894_376, 590_227_709]);
+    const out = rebaseMicAudio(raw, 568_894_376);
+    expect(out.framesNs).toEqual(raw.framesNs);
+    expect(out.chunks.map((c) => c.timestampUs)).toEqual(raw.chunks.map((c) => c.timestampUs));
   });
 });
