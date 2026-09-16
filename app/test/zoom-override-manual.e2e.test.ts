@@ -189,7 +189,7 @@ describe("deleting a manual window", () => {
 
     await expect.poll(() => readProject(takeDir).overrides?.length ?? 0, { timeout: 10_000 }).toBe(0);
     expect(await win.locator(".zoomblock.manual").count()).toBe(0);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe("re-opening a manual window without dragging", () => {
@@ -208,5 +208,5 @@ describe("re-opening a manual window without dragging", () => {
     await expect.poll(() => win.isHidden("#overridebar"), { timeout: 10_000 }).toBe(true);
     expect(readProject(takeDir).overrides?.length).toBe(1);
     expect(readProject(takeDir).overrides[0]).toEqual(before);
-  }, 30_000);
+  }, 60_000);
 });

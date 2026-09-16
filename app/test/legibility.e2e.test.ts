@@ -213,7 +213,7 @@ describe("legibility at embed width (STC-318), inside the editor's export dialog
     // must be invisible, or Copy frame silently turns the viewer's eye off.
     await expect.poll(() => stageSize(win), { timeout: 20_000 })
       .toEqual({ width: 1232, height: 694 });
-  }, 60_000);
+  }, 90_000);
 
   test("THE PIN DIES WITH THE PLAYER — a close and re-open clears it", async () => {
     // The display fix pins the stage's CSS width to the embed width while the

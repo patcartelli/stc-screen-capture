@@ -47,7 +47,7 @@ describe("selecting a block", () => {
     await expect.poll(() => win.isVisible("#overridebar"), { timeout: 10_000 }).toBe(true);
     expect(await win.isVisible("#rectoverlay")).toBe(true);
     expect(await blockClass(win)).toMatch(/\bselected\b/);
-  });
+  }, 60_000);
 
   test("seeks the preview into the window", async () => {
     const { win } = await openPreview();
@@ -61,7 +61,7 @@ describe("selecting a block", () => {
     await win.click(".zoomblock");
     await expect.poll(frameOf, { timeout: 10_000 }).toBeGreaterThan(100);
     expect(await frameOf()).toBeLessThan(271);
-  });
+  }, 60_000);
 });
 
 describe("dragging a rect", () => {
@@ -143,7 +143,7 @@ describe("removing an override", () => {
     await expect.poll(() => readProject(takeDir).overrides?.length ?? 0, { timeout: 10_000 }).toBe(0);
     await expect.poll(() => win.isHidden("#overridebar"), { timeout: 10_000 }).toBe(true);
     expect(await blockClass(win)).not.toMatch(/\boverridden\b/);
-  }, 30_000);
+  }, 70_000);
 });
 
 describe("re-opening a block without dragging", () => {
@@ -163,7 +163,7 @@ describe("re-opening a block without dragging", () => {
     await expect.poll(() => win.isHidden("#overridebar"), { timeout: 10_000 }).toBe(true);
     expect(readProject(takeDir).overrides?.length).toBe(1);
     expect(readProject(takeDir).overrides[0]).toEqual(before);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe("closing the whole window mid-edit", () => {

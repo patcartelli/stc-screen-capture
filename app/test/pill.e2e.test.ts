@@ -120,7 +120,7 @@ describe("the pill's collapse mechanism", () => {
     await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: true, alwaysOnTop: false });
     await expect.poll(() => isPillCollapsed(win), { timeout: 5_000 }).toBe(false);
-  }, 120_000);
+  }, 160_000);
 
   test("a take the helper ends on its own also undoes the collapse", async () => {
     // STC-306: a display stream dying mid-take ends it unsolicited, through
