@@ -211,14 +211,20 @@ process.stdin.on("data", (chunk) => {
           send("error", { seq, code: "no-displays", detail: "stand-in has no grant" });
           break;
         }
-        send("windows", {
-          seq,
-          windows: [
-            { id: 4711, app: "Finder", title: "Downloads", x: 100, y: 100, width: 400, height: 300, displayId: 1 },
-            { id: 4712, app: "Safari", title: "Example", x: 200, y: 150, width: 800, height: 600, displayId: 1 },
-          ],
-          displays: [{ id: 1, pointWidth: 1920, pointHeight: 1080 }],
-        });
+        // STC_FAKE_HIDDEN_WINDOW appends a third window mostly off the
+        // display's right edge (STC-380) — opt-in, so every test that does
+        // not care about it sees exactly the same two windows it always has.
+        const windows = [
+          { id: 4711, app: "Finder", title: "Downloads", x: 100, y: 100, width: 400, height: 300,
+            displayId: 1, fullyVisible: true },
+          { id: 4712, app: "Safari", title: "Example", x: 200, y: 150, width: 800, height: 600,
+            displayId: 1, fullyVisible: true },
+        ];
+        if (process.env.STC_FAKE_HIDDEN_WINDOW) {
+          windows.push({ id: 4713, app: "Terminal", title: "Mostly off-screen",
+            x: 1800, y: 100, width: 400, height: 300, displayId: 1, fullyVisible: false });
+        }
+        send("windows", { seq, windows, displays: [{ id: 1, pointWidth: 1920, pointHeight: 1080 }] });
         break;
       }
       case "capture-still": {
