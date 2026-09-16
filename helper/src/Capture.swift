@@ -653,6 +653,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // of granularity on a value a reader must recover exactly; 90 kHz cuts
         // the worst-case recovery error to ~5.5 us.
         w.movieTimeScale = 90_000
+        // STC-394: a crash leaves a playable prefix rather than an unreadable
+        // file — see `movieFragmentIntervalSec`'s own comment for what this
+        // does and does not change about a normal, clean finish.
+        w.movieFragmentInterval = CMTime(seconds: movieFragmentIntervalSec, preferredTimescale: 1)
         // PHASE-0 §8, verified settings. AllowFrameReordering=false matters:
         // no B-frames means decode order equals presentation order, which is
         // what lets a sink map a decoded frame back to an index without a sort.

@@ -129,6 +129,33 @@ describe("listLibrary — one index, both kinds", () => {
     expect(takes.invalid).toEqual([]);
   });
 
+  /**
+   * STC-394's own acceptance criterion: sidecars are "recoverable with the
+   * partial take, or clearly marked missing" — never a silent mismatch.
+   *
+   * A genuine mid-recording crash never writes anchors.json/events.json at
+   * all (`writeSidecars()` runs once, at the very end of a clean stop —
+   * CLAUDE.md's STC-376 account) — so there is no scenario where a video
+   * pairs with a STALE or wrong-length sidecar; it is always both-complete
+   * or both-absent. Fragmentation (STC-394) makes display.mp4 itself
+   * genuinely playable after a crash, but a video with no anchors.json is
+   * still refused here, with the exact reason a still capture used to be
+   * mistaken for — a directory this scanner has always been able to name
+   * accurately, not a new hole this ticket opened.
+   */
+  test("a fragmented, crash-truncated video with no sidecars is refused, not silently listed", async () => {
+    const dir = join(root, "2026-09-16_09-00-00");
+    mkdirSync(dir, { recursive: true });
+    // A real, playable prefix — exactly what STC-394 leaves behind. Its
+    // CONTENT does not matter to this scanner (it only stats the file), so a
+    // fixture stand-in is enough; what matters is anchors.json's absence.
+    writeFileSync(join(dir, "display.mp4"), Buffer.alloc(4096));
+    const { items, invalid } = await listLibrary(env());
+    expect(items).toEqual([]);
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]?.reason).toBe("no anchors.json — not a recording");
+  });
+
   test("a directory that is neither kind is still reported, with a reason", async () => {
     mkdirSync(join(root, "2026-09-08_10-00-00"), { recursive: true });
     writeFileSync(join(root, "2026-09-08_10-00-00", "notes.txt"), "hello");

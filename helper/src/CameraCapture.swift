@@ -208,6 +208,9 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         try? FileManager.default.removeItem(at: url)
         let w = try AVAssetWriter(outputURL: url, fileType: .mp4)
         w.movieTimeScale = 90_000
+        // STC-394: matches display.mp4's own writer — see
+        // `movieFragmentIntervalSec`'s comment (CaptureDecisions.swift).
+        w.movieFragmentInterval = CMTime(seconds: movieFragmentIntervalSec, preferredTimescale: 1)
         let inp = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: Self.width,
