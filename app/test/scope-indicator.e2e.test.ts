@@ -60,7 +60,7 @@ async function launch(): Promise<Page> {
   app = await electron.launch({
     args: [root, `--user-data-dir=${ud}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
            STC_OVERLAY_SYNTHETIC_INPUT: "1" },
   });
   const win = await app.firstWindow();

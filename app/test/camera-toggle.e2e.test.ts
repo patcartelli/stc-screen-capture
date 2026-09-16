@@ -33,7 +33,7 @@ async function launch(opts: {
     cwd: root,
     env: {
       ...process.env,
-      STC_RECORDINGS_DIR: opts.recordings,
+      STC_RECORDINGS_DIR: opts.recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_HELPER_BIN: FAKE_HELPER,
       ...(opts.startLog ? { STC_FAKE_START_LOG: opts.startLog } : {}),
       ...(opts.camera ? { STC_FAKE_CAMERA: opts.camera } : {}),

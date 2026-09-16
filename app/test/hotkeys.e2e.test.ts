@@ -45,7 +45,7 @@ async function launch(o: { userData?: string; recordings?: string; stillLog?: st
     cwd: root,
     env: {
       ...process.env,
-      STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+      STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
       STC_FAKE_STILL_LOG: stillLog,
       // A CI runner has no audio device and a developer machine does not want
       // a shutter per assertion. The path itself is covered by shutter.test.ts.
@@ -297,8 +297,11 @@ describe("a full-display capture", () => {
     expect(req.excludeWindowIds).toBeUndefined();
     expect(typeof req.displayId).toBe("number");
 
+    // The shot lands in temp storage first and only reaches the library once
+    // the floating panel settles (STC-393) — up to `DEFAULT_THUMBNAIL_TIMEOUT_MS`
+    // later, not synchronously with the capture request answering.
+    await expect.poll(() => readdirSync(recordings).length, { timeout: 15_000 }).toBe(before + 1);
     const dirs = readdirSync(recordings);
-    expect(dirs.length).toBe(before + 1);
     const shotDir = join(recordings, dirs.find((d) => !d.startsWith("2026-08-24"))!);
     const shot = parseShot(JSON.parse(readFileSync(join(shotDir, "shot.json"), "utf8")));
     expect(shot.kind).toBe("display-crop");

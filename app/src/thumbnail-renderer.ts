@@ -46,6 +46,8 @@ declare global {
         code?: string; detail?: string;
         /** The user closed the Save As panel without choosing. */
         cancelled?: boolean;
+        /** Present when the take moved out of temp storage into the library (STC-393). */
+        dir?: string;
       }>;
       menu(ctx: { redacting: boolean; busy: boolean }): Promise<string | null>;
       revealShot(dir: string): Promise<boolean>;
@@ -74,7 +76,13 @@ const undoBtn = $("undo") as HTMLButtonElement;
 const doneRedactBtn = $("donedact") as HTMLButtonElement;
 
 const params = new URLSearchParams(location.search);
-const dir = params.get("dir") ?? "";
+/**
+ * The shot's own directory — temp storage until an export promotes it to the
+ * library (STC-393), `let` rather than `const` for exactly that reason: every
+ * later call (redact, reveal, discard) reads this same variable, and a stale
+ * reference to a directory `promoteTake` has already moved would fail.
+ */
+let dir = params.get("dir") ?? "";
 // "none" is the re-opened case (STC-294): close without exporting, because
 // the shot is already on disk and a second copy is not what a glance meant.
 const settleParam = params.get("settleAction");
@@ -279,6 +287,9 @@ async function runExport(action: ExportAction): Promise<boolean> {
     setStatus(`Could not ${action === "copy" ? "copy" : "save"}: ${r.detail ?? r.code ?? "unknown error"}`);
     return false;
   }
+  // The shot just moved out of temp storage (STC-393) — every later call in
+  // this session (redact, reveal, discard) must use its new home.
+  if (r.dir) dir = r.dir;
   setStatus((action === "copy" ? "Copied" : `Saved ${r.file?.split("/").pop() ?? ""}`)
     + (fellBackToPng ? " (as PNG — this style needs transparency)" : ""));
   return true;

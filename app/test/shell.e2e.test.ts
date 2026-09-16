@@ -15,7 +15,10 @@ async function launch() {
   // Never write takes to the real ~/Desktop/stc from an automated run.
   app = await electron.launch({
     args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")) },
+    env: {
+      ...process.env, STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")),
+      STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+    },
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
