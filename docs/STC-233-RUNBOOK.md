@@ -150,6 +150,27 @@ This is the part that matters most and is the least reasoned-about, because
 `transform/src/export.ts`'s audio path (`decodeAllAudio`, `retimeAudioData`,
 the `AudioEncoder`/muxer wiring) has never run against a real browser.
 
+**Already found and fixed here, on real hardware, 2026-09-16**: the first
+real export attempt (once §3's offset fix let a take open at all) failed
+with `Input audio buffer is incompatible with codec parameters`. Diagnosed
+in two steps — a diagnostic-only commit first, since the encoder's error
+callback fires asynchronously and names no offending chunk, so a blind
+second guess was not worth making. The enriched error then said exactly
+what was wrong: `encoder configured for mp4a.40.2 48000Hz x2ch; ...; last
+chunk sent: ... numberOfChannels=1 ...`. `mic.m4a`'s container declares 2
+channels (read from the file's own `AudioSampleEntry`) while the AAC
+bitstream itself decodes to genuinely mono — the same class of bug as
+§3's `rebaseMicAudio` fix, one section up: a container's declared metadata
+cannot be trusted over what was actually decoded. `exportSession()` now
+decodes the mic track once, up front, and configures the `Muxer` and
+`AudioEncoder` from the decoded `AudioData`'s own `sampleRate`/
+`numberOfChannels` rather than `session.micAudio`'s container-derived
+fields. Why the container disagrees with the bitstream at all — a
+`MicCapture.swift`/`AVAssetWriter` authoring question — is still open;
+this fix unblocks export regardless of that root cause. **Re-run this
+section fresh** — export has never succeeded past this point, so nothing
+below (audio present, in sync, correctly trimmed) has been confirmed yet.
+
 ```
 node scripts/export-one.mjs <sessionDir> [seconds]
 ```
