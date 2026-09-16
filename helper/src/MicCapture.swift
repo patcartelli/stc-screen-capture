@@ -65,6 +65,12 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     private var sampleRate: Double = 0
     private var channels = 0
 
+    /// The take's pause gate (STC-240). This one is the privacy property
+    /// rather than symmetry: a pause that left mic.m4a recording would capture
+    /// audio the user believes is off. The samples must never reach the file,
+    /// not merely be cut from the export.
+    private let pauseGate: PauseGate
+
     private let lock = NSLock()
     /// Mirrors `CameraCapture`'s own guard: never hand the writer a
     /// non-increasing timestamp, independent of what the gate does with it.
@@ -86,10 +92,11 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     /// name while silently delivering nothing looks exactly like success.
     static let noSamplesWarningSeconds: Double = 3
 
-    init(dir: URL, t0Ns: UInt64, deviceUid: String) {
+    init(dir: URL, t0Ns: UInt64, deviceUid: String, pauseGate: PauseGate) {
         self.dir = dir
         self.t0Ns = t0Ns
         self.deviceUid = deviceUid
+        self.pauseGate = pauseGate
     }
 
     func start() -> Result<String, Error> {
@@ -247,6 +254,8 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
             }
             monotonicGuardPtsNs = rel
             lock.unlock()
+
+            if pauseGate.isPaused(atNs: rel) { return }
 
             guard let retimed = Self.retimed(sb, toNs: rel) else { return }
             let outcome = gate.append(retimed)

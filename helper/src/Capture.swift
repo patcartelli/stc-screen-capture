@@ -580,7 +580,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self.lock.unlock()
             if stoppingAlready { return }
 
-            let cam = CameraCapture(dir: dir, t0Ns: t0Ns)
+            let cam = CameraCapture(dir: dir, t0Ns: t0Ns, pauseGate: self.pauseGate)
             let result = cam.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
@@ -635,7 +635,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self.lock.unlock()
             if stoppingAlready { return }
 
-            let m = MicCapture(dir: dir, t0Ns: t0Ns, deviceUid: deviceUid)
+            let m = MicCapture(dir: dir, t0Ns: t0Ns, deviceUid: deviceUid, pauseGate: self.pauseGate)
             let result = m.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
