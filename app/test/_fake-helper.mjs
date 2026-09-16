@@ -123,6 +123,23 @@ process.stdin.on("data", (chunk) => {
         } else if (process.env.STC_FAKE_CAMERA) {
           setTimeout(() => send("camera-started", { device: process.env.STC_FAKE_CAMERA }), 40);
         }
+        // STC-233. Mirrors the camera block above exactly, one device over:
+        // `started` goes out first (with no mic field — the device opens off
+        // the critical path in the real helper too), and `mic-started`/a
+        // warning follows once the open actually resolves.
+        if (process.env.STC_FAKE_MIC === "noframes") {
+          setTimeout(() => send("mic-started", { device: "Fixture USB Mic" }), 40);
+          setTimeout(() => send("warning", {
+            code: "mic-no-frames", device: "Fixture USB Mic",
+            detail: "fake: opened but delivered nothing",
+          }), 120);
+        } else if (process.env.STC_FAKE_MIC === "fail") {
+          setTimeout(() => send("warning", {
+            code: "mic-not-found", detail: "fake: the device could not be found",
+          }), 40);
+        } else if (process.env.STC_FAKE_MIC) {
+          setTimeout(() => send("mic-started", { device: process.env.STC_FAKE_MIC }), 40);
+        }
         // Any warning code, after `started` — the real helper reports a tap it
         // could not install, or a stream that died, as a warning on the
         // reliable channel once the take is already running.
@@ -176,7 +193,13 @@ process.stdin.on("data", (chunk) => {
         if (process.env.STC_FAKE_DISPLAYS) {
           try { displays = JSON.parse(process.env.STC_FAKE_DISPLAYS); } catch { /* keep the default */ }
         }
-        send("devices", { seq, cameras: [], mics: [], displays });
+        // One mic by default, so the picker has something to pick (STC-233);
+        // STC_FAKE_MICS overrides with a JSON array, [] included.
+        let mics = [{ name: "Fixture USB Mic", uid: "fixture-mic-1", bluetooth: false }];
+        if (process.env.STC_FAKE_MICS) {
+          try { mics = JSON.parse(process.env.STC_FAKE_MICS); } catch { /* keep the default */ }
+        }
+        send("devices", { seq, cameras: [], mics, displays });
         break;
       }
       // ── the still path (STC-289/290) ────────────────────────────────────
@@ -188,14 +211,20 @@ process.stdin.on("data", (chunk) => {
           send("error", { seq, code: "no-displays", detail: "stand-in has no grant" });
           break;
         }
-        send("windows", {
-          seq,
-          windows: [
-            { id: 4711, app: "Finder", title: "Downloads", x: 100, y: 100, width: 400, height: 300, displayId: 1 },
-            { id: 4712, app: "Safari", title: "Example", x: 200, y: 150, width: 800, height: 600, displayId: 1 },
-          ],
-          displays: [{ id: 1, pointWidth: 1920, pointHeight: 1080 }],
-        });
+        // STC_FAKE_HIDDEN_WINDOW appends a third window mostly off the
+        // display's right edge (STC-380) — opt-in, so every test that does
+        // not care about it sees exactly the same two windows it always has.
+        const windows = [
+          { id: 4711, app: "Finder", title: "Downloads", x: 100, y: 100, width: 400, height: 300,
+            displayId: 1, fullyVisible: true },
+          { id: 4712, app: "Safari", title: "Example", x: 200, y: 150, width: 800, height: 600,
+            displayId: 1, fullyVisible: true },
+        ];
+        if (process.env.STC_FAKE_HIDDEN_WINDOW) {
+          windows.push({ id: 4713, app: "Terminal", title: "Mostly off-screen",
+            x: 1800, y: 100, width: 400, height: 300, displayId: 1, fullyVisible: false });
+        }
+        send("windows", { seq, windows, displays: [{ id: 1, pointWidth: 1920, pointHeight: 1080 }] });
         break;
       }
       case "capture-still": {

@@ -42,6 +42,23 @@ export interface Settings {
    */
   displayId: number | null;
   /**
+   * Which microphone to record (STC-233), as the helper's
+   * `AVCaptureDevice.uniqueID`, or null for no mic at all.
+   *
+   * UNLIKE `displayId`, null is not "automatic" — there is no automatic mic.
+   * The settled decision (phase 0) is that this app must never take the
+   * default audio input, or any input, without the user having named it
+   * explicitly: auto-grabbing a Bluetooth mic once stalled capture and
+   * wedged CoreAudio system-wide. So null means the picker shows "Off" and
+   * `start` sends no mic request at all, exactly the way it means "no
+   * camera" for the boolean above — except there the off state IS the
+   * default and here it is the ONLY safe one. Sticky like `displayId`: a
+   * picked mic stays picked across launches, and if it is gone at `start`
+   * the helper refuses that device (never falls back to another) the same
+   * way a stale `displayId` is refused rather than silently swapped.
+   */
+  micDeviceUid: string | null;
+  /**
    * The global capture shortcuts (STC-292), as Electron accelerators. `null`
    * for an action the user deliberately unbound — which is a preference like
    * any other, and must survive a restart rather than springing back to the
@@ -185,7 +202,7 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  camera: false, displayId: null, shortcuts: { ...DEFAULT_SHORTCUTS },
+  camera: false, displayId: null, micDeviceUid: null, shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true,
   still: { ...DEFAULT_STILL_SETTINGS },
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
@@ -256,6 +273,15 @@ function cleanShare(v: unknown): ShareSettings {
 /** A display id is a positive integer; anything else is "automatic". */
 function cleanDisplayId(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
+}
+
+/**
+ * A mic uid is a non-empty string; anything else is "no mic" — never a
+ * fallback to some other device. See `Settings.micDeviceUid`'s own doc
+ * comment for why null here is not the same shape as a null `displayId`.
+ */
+function cleanMicDeviceUid(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 /** A CGWindowID is a non-negative integer. */
@@ -345,6 +371,7 @@ export function readSettings(dir: string): Settings {
   return {
     camera: typeof doc.camera === "boolean" ? doc.camera : DEFAULT_SETTINGS.camera,
     displayId: cleanDisplayId(doc.displayId),
+    micDeviceUid: cleanMicDeviceUid(doc.micDeviceUid),
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
@@ -379,6 +406,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
   const clean: Settings = {
     camera: merged.camera === true,
     displayId: cleanDisplayId(merged.displayId),
+    micDeviceUid: cleanMicDeviceUid(merged.micDeviceUid),
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),

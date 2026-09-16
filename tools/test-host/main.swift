@@ -26,7 +26,7 @@ func arg(_ name: String) -> String? {
 }
 
 guard let outPath = arg("--out") else {
-    FileHandle.standardError.write("usage: --out <result.json> [--probe | --camera-request | --camera-probe --helper <bin> | --cursor-probe --helper <bin> [--ms <n>] [--on-main] | --helper <bin> --dir <sessionDir> --ms <n> [--camera]]\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: --out <result.json> [--probe | --camera-request | --mic-request | --camera-probe --helper <bin> | --cursor-probe --helper <bin> [--ms <n>] [--on-main] | --helper <bin> --dir <sessionDir> --ms <n> [--camera] [--mic <uid>]]\n".data(using: .utf8)!)
     exit(2)
 }
 let outURL = URL(fileURLWithPath: outPath)
@@ -103,12 +103,26 @@ func runCameraRequest() {
     }
 }
 
+// MARK: - mic-request mode (STC-233)
+
+/// The microphone twin of `runCameraRequest` — same mechanism, same reason:
+/// the Microphone pane in System Settings only lists apps that have already
+/// requested access, and nothing else in this repo calls
+/// `requestAccess(for: .audio)`. Raises the prompt without opening the
+/// device.
+func runMicRequest() {
+    AVCaptureDevice.requestAccess(for: .audio) { granted in
+        writeResult(["verdict": granted ? "granted" : "denied", "granted": granted])
+        exit(0)
+    }
+}
+
 // MARK: - session mode
 
 /// Drives the helper through start -> record -> stop and records everything it
 /// said. Assertions live in the test suite, not here: this writes a transcript,
 /// it does not decide whether the transcript is good.
-func runSession(helper: String, dir: String, recordMs: Int, camera: Bool) {
+func runSession(helper: String, dir: String, recordMs: Int, camera: Bool, mic: String?) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: helper)
     // No fd3: Process cannot hand a child an arbitrary descriptor without
@@ -168,6 +182,7 @@ func runSession(helper: String, dir: String, recordMs: Int, camera: Bool) {
 
     var startCmd: [String: Any] = ["cmd": "start", "dir": dir, "seq": 1]
     if camera { startCmd["camera"] = true }
+    if let mic { startCmd["micDeviceUid"] = mic }
     send(startCmd)
     let startOutcome = waitFor("start", { ($0["seq"] as? Int) == 1 }, timeout: 30)
 
@@ -379,6 +394,7 @@ DispatchQueue.main.async {
         return
     }
     if args.contains("--camera-request") { runCameraRequest(); return }
+    if args.contains("--mic-request") { runMicRequest(); return }
     if args.contains("--camera-probe") {
         guard let helper = arg("--helper") else {
             writeResult(["verdict": "bad-args", "detail": "--camera-probe needs --helper <bin>"])
@@ -393,7 +409,7 @@ DispatchQueue.main.async {
     }
     DispatchQueue.global().async {
         runSession(helper: helper, dir: dir, recordMs: Int(arg("--ms") ?? "3000") ?? 3000,
-                   camera: args.contains("--camera"))
+                   camera: args.contains("--camera"), mic: arg("--mic"))
     }
 }
 app.run()

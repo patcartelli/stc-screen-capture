@@ -5,15 +5,42 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
   <title>stc editor</title>
   <style>
-    @font-face { font-family: "Geist"; font-weight: 400; src: url("fonts/Geist-Regular.woff2") format("woff2"); }
-    @font-face { font-family: "Geist"; font-weight: 500; src: url("fonts/Geist-Medium.woff2") format("woff2"); }
-    @font-face { font-family: "Geist"; font-weight: 600; src: url("fonts/Geist-SemiBold.woff2") format("woff2"); }
-    @font-face { font-family: "Geist Mono"; font-weight: 400; src: url("fonts/GeistMono-Regular.woff2") format("woff2"); }
-    @font-face { font-family: "Geist Mono"; font-weight: 500; src: url("fonts/GeistMono-Medium.woff2") format("woff2"); }
+    @font-face { font-family: "Geist"; font-weight: 300; src: url("fonts/Geist-Light.woff2") format("woff2"); font-display: swap; }
+    @font-face { font-family: "Geist"; font-weight: 400; src: url("fonts/Geist-Regular.woff2") format("woff2"); font-display: swap; }
+    @font-face { font-family: "Geist"; font-weight: 500; src: url("fonts/Geist-Medium.woff2") format("woff2"); font-display: swap; }
+    @font-face { font-family: "Geist"; font-weight: 600; src: url("fonts/Geist-SemiBold.woff2") format("woff2"); font-display: swap; }
+    @font-face { font-family: "JetBrains Mono"; font-weight: 400; src: url("fonts/JetBrainsMono-Regular.woff2") format("woff2"); font-display: swap; }
+    @font-face { font-family: "JetBrains Mono"; font-weight: 500; src: url("fonts/JetBrainsMono-Medium.woff2") format("woff2"); font-display: swap; }
+    @font-face { font-family: "Silkscreen"; font-weight: 400; src: url("fonts/Silkscreen-Regular.woff2") format("woff2"); font-display: swap; }
 
     :root {
       color-scheme: light dark;
-      font: 13px/1.5 "Geist", -apple-system, system-ui, sans-serif;
+      --font-sans: "Geist", -apple-system, system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --font-pixel: "Silkscreen", "JetBrains Mono", ui-monospace, monospace;
+
+      /* Type ramp — sans (Geist). No view sets a font-size inline. */
+      --type-label: 10px; --type-label-weight: 500; --type-label-tracking: 0.10em;
+      --type-meta: 11px; --type-meta-weight: 400; --type-meta-tracking: 0.02em;
+      --type-body: 12px; --type-body-weight: 400; --type-body-lh: 1.4;
+      --type-body-strong: 12px; --type-body-strong-weight: 600; --type-body-strong-lh: 1.4;
+      --type-heading: 13px; --type-heading-weight: 600; --type-heading-lh: 1.3;
+      --type-read: 13px; --type-read-weight: 400; --type-read-lh: 1.5;
+      --type-title: 15px; --type-title-weight: 300; --type-title-tracking: -0.01em; --type-title-lh: 1.3;
+      --type-display: 20px; --type-display-weight: 300; --type-display-tracking: -0.02em; --type-display-lh: 1.1;
+
+      /* Type ramp — mono (JetBrains Mono) with tabular-nums */
+      --type-value-sm: 11px; --type-value-sm-weight: 400; --type-value-sm-lh: 1.4;
+      --type-value: 12px; --type-value-weight: 400; --type-value-lh: 1.4;
+
+      /* Type ramp — pixel (Silkscreen) at 8px grid multiples only */
+      --type-timer-pill: 16px; --type-timer-pill-lh: 1;
+      --type-timer: 32px; --type-timer-lh: 1;
+
+      font-family: var(--font-sans);
+      font-size: var(--type-body);
+      line-height: 1.5;
+
       --bg: #fff; --surface: #f4f4f5; --text: #111; --muted: #666;
       --line: rgba(128,128,128,.28); --accent: #3b6fe0; --warn: #b34;
       --clip: #6a8fd8; --zoom: #d88a3b;
@@ -31,7 +58,7 @@
     button[disabled] { opacity: .4; cursor: default; }
     select, input { font: inherit; color: inherit; background: var(--surface);
                     border: 1px solid var(--line); border-radius: 5px; }
-    .mono { font-family: "Geist Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
     #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid rgba(200,80,60,.5);
              background: rgba(200,80,60,.1); display: none; white-space: pre-wrap; }
@@ -53,8 +80,8 @@
                    background: rgba(216,138,59,.12); pointer-events: none; }
 
     .transport { display: flex; align-items: center; gap: 10px; }
-    #clock { min-width: 132px; font-size: 12px; opacity: .75; }
-    #shuttle { min-width: 32px; font-size: 12px; font-weight: 600; opacity: .85; }
+    #clock { min-width: 132px; font-size: var(--type-value); opacity: .75; }
+    #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 600; opacity: .85; }
 
     /* ── the timeline: a ruler and two lanes over one shared [a, b] span ─── */
     .timelinewrap { display: flex; flex-direction: column; gap: 2px; }
@@ -152,11 +179,11 @@
     .timeline #scrub:active::-webkit-slider-thumb { height: 24px; margin-top: -10px; }
     .timeline #scrub:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     #clip-activity, #zoom-curve { display: block; width: 100%; height: 100%; }
-    .lanelabel { position: absolute; left: 4px; top: 2px; font-size: 10px;
-                 text-transform: uppercase; letter-spacing: .04em; opacity: .5;
+    .lanelabel { position: absolute; left: 4px; top: 2px; font-size: var(--type-label);
+                 text-transform: uppercase; letter-spacing: var(--type-label-tracking); opacity: .5;
                  pointer-events: none; z-index: 4; }
 
-    .trimbar, .framebar { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .trimbar, .framebar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
     #triminfo, #framestatus { opacity: .7; }
     #framestatus[hidden] { display: none; }
 
@@ -164,7 +191,7 @@
        clear action, shown only while a block is selected. Sits where the
        trim/frame bars do rather than floating over the preview, so it never
        covers the rect the user is trying to look at. */
-    .overridebar { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .overridebar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
     .overridebar[hidden] { display: none; }
     #overridehint { opacity: .7; }
 
@@ -173,7 +200,7 @@
                           padding: 16px; background: var(--surface); color: inherit;
                           width: min(420px, 90vw); }
     dialog#exportdialog::backdrop { background: rgba(0,0,0,.35); }
-    .dialogrow { display: flex; align-items: center; gap: 8px; font-size: 12px;
+    .dialogrow { display: flex; align-items: center; gap: 8px; font-size: var(--type-body);
                 margin-top: 8px; flex-wrap: wrap; }
     .dialogrow:first-child { margin-top: 0; }
     #embedwidth { width: 5.5em; }
@@ -183,10 +210,10 @@
     #exportbar { display: flex; align-items: center; gap: 10px; }
     #exportbar[hidden] { display: none; }
     #exportprogress { flex: 1; }
-    #exportstatus { font-size: 12px; opacity: .75; min-width: 130px; }
+    #exportstatus { font-size: var(--type-value); opacity: .75; min-width: 130px; }
     .dialogfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
-    .sharebar { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .sharebar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
     #sharestatus { opacity: .75; }
   </style>
 </head>

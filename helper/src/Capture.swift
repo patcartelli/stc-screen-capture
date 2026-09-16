@@ -44,6 +44,18 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// (STC-303) — camera==nil is ambiguous between "never asked" and "asked,
     /// got nothing", and only this flag tells the two apart.
     private var wantCamera = false
+    /// The mic subsystem (STC-233) — same optional-subsystem shape as camera,
+    /// same HIGH-1 race (an async open racing `stop()`), same reason it is
+    /// guarded by `lock` rather than a bare `var`.
+    private var mic: MicCapture?
+    private var micTrack: MicTrack?
+    /// Set once, in `begin`, from `start`'s own request. Non-nil means a
+    /// specific device was asked for; nil means no mic at all — never
+    /// "whichever mic is default" (the settled decision `MicCapture`'s own
+    /// header documents). `writeSidecars` reads whether this is non-nil the
+    /// same way it reads `wantCamera`: to tell "never asked" from "asked, got
+    /// nothing" in anchors.json's `mic` block.
+    private var wantMicUid: String?
     private var stoppingBegan = false
     /// Guards RE-ENTRY into `stop()` itself (STC-305). `App.start`'s success
     /// handler can call `stop()` a second time on a session whose teardown is
@@ -219,7 +231,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             case .failure(let e):
                 self.finishStart(.failure(e))
             case .success(let target):
-                self.begin(target: target, camera: request.camera)
+                self.begin(target: target, camera: request.camera, micDeviceUid: request.micDeviceUid)
             }
         }
     }
@@ -299,11 +311,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Takes no completion: `start` owns it and every path below answers through
     /// `finishStart`, which is call-once. Handing this a second reference to the
     /// same completion is how a request gets answered twice.
-    private func begin(target: CaptureTarget, camera wantCamera: Bool) {
+    private func begin(target: CaptureTarget, camera wantCamera: Bool, micDeviceUid: String?) {
         // Recorded before anything can fail below: writeSidecars must know
         // whether a camera was ever asked for, independent of whether this
         // particular start succeeds at opening one.
         self.wantCamera = wantCamera
+        self.wantMicUid = micDeviceUid
 
         // CaptureDecisions.swift hardcodes this so it can be compiled without
         // ScreenCaptureKit. If the framework ever renumbers, refuse to start
@@ -382,6 +395,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // success and failure both, whenever the open actually resolves.
                     if wantCamera {
                         self.startCameraAsync()
+                    }
+                    // STC-233: same off-critical-path reasoning as the camera
+                    // just above — AVCaptureSession.startRunning() blocks, so
+                    // a slow mic must not delay `started`.
+                    if let uid = self.wantMicUid {
+                        self.startMicAsync(deviceUid: uid)
                     }
                     // STC-370: a window-scope take polls its own window, since
                     // SCK has no delegate for "this window resized/closed" the
@@ -578,6 +597,48 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     let ce = e as? CameraError
                     IO.send("warning", ["code": ce?.code ?? "camera-failed",
                                         "detail": ce.map { $0.description } ?? "\(e)"])
+                }
+            }
+        }
+    }
+
+    /// Opens the mic off the critical path, mirroring `startCameraAsync`
+    /// exactly — same HIGH-1 race against `stop()`, same reason
+    /// `decideCameraOpen` (a device-agnostic decision despite its name — see
+    /// its own doc comment) is reused here rather than copied.
+    private func startMicAsync(deviceUid: String) {
+        let dir = self.dir
+        let t0Ns = self.t0Ns
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+
+            self.lock.lock()
+            let stoppingAlready = self.stoppingBegan
+            self.lock.unlock()
+            if stoppingAlready { return }
+
+            let m = MicCapture(dir: dir, t0Ns: t0Ns, deviceUid: deviceUid)
+            let result = m.start()
+            let opened: Bool
+            if case .success = result { opened = true } else { opened = false }
+
+            self.lock.lock()
+            let decision = decideCameraOpen(opened: opened, stoppingBegan: self.stoppingBegan)
+            if decision == .store { self.mic = m }
+            self.lock.unlock()
+
+            switch decision {
+            case .store:
+                if case .success(let name) = result {
+                    IO.send("mic-started", ["device": name])
+                }
+            case .closeImmediately:
+                m.stop { _ in }
+            case .reportFailure:
+                if case .failure(let e) = result {
+                    let me = e as? MicError
+                    IO.send("warning", ["code": me?.code ?? "mic-failed",
+                                        "detail": me.map { $0.description } ?? "\(e)"])
                 }
             }
         }
@@ -959,6 +1020,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // (handleTapEvent) is seen as ours and not re-enabled or counted.
         stoppingBegan = true
         let cam = camera
+        let m = mic
         let cursorRL = cursorRunLoop
         let winWatcher = windowWatcher
         windowWatcher = nil
@@ -1039,6 +1101,19 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
 
+        if let m {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                m.stop { track in
+                    self?.lock.lock()
+                    self?.micTrack = track
+                    self?.mic = nil
+                    self?.lock.unlock()
+                    group.leave()
+                }
+            }
+        }
+
         group.enter()
         if let stream {
             stream.stopCapture { [weak self] _ in
@@ -1062,6 +1137,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         let evs = events
         let camTrack = cameraTrack
+        let micT = micTrack
         lock.unlock()
 
         // events-2 since STC-309: v1 plus `{t, kind: "cursor", shape}`. The
@@ -1081,6 +1157,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                                         firstFrameNs: Int(firstFramePtsNs)),
             camera: camTrack,
             requested: wantCamera,
+            mic: micT,
+            micRequested: wantMicUid != nil,
             scope: captureScope,
             stopReason: reason,
             stopTNs: Int(Clock.nowNs() - t0Ns))

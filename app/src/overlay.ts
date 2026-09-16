@@ -124,12 +124,21 @@ function render(p: OverlayPayload): void {
     if (!w) { hide(highlight, titleChip); return; }
     const local = toLocal(w.bounds);
     place(highlight, local);
-    const display = p.displays.find((d) => rectContains(d.bounds, {
-      x: w.bounds.x + w.bounds.width / 2, y: w.bounds.y + w.bounds.height / 2,
-    }));
-    const px = pixelSize(w.bounds, display);
+    // Not fully visible (STC-380): still shown, so the target does not just
+    // vanish, but styled apart and captioned instead of measured — the size
+    // readout would be true and still misleading, since a click here will not
+    // capture it.
+    highlight.classList.toggle("not-fully-visible", !w.fullyVisible);
     const name = [w.app, w.title].filter(Boolean).join(" — ") || "Window";
-    titleChip.textContent = `${name}   ${px.width} × ${px.height}`;
+    if (w.fullyVisible) {
+      const display = p.displays.find((d) => rectContains(d.bounds, {
+        x: w.bounds.x + w.bounds.width / 2, y: w.bounds.y + w.bounds.height / 2,
+      }));
+      const px = pixelSize(w.bounds, display);
+      titleChip.textContent = `${name}   ${px.width} × ${px.height}`;
+    } else {
+      titleChip.textContent = `${name} — not fully visible, choose another window`;
+    }
     placeChip(titleChip, local.x, local.y, false);
     return;
   }

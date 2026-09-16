@@ -234,3 +234,42 @@ describe("v2 schemas carry the camera track and PiP geometry", () => {
     expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
   });
 });
+
+describe("v4 schema carries the mic track (STC-233)", () => {
+  // No committed mic.m4a fixture exists (needs a Mac to record one), so these
+  // build a v4 document by hand from the v2 pip fixture rather than loading a
+  // real take — the same shape anchors-2's "camera: present:false is valid
+  // and does not fabricate measurements" test already takes.
+  const v4 = (over: Record<string, unknown> = {}) => ({
+    ...clone(load("fixtures/pip/anchors.json")),
+    version: 4,
+    mic: { present: false },
+    ...over,
+  });
+
+  test("a mic-requested take with no track validates as present:false, no measurements fabricated", () => {
+    const validate = compile("schema/anchors-4.schema.json");
+    const ok = validate(v4());
+    expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
+  });
+
+  test("mic: present:true requires every measurement field", () => {
+    const validate = compile("schema/anchors-4.schema.json");
+    const doc = v4({
+      mic: {
+        present: true, device: "Fixture Mic", sampleRate: 48000, channels: 1,
+        firstFramePtsNs: 0, lastFramePtsNs: 1_000_000_000,
+      },
+      files: { display: "display.mp4", camera: "camera.mp4", mic: "mic.m4a" },
+    });
+    expect(compile("schema/anchors-4.schema.json")(doc), JSON.stringify(validate.errors)).toBe(true);
+    const missingSampleRate = clone(doc);
+    delete missingSampleRate.mic.sampleRate;
+    expect(validate(missingSampleRate)).toBe(false);
+  });
+
+  test("a v2 document is not a v4 document", () => {
+    const validate = compile("schema/anchors-4.schema.json");
+    expect(validate(load("fixtures/pip/anchors.json"))).toBe(false);
+  });
+});

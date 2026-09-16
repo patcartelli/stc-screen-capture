@@ -336,6 +336,13 @@ struct StartRequest: Equatable {
     let region: StillRect?
     let windowId: UInt32?
     let camera: Bool
+    /// nil means no mic (STC-233) — never "whichever mic is default". A
+    /// non-nil value is an `AVCaptureDevice.uniqueID` the app already showed
+    /// the user in a picker; this function does not check it exists
+    /// (`MicCapture.start` does, once ScreenCaptureKit's own async lookup is
+    /// no longer in the way) — it only carries the caller's own choice
+    /// forward unexamined, the same latitude `region`/`windowId` get here.
+    let micDeviceUid: String?
 }
 
 enum StartRequestError: Error, Equatable, CustomStringConvertible {
@@ -400,8 +407,17 @@ func parseStartRequest(_ cmd: [String: Any]) -> Result<StartRequest, StartReques
     guard !(region != nil && windowId != nil) else { return .failure(.regionAndWindow) }
 
     let camera = cmd["camera"] as? Bool ?? false
+    // A non-string or empty micDeviceUid is treated as "no mic" rather than
+    // refused — the same latitude a malformed displayId gets (falls back to
+    // phase-1 behaviour) rather than the latitude a malformed windowId gets
+    // (refused): naming a mic wrong costs a take its audio, not its video,
+    // and a request that could not have named the user's actual choice is
+    // more honestly answered by recording without it than by refusing the
+    // whole take.
+    let micRaw = cmd["micDeviceUid"] as? String
+    let micDeviceUid = (micRaw?.isEmpty == false) ? micRaw : nil
     return .success(StartRequest(dir: dir, displayId: displayId, region: region,
-                                 windowId: windowId, camera: camera))
+                                 windowId: windowId, camera: camera, micDeviceUid: micDeviceUid))
 }
 
 

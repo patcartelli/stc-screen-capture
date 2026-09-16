@@ -26,9 +26,15 @@ const RIGHT = { id: 2, bounds: { x: 1920, y: 0, width: 2560, height: 1440 }, sca
 const WINDOWS = [
   // Front to back, as SCShareableContent lists them — the front one overlaps
   // the back one, which is the only way to prove the order is respected.
-  { id: 11, bounds: { x: 100, y: 100, width: 400, height: 300 }, app: "Notes", title: "Front" },
-  { id: 12, bounds: { x: 200, y: 150, width: 800, height: 600 }, app: "Finder", title: "Behind" },
-  { id: 13, bounds: { x: 2000, y: 200, width: 500, height: 400 }, app: "Safari", title: "On the right display" },
+  { id: 11, bounds: { x: 100, y: 100, width: 400, height: 300 }, app: "Notes", title: "Front", fullyVisible: true },
+  { id: 12, bounds: { x: 200, y: 150, width: 800, height: 600 }, app: "Finder", title: "Behind", fullyVisible: true },
+  { id: 13, bounds: { x: 2000, y: 200, width: 500, height: 400 }, app: "Safari",
+    title: "On the right display", fullyVisible: true },
+  // Mostly off the right display's edge (STC-380) — not one of the two
+  // overlapping windows above, so it can be added to a test without
+  // disturbing any assertion about THEM.
+  { id: 14, bounds: { x: 2400, y: 1200, width: 400, height: 300 }, app: "Terminal",
+    title: "Barely on screen", fullyVisible: false },
 ];
 
 const ctx: SelectionContext = { displays: [MAIN, RIGHT], windows: WINDOWS };
@@ -399,6 +405,31 @@ describe("window mode", () => {
     const gone: SelectionContext = { ...ctx, windows: WINDOWS.filter((w) => w.id !== 11) };
     expect(confirm(hovered, ctx)).toEqual({ kind: "window", windowId: 11 });
     expect(confirm(hovered, gone)).toBeUndefined();
+  });
+
+  /**
+   * STC-380: a window that is not fully visible (mostly off every display, or
+   * mostly buried under another) is still listed and still hoverable — the
+   * overlay draws it deprioritized rather than making it silently vanish —
+   * but it must not be a selection, from a click or from Return. Window 14 in
+   * the fixture is exactly that case.
+   */
+  test("hovering a not-fully-visible window highlights it but a click selects nothing", () => {
+    const { state, outcome } = run([
+      { t: "key", key: " " },
+      { t: "pointermove", at: { x: 2500, y: 1300 } },
+      { t: "pointerdown", at: { x: 2500, y: 1300 } },
+    ]);
+    expect(state.hoveredWindowId).toBe(14);
+    expect(outcome).toBeUndefined();
+  });
+
+  test("Return over a not-fully-visible window confirms nothing", () => {
+    const hovered = run([{ t: "key", key: " " }, { t: "pointermove", at: { x: 2500, y: 1300 } }]).state;
+    expect(hovered.hoveredWindowId).toBe(14);
+    expect(confirm(hovered, ctx)).toBeUndefined();
+    const { outcome } = run([{ t: "key", key: "Enter" }], hovered);
+    expect(outcome).toBeUndefined();
   });
 });
 

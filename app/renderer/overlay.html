@@ -55,6 +55,13 @@
     background: rgba(90, 160, 255, 0.16);
     border-radius: 6px;
   }
+  /* Hovering a window the picker refuses to pick (STC-380) — dashed and dim
+     rather than the solid blue "this is what Return takes", and no fill, so
+     it reads as "here, but not selectable" rather than "selected". */
+  #highlight.not-fully-visible {
+    border: 2px dashed rgba(255, 255, 255, 0.55);
+    background: transparent;
+  }
 
   /* Readouts. Positioned by script; styled to stay legible over anything. */
   .chip {

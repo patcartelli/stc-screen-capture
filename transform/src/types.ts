@@ -48,6 +48,21 @@ export interface CameraTrack {
   frameIntervalNs: number;
 }
 
+/**
+ * Mirrors the optional `mic` block in schema/anchors-4.schema.json (STC-233).
+ * No `frameIntervalNs` — unlike the camera, the mic track is muxed into an
+ * export unmodified rather than held between discrete samples, so there is
+ * no track-end bound derived from an inter-sample interval.
+ */
+export interface MicTrack {
+  present: boolean;
+  device: string;
+  sampleRate: number;
+  channels: number;
+  firstFramePtsNs: number;
+  lastFramePtsNs: number;
+}
+
 /** Mirrors the optional `pip` block in schema/project-2.schema.json. */
 export interface Pip {
   enabled: boolean;
@@ -77,9 +92,9 @@ export type CaptureScope =
       };
     };
 
-/** Mirrors schema/anchors-1.schema.json, anchors-2.schema.json and anchors-3.schema.json. */
+/** Mirrors schema/anchors-1.schema.json through anchors-4.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {
@@ -94,9 +109,11 @@ export interface Anchors {
   };
   capture: { width: number; height: number; codec: "h264" };
   camera?: CameraTrack;
+  /** STC-233. Absent means no mic was requested, the same as v1-v3. */
+  mic?: MicTrack;
   /** STC-370. Absent means the whole display, the same as v1/v2. */
   scope?: CaptureScope;
-  files: { display: string; camera?: string };
+  files: { display: string; camera?: string; mic?: string };
   /**
    * `reason` is a plain string, not a union, ON PURPOSE (STC-311).
    *

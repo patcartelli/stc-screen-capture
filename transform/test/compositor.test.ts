@@ -30,11 +30,20 @@ function draw(fs: FrameState) {
 
 describe("auto-zoom stage 1 draws the source, and the stub changes nothing", () => {
   const bitmap = { width: 1280, height: 720 } as unknown as ImageBitmap;
+  // What export.ts's ForwardFrameSource and preview.ts's SeekingFrameSource
+  // ACTUALLY hand the compositor — a VideoFrame, which has no .width/.height
+  // (WebCodecs: codedWidth/codedHeight, displayWidth/displayHeight). A fake
+  // shaped like `bitmap` above shares the bug's own wrong assumption and
+  // cannot catch it; this shape is what found it on a real take.
+  const videoFrame = { displayWidth: 1280, displayHeight: 720 } as unknown as VideoFrame;
 
-  function drawWith(crop: { x: number; y: number; width: number; height: number }): string[] {
+  function drawWith(
+    crop: { x: number; y: number; width: number; height: number },
+    frame: ImageBitmap | VideoFrame = bitmap,
+  ): string[] {
     const { ctx, ops } = recorder();
     const fs: FrameState = { ...frameState(), zoom: { amount: 1, crop } };
-    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null, fs, 640, 360);
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, frame, null, fs, 640, 360);
     return ops.filter((o) => o.startsWith("drawImage"));
   }
 
@@ -57,6 +66,19 @@ describe("auto-zoom stage 1 draws the source, and the stub changes nothing", () 
 
   test("the two paths really differ — otherwise the guard above is decoration", () => {
     expect(drawWith(FULL_FRAME_UV)).not.toEqual(drawWith({ x: 0, y: 0, width: 0.5, height: 0.5 }));
+  });
+
+  test("a raw VideoFrame crops identically to an ImageBitmap of the same size", () => {
+    // The regression this repo actually shipped (STC-326/330): drawSource
+    // read frame.width/height directly, which is undefined on a VideoFrame,
+    // so uvRectToPixels produced NaN and drawImage silently drew nothing —
+    // no exception, the canvas just kept its black fill. Neither sink's own
+    // frame source (ForwardFrameSource, SeekingFrameSource) ever hands the
+    // compositor an ImageBitmap; only the gate's decodeAll() path does, which
+    // is why gate:identity never saw it.
+    const crop = { x: 0.25, y: 0.5, width: 0.5, height: 0.25 };
+    expect(drawWith(crop, videoFrame)).toEqual(drawWith(crop, bitmap));
+    expect(drawWith(crop, videoFrame)).toEqual(["drawImage([object Object],320,360,640,180,0,0,640,360)"]);
   });
 });
 

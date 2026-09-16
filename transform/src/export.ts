@@ -7,6 +7,7 @@ import type { Project } from "./types.js";
 import { exportWindow, availableFrames } from "./trim.js";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
+import { decodeAllAudio } from "./decode-audio.js";
 
 /**
  * The export sink. ONE implementation, called by both the CLI gates and the
@@ -42,6 +43,8 @@ export interface ExportResult {
    * two sinks that both ignore the camera agree perfectly.
    */
   cameraDecodedFrames: number;
+  /** STC-233. Audio chunks encoded into the output; 0 for a take with no mic track. */
+  micEncodedChunks: number;
   durationMs: number;
   cancelled: boolean;
 }
@@ -68,6 +71,11 @@ export async function exportSession(
   // exactly as the display index is, because pipStateAt() returns null outside
   // the track's bounds rather than clamping backwards into it.
   const cameraSource = session.cameraVideo ? new ForwardFrameSource(session.cameraVideo) : null;
+  // STC-233. Unlike the camera, the mic track has no per-frame relationship
+  // to render() at all — it is clipped to the export window and muxed in,
+  // never read by the compositor — so it needs no frame source, only the
+  // decoded track itself.
+  const micAudio = session.micAudio;
   const { width, height, fps } = project.output;
   const wantHash = opts.hash ?? false;
 
@@ -93,14 +101,42 @@ export async function exportSession(
   let muxer: Muxer<ArrayBufferTarget> | undefined;
   let encoder: VideoEncoder | undefined;
   let encoderError: Error | null = null;
+  let audioEncoder: AudioEncoder | undefined;
+  let audioEncoderError: Error | null = null;
   if (encode) {
-    muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: "avc", width, height }, fastStart: "in-memory" });
+    muxer = new Muxer({
+      target: new ArrayBufferTarget(),
+      video: { codec: "avc", width, height },
+      // STC-233: an audio track option on the SAME muxer, not a second file —
+      // mp4-muxer already supports this; nothing about the video half changes.
+      ...(micAudio
+        ? { audio: { codec: "aac" as const, numberOfChannels: micAudio.numberOfChannels, sampleRate: micAudio.sampleRate } }
+        : {}),
+      fastStart: "in-memory",
+    });
     encoder = new VideoEncoder({
       output: (chunk, meta) => muxer!.addVideoChunk(chunk, meta),
       error: (e) => { encoderError = e instanceof Error ? e : new Error(String(e)); },
     });
     // High @ L5.2 (PHASE-0 §8). NOT L4.0: its 2 Mpixel coded-area cap rejects 4K.
     encoder.configure({ codec: "avc1.640034", width, height, framerate: fps, bitrate: 12_000_000 });
+
+    if (micAudio) {
+      audioEncoder = new AudioEncoder({
+        output: (chunk, meta) => muxer!.addAudioChunk(chunk, meta),
+        error: (e) => { audioEncoderError = e instanceof Error ? e : new Error(String(e)); },
+      });
+      // AAC-LC, matching what MicCapture.swift already wrote at capture time
+      // (kAudioFormatMPEG4AAC) — re-encoded rather than remuxed because the
+      // clip is a TIME WINDOW of the mic track, not the whole thing, and a
+      // compressed AAC stream cannot be cut at an arbitrary sample boundary
+      // the way the video's own GOP-aware muxing does not need to worry
+      // about here either (every export frame is its own VideoFrame).
+      audioEncoder.configure({
+        codec: "mp4a.40.2", sampleRate: micAudio.sampleRate,
+        numberOfChannels: micAudio.numberOfChannels, bitrate: 128_000,
+      });
+    }
   }
 
   const rolling = new Uint8Array(32);
@@ -121,8 +157,7 @@ export async function exportSession(
       const frame = idx === null ? null : await source.frameAt(idx);
       const cameraFrame = fs.pip && cameraSource ? await cameraSource.frameAt(fs.pip.frameIndex) : null;
       peakBuffered = Math.max(peakBuffered, source.bufferedCount + (cameraSource?.bufferedCount ?? 0));
-      composite(ctx, frame as unknown as ImageBitmap | null,
-                cameraFrame as unknown as ImageBitmap | null, fs, width, height);
+      composite(ctx, frame, cameraFrame, fs, width, height);
 
       if (wantHash) {
         const rgba = ctx.getImageData(0, 0, width, height).data;
@@ -158,9 +193,40 @@ export async function exportSession(
       }
     }
 
+    let micEncodedChunks = 0;
+    if (audioEncoder && micAudio && !cancelled) {
+      if (audioEncoderError) throw audioEncoderError;
+      // The export window in the SAME session-relative ns every other track
+      // in this file uses — `endNs` is one past the last included video
+      // frame, the export's own timeline boundary, not a separate audio cut.
+      const endNs = exportFrameTimeNs(from + total);
+      const decoded = await decodeAllAudio(micAudio);
+      try {
+        for (const data of decoded) {
+          // AudioData.timestamp is MICROSECONDS on the same session-relative
+          // origin demux-audio.ts produced — clip to the export window and
+          // retime to clip-relative, exactly as the VideoFrame above.
+          const sampleNs = data.timestamp * 1000;
+          if (sampleNs >= originNs && sampleNs < endNs && !audioEncoderError) {
+            const retimed = retimeAudioData(data, Math.round((sampleNs - originNs) / 1000));
+            audioEncoder.encode(retimed);
+            retimed.close();
+            micEncodedChunks++;
+          }
+        }
+      } finally {
+        for (const d of decoded) d.close();
+      }
+      if (audioEncoderError) throw audioEncoderError;
+      // Same reasoning as the video encoder's own unbounded final flush below:
+      // an encoder that never finishes would hang the export at 100%.
+      await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export");
+    }
+
     let encodedBytes = 0;
     let encoded: Uint8Array | undefined;
     if (encoderError) throw encoderError;
+    if (audioEncoderError) throw audioEncoderError;
     if (encoder && muxer && !cancelled) {
       // The per-frame back-pressure loop is bounded; this final flush was not.
       // An encoder that accepts every frame and then never finishes would hang
@@ -172,6 +238,7 @@ export async function exportSession(
       encoded = new Uint8Array(buf);
     }
     if (encoder && encoder.state !== "closed") encoder.close();
+    if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();
     opts.onProgress?.(total, total);
 
     return {
@@ -181,6 +248,7 @@ export async function exportSession(
       peakBufferedFrames: peakBuffered,
       decodedFrames: source.decodedCount,
       cameraDecodedFrames: cameraSource?.decodedCount ?? 0,
+      micEncodedChunks: cancelled ? 0 : micEncodedChunks,
       durationMs: Math.round(performance.now() - t0),
       cancelled,
     };
@@ -188,5 +256,39 @@ export async function exportSession(
     source.close();
     cameraSource?.close();
     if (encoder && encoder.state !== "closed") encoder.close();
+    if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();
   }
+}
+
+/**
+ * A copy of `data` with a different `timestamp`, same samples. There is no
+ * WebCodecs call to retime an `AudioData` in place — the timestamp is
+ * immutable — so a clip-relative export needs a fresh one, the way a clipped
+ * `VideoFrame` above is a fresh `VideoFrame` over the same canvas at a
+ * different timestamp.
+ *
+ * Handles both interleaved formats (one plane) and planar formats (one plane
+ * per channel — AAC decode commonly yields `f32-planar`) by copying
+ * `numberOfChannels` planes when the format ends in `-planar` and one
+ * otherwise, each sized by `allocationSize` rather than assumed, since a
+ * wrong size here is a wrong sample count, not merely a wrong timestamp.
+ */
+function retimeAudioData(data: AudioData, timestampUs: number): AudioData {
+  const format = data.format!;
+  const planar = format.endsWith("-planar");
+  const numPlanes = planar ? data.numberOfChannels : 1;
+  const planeSizes = Array.from({ length: numPlanes },
+    (_, p) => data.allocationSize({ planeIndex: p, format }));
+  const total = planeSizes.reduce((a, b) => a + b, 0);
+  const buf = new ArrayBuffer(total);
+  const bytes = new Uint8Array(buf);
+  let offset = 0;
+  for (let p = 0; p < numPlanes; p++) {
+    data.copyTo(bytes.subarray(offset, offset + planeSizes[p]!), { planeIndex: p, format });
+    offset += planeSizes[p]!;
+  }
+  return new AudioData({
+    format, sampleRate: data.sampleRate, numberOfFrames: data.numberOfFrames,
+    numberOfChannels: data.numberOfChannels, timestamp: timestampUs, data: buf,
+  });
 }

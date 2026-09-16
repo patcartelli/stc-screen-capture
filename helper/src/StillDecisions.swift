@@ -235,6 +235,78 @@ func localizeCursor(mouseX: Double, mouseY: Double,
 /// classified by STC-309's `classifyCursor`; shot-1's enum is the same set as
 /// events-2's, and `still-decisions.test.ts` holds the Swift list to it.
 
+// ── window visibility (STC-380) ──────────────────────────────────────────────
+//
+// The `windows` verb (Still.swift) used to list every layer-0 on-screen window
+// SCShareableContent reports, with no regard for whether a click could
+// actually reach it as the thing it looks like: a window hanging mostly off
+// every display, or buried under another window with only a sliver showing,
+// still appeared as a full-size, freely selectable entry. `onScreenWindowsOnly`
+// only means "not minimized" — it says nothing about occlusion or a frame
+// that has drifted off every display, which is exactly what left both open.
+//
+// `isFullyVisible` answers both with one primitive: how much of a rectangle's
+// area survives having a list of other rectangles subtracted from it. Run
+// against the display union it finds the off-screen fraction; run against the
+// windows strictly in front of this one (SCShareableContent's own front-to-back
+// order — a window BEHIND never occludes) it finds the covered fraction. Same
+// arithmetic, different occluders, so there is one function to get right
+// rather than two.
+
+/// Splits each rect in `rects` around its overlap with `cut`, keeping only the
+/// parts that do NOT overlap it — up to four pieces (above/below/left/right of
+/// the overlap) per input rect that actually intersects. A rect untouched by
+/// `cut` passes through unchanged.
+func subtractRect(_ rects: [StillRect], _ cut: StillRect) -> [StillRect] {
+    guard cut.width > 0, cut.height > 0 else { return rects }
+    var out: [StillRect] = []
+    for r in rects {
+        guard r.width > 0, r.height > 0 else { continue }
+        let ix0 = max(r.x, cut.x), iy0 = max(r.y, cut.y)
+        let ix1 = min(r.x + r.width, cut.x + cut.width)
+        let iy1 = min(r.y + r.height, cut.y + cut.height)
+        guard ix1 > ix0, iy1 > iy0 else { out.append(r); continue }
+        let rBottom = r.y + r.height, rRight = r.x + r.width
+        if iy0 > r.y { out.append(StillRect(x: r.x, y: r.y, width: r.width, height: iy0 - r.y)) }
+        if rBottom > iy1 { out.append(StillRect(x: r.x, y: iy1, width: r.width, height: rBottom - iy1)) }
+        if ix0 > r.x { out.append(StillRect(x: r.x, y: iy0, width: ix0 - r.x, height: iy1 - iy0)) }
+        if rRight > ix1 { out.append(StillRect(x: ix1, y: iy0, width: rRight - ix1, height: iy1 - iy0)) }
+    }
+    return out
+}
+
+/// The fraction of `rect`'s own area left after removing every overlap with
+/// `cutters`, 0...1. Order does not matter: each subtraction only ever shrinks
+/// what remains, and an empty `cutters` list leaves the whole rect.
+func remainingFraction(_ rect: StillRect, subtracting cutters: [StillRect]) -> Double {
+    guard rect.width > 0, rect.height > 0 else { return 0 }
+    var remaining = [rect]
+    for c in cutters {
+        remaining = subtractRect(remaining, c)
+        if remaining.isEmpty { return 0 }
+    }
+    let total = remaining.reduce(0.0) { $0 + $1.width * $1.height }
+    return total / (rect.width * rect.height)
+}
+
+/// Tolerance for "fully", as a fraction of the window's own area. Real display
+/// bounds and window frames are both floating point, so a window flush against
+/// a display edge must not fail on rounding alone; VISIBILITY_EPSILON is far
+/// looser than float error needs and far tighter than a sliver anyone would
+/// call "still visible" (2% of a 400x300 window is under 5x5 points).
+let VISIBILITY_EPSILON = 0.02
+
+/// Whether `frame` sits (within tolerance) entirely inside the display union
+/// AND is not (within tolerance) covered by `occluders` — the two independent
+/// ways the picker used to offer a window nobody could actually see (STC-380).
+/// `occluders` must already be narrowed to windows strictly in front of this
+/// one; a window sitting behind is not this function's concern.
+func isFullyVisible(_ frame: StillRect, displays: [StillRect], occluders: [StillRect]) -> Bool {
+    let offDisplay = remainingFraction(frame, subtracting: displays)
+    let covered = 1 - remainingFraction(frame, subtracting: occluders)
+    return offDisplay <= VISIBILITY_EPSILON && covered <= VISIBILITY_EPSILON
+}
+
 struct StillWindowInfo: Equatable {
     let id: Int
     let app: String?

@@ -103,4 +103,47 @@ describe("anchors document", () => {
     );
     expect(validate2(region), "anchors-2 must refuse a v3, region-scope document").toBe(false);
   });
+
+  // STC-233: a mic-requested take writes version 4 with a `mic` block — a
+  // shape anchors-3 cannot express at all. Mirrors the anchors-3/scope test
+  // above one version up, plus the "everything at once" case that proves
+  // the version is a MAX over scope's own floor and mic's, not whichever was
+  // computed last.
+  test("mic documents validate against anchors-4, scope and camera included", async () => {
+    const out = await runSwiftHarness({
+      label: "anchors",
+      sources: [
+        "helper/src/StillDecisions.swift",
+        "helper/src/AnchorsDoc.swift",
+        "helper/test/anchors/main.swift",
+      ],
+    });
+    expect(out, out).toContain("ALL PASS");
+
+    const ajv4 = new Ajv({ allErrors: true, strict: true });
+    const validate4 = ajv4.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-4.schema.json"), "utf8")),
+    );
+
+    const requestedNoFrames = extractJSON(out, "JSON-MIC-REQUESTED-NO-FRAMES:");
+    expect(validate4(requestedNoFrames), JSON.stringify(validate4.errors, null, 2)).toBe(true);
+
+    const withMic = extractJSON(out, "JSON-WITH-MIC:");
+    expect(validate4(withMic), JSON.stringify(validate4.errors, null, 2)).toBe(true);
+
+    const everything = extractJSON(out, "JSON-VERSION-4-EVERYTHING:");
+    expect(validate4(everything), JSON.stringify(validate4.errors, null, 2)).toBe(true);
+    expect((everything as { version: number }).version).toBe(4);
+    expect((everything as { camera?: unknown }).camera).toBeDefined();
+    expect((everything as { mic?: unknown }).mic).toBeDefined();
+    expect((everything as { scope?: unknown }).scope).toBeDefined();
+
+    // A v4-shaped document must still refuse anchors-3 — the version bump is
+    // not a widening that now accepts everything the old schema did too.
+    const ajv3 = new Ajv({ allErrors: true, strict: true });
+    const validate3 = ajv3.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-3.schema.json"), "utf8")),
+    );
+    expect(validate3(withMic), "anchors-3 must refuse a v4, mic-bearing document").toBe(false);
+  });
 }, 60_000);

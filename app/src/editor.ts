@@ -927,7 +927,9 @@ async function openTakeOrThrow(dir: string): Promise<void> {
       .catch(() => null),
   ]);
   const cameraMp4 = anchors.files?.camera ? await readVideo(anchors.files.camera) : undefined;
-  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4 });
+  // STC-233: same reasoning as cameraMp4 above, one track over.
+  const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
+  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
