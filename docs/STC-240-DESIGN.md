@@ -94,7 +94,7 @@ same reason one layer up (`main.ts`, `pill.ts`, `countdown-window.ts` and
 
 ### Pause means nothing is written, anywhere
 
-Four writers gate on one flag:
+Five writers gate on one flag:
 
 | writer | why it must stop |
 |---|---|
@@ -102,43 +102,141 @@ Four writers gate on one flag:
 | camera frames (`CameraCapture.swift`) | otherwise the PiP carries the paused period into the cut |
 | mic samples (`MicCapture.swift`) | **a pause that left `mic.m4a` recording captures audio the user believes is off.** This one is not symmetry, it is the privacy property. |
 | the event tap (`Capture.swift`) | decision 2 |
+| the cursor-shape sampler (`CursorShape.swift`) | a shape-change event carries the same "user believes nothing is being recorded" property the tap's move/click events do — a shape event landing inside a pause interval would be exactly the invariant violation decision 2 exists to prevent, on a different event kind |
 
 The tap is **held, not torn down**. Re-creating a `CGEvent` tap means
 re-entering the Input Monitoring path STC-315 mapped (and `tapCreate` fails
 *synchronously*, which is why its creation already moved to `begin()`), and
-nothing about a tap needs re-creating in order to stop delivering. Disabling and
-re-enabling it also lands in `decideCursorEvent`'s `tapDisabledByUserInput`
-branch — the same path the helper's own `stop()` already has to tell apart from
-starvation — so pause must mark its own disables the way `stoppingBegan`
-already does, or `stats().tapDisabled` starts counting our own pauses as
-timeouts.
+nothing about a tap needs re-creating in order to stop delivering.
+
+**Superseded by the shipped design, kept for the record rather than deleted:**
+this paragraph originally argued that disabling and re-enabling the tap on
+pause/resume would land in `decideCursorEvent`'s `tapDisabledByUserInput`
+branch and so would need pause to mark its own disables, the way `stoppingBegan`
+already does for `stop()`. That concern does not apply to what was actually
+built — the shipped design never calls `CGEvent.tapEnable` for a pause at all;
+the tap stays enabled throughout and `PauseGate.isPaused` is checked per-event
+inside the existing callback instead (see `decideCursorEvent`'s `.event` case
+in `Capture.swift`). There is nothing here for `stats().tapDisabled` to
+miscount.
 
 ### Disk and the sidecar agree by construction
 
 The interval is stamped from the helper's own clock at the moment the command is
-processed, and **all four gates test one predicate**: *is this sample's
+processed, and **all five gates test one predicate**: *is this sample's
 session-relative pts inside a recorded interval?* That is the identical
 predicate the transform uses to cut.
 
-So the invariant is checkable rather than hoped for:
+So the invariant is checkable rather than hoped for — but it is not quite
+absolute, and the real precision is worth stating rather than the tidier claim
+this section originally made:
 
-> **No sample on disk may have a pts inside a pause interval.**
+> **No sample on disk may have a pts inside a pause interval, EXCEPT a frame
+> already in flight when the span opens, which may carry a pts up to one frame
+> interval past the pause's start.**
+
+The display gate tests `pts`, which is `displayTime` — the *scheduled VBL
+presentation time*, ~7 ms **ahead of delivery** (`Capture.swift`'s own comment
+a few lines above the gate says so). A frame already in flight through
+ScreenCaptureKit's pipeline when `pause()` opens its span can therefore carry a
+`pts` that lands inside the interval and still reach the gate as an `.accept`
+before the pause's effect is visible to it — the frame was already scheduled
+before the pause existed. This is a property of `displayTime` being a
+presentation time rather than a capture time, not a bug in the gate's ordering
+(see "The synthetic held-button release" below for a DIFFERENT, avoidable gap
+in `pause()`'s own ordering — the events.json race — which this one is not:
+there is no "before the display pipeline scheduled it" moment to move the
+display gate earlier than).
+
+**`events.json` is exempt from this tolerance** — the tap fires synchronously
+on the event itself, with no scheduled-ahead-of-delivery pipeline in between,
+so the events invariant IS absolute in a way the video invariant is not.
+`helper/test/capture.grant.test.ts`'s invariant assertion covers events.json
+only, for exactly this reason; `display.mp4` carries the one-frame tolerance
+and nothing in this repo currently checks it, since PR A does not cut yet.
+
+**PR B's cut must tolerate this.** A cut that assumes every disk sample
+strictly respects the pause boundary will, on rare timing, include one extra
+frame from just inside a pause's start in the segment before the cut point.
+The timeline's segment boundaries should treat "off by at most one frame
+interval" as within spec rather than as a corruption to detect.
 
 A drift between "what the helper dropped" and "what the sidecar says was
-paused" would otherwise be invisible until an export was watched — the picture
-would be right and one frame would be wrong, which is the class of fault this
-repo keeps recording as *correctly-rendered wrong answers*.
+paused" beyond that one-frame tolerance would otherwise be invisible until an
+export was watched — the picture would be right and one frame would be wrong,
+which is the class of fault this repo keeps recording as *correctly-rendered
+wrong answers*.
 
 ### The synthetic re-anchor
 
 On `resume`, one `{t, kind: "move", x, y}` at the resume instant carrying the
-pointer's current position, from the same `NSEvent.mouseLocation` read
-`Still.swift` already uses. This is the whole of decision 2's implementation.
+pointer's current position.
+
+**Correction (final review, before PR A merged):** this section originally
+said the position comes "from the same `NSEvent.mouseLocation` read
+`Still.swift` already uses." The shipped code deliberately does NOT do that —
+it reads `CGEvent(source: nil)?.location` instead. `NSEvent.mouseLocation` is a
+Cocoa point (origin bottom-left, y up, flipped against whichever display is
+the MAIN one) while every real move in `events.json` carries the tap's
+`event.location` — a CoreGraphics global point (origin top-left, y down).
+Writing an `NSEvent.mouseLocation` value into this array without the flip
+`StillDecisions.swift`'s `localizeCursor` owns would put the synthetic anchor
+at a mirrored y: a cursor that jumps across the seam and snaps back one frame
+later, defeating the exact thing the anchor exists to fix while looking
+implemented. `CGEvent(source: nil)?.location` is already in the right space
+with no flip needed, which is why it was used instead. This is the whole of
+decision 2's implementation.
 
 It needs no `events` schema change: `move` is an events-1 kind and the
 synthetic one is indistinguishable in shape from a real one. Deliberately so —
 a `synthetic: true` field would be a fact about the helper, not about the take,
 and nothing downstream would branch on it.
+
+### The synthetic held-button release
+
+**Added during review; not in the original ticket text, and PR B's cursor work
+needs to know about it.** `pause()` releases any mouse button the tap
+currently believes is held, writing one synthetic `{t: tNs - 1, kind: "up",
+x, y, button}` per held button immediately before the pause span opens (`tNs -
+1`, not `tNs`, keeps the synthetic event strictly outside the interval it
+precedes — the invariant holds with no carve-out for our own synthetics, and
+at nanosecond resolution the offset is not physically meaningful).
+
+**`pause()`'s own ordering matters here, and was corrected in final review.**
+The call reads the clock, and between that read and the gate actually opening
+there are lock round-trips and a `CGEvent(source:)` allocation in the release
+path — not microseconds. Releasing held buttons BEFORE opening the gate would
+leave a window in which a real tap event with `t >= tNs` (the pause instant)
+could still be appended, with a timestamp already inside the span the next
+line was about to open — breaking the very invariant this whole feature rests
+on. The shipped order opens the gate FIRST (`guard pauseGate.pause(atNs: tNs)
+else { return false }`) and only then releases held buttons, so an event
+landing in that same window is now dropped by the gate itself. This also means
+a REDUNDANT pause (one already open) returns before ever calling the release —
+see below.
+
+Why: `cursor.ts` computes "is a button pressed" as a prefix sum over
+`down`/`up` events. If a button is held, `pause` drops every event for the
+rest of that gesture (including its eventual `up`, wherever it happens), and
+resume's synthetic `move` does not itself carry press state — so without this,
+holding a button into a pause and releasing it while paused would leave the
+depth permanently unbalanced: the cursor renders pressed for the entire REST
+of the export, and `zoom.ts` (a move while a button is held is a drag) opens a
+zoom window on every later move, from that instant to the end of the take.
+One dropped `up` and the take is silently wrong in a way that reads as a
+transform bug rather than a pause/resume one.
+
+The known, accepted inaccuracy this trades for: a button still physically held
+across a RESUME produces no new `down` (the real press happened before the
+pause, and is not re-synthesized), so the pointer reads as un-pressed for the
+remainder of that drag after resuming. This is a deliberate, bounded
+imprecision — strictly better than a take stuck pressed to its end — and PR
+B's cursor/zoom consumers should not expect a drag to survive a pause/resume
+cycle intact.
+
+A REDUNDANT pause (one already open) does not run this at all — see the
+`pause()` reordering note above — so it can only ever run once per pause span,
+at that span's true start.
 
 ### Edge cases
 
@@ -359,7 +457,7 @@ last so master is never in a half-state:
 
 | | scope | user-visible |
 |---|---|---|
-| **A** | helper commands, the four gates, `PauseDecisions`, `anchors-5`, grant test | **none** — nothing can trigger a pause |
+| **A** | helper commands, the five gates, `PauseDecisions`, `anchors-5`, grant test | **none** — nothing can trigger a pause |
 | **B** | `timeline.ts`, export/preview/trim/editor wiring, audio segments, `TRANSFORM_VERSION` 8 | **none** — but a hand-authored paused take now exports cut |
 | **C** | the pill split, the supervisor `paused` flag, `_fake-helper.mjs`, E2E | the feature turns on |
 
@@ -395,7 +493,13 @@ on CI. What still needs hardware and a human:
 - **Does a pause survive a crash?** STC-394 writes the movie in fragments so a
   killed take is recoverable. A take crashed *while paused* would recover with
   an unterminated final pause interval. Proposal: the recovery path closes it at
-  the last written sample. Confirm during A.
+  the last written sample. **NOT addressed in PR A** — nothing in that PR
+  touches the crash-recovery path, and `PauseGate.close(atNs:)` is only ever
+  called from the clean-stop path (`App.stop`). Explicitly moved to PR B: an
+  unterminated open interval reaching the timeline builder is a real case PR
+  B's `createTimeline` must decide how to handle (close it at the last written
+  sample, as proposed here, or refuse the document) before it can be trusted
+  with a recovered take.
 - **Maximum pause length.** None proposed. A take paused for an hour is a
   legitimate use (a long interruption) and nothing degrades — the intervals
   array is tiny and the frames simply do not exist.

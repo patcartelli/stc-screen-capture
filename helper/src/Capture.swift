@@ -104,8 +104,23 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// reasoning as `tapDisablesAfterStop` sitting apart from `tapReenables`.
     private var framesPaused = 0
 
+    /// Tap events AND cursor-shape samples dropped by the pause gate.
+    /// Counted together because neither has any other automated coverage:
+    /// on an idle machine no mouse events occur during a pause, so the
+    /// events-invariant assertion in capture.grant.test.ts is vacuous
+    /// (proven by mutation — removing the tap gate does not fail it), and
+    /// posting synthetic input to get real coverage would need an
+    /// Accessibility grant this repo does not ask for. This is a WIRING
+    /// WITNESS, not a proof: it moves 0 -> nonzero on the same runs
+    /// `framesPaused` does, and it moves too if either gate line is
+    /// deleted, which is more evidence than existed before it. It proves
+    /// the gate was ASKED, never that dropping was correct.
+    private var eventsPaused = 0
+
     /// Owns this take's pause intervals (STC-240). Handed to the camera and
-    /// mic captures too, so all four writers answer one question.
+    /// mic captures too, so all five writers (display frames here, the tap
+    /// here, camera frames, mic samples, and the cursor-shape sampler here)
+    /// answer one question.
     let pauseGate = PauseGate()
 
     /// Buttons this take has RECORDED a `down` for and not yet an `up`.
@@ -963,7 +978,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             // Monitoring path STC-315 mapped, and `tapCreate` fails
             // synchronously, so a resume could fail in a way a pause cannot
             // report. Dropping the event is the cheap, reversible half.
-            if pauseGate.isPaused(atNs: Int64(t)) { return }
+            if pauseGate.isPaused(atNs: Int64(t)) {
+                lock.lock(); eventsPaused += 1; lock.unlock()
+                return
+            }
             let loc = event.location
             var e: [String: Any] = ["t": t, "kind": kind, "x": loc.x, "y": loc.y]
             if let button { e["button"] = button }
@@ -988,7 +1006,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private func recordCursorShape(_ shape: String, observedNs: UInt64) {
         // Mirrors decideCursorEvent's .beforeStart: the schema requires t >= 0.
         guard observedNs >= t0Ns else { return }
-        if pauseGate.isPaused(atNs: Int64(observedNs - t0Ns)) { return }
+        if pauseGate.isPaused(atNs: Int64(observedNs - t0Ns)) {
+            lock.lock(); eventsPaused += 1; lock.unlock()
+            return
+        }
         lock.lock()
         events.append(["t": Int(observedNs - t0Ns), "kind": "cursor", "shape": shape])
         cursorEvents += 1
@@ -1000,13 +1021,29 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     var isPaused: Bool { pauseGate.isPaused }
 
     /// Session-relative, from the helper's own clock — the same instant the
-    /// four gates then test every sample against, which is what makes the
+    /// five gates then test every sample against, which is what makes the
     /// sidecar and the disk agree by construction rather than by inspection.
+    ///
+    /// The GATE opens BEFORE `recordHeldButtonReleases` runs, not after.
+    /// Between reading `tNs` and opening the span there are two lock
+    /// round-trips and a `CGEvent(source:)` allocation in the release path —
+    /// not microseconds — and a tap event evaluated in that window with
+    /// `t >= tNs` used to be appended with a timestamp already inside the
+    /// span the next line was about to open. Gating first closes that: an
+    /// event with `t >= tNs` is now dropped by the gate itself (the
+    /// invariant holds), and an event with `t < tNs` is still accepted but
+    /// lies OUTSIDE the span either way, so nothing regresses. It also
+    /// removes a hazard the old order carried: a REDUNDANT pause (one
+    /// already open) used to still run `recordHeldButtonReleases`, which
+    /// could write a synthetic `up` at `tNs2 - 1` — INSIDE the
+    /// already-open span. Guarding first means a redundant pause writes
+    /// nothing at all.
     @discardableResult
     func pause() -> Bool {
         let tNs = Int64(Clock.nowNs() - t0Ns)
+        guard pauseGate.pause(atNs: tNs) else { return false }
         recordHeldButtonReleases(atNs: tNs)
-        return pauseGate.pause(atNs: tNs)
+        return true
     }
 
     /// Release anything still held, immediately BEFORE the span opens.
@@ -1104,6 +1141,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // such.
         return ["frames": framesAppended, "dropped": framesDropped,
                 "framesPaused": framesPaused,
+                "eventsPaused": eventsPaused,
                 "paused": pauseGate.isPaused,
                 "nonMonotonic": framesNonMonotonic, "events": events.count,
                 "cursorEvents": cursorEvents,

@@ -151,12 +151,33 @@ describe("loader accepts v1 through v4 anchors", () => {
     expect((s.anchors as any).mic).toEqual({ present: false });
   });
 
-  test("a version 5 anchors document is rejected by name", async () => {
-    await expect(loadSession({
-      anchors: offsetAnchors({ version: 5 as any }),
+  // STC-240 PR A: a paused take writes v5 with a `pauses` block. `pauses` is
+  // ACCEPTED AND IGNORED by loadSession in PR A — nothing here reads it yet,
+  // so a v5 document loads exactly like a v4 with the field simply present
+  // and unused. PR B is what teaches render()/the timeline to cut it.
+  test("a version 5 anchors document loads, pauses included but unread", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors({
+        version: 5,
+        pauses: [{ startNs: 1_000_000_000, endNs: 2_000_000_000 }],
+      } as any),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 5 is not supported/);
+    });
+    expect(s).toBeDefined();
+    expect((s.anchors as any).pauses).toEqual([{ startNs: 1_000_000_000, endNs: 2_000_000_000 }]);
+  });
+
+  test("a version 6 anchors document is rejected by name", async () => {
+    // Widening must not become "accept anything". Version 6, not 5: STC-240
+    // made 5 a real, supported version (a paused take's `pauses` block), so
+    // it is no longer a stand-in for "unknown future version" — the same
+    // thing already happened to 3 (STC-370) and 4 (STC-233).
+    await expect(loadSession({
+      anchors: offsetAnchors({ version: 6 as any }),
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/version 6 is not supported/);
   });
 
   test("a version 2 events document loads, cursor events included", async () => {

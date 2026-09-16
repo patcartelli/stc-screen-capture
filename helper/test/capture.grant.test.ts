@@ -247,11 +247,24 @@ describe("capture — pause and resume on a live take (STC-240)", () => {
       readFileSync(join(root, "schema/anchors-5.schema.json"), "utf8")));
     expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
 
-    // THE INVARIANT. The helper's drop rule and the transform's cut rule are
-    // the same predicate over the same intervals, so a survivor means they
-    // have drifted — and PR B would then cut a real sample out of the export,
-    // which looks like correct video. Half-open, so the synthetic re-anchor AT
-    // endNs is outside the span and needs no exception carved for it.
+    // THE INVARIANT — for events.json ONLY. The helper's drop rule and the
+    // transform's cut rule are the same predicate over the same intervals,
+    // so a survivor means they have drifted — and PR B would then cut a real
+    // sample out of the export, which looks like correct video. Half-open,
+    // so the synthetic re-anchor AT endNs is outside the span and needs no
+    // exception carved for it.
+    //
+    // This assertion covers events.json ONLY. The tap fires synchronously on
+    // the event itself, so the events invariant is genuinely absolute — no
+    // tolerance. display.mp4 does NOT get the same absolute guarantee: the
+    // display gate tests `displayTime`, the scheduled VBL presentation time,
+    // ~7 ms AHEAD OF DELIVERY, so a frame already in flight when a pause
+    // opens can carry a pts up to one frame interval inside the span and
+    // still be written. Nothing here checks display.mp4 against the pause
+    // intervals (there is no equivalent assertion for it), and PR B's cut
+    // must tolerate that one-frame slop rather than treating it as a
+    // drifted invariant. See docs/STC-240-DESIGN.md's "Disk and the sidecar
+    // agree by construction" for the full account.
     //
     // THIS ONLY DISCRIMINATES WHEN REAL INPUT ACTUALLY LANDED DURING THE
     // PAUSE. Nothing moves the mouse on an automated, idle machine, so
@@ -309,7 +322,10 @@ describe("capture — pause and resume on a live take (STC-240)", () => {
         "gate is UNPROVEN by this run. (A nonzero count here would not have " +
         "proven the opposite: it only means real events existed SOMEWHERE " +
         "in the take, not that any landed near the pause.) Only " +
-        "framesPaused is evidence the display gate works.\n");
+        "framesPaused is evidence the display gate works. stats().eventsPaused " +
+        `was ${stopped.eventsPaused}: a wiring witness (it moves 0 -> nonzero on ` +
+        "the same runs framesPaused does, and moves if either gate line is " +
+        "deleted), not proof of a correct drop on THIS idle run.\n");
     }
   }, 90_000);
 });

@@ -38,8 +38,9 @@ func isPausedNs(_ tNs: Int64, closed: [PauseInterval], openSinceNs: Int64?) -> B
 ///
 /// Handed to every writer rather than each keeping its own copy of the state:
 /// display frames arrive on ScreenCaptureKit's queue, camera and mic frames on
-/// their own AVFoundation queues, and tap events on the tap's run loop. Four
-/// copies of "am I paused" is four chances to disagree.
+/// their own AVFoundation queues, tap events on the tap's run loop, and
+/// cursor-shape samples on the sampler's own thread. Five copies of "am I
+/// paused" is five chances to disagree.
 final class PauseGate {
     private let lock = NSLock()
     private var closed: [PauseInterval] = []
@@ -51,7 +52,7 @@ final class PauseGate {
         return openSinceNs != nil
     }
 
-    /// For the four writer gates — was this sample's instant inside a pause.
+    /// For the five writer gates — was this sample's instant inside a pause.
     func isPaused(atNs tNs: Int64) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return isPausedNs(tNs, closed: closed, openSinceNs: openSinceNs)

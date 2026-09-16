@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The helper accepts `pause` and `resume`, writes nothing to any of its four outputs while paused, and records the intervals in `anchors.json` — with no user-visible change, because nothing can trigger a pause yet.
+**Goal:** The helper accepts `pause` and `resume`, writes nothing to any of its five outputs while paused, and records the intervals in `anchors.json` — with no user-visible change, because nothing can trigger a pause yet.
 
-**Architecture:** One thread-safe `PauseGate` owns the intervals and answers one predicate — *is this sample's session-relative pts inside a paused span*. All four writers (display frames, camera frames, mic samples, the event tap) ask it the same question, so what lands on disk and what the sidecar claims cannot drift. `App.State` gains no case; paused-ness is a separate boolean.
+**Architecture:** One thread-safe `PauseGate` owns the intervals and answers one predicate — *is this sample's session-relative pts inside a paused span*. All five writers (display frames, camera frames, mic samples, the event tap, the cursor-shape sampler) ask it the same question, so what lands on disk and what the sidecar claims cannot drift. `App.State` gains no case; paused-ness is a separate boolean.
+
+*(Corrected during final review: this was originally written as "four writers" / "four outputs", missing the cursor-shape sampler's own gate in `recordCursorShape` — see `docs/STC-240-DESIGN.md`'s "Pause means nothing is written, anywhere" table.)*
 
 **Tech Stack:** Swift 5.8+ compiled by `helper/build.sh` (no SwiftPM — Xcode is absent); pure-function tests via `runSwiftHarness` compiling production sources with a `main.swift` of assertions; vitest for the TS-side drivers; Ajv for schema validation.
 
@@ -502,6 +504,33 @@ Add beside the other `CaptureSession` counters (after `private var framesDropped
 ```
 
 Add these methods next to `stats()`:
+
+**Corrected during final review, before merge — the snippet below is what was
+ORIGINALLY planned and is now WRONG.** `pause()` as written here calls
+`recordHeldButtonReleases` BEFORE opening the gate. Between the clock read and
+the gate opening there are two lock round-trips and a `CGEvent(source:)`
+allocation in the release path — not microseconds — so a tap event evaluated
+in that window with `t >= tNs` would be appended with a timestamp already
+inside the span the next line was about to open, breaking the invariant this
+whole feature exists to hold. The shipped code opens the gate FIRST:
+
+```swift
+    @discardableResult
+    func pause() -> Bool {
+        let tNs = Int64(Clock.nowNs() - t0Ns)
+        guard pauseGate.pause(atNs: tNs) else { return false }
+        recordHeldButtonReleases(atNs: tNs)
+        return true
+    }
+```
+
+This also means a REDUNDANT pause (one already open) returns before ever
+calling `recordHeldButtonReleases`, closing a second, related hazard the
+original order carried: a redundant pause used to still run the release,
+which could write a synthetic `up` at `tNs2 - 1` — INSIDE the already-open
+span from the first pause. See `docs/STC-240-DESIGN.md`'s "The synthetic
+held-button release" for the full account. The as-planned snippet, kept for
+the historical record of what this task originally specified:
 
 ```swift
     var isPaused: Bool { pauseGate.isPaused }
@@ -1025,11 +1054,14 @@ describe("capture — pause and resume on a live take (STC-240)", () => {
       readFileSync(join(root, "schema/anchors-5.schema.json"), "utf8")));
     expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
 
-    // THE INVARIANT. The helper's drop rule and the transform's cut rule are
-    // the same predicate over the same intervals, so a survivor means they
-    // have drifted — and PR B would then cut a real sample out of the export,
-    // which looks like correct video. Half-open, so the synthetic re-anchor AT
-    // endNs is outside the span and needs no exception carved for it.
+    // THE INVARIANT — for events.json ONLY (display.mp4 carries a one-frame
+    // tolerance the display gate cannot avoid, since it tests `displayTime`,
+    // a scheduled-ahead-of-delivery time; see docs/STC-240-DESIGN.md). The
+    // helper's drop rule and the transform's cut rule are the same predicate
+    // over the same intervals, so a survivor means they have drifted — and
+    // PR B would then cut a real sample out of the export, which looks like
+    // correct video. Half-open, so the synthetic re-anchor AT endNs is
+    // outside the span and needs no exception carved for it.
     const events = load("events.json");
     const inside = events.events.filter(
       (e: { t: number }) => e.t >= span.startNs && e.t < span.endNs);
@@ -1061,10 +1093,15 @@ Restore the line, rebuild, re-run, and confirm PASS. The invariant is the whole 
 git add helper/test/capture.grant.test.ts
 git commit -m "STC-240: the disk invariant, on real hardware
 
-No sample on disk may have a pts inside a recorded pause interval. The
-helper's drop rule and the transform's cut rule are the same predicate over
-the same intervals, so a survivor means they have drifted — and PR B would
-then cut a real frame out of the export, which looks like correct video.
+No event on disk may have a pts inside a recorded pause interval — checked
+for events.json, where the tap fires synchronously so the guarantee is
+genuinely absolute. display.mp4 carries a one-frame tolerance the display
+gate cannot avoid (it tests displayTime, a scheduled-ahead-of-delivery time,
+not a capture time) and is not asserted here; PR B's cut must tolerate it.
+The helper's drop rule and the transform's cut rule are the same predicate
+over the same intervals, so a survivor means they have drifted — and PR B
+would then cut a real frame out of the export, which looks like correct
+video.
 
 The 2 s pause is not arbitrary: a short one is indistinguishable from a
 momentarily idle screen, which VFR legitimately produces no frames for."
@@ -1083,7 +1120,9 @@ momentarily idle screen, which VFR legitimately produces no frames for."
 
 ## What PR A deliberately does not do
 
-Nothing user-facing can pause. There is no UI, no hotkey, and the transform does not know `pauses` exists — `session.ts` will ignore the key it cannot parse. A take paused via a hand-driven `echo '{"cmd":"pause"}'` will therefore **freeze** on export rather than cut, which is the graceful degradation the spec's §"key question" describes, not a bug to fix here. PR B makes it cut.
+Nothing user-facing can pause. There is no UI, no hotkey, and the transform does not act on `pauses` yet.
+
+**Correction (final review, before PR A merged):** this section originally claimed `session.ts` "will ignore the key it cannot parse" — that is FALSE. `session.ts` gates on the anchors *version*, not on individual keys, and a v5 document would have been refused outright (`anchors.json version 5 is not supported`) had `SUPPORTED_ANCHORS_VERSIONS` (app/src/library-items.ts) and `session.ts`'s own version guard not both been widened to accept 5 as part of landing this PR. With that fix in, a v5 document loads and its `pauses` array is accepted-and-IGNORED — `render()` never consults it — so a take paused via a hand-driven `echo '{"cmd":"pause"}'` **freezes** on export rather than cutting, which is the graceful degradation the spec's §"key question" describes, not a bug to fix here. PR B makes it cut. See `app/test/take-list.test.ts`'s "the accepted anchors versions cover every anchors schema on disk" for the guard that now prevents a schema being minted without both gates being wired.
 
 ## Next
 

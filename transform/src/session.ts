@@ -109,15 +109,28 @@ export function rebaseMicAudio(raw: DemuxedAudio, measuredFirstNs: number): Demu
 export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   const { anchors, events } = input;
 
-  // v1 through v4 differ only by additions the transform treats as optional
+  // v1 through v5 differ only by additions the transform treats as optional
   // (camera track, pip geometry, `scope` for a region/window take — STC-370,
-  // and now a `mic` block — STC-233), so an older document loads as a v4
-  // with the newer fields absent. `scope` absent means the whole display,
-  // same as v1/v2 always meant; nothing here reads it yet (that is STC-374's
-  // picker and whatever consumes it), so every version is accepted on the
-  // same terms v2 was.
-  if (anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 && anchors?.version !== 4) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3 or 4)`);
+  // a `mic` block — STC-233, and now `pauses` — STC-240 PR A), so an older
+  // document loads as a v5 with the newer fields absent. `scope` absent
+  // means the whole display, same as v1/v2 always meant; nothing here reads
+  // it yet (that is STC-374's picker and whatever consumes it), so every
+  // version is accepted on the same terms v2 was.
+  //
+  // v5's `pauses` (session-relative `[startNs, endNs)` spans the four
+  // capture-side writers gated on) is ACCEPTED AND IGNORED here — this is
+  // PR A of STC-240, the helper half only. Loading a v5 document today reads
+  // it exactly like a v2 with no gaps: the exported timeline still plays the
+  // paused span back as held frames, since nothing in `render()` consults
+  // `pauses` yet. PR B is what makes the export CUT those spans out; until
+  // it lands, a paused take degrades to "recorded through the pause" rather
+  // than failing to load, which is the documented, deliberate PR A behaviour
+  // (see docs/STC-240-DESIGN.md and docs/STC-240-PLAN-A.md).
+  if (
+    anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
+    anchors?.version !== 4 && anchors?.version !== 5
+  ) {
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4 or 5)`);
   }
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.
