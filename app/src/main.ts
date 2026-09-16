@@ -25,17 +25,17 @@ import {
 } from "./share.js";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
 import { readFile, writeFile, stat, open, copyFile, rm, mkdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
-  purgeStaleTempTakes, listTempTakes,
+  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes,
 } from "./temp-takes.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
-import { productStamp } from "./product.js";
+import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
@@ -163,7 +163,7 @@ function send(channel: string, payload: unknown): void {
 function createWindow(): void {
   setDockVisible(true);
   win = new BrowserWindow({
-    width: 520, height: 680, title: "stc recorder",
+    width: 520, height: 680, title: PRODUCT_NAME,
     // STC-375 (Pill): a fully frameless window was the other option on the
     // table and was passed over — see pill.ts's header. "hidden" keeps the
     // native traffic lights as an inset overlay (no drawn title strip), which
@@ -333,7 +333,57 @@ const TEMP_PURGE_INTERVAL_MS = 12 * 60 * 60 * 1000;
 // `app.getVersion()` — it is a renderer, sandboxed like every other window.
 ipcMain.handle("app:version", () => app.getVersion());
 
+/**
+ * Carry `settings.json` across the rename to Capture (STC-397).
+ *
+ * `productName` sets `app.getName()`, which sets `app.getPath("userData")` —
+ * so renaming the product moves that folder from `…/stc-screen-recorder` to
+ * `…/Capture`, and a user's camera choice, mic, four custom hotkeys, still
+ * destination and share destination are orphaned: still on disk, in a folder
+ * the app no longer reads.
+ *
+ * `settings.json` is the ONLY file this app writes there — everything else
+ * in that directory is Chromium's (caches, GPUCache, Local State) and
+ * regenerates on demand — so this copies that one file rather than dragging
+ * a stale browser cache into the new folder under a new name.
+ *
+ * The legacy directory is resolved as a SIBLING of the current one rather
+ * than rebuilt from `homedir()` + a hardcoded `Library/Application Support`:
+ * Electron already knows where user data lives on this platform, and
+ * spelling that path a second time here is how the migration silently
+ * stops finding anything the first time it runs somewhere unexpected.
+ *
+ * Runs on EVERY launch and must therefore be idempotent: it does nothing
+ * once the new file exists, so a settings change made after the rename is
+ * never overwritten by the pre-rename copy.
+ */
+function migrateLegacyAppData(): void {
+  const current = app.getPath("userData");
+  const legacy = join(dirname(current), LEGACY_APP_DIR_NAME);
+  if (legacy === current) return;
+  const from = join(legacy, "settings.json");
+  const to = join(current, "settings.json");
+  if (!existsSync(from) || existsSync(to)) return;
+  try {
+    mkdirSync(current, { recursive: true });
+    copyFileSync(from, to);
+    // COPIED, not moved: if this build is rolled back, the old app finds its
+    // settings exactly where it left them. The cost is one stale file in a
+    // folder nothing else writes to, which is cheaper than the alternative.
+    console.log(`[rename] carried settings.json across from ${legacy}`);
+  } catch (e) {
+    console.error("[rename] could not carry settings.json across:", e);
+  }
+}
+
 app.whenReady().then(async () => {
+  // FIRST, before anything reads settings or looks for unsaved takes — both
+  // of those resolve paths that this rename moved (STC-397).
+  migrateLegacyAppData();
+  await migrateLegacyTempTakes(process.env)
+    .then((n) => { if (n) console.log(`[rename] carried ${n} unsaved take(s) across`); })
+    .catch((e) => { console.error("[rename] could not carry unsaved takes across:", e); });
+
   // STC-399: the model code's identity on the one surface Electron owns
   // outright — no custom Menu is ever built here, so this app keeps the
   // platform's default menu, which already has an "About" item; this only
@@ -341,7 +391,7 @@ app.whenReady().then(async () => {
   // "version" the same way `app.getPath("userData")` already reads its
   // "name" — the ONE place either is typed.
   app.setAboutPanelOptions({
-    applicationName: "stc recorder",
+    applicationName: PRODUCT_NAME,
     applicationVersion: productStamp(app.getVersion()),
   });
   // Ensured once, here, rather than by every capture: the leaf take directory

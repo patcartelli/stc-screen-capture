@@ -10,6 +10,7 @@
  * appearances — which is exactly the part a test could never have claimed.
  */
 
+import { PRODUCT_NAME } from "./product.js";
 import {
   ACTION_LABELS, CAPTURE_ACTIONS,
   type CaptureAction, type Shortcuts,
@@ -41,7 +42,7 @@ export interface TrayContext {
   busy?: boolean;
 }
 
-export const TRAY_TOOLTIP = "stc recorder";
+export const TRAY_TOOLTIP = PRODUCT_NAME;
 
 /**
  * The three captures, then the way back to a window, then quit.
@@ -65,7 +66,7 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
   items.push({ id: "separator", type: "separator" });
   items.push({ id: "library", label: "Open Library" });
   items.push({ id: "separator", type: "separator" });
-  items.push({ id: "quit", label: "Quit stc recorder" });
+  items.push({ id: "quit", label: `Quit ${PRODUCT_NAME}` });
   return items;
 }
 
