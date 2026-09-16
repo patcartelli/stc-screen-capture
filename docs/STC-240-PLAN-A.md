@@ -762,7 +762,18 @@ wrong: a reply's event name is **`ev`**, not `type`; replies are matched by
 
 The second test is the control. Without it, a dispatch that answered *every*
 unrecognised verb with `bad-state` would satisfy the first test while having
-broken the protocol.swift
+broken the protocol.
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `npx vitest run helper/test/capture.test.ts`
+Expected: FAIL — `pause` currently answers `unknown-command`, so the first test's `code` assertion fails.
+
+- [ ] **Step 3: Implement the dispatch**
+
+In `helper/src/main.swift`, add to the `switch` in `handle`, immediately after `case "stop":`:
+
+```swift
         case "pause":
             setPaused(true, seq: seq)
         case "resume":
