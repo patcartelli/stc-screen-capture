@@ -195,46 +195,58 @@ export async function exportSession(
 
     let micEncodedChunks = 0;
     if (audioEncoder && micAudio && !cancelled) {
-      if (audioEncoderError) throw audioEncoderError;
-      // The export window in the SAME session-relative ns every other track
-      // in this file uses — `endNs` is one past the last included video
-      // frame, the export's own timeline boundary, not a separate audio cut.
-      const endNs = exportFrameTimeNs(from + total);
-      const decoded = await decodeAllAudio(micAudio);
-      // STC-233: the encoder's error callback fires asynchronously and names
+      // STC-233: the encoder's error callback fires ASYNCHRONOUSLY and names
       // no offending chunk — "Input audio buffer is incompatible with codec
       // parameters" gives no way to tell a sample-rate/channel mismatch from
-      // a format one. Recording what was actually sent turns the NEXT
-      // failure into a diagnosis instead of a second blind guess.
+      // a format one. It can also surface AFTER the encode loop, as a
+      // rejection of the flush() below, once encode() has already queued
+      // several chunks — so checking `audioEncoderError` at just one or two
+      // points can miss it entirely (the flush rejects with its own error,
+      // bypassing both checks). The whole block is wrapped instead: whatever
+      // throws — a checked `audioEncoderError`, or flush()'s own rejection —
+      // is enriched with what was actually sent and what the encoder was
+      // configured for, so the NEXT failure is a diagnosis, not a second
+      // blind guess.
       let lastSent: string | undefined;
       try {
-        for (const data of decoded) {
-          // AudioData.timestamp is MICROSECONDS on the same session-relative
-          // origin demux-audio.ts produced — clip to the export window and
-          // retime to clip-relative, exactly as the VideoFrame above.
-          const sampleNs = data.timestamp * 1000;
-          if (sampleNs >= originNs && sampleNs < endNs && !audioEncoderError) {
-            const retimed = retimeAudioData(data, Math.round((sampleNs - originNs) / 1000));
-            lastSent = `format=${retimed.format} sampleRate=${retimed.sampleRate} ` +
-              `numberOfChannels=${retimed.numberOfChannels} numberOfFrames=${retimed.numberOfFrames}`;
-            audioEncoder.encode(retimed);
-            retimed.close();
-            micEncodedChunks++;
+        if (audioEncoderError) throw audioEncoderError;
+        // The export window in the SAME session-relative ns every other
+        // track in this file uses — `endNs` is one past the last included
+        // video frame, the export's own timeline boundary, not a separate
+        // audio cut.
+        const endNs = exportFrameTimeNs(from + total);
+        const decoded = await decodeAllAudio(micAudio);
+        try {
+          for (const data of decoded) {
+            // AudioData.timestamp is MICROSECONDS on the same
+            // session-relative origin demux-audio.ts produced — clip to the
+            // export window and retime to clip-relative, exactly as the
+            // VideoFrame above.
+            const sampleNs = data.timestamp * 1000;
+            if (sampleNs >= originNs && sampleNs < endNs && !audioEncoderError) {
+              const retimed = retimeAudioData(data, Math.round((sampleNs - originNs) / 1000));
+              lastSent = `format=${retimed.format} sampleRate=${retimed.sampleRate} ` +
+                `numberOfChannels=${retimed.numberOfChannels} numberOfFrames=${retimed.numberOfFrames}`;
+              audioEncoder.encode(retimed);
+              retimed.close();
+              micEncodedChunks++;
+            }
           }
+        } finally {
+          for (const d of decoded) d.close();
         }
-      } finally {
-        for (const d of decoded) d.close();
-      }
-      if (audioEncoderError) {
-        const err = audioEncoderError as Error;
+        if (audioEncoderError) throw audioEncoderError;
+        // Same reasoning as the video encoder's own unbounded final flush
+        // below: an encoder that never finishes would hang the export at 100%.
+        await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         throw new Error(
-          `${err.message} — encoder configured for mp4a.40.2 ${micAudio.sampleRate}Hz ` +
-          `x${micAudio.numberOfChannels}ch; last chunk sent: ${lastSent ?? "(none — failed before any chunk)"}`,
+          `${msg} — encoder configured for mp4a.40.2 ${micAudio.sampleRate}Hz ` +
+          `x${micAudio.numberOfChannels}ch; ${micEncodedChunks} chunk(s) encoded before this; ` +
+          `last chunk sent: ${lastSent ?? "(none — failed before any chunk)"}`,
         );
       }
-      // Same reasoning as the video encoder's own unbounded final flush below:
-      // an encoder that never finishes would hang the export at 100%.
-      await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export");
     }
 
     let encodedBytes = 0;
