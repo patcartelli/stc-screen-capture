@@ -115,7 +115,7 @@ describe("the pill's collapse mechanism", () => {
     // The pill itself is the Stop control — clicking it must do exactly what
     // clicking #record would have, since it shares that click handler
     // (renderer.ts). A real user has no other way to end this take: there
-    // is no hotkey for it (hotkeys.ts's CAPTURE_ACTIONS is stills only).
+    // is no hotkey for it (hotkeys.ts's SHOT_ACTIONS is stills only).
     await win.click("#pill");
     await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: true, alwaysOnTop: false });

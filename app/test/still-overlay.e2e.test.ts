@@ -139,7 +139,7 @@ describe("the selection overlay", () => {
     await send(overlay, { t: "key", key: "Enter" });
 
     await expect.poll(() => win.textContent("#stillstatus"), { timeout: 15_000 })
-      .toMatch(/^Captured region/);
+      .toMatch(/^Shot area/);
 
     // The overlay is gone, not merely hidden behind the main window.
     await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
@@ -198,7 +198,7 @@ describe("the selection overlay", () => {
     await send(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
 
     await expect.poll(() => win.textContent("#stillstatus"), { timeout: 15_000 })
-      .toMatch(/^Captured window/);
+      .toMatch(/^Shot window/);
 
     const [req] = readRequests(stillLog);
     expect(req.kind).toBe("window");
@@ -245,7 +245,7 @@ describe("the selection overlay", () => {
     await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
     await send(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
     await expect.poll(() => win.textContent("#stillstatus"), { timeout: 15_000 })
-      .toMatch(/^Captured window/);
+      .toMatch(/^Shot window/);
     const [req] = readRequests(stillLog);
     expect(req.windowId).toBe(4711);
   }, 120_000);

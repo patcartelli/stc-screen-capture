@@ -143,7 +143,7 @@ on the first pass):
 
 ## 3. The self-timer, and whether it does what it is for
 
-⌃⌥⇧⌘5, or **Capture with Self-Timer** in the menu bar.
+⌃⌥⇧⌘5, or **Shot with Self-Timer** in the menu bar.
 
 1. From another app entirely, press ⌃⌥⇧⌘5.
 2. The scope overlay opens (drag an area, or press W for a window) — the same
@@ -195,7 +195,7 @@ System Settings › Accessibility › Display › **Reduce motion**, on.
 ## 5. The shortcut and the menu bar
 
 - **Shortcuts editor** (Profile › the shortcuts list): there is a fourth row,
-  **Capture with Self-Timer**, bound to ⌃⌥⇧⌘5. Rebind it, quit, reopen — it
+  **Shot with Self-Timer**, bound to ⌃⌥⇧⌘5. Rebind it, quit, reopen — it
   sticks. Unbind it — the menu-bar item shows no accelerator rather than "—".
 - **Menu bar**: the item is there, in the same list as the other three, and
   fires. While a capture is in flight all four grey out.

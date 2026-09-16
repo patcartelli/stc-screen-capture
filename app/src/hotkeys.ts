@@ -35,33 +35,58 @@
 /**
  * What a global shortcut can be bound to.
  *
- * Three of these take a still immediately. `self-timer` (STC-391) does NOT,
- * and that is the structural point of it being here: this list was built when
- * every action was an instant still, and the name `CaptureAction` is now one
- * word short of the truth. Nothing in this module cares — an action is a thing
- * a key starts, and `main.ts` decides what it starts — but `captureStill` and
- * `trayTemplate` both iterate it, so anything added here has to be something
- * both of them can honour.
+ * Three of these take a shot immediately. `self-timer` (STC-391) does NOT —
+ * it starts a countdown first — and that is the structural point of it being
+ * here: this list was built when every action was an instant still, and under
+ * the old name `CaptureAction` that made the name one word short of the truth.
+ * `ShotAction` (STC-398) is the better name for exactly that reason: it names
+ * the OUTCOME rather than the timing, and all four produce a shot.
+ *
+ * Nothing in this module cares which — an action is a thing a key starts, and
+ * `main.ts` decides what it starts — but `captureStill` and `trayTemplate`
+ * both iterate it, so anything added here has to be something both can honour.
+ *
+ * The VALUES are the ids `settings.json` stores bindings against and may not
+ * be renamed without a settings migration; the type's name is free.
  */
-export type CaptureAction = "region" | "window" | "display" | "self-timer";
+export type ShotAction = "region" | "window" | "display" | "self-timer";
 
 /** Order matters: it is the order preferences lists, and the order duplicate
  * detection resolves in — the first action to claim an accelerator keeps it. */
-export const CAPTURE_ACTIONS: readonly CaptureAction[] =
+export const SHOT_ACTIONS: readonly ShotAction[] =
   ["region", "window", "display", "self-timer"];
 
-export const ACTION_LABELS: Record<CaptureAction, string> = {
-  region: "Capture Region",
-  window: "Capture Window",
-  display: "Capture Full Display",
+/**
+ * What each action is CALLED (STC-398).
+ *
+ * "Shot", not "Capture": the app itself is now called Capture (STC-397), so
+ * the stills mode cannot also be — one word would name both the product and
+ * one of the two things it does. "Shot" follows macOS's own screenshot
+ * language, and it is what this codebase has called the artefact all along
+ * (`shot.json`, `parseShot`, the `Shot` type), so the UI now agrees with the
+ * data model rather than contradicting it. Motion stays "Record".
+ *
+ * These are LABELS only. The action ids they key off (`region`, `window`,
+ * `display`, `self-timer`) are unchanged and are what `settings.json`
+ * persists a user's bindings against — renaming a label cannot cost anyone
+ * a hotkey, which is this ticket's own acceptance criterion.
+ *
+ * "Area" rather than "Region" to match the Scope picker in the main window,
+ * which has called it Area since STC-374; the two naming the same rectangle
+ * differently was a small existing inconsistency worth closing while here.
+ */
+export const ACTION_LABELS: Record<ShotAction, string> = {
+  region: "Shot Area",
+  window: "Shot Window",
+  display: "Shot Full Display",
   // Named for what it does rather than for the countdown it shows: the
   // countdown is the mechanism, "with a delay" is the reason anyone reaches
-  // for it. It is one capture, not a mode that stays on (STC-391).
-  "self-timer": "Capture with Self-Timer",
+  // for it. It is one shot, not a mode that stays on (STC-391).
+  "self-timer": "Shot with Self-Timer",
 };
 
 /** `null` is a deliberately unbound action, which is not a failure. */
-export type Shortcuts = Record<CaptureAction, string | null>;
+export type Shortcuts = Record<ShotAction, string | null>;
 
 /**
  * All four modifiers at once — what a caps-lock "hyperkey" remap sends.
@@ -230,7 +255,7 @@ function canonicalKey(token: string): string | undefined {
 // ── planning a whole set ────────────────────────────────────────────────────
 
 export interface ShortcutPlan {
-  action: CaptureAction;
+  action: ShotAction;
   /** The normalised accelerator when it is bindable; otherwise what was asked
    * for, verbatim, so the UI can show the user their own text back. */
   accelerator: string | null;
@@ -243,14 +268,14 @@ export interface ShortcutPlan {
 /**
  * What each action would bind to, before anything is registered.
  *
- * Duplicates are resolved in `CAPTURE_ACTIONS` order rather than rejected on
+ * Duplicates are resolved in `SHOT_ACTIONS` order rather than rejected on
  * both sides: two actions on one key can only fire one of them, and silently
  * letting the pair through would give the user a binding whose behaviour
  * depends on registration order.
  */
 export function planShortcuts(s: Shortcuts): ShortcutPlan[] {
   const taken = new Set<string>();
-  return CAPTURE_ACTIONS.map((action): ShortcutPlan => {
+  return SHOT_ACTIONS.map((action): ShortcutPlan => {
     const wanted = s[action];
     if (wanted == null || wanted === "") return { action, accelerator: null };
     const parsed = parseAccelerator(wanted);

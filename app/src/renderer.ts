@@ -69,9 +69,9 @@ declare const recorder: {
   // `publish`, and the rest) moved to `editor-preload.ts`, the only bridge
   // that still calls them.
   openEditor(dir: string, name: string): Promise<boolean>;
-  captureStill(action?: CaptureAction): Promise<StillResult>;
+  captureStill(action?: ShotAction): Promise<StillResult>;
   getShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
-  setShortcut(action: CaptureAction, accelerator: string | null):
+  setShortcut(action: ShotAction, accelerator: string | null):
     Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   chooseStillDestination(): Promise<{ destination: string | null }>;
@@ -88,9 +88,9 @@ declare const recorder: {
 
 import { COUNTDOWN_OPTIONS } from "./countdown.js";
 import {
-  ACTION_LABELS, CAPTURE_ACTIONS, acceleratorFromKeyStroke, explainShortcut,
+  ACTION_LABELS, SHOT_ACTIONS, acceleratorFromKeyStroke, explainShortcut,
   formatAccelerator, parseAccelerator,
-  type CaptureAction, type ShortcutReport, type Shortcuts,
+  type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { renderLibrary, type LibraryCallbacks } from "./library-view.js";
 import type { LibraryItem, LibraryList } from "./library-items.js";
@@ -447,7 +447,7 @@ function stillStatus(text?: string): void {
 }
 
 const KIND_WORDS: Record<string, string> = {
-  region: "region", window: "window", display: "full display",
+  region: "area", window: "window", display: "full display",
 };
 
 /**
@@ -465,14 +465,14 @@ async function reportStill(r: StillResult): Promise<void> {
     alertUser(r.code === "no-displays"
       ? "Screen Recording permission is required.\nGrant it in System Settings › Privacy & Security › Screen & System Audio Recording, then try again."
       : r.code === "still-unsupported"
-      ? "Still capture needs macOS 14 or newer."
+      ? "Shots need macOS 14 or newer."
       : r.code === "overlay-open"
-      ? "A capture is already in progress."
-      : `Could not capture: ${r.code}\n${r.detail ?? ""}`);
+      ? "A shot is already in progress."
+      : `Could not take the shot: ${r.code}\n${r.detail ?? ""}`);
     return;
   }
   const px = r.shot?.frame ? `${r.shot.frame.width} × ${r.shot.frame.height}` : "";
-  stillStatus(`Captured ${KIND_WORDS[r.kind ?? ""] ?? "still"} ${px} → ${r.dir?.split("/").pop() ?? ""}`);
+  stillStatus(`Shot ${KIND_WORDS[r.kind ?? ""] ?? ""} ${px} → ${r.dir?.split("/").pop() ?? ""}`.replace(/\s+/g, " "));
   if (r.warning) alertUser(r.warning);
   await refreshTakes();
   // The floating thumbnail (STC-296) is presented from the MAIN process, not
@@ -498,7 +498,7 @@ stillBtn.addEventListener("click", async () => {
   try {
     await reportStill(await recorder.captureStill("region"));
   } catch (e: any) {
-    alertUser(`Could not capture: ${e?.message ?? e}`);
+    alertUser(`Could not take the shot: ${e?.message ?? e}`);
   } finally {
     stillBtn.disabled = false;
   }
@@ -529,10 +529,10 @@ const START_FAULTS: Record<string, string> = {
   // between disabling and pressing — still worth a real message rather than
   // a raw error code.
   "no-capture-target": "Choose a window or an area to record before pressing Record.",
-  // STC-391: a still capture is mid-flight — most likely a self-timer, which
+  // STC-391: a shot is mid-flight — most likely a self-timer, which
   // now spends seconds waiting with this window still live and pressable.
   "capture-in-flight":
-    "A capture is already in progress. Finish or cancel it, then press Record.",
+    "A shot is already in progress. Finish or cancel it, then press Record.",
   "no-displays":
     "Screen Recording permission is required.\nGrant it in System Settings › " +
     "Privacy & Security › Screen & System Audio Recording, then try again.",
@@ -1094,15 +1094,15 @@ refreshTakes();
 const shortcutList = $("shortcuts");
 let shortcutState: { shortcuts: Shortcuts; report: ShortcutReport[] } | undefined;
 /** Which row is waiting for a keystroke, if any. */
-let listening: CaptureAction | undefined;
+let listening: ShotAction | undefined;
 
-function reportFor(action: CaptureAction): ShortcutReport | undefined {
+function reportFor(action: ShotAction): ShortcutReport | undefined {
   return shortcutState?.report.find((r) => r.action === action);
 }
 
 function renderShortcuts(): void {
   shortcutList.replaceChildren();
-  for (const action of CAPTURE_ACTIONS) {
+  for (const action of SHOT_ACTIONS) {
     const row = document.createElement("div");
     row.className = "shortcut";
 
@@ -1140,7 +1140,7 @@ function renderShortcuts(): void {
   }
 }
 
-async function applyShortcut(action: CaptureAction, accelerator: string | null): Promise<void> {
+async function applyShortcut(action: ShotAction, accelerator: string | null): Promise<void> {
   listening = undefined;
   try {
     shortcutState = await recorder.setShortcut(action, accelerator);

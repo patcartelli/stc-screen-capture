@@ -98,8 +98,8 @@ the accelerators render as glyphs.** Re-run this after any change to
   legible at a glance and must invert with the menu bar** — check in both Light
   and Dark appearance (System Settings › Appearance), and with a light and a
   dark desktop picture if the menu bar is translucent.
-* Click it. Four items and two separators: Capture Region, Capture Window,
-  Capture Full Display, ──, Open Library, ──, Quit Capture.
+* Click it. Four items and two separators: Shot Area, Shot Window,
+  Shot Full Display, ──, Open Library, ──, Quit Capture.
 * The three captures show `⌃⌥⇧⌘1`, `⌃⌥⇧⌘2`, `⌃⌥⇧⌘3` on their right. **Electron
   renders those glyphs itself** from the accelerator string — if they appear as
   the literal text `Control+Alt+Shift+Command+1`, the template is handing over

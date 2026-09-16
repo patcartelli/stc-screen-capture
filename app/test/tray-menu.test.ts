@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, bgraFromMask, marqueeMask, trayTemplate,
 } from "../src/tray-menu.js";
-import { CAPTURE_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
+import { SHOT_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 
 /**
  * The menu-bar item's contents and icon (STC-292).
@@ -22,8 +22,8 @@ describe("the menu", () => {
     // Sliced by the LIST's own length, not by a literal 3 — the claim is
     // "every capture action", and the literal made that claim go stale the
     // first time an action was added (STC-391's self-timer).
-    expect(ids({ shortcuts: DEFAULT_SHORTCUTS }).slice(0, CAPTURE_ACTIONS.length))
-      .toEqual(CAPTURE_ACTIONS.map((a) => `capture:${a}`));
+    expect(ids({ shortcuts: DEFAULT_SHORTCUTS }).slice(0, SHOT_ACTIONS.length))
+      .toEqual(SHOT_ACTIONS.map((a) => `capture:${a}`));
   });
 
   test("there is a way back to a window and a way to quit", () => {
@@ -54,8 +54,8 @@ describe("the menu", () => {
     // Every capture, however many there are — and the count is asserted too,
     // so "disables the captures" cannot be satisfied by a filter that found
     // none of them.
-    expect(captures).toHaveLength(CAPTURE_ACTIONS.length);
-    expect(captures.map((i) => i.enabled)).toEqual(CAPTURE_ACTIONS.map(() => false));
+    expect(captures).toHaveLength(SHOT_ACTIONS.length);
+    expect(captures.map((i) => i.enabled)).toEqual(SHOT_ACTIONS.map(() => false));
     expect(busy.find((i) => i.id === "library")!.enabled).not.toBe(false);
     expect(busy.find((i) => i.id === "quit")!.enabled).not.toBe(false);
   });

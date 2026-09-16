@@ -6,7 +6,7 @@ import {
   readSettings, writeSettings, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
   DEFAULT_THUMBNAIL_SETTINGS, DEFAULT_SCOPE_SETTINGS,
 } from "../src/settings.js";
-import { CAPTURE_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
+import { SHOT_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
 
 /**
@@ -225,7 +225,7 @@ describe("the capture shortcuts", () => {
     // The declared list rather than three literals: the fault this catches is
     // `regoin` reaching the file, which it still catches, and it does not go
     // stale the next time an action is added.
-    expect(Object.keys(stored.shortcuts).sort()).toEqual([...CAPTURE_ACTIONS].sort());
+    expect(Object.keys(stored.shortcuts).sort()).toEqual([...SHOT_ACTIONS].sort());
   });
 });
 

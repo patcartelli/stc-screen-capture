@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  CAPTURE_ACTIONS, DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
+  ACTION_LABELS, SHOT_ACTIONS, DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
   acceleratorFromKeyStroke, explainShortcut, formatAccelerator,
   parseAccelerator, planShortcuts,
   type ShortcutReport, type Shortcuts,
@@ -99,8 +99,8 @@ describe("planning a whole set", () => {
 
   test("the defaults all plan clean, and differ from each other", () => {
     const p = plan({});
-    expect(p.map((x) => x.problem)).toEqual(CAPTURE_ACTIONS.map(() => undefined));
-    expect(new Set(p.map((x) => x.accelerator)).size).toBe(CAPTURE_ACTIONS.length);
+    expect(p.map((x) => x.problem)).toEqual(SHOT_ACTIONS.map(() => undefined));
+    expect(new Set(p.map((x) => x.accelerator)).size).toBe(SHOT_ACTIONS.length);
   });
 
   test("no default collides with a system binding", () => {
@@ -211,5 +211,45 @@ describe("showing a binding", () => {
 
   test("an unbound action renders as a dash, not as an empty gap", () => {
     expect(formatAccelerator(null)).toBe("—");
+  });
+});
+
+/**
+ * Stills are called "Shot" now (STC-398).
+ *
+ * The rename is a LABEL change, and this pins the thing that makes that safe:
+ * the action ids are what `settings.json` stores a user's bindings against, so
+ * a label may be rewritten freely but an id may not — renaming one silently
+ * unbinds every hotkey that user had chosen. That is this ticket's own second
+ * acceptance criterion, and it is the half no amount of reading the labels
+ * would catch.
+ */
+describe("stills are Shot (STC-398)", () => {
+  test("no label calls a still a Capture — the app itself is Capture now", () => {
+    for (const [action, label] of Object.entries(ACTION_LABELS)) {
+      expect(label, `${action} still says Capture`).not.toMatch(/capture/i);
+    }
+  });
+
+  test("every label says Shot", () => {
+    for (const label of Object.values(ACTION_LABELS)) expect(label).toMatch(/^Shot\b/);
+  });
+
+  test("the action IDS are untouched, so stored bindings still resolve", () => {
+    // Exactly the keys a pre-rename settings.json holds. If this list ever has
+    // to change, it needs a settings migration — not a relabel.
+    expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer"]);
+    expect(Object.keys(DEFAULT_SHORTCUTS).sort())
+      .toEqual(["display", "region", "self-timer", "window"]);
+  });
+
+  test("a binding stored before the rename still plans onto its action", () => {
+    // A real pre-rename shortcuts block, keyed by id rather than by label.
+    const stored = { region: `${HYPER}+1`, window: `${HYPER}+2`,
+                     display: `${HYPER}+3`, "self-timer": `${HYPER}+5` };
+    const planned = planShortcuts(stored);
+    for (const p of planned) {
+      expect(p.accelerator, `${p.action} lost its binding`).toBe(stored[p.action]);
+    }
   });
 });
