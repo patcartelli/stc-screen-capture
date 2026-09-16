@@ -132,6 +132,10 @@ final class App {
             start(cmd, seq: seq)
         case "stop":
             stop(seq: seq)
+        case "pause":
+            setPaused(true, seq: seq)
+        case "resume":
+            setPaused(false, seq: seq)
         case "quit":
             shutdown(reason: "quit", exitCode: 0, seq: seq)
         case let other:
@@ -359,6 +363,30 @@ final class App {
         }
     }
 
+    /// Pause and resume (STC-240).
+    ///
+    /// Deliberately NOT a new `State` case: a paused take is still
+    /// `.recording`. Adding `.paused` would mean auditing every
+    /// `state == .recording` site in this file, and that is precisely the
+    /// mistake STC-376 cost a take its moov atom for — `shutdown()`'s guard
+    /// read `.recording || .starting` and fell through neither once the state
+    /// had reached `.stopping`.
+    ///
+    /// Idempotent. `changed` reports whether this call did anything, so a
+    /// caller that cares can tell; the pill does not, because a double-click
+    /// on a pause button is not an error worth a dialog.
+    private func setPaused(_ want: Bool, seq: Int?) {
+        guard state == .recording, let capture else {
+            IO.send("error", seq: seq,
+                    ["code": "bad-state",
+                     "detail": "cannot \(want ? "pause" : "resume") while \(state.rawValue)"])
+            return
+        }
+        let changed = want ? capture.pause() : capture.resume()
+        IO.send(want ? "paused" : "resumed", seq: seq,
+                ["paused": capture.isPaused, "changed": changed])
+    }
+
     /// See `idleWaiters`'s own doc comment (STC-376).
     private func notifyIdle() {
         idleWaitersLock.lock()
@@ -391,6 +419,7 @@ final class App {
             var o: [String: Any] = ["state": self.state.rawValue]
             if self.state == .recording {
                 o["elapsedMs"] = (Clock.nowNs() - self.startedAtNs) / 1_000_000
+                o["paused"] = self.capture?.isPaused ?? false
             }
             if let s = self.capture?.stats() { o.merge(s) { a, _ in a } }
             IO.stat("stats", o)
