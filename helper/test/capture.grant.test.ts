@@ -162,3 +162,81 @@ describe("capture — a real recording (requires Screen Recording)", () => {
     expect(typeof anchors.t0Ns).toBe("string");
   }, 120_000);
 });
+
+describe("capture — pause and resume on a live take (STC-240)", () => {
+  test("the display gate fires, and nothing on disk sits inside a pause", async () => {
+    const probe = await tryOneRecording();
+    if (probe.ev !== "started") throw explainFailedStart(probe, "pause/resume");
+
+    const dir = session();
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "start", dir, seq: 1 });
+    expect((await waitFor(() => h.fd3.find((l) => l.seq === 1), 20_000, "started")).ev)
+      .toBe("started");
+
+    await sleep(1000);
+    h.send({ cmd: "pause", seq: 2 });
+    const paused = await waitFor(() => h.fd3.find((l) => l.seq === 2), 10_000, "paused");
+    expect(paused.ev).toBe("paused");
+    expect(paused.paused).toBe(true);
+    expect(paused.changed).toBe(true);
+
+    // 2 s, not 200 ms: a short pause is indistinguishable from a momentarily
+    // idle screen, which VFR legitimately emits no frames for. At 60 fps this
+    // span would carry ~120 frames if the gate did nothing.
+    await sleep(2000);
+
+    // Idempotence on the real helper, not only in the pure tests.
+    h.send({ cmd: "pause", seq: 3 });
+    const again = await waitFor(() => h.fd3.find((l) => l.seq === 3), 10_000, "pause again");
+    expect(again.ev).toBe("paused");
+    expect(again.changed).toBe(false);
+
+    h.send({ cmd: "resume", seq: 4 });
+    const resumed = await waitFor(() => h.fd3.find((l) => l.seq === 4), 10_000, "resumed");
+    expect(resumed.ev).toBe("resumed");
+    expect(resumed.paused).toBe(false);
+    expect(resumed.changed).toBe(true);
+
+    await sleep(1000);
+    h.send({ cmd: "stop", seq: 5 });
+    const stopped = await waitFor(() => h.fd3.find((l) => l.seq === 5), 30_000, "stopped");
+    expect(stopped.ev).toBe("stopped");
+
+    // The display gate fired. Read from the stop reply's own stats rather than
+    // polled mid-take: heartbeat stats land on the LOSSY stdout channel at a
+    // 2 s default interval, so a test timing itself against them would be
+    // racing a channel designed to drop messages.
+    expect(stopped.framesPaused as number,
+      "frames arrived during the pause and were gated").toBeGreaterThan(0);
+    expect(stopped.frames as number, "the take still recorded").toBeGreaterThan(0);
+
+    const load = (f: string) => JSON.parse(readFileSync(join(dir, f), "utf8"));
+    const anchors = load("anchors.json");
+    expect(anchors.version).toBe(5);
+    expect(anchors.pauses).toHaveLength(1);
+    const [span] = anchors.pauses;
+    expect(span.endNs).toBeGreaterThan(span.startNs);
+
+    const ajv = new Ajv({ allErrors: true, strict: true });
+    const validate = ajv.compile(JSON.parse(
+      readFileSync(join(root, "schema/anchors-5.schema.json"), "utf8")));
+    expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
+
+    // THE INVARIANT. The helper's drop rule and the transform's cut rule are
+    // the same predicate over the same intervals, so a survivor means they
+    // have drifted — and PR B would then cut a real sample out of the export,
+    // which looks like correct video. Half-open, so the synthetic re-anchor AT
+    // endNs is outside the span and needs no exception carved for it.
+    const events = load("events.json");
+    const inside = events.events.filter(
+      (e: { t: number }) => e.t >= span.startNs && e.t < span.endNs);
+    expect(inside, `events recorded inside the pause: ${JSON.stringify(inside)}`).toEqual([]);
+
+    // And the one thing that must exist at the seam.
+    const anchor = events.events.find(
+      (e: { t: number; kind: string }) => e.kind === "move" && e.t === span.endNs);
+    expect(anchor, "a resume must leave one synthetic move at its own instant").toBeTruthy();
+  }, 90_000);
+});
