@@ -1,5 +1,7 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication } from "playwright";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 
@@ -20,7 +22,11 @@ describe("a helper binary that does not exist", () => {
     const { dir } = makeTakeFolder();
     app = await electron.launch({
       args: [root], cwd: root,
-      env: { ...process.env, STC_RECORDINGS_DIR: dir, STC_HELPER_BIN: "/nonexistent/stc-helper" },
+      env: {
+        ...process.env, STC_RECORDINGS_DIR: dir,
+        STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+        STC_HELPER_BIN: "/nonexistent/stc-helper",
+      },
     });
     const win = await app.firstWindow();
     await win.waitForLoadState("domcontentloaded");

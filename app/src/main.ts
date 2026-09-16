@@ -26,10 +26,14 @@ import {
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync } from "node:fs";
-import { readFile, writeFile, stat, open, copyFile, rm } from "node:fs/promises";
+import { readFile, writeFile, stat, open, copyFile, rm, mkdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
+import {
+  tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
+  purgeStaleTempTakes, listTempTakes,
+} from "./temp-takes.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
@@ -125,6 +129,20 @@ let capturing = false;
  */
 let lastStillFile: string | undefined;
 
+/**
+ * Inside the library root OR the temp root (STC-393).
+ *
+ * An unsaved capture's own panel still needs to read its frame, redact it,
+ * reveal it or discard it while it sits in temp — `insideTakesRoot` alone
+ * would refuse all of that the moment captures stopped landing in the
+ * library immediately. Handlers that only ever operate on an ALREADY-saved
+ * take (the library grid, the editor, duplicate) keep using
+ * `insideTakesRoot` unwidened: a temp take has no business reaching them.
+ */
+function insideCaptureRoot(env: NodeJS.ProcessEnv, dir: string): boolean {
+  return insideTakesRoot(env, dir) || insideTempTakesRoot(env, dir);
+}
+
 // The renderer is sandboxed and cannot read files. It gets bytes over IPC and
 // never names a path: it may ask for one of a few fixed filenames, and only
 // from the take the main process deliberately opened.
@@ -208,7 +226,19 @@ function startSupervisor(): void {
   // gone, and that must be stated rather than left to look like an idle reset.
   sup.on("recording-lost", (i) => send("helper:recording-lost", i));
   // Stopped cleanly without being asked — the take is intact, unlike a loss.
+  // Already promoted out of temp storage by the time this fires (STC-393):
+  // `HelperSupervisor.endRecording` does that before emitting, so a grid
+  // refresh triggered by this event finds the take where it now lives.
   sup.on("recording-ended", (i) => send("helper:recording-ended", i));
+  // A promotion that failed (STC-393) — the take is still a real recording,
+  // just stuck in temp storage rather than the library. Surfaced as a
+  // warning rather than folded into `recording-lost`: the file is intact,
+  // unlike a genuine loss, and crash recovery will pick it up on next launch
+  // if nothing here gets to it first.
+  sup.on("recording-promote-failed", (i) => send("helper:warning", {
+    code: "recording-not-promoted",
+    detail: `Recording saved but could not be moved into the library: ${i?.dir}`,
+  }));
   sup.on("helper:warning", (l) => send("helper:warning", l));
   // STC-287. The camera opens off the critical path (deliberately — see
   // Capture.swift), so it goes live a second or so AFTER recording starts. The
@@ -221,7 +251,90 @@ function startSupervisor(): void {
   sup.on("helper:mic-started", (l) => send("helper:mic-started", l));
 }
 
-app.whenReady().then(() => {
+/**
+ * Purge, then — whatever survives that — offer to recover it (STC-393).
+ *
+ * Order matters: a temp take that is only stale gets silently deleted by the
+ * purge and must never reach the prompt, or "N unsaved takes recovered"
+ * would include things the app itself just decided to throw away.
+ *
+ * Nothing can be "claimed" yet at the point this runs — no capture has
+ * started this session — so every survivor is, by definition, something a
+ * PREVIOUS run left behind with no panel and no clean stop to claim it.
+ */
+async function recoverUnsavedTakes(): Promise<void> {
+  await purgeStaleTempTakes(process.env).catch((e) => {
+    console.error("[temp-takes] purge failed:", e);
+    return [];
+  });
+  const orphaned = await listTempTakes(process.env).catch((e) => {
+    console.error("[temp-takes] could not list temp storage:", e);
+    return [];
+  });
+  if (orphaned.length === 0) return;
+
+  const { response } = await dialog.showMessageBox({
+    type: "info",
+    buttons: ["Review", "Discard all"],
+    defaultId: 0,
+    cancelId: 0,
+    message: orphaned.length === 1 ? "1 unsaved take recovered" : `${orphaned.length} unsaved takes recovered`,
+    detail: "The app didn't shut down cleanly last time — these captures never made it to your library.",
+  });
+
+  if (response === 1) {
+    for (const t of orphaned) await rm(t.dir, { recursive: true, force: true }).catch(() => {});
+    return;
+  }
+
+  // Oldest first: `presentThumbnail` always unshifts its newest call to the
+  // front of the stack, so presenting in this order leaves the genuinely
+  // most-recent recovered take frontmost — matching the ticket's "most
+  // recent first, and focuses it" for the one part of that rule this app can
+  // still express (`showInactive`, not real OS focus — see thumbnail-window.ts).
+  const ordered = [...orphaned].reverse();
+  const { thumbnail } = readSettings(app.getPath("userData"));
+  for (const t of ordered) {
+    if (t.kind === "still") {
+      try {
+        const shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
+        presentThumbnail({
+          dir: t.dir, shot, corner: thumbnail.corner, timeoutMs: thumbnail.timeoutMs,
+          dist: here, rendererDir: join(here, "..", "renderer"),
+          settleAction: thumbnail.settleAction,
+        });
+      } catch (e) {
+        console.error("[recovery] could not reopen a recovered still:", t.dir, e);
+      }
+    } else if (t.kind === "recording") {
+      // No STC-392 panel exists yet for a recording, so there is nothing to
+      // "bring back" — the closest honest equivalent is to save it outright
+      // (rather than let it expire silently in 7 days) and bring the library
+      // where it now lives in front of the user.
+      try {
+        await promoteTake(process.env, t.dir);
+        openLibrary();
+      } catch (e) {
+        console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
+      }
+    } else {
+      console.error("[recovery] unrecognised temp take, leaving it in place:", t.dir);
+    }
+  }
+}
+
+/** How often to sweep temp storage for stale takes while the app keeps running. */
+const TEMP_PURGE_INTERVAL_MS = 12 * 60 * 60 * 1000;
+
+app.whenReady().then(async () => {
+  // Ensured once, here, rather than by every capture: the leaf take directory
+  // is the helper's to create, but the temp root itself (several levels deep
+  // under Application Support) is this app's.
+  await mkdir(tempTakesRoot(process.env), { recursive: true }).catch((e) => {
+    console.error("[temp-takes] could not create the temp root:", e);
+  });
+  setInterval(() => { void purgeStaleTempTakes(process.env).catch(() => {}); }, TEMP_PURGE_INTERVAL_MS);
+
   startSupervisor();
   shortcuts = readSettings(app.getPath("userData")).shortcuts;
   // The menu bar first, and deliberately: from here on the app is allowed to
@@ -236,11 +349,15 @@ app.whenReady().then(() => {
   applyShortcuts(shortcuts);
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  // Fire-and-forget: a window already exists for "Review" to bring forward,
+  // and nothing else in startup depends on this finishing first.
+  void recoverUnsavedTakes();
 });
 
 app.on("window-all-closed", async () => {
   // A take in flight when its window goes is ENDED, not abandoned: the helper
   // would otherwise keep recording with nothing left that could stop it.
+  // `stopRecording` promotes it out of temp storage on its own (STC-393).
   if (sup?.state === "recording") await sup.stopRecording().catch(() => {});
   // On macOS the app stays alive and the helper stays with it. Shutting the
   // helper down here left a reopened window (Dock click) with a supervisor
@@ -368,11 +485,15 @@ ipcMain.handle("recorder:start", async () => {
     // have its choice silently swapped for another.
     return { ok: false, code: "no-capture-target" };
   }
-  const root = takesRoot(process.env);
+  // Temp storage, not the library (STC-393): the take is not real until a
+  // clean stop promotes it, so a denied grant or a crash mid-recording leaves
+  // nothing in the library at all rather than a broken entry someone has to
+  // notice and clean up. The helper creates the leaf directory itself and
+  // removes it again if the start fails; the root above it is ensured once at
+  // launch (`app.whenReady`).
+  const root = tempTakesRoot(process.env);
   const existing = existsSync(root) ? readdirSync(root) : [];
-  // The helper creates the directory itself, and removes it again if the start
-  // fails — so a denied grant leaves nothing behind on the user's Desktop.
-  const dir = newTakeDir(process.env, new Date(), existing);
+  const dir = newTempTakeDir(process.env, new Date(), existing);
   try {
     const r = await sup.startRecording(dir, startParams);
     return { ok: true, dir, info: r };
@@ -512,9 +633,12 @@ async function captureStill(action: CaptureAction, source: CaptureSource): Promi
       : await selectRegionOrWindow(action, thumbExcluded);
     if (outcome === undefined) return { ok: false, cancelled: true, source };
 
-    const root = takesRoot(process.env);
+    // Temp storage, not the library (STC-393) — see `recorder:start`'s
+    // identical reasoning. The panel (below) is what decides whether this
+    // capture ever becomes a library entry.
+    const root = tempTakesRoot(process.env);
     const existing = existsSync(root) ? readdirSync(root) : [];
-    const dir = newTakeDir(process.env, new Date(), existing);
+    const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup.captureStill({ dir, ...outcome.params });
     // The sound is the ONLY feedback a full-display hotkey capture gives — no
     // overlay was ever on screen — so it is played on every successful shot,
@@ -699,6 +823,9 @@ ipcMain.handle("shortcuts:reset", async () => {
 
 ipcMain.handle("recorder:stop", async () => {
   if (!sup) throw new Error("supervisor not running");
+  // `stopRecording` promotes the take out of temp storage on its own
+  // (STC-393) — no recording panel exists yet (STC-392), so a clean stop IS
+  // the save.
   const r = await sup.stopRecording();
   return { ok: true, info: r };
 });
@@ -929,13 +1056,30 @@ ipcMain.handle("still:export", async (_e, req: {
   // every saved frame.
   const options = resolveExportOptions(stored, req.options);
 
+  // The decision point (STC-393): every `still:export` call — Save, Copy,
+  // and Save As alike — is a "keep it" outcome, the only thing this panel
+  // model has that isn't an explicit discard. If the take is still in temp,
+  // promote it to the library FIRST, so `fallbackDir` below (the "beside the
+  // shot" default) resolves inside the take's final home rather than a
+  // directory about to be moved out from under the file just written there.
+  // `dir` is reassigned rather than left as `req.dir` so the reply can hand
+  // the renderer its new location.
+  let dir = req.dir && insideCaptureRoot(process.env, req.dir) ? req.dir : undefined;
+  if (dir) {
+    try { dir = await promoteTake(process.env, dir); }
+    catch (e) {
+      console.error("[still] could not move the shot into the library:", dir, e);
+    }
+  }
+
   // A take directory is the only fallback destination that may be named, and
-  // it must be inside the recordings root — the renderer is sandboxed and
-  // never gets to point the writer at an arbitrary path.
-  // `insideTakesRoot`, not `startsWith`: this path is handed to the helper,
-  // which CREATES directories and writes an image at it. A `..` segment or a
-  // sibling folder with the same prefix both pass a prefix test.
-  const fallbackDir = req.dir && insideTakesRoot(process.env, req.dir) ? req.dir : undefined;
+  // it must be inside the recordings root (or, before promotion above ran,
+  // the temp root) — the renderer is sandboxed and never gets to point the
+  // writer at an arbitrary path. `insideCaptureRoot`, not `startsWith`: this
+  // path is handed to the helper, which CREATES directories and writes an
+  // image at it. A `..` segment or a sibling folder with the same prefix both
+  // pass a prefix test.
+  const fallbackDir = dir && insideCaptureRoot(process.env, dir) ? dir : undefined;
 
   const still: CompositedStill = {
     bytes: req.bytes,
@@ -975,7 +1119,11 @@ ipcMain.handle("still:export", async (_e, req: {
     // Only a save is worth revealing. A copy's file lives in the cache and
     // exists so the pasteboard's URL points somewhere, not for the user.
     if (req.target.file && r.file) lastStillFile = r.file;
-    return { ok: true, ...r };
+    // `dir` only when it moved (STC-393): the renderer holds its own copy for
+    // every later call (redact, reveal, discard) and must update it once the
+    // shot has a new home, but a caller with no take of its own (the editor's
+    // frame grab) never sent one and should not be handed one back.
+    return { ok: true, ...r, ...(dir ? { dir } : {}) };
   } catch (e: any) {
     return { ok: false, code: e?.code ?? "export-failed",
              detail: e?.detail ?? String(e?.message ?? e) };
@@ -1105,7 +1253,7 @@ ipcMain.on("still:startDrag", (e, file: string) => {
  * it — a prefix test passes a `..` segment.
  */
 ipcMain.handle("still:revealShot", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideTakesRoot(process.env, dir) || !existsSync(dir)) return false;
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir) || !existsSync(dir)) return false;
   shell.showItemInFolder(dir);
   return true;
 });
@@ -1123,7 +1271,7 @@ ipcMain.handle("still:revealShot", async (_e, dir: string) => {
  * removes the directory the panel would otherwise export from.
  */
 ipcMain.handle("still:deleteShot", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideTakesRoot(process.env, dir)) {
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
     return { ok: false, detail: "not a shot this app wrote" };
   }
   if (!existsSync(dir)) return { ok: true };
@@ -1158,7 +1306,7 @@ ipcMain.handle("still:clearDestination", async () => {
  * place `still:capture` ever writes.
  */
 ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  if (!insideCaptureRoot(process.env, dir)) {
     throw new Error("refusing to read a path outside the recordings folder");
   }
   if (!/^[A-Za-z0-9._-]+\.png$/.test(name) || name.includes("..")) {
@@ -1189,7 +1337,7 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
  * is untouched here and is what the shot actually is.
  */
 ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  if (!insideCaptureRoot(process.env, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
   const file = join(dir, "shot.json");

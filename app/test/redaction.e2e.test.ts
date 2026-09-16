@@ -27,7 +27,7 @@ afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function launch(): Promise<{ win: Page; destDir: string }> {
+async function launch(): Promise<{ win: Page; destDir: string; recordings: string }> {
   const { dir: recordings } = makeTakeFolder();
   const destDir = mkdtempSync(join(tmpdir(), "stc-redact-dest-"));
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
@@ -40,13 +40,13 @@ async function launch(): Promise<{ win: Page; destDir: string }> {
     args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+      ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
       STC_NO_SHUTTER: "1",
     },
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
-  return { win, destDir };
+  return { win, destDir, recordings };
 }
 
 async function thumbnailWindow(ms = 15_000): Promise<Page> {
@@ -199,7 +199,7 @@ describe("redaction", () => {
   }, 60_000);
 
   test("the stored regions reach the export, not just the preview", async () => {
-    const { win, destDir } = await launch();
+    const { win, destDir, recordings } = await launch();
     const { panel, dir } = await redactingPanel(win);
     await dragBox(panel, [0.25, 0.3], [0.75, 0.65]);
     await expect.poll(() => storedRegions(dir).length, { timeout: 15_000 }).toBe(1);
@@ -215,8 +215,17 @@ describe("redaction", () => {
     const saved = readdirSync(destDir);
     expect(saved).toHaveLength(1);
     expect(readFileSync(join(destDir, saved[0]!)).length).toBeGreaterThan(0);
-    // The document that produced it still carries the region, so re-opening
-    // the shot later (STC-294) finds it rather than a flattened picture.
-    expect(storedRegions(dir)).toHaveLength(1);
+    // A save moves the take out of temp storage into the library (STC-393) —
+    // `dir` is stale once the panel has closed, so the document is looked up
+    // by the name `promoteTake` keeps (nothing else was ever going to be in
+    // this freshly isolated recordings root). The document that produced the
+    // export still carries the region, so re-opening the shot later
+    // (STC-294) finds it rather than a flattened picture.
+    // `launch()` seeds the library with its own fixture take (`makeTakeFolder`)
+    // for the app to have something to show at boot — filtered out here so
+    // this only names the take THIS test just captured and saved.
+    const savedShots = readdirSync(recordings).filter((n) => n !== "2026-08-24_10-00-00");
+    expect(savedShots).toHaveLength(1);
+    expect(storedRegions(join(recordings, savedShots[0]!))).toHaveLength(1);
   }, 60_000);
 });

@@ -44,7 +44,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
     // The overlay must not take input from the window server while this suite
     // is injecting its own: a real pointermove landing mid-gesture rewrites the
     // marquee, which is what made this file flaky on master. See overlay.ts.
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_STILL_LOG: stillLog, STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
   const win = await app.firstWindow();
@@ -145,9 +145,11 @@ describe("the selection overlay", () => {
     await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
                       { timeout: 10_000 }).toBe(0);
 
-    // Exactly one new directory, holding a shot the real loader accepts.
+    // Exactly one new directory, holding a shot the real loader accepts. The
+    // shot lands in temp storage first and only reaches the library once the
+    // floating panel settles (STC-393).
+    await expect.poll(() => readdirSync(recordings).length, { timeout: 15_000 }).toBe(before + 1);
     const dirs = readdirSync(recordings);
-    expect(dirs.length).toBe(before + 1);
     const shotDir = join(recordings, dirs.find((d) => !d.startsWith("2026-08-24"))!);
     expect(existsSync(join(shotDir, "frame.png"))).toBe(true);
     const shot = parseShot(JSON.parse(readFileSync(join(shotDir, "shot.json"), "utf8")));
@@ -203,6 +205,12 @@ describe("the selection overlay", () => {
     expect(req.windowId).toBe(4711);
     expect(req.crop).toBeUndefined();
 
+    // Lands in temp storage first, promoted to the library once the panel
+    // settles (STC-393).
+    await expect.poll(
+      () => readdirSync(recordings).filter((d) => !d.startsWith("2026-08-24")).length,
+      { timeout: 15_000 },
+    ).toBe(1);
     const dirs = readdirSync(recordings).filter((d) => !d.startsWith("2026-08-24"));
     const shot = parseShot(JSON.parse(readFileSync(join(recordings, dirs[0]!, "shot.json"), "utf8")));
     expect(shot.kind).toBe("window");

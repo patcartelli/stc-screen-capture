@@ -1,4 +1,6 @@
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
 
@@ -9,7 +11,15 @@ export async function launchApp(dir: string, env: Record<string, string> = {}):
     Promise<{ app: ElectronApplication; win: Page }> {
   const app = await electron.launch({
     args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: dir, ...env },
+    env: {
+      ...process.env, STC_RECORDINGS_DIR: dir,
+      // Isolated the same way the library root is (STC-393): without this,
+      // the app falls back to the REAL Application Support temp folder, and
+      // a launch-time crash-recovery prompt over real leftover content would
+      // block on a native dialog no test here can answer.
+      STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+      ...env,
+    },
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");

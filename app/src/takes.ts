@@ -38,10 +38,27 @@ export function takesRoot(env: NodeJS.ProcessEnv): string {
   return env.STC_RECORDINGS_DIR || join(homedir(), "Desktop", "stc");
 }
 
-function stamp(at: Date): string {
+/**
+ * Exported so `temp-takes.ts` names its own directories the same way, rather
+ * than re-deriving the format — the temp root and the library root are two
+ * different roots but one naming rule.
+ */
+export function stamp(at: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())}_` +
          `${p(at.getHours())}-${p(at.getMinutes())}-${p(at.getSeconds())}`;
+}
+
+/**
+ * `base`, or `base-2`/`base-3`/… if `base` collides with something already in
+ * `existing`. Split out of `newTakeDir` so `temp-takes.ts`'s `promoteTake`
+ * can reuse the exact same collision rule when a temp take's own name is
+ * already taken in the library — two different roots, one naming rule.
+ */
+export function uniqueTakeName(base: string, existing: string[]): string {
+  let name = base;
+  for (let n = 2; existing.includes(name); n++) name = `${base}-${n}`;
+  return name;
 }
 
 /**
@@ -52,10 +69,7 @@ function stamp(at: Date): string {
 export function newTakeDir(env: NodeJS.ProcessEnv, at: Date = new Date(),
                            existing: string[] = []): string {
   const root = takesRoot(env);
-  const base = stamp(at);
-  let name = base;
-  for (let n = 2; existing.includes(name); n++) name = `${base}-${n}`;
-  return join(root, name);
+  return join(root, uniqueTakeName(stamp(at), existing));
 }
 
 export const MAX_LABEL_LENGTH = 120;

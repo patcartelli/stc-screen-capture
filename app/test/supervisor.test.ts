@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { join } from "node:path";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { HelperSupervisor } from "../src/supervisor.js";
 import { withTimeout } from "../../transform/src/timeout.js";
@@ -135,5 +135,86 @@ describe("HelperSupervisor — the helper can stop itself", () => {
     const info = await notified;
     expect(info.reason).toBeDefined();
     expect(s.state).toBe("idle");
+  }, 20_000);
+});
+
+/**
+ * A clean stop promotes the take out of temp storage (STC-393), whichever of
+ * `stopRecording` or the self-initiated `endRecording` path got there — the
+ * whole point of putting the promote inside the supervisor rather than at
+ * each call site in `main.ts`.
+ *
+ * `promoteTake` reads `process.env` directly (matching every other Electron-
+ * free module in this app — `takes.ts`, `temp-takes.ts`), so these mutate it
+ * for the duration of the test rather than injecting it.
+ */
+describe("HelperSupervisor — promotes a clean stop out of temp storage (STC-393)", () => {
+  let base: string, tempRoot: string, libRoot: string, prevTemp: string | undefined, prevLib: string | undefined;
+
+  function setEnv() {
+    base = mkdtempSync(join(tmpdir(), "stc-sup-promote-"));
+    tempRoot = join(base, "temp");
+    libRoot = join(base, "lib");
+    mkdirSync(tempRoot, { recursive: true });
+    prevTemp = process.env.STC_TEMP_TAKES_DIR;
+    prevLib = process.env.STC_RECORDINGS_DIR;
+    process.env.STC_TEMP_TAKES_DIR = tempRoot;
+    process.env.STC_RECORDINGS_DIR = libRoot;
+  }
+  function restoreEnv() {
+    if (prevTemp === undefined) delete process.env.STC_TEMP_TAKES_DIR; else process.env.STC_TEMP_TAKES_DIR = prevTemp;
+    if (prevLib === undefined) delete process.env.STC_RECORDINGS_DIR; else process.env.STC_RECORDINGS_DIR = prevLib;
+    rmSync(base, { recursive: true, force: true });
+  }
+
+  test("stopRecording() moves the take from temp into the library", async () => {
+    setEnv();
+    try {
+      const s = sup({}, FAKE_BIN);
+      live.push(s);
+      await s.ready();
+      const dir = join(tempRoot, "2026-09-16_10-00-00");
+      // Unlike the real helper, the stand-in does not create `dir` on start
+      // (its "start" handling has nothing that captures) — matched here so
+      // the promote at stop has something real to move.
+      mkdirSync(dir, { recursive: true });
+      await s.startRecording(dir);
+      await s.stopRecording();
+      expect(existsSync(dir)).toBe(false);
+      expect(existsSync(join(libRoot, "2026-09-16_10-00-00"))).toBe(true);
+    } finally { restoreEnv(); }
+  }, 20_000);
+
+  test("the helper stopping itself (recording-ended) promotes too, and reports the NEW dir", async () => {
+    setEnv();
+    try {
+      const s = sup();
+      live.push(s);
+      await s.ready();
+      const dir = join(tempRoot, "2026-09-16_11-00-00");
+      mkdirSync(dir, { recursive: true });
+      s.markRecordingForTest(dir);
+
+      const notified = new Promise<any>((res) => s.on("recording-ended", res));
+      const info = await notified;
+      expect(info.dir).toBe(join(libRoot, "2026-09-16_11-00-00"));
+      expect(existsSync(dir)).toBe(false);
+      expect(existsSync(info.dir)).toBe(true);
+    } finally { restoreEnv(); }
+  }, 20_000);
+
+  test("a dir outside the temp root (a bare test tmpdir) is left exactly where it was", async () => {
+    // The existing "start failure is reported" test above relies on this:
+    // `session()` makes a directory under the OS tmpdir, nowhere near
+    // whatever STC_TEMP_TAKES_DIR happens to be, and stopRecording() must not
+    // try to move it anywhere.
+    const dir = session();
+    const s = sup();
+    live.push(s);
+    await s.ready();
+    const started = await s.startRecording(dir).catch((e) => e);
+    if (started instanceof Error) return;   // no grant here — nothing to assert
+    await s.stopRecording();
+    expect(existsSync(dir)).toBe(true);
   }, 20_000);
 });
