@@ -16,14 +16,22 @@ import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
  * page can be occluded, throttled or never painted, and a countdown whose
  * clock lived there could silently take longer than it promised.
  *
- * ## A panel, not a scrim
+ * ## A panel, not a scrim — and centred
  *
  * The obvious countdown is a full-screen number. It cannot be one here: the
  * self-timer exists to let someone open a dropdown or hold a hover state
  * WHILE it runs, and a full-display window either swallows those clicks or has
  * to be click-through — at which point Skip and Cancel are unclickable. So it
- * is a small panel at the bottom centre of the target display, over its work
- * area so it clears the Dock, leaving every other pixel of the screen live.
+ * is a small panel, leaving every other pixel of the screen live.
+ *
+ * It sits in the CENTRE of the target display, horizontally and vertically.
+ * The first cut put it at the bottom centre on the reasoning that a countdown
+ * should keep out of the way; watched on hardware (2026-09-16) the centre is
+ * what reads as a countdown rather than as a notification, and is where other
+ * screen recorders put one. The cost is real and small: a 260x156 panel over
+ * the middle of the screen blocks clicks there for its duration. It cannot
+ * corrupt a capture — it is destroyed and excluded before the frame is taken —
+ * so what it costs is reach, not fidelity.
  *
  * ## Focus, and what is lost when it goes
  *
@@ -51,10 +59,6 @@ import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
 /** Panel geometry. Small enough to leave the screen usable, big enough for the
  * number to be read from across a desk. */
 const PANEL = { width: 260, height: 156 };
-/** Clearance from the bottom of the display's WORK area — which already
- * excludes the Dock and the menu bar, so this is a margin rather than a guess
- * at furniture. */
-const PANEL_MARGIN = 24;
 
 export interface CountdownOptions {
   /** How long, ms. The caller has already clamped it and already checked
@@ -100,7 +104,21 @@ export function runCountdown(opts: CountdownOptions): Promise<CountdownResult> {
   // screen.
   if (active) return Promise.resolve({ outcome: "cancelled", excludeWindowIds: [] });
   return new Promise<CountdownResult>((resolve) => {
-    active = new Session(opts, (r) => { active = undefined; resolve(r); });
+    // Constructed, PUBLISHED, and only then started. The obvious one-liner —
+    // `active = new Session(...)` with the clock started in the constructor —
+    // has a latent order bug that costs the app its ability to capture at all:
+    // a session that settles during its own construction runs the callback
+    // BEFORE the assignment completes, so `active = undefined` happens first
+    // and the assignment then puts the dead session back. `countdownIsOpen()`
+    // is true forever after that, and every later capture and Record is
+    // refused. The identity check is the second half: a stale session's settle
+    // may never clear a newer one.
+    const session = new Session(opts, (r) => {
+      if (active === session) active = undefined;
+      resolve(r);
+    });
+    active = session;
+    session.begin();
   });
 }
 
@@ -116,18 +134,26 @@ export function cancelCountdown(): void {
 }
 
 class Session {
-  private win: BrowserWindow;
+  private win!: BrowserWindow;
   private done = false;
-  private endsAt: number;
+  private endsAt = 0;
   private timer: NodeJS.Timeout | undefined;
 
-  constructor(private opts: CountdownOptions, private settle: (r: CountdownResult) => void) {
+  constructor(private opts: CountdownOptions, private settle: (r: CountdownResult) => void) {}
+
+  /** Opens the panel and starts the clock. Separate from the constructor so
+   * `runCountdown` can publish this session before anything it does can
+   * settle — see the comment there. */
+  begin(): void {
+    const opts = this.opts;
     this.endsAt = Date.now() + opts.ms;
     const display = this.targetDisplay();
     const { x, y, width, height } = display.workArea;
     this.win = new BrowserWindow({
       x: Math.round(x + (width - PANEL.width) / 2),
-      y: Math.round(y + height - PANEL.height - PANEL_MARGIN),
+      // Centred on the display's WORK area rather than its full bounds, so a
+      // Dock or a menu bar does not pull the apparent centre off true.
+      y: Math.round(y + (height - PANEL.height) / 2),
       width: PANEL.width, height: PANEL.height,
       transparent: true, frame: false, hasShadow: false,
       resizable: false, movable: false, minimizable: false, maximizable: false,
@@ -215,16 +241,42 @@ class Session {
     ipcMain.removeListener("countdown:event", this.onEvent);
 
     const excludeWindowIds: number[] = [];
-    if (!this.win.isDestroyed()) {
-      try {
-        const id = windowIdOf(this.win.getMediaSourceId());
-        if (id !== undefined) excludeWindowIds.push(id);
-      } catch { /* not available here; the hide below still stands */ }
-      this.win.hide();
-      await sleep(HIDE_SETTLE_MS);
-      if (!this.win.isDestroyed()) this.win.destroy();
+    // The teardown runs inside a `try` whose `finally` ALWAYS settles, and
+    // that is load-bearing rather than tidy. Every line below can throw on a
+    // window destroyed out from under it — `isDestroyed()` is a read, not a
+    // lock, and `hide()`/`destroy()` sit after it — and `finish` is invoked as
+    // `void this.finish(...)`, so a rejection here used to become an unhandled
+    // rejection with `settle` never called. The caller's promise then never
+    // resolved: `captureStill` waited on it forever with `capturing` still
+    // true, `active` stayed set, and the app could not capture OR record again
+    // for the rest of the session. A countdown failing to tear its own window
+    // down must cost that window, never the app's ability to record.
+    try {
+      if (!this.win.isDestroyed()) {
+        try {
+          const id = windowIdOf(this.win.getMediaSourceId());
+          if (id !== undefined) excludeWindowIds.push(id);
+        } catch { /* not available here; the hide below still stands */ }
+        // The fault injector, on the same idiom as `STC_CAPTURE_FAULT` and
+        // `STC_WG_FAULT`: the real trigger is a window destroyed in the gap
+        // between the `isDestroyed()` read above and this `hide()`, which is a
+        // timing coincidence no test can schedule. Without a way to reach it,
+        // the `finally` below is a guard nobody has watched fire — which this
+        // file already learned is indistinguishable from one that cannot.
+        if (process.env.STC_COUNTDOWN_FAULT === "teardown-throws") {
+          throw new Error("fault: the countdown panel's teardown failed");
+        }
+        this.win.hide();
+        await sleep(HIDE_SETTLE_MS);
+        if (!this.win.isDestroyed()) this.win.destroy();
+      }
+    } catch (e) {
+      // Named rather than swallowed: the panel may still be on screen, and a
+      // silent catch here is how that would go unexplained.
+      console.error("[countdown] tearing the panel down failed:", e);
+    } finally {
+      this.settle({ outcome, excludeWindowIds });
     }
-    this.settle({ outcome, excludeWindowIds });
   }
 }
 

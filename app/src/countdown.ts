@@ -62,6 +62,28 @@
 export const DEFAULT_COUNTDOWN_MS = 3000;
 
 /**
+ * What the profile sheet offers.
+ *
+ * Here rather than in the markup for `ACTION_LABELS`' reason: the list and the
+ * clamp that has to accept it belong together, and a test can then hold them
+ * to each other. `countdown-options.test.ts` asserts every option survives
+ * `clampCountdownMs` unchanged and that the default is one of them, so an
+ * option nobody can actually store is a failing test rather than a control
+ * that silently snaps back.
+ *
+ * **"Off" is deliberately not offered.** The ticket's first rule is that
+ * Record ALWAYS counts down, so a control that could switch it off would
+ * contradict the feature it belongs to. `countdownMs: 0` remains a legitimate
+ * stored value — rule 6, and what the test suite uses — reachable by editing
+ * the preferences file; it is simply not something the UI invites.
+ */
+export const COUNTDOWN_OPTIONS: readonly { ms: number; label: string }[] = [
+  { ms: 3000, label: "3 seconds" },
+  { ms: 5000, label: "5 seconds" },
+  { ms: 10_000, label: "10 seconds" },
+];
+
+/**
  * The longest a stored preference may ask for.
  *
  * Not taste: `countdown-window.ts` puts a focusable panel on screen and

@@ -1,8 +1,22 @@
 # STC-391 — the countdown, on a Mac
 
-Written on Linux. The component, both ways in, and the preference are built and
-tested; **nothing here has been looked at**. This is what only a Mac can settle,
-in the order worth doing it.
+**First hardware pass run 2026-09-16.** What it settled, and what it changed:
+
+- **Esc, Skip and Return work.** §1's keyboard half is confirmed.
+- **The ring reads as a countdown, not a spinner.** Confirmed.
+- **The panel moved to the CENTRE**, horizontally and vertically. It shipped at
+  the bottom centre on the reasoning that a countdown should keep out of the
+  way; watched on hardware, the centre is what reads as a countdown. Changed.
+- **3 s feels right, and the duration is now choosable** — 3/5/10 s in the
+  profile sheet, reversing this ticket's own "no control" call now that it has
+  been used. Off is deliberately not offered (rule 1: Record always counts
+  down).
+- **Second display: both routes work.** §6 is confirmed.
+- **Two bugs found.** One is fixed (see §7); one is still open and §8 is how to
+  pin it down.
+
+The rest is still unlooked-at. What follows is what a Mac settles, in the order
+worth doing it.
 
 Everything below assumes a build: `node app/build.mjs && npm run app:start`.
 
@@ -36,17 +50,19 @@ Then, three at a time:
 
 Judgements, all of them open:
 
-- **Is 3 s right?** The ticket's own Open item, answered as a default rather
-  than settled. It is `countdownMs` in `~/Library/Application
-  Support/Electron/settings.json` — edit it and relaunch. 0 turns it off.
-  Deliberately no control in this ticket; if a number other than 3 s wins, say
-  so and a control becomes worth building.
-- **Is the bottom centre right?** It is over the work area, so it clears the
-  Dock and the menu bar. The alternative was centre-screen, which is what
-  CleanShot does and what blocks the most clicks. If it covers something that
-  matters, `PANEL`/`PANEL_MARGIN` in `countdown-window.ts` are the dials.
-- **Does the ring read as a countdown or as a spinner?** It sweeps 0 → full
-  over the countdown; the number is the real signal and the ring is support.
+- ~~**Is 3 s right?**~~ **Settled: 3 s feels right, and there is a control
+  now** — Profile › Countdown offers 3/5/10 s. Off is not offered on purpose;
+  `countdownMs: 0` is still a legitimate stored value (edit
+  `~/Library/Application Support/Electron/settings.json`) and is what the test
+  suite uses, it is just not something the UI invites.
+- ~~**Is the bottom centre right?**~~ **Settled: centre.** It is centred on the
+  display's work area, so a Dock or menu bar does not pull the apparent centre
+  off true. `PANEL` in `countdown-window.ts` is the remaining dial (size). What
+  is still worth a look: a 260x156 panel over the middle of the screen blocks
+  clicks there for the countdown's duration — it cannot corrupt a capture, but
+  check it does not sit on top of the thing you were about to click.
+- ~~**Does the ring read as a countdown or as a spinner?**~~ **Settled: reads
+  as a countdown.**
 
 ## 2. It is never in the frame (the ticket's requirement 3)
 
@@ -134,11 +150,57 @@ With a second display:
   nothing else needs. If that fallback puts it somewhere silly in practice,
   that is the thing to report.
 
+## 7. The wedge, fixed — confirm it is gone
+
+Reported on the first pass: interrupting a self-timer with another capture
+showed "A capture is already in progress", and **nothing could record after
+that**.
+
+Root cause found and fixed: `Session.finish()`'s teardown ran outside any
+`try/finally`, so a throw there (a window destroyed in the gap after the
+`isDestroyed()` check) meant `settle` was never called. The caller's promise
+never resolved — `captureStill` waited on it forever with `capturing` still
+true and `active` still set — so every later capture and Record was refused
+for a capture that had already ended. It is in a `finally` now, and the
+`active` handle is published before the session starts and cleared by identity.
+
+To confirm by hand:
+
+1. Start a self-timer (⌃⌥⇧⌘5), pick a scope, and while it counts down press
+   **Record** and any other capture shortcut.
+2. Each should refuse with a message. The self-timer should carry on and
+   complete.
+3. **Then record something, and capture a still.** Both must work. That is the
+   half that used to be broken.
+
+## 8. The one bug still open: Record did not collapse to the pill
+
+Also reported on the first pass, and **not yet explained**: after the countdown
+ran and the take started, the main window showed the library instead of
+collapsing into the pill. The take itself was created, so the recording did
+start — this is the pill, not the start.
+
+Nothing in this ticket touches the pill: `attachPillToSupervisor` reconciles
+off the supervisor's own heartbeat and neither `recorder:start`'s countdown nor
+the panel window is in that path. It cannot be reproduced in the Linux sandbox
+at all — Xvfb has no window manager there, and `pill.e2e.test.ts` already
+records that a bare `win.setSize()` does nothing in it — so this needs the Mac.
+
+Two checks, in this order, and the first is the one that matters:
+
+1. **Does the pill work on `master`?** Switch to master, build, press Record.
+   If the window does not collapse there either, this is not STC-391's and
+   belongs to whatever landed before it.
+2. If master IS fine, then on this branch: does the window collapse **at all**,
+   even for a frame, before the library comes back? A collapse-then-restore
+   points at `sup.state` flickering; never collapsing at all points at the
+   heartbeat reconcile not firing.
+
 ## What is deliberately not here
 
-- **No control for the duration.** It is a real stored preference
-  (`countdownMs`), hand-editable, with no UI — settled with Patrick before any
-  code was written.
+- **No "Off" in the duration control.** Rule 1 is that Record always counts
+  down, so a control that could switch it off would contradict the feature.
+  `countdownMs: 0` remains storable by hand.
 - **No countdown on the menu-bar or hotkey Record.** There is no such entry
   point yet; STC-388 owns the Record flow from every door, and this ticket's
   countdown is what it will call.

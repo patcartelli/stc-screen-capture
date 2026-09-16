@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   clampCountdownMs, countdownCaption, countdownFired, countdownLabel, countdownView,
   decideCountdownKey, needsCountdown,
-  DEFAULT_COUNTDOWN_MS, MAX_COUNTDOWN_MS,
+  COUNTDOWN_OPTIONS, DEFAULT_COUNTDOWN_MS, MAX_COUNTDOWN_MS,
 } from "../src/countdown.js";
 
 /**
@@ -46,6 +46,37 @@ describe("how long (rule 6, and the ticket's own Open item)", () => {
     for (const bad of ["3000", null, NaN, Infinity, {}, []]) {
       expect(clampCountdownMs(bad), String(bad)).toBe(DEFAULT_COUNTDOWN_MS);
     }
+  });
+});
+
+describe("what the profile sheet offers", () => {
+  test("every option is a value the clamp will actually store", () => {
+    // The failure this catches is a control that silently snaps back: an
+    // option the stored value cannot hold looks like a working control and
+    // is not one.
+    for (const { ms } of COUNTDOWN_OPTIONS) {
+      expect(clampCountdownMs(ms), String(ms)).toBe(ms);
+      expect(needsCountdown(ms), String(ms)).toBe(true);
+    }
+  });
+
+  test("the default is one of them", () => {
+    // Otherwise a fresh install opens the sheet on a blank select.
+    expect(COUNTDOWN_OPTIONS.map((o) => o.ms)).toContain(DEFAULT_COUNTDOWN_MS);
+  });
+
+  test("every option has a label, and no two share a value", () => {
+    expect(COUNTDOWN_OPTIONS.every((o) => o.label.trim() !== "")).toBe(true);
+    expect(new Set(COUNTDOWN_OPTIONS.map((o) => o.ms)).size).toBe(COUNTDOWN_OPTIONS.length);
+  });
+
+  test("OFF is deliberately not offered", () => {
+    // Rule 1 is that Record always counts down, so a control that could
+    // switch it off would contradict the feature it belongs to. 0 stays a
+    // legitimate STORED value (rule 6) — it is just not something the UI
+    // invites, and this test is what stops it being added without a decision.
+    expect(COUNTDOWN_OPTIONS.map((o) => o.ms)).not.toContain(0);
+    expect(clampCountdownMs(0)).toBe(0);
   });
 });
 

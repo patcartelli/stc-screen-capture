@@ -52,7 +52,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface Launched { win: Page; startLog: string; stillLog: string; recordings: string }
 
-async function launch(): Promise<Launched> {
+async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
   const ud = mkdtempSync(join(tmpdir(), "stc-ud-"));
   const logs = mkdtempSync(join(tmpdir(), "stc-logs-"));
@@ -63,7 +63,7 @@ async function launch(): Promise<Launched> {
     cwd: root,
     env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_START_LOG: startLog, STC_FAKE_STILL_LOG: stillLog,
-           STC_OVERLAY_SYNTHETIC_INPUT: "1" },
+           STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#record");
@@ -216,6 +216,113 @@ describe("the panel itself", () => {
       .toBe("false");
     expect(await page.isVisible("#ring")).toBe(false);
     expect(await page.textContent("#count")).toMatch(/^\d+$/);
+  }, 120_000);
+});
+
+describe("a countdown that loses its own window does not wedge the app", () => {
+  test("a teardown that THROWS still settles, and Record works after", async () => {
+    // The fault this is really about, reached deliberately because its natural
+    // trigger is a timing coincidence. With the teardown outside a `finally`,
+    // the throw meant `settle` was never called: the caller's promise never
+    // resolved, `capturing` stayed true and `active` stayed set, so the app
+    // could not capture OR record again for the rest of the session.
+    const { win, startLog } = await launch({ STC_COUNTDOWN_FAULT: "teardown-throws" });
+    await withCountdown(win, LONGER_THAN_THE_TEST_MS);
+    await win.click("#record");
+    const page = await countdownPage();
+    await page.keyboard.press("Escape");
+
+    // Cancelled, so nothing was recorded — the throw must not turn a cancel
+    // into a take.
+    await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Record");
+    expect(lines(startLog)).toHaveLength(0);
+
+    // The part that matters: not wedged. A second Record has to reach a
+    // countdown again rather than be refused for a capture that has ended.
+    await win.click("#record");
+    await countdownPage();
+    expect(await win.textContent("#alert")).toBeFalsy();
+  }, 120_000);
+
+  test("destroying the panel mid-countdown still settles, and Record works after", async () => {
+    const { win, startLog } = await launch();
+    await withCountdown(win, LONGER_THAN_THE_TEST_MS);
+    await win.click("#record");
+    await countdownPage();
+
+    // Destroy the panel out from under the session — the shape of the real
+    // fault, which is that `finish`'s teardown can throw on a window that has
+    // gone between the `isDestroyed()` check and the `hide()` after it. Before
+    // the `finally`, that rejection meant `settle` was never called: the
+    // caller's promise never resolved, `capturing` stayed true and `active`
+    // stayed set, so the app could not capture OR record again for the rest of
+    // the session. This asserts the recovery, not the mechanism.
+    await app!.evaluate(({ BrowserWindow }) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (w.webContents.getURL().includes("countdown.html")) w.destroy();
+      }
+    });
+
+    // The countdown is gone and nothing was recorded — a lost panel cancels,
+    // it does not silently record.
+    await expect.poll(hasCountdownWindow, { timeout: 10_000 }).toBe(false);
+    expect(lines(startLog)).toHaveLength(0);
+
+    // The part that actually matters: the app is not wedged. A second Record
+    // must reach the countdown again rather than being refused for a capture
+    // that is no longer in flight.
+    await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
+    await win.click("#record");
+    await countdownPage();
+    expect(await win.textContent("#alert")).toBeFalsy();
+  }, 120_000);
+});
+
+describe("the countdown duration is choosable (STC-391, from hardware)", () => {
+  test("the profile sheet offers the options, and the pick is what Record waits", async () => {
+    const { win, startLog } = await launch();
+    await win.click("#profile");
+    await win.waitForSelector("#countdownms");
+
+    // Built from COUNTDOWN_OPTIONS, not hand-listed in the markup.
+    const values = await win.evaluate(() =>
+      [...document.querySelectorAll("#countdownms option")].map((o) => (o as HTMLOptionElement).value));
+    expect(values).toEqual(["3000", "5000", "10000"]);
+    expect(await win.inputValue("#countdownms")).toBe("3000");
+
+    // Pick 10s, then prove Record really waits it out rather than the stored
+    // default: no start within a window that 3s would comfortably have cleared.
+    await win.selectOption("#countdownms", "10000");
+    await win.click("#profileclose");
+    await win.click("#record");
+    await countdownPage();
+    await sleep(4_000);
+    expect(lines(startLog)).toHaveLength(0);
+  }, 120_000);
+
+  test("the choice survives a restart", async () => {
+    const { dir: recordings } = makeTakeFolder();
+    const ud = mkdtempSync(join(tmpdir(), "stc-ud-"));
+    const open = async () => {
+      app = await electron.launch({
+        args: [root, `--user-data-dir=${ud}`],
+        cwd: root,
+        env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER },
+      });
+      const w = await app.firstWindow();
+      await w.waitForSelector("#record");
+      await w.click("#profile");
+      await w.waitForSelector("#countdownms");
+      return w;
+    };
+
+    const first = await open();
+    await first.selectOption("#countdownms", "5000");
+    await expect.poll(() => first.inputValue("#countdownms"), { timeout: 10_000 }).toBe("5000");
+    await app!.close();
+
+    const second = await open();
+    expect(await second.inputValue("#countdownms")).toBe("5000");
   }, 120_000);
 });
 

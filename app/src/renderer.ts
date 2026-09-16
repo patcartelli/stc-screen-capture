@@ -31,6 +31,8 @@ interface AppSettings {
   micDeviceUid: string | null;
   /** STC-292. */
   shutterSound: boolean;
+  /** STC-391: how long Record and the self-timer count down, ms. */
+  countdownMs: number;
   /** STC-293. */
   still: StillSettingsView;
   /** STC-296. */
@@ -84,6 +86,7 @@ declare const recorder: {
   reportPillWidth(px: number): void;
 };
 
+import { COUNTDOWN_OPTIONS } from "./countdown.js";
 import {
   ACTION_LABELS, CAPTURE_ACTIONS, acceleratorFromKeyStroke, explainShortcut,
   formatAccelerator, parseAccelerator,
@@ -858,14 +861,30 @@ const thumbCornerSel = $("thumbcorner") as HTMLSelectElement;
 const thumbTimeoutInput = $("thumbtimeout") as HTMLInputElement;
 const thumbSettleSel = $("thumbsettle") as HTMLSelectElement;
 const thumbSkipBox = $("thumbskip") as HTMLInputElement;
+const countdownSel = $("countdownms") as HTMLSelectElement;
+
+// Built from the module that owns the clamp, never hand-listed in the markup
+// (STC-391) — an option the stored value could not hold would otherwise look
+// like a control that silently snaps back.
+for (const { ms, label } of COUNTDOWN_OPTIONS) {
+  const opt = document.createElement("option");
+  opt.value = String(ms);
+  opt.textContent = label;
+  countdownSel.append(opt);
+}
 
 async function loadStillPreferences(): Promise<void> {
-  const { still, thumbnail } = await recorder.getSettings();
+  const { still, thumbnail, countdownMs } = await recorder.getSettings();
   showDestination(still.destination);
   thumbCornerSel.value = thumbnail.corner;
   thumbTimeoutInput.value = String(Math.round(thumbnail.timeoutMs / 1000));
   thumbSettleSel.value = thumbnail.settleAction;
   thumbSkipBox.checked = thumbnail.skip;
+  // A stored value that is not one of the offered options — 0, or a number
+  // someone typed into the file — leaves the select showing nothing rather
+  // than silently misreporting itself as 3 seconds.
+  countdownSel.value = COUNTDOWN_OPTIONS.some((o) => o.ms === countdownMs)
+    ? String(countdownMs) : "";
 }
 
 /** Every control here changes ONE field; the rest of `thumbnail` is read fresh and kept. */
@@ -894,6 +913,13 @@ thumbSettleSel.addEventListener("change", () => {
   void patchThumbnail({ settleAction: thumbSettleSel.value as AppSettings["thumbnail"]["settleAction"] });
 });
 thumbSkipBox.addEventListener("change", () => void patchThumbnail({ skip: thumbSkipBox.checked }));
+countdownSel.addEventListener("change", () => {
+  // `countdownMs` is a top-level preference rather than a block, so it needs
+  // no read-merge-write the way `thumbnail` does — `writeSettings` merges it
+  // over what is stored and clamps it on the way in.
+  const ms = Number(countdownSel.value);
+  if (Number.isFinite(ms)) void recorder.setSettings({ countdownMs: ms });
+});
 
 // ---- library -------------------------------------------------------------
 
