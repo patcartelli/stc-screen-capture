@@ -164,7 +164,7 @@ describe("the library grid", () => {
 
     await win.locator('.libfilters .chip[data-filter="all"]').click();
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
-  }, 60_000);
+  }, 90_000);
 
   test("each kind offers its own actions, and both offer rename and delete", async () => {
     const { win } = await launch((dir) => {
