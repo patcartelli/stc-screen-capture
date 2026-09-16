@@ -255,8 +255,15 @@ not seed one yet.**
   then confirms — is refused only on **timing**, not merit. It turns
   `ScopeSettings.windowLabel` from what its own comment calls *"cosmetic only —
   never sent to the helper"* into a live claim that the window still exists, on
-  the very picker **STC-380 (open, PR #158)** is currently repairing. It is the
-  right second step, after that lands.
+  the very picker STC-380 was repairing.
+
+  **STC-380 landed 2026-09-16 (#158), so that blocker is cleared and seeding is
+  the unblocked next step.** One caveat worth carrying rather than dropping:
+  STC-380's own Swift geometry (`isFullyVisible`, the occlusion and off-screen
+  subtraction) was written on Linux and **has never run against a real
+  `SCShareableContent` list** — so the picker is repaired in code, not yet on
+  hardware. Seeding leans on exactly that geometry being right, which makes
+  `docs/STC-380-RUNBOOK.md` a sensible precondition rather than a formality.
 - What remains is the vocabulary fix in §4: Scope keeps meaning what it already
   means, and the interface stops implying otherwise.
 
