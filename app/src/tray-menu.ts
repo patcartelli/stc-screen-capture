@@ -12,11 +12,11 @@
 
 import { PRODUCT_NAME } from "./product.js";
 import {
-  ACTION_LABELS, CAPTURE_ACTIONS,
-  type CaptureAction, type Shortcuts,
+  ACTION_LABELS, SHOT_ACTIONS,
+  type ShotAction, type Shortcuts,
 } from "./hotkeys.js";
 
-export type TrayItemId = `capture:${CaptureAction}` | "library" | "quit" | "separator";
+export type TrayItemId = `capture:${ShotAction}` | "library" | "quit" | "separator";
 
 export interface TrayItem {
   id: TrayItemId;
@@ -52,7 +52,7 @@ export const TRAY_TOOLTIP = PRODUCT_NAME;
  * quit is worse than one with no menu-bar item at all.
  */
 export function trayTemplate(ctx: TrayContext): TrayItem[] {
-  const items: TrayItem[] = CAPTURE_ACTIONS.map((action) => {
+  const items: TrayItem[] = SHOT_ACTIONS.map((action) => {
     const accelerator = ctx.shortcuts[action];
     return {
       id: `capture:${action}` as TrayItemId,

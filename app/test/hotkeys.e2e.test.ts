@@ -323,6 +323,6 @@ describe("a full-display capture", () => {
     await expect.poll(() => win.evaluate(() => (window as any).__announced?.source), { timeout: 10_000 })
       .toBe("hotkey");
     await expect.poll(() => win.textContent("#stillstatus"), { timeout: 10_000 })
-      .toMatch(/^Captured full display/);
+      .toMatch(/^Shot full display/);
   }, 120_000);
 });

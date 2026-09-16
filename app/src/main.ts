@@ -4,8 +4,8 @@ import {
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
-  CAPTURE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts,
-  type CaptureAction, type ShortcutReport, type Shortcuts,
+  SHOT_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts,
+  type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
@@ -282,7 +282,7 @@ async function recoverUnsavedTakes(): Promise<void> {
     defaultId: 0,
     cancelId: 0,
     message: orphaned.length === 1 ? "1 unsaved take recovered" : `${orphaned.length} unsaved takes recovered`,
-    detail: "The app didn't shut down cleanly last time — these captures never made it to your library.",
+    detail: "The app didn't shut down cleanly last time — these takes never made it to your library.",
   });
 
   if (response === 1) {
@@ -410,7 +410,7 @@ app.whenReady().then(async () => {
   tray = installTray({ shortcuts, busy: capturing }, (id) => {
     if (id === "library") return openLibrary();
     if (id === "quit") return app.quit();
-    const action = CAPTURE_ACTIONS.find((a) => id === `capture:${a}`);
+    const action = SHOT_ACTIONS.find((a) => id === `capture:${a}`);
     if (action) void captureStill(action, "menu-bar");
   });
   applyShortcuts(shortcuts);
@@ -718,7 +718,7 @@ export interface StillResult {
 
 type CaptureSource = "window" | "hotkey" | "menu-bar";
 
-async function captureStill(action: CaptureAction, source: CaptureSource): Promise<StillResult> {
+async function captureStill(action: ShotAction, source: CaptureSource): Promise<StillResult> {
   // Never throws, whatever the door. A hotkey has no caller to reject to: an
   // exception here would be an unhandled rejection in the main process and a
   // capture that silently did nothing.
@@ -827,7 +827,7 @@ interface CaptureParams { kind: string; [k: string]: unknown }
 
 /** The overlay path. `undefined` is a cancellation, which writes nothing. */
 async function selectRegionOrWindow(
-  action: Extract<CaptureAction, "region" | "window">,
+  action: Extract<ShotAction, "region" | "window">,
   thumbExcluded: number[],
 ): Promise<{ kind: string; params: CaptureParams } | undefined> {
   let windows: WindowInfo[] = [];
@@ -927,13 +927,13 @@ function excludeAlso(params: CaptureParams, ids: number[]): void {
  * take list and says what happened; one that is not open misses nothing,
  * because the shot is already on disk.
  */
-async function captureAndAnnounce(action: CaptureAction, source: CaptureSource): Promise<void> {
+async function captureAndAnnounce(action: ShotAction, source: CaptureSource): Promise<void> {
   const r = await captureStill(action, source);
   send("still:captured", r);
 }
 
-ipcMain.handle("still:capture", async (_e, action?: CaptureAction) =>
-  captureStill(action && CAPTURE_ACTIONS.includes(action) ? action : "region", "window"));
+ipcMain.handle("still:capture", async (_e, action?: ShotAction) =>
+  captureStill(action && SHOT_ACTIONS.includes(action) ? action : "region", "window"));
 
 /**
  * Register what preferences asked for, and report what actually took.
@@ -972,8 +972,8 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
 
 ipcMain.handle("shortcuts:get", async () => ({ shortcuts, report: shortcutReport }));
 
-ipcMain.handle("shortcuts:set", async (_e, action: CaptureAction, accelerator: string | null) => {
-  if (!CAPTURE_ACTIONS.includes(action)) throw new Error(`unknown capture action: ${action}`);
+ipcMain.handle("shortcuts:set", async (_e, action: ShotAction, accelerator: string | null) => {
+  if (!SHOT_ACTIONS.includes(action)) throw new Error(`unknown capture action: ${action}`);
   const plan = planShortcuts({ ...shortcuts, [action]: accelerator })
     .find((p) => p.action === action)!;
   if (plan.problem !== undefined) {
@@ -1277,8 +1277,8 @@ ipcMain.handle("still:export", async (_e, req: {
     const parent = BrowserWindow.getFocusedWindow() ?? win;
     const suggested = plannedFileName(options, req.info, { width: req.width, height: req.height });
     const picked = await (parent
-      ? dialog.showSaveDialog(parent, { title: "Save Still", defaultPath: suggested })
-      : dialog.showSaveDialog({ title: "Save Still", defaultPath: suggested }));
+      ? dialog.showSaveDialog(parent, { title: "Save Shot", defaultPath: suggested })
+      : dialog.showSaveDialog({ title: "Save Shot", defaultPath: suggested }));
     // Cancelling is an answer, not a failure: it must not fall through to a
     // silent save in the destination folder, which is the one outcome someone
     // who opened this dialog has ruled out.
@@ -1321,7 +1321,7 @@ ipcMain.handle("still:chooseDestination", async () => {
   if (!win) throw new Error("no window");
   const current = readSettings(app.getPath("userData")).still.destination;
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: "Where should stills be saved?",
+    title: "Where should shots be saved?",
     properties: ["openDirectory", "createDirectory"],
     ...(current ? { defaultPath: current } : {}),
     buttonLabel: "Choose",

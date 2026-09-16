@@ -347,10 +347,10 @@
       <span id="pill-meter" aria-hidden="true"></span>
       <span id="pill-stop" aria-hidden="true"></span>
     </button>
-    <button id="capturestill" title="Select a region or a window and capture one frame">Capture still</button>
+    <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
     <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
     <label id="mic-label">Mic <select id="mic"><option value="">Off</option></select></label>
-    <button id="profile" title="Still-capture preferences and shortcuts">Profile</button>
+    <button id="profile" title="Shot preferences and shortcuts">Profile</button>
     <span id="state">starting…</span>
   </div>
   <div class="row">
@@ -402,7 +402,7 @@
       <button id="profileclose" aria-label="Close">×</button>
     </div>
 
-    <h2>Still capture</h2>
+    <h2>Shot</h2>
     <!--
       The destination folder (STC-293) and the post-capture floating
       thumbnail's preferences (STC-296). The decorated still itself — style,
@@ -429,7 +429,7 @@
         <option value="save">Save</option>
         <option value="copy">Copy</option>
       </select></label>
-      <label title="Skip the panel entirely and copy every capture straight to the clipboard">
+      <label title="Skip the panel entirely and copy every shot straight to the clipboard">
         <input type="checkbox" id="thumbskip"> Skip it — straight to clipboard</label>
     </div>
 
@@ -441,12 +441,12 @@
       here, so the list and the clamp that has to accept it cannot drift.
     -->
     <div class="stillrow">
-      <label title="Record always counts down. A still capture counts down only when started with the self-timer.">Counts
+      <label title="Record always counts down. A shot counts down only when started with the self-timer.">Counts
         down for <select id="countdownms"></select></label>
-      <span id="countdownhint">Applies to Record, and to Capture with Self-Timer.</span>
+      <span id="countdownhint">Applies to Record, and to Shot with Self-Timer.</span>
     </div>
 
-    <h2>Capture shortcuts</h2>
+    <h2>Shot shortcuts</h2>
     <div id="shortcuts"></div>
     <div id="shortcutfoot">
       <button id="resetshortcuts">Restore defaults</button>

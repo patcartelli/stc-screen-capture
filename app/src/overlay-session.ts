@@ -88,7 +88,7 @@ export interface OpenOptions {
   /**
    * Which mode to open in (STC-292). The window's one button opens in region
    * mode as it always did; the hotkeys and the menu bar have an item each, and
-   * a "Capture Window" that opened on a crosshair and made the user press Space
+   * a "Shot Window" that opened on a crosshair and made the user press Space
    * would not be the action it names. The mode toggle still works either way —
    * this decides where the interaction STARTS, not what it can do.
    */

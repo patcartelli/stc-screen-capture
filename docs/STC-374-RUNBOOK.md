@@ -10,7 +10,7 @@ that file cannot see is what any of it looks or feels like.
 ## What changed
 
 - The main window sheds everything but capture and the take grid at rest:
-  Record, Capture still, Camera, a new **Profile** button, the Scope picker
+  Record, Shot, Camera, a new **Profile** button, the Scope picker
   (Screen/Window/Area), the scope's "source" control, live telemetry, and
   the take grid. Still-capture preferences and the shortcuts editor moved
   behind the Profile button, into a slide-over panel (`#profilesheet`) that
@@ -40,7 +40,7 @@ grant.
 ## 1. Look at the stripped window
 
 Launch the app normally (`npm run app:start`). At rest, the window should
-show exactly: Record, Capture still, the Camera checkbox, a Profile button,
+show exactly: Record, Shot, the Camera checkbox, a Profile button,
 the state readout, the Scope picker and its source control, the telemetry
 table, and the take grid. Nothing else.
 

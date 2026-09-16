@@ -30,7 +30,7 @@ build matters again.
 
 ## 1. The overlay itself — the part only a person can judge
 
-`npm run app:start`, then **Capture still**.
+`npm run app:start`, then **Shot**.
 
 - **It appears at once, over everything.** Over a full-screen app, over another
   app's menu, on every display. If it opens behind something, `screen-saver` level
