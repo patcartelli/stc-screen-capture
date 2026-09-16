@@ -67,6 +67,24 @@ and each tear down through the same `DispatchGroup` in `Capture.swift`'s
 finalizing concurrently, and nothing here can produce that concurrency
 without real hardware.
 
+**Already found and fixed here, on real hardware, 2026-09-16**: the
+app-packaged build crashed the whole helper (`EXC_CRASH`/`SIGABRT`, an
+uncaught `NSException`) the instant camera+mic were both enabled, every
+time — camera alone worked, mic alone was untested but the crash was in
+mic's own writer setup. `MicCapture.setupWriter()` had copied
+`inp.mediaTimeScale = 1_000_000_000` verbatim from `Capture.swift`'s VIDEO
+writer; that property is video-only (an audio input infers its own time
+scale from its samples), and setting it left the audio
+`AVAssetWriterInput` unable to resolve a real backing helper
+(`AVAssetWriterInputUnknownHelper` in the crash report), so the very next
+property touch threw and took the whole process down — camera and display
+included, not just the mic. Removed; `retimed()` already stamps each
+sample buffer with an exact-ns PTS before the gate sees it, so the file's
+sample table needed no help from this property the way the video track
+does. **Re-verify this section fresh** — it had never been reached before
+this fix, so nothing past "the process no longer crashes" is confirmed
+yet.
+
 ## §4 — export with audio, and LISTEN to it
 
 This is the part that matters most and is the least reasoned-about, because
