@@ -74,7 +74,7 @@ declare const recorder: {
   resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   chooseStillDestination(): Promise<{ destination: string | null }>;
   clearStillDestination(): Promise<{ destination: string | null }>;
-  start(): Promise<{ ok: boolean; dir?: string; code?: string; detail?: string }>;
+  start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   pickCaptureTarget(kind: "region" | "window"):
     Promise<{ ok: boolean; cancelled?: boolean; scope?: ScopeSettingsView }>;
   stop(): Promise<{ ok: boolean; info?: any }>;
@@ -521,6 +521,10 @@ const START_FAULTS: Record<string, string> = {
   // between disabling and pressing — still worth a real message rather than
   // a raw error code.
   "no-capture-target": "Choose a window or an area to record before pressing Record.",
+  // STC-391: a still capture is mid-flight — most likely a self-timer, which
+  // now spends seconds waiting with this window still live and pressable.
+  "capture-in-flight":
+    "A capture is already in progress. Finish or cancel it, then press Record.",
   "no-displays":
     "Screen Recording permission is required.\nGrant it in System Settings › " +
     "Privacy & Security › Screen & System Audio Recording, then try again.",
@@ -578,7 +582,13 @@ recordBtn.addEventListener("click", async () => {
   try {
     if (!recording) {
       const r = await recorder.start();
-      if (!r.ok) {
+      // STC-391: Escape (or Cancel) during the countdown. Not a failure and
+      // not an alert — the user asked for nothing to happen, and telling them
+      // so would be the app arguing with them. Same reasoning a cancelled
+      // still selection has never produced a message.
+      if (!r.ok && r.cancelled) {
+        setState("idle");
+      } else if (!r.ok) {
         alertUser(START_FAULTS[String(r.code)] ?? `Could not start: ${r.code}\n${r.detail ?? ""}`);
         setState("idle");
       } else {

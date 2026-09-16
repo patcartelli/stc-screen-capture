@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -34,6 +35,10 @@ describe("quitting while recording", () => {
     });
     const win = await app.firstWindow();
     await win.waitForLoadState("domcontentloaded");
+    // STC-391: the subject here is the stop-before-quit ORDER, not the
+    // countdown — which would otherwise put three seconds between the click
+    // and the take, and a `start` in the log either way.
+    await withoutCountdown(win);
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     await win.click("#record");
     await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");

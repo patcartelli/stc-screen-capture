@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+  <title>countdown</title>
+  <style>
+    /*
+      STC-391. The window is transparent and borderless — everything that reads
+      as "a panel" is this card's own background and shadow, the same
+      arrangement `thumbnail.html` uses.
+    */
+    :root { color-scheme: light dark; }
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background: transparent; overflow: hidden;
+      font: 12px/1.4 -apple-system, system-ui, sans-serif;
+      -webkit-user-select: none; user-select: none;
+    }
+    #card {
+      position: absolute; inset: 8px;
+      border-radius: 16px;
+      background: rgba(30, 30, 32, 0.86);
+      color: #f2f2f2;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 6px;
+    }
+    #dial { position: relative; width: 72px; height: 72px; }
+    #ring { position: absolute; inset: 0; }
+    /*
+      Rotated so the sweep starts at twelve o'clock rather than at three, which
+      is where an SVG circle's dash offset would otherwise begin.
+    */
+    #ring { transform: rotate(-90deg); }
+    #track { fill: none; stroke: rgba(255, 255, 255, 0.16); stroke-width: 4; }
+    #sweep {
+      fill: none; stroke: #7aa2ff; stroke-width: 4; stroke-linecap: round;
+      transition: stroke-dashoffset 120ms linear;
+    }
+    #count {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums;
+    }
+    #caption { font-size: 12px; opacity: 0.72; }
+    #actions { display: flex; gap: 8px; margin-top: 4px; }
+    button {
+      font: inherit; font-size: 12px;
+      padding: 5px 14px; border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08); color: inherit;
+      cursor: pointer;
+    }
+    button:hover { background: rgba(255, 255, 255, 0.16); }
+    #skip { border-color: rgba(122, 162, 255, 0.5); }
+    kbd {
+      font: inherit; font-size: 10px; opacity: 0.6; margin-left: 4px;
+    }
+    /*
+      Reduced motion (STC-391 rule 5): the ring goes, the COUNT goes on
+      counting. Driven off the body attribute `countdown-renderer.ts` sets from
+      `countdownView`, so the decision has one owner and the page is not a
+      second place it is made.
+
+      Hidden from CSS rather than with the `hidden` property, and that is a
+      finding rather than a style choice: `#ring` is an <svg>, and `hidden`
+      lives on HTMLElement — SVGElement takes `dataset`/`nonce`/`autofocus`/
+      `tabIndex` from HTMLOrSVGElement but not `hidden`, so `ring.hidden = true`
+      sets a JS expando and reflects no attribute at all. It looked like it
+      worked and hid nothing; the E2E caught it.
+    */
+    body[data-animate="false"] #ring { display: none; }
+    /* Belt for a viewer whose setting changes between one frame and the next,
+       before a state message can arrive and re-run the decision. */
+    @media (prefers-reduced-motion: reduce) {
+      #sweep { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="card">
+    <div id="dial">
+      <svg id="ring" viewBox="0 0 72 72" aria-hidden="true">
+        <circle id="track" cx="36" cy="36" r="26"></circle>
+        <circle id="sweep" cx="36" cy="36" r="26"></circle>
+      </svg>
+      <div id="count" role="status" aria-live="polite">—</div>
+    </div>
+    <div id="caption"></div>
+    <div id="actions">
+      <button id="cancel" type="button">Cancel<kbd>esc</kbd></button>
+      <button id="skip" type="button">Skip<kbd>&#8629;</kbd></button>
+    </div>
+  </div>
+  <script src="../dist/countdown-renderer.js"></script>
+</body>
+</html>

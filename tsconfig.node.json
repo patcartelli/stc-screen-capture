@@ -9,9 +9,9 @@
   // to opt OUT. The fail-safe direction: forgetting to list a file cannot
   // silently lose the constraint. The carve-outs are all PAGES: the main
   // window's renderer, the selection overlay's (STC-290), the post-capture
-  // panel's (STC-296), and the library's grid (STC-294) — that last one is a
-  // module rather than a page entry point, and it is renderer code all the
-  // same, drawn into the main window's document.
+  // panel's (STC-296), the countdown panel's (STC-391), and the library's grid
+  // (STC-294) — that last one is a module rather than a page entry point, and
+  // it is renderer code all the same, drawn into the main window's document.
   //
   // skipLibCheck is on ONLY here, and only because electron.d.ts declares the
   // main, renderer and <webview> APIs in one file and cannot parse without
@@ -30,5 +30,5 @@
   },
   "include": ["app/src/**/*.ts", "harness/vite.config.ts", "vitest.*.ts"],
   "exclude": ["app/src/renderer.ts", "app/src/overlay.ts", "app/src/thumbnail-renderer.ts",
-              "app/src/library-view.ts", "app/src/editor.ts"]
+              "app/src/library-view.ts", "app/src/editor.ts", "app/src/countdown-renderer.ts"]
 }

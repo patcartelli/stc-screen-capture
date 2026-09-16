@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 /**
  * The pill's real window collapse, wired through the real app (STC-375).
@@ -57,6 +58,10 @@ async function launch(env: Record<string, string> = {}): Promise<{ win: Page }> 
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
+  // STC-391: Record counts down now. This file is not about the countdown,
+  // so it turns it off through the shipped preference rather than waiting
+  // out three real seconds on every take.
+  await withoutCountdown(win);
   return { win };
 }
 
