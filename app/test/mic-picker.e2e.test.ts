@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 
 /**
  * The mic picker, end to end through the real app (STC-233).
@@ -174,16 +175,28 @@ describe("the mic says what it is doing", () => {
       .toContain("no longer available");
   }, 60_000);
 
+  // STC-389: mirrors camera-toggle.e2e.test.ts's own fix exactly, one device
+  // over — "Fixture USB Mic" and "no frames" are 80ms apart in the fake
+  // helper, and sampling #mic-state at two points in time could land after
+  // that window closed. Recording the whole sequence and asserting order
+  // proves the same claim without racing the runner's scheduling.
   test("a mic that opens and then sends nothing stops claiming it works", async () => {
     const win = await launch({ ...dirs(), mic: "noframes" });
     await waitForMicOption(win, "fixture-mic-1");
     await win.selectOption("#mic", "fixture-mic-1");
+    await observeTextSequence(win, "mic-state");
+
     await win.click("#record");
 
-    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
-      .toContain("Fixture USB Mic");
-    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
-      .toContain("no frames");
+    await expect.poll(
+      async () => (await textSequence(win, "mic-state")).some((s) => s.includes("no frames")),
+      { timeout: 20_000 },
+    ).toBe(true);
+
+    const seq = await textSequence(win, "mic-state");
+    expect(occursBefore(seq, "Fixture USB Mic", "no frames"), `states were ${JSON.stringify(seq)}`)
+      .toBe(true);
+
     await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
       .toContain("no sound");
   }, 60_000);
