@@ -1164,6 +1164,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             mic: micT,
             micRequested: wantMicUid != nil,
             scope: captureScope,
+            pauses: [],
             stopReason: reason,
             stopTNs: Int(Clock.nowNs() - t0Ns))
         write(doc, to: "anchors.json")

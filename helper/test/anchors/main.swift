@@ -31,6 +31,7 @@ let capture = CaptureGeometryDoc(width: 3840, height: 2160, firstFrameNs: 200_00
 do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: nil, requested: false,
+                            pauses: [],
                             stopReason: "user", stopTNs: 20_000_000_000)
     check(d["version"] as? Int == 2, "version must be 2")
     check(d["camera"] == nil, "camera block must be absent when no camera was requested")
@@ -45,6 +46,7 @@ do {
 do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: nil, requested: true,
+                            pauses: [],
                             stopReason: "user", stopTNs: 20_000_000_000)
     let cam = d["camera"] as? [String: Any]
     check(cam != nil, "a requested camera must always write a camera block")
@@ -62,6 +64,7 @@ do {
                             frameIntervalNs: 17_000_000)
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: track, requested: true,
+                            pauses: [],
                             stopReason: "user", stopTNs: 20_000_000_000)
     let cam = d["camera"] as? [String: Any]
     check(cam?["present"] as? Bool == true, "present camera must record present:true")
@@ -80,6 +83,7 @@ do {
 do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 18_446_744_073, display: display,
                             capture: capture, camera: nil, requested: false,
+                            pauses: [],
                             stopReason: "user", stopTNs: 1)
     check(d["t0Ns"] as? String == "18446744073", "t0Ns must be a string")
 }
@@ -95,6 +99,7 @@ do {
     for reason in ["quit", "stdin-closed", "signal-15", "stopped-during-start"] {
         let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                                 capture: capture, camera: nil, requested: false,
+                                pauses: [],
                                 stopReason: reason, stopTNs: 8_000_000_000)
         let stop = d["stop"] as? [String: Any]
         check(stop?["reason"] as? String == reason, "stop.reason must be written verbatim: \(reason)")
@@ -109,6 +114,7 @@ do {
 do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: nil, requested: false,
+                            pauses: [],
                             stopReason: "signal-15-timeout", stopTNs: 8_000_000_000)
     check((d["stop"] as? [String: Any])?["reason"] as? String == "signal-15-timeout",
           "a timed-out shutdown keeps its suffixed reason")
@@ -124,6 +130,7 @@ do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: nil, requested: false,
                             scope: CaptureScopeDoc(kind: .region, region: region, window: nil),
+                            pauses: [],
                             stopReason: "user", stopTNs: 20_000_000_000)
     check(d["version"] as? Int == 3, "a region-scope take must write version 3")
     let scope = d["scope"] as? [String: Any]
@@ -143,6 +150,7 @@ do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: nil, requested: false,
                             scope: CaptureScopeDoc(kind: .window, region: nil, window: window),
+                            pauses: [],
                             stopReason: "window-closed", stopTNs: 5_000_000_000)
     check(d["version"] as? Int == 3, "a window-scope take must write version 3")
     let scope = d["scope"] as? [String: Any]
@@ -162,6 +170,7 @@ do {
 do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: nil, requested: false,
+                            pauses: [],
                             stopReason: "user", stopTNs: 20_000_000_000)
     check(d["version"] as? Int == 2, "a whole-display take must still write version 2")
     check(d["scope"] == nil, "a whole-display take must not carry a scope block at all")
@@ -176,6 +185,7 @@ do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: nil, requested: false,
                             mic: nil, micRequested: true,
+                            pauses: [],
                             stopReason: "user", stopTNs: 20_000_000_000)
     check(d["version"] as? Int == 4, "a mic-requested take must write version 4")
     let mic = d["mic"] as? [String: Any]
@@ -194,6 +204,7 @@ do {
     let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
                             capture: capture, camera: nil, requested: false,
                             mic: track, micRequested: true,
+                            pauses: [],
                             stopReason: "user", stopTNs: 20_000_000_000)
     check(d["version"] as? Int == 4, "a take with a real mic track must write version 4")
     let mic = d["mic"] as? [String: Any]
@@ -222,12 +233,43 @@ do {
                             capture: capture, camera: camTrack, requested: true,
                             mic: micTrack, micRequested: true,
                             scope: CaptureScopeDoc(kind: .region, region: region, window: nil),
+                            pauses: [],
                             stopReason: "user", stopTNs: 20_000_000_000)
     check(d["version"] as? Int == 4, "camera + mic + region scope together must still write version 4")
     check(d["camera"] != nil, "camera block must still be present alongside mic")
     check(d["mic"] != nil, "mic block must still be present alongside camera")
     check(d["scope"] != nil, "scope block must still be present at version 4")
     printJSON(d, marker: "JSON-VERSION-4-EVERYTHING:")
+}
+
+// ── pauses (STC-240) ────────────────────────────────────────────────────────
+// Minimum-version emission: a take that was never paused is byte-for-byte the
+// document it is today, at whatever version its other blocks demand.
+do {
+    let noPause = anchorsDocument(
+        timebase: (125, 3), t0Ns: 0,
+        display: DisplayGeometry(id: 1, pointWidth: 100, pointHeight: 50,
+                                 pixelWidth: 200, pixelHeight: 100, originX: 0, originY: 0),
+        capture: CaptureGeometryDoc(width: 200, height: 100, firstFrameNs: 0),
+        camera: nil, requested: false, mic: nil, micRequested: false,
+        scope: .display, pauses: [], stopReason: "user", stopTNs: 1_000)
+    check(noPause["version"] as? Int == 2, "no pauses stays v2")
+    check(noPause["pauses"] == nil, "no pauses writes no block")
+
+    let paused = anchorsDocument(
+        timebase: (125, 3), t0Ns: 0,
+        display: DisplayGeometry(id: 1, pointWidth: 100, pointHeight: 50,
+                                 pixelWidth: 200, pixelHeight: 100, originX: 0, originY: 0),
+        capture: CaptureGeometryDoc(width: 200, height: 100, firstFrameNs: 0),
+        camera: nil, requested: false, mic: nil, micRequested: false,
+        scope: .display,
+        pauses: [PauseInterval(startNs: 10, endNs: 20)],
+        stopReason: "user", stopTNs: 1_000)
+    check(paused["version"] as? Int == 5, "a pause raises the floor to v5")
+    check((paused["pauses"] as? [[String: Any]])?.count == 1, "and writes one interval")
+    check((paused["pauses"] as? [[String: Any]])?.first?["startNs"] as? Int == 10, "startNs survives")
+    printJSON(noPause, marker: "JSON-NO-PAUSE:")
+    printJSON(paused, marker: "JSON-WITH-PAUSE:")
 }
 
 if failures.isEmpty { print("ALL PASS") }

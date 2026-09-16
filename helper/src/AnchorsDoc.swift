@@ -113,6 +113,12 @@ struct MicTrack {
 /// (which validates `additionalProperties: false`) must never be handed one
 /// it cannot express. A take with no mic requested writes whatever version
 /// its scope already implies, unchanged.
+///
+/// `pauses` raises the floor to version 5 (STC-240) when non-empty, the same
+/// way `micRequested` raises it to 4 and `scope` to 3. A take that was never
+/// paused writes no `pauses` key and keeps whatever version its other blocks
+/// demand — so nothing about an ordinary take changes, and an older build can
+/// still read it.
 func anchorsDocument(timebase: (numer: Int, denom: Int),
                      t0Ns: UInt64,
                      display: DisplayGeometry,
@@ -122,6 +128,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                      mic: MicTrack? = nil,
                      micRequested: Bool = false,
                      scope: CaptureScopeDoc = .display,
+                     pauses: [PauseInterval],
                      stopReason: String,
                      stopTNs: Int) -> [String: Any] {
     var files: [String: Any] = ["display": "display.mp4"]
@@ -158,6 +165,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     }
     var version = scope.kind == .display ? 2 : 3
     if micRequested { version = max(version, 4) }
+    if !pauses.isEmpty { version = max(version, 5) }
     var doc: [String: Any] = [
         "version": version,
         "timebase": ["numer": timebase.numer, "denom": timebase.denom],
@@ -179,6 +187,9 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     }
     if let micBlock {
         doc["mic"] = micBlock
+    }
+    if !pauses.isEmpty {
+        doc["pauses"] = pauses.map { $0.json }
     }
     if scope.kind != .display {
         var scopeBlock: [String: Any] = ["kind": scope.kind.rawValue]

@@ -23,6 +23,7 @@ describe("anchors document", () => {
         // (STC-370) mirrors shot-1's kind/crop/window shapes on purpose and
         // reuses their types rather than a second copy.
         "helper/src/StillDecisions.swift",
+        "helper/src/PauseDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -75,6 +76,7 @@ describe("anchors document", () => {
       label: "anchors",
       sources: [
         "helper/src/StillDecisions.swift",
+        "helper/src/PauseDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -114,6 +116,7 @@ describe("anchors document", () => {
       label: "anchors",
       sources: [
         "helper/src/StillDecisions.swift",
+        "helper/src/PauseDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -145,5 +148,48 @@ describe("anchors document", () => {
       JSON.parse(readFileSync(join(root, "schema/anchors-3.schema.json"), "utf8")),
     );
     expect(validate3(withMic), "anchors-3 must refuse a v4, mic-bearing document").toBe(false);
+  });
+
+  // STC-240: minimum-version emission for pauses. A take that was never
+  // paused stays whatever version its other blocks demand (v2 here, with no
+  // `pauses` key at all) and validates against anchors-2 unchanged; a paused
+  // take writes version 5 with a `pauses` block anchors-4 cannot express.
+  test("a paused document validates against anchors-5; an unpaused one stays v2", async () => {
+    const out = await runSwiftHarness({
+      label: "anchors",
+      sources: [
+        "helper/src/StillDecisions.swift",
+        "helper/src/PauseDecisions.swift",
+        "helper/src/AnchorsDoc.swift",
+        "helper/test/anchors/main.swift",
+      ],
+    });
+    expect(out, out).toContain("ALL PASS");
+
+    const ajv2 = new Ajv({ allErrors: true, strict: true });
+    const validate2 = ajv2.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-2.schema.json"), "utf8")),
+    );
+    const noPause = extractJSON(out, "JSON-NO-PAUSE:");
+    expect(validate2(noPause), JSON.stringify(validate2.errors, null, 2)).toBe(true);
+    expect((noPause as { version: number }).version).toBe(2);
+    expect((noPause as { pauses?: unknown }).pauses).toBeUndefined();
+
+    const ajv5 = new Ajv({ allErrors: true, strict: true });
+    const validate5 = ajv5.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-5.schema.json"), "utf8")),
+    );
+    const paused = extractJSON(out, "JSON-WITH-PAUSE:");
+    expect(validate5(paused), JSON.stringify(validate5.errors, null, 2)).toBe(true);
+    expect((paused as { version: number }).version).toBe(5);
+    expect((paused as { pauses?: unknown[] }).pauses).toHaveLength(1);
+
+    // A v5-shaped document must still refuse anchors-4 — the version bump is
+    // not a widening that now accepts everything the old schema did too.
+    const ajv4 = new Ajv({ allErrors: true, strict: true });
+    const validate4 = ajv4.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-4.schema.json"), "utf8")),
+    );
+    expect(validate4(paused), "anchors-4 must refuse a v5, pause-bearing document").toBe(false);
   });
 }, 60_000);

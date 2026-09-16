@@ -1,0 +1,329 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "stc:anchors-5",
+  "title": "stc session anchors, v5",
+  "description": "anchors-4 plus an optional pauses array (STC-240). A take that was never paused is still written at whatever version its scope/mic already imply (2, 3 or 4) with no pauses block at all — the same 'emit the minimum version that can express the document' rule scope and mic already follow. version 5 is written only when the take was actually paused, so a v4-or-earlier reader (predating pause/resume) never has to understand a field it cannot use anyway.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "timebase",
+    "t0Ns",
+    "display",
+    "capture",
+    "files"
+  ],
+  "properties": {
+    "version": {
+      "const": 5
+    },
+    "timebase": {
+      "description": "mach_timebase_info at helper startup. displayTimeNs = displayTime * numer / denom.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "numer",
+        "denom"
+      ],
+      "properties": {
+        "numer": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "denom": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "t0Ns": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "display": {
+      "description": "The display the take happened on — for a region or window scope, the display the region/window was resolved against, in the SAME shape a whole-display take already carries. A region's own rectangle lives in `scope.region`, display-local points against this block's originX/originY, exactly like shot.json's crop.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pointWidth",
+        "pointHeight",
+        "pixelWidth",
+        "pixelHeight",
+        "backingScale",
+        "originX",
+        "originY"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pointWidth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pointHeight": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pixelWidth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pixelHeight": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "backingScale": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "originX": {
+          "type": "number",
+          "description": "global display-space origin of the captured display, in points (CGEvent coordinates are global)"
+        },
+        "originY": {
+          "type": "number"
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "codec"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3840
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2160
+        },
+        "codec": {
+          "enum": [
+            "h264"
+          ]
+        },
+        "firstFrameNs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Session-relative ns of the first captured frame, measured by the helper. The file carries the same offset only as an empty edit quantised to the movie timescale, so this is the exact value to check a recovered offset against."
+        }
+      }
+    },
+    "camera": {
+      "description": "Absent means no camera track was even attempted. present:false means a camera was attempted (or considered) but yielded no track — measurement fields are meaningless then and must be omitted, not fabricated. Only present:true requires them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present"],
+      "properties": {
+        "present": { "type": "boolean" },
+        "device": { "type": "string" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "firstFramePtsNs": { "type": "integer", "minimum": 0 },
+        "lastFramePtsNs": { "type": "integer", "minimum": 0 },
+        "frameIntervalNs": { "type": "integer", "minimum": 1,
+                             "description": "median inter-frame delta; the transform bounds the track end with it" }
+      },
+      "if": {
+        "properties": { "present": { "const": true } },
+        "required": ["present"]
+      },
+      "then": {
+        "required": ["present", "device", "width", "height",
+                     "firstFramePtsNs", "lastFramePtsNs", "frameIntervalNs"],
+        "properties": {
+          "present": { "type": "boolean" },
+          "device": { "type": "string" },
+          "width": { "type": "integer", "minimum": 1 },
+          "height": { "type": "integer", "minimum": 1 },
+          "firstFramePtsNs": { "type": "integer", "minimum": 0 },
+          "lastFramePtsNs": { "type": "integer", "minimum": 0 },
+          "frameIntervalNs": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "mic": {
+      "description": "STC-233. Absent means no mic was even requested — a picker with nothing chosen. present:false means a device WAS named but yielded no track (not found, failed to open, or opened and delivered nothing); measurement fields are meaningless then and must be omitted, not fabricated. Only present:true requires them. Mirrors camera's own present/requested split (STC-303) exactly, and the same reason: camera==nil is ambiguous between 'never asked' and 'asked, got nothing', and mic==nil would be too.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present"],
+      "properties": {
+        "present": { "type": "boolean" },
+        "device": { "type": "string" },
+        "sampleRate": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 },
+        "firstFramePtsNs": { "type": "integer", "minimum": 0 },
+        "lastFramePtsNs": { "type": "integer", "minimum": 0 }
+      },
+      "if": {
+        "properties": { "present": { "const": true } },
+        "required": ["present"]
+      },
+      "then": {
+        "required": ["present", "device", "sampleRate", "channels",
+                     "firstFramePtsNs", "lastFramePtsNs"],
+        "properties": {
+          "present": { "type": "boolean" },
+          "device": { "type": "string" },
+          "sampleRate": { "type": "integer", "minimum": 1 },
+          "channels": { "type": "integer", "minimum": 1 },
+          "firstFramePtsNs": { "type": "integer", "minimum": 0 },
+          "lastFramePtsNs": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "scope": {
+      "description": "What this take is scoped to, when it is not the whole display (STC-370). Absent means display — the same 'no scope block' a v2 document has, but v3+ documents may still write it explicitly. Mirrors shot-1's kind/crop/window shapes so a still and a take describe the same thing the same way.",
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "display" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "region"],
+          "properties": {
+            "kind": { "const": "region" },
+            "region": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["x", "y", "width", "height"],
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "width": { "type": "number", "exclusiveMinimum": 0 },
+                "height": { "type": "number", "exclusiveMinimum": 0 }
+              },
+              "description": "display-local points, against this document's own display.originX/originY — the same convention shot-1's crop uses."
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "window"],
+          "properties": {
+            "kind": { "const": "window" },
+            "window": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "bounds"],
+              "properties": {
+                "id": { "type": "integer", "minimum": 0 },
+                "app": { "type": "string" },
+                "title": { "type": "string" },
+                "bounds": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["x", "y", "width", "height"],
+                  "properties": {
+                    "x": { "type": "number" },
+                    "y": { "type": "number" },
+                    "width": { "type": "number", "exclusiveMinimum": 0 },
+                    "height": { "type": "number", "exclusiveMinimum": 0 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "pauses": {
+      "description": "Spans the take was paused (STC-240). Session-relative ns, half-open [startNs, endNs), disjoint and ascending. Absent when the take was never paused — such a take stays at version 4.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["startNs", "endNs"],
+        "properties": {
+          "startNs": { "type": "integer", "minimum": 0 },
+          "endNs": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display"
+      ],
+      "properties": {
+        "display": {
+          "type": "string",
+          "minLength": 1
+        },
+        "camera": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mic": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "stop": {
+      "description": "Present after a clean stop. t is session-relative ns.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "t",
+        "reason"
+      ],
+      "properties": {
+        "t": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "anyOf": [
+            {
+              "enum": [
+              "user",
+              "display-reconfigured",
+              "stream-stopped",
+              "stopped-during-start",
+              "window-resized",
+              "window-closed",
+              "device-lost",
+              "error",
+              "quit",
+              "stdin-closed",
+              "user-timeout",
+              "display-reconfigured-timeout",
+              "stream-stopped-timeout",
+              "stopped-during-start-timeout",
+              "window-resized-timeout",
+              "window-closed-timeout",
+              "device-lost-timeout",
+              "error-timeout",
+              "quit-timeout",
+              "stdin-closed-timeout"
+            ]
+            },
+            {
+              "pattern": "^signal-[0-9]+(-timeout)?$"
+            }
+          ],
+          "description": "Why the recording ended, as the helper writes it. Same families anchors-2 describes, plus 'window-resized'/'window-closed' (STC-370): a window-scope take whose window changed size or went away mid-take ends the same clean way a display reconfiguration does. A '-timeout' suffix on ANY of them means the writer did not finalise in time and the sidecars were written anyway. helper/test/stop-reasons.test.ts holds this schema to the reasons the Swift can actually produce."
+        }
+      }
+    }
+  }
+}
