@@ -118,6 +118,11 @@
     body { margin: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px;
            background: var(--bg); color: var(--text); }
     h1 { font-size: var(--type-title); font-weight: var(--type-title-weight); margin: 0; }
+    /* STC-399: a model plate beside the title, not a control — quiet, and
+       excluded from the collapsed pill for free (it is not #record-row). */
+    #modelcode { font-family: var(--font-mono); font-size: var(--type-label);
+                letter-spacing: var(--type-label-tracking); text-transform: uppercase;
+                color: var(--text-dim); opacity: .55; }
     /* 500 is a deliberate middle weight — body text is 400, headings are
        600, and a control (this rule, and .shortcut .keys below) reads as a
        control rather than as either. */
@@ -330,7 +335,10 @@
   </style>
 </head>
 <body>
-  <h1>stc recorder</h1>
+  <div class="row" id="title-row">
+    <h1>stc recorder</h1>
+    <span id="modelcode"></span>
+  </div>
   <div class="row" id="record-row">
     <button id="record">Record</button>
     <button id="pill" aria-label="Stop recording">

@@ -207,6 +207,10 @@
     #textpt { width: 4em; }
     #legibility { opacity: .8; }
     #legibility.warn { opacity: 1; color: var(--warn); font-weight: 600; }
+    /* STC-399: a model plate, not a control — quiet, never competing with
+       the legibility warning it sits beside. */
+    #modelstamp { opacity: .45; font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
+                  margin-left: auto; }
     #exportbar { display: flex; align-items: center; gap: 10px; }
     #exportbar[hidden] { display: none; }
     #exportprogress { flex: 1; }
@@ -343,6 +347,7 @@
       </label>
       <!-- Warns below 9pt; never blocks (STC-373's own scope line). -->
       <span id="legibility" class="mono"></span>
+      <span id="modelstamp" class="mono"></span>
     </div>
     <div class="dialogrow" id="exportbar" hidden>
       <progress id="exportprogress" max="1000" value="0"></progress>

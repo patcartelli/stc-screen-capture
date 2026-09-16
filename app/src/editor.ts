@@ -42,6 +42,7 @@ declare const editor: {
   }>;
   chooseShareDestination(): Promise<{ destination: string | null }>;
   revealPublished(): Promise<{ ok: boolean; file?: string; message?: string }>;
+  getVersion(): Promise<string>;
 };
 
 import { loadSession, type LoadedSession } from "@transform/session";
@@ -59,6 +60,7 @@ import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, legibility, legibilitySentence, zoomFactorForCrop,
 } from "@transform/legibility";
 import { TRANSFORM_VERSION } from "@transform/transform-version";
+import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
 import { windowId, overrideFor, rectFromGesture } from "@transform/zoom-override";
 import type { Rect } from "@transform/spaces";
@@ -1289,6 +1291,10 @@ document.addEventListener("keydown", (e) => {
 // ---- boot -------------------------------------------------------------
 
 window.addEventListener("beforeunload", () => { void editor.closePreview(); });
+
+// STC-399: set once, not re-derived per render — the model code and version
+// do not change while the window is open.
+void editor.getVersion().then((v) => { $("modelstamp").textContent = productStamp(v); });
 
 void (async () => {
   if (!takeDir) {
