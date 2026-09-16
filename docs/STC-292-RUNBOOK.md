@@ -99,7 +99,7 @@ the accelerators render as glyphs.** Re-run this after any change to
   and Dark appearance (System Settings › Appearance), and with a light and a
   dark desktop picture if the menu bar is translucent.
 * Click it. Four items and two separators: Capture Region, Capture Window,
-  Capture Full Display, ──, Open Library, ──, Quit stc recorder.
+  Capture Full Display, ──, Open Library, ──, Quit Capture.
 * The three captures show `⌃⌥⇧⌘1`, `⌃⌥⇧⌘2`, `⌃⌥⇧⌘3` on their right. **Electron
   renders those glyphs itself** from the accelerator string — if they appear as
   the literal text `Control+Alt+Shift+Command+1`, the template is handing over
@@ -295,7 +295,7 @@ rather than trusting this line:
 **Quit the recorder — and note that closing its window is not quitting it.**
 This ticket made the app menu-bar-first, so ⌘W leaves it running with its
 menu-bar item and its hotkeys still bound. Use the menu-bar icon (the four
-corner brackets) › **Quit stc recorder**, or ⌘Q with a recorder window
+corner brackets) › **Quit Capture**, or ⌘Q with a recorder window
 frontmost, or Ctrl+C in the terminal running `npm run app:start`.
 
 Then confirm nothing is lingering. A leftover `electron .` holds the display,

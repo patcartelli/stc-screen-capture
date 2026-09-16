@@ -1,4 +1,4 @@
-# stc-screen-recorder
+# Capture
 
 A macOS screen recorder for making polished tutorials and demos, built on one principle: **the
 recording is immutable data; every decision about how it looks is made afterwards by a pure
@@ -52,8 +52,8 @@ changed.
 
 ### Download and Install
 
-1. Download the latest release from [GitHub Releases](https://github.com/patcartelli/stc-screen-recorder/releases)
-2. Open the `.dmg` file and drag **stc-screen-recorder** to Applications
+1. Download the latest release from [GitHub Releases](https://github.com/patcartelli/stc-screen-capture/releases)
+2. Open the `.dmg` file and drag **Capture** to Applications
 3. Launch from Applications or Spotlight (⌘Space)
 4. On first launch, macOS will prompt for Screen Recording permission — grant it
 5. Follow the same process for Input Monitoring when prompted
@@ -75,7 +75,7 @@ tccutil reset ListenEvent com.github.Electron
 
 ### Recording
 
-1. Open **stc-screen-recorder**
+1. Open **Capture**
 2. Use the **Scope** picker to choose what to record:
    - **Screen**: entire display
    - **Window**: a single window (opens overlay to select)
@@ -168,26 +168,52 @@ Why? Because:
 - **Auto-zoom stage 1**: Currently responds to clicks and drags only; keystroke-based changes are
   recorded but not auto-zoomed (see auto-zoom stage 2, not yet implemented)
 - **No audio**: Microphone capture is not implemented (phase 4 consideration)
+- **No app bundle yet**: there is no packaging step, so the app runs from source under Electron's
+  own identity — see "Name and identity" below
+
+## Name and identity
+
+The product is **Capture**; **STC** is the label; the model code is **SK-016** (fixed for the life of
+the job — the version moves under it). `app/src/product.ts` is the one place any of that is written
+down, and `package.json`'s `productName` has to agree with it because Electron derives both the name
+a launcher matches and the `userData` folder settings live in from that field.
+
+**The bundle identifier is still Electron's own `com.github.Electron`, and that is not an oversight.**
+There is no packaging step in this repo — no electron-builder, no forge, no `Info.plist` of the app's
+own — so there is nowhere to put `com.studiocartelli.capture` yet. Two consequences worth knowing
+before you go looking for something that isn't there:
+
+- macOS lists this app as **Electron** under Privacy & Security, and `tccutil` takes
+  `com.github.Electron`. Permissions are keyed to that identifier, so they are shared with anything
+  else run the same way.
+- Spotlight and Raycast will not find "Capture" until a real bundle exists.
+
+Renaming the product did move `userData` (from `…/Application Support/stc-screen-recorder` to
+`…/Capture`). Settings and any unsaved takes are carried across once, on first launch after the
+rename; the old folder is left in place, so rolling back to an earlier build finds its own settings
+where it left them. Takes themselves live in `~/Desktop/stc` and were never affected.
 
 ## Troubleshooting
 
 ### "Application connection being interrupted" (-3805)
 
-This usually means **another stc-screen-recorder process is still running**. The display can only have
+This usually means **another Capture process is still running**. The display can only have
 one active ScreenCaptureKit stream at a time.
 
 **Fix**: Kill the existing process or check the menu bar — the app may have no window visible but is
-still running:
+still running. Match your **checkout directory**, not the product name: run from source, the process
+is `electron` and the only distinguishing part of its command line is the path it was launched from.
 ```bash
-pkill -f "stc-screen-recorder" || killall Electron
+pkill -f "$(pwd)/node_modules/electron" || killall Electron
 ```
 
 ### Screen Recording permission not working
 
 If you granted permission but capture still fails:
 
-1. Verify the permission: **System Settings → Privacy & Security → Screen Recording** should list
-   stc-screen-recorder
+1. Verify the permission: **System Settings → Privacy & Security → Screen Recording**. Run from
+   source it is listed as **Electron**, not Capture — the app has no bundle of its own yet, so it
+   inherits Electron's identity (`com.github.Electron`). See "Name and identity" below.
 2. If it's there but not working, try revoking and re-granting:
    ```bash
    tccutil reset ScreenRecording com.github.Electron
@@ -528,7 +554,7 @@ no current display state inside the transform.
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE.md) — Read it, fork it, change it, build on it for any
-noncommercial purpose. Commercial use is not granted; [ask](https://github.com/patcartelli/stc-screen-recorder/issues/new).
+noncommercial purpose. Commercial use is not granted; [ask](https://github.com/patcartelli/stc-screen-capture/issues/new).
 
 GitHub's license detector doesn't recognize PolyForm, so the sidebar shows nothing. The license file
 is authoritative.

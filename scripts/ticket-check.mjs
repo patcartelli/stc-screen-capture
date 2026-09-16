@@ -54,7 +54,7 @@
  */
 import { execFileSync } from "node:child_process";
 
-const REPO = "patcartelli/stc-screen-recorder";
+const REPO = "patcartelli/stc-screen-capture";
 const API = `https://api.github.com/repos/${REPO}`;
 
 /** `STC-325`, case-insensitively, and nothing that merely contains it. */

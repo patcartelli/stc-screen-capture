@@ -7,12 +7,16 @@ import { join } from "node:path";
 import {
   tempTakesRoot, insideTempTakesRoot, newTempTakeDir, promoteTake,
   purgeStaleTempTakes, listTempTakes, TEMP_TAKE_MAX_AGE_MS,
+  legacyTempTakesRoot, migrateLegacyTempTakes,
 } from "../src/temp-takes.js";
+import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "../src/product.js";
 
 describe("where a capture lives before it is saved (STC-393)", () => {
   test("defaults to Application Support, not Caches — the OS must not sweep a live recording", () => {
+    // Named for the PRODUCT (STC-397), so this root moves with `userData`
+    // rather than sitting in a folder named after the old product forever.
     expect(tempTakesRoot({})).toBe(
-      join(homedir(), "Library", "Application Support", "stc-screen-recorder", "temp-takes"));
+      join(homedir(), "Library", "Application Support", PRODUCT_NAME, "temp-takes"));
   });
 
   test("STC_TEMP_TAKES_DIR overrides it, so tests need not litter a real Application Support", () => {
@@ -27,6 +31,38 @@ describe("where a capture lives before it is saved (STC-393)", () => {
     const b = newTempTakeDir({ STC_TEMP_TAKES_DIR: "/t" }, at, ["2026-09-16_10-05-30"]);
     expect(b).not.toBe(a);
     expect(b).toMatch(/2026-09-16_10-05-30-2$/);
+  });
+});
+
+/**
+ * Carrying unsaved takes across the rename to Capture (STC-397).
+ *
+ * The move itself is `moveDir`, which `promoteTake`'s own tests above already
+ * exercise against real directories. What is worth pinning here is the part
+ * that is specific to a MIGRATION and easy to get quietly wrong: that it
+ * knows which two folders it is bridging, and — the load-bearing one — that
+ * it refuses to run at all under `STC_TEMP_TAKES_DIR`, so a test's fresh
+ * temp root can never be handed the real user's leftovers.
+ */
+describe("migrating unsaved takes across the rename (STC-397)", () => {
+  test("the legacy root is the pre-rename folder, and it is NOT the current one", () => {
+    expect(legacyTempTakesRoot()).toBe(
+      join(homedir(), "Library", "Application Support", LEGACY_APP_DIR_NAME, "temp-takes"));
+    // If these ever coincided the migration would be vacuous, and every test
+    // below would pass while proving nothing.
+    expect(legacyTempTakesRoot()).not.toBe(tempTakesRoot({}));
+    expect(PRODUCT_NAME).not.toBe(LEGACY_APP_DIR_NAME);
+  });
+
+  test("does nothing at all when STC_TEMP_TAKES_DIR is set — a test root is never given real leftovers", async () => {
+    const isolated = mkdtempSync(join(tmpdir(), "stc-migrate-"));
+    try {
+      expect(await migrateLegacyTempTakes({ STC_TEMP_TAKES_DIR: isolated })).toBe(0);
+      // Untouched: nothing was created inside it and nothing was moved in.
+      expect(readdirSync(isolated)).toEqual([]);
+    } finally {
+      rmSync(isolated, { recursive: true, force: true });
+    }
   });
 });
 

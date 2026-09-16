@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readdir, stat, mkdir, rename, cp, rm } from "node:fs/promises";
 import { join, resolve, sep, basename } from "node:path";
 import { takesRoot, stamp, uniqueTakeName } from "./takes.js";
+import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "./product.js";
 
 /**
  * Where a capture lives before it is saved (STC-393).
@@ -40,8 +41,50 @@ import { takesRoot, stamp, uniqueTakeName } from "./takes.js";
  * user's Application Support folder.
  */
 export function tempTakesRoot(env: NodeJS.ProcessEnv): string {
-  return env.STC_TEMP_TAKES_DIR
-    || join(homedir(), "Library", "Application Support", "stc-screen-recorder", "temp-takes");
+  return env.STC_TEMP_TAKES_DIR || join(appSupportDir(PRODUCT_NAME), "temp-takes");
+}
+
+/** `~/Library/Application Support/<name>` — the one place that shape is spelled. */
+function appSupportDir(name: string): string {
+  return join(homedir(), "Library", "Application Support", name);
+}
+
+/**
+ * Where temp takes lived before the app was renamed to Capture (STC-397).
+ *
+ * This root is derived from `PRODUCT_NAME` rather than from
+ * `app.getPath("userData")` — this module is deliberately Electron-free —
+ * so the rename moves it exactly as it moves `userData`, and unsaved takes
+ * from before the rename would be left in a folder nothing looks at any
+ * more. They are not lost, just invisible: the crash-recovery prompt
+ * (main.ts) reads the CURRENT root, so without this it would report
+ * "0 unsaved takes" over a folder that still had them.
+ */
+export function legacyTempTakesRoot(): string {
+  return join(appSupportDir(LEGACY_APP_DIR_NAME), "temp-takes");
+}
+
+/**
+ * Carry unsaved takes across the rename, once.
+ *
+ * Deliberately a no-op when `STC_TEMP_TAKES_DIR` is set: that override is
+ * how every test isolates itself, and a test's fresh temp root must never
+ * be handed the real user's leftovers. Also a no-op once the new root
+ * exists — this runs on every launch, and a second run must not undo what
+ * a capture has done since the first.
+ *
+ * Failures are reported by the caller and never fatal: the worst case is
+ * that some unsaved takes stay where they are, which is the situation this
+ * function exists to improve rather than a new way to lose them.
+ */
+export async function migrateLegacyTempTakes(env: NodeJS.ProcessEnv): Promise<number> {
+  if (env.STC_TEMP_TAKES_DIR) return 0;
+  const from = legacyTempTakesRoot();
+  const to = tempTakesRoot(env);
+  if (from === to || !existsSync(from) || existsSync(to)) return 0;
+  await mkdir(join(to, ".."), { recursive: true });
+  await moveDir(from, to);
+  try { return (await readdir(to)).length; } catch { return 0; }
 }
 
 /** `insideTakesRoot`'s traversal/sibling closure, against the temp root instead. */
