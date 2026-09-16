@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
+import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 
 /**
  * The camera toggle, end to end through the real app.
@@ -227,19 +228,32 @@ describe("the camera says what it is doing (STC-287)", () => {
    * accurate and actively misleading: it said the camera was working while it
    * delivered nothing, and only admitted otherwise in the library afterwards.
    */
+  // STC-389: the device-name state and "no frames" are 80ms apart in the
+  // fake helper. Sampling `#camera-state` at two points in time raced that
+  // window on a loaded runner — the first poll could land after the state
+  // had already been replaced, reading "no frames" for a device name that
+  // really was shown. A MutationObserver installed BEFORE the click records
+  // every value the element takes, so the claim is proven by order rather
+  // than by out-running the runner's own scheduling jitter.
   test("a camera that opens and then sends nothing stops claiming it works", async () => {
     const win = await launch({ ...dirs(), camera: "noframes" });
     await win.waitForSelector("#camera");
     if (!(await win.isChecked("#camera"))) await win.click("#camera");
+    await observeTextSequence(win, "camera-state");
+
     await win.click("#record");
+
+    await expect.poll(
+      async () => (await textSequence(win, "camera-state")).some((s) => s.includes("no frames")),
+      { timeout: 20_000 },
+    ).toBe(true);
 
     // It really does say the device name first — that is the window the user
     // sees, and asserting the end state alone would not prove it was replaced.
-    await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
-      .toContain("FaceTime HD Camera");
-    // ...and then stops saying it.
-    await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
-      .toContain("no frames");
+    const seq = await textSequence(win, "camera-state");
+    expect(occursBefore(seq, "FaceTime HD Camera", "no frames"), `states were ${JSON.stringify(seq)}`)
+      .toBe(true);
+
     await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
       .toContain("not sending any frames");
   }, 60_000);
