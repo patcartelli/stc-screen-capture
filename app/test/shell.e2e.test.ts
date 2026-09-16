@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { PRODUCT_NAME } from "../src/product.js";
 
 const root = join(__dirname, "..", "..");
 
@@ -36,7 +37,7 @@ describe("Electron shell", () => {
     await expect.poll(() => win.textContent("#pid"), { timeout: 20_000 })
       .toMatch(/^\d+$/);                                  // a real helper pid
     expect(await win.textContent("#state")).toBe("idle");
-    expect(await win.textContent("h1")).toBe("stc recorder");
+    expect(await win.textContent("h1")).toBe(PRODUCT_NAME);
   }, 60_000);
 
   test("live stats arrive from the lossy channel while idle", async () => {
