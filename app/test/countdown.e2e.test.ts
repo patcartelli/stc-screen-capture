@@ -50,24 +50,30 @@ afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-interface Launched { win: Page; startLog: string; stillLog: string; recordings: string }
+interface Launched { win: Page; startLog: string; stillLog: string; tempTakes: string }
 
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
   const ud = mkdtempSync(join(tmpdir(), "stc-ud-"));
   const logs = mkdtempSync(join(tmpdir(), "stc-logs-"));
+  // Where a take actually LANDS since STC-393 — the library root is only what
+  // a clean stop promotes into. A "nothing was recorded" assertion pointed at
+  // `recordings` would pass for a take that really had been started, which is
+  // the whole property these tests exist to check.
+  const tempTakes = mkdtempSync(join(tmpdir(), "stc-temp-"));
   const startLog = join(logs, "start.jsonl");
   const stillLog = join(logs, "still.jsonl");
   app = await electron.launch({
     args: [root, `--user-data-dir=${ud}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes,
+           STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_START_LOG: startLog, STC_FAKE_STILL_LOG: stillLog,
            STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#record");
-  return { win, startLog, stillLog, recordings };
+  return { win, startLog, stillLog, tempTakes };
 }
 
 const lines = (file: string): string[] =>
@@ -147,11 +153,10 @@ describe("Record always counts down", () => {
   }, 120_000);
 
   test("Escape cancels: nothing is recorded and the app is idle again", async () => {
-    const { win, startLog, recordings } = await launch();
+    const { win, startLog } = await launch();
     // Far longer than this test — so a start appearing could only mean the
     // cancel did not take, never that the clock ran out.
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    const before = readdirSync(recordings).length;
     await win.click("#record");
 
     const page = await countdownPage();
@@ -163,7 +168,11 @@ describe("Record always counts down", () => {
     // not a failure, so no alert either.
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
     expect(await win.textContent("#alert")).toBeFalsy();
-    expect(readdirSync(recordings).length).toBe(before);
+    // Deliberately NOT a directory count: nothing on the recording path
+    // creates a take directory before the helper does (`newTempTakeDir` only
+    // names one), so a count would read the same whether the cancel took or
+    // not. `startLog` is the discriminator here and the stand-in writes it on
+    // every `start` it is sent.
   }, 120_000);
 
   test("Skip starts it now", async () => {
@@ -307,7 +316,9 @@ describe("the countdown duration is choosable (STC-391, from hardware)", () => {
       app = await electron.launch({
         args: [root, `--user-data-dir=${ud}`],
         cwd: root,
-        env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER },
+        env: { ...process.env, STC_RECORDINGS_DIR: recordings,
+               STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+               STC_HELPER_BIN: FAKE_HELPER },
       });
       const w = await app.firstWindow();
       await w.waitForSelector("#record");
@@ -349,9 +360,9 @@ describe("the self-timer (scope → countdown → capture)", () => {
   }, 120_000);
 
   test("Escape during a self-timer captures nothing at all", async () => {
-    const { win, stillLog, recordings } = await launch();
+    const { win, stillLog, tempTakes } = await launch();
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    const before = readdirSync(recordings).length;
+    const before = readdirSync(tempTakes).length;
     const result = win.evaluate(() => (window as any).recorder.captureStill("self-timer"));
 
     await pickAnArea();
@@ -360,9 +371,10 @@ describe("the self-timer (scope → countdown → capture)", () => {
 
     expect(await result).toMatchObject({ ok: false, cancelled: true });
     expect(lines(stillLog)).toHaveLength(0);
-    // Nothing touches the disk until there is something to write — the same
-    // property "Escape leaves no shot.json on disk" already rests on.
-    expect(readdirSync(recordings).length).toBe(before);
+    // A real discriminator, unlike the recording path's: the stand-in creates
+    // the leaf directory itself on `capture-still` (as the real helper does),
+    // so a shot that went ahead would show up here as well as in `stillLog`.
+    expect(readdirSync(tempTakes).length).toBe(before);
   }, 120_000);
 
   test("an ordinary capture still fires immediately — the self-timer is one shot, not a mode", async () => {

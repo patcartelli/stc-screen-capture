@@ -35,7 +35,7 @@ async function launchAndPressRecord(env: Record<string, string>) {
   app = await electron.launch({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER, ...env },
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER, ...env },
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");

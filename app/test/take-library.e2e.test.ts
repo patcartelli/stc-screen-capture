@@ -16,7 +16,7 @@ async function launch(recordingsDir: string) {
   // raced every other suite doing the same on app/dist/ — see that file.
   app = await electron.launch({
     args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordingsDir },
+    env: { ...process.env, STC_RECORDINGS_DIR: recordingsDir, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), },
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");

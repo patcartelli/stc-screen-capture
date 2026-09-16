@@ -1,5 +1,6 @@
 import { HelperClient, type HelperLine, type SpawnOptions } from "./helper-client.js";
 import type { SupervisorState } from "./supervisor-state.js";
+import { promoteTake } from "./temp-takes.js";
 
 /**
  * Keeps a helper process alive and makes its death legible.
@@ -30,7 +31,10 @@ export class HelperSupervisor {
   private readonly handlers = new Map<string, Set<Handler>>();
   private restarts: number[] = [];
   private shuttingDown = false;
-  private recordingDir: string | undefined;
+  private _recordingDir: string | undefined;
+
+  /** The take a live recording is writing to, or undefined when idle. */
+  get recordingDir(): string | undefined { return this._recordingDir; }
   private readyPromise!: Promise<void>;
 
   private constructor(private readonly bin: string, private readonly opts: SupervisorOptions) {}
@@ -52,7 +56,7 @@ export class HelperSupervisor {
   async startRecording(dir: string, params: Record<string, unknown> = {}): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");
     const r = await this.client.request("start", { dir, ...params });
-    this.recordingDir = dir;
+    this._recordingDir = dir;
     this.state = "recording";
     return r;
   }
@@ -101,11 +105,36 @@ export class HelperSupervisor {
     return this.client.request("export-still", params);
   }
 
+  /**
+   * Every clean stop promotes (STC-393): a display change, a closed window
+   * or a user pressing Stop are all "the file is valid and playable" per
+   * `endRecording`'s own distinction from a crash, and this is the ONE place
+   * that is true regardless of which of those asked for it — so the promote
+   * lives here rather than at each of `recorder:stop`, `window-all-closed`
+   * and `shutdown` in `main.ts`, each remembering to call it. No recording
+   * panel exists yet (STC-392), so a clean stop IS the save.
+   *
+   * `promoteTake` is a no-op for a `dir` outside the temp root (a bare
+   * `/tmp/...` path in a test, say), so nothing here needs to ask first
+   * whether promotion applies.
+   */
+  private async promote(dir: string | undefined): Promise<string | undefined> {
+    if (!dir) return dir;
+    try {
+      return await promoteTake(process.env, dir);
+    } catch (e: any) {
+      this.emit("recording-promote-failed", { dir, error: String(e?.message ?? e) });
+      return dir;
+    }
+  }
+
   async stopRecording(): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");
+    const dir = this._recordingDir;
     const r = await this.client.request("stop");
-    this.recordingDir = undefined;
+    this._recordingDir = undefined;
     this.state = "idle";
+    await this.promote(dir);
     return r;
   }
 
@@ -114,12 +143,13 @@ export class HelperSupervisor {
    * there the helper died and the take is gone, here it stopped cleanly and the
    * partial file is valid and playable.
    */
-  private endRecording(reason: string, line?: HelperLine): void {
+  private async endRecording(reason: string, line?: HelperLine): Promise<void> {
     if (this.state !== "recording") return;
-    const dir = this.recordingDir;
-    this.recordingDir = undefined;
+    const dir = this._recordingDir;
+    this._recordingDir = undefined;
     this.state = "idle";
-    this.emit("recording-ended", { reason, dir, info: line });
+    const promoted = await this.promote(dir);
+    this.emit("recording-ended", { reason, dir: promoted, info: line });
   }
 
   /**
@@ -147,7 +177,7 @@ export class HelperSupervisor {
 
   /** Test seams — a supervisor whose restart path is never exercised is untested. */
   killForTest(): void { this.client?.kill(); }
-  markRecordingForTest(dir: string): void { this.recordingDir = dir; this.state = "recording"; }
+  markRecordingForTest(dir: string): void { this._recordingDir = dir; this.state = "recording"; }
 
   private launch(): void {
     const c = HelperClient.spawn(this.bin, this.opts);
@@ -172,7 +202,7 @@ export class HelperSupervisor {
       // we know about — including a `stopped` that never reached us because
       // it raced a respawn.
       if (this.state === "recording" && line.state === "idle") {
-        this.endRecording("helper-idle");
+        void this.endRecording("helper-idle");
       }
     });
 
@@ -181,7 +211,7 @@ export class HelperSupervisor {
     // mid-file, so it stops rather than corrupting the take).
     c.on("stopped", (line) => {
       if (typeof line.seq === "number") return;   // answered a request; already handled
-      this.endRecording(String(line.reason ?? "helper-stopped"), line);
+      void this.endRecording(String(line.reason ?? "helper-stopped"), line);
     });
 
     c.waitForExit().then((info) => {
@@ -189,14 +219,14 @@ export class HelperSupervisor {
 
       // A recording in flight when the helper died is lost — the sidecars are
       // written on stop, which never happened. Say so loudly.
-      if (this.recordingDir) {
+      if (this._recordingDir) {
         this.emit("recording-lost", {
-          dir: this.recordingDir, ...info,
+          dir: this._recordingDir, ...info,
           // Whatever the helper managed to say on its way out — for a fault
           // signal that is "[helper] FATAL signal SIGSEGV" (STC-254).
           stderr: c.recentStderr.trim() || undefined,
         });
-        this.recordingDir = undefined;
+        this._recordingDir = undefined;
       }
 
       const now = Date.now();

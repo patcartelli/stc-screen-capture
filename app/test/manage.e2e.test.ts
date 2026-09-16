@@ -28,7 +28,7 @@ async function launch(recordings: string) {
   // The bundle is built once in vitest.global-setup.ts. Building it here
   // raced every other suite doing the same on app/dist/ — see that file.
   app = await electron.launch({ args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings } });
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), } });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   return win;

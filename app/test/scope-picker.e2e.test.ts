@@ -39,7 +39,7 @@ async function launch(userData?: string): Promise<Launched> {
     // needs it: real input would test the window server's hit-testing, which
     // belongs on the Mac, and would make this file flaky the same way that
     // one already paid for once.
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_START_LOG: startLog, STC_OVERLAY_SYNTHETIC_INPUT: "1" },
   });
   const win = await app.firstWindow();

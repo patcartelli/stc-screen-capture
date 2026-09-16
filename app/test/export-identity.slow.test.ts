@@ -74,7 +74,10 @@ async function launchWithTake() {
   // the backend both environments can always provide.
   app = await electron.launch({
     args: [root, ...SOFTWARE_RENDER_ARGS], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: dir },
+    env: {
+      ...process.env, STC_RECORDINGS_DIR: dir,
+      STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+    },
   });
   const mainWin = await app.firstWindow();
   await mainWin.waitForLoadState("domcontentloaded");

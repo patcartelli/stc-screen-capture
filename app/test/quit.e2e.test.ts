@@ -28,7 +28,7 @@ describe("quitting while recording", () => {
     app = await electron.launch({
       args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
       cwd: root,
-      env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+      env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
              // Slow enough that a quit which does not wait for the stop leaves
              // the process before the quit command is ever written.
              STC_FAKE_CMD_LOG: log, STC_FAKE_STOP_DELAY_MS: "1500" },

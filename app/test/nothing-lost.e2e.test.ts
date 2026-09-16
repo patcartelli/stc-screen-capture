@@ -77,10 +77,11 @@ const TEARDOWN_MS = SETTLE_READY_MS + 20_000;
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; }, TEARDOWN_MS);
 
-interface Launched { win: Page; recordings: string; destDir: string }
+interface Launched { win: Page; recordings: string; tempTakes: string; destDir: string }
 
 async function launch(): Promise<Launched> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-nothinglost-"));
+  const tempTakes = mkdtempSync(join(tmpdir(), "stc-nothinglost-temp-"));
   const destDir = mkdtempSync(join(tmpdir(), "stc-nothinglost-dest-"));
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   // Seeded on DISK: `recorder:setSettings` strips `still.destination` by design
@@ -93,13 +94,14 @@ async function launch(): Promise<Launched> {
     args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+      ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes,
+      STC_HELPER_BIN: FAKE_HELPER,
       STC_NO_SHUTTER: "1",
     },
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
-  return { win, recordings, destDir };
+  return { win, recordings, tempTakes, destDir };
 }
 
 /** Every take directory that holds a shot, with the document it carries. */
@@ -111,7 +113,7 @@ function shotsIn(recordings: string): { name: string; dir: string }[] {
 
 describe("gate 4: nothing is lost in a burst of captures", () => {
   test(`${N} captures in quick succession leave ${N} recoverable shots`, async () => {
-    const { win, recordings } = await launch();
+    const { win, tempTakes } = await launch();
 
     // Fired one after another with no waiting between them beyond the await —
     // which is what a person mashing a hotkey produces, and what the panel's
@@ -127,7 +129,11 @@ describe("gate 4: nothing is lost in a burst of captures", () => {
     const dirs = results.map((r) => r.dir as string);
     expect(new Set(dirs).size, `captures shared a directory: ${JSON.stringify(dirs)}`).toBe(N);
 
-    const shots = shotsIn(recordings);
+    // TEMP storage (STC-393), not the library — this half of the claim is
+    // about what `capture-still` itself wrote, before any panel exists to
+    // decide whether a shot is kept. The library only gets these once a panel
+    // settles, which is the second test's claim, not this one's.
+    const shots = shotsIn(tempTakes);
     expect(shots.length, `only ${shots.length} of ${N} captures left a shot.json`).toBe(N);
 
     // Every one of them loads. Not "the file exists" — `parseShot` refuses
