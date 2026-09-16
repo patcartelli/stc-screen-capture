@@ -3,6 +3,7 @@ import { _electron as electron, type ElectronApplication } from "playwright";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 const root = join(__dirname, "..", "..");
 
@@ -22,6 +23,10 @@ async function launch() {
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
+  // STC-391: Record counts down now. This file is not about the countdown,
+  // so it turns it off through the shipped preference rather than waiting
+  // out three real seconds on every take.
+  await withoutCountdown(win);
   return win;
 }
 

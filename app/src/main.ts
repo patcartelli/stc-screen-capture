@@ -37,6 +37,8 @@ import {
 import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
+import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
+import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
@@ -386,6 +388,10 @@ app.on("before-quit", (e) => {
   tray?.destroy();
   tray = undefined;
   hideScopeIndicator();
+  // A countdown at quit answers its caller `cancelled`, so the capture or the
+  // recording it was counting down to never happens — which is the only safe
+  // answer when the process is going away underneath it.
+  cancelCountdown();
   closeThumbnail()
     .catch(() => {})
     .then(() => closeOverlay())
@@ -457,11 +463,20 @@ ipcMain.handle("recorder:start", async () => {
   // must never survive into a live take, whether or not the take starts.
   hideScopeIndicator();
   if (!sup) throw new Error("supervisor not running");
+  // A still capture in flight owns the overlay, the countdown panel and the
+  // helper's attention. Pressing Record into the middle of one used to start a
+  // take with that overlay on screen; STC-391 makes the window much easier to
+  // hit, since a self-timer spends seconds waiting with the main window still
+  // live, so it is refused with something to read rather than left to race.
+  if (capturing || overlayIsOpen() || countdownIsOpen()) {
+    return { ok: false, code: "capture-in-flight" };
+  }
   // Read from the stored preference, NOT passed up from the renderer. Main
   // already owns these settings, and a renderer-supplied value would be a
   // second source of truth for what turns on a physical camera and what the
   // helper is told to point at.
-  const { camera, displayId, micDeviceUid, scope } = readSettings(app.getPath("userData"));
+  const { camera, displayId, micDeviceUid, scope, countdownMs } =
+    readSettings(app.getPath("userData"));
   const startParams: Record<string, unknown> = { camera };
   // Only when a device is actually picked (STC-233) — an absent field is
   // "no mic" to the helper's own parseStartRequest, and there is no
@@ -485,6 +500,33 @@ ipcMain.handle("recorder:start", async () => {
     // have its choice silently swapped for another.
     return { ok: false, code: "no-capture-target" };
   }
+  // STC-391: Record ALWAYS counts down — the countdown is what makes Record
+  // feel weightier than Capture. After the scope checks above and never
+  // before: the ticket makes scope and countdown separate steps, and counting
+  // down to a `no-capture-target` refusal would be three seconds spent on
+  // nothing.
+  //
+  // `readSettings` has already clamped it; clamped again so this site reads
+  // the same as the capture path and neither has to know which of them
+  // sanitised the value.
+  const ms = clampCountdownMs(countdownMs);
+  if (needsCountdown(ms)) {
+    const counted = await runCountdown({
+      ms, purpose: "record",
+      displayId: countdownDisplayFor(scope, displayId),
+      dist: here, rendererDir: join(here, "..", "renderer"),
+    });
+    // Requirement 1: nothing is recorded. `cancelled` rather than an error
+    // code the renderer would put in an alert — the user chose this.
+    if (!countdownFired(counted.outcome)) return { ok: false, cancelled: true };
+  }
+  // Any floating panel still on screen would be IN the take, and unlike a
+  // still capture there is no exclusion list for `start` to be added to.
+  // SETTLED rather than hidden (`closeThumbnail`, the same call quit makes):
+  // hiding it for the length of a recording would leave its own timer running
+  // out of sight, and the shot would settle where nobody could act on it.
+  // After the countdown, so a cancelled one costs a pending panel nothing.
+  await closeThumbnail().catch(() => {});
   // Temp storage, not the library (STC-393): the take is not real until a
   // clean stop promotes it, so a denied grant or a crash mid-recording leaves
   // nothing in the library at all rather than a broken entry someone has to
@@ -617,8 +659,13 @@ async function captureStill(action: CaptureAction, source: CaptureSource): Promi
   // capture that silently did nothing.
   if (!sup) return { ok: false, code: "helper-not-running", source };
   // A second press while one is in flight is a no-op, not a second overlay and
-  // not a second directory.
-  if (capturing || overlayIsOpen()) return { ok: false, code: "overlay-open", source };
+  // not a second directory. `countdownIsOpen` is the STC-391 addition: a
+  // self-timer spends most of its life with no overlay up at all, so the
+  // `overlayIsOpen` half stopped covering the whole of "a capture is running"
+  // the moment a countdown could sit between the two.
+  if (capturing || overlayIsOpen() || countdownIsOpen()) {
+    return { ok: false, code: "overlay-open", source };
+  }
 
   capturing = true;
   tray?.update({ shortcuts, busy: true });
@@ -630,8 +677,31 @@ async function captureStill(action: CaptureAction, source: CaptureSource): Promi
     const thumbExcluded = await hideThumbnailForCapture();
     const outcome = action === "display"
       ? await wholeDisplay(thumbExcluded)
-      : await selectRegionOrWindow(action, thumbExcluded);
+      // The self-timer picks its scope through the SAME overlay, opened in
+      // region mode — the overlay's own toggle still reaches window mode, so
+      // "scope is chosen during the flow" costs it no second picker.
+      : await selectRegionOrWindow(action === "self-timer" ? "region" : action, thumbExcluded);
     if (outcome === undefined) return { ok: false, cancelled: true, source };
+
+    // STC-391. Scope first, countdown second — the ticket makes them separate
+    // steps, and a countdown that ran before the selection would be three
+    // seconds spent in front of a picture nobody had framed yet. The panels
+    // hidden above stay hidden throughout, which is the second half of the
+    // ticket's "neither is any waiting floating panel".
+    if (action === "self-timer") {
+      const ms = clampCountdownMs(readSettings(app.getPath("userData")).countdownMs);
+      if (needsCountdown(ms)) {
+        const counted = await runCountdown({
+          ms, purpose: "capture", displayId: displayIdOf(outcome.params),
+          dist: here, rendererDir: join(here, "..", "renderer"),
+        });
+        // Escape is the ticket's requirement 1: nothing is captured, and this
+        // is reported as a cancellation rather than a failure so no door shows
+        // an error for something the user chose.
+        if (!countdownFired(counted.outcome)) return { ok: false, cancelled: true, source };
+        excludeAlso(outcome.params, counted.excludeWindowIds);
+      }
+    }
 
     // Temp storage, not the library (STC-393) — see `recorder:start`'s
     // identical reasoning. The panel (below) is what decides whether this
@@ -740,6 +810,50 @@ async function wholeDisplay(thumbExcluded: number[]): Promise<{ kind: string; pa
   return { kind: "display",
            params: { kind: "display-crop", displayId: display.id,
                      ...(thumbExcluded.length ? { excludeWindowIds: thumbExcluded } : {}) } };
+}
+
+/**
+ * Which display a RECORDING is aimed at, for the countdown's benefit.
+ *
+ * A region scope names one; a display scope names one when the user picked it.
+ * A window scope does not — finding it would mean a second helper round trip
+ * for a window whose bounds nothing else here needs — and neither does an
+ * automatic display, where the helper picks its own first. Both fall through
+ * to the pointer's display, which is where the person pressing Record is
+ * looking.
+ */
+function countdownDisplayFor(scope: Settings["scope"], displayId: number | null): number | undefined {
+  if (scope.kind === "region" && scope.region) return scope.region.displayId;
+  if (scope.kind === "display" && displayId != null) return displayId;
+  return undefined;
+}
+
+/**
+ * Which display a capture is aimed at, when its parameters say — so the
+ * countdown appears on the screen being photographed rather than wherever the
+ * pointer drifted to. A window capture does not say, and falls back to the
+ * pointer's display inside `runCountdown`.
+ */
+function displayIdOf(params: CaptureParams): number | undefined {
+  return typeof params.displayId === "number" ? params.displayId : undefined;
+}
+
+/**
+ * Add the countdown panel's own window id to a capture's exclusion list.
+ *
+ * The panel is already hidden and destroyed by the time this is called — this
+ * is the belt to that brace, the same pairing `overlay-session.ts` uses,
+ * because a hide and a capture reach the window server down different paths
+ * with no ordering between them.
+ *
+ * Only a `display-crop` capture needs it. A `window` capture's filter names
+ * exactly one window and cannot accidentally include another, which is why the
+ * still path has never sent an exclusion list for one.
+ */
+function excludeAlso(params: CaptureParams, ids: number[]): void {
+  if (ids.length === 0 || params.kind !== "display-crop") return;
+  const existing = Array.isArray(params.excludeWindowIds) ? params.excludeWindowIds as number[] : [];
+  params.excludeWindowIds = [...existing, ...ids];
 }
 
 /**

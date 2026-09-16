@@ -4,6 +4,7 @@ import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 /**
  * The main window's capture scope (STC-370's region/window capability, wired
@@ -43,6 +44,10 @@ async function launch(userData?: string): Promise<Launched> {
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#scope");
+  // STC-391: Record counts down now. This file is not about the countdown,
+  // so it turns it off through the shipped preference rather than waiting
+  // out three real seconds on every take.
+  await withoutCountdown(win);
   return { win, userData: ud, startLog };
 }
 

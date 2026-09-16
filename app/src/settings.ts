@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   CAPTURE_ACTIONS, DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
 } from "./hotkeys.js";
+import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import {
   DEFAULT_EXPORT_OPTIONS, DEFAULT_FILENAME_TEMPLATE, clampQuality, parseFormat, parseScale,
   type ExportOptions,
@@ -74,6 +75,18 @@ export interface Settings {
    * no combination that makes a noise the system was told not to make.
    */
   shutterSound: boolean;
+  /**
+   * How long the countdown runs, in milliseconds (STC-391) — for Record, and
+   * for a still capture started with the self-timer.
+   *
+   * A preference rather than a constant, and the ticket's own Open item:
+   * answered 3s, stored here so the number can move without a code change.
+   * There is deliberately NO control for it in this ticket. `0` is "off" and
+   * is a legitimate value — Record then starts immediately, which is what it
+   * did before this ticket existed. `countdown.ts` owns the clamp, so the
+   * bound and the constant it clamps to cannot drift apart.
+   */
+  countdownMs: number;
   /**
    * How a still leaves the app (STC-293), and the one place those answers
    * live. The ticket's Note: "One encoder, one filename template, one
@@ -203,7 +216,7 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 
 export const DEFAULT_SETTINGS: Settings = {
   camera: false, displayId: null, micDeviceUid: null, shortcuts: { ...DEFAULT_SHORTCUTS },
-  shutterSound: true,
+  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   still: { ...DEFAULT_STILL_SETTINGS },
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
   share: { ...DEFAULT_SHARE_SETTINGS },
@@ -375,6 +388,7 @@ export function readSettings(dir: string): Settings {
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
+    countdownMs: clampCountdownMs(doc.countdownMs),
     still: cleanStill(doc.still),
     thumbnail: cleanThumbnail(doc.thumbnail),
     share: cleanShare(doc.share),
@@ -417,6 +431,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     // opposite case for the opposite reason — it defaults off because it turns
     // on a physical LED.
     shutterSound: merged.shutterSound !== false,
+    countdownMs: clampCountdownMs(merged.countdownMs),
   };
   try {
     writeFileSync(join(dir, FILE), JSON.stringify(clean, null, 2));
