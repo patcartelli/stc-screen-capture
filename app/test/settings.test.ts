@@ -6,7 +6,8 @@ import {
   readSettings, writeSettings, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
   DEFAULT_THUMBNAIL_SETTINGS, DEFAULT_SCOPE_SETTINGS,
 } from "../src/settings.js";
-import { DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
+import { CAPTURE_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
+import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
 
 /**
  * The camera preference is opt-in, default off, and sticky (design spec).
@@ -21,7 +22,8 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
-                 shutterSound: true, still: DEFAULT_STILL_SETTINGS,
+                 shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
+                 still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
                  scope: DEFAULT_SCOPE_SETTINGS });
     expect(DEFAULT_SETTINGS.camera).toBe(false);
@@ -59,7 +61,8 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
-                 shutterSound: true, still: DEFAULT_STILL_SETTINGS,
+                 shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
+                 still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
                  scope: DEFAULT_SCOPE_SETTINGS });
   });
@@ -112,7 +115,8 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
-                 shutterSound: true, still: DEFAULT_STILL_SETTINGS,
+                 shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
+                 still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
                  scope: DEFAULT_SCOPE_SETTINGS });
   });
@@ -163,6 +167,8 @@ describe("the capture shortcuts", () => {
   test("default to the hyperkey row when nothing has been saved", () => {
     expect(readSettings(dir()).shortcuts).toEqual({
       region: `${HYPER}+1`, window: `${HYPER}+2`, display: `${HYPER}+3`,
+      // STC-391. 5 rather than 4, leaving 4 for the Record flow (STC-388).
+      "self-timer": `${HYPER}+5`,
     });
   });
 
@@ -216,7 +222,10 @@ describe("the capture shortcuts", () => {
     const d = dir();
     writeSettings(d, { shortcuts: { ...DEFAULT_SHORTCUTS, regoin: "Alt+X" } as never });
     const stored = JSON.parse(readFileSync(join(d, "settings.json"), "utf8"));
-    expect(Object.keys(stored.shortcuts).sort()).toEqual(["display", "region", "window"]);
+    // The declared list rather than three literals: the fault this catches is
+    // `regoin` reaching the file, which it still catches, and it does not go
+    // stale the next time an action is added.
+    expect(Object.keys(stored.shortcuts).sort()).toEqual([...CAPTURE_ACTIONS].sort());
   });
 });
 

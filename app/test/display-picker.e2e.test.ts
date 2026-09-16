@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 /**
  * The display picker (STC-247), end to end through the real app: the real IPC
@@ -25,7 +26,7 @@ async function launch(opts: { userData: string; recordings: string; startLog?: s
     cwd: root,
     env: {
       ...process.env,
-      STC_RECORDINGS_DIR: opts.recordings,
+      STC_RECORDINGS_DIR: opts.recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_HELPER_BIN: FAKE_HELPER,
       ...(opts.startLog ? { STC_FAKE_START_LOG: opts.startLog } : {}),
       ...(opts.displays ? { STC_FAKE_DISPLAYS: opts.displays } : {}),
@@ -33,6 +34,10 @@ async function launch(opts: { userData: string; recordings: string; startLog?: s
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
+  // STC-391: Record counts down now. This file is not about the countdown,
+  // so it turns it off through the shipped preference rather than waiting
+  // out three real seconds on every take.
+  await withoutCountdown(win);
   return win;
 }
 

@@ -3,6 +3,7 @@ import { _electron as electron, type ElectronApplication } from "playwright";
 import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 /**
  * A warning the helper sends on its reliable channel reaches the user, and a
@@ -34,10 +35,14 @@ async function launchAndPressRecord(env: Record<string, string>) {
   app = await electron.launch({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER, ...env },
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER, ...env },
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
+  // STC-391: Record counts down now. This file is not about the countdown,
+  // so it turns it off through the shipped preference rather than waiting
+  // out three real seconds on every take.
+  await withoutCountdown(win);
   await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
   await win.click("#record");
   return { win, recordings };

@@ -32,16 +32,32 @@
  * the point where the user can still choose something else.
  */
 
-export type CaptureAction = "region" | "window" | "display";
+/**
+ * What a global shortcut can be bound to.
+ *
+ * Three of these take a still immediately. `self-timer` (STC-391) does NOT,
+ * and that is the structural point of it being here: this list was built when
+ * every action was an instant still, and the name `CaptureAction` is now one
+ * word short of the truth. Nothing in this module cares — an action is a thing
+ * a key starts, and `main.ts` decides what it starts — but `captureStill` and
+ * `trayTemplate` both iterate it, so anything added here has to be something
+ * both of them can honour.
+ */
+export type CaptureAction = "region" | "window" | "display" | "self-timer";
 
 /** Order matters: it is the order preferences lists, and the order duplicate
  * detection resolves in — the first action to claim an accelerator keeps it. */
-export const CAPTURE_ACTIONS: readonly CaptureAction[] = ["region", "window", "display"];
+export const CAPTURE_ACTIONS: readonly CaptureAction[] =
+  ["region", "window", "display", "self-timer"];
 
 export const ACTION_LABELS: Record<CaptureAction, string> = {
   region: "Capture Region",
   window: "Capture Window",
   display: "Capture Full Display",
+  // Named for what it does rather than for the countdown it shows: the
+  // countdown is the mechanism, "with a delay" is the reason anyone reaches
+  // for it. It is one capture, not a mode that stays on (STC-391).
+  "self-timer": "Capture with Self-Timer",
 };
 
 /** `null` is a deliberately unbound action, which is not a failure. */
@@ -61,6 +77,10 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   region: `${HYPER}+1`,
   window: `${HYPER}+2`,
   display: `${HYPER}+3`,
+  // 5, not 4: the ticket names it, and it leaves 4 free for whatever the
+  // Record flow (STC-388) binds — the two are a pair in the user's head and
+  // will read better adjacent than interleaved.
+  "self-timer": `${HYPER}+5`,
 };
 
 // ── the accelerator grammar ─────────────────────────────────────────────────

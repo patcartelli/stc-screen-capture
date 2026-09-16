@@ -425,6 +425,19 @@
         <input type="checkbox" id="thumbskip"> Skip it — straight to clipboard</label>
     </div>
 
+    <h2>Countdown</h2>
+    <!--
+      STC-391. One countdown, two ways in: Record always counts down, and a
+      still capture only when it was started with the self-timer. The options
+      are built from `countdown.ts`'s COUNTDOWN_OPTIONS rather than listed
+      here, so the list and the clamp that has to accept it cannot drift.
+    -->
+    <div class="stillrow">
+      <label title="Record always counts down. A still capture counts down only when started with the self-timer.">Counts
+        down for <select id="countdownms"></select></label>
+      <span id="countdownhint">Applies to Record, and to Capture with Self-Timer.</span>
+    </div>
+
     <h2>Capture shortcuts</h2>
     <div id="shortcuts"></div>
     <div id="shortcutfoot">

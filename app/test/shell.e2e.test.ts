@@ -3,6 +3,7 @@ import { _electron as electron, type ElectronApplication } from "playwright";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 const root = join(__dirname, "..", "..");
 
@@ -15,10 +16,17 @@ async function launch() {
   // Never write takes to the real ~/Desktop/stc from an automated run.
   app = await electron.launch({
     args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")) },
+    env: {
+      ...process.env, STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")),
+      STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+    },
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
+  // STC-391: Record counts down now. This file is not about the countdown,
+  // so it turns it off through the shipped preference rather than waiting
+  // out three real seconds on every take.
+  await withoutCountdown(win);
   return win;
 }
 

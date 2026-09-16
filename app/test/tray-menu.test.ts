@@ -19,7 +19,10 @@ describe("the menu", () => {
     trayTemplate(ctx).map((i) => i.id);
 
   test("every capture action is offered, in the order preferences lists them", () => {
-    expect(ids({ shortcuts: DEFAULT_SHORTCUTS }).slice(0, 3))
+    // Sliced by the LIST's own length, not by a literal 3 — the claim is
+    // "every capture action", and the literal made that claim go stale the
+    // first time an action was added (STC-391's self-timer).
+    expect(ids({ shortcuts: DEFAULT_SHORTCUTS }).slice(0, CAPTURE_ACTIONS.length))
       .toEqual(CAPTURE_ACTIONS.map((a) => `capture:${a}`));
   });
 
@@ -48,7 +51,11 @@ describe("the menu", () => {
   test("a capture in flight disables the captures and nothing else", () => {
     const busy = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS, busy: true });
     const captures = busy.filter((i) => i.id.startsWith("capture:"));
-    expect(captures.map((i) => i.enabled)).toEqual([false, false, false]);
+    // Every capture, however many there are — and the count is asserted too,
+    // so "disables the captures" cannot be satisfied by a filter that found
+    // none of them.
+    expect(captures).toHaveLength(CAPTURE_ACTIONS.length);
+    expect(captures.map((i) => i.enabled)).toEqual(CAPTURE_ACTIONS.map(() => false));
     expect(busy.find((i) => i.id === "library")!.enabled).not.toBe(false);
     expect(busy.find((i) => i.id === "quit")!.enabled).not.toBe(false);
   });

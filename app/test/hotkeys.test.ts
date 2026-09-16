@@ -99,7 +99,7 @@ describe("planning a whole set", () => {
 
   test("the defaults all plan clean, and differ from each other", () => {
     const p = plan({});
-    expect(p.map((x) => x.problem)).toEqual([undefined, undefined, undefined]);
+    expect(p.map((x) => x.problem)).toEqual(CAPTURE_ACTIONS.map(() => undefined));
     expect(new Set(p.map((x) => x.accelerator)).size).toBe(CAPTURE_ACTIONS.length);
   });
 

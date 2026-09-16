@@ -78,11 +78,30 @@ export function demuxAudioTrack(buf: ArrayBuffer, what: string): Promise<Demuxed
       file.onSamples = (_id: number, _user: unknown, samples: any[]) => {
         collected.push(...samples);
         if (collected.length < track.nb_samples) return;
-        const framesNs = collected.map((s) => {
+        // demux.ts's video twin asserts this SUM is already an integer, because
+        // Capture.swift/CameraCapture.swift force mediaTimeScale to exactly
+        // 1_000_000_000 on every video input, making scale === 1 always. Audio
+        // cannot do that: AVFoundation rejects mediaTimeScale on any
+        // audio-media-type input outright (the STC-233 crash this repo's own
+        // CLAUDE.md records), so an AAC track's own sample grid is its CODEC
+        // RATE — 48000 Hz here, 1024-sample frames — and cts*scale is a real
+        // number on real hardware (cts=1024, timescale=48000 -> 21.333... ms).
+        // Rounding is the right answer, not a refusal: the worst case is under
+        // 1/48000 s (~20.8 us), two orders of magnitude inside session.ts's own
+        // OFFSET_TOLERANCE_NS (50 us) and three inside this app's measured
+        // camera<->mic sync tolerance (1.8 ms median, MicCapture.swift's header).
+        // Chained from durations, not read from each sample's own `cts` —
+        // demux.ts's identical fix, STC-394, and the same reason: once
+        // mic.m4a is fragmented too (`MicCapture.swift`'s own
+        // `movieFragmentInterval`), a crash-truncated file's first REAL
+        // `moof` resets mp4box.js's accumulated decode time back near zero.
+        // A sample's own `duration` is a per-sample delta, not an
+        // accumulated base, so it survives the reset.
+        let cumulative = collected[0].cts as number;
+        const framesNs = collected.map((s, i) => {
+          if (i > 0) cumulative += collected[i - 1].duration;
           const scale = 1_000_000_000 / s.timescale;
-          const pts = s.cts * scale + editOffsetNs;
-          if (!Number.isInteger(pts)) throw new Error(`non-integer ns PTS: cts=${s.cts} timescale=${s.timescale}`);
-          return pts;
+          return Math.round(cumulative * scale + editOffsetNs);
         });
         clearTimeout(watchdog);
         finish(() => resolve({
@@ -91,8 +110,8 @@ export function demuxAudioTrack(buf: ArrayBuffer, what: string): Promise<Demuxed
           sampleRate: track.audio?.sample_rate ?? 0,
           numberOfChannels: track.audio?.channel_count ?? 0,
           description,
-          chunks: collected.map((s) => ({
-            timestampUs: Math.round((s.cts * (1_000_000_000 / s.timescale) + editOffsetNs) / 1000),
+          chunks: collected.map((s, i) => ({
+            timestampUs: Math.round(framesNs[i]! / 1000),
             data: s.data as Uint8Array,
           })),
         }));

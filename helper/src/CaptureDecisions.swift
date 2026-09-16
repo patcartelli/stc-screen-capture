@@ -25,6 +25,26 @@ func machToNs(_ ticks: UInt64, numer: UInt32, denom: UInt32) -> UInt64 {
     ticks &* UInt64(numer) / UInt64(denom)
 }
 
+/// How often each `AVAssetWriter` flushes a movie fragment to disk (STC-394).
+///
+/// One constant, shared by `Capture.swift`, `CameraCapture.swift` and
+/// `MicCapture.swift` rather than three copies of the same literal — the
+/// "one value, two copies" defect this codebase keeps re-finding, one file
+/// short of happening again here. 2 seconds: the ticket's own "a few seconds
+/// is enough", and short enough that a kill mid-recording loses at most a
+/// couple of seconds rather than the whole take. Set on the writer BEFORE
+/// `startWriting()` — `movieFragmentInterval` cannot be changed after.
+///
+/// Measured directly (`helper/test/fragmented-writer.test.ts`), not assumed
+/// from Apple's docs: a writer configured this way and finished NORMALLY
+/// produces a file with NO moof/mdat fragment boxes at all — AVAssetWriter
+/// consolidates everything back into the same single-mdat-then-moov shape a
+/// non-fragmented file already has, which is why "normal-stop output is
+/// unchanged" holds by construction rather than by coincidence. Only a
+/// process that never reaches `finishWriting` ever leaves fragment boxes
+/// behind, which is exactly the case this ticket exists for.
+let movieFragmentIntervalSec: Double = 2.0
+
 enum FrameDecision: Equatable {
     /// Not a complete frame, or older than the session start. VFR emits
     /// nothing here — deliberately not a repeated frame (PHASE-0 §4).

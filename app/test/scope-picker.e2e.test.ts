@@ -4,6 +4,7 @@ import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 /**
  * The main window's capture scope (STC-370's region/window capability, wired
@@ -38,11 +39,15 @@ async function launch(userData?: string): Promise<Launched> {
     // needs it: real input would test the window server's hit-testing, which
     // belongs on the Mac, and would make this file flaky the same way that
     // one already paid for once.
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_START_LOG: startLog, STC_OVERLAY_SYNTHETIC_INPUT: "1" },
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#scope");
+  // STC-391: Record counts down now. This file is not about the countdown,
+  // so it turns it off through the shipped preference rather than waiting
+  // out three real seconds on every take.
+  await withoutCountdown(win);
   return { win, userData: ud, startLog };
 }
 

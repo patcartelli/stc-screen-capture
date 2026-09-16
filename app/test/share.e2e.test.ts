@@ -54,7 +54,7 @@ async function launch(opts: { withExport?: boolean; slug?: string } = {}): Promi
   }
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings },
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), },
   });
   const mainWin = await app.firstWindow();
   await mainWin.waitForLoadState("domcontentloaded");

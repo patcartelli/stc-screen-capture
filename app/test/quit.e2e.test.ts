@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -27,13 +28,17 @@ describe("quitting while recording", () => {
     app = await electron.launch({
       args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
       cwd: root,
-      env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+      env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
              // Slow enough that a quit which does not wait for the stop leaves
              // the process before the quit command is ever written.
              STC_FAKE_CMD_LOG: log, STC_FAKE_STOP_DELAY_MS: "1500" },
     });
     const win = await app.firstWindow();
     await win.waitForLoadState("domcontentloaded");
+    // STC-391: the subject here is the stop-before-quit ORDER, not the
+    // countdown — which would otherwise put three seconds between the click
+    // and the take, and a `start` in the log either way.
+    await withoutCountdown(win);
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     await win.click("#record");
     await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");

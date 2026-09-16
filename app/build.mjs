@@ -21,4 +21,8 @@ await build({ ...common, entryPoints: ["app/src/thumbnail-renderer.ts"], outfile
 // thumbnail's are separate.
 await build({ ...common, entryPoints: ["app/src/editor-preload.ts"], outfile: "app/dist/editor-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/editor.ts"], outfile: "app/dist/editor.js", format: "iife", platform: "browser" });
+// The countdown (STC-391) — Record's countdown and Capture's self-timer are
+// one surface, in its own window with its own, narrowest bridge.
+await build({ ...common, entryPoints: ["app/src/countdown-preload.ts"], outfile: "app/dist/countdown-preload.cjs", format: "cjs" });
+await build({ ...common, entryPoints: ["app/src/countdown-renderer.ts"], outfile: "app/dist/countdown-renderer.js", format: "iife", platform: "browser" });
 console.log("app built -> app/dist/");

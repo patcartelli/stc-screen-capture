@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { FLASH_HOLD_MS, FLASH_FADE_MS } from "../src/scope-indicator-window.js";
+import { withoutCountdown } from "./_countdown-fixture.js";
 
 /** Total time the flash's window can exist, hold plus fade, before it
  * destroys itself with no further input. Any test proving an EARLY cancel
@@ -60,11 +61,15 @@ async function launch(): Promise<Page> {
   app = await electron.launch({
     args: [root, `--user-data-dir=${ud}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_HELPER_BIN: FAKE_HELPER,
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
            STC_OVERLAY_SYNTHETIC_INPUT: "1" },
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#scope");
+  // STC-391: Record counts down now. The subject here is the flash, which
+  // `recorder:start` cancels on its very first line either way — the countdown
+  // would only add three seconds and a second window to every Record test.
+  await withoutCountdown(win);
   return win;
 }
 

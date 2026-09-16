@@ -40,32 +40,80 @@ npm run test:capture
 `SKIP-GRANT`, the message says which grant is missing and how to raise the
 prompt.
 
-## §2 — does a real recording actually produce mic.m4a
+## §2 — does a real recording actually produce mic.m4a — DONE 2026-09-16
 
 Pick a real microphone (built-in is fine for the first run), record ~15s
 with `tools/test-host`'s `--mic <uid>` flag (get the uid from `--out`'s
 `devices` transcript, or from `AVCaptureDevice.devices(for: .audio)` in a
 quick swift snippet), and check:
 
-- `mic.m4a` exists and is non-zero bytes.
+- `mic.m4a` exists and is non-zero bytes. **CONFIRMED** — a real device
+  (Elgato Wave:3) produced a non-empty file.
 - `anchors.json` is version 4, has a `mic` block with `present: true`, and
-  `files.mic == "mic.m4a"`.
+  `files.mic == "mic.m4a"`. **CONFIRMED**.
 - `mic.firstFramePtsNs` is small (the mic should open fast — no measured
   number exists yet the way the camera's ~1035ms warm-up was measured;
-  **this run is what produces the first one**).
+  **this run is what produces the first one**). **MEASURED: 758031792 ns**
+  on the same take whose `camera.firstFrameNs` was 255209000 — both on the
+  same clock, plausible relative to each other. Not yet compared against a
+  session-zero origin to say whether ~758ms is a *good* mic warm-up number,
+  only that it recorded.
 - Play `mic.m4a` in QuickTime. Is there audio? Does it sound like what was
-  said during the take?
+  said during the take? **Not yet confirmed by ear** — recording and the
+  anchors document were verified; nobody has listened to the file yet.
 
-## §3 — camera + mic together
+## §3 — camera + mic together — DONE 2026-09-16
 
 Record with both `--camera` and `--mic <uid>`. Does `anchors.json` carry
-BOTH `camera` and `mic` blocks? Does the take still produce a valid
+BOTH `camera` and `mic` blocks? **CONFIRMED** — a real take carried both
+blocks with plausible values. Does the take still produce a valid
 `display.mp4`, `camera.mp4` AND `mic.m4a` all in the same directory? The
 three subsystems (display/camera/mic) each own a separate `AVAssetWriter`
 and each tear down through the same `DispatchGroup` in `Capture.swift`'s
 `stop()` — this is the first take that exercises all three writers
 finalizing concurrently, and nothing here can produce that concurrency
-without real hardware.
+without real hardware. **This concurrent-teardown path ran on real
+hardware and produced a clean, valid anchors document — not separately
+re-verified file-by-file (`display.mp4`/`camera.mp4` playability was not
+re-checked here, only that all three tracks were requested and the
+document was consistent), but nothing pointed at a partial or corrupt
+take.**
+
+**Already found and fixed here, on real hardware, 2026-09-16**: the
+app-packaged build crashed the whole helper (`EXC_CRASH`/`SIGABRT`, an
+uncaught `NSException`) the instant camera+mic were both enabled, every
+time — camera alone worked, mic alone was untested but the crash was in
+mic's own writer setup. `MicCapture.setupWriter()` had copied
+`inp.mediaTimeScale = 1_000_000_000` verbatim from `Capture.swift`'s VIDEO
+writer; that property is video-only (an audio input infers its own time
+scale from its samples), and setting it left the audio
+`AVAssetWriterInput` unable to resolve a real backing helper
+(`AVAssetWriterInputUnknownHelper` in the crash report), so the very next
+property touch threw and took the whole process down — camera and display
+included, not just the mic. Removed; `retimed()` already stamps each
+sample buffer with an exact-ns PTS before the gate sees it, so the file's
+sample table needed no help from this property the way the video track
+does. **Re-verified fresh, same day, after the fix**: camera+mic together
+recorded cleanly with both anchors blocks present (see the confirmation at
+the top of this section) — the crash is gone, not just theorized fixed.
+
+**Second thing found and fixed here, same day, once §3 could actually be
+reached**: a real camera+mic take recorded fine (both anchors blocks
+present, correct values) but the editor refused to open it —
+`could not parse mic.m4a: Error: non-integer ns PTS: cts=1024
+timescale=48000`. Direct consequence of the crash fix above:
+`demux-audio.ts` assumed mic.m4a's sample grid was exact nanoseconds, the
+same guarantee `demux.ts` correctly relies on for video — but that
+guarantee comes from `Capture.swift`/`CameraCapture.swift` forcing
+`mediaTimeScale = 1_000_000_000` on the video input, the exact property
+that crashes when set on audio. So an AAC track's grid is its own sample
+rate instead (48000 Hz, 1024-sample frames — 1024/48000 s = 21.333... ms,
+not an integer number of ns). `demux-audio.ts` now rounds rather than
+throws; the worst-case error (~20.8 us) is two orders of magnitude inside
+`session.ts`'s own 50 us `OFFSET_TOLERANCE_NS` check and three inside this
+app's measured camera<->mic tolerance (1.8 ms median). **Re-verify §4
+fresh too** — the take that surfaced this never got past opening in the
+editor, so export-with-audio is still unreached.
 
 ## §4 — export with audio, and LISTEN to it
 
