@@ -78,11 +78,21 @@ export function demuxAudioTrack(buf: ArrayBuffer, what: string): Promise<Demuxed
       file.onSamples = (_id: number, _user: unknown, samples: any[]) => {
         collected.push(...samples);
         if (collected.length < track.nb_samples) return;
+        // demux.ts's video twin asserts this SUM is already an integer, because
+        // Capture.swift/CameraCapture.swift force mediaTimeScale to exactly
+        // 1_000_000_000 on every video input, making scale === 1 always. Audio
+        // cannot do that: AVFoundation rejects mediaTimeScale on any
+        // audio-media-type input outright (the STC-233 crash this repo's own
+        // CLAUDE.md records), so an AAC track's own sample grid is its CODEC
+        // RATE — 48000 Hz here, 1024-sample frames — and cts*scale is a real
+        // number on real hardware (cts=1024, timescale=48000 -> 21.333... ms).
+        // Rounding is the right answer, not a refusal: the worst case is under
+        // 1/48000 s (~20.8 us), two orders of magnitude inside session.ts's own
+        // OFFSET_TOLERANCE_NS (50 us) and three inside this app's measured
+        // camera<->mic sync tolerance (1.8 ms median, MicCapture.swift's header).
         const framesNs = collected.map((s) => {
           const scale = 1_000_000_000 / s.timescale;
-          const pts = s.cts * scale + editOffsetNs;
-          if (!Number.isInteger(pts)) throw new Error(`non-integer ns PTS: cts=${s.cts} timescale=${s.timescale}`);
-          return pts;
+          return Math.round(s.cts * scale + editOffsetNs);
         });
         clearTimeout(watchdog);
         finish(() => resolve({

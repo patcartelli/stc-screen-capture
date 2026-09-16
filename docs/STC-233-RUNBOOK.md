@@ -85,6 +85,24 @@ does. **Re-verify this section fresh** — it had never been reached before
 this fix, so nothing past "the process no longer crashes" is confirmed
 yet.
 
+**Second thing found and fixed here, same day, once §3 could actually be
+reached**: a real camera+mic take recorded fine (both anchors blocks
+present, correct values) but the editor refused to open it —
+`could not parse mic.m4a: Error: non-integer ns PTS: cts=1024
+timescale=48000`. Direct consequence of the crash fix above:
+`demux-audio.ts` assumed mic.m4a's sample grid was exact nanoseconds, the
+same guarantee `demux.ts` correctly relies on for video — but that
+guarantee comes from `Capture.swift`/`CameraCapture.swift` forcing
+`mediaTimeScale = 1_000_000_000` on the video input, the exact property
+that crashes when set on audio. So an AAC track's grid is its own sample
+rate instead (48000 Hz, 1024-sample frames — 1024/48000 s = 21.333... ms,
+not an integer number of ns). `demux-audio.ts` now rounds rather than
+throws; the worst-case error (~20.8 us) is two orders of magnitude inside
+`session.ts`'s own 50 us `OFFSET_TOLERANCE_NS` check and three inside this
+app's measured camera<->mic tolerance (1.8 ms median). **Re-verify §4
+fresh too** — the take that surfaced this never got past opening in the
+editor, so export-with-audio is still unreached.
+
 ## §4 — export with audio, and LISTEN to it
 
 This is the part that matters most and is the least reasoned-about, because
