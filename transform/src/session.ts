@@ -50,8 +50,12 @@ const OFFSET_TOLERANCE_NS = 50_000;
  * two turns a whole class of silent clock bugs into a loud one — on the
  * display track a few frames of desync looks like a rendering fault; on the
  * camera track (~1 s empty edit) an unchecked gap is seconds of PiP desync,
- * invisible in a still frame. Shared by both tracks so the two checks cannot
- * drift apart.
+ * invisible in a still frame. Shared by both video tracks so the two checks
+ * cannot drift apart.
+ *
+ * NOT used for mic.m4a (STC-233) — the file has no empty edit to compare
+ * against at all, so there is nothing to check. See the mic-loading block
+ * below for why, and what happens instead.
  */
 function checkFrameOffset(what: string, measuredNs: number | undefined, demuxedFirstNs: number): void {
   if (typeof measuredNs !== "number") return;
@@ -62,6 +66,44 @@ function checkFrameOffset(what: string, measuredNs: number | undefined, demuxedF
       `${demuxedFirstNs} ns (${(drift / 1e6).toFixed(1)} ms apart). Render would desync by that amount.`,
     );
   }
+}
+
+/**
+ * STC-233. mic.m4a cannot carry the session-start gap the way display.mp4/
+ * camera.mp4 do — confirmed on real hardware (2026-09-16) against a take
+ * where display.mp4's video track had a real two-entry edit list (an empty
+ * edit for the startup gap, then the actual content) while mic.m4a's
+ * `trak.edts` was entirely absent. `MicCapture.swift` retimes every sample
+ * buffer to a session-relative PTS before appending it, but
+ * `AVAssetWriter`'s real-time AAC pipeline resets the track's own timeline
+ * to whichever sample it first receives rather than preserving that PTS as
+ * a recoverable offset. So unlike video there is nothing in the file to
+ * independently corroborate `anchors.mic.firstFramePtsNs` against —
+ * `checkFrameOffset`'s "helper vs file, they should agree" design would
+ * throw on every take with a mic, since the file's own first sample always
+ * lands near its own zero regardless of how late the mic actually opened.
+ *
+ * `anchors.mic.firstFramePtsNs` is therefore the ONLY source for where this
+ * track sits in session time, and every demuxed timestamp is REBASED onto
+ * it rather than merely checked against it. The shift is measured against
+ * the file's OWN first sample (not assumed to be exactly 0), so this is a
+ * no-op if a future macOS version starts writing a real edit list for
+ * audio — it would simply come out near zero.
+ *
+ * `chunks[i].timestampUs` is RECOMPUTED from the shifted `framesNs[i]`
+ * (not the old timestampUs plus a separately-rounded shift), to preserve
+ * demux-audio.ts's own invariant since STC-394: `timestampUs` is always
+ * exactly `Math.round(framesNs / 1000)`, never a value that could drift
+ * from it by a rounding unit through a second, independent rounding path.
+ */
+export function rebaseMicAudio(raw: DemuxedAudio, measuredFirstNs: number): DemuxedAudio {
+  const shiftNs = measuredFirstNs - raw.framesNs[0]!;
+  const framesNs = raw.framesNs.map((ns) => ns + shiftNs);
+  return {
+    ...raw,
+    framesNs,
+    chunks: raw.chunks.map((c, i) => ({ ...c, timestampUs: Math.round(framesNs[i]! / 1000) })),
+  };
 }
 
 export async function loadSession(input: SessionInput): Promise<LoadedSession> {
@@ -134,11 +176,12 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
 
   let micAudio: DemuxedAudio | undefined;
   if (claimsMic && input.micM4a) {
-    micAudio = await demuxAudioTrack(input.micM4a, "mic.m4a");
-    if (micAudio.framesNs.length === 0) {
+    const rawMicAudio = await demuxAudioTrack(input.micM4a, "mic.m4a");
+    if (rawMicAudio.framesNs.length === 0) {
       throw new SessionLoadError("mic.m4a contains no samples");
     }
-    checkFrameOffset("mic.m4a", anchors.mic!.firstFramePtsNs, micAudio.framesNs[0]!);
+    // NOT checkFrameOffset — see rebaseMicAudio's own header for why.
+    micAudio = rebaseMicAudio(rawMicAudio, anchors.mic!.firstFramePtsNs);
   }
 
   return {
