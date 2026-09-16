@@ -513,7 +513,7 @@ Add these methods next to `stats()`:
     }
 
     /// One synthetic move at the resume instant, carrying where the pointer
-    /// actually is (STC-240).
+    /// actually is (STC-240), in the tap's own coordinate space.
     ///
     /// Without it the cursor sim — which eases toward the pointer at 120 Hz —
     /// holds at its pre-pause position and then visibly GLIDES across the cut
@@ -524,7 +524,28 @@ Add these methods next to `stats()`:
     /// field would be a fact about the helper rather than about the take, and
     /// nothing downstream would branch on it.
     private func recordResumeAnchor(atNs tNs: Int64) {
-        let loc = NSEvent.mouseLocation
+        // CGEvent, NOT NSEvent.mouseLocation — the two are in different
+        // coordinate spaces and only one of them matches this array.
+        //
+        // Every move in `events` carries the tap's `event.location`:
+        // CoreGraphics global points, origin TOP-left, y down.
+        // `NSEvent.mouseLocation` is a Cocoa global point: origin BOTTOM-left,
+        // y up, flipped against the MAIN display's height whatever display the
+        // pointer is actually over. `StillDecisions.swift`'s `localizeCursor`
+        // is where that flip is owned, and it is the ONE flip in the system
+        // precisely so everything downstream of events.json can assume
+        // top-left.
+        //
+        // Writing an unconverted Cocoa point into this array would put the
+        // synthetic anchor at a mirrored y — a cursor that jumps across the
+        // seam and snaps back one frame later. Since the anchor exists to make
+        // the seam land cleanly, that bug would defeat the feature while
+        // looking implemented.
+        //
+        // A nil event (the allocation failing) costs the anchor, not the take:
+        // the seam degrades to the glide this function exists to remove, which
+        // is the old behaviour rather than a new fault.
+        guard let loc = CGEvent(source: nil)?.location else { return }
         lock.lock()
         events.append(["t": Int(tNs), "kind": "move", "x": loc.x, "y": loc.y])
         lock.unlock()
