@@ -99,12 +99,17 @@ import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
+import { MODEL_CODE } from "./product.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
 const stillBtn = $("capturestill") as HTMLButtonElement;
 const cameraBox = $("camera") as HTMLInputElement;
 let recording = false;
+
+// STC-399: the strip's own model plate — the bare code, no version (that is
+// the About panel and the export stamp's job). Static, so no boot IIFE needed.
+$("modelcode").textContent = MODEL_CODE;
 
 // STC-375: the pill. It is only ever shown (body.pill-collapsed) while
 // recording, and its one job is to be the only thing that can stop that

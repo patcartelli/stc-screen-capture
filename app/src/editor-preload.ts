@@ -28,4 +28,6 @@ contextBridge.exposeInMainWorld("editor", {
   publish: () => ipcRenderer.invoke("share:publish"),
   chooseShareDestination: () => ipcRenderer.invoke("share:chooseDestination"),
   revealPublished: () => ipcRenderer.invoke("share:reveal"),
+  // STC-399: the export manifest stamp's version half.
+  getVersion: () => ipcRenderer.invoke("app:version"),
 });

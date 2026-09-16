@@ -35,6 +35,7 @@ import {
   purgeStaleTempTakes, listTempTakes,
 } from "./temp-takes.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
+import { productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
@@ -328,7 +329,21 @@ async function recoverUnsavedTakes(): Promise<void> {
 /** How often to sweep temp storage for stale takes while the app keeps running. */
 const TEMP_PURGE_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
+// STC-399: the editor's export dialog has no other way to reach
+// `app.getVersion()` — it is a renderer, sandboxed like every other window.
+ipcMain.handle("app:version", () => app.getVersion());
+
 app.whenReady().then(async () => {
+  // STC-399: the model code's identity on the one surface Electron owns
+  // outright — no custom Menu is ever built here, so this app keeps the
+  // platform's default menu, which already has an "About" item; this only
+  // customises what it shows. `app.getVersion()` reads package.json's own
+  // "version" the same way `app.getPath("userData")` already reads its
+  // "name" — the ONE place either is typed.
+  app.setAboutPanelOptions({
+    applicationName: "stc recorder",
+    applicationVersion: productStamp(app.getVersion()),
+  });
   // Ensured once, here, rather than by every capture: the leaf take directory
   // is the helper's to create, but the temp root itself (several levels deep
   // under Application Support) is this app's.
