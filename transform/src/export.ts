@@ -103,6 +103,24 @@ export async function exportSession(
   let encoderError: Error | null = null;
   let audioEncoder: AudioEncoder | undefined;
   let audioEncoderError: Error | null = null;
+  // STC-233. Decoded once, up front — not because the bytes are needed yet
+  // (the loop below still clips and retimes them into the export window),
+  // but because configuring the encoder and the muxer's audio track needs
+  // the REAL sampleRate/numberOfChannels the decoder actually produces.
+  // Measured on a real take: session.ts's demuxed micAudio.numberOfChannels
+  // (read from mic.m4a's own AudioSampleEntry — the container's declared
+  // channel count) said 2, while the decoded AudioData came back genuinely
+  // MONO. Configuring the encoder from the container's claim rather than
+  // the decoder's own output failed every export with "Input audio buffer
+  // is incompatible with codec parameters" — the exact class of bug the
+  // mic-offset fix already found once (STC-233, session.ts's
+  // rebaseMicAudio): trust what was actually measured, not what a
+  // container's metadata says it should be.
+  let micDecoded: AudioData[] | undefined;
+  if (encode && micAudio) micDecoded = await decodeAllAudio(micAudio);
+  const micRealSampleRate = micDecoded?.[0]!.sampleRate;
+  const micRealChannels = micDecoded?.[0]!.numberOfChannels;
+
   if (encode) {
     muxer = new Muxer({
       target: new ArrayBufferTarget(),
@@ -110,7 +128,7 @@ export async function exportSession(
       // STC-233: an audio track option on the SAME muxer, not a second file —
       // mp4-muxer already supports this; nothing about the video half changes.
       ...(micAudio
-        ? { audio: { codec: "aac" as const, numberOfChannels: micAudio.numberOfChannels, sampleRate: micAudio.sampleRate } }
+        ? { audio: { codec: "aac" as const, numberOfChannels: micRealChannels!, sampleRate: micRealSampleRate! } }
         : {}),
       fastStart: "in-memory",
     });
@@ -133,8 +151,8 @@ export async function exportSession(
       // the way the video's own GOP-aware muxing does not need to worry
       // about here either (every export frame is its own VideoFrame).
       audioEncoder.configure({
-        codec: "mp4a.40.2", sampleRate: micAudio.sampleRate,
-        numberOfChannels: micAudio.numberOfChannels, bitrate: 128_000,
+        codec: "mp4a.40.2", sampleRate: micRealSampleRate!,
+        numberOfChannels: micRealChannels!, bitrate: 128_000,
       });
     }
   }
@@ -215,7 +233,10 @@ export async function exportSession(
         // video frame, the export's own timeline boundary, not a separate
         // audio cut.
         const endNs = exportFrameTimeNs(from + total);
-        const decoded = await decodeAllAudio(micAudio);
+        // Already decoded above, before the encoder was configured — decoding
+        // a second time here would be wasteful and, worse, a second place that
+        // could disagree with the first about what the track actually is.
+        const decoded = micDecoded!;
         try {
           for (const data of decoded) {
             // AudioData.timestamp is MICROSECONDS on the same
@@ -242,8 +263,8 @@ export async function exportSession(
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         throw new Error(
-          `${msg} — encoder configured for mp4a.40.2 ${micAudio.sampleRate}Hz ` +
-          `x${micAudio.numberOfChannels}ch; ${micEncodedChunks} chunk(s) encoded before this; ` +
+          `${msg} — encoder configured for mp4a.40.2 ${micRealSampleRate}Hz ` +
+          `x${micRealChannels}ch; ${micEncodedChunks} chunk(s) encoded before this; ` +
           `last chunk sent: ${lastSent ?? "(none — failed before any chunk)"}`,
         );
       }
