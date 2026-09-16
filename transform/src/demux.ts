@@ -77,10 +77,37 @@ export function demuxTrack(buf: ArrayBuffer, what: string): Promise<DemuxedVideo
       file.onSamples = (_id: number, _user: unknown, samples: any[]) => {
         collected.push(...samples);
         if (collected.length < track.nb_samples) return;
-        const framesNs = collected.map((s) => {
+
+        // Chained from durations, not read from each sample's own `cts`
+        // (STC-394). A crash mid-recording leaves a fragmented file whose
+        // FIRST fragment lives in the initial moov's own sample table (a
+        // clean finish consolidates everything back into that same shape —
+        // measured directly, a finished movieFragmentInterval file has no
+        // moof boxes at all, which is why this bug is unreachable on the
+        // normal-stop path) while every fragment AFTER the crash lives in a
+        // real `moof`/`tfdt`. mp4box.js's own cross-fragment accumulation
+        // (`first_traf_merged`) is keyed on having seen a `traf`, which the
+        // stbl-derived first segment never is — so the FIRST real fragment's
+        // `tfdt.baseMediaDecodeTime` (0) is read as an absolute base instead
+        // of continuing the running total, and every sample from there on
+        // reports a PTS reset back near zero. Reproduced directly: 181
+        // recovered samples from a synthetic crash, `cts` resetting to 0
+        // exactly at sample 61 (the first real fragment boundary) —
+        // `helper/test/fragmented-writer.test.ts`.
+        // Each sample's OWN `duration` is a per-sample delta, never an
+        // accumulated base, so it is not subject to this reset — chaining
+        // through it reconstructs the true grid regardless. `cts` alone (not
+        // `dts`) still anchors the very first sample, and the two are
+        // guaranteed equal throughout because the writer sets
+        // `AVVideoAllowFrameReorderingKey: false` (no B-frames): decode order
+        // is presentation order, so there is no composition offset to lose
+        // by not reading it per-sample.
+        let cumulative = collected[0].cts as number;
+        const framesNs = collected.map((s, i) => {
+          if (i > 0) cumulative += collected[i - 1].duration;
           const scale = 1_000_000_000 / s.timescale;
-          const pts = s.cts * scale + editOffsetNs;
-          if (!Number.isInteger(pts)) throw new Error(`non-integer ns PTS: cts=${s.cts} timescale=${s.timescale}`);
+          const pts = cumulative * scale + editOffsetNs;
+          if (!Number.isInteger(pts)) throw new Error(`non-integer ns PTS: cts=${cumulative} timescale=${s.timescale}`);
           return pts;
         });
         clearTimeout(watchdog);
@@ -90,9 +117,9 @@ export function demuxTrack(buf: ArrayBuffer, what: string): Promise<DemuxedVideo
           codedWidth: track.track_width,
           codedHeight: track.track_height,
           description,
-          chunks: collected.map((s) => ({
+          chunks: collected.map((s, i) => ({
             type: s.is_sync ? "key" : "delta",
-            timestampUs: Math.round((s.cts * (1_000_000_000 / s.timescale) + editOffsetNs) / 1000),
+            timestampUs: Math.round(framesNs[i]! / 1000),
             data: s.data as Uint8Array,
           })),
         }));

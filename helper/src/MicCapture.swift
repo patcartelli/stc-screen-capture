@@ -174,6 +174,11 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         try? FileManager.default.removeItem(at: url)
         let w = try AVAssetWriter(outputURL: url, fileType: .m4a)
         w.movieTimeScale = 90_000
+        // STC-394: matches display.mp4's own writer — see
+        // `movieFragmentIntervalSec`'s comment (CaptureDecisions.swift). A
+        // writer-level property, not per-input, so it applies the same way
+        // regardless of media type.
+        w.movieFragmentInterval = CMTime(seconds: movieFragmentIntervalSec, preferredTimescale: 1)
         let inp = AVAssetWriterInput(mediaType: .audio, outputSettings: [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: sampleRate,

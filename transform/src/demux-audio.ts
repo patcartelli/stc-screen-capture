@@ -90,9 +90,18 @@ export function demuxAudioTrack(buf: ArrayBuffer, what: string): Promise<Demuxed
         // 1/48000 s (~20.8 us), two orders of magnitude inside session.ts's own
         // OFFSET_TOLERANCE_NS (50 us) and three inside this app's measured
         // camera<->mic sync tolerance (1.8 ms median, MicCapture.swift's header).
-        const framesNs = collected.map((s) => {
+        // Chained from durations, not read from each sample's own `cts` —
+        // demux.ts's identical fix, STC-394, and the same reason: once
+        // mic.m4a is fragmented too (`MicCapture.swift`'s own
+        // `movieFragmentInterval`), a crash-truncated file's first REAL
+        // `moof` resets mp4box.js's accumulated decode time back near zero.
+        // A sample's own `duration` is a per-sample delta, not an
+        // accumulated base, so it survives the reset.
+        let cumulative = collected[0].cts as number;
+        const framesNs = collected.map((s, i) => {
+          if (i > 0) cumulative += collected[i - 1].duration;
           const scale = 1_000_000_000 / s.timescale;
-          return Math.round(s.cts * scale + editOffsetNs);
+          return Math.round(cumulative * scale + editOffsetNs);
         });
         clearTimeout(watchdog);
         finish(() => resolve({
@@ -101,8 +110,8 @@ export function demuxAudioTrack(buf: ArrayBuffer, what: string): Promise<Demuxed
           sampleRate: track.audio?.sample_rate ?? 0,
           numberOfChannels: track.audio?.channel_count ?? 0,
           description,
-          chunks: collected.map((s) => ({
-            timestampUs: Math.round((s.cts * (1_000_000_000 / s.timescale) + editOffsetNs) / 1000),
+          chunks: collected.map((s, i) => ({
+            timestampUs: Math.round(framesNs[i]! / 1000),
             data: s.data as Uint8Array,
           })),
         }));
