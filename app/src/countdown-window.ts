@@ -1,5 +1,6 @@
-import { BrowserWindow, ipcMain, screen } from "electron";
+import { app, BrowserWindow, ipcMain, screen } from "electron";
 import { join } from "node:path";
+import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import {
   COUNTDOWN_TICK_MS, countdownView,
   type CountdownOutcome, type CountdownPurpose,
@@ -158,6 +159,11 @@ class Session {
       transparent: true, frame: false, hasShadow: false,
       resizable: false, movable: false, minimizable: false, maximizable: false,
       fullscreenable: false, skipTaskbar: true,
+      // An NSPanel: it must be able to hold the keyboard WITHOUT activating
+      // the app, or focusing it raises the main window and the self-timer's
+      // whole point — leaving another app's dropdown open — is undone. See
+      // `panel-focus.ts`.
+      type: PANEL_WINDOW_TYPE,
       // Not shown before its first paint — a transparent window shown empty
       // flashes the desktop through it, the same reason the overlay and the
       // thumbnail both wait.
@@ -183,6 +189,17 @@ class Session {
       // `show`, not `showInactive`: focus is what makes Escape and Return
       // reach the page at all — see the header.
       this.win.show();
+      // And showing is NOT enough on its own. The overlay that chose this
+      // capture's scope is torn down moments earlier, and macOS then hands key
+      // status to the app's next ordinary window — the main window — which is
+      // how Escape and Return came to be dead here on hardware (§0/§3) while
+      // the panel sat visibly on top. Ask for the keyboard explicitly, and
+      // report it rather than assume it.
+      void focusPanel(this.win, () => app.focus({ steal: true })).then((took) => {
+        if (took === "escalated") {
+          console.warn("[countdown] the panel could not take key focus; activated the app instead");
+        }
+      });
     });
     void this.win.loadFile(join(opts.rendererDir, "countdown.html"), {
       query: { ms: String(opts.ms), purpose: opts.purpose },

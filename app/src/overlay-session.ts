@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, screen } from "electron";
 import { join } from "node:path";
+import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import {
   reduce, confirm, initialState,
   type DisplayInfo, type Mode, type SelectionContext, type SelectionEvent,
@@ -173,14 +174,25 @@ class OverlaySession {
     try {
       for (const d of screen.getAllDisplays()) this.windows.push(this.makeWindow(d));
       // The overlay needs the keyboard, and a hotkey capture (STC-292) starts
-      // with this app in the background — where focusing a window raises it
-      // BEHIND whatever is frontmost, leaving Escape dead and the user with an
-      // overlay they cannot dismiss. The main window is not activated by this;
-      // only the overlay is, which is what "without the main window ever
-      // activating" means in practice.
-      app.focus({ steal: true });
-      // Focus one of them, or nothing receives the keyboard and Escape is dead.
-      this.windows[0]?.focus();
+      // with this app in the background — where focusing an ordinary window
+      // raises it BEHIND whatever is frontmost, leaving Escape dead and the
+      // user with an overlay they cannot dismiss.
+      //
+      // This used to be a bare `app.focus({ steal: true })`, with a comment
+      // claiming the main window was not activated by it. On hardware it IS:
+      // app activation raises every ordinary window, so a menu-bar capture
+      // brought the library forward and then took focus back off whatever
+      // opened next. The windows are NSPanels now and ask for the keyboard
+      // without activating anything; `focusPanel` escalates to the old
+      // behaviour only if the polite path does not actually take. See
+      // `panel-focus.ts`.
+      const first = this.windows[0];
+      if (first) {
+        const took = await focusPanel(first, () => app.focus({ steal: true }));
+        if (took === "escalated") {
+          console.warn("[overlay] the panel could not take key focus; activated the app instead");
+        }
+      }
     } catch (e) {
       // A window that cannot be built is a cancellation with the reason logged,
       // never a rejected promise the caller has to unwind a half-open overlay from.
@@ -196,6 +208,9 @@ class OverlaySession {
       transparent: true, frame: false, hasShadow: false,
       resizable: false, movable: false, minimizable: false, maximizable: false,
       fullscreenable: false, skipTaskbar: true,
+      // An NSPanel, so it can become key without activating the app and
+      // dragging the main window up with it — see `panel-focus.ts`.
+      type: PANEL_WINDOW_TYPE,
       // Not shown until it has painted: a transparent window that appears
       // before its first frame flashes the desktop through, which on a dimming
       // overlay reads as a flicker at exactly the moment the ticket says is the
@@ -227,7 +242,9 @@ class OverlaySession {
     w.once("ready-to-show", () => {
       if (this.done) return;
       w.showInactive();
-      this.windows[0]?.focus();
+      // A later display's window arriving must not take the keyboard off the
+      // one already holding it; focus the FIRST, as before, and never activate.
+      if (!this.windows[0]?.isDestroyed()) this.windows[0]?.focus();
       this.push(w);
     });
     return w;
