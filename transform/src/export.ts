@@ -201,6 +201,12 @@ export async function exportSession(
       // frame, the export's own timeline boundary, not a separate audio cut.
       const endNs = exportFrameTimeNs(from + total);
       const decoded = await decodeAllAudio(micAudio);
+      // STC-233: the encoder's error callback fires asynchronously and names
+      // no offending chunk — "Input audio buffer is incompatible with codec
+      // parameters" gives no way to tell a sample-rate/channel mismatch from
+      // a format one. Recording what was actually sent turns the NEXT
+      // failure into a diagnosis instead of a second blind guess.
+      let lastSent: string | undefined;
       try {
         for (const data of decoded) {
           // AudioData.timestamp is MICROSECONDS on the same session-relative
@@ -209,6 +215,8 @@ export async function exportSession(
           const sampleNs = data.timestamp * 1000;
           if (sampleNs >= originNs && sampleNs < endNs && !audioEncoderError) {
             const retimed = retimeAudioData(data, Math.round((sampleNs - originNs) / 1000));
+            lastSent = `format=${retimed.format} sampleRate=${retimed.sampleRate} ` +
+              `numberOfChannels=${retimed.numberOfChannels} numberOfFrames=${retimed.numberOfFrames}`;
             audioEncoder.encode(retimed);
             retimed.close();
             micEncodedChunks++;
@@ -217,7 +225,13 @@ export async function exportSession(
       } finally {
         for (const d of decoded) d.close();
       }
-      if (audioEncoderError) throw audioEncoderError;
+      if (audioEncoderError) {
+        const err = audioEncoderError as Error;
+        throw new Error(
+          `${err.message} — encoder configured for mp4a.40.2 ${micAudio.sampleRate}Hz ` +
+          `x${micAudio.numberOfChannels}ch; last chunk sent: ${lastSent ?? "(none — failed before any chunk)"}`,
+        );
+      }
       // Same reasoning as the video encoder's own unbounded final flush below:
       // an encoder that never finishes would hang the export at 100%.
       await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export");
