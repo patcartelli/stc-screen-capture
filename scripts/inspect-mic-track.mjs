@@ -7,7 +7,7 @@
 // the actual file rather than reasoned about blind. Never merged into the
 // transform; run by hand: `node scripts/inspect-mic-track.mjs <path-to-mic.m4a>`
 import { readFileSync } from "node:fs";
-import MP4BoxNS from "mp4box";
+import * as MP4BoxNS from "mp4box";
 
 const MP4Box = MP4BoxNS.default ?? MP4BoxNS;
 const path = process.argv[2];
