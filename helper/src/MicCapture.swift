@@ -181,7 +181,20 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
             AVEncoderBitRateKey: 128_000,
         ])
         inp.expectsMediaDataInRealTime = true
-        inp.mediaTimeScale = 1_000_000_000
+        // NOT `inp.mediaTimeScale = 1_000_000_000`, unlike Capture.swift's video
+        // input. This line was copied from there verbatim and crashed the whole
+        // helper on real hardware (2026-09-16): `mediaTimeScale` is a VIDEO-only
+        // property — Apple documents it as applicable only to inputs whose media
+        // type is video, since an audio input infers its own time scale from the
+        // samples appended to it. Setting it on this audio input left the writer
+        // unable to resolve a real backing helper for it
+        // (`AVAssetWriterInputUnknownHelper`), and the very next property access
+        // threw an uncaught NSException -> abort(), taking down the whole
+        // process (camera+display included) rather than just failing the mic.
+        // `retimed()` already stamps each sample buffer with an exact
+        // nanosecond PTS before it reaches the gate, so the file's own sample
+        // table is still exact regardless of the input's inferred time scale —
+        // this property was never needed for audio the way it is for video.
         guard w.canAdd(inp) else { throw MicError.writerFailed(nil) }
         w.add(inp)
         guard w.startWriting() else { throw MicError.writerFailed(w.error) }
