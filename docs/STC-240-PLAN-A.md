@@ -491,6 +491,14 @@ Add beside the other `CaptureSession` counters (after `private var framesDropped
     /// Owns this take's pause intervals (STC-240). Handed to the camera and
     /// mic captures too, so all four writers answer one question.
     let pauseGate = PauseGate()
+
+    /// Buttons this take has RECORDED a `down` for and not yet an `up`.
+    ///
+    /// Not a query of the OS: what must stay consistent is `events.json`
+    /// itself, because `cursor.ts` derives "pressed" as a PREFIX SUM over the
+    /// file's own down(+1)/up(-1) events. Only events this take actually wrote
+    /// may count toward it.
+    private var heldButtons: Set<Int> = []
 ```
 
 Add these methods next to `stats()`:
@@ -502,7 +510,51 @@ Add these methods next to `stats()`:
     /// four gates then test every sample against, which is what makes the
     /// sidecar and the disk agree by construction rather than by inspection.
     @discardableResult
-    func pause() -> Bool { pauseGate.pause(atNs: Int64(Clock.nowNs() - t0Ns)) }
+    func pause() -> Bool {
+        let tNs = Int64(Clock.nowNs() - t0Ns)
+        recordHeldButtonReleases(atNs: tNs)
+        return pauseGate.pause(atNs: tNs)
+    }
+
+    /// Release anything still held, immediately BEFORE the span opens.
+    ///
+    /// The mirror of `recordResumeAnchor`: one synthetic event at each end of
+    /// a pause. Without it, holding a button, pausing, letting go while
+    /// paused, then resuming records the `down` and DROPS the `up` — and since
+    /// `cursor.ts` computes pressed as a prefix sum, the depth never returns
+    /// to zero. The cursor then renders pressed for the entire rest of the
+    /// export, and `zoom.ts`, which treats a move while a button is held as a
+    /// DRAG, opens a zoom window on every later move. One dropped event and
+    /// the take is wrong from that instant to its end — while reading as a
+    /// transform bug rather than a helper one.
+    ///
+    /// `tNs - 1`, not `tNs`, so the invariant stays absolute: no sample on
+    /// disk has a pts inside a pause interval, with no carve-out for our own
+    /// synthetics. At nanosecond resolution the offset is not physical.
+    ///
+    /// A button still physically held at resume produces no new `down` (the
+    /// press happened before the pause), so the pointer reads as un-pressed
+    /// for the remainder of that drag. A known, bounded inaccuracy, and
+    /// strictly better than a take stuck pressed to its end.
+    private func recordHeldButtonReleases(atNs tNs: Int64) {
+        guard tNs > 0 else { return }          // the schema requires t >= 0
+        lock.lock()
+        let held = heldButtons
+        heldButtons.removeAll()
+        lock.unlock()
+        guard !held.isEmpty else { return }
+        // If the allocation fails the coordinates are lost, but the RELEASE
+        // matters far more than where it happened: x/y on an `up` only satisfy
+        // the schema — cursor.ts takes position from moves — while a missing
+        // `up` sticks the pressed state for the whole export.
+        let loc = CGEvent(source: nil)?.location ?? .zero
+        lock.lock()
+        for b in held.sorted() {
+            events.append(["t": Int(tNs - 1), "kind": "up",
+                           "x": loc.x, "y": loc.y, "button": b])
+        }
+        lock.unlock()
+    }
 
     @discardableResult
     func resume() -> Bool {
@@ -581,6 +633,25 @@ In `handleTapEvent`, in the `.event(let t, let kind, let button)` case, insert b
             // synchronously, so a resume could fail in a way a pause cannot
             // report. Dropping the event is the cheap, reversible half.
             if pauseGate.isPaused(atNs: Int64(t)) { return }
+```
+
+In the SAME `.event` case, the recorded event must also maintain
+`heldButtons`. Find the existing `lock.lock(); events.append(e); lock.unlock()`
+and add the tracking inside that same lock:
+
+```swift
+            lock.lock()
+            events.append(e)
+            // Track what is held so a pause can release it (see
+            // recordHeldButtonReleases). Updated only for events this take
+            // actually RECORDS, which is what keeps it in step with the prefix
+            // sum cursor.ts computes over the same file. It sits after the
+            // paused check by construction, so nothing dropped can reach it.
+            if let button {
+                if kind == "down" { heldButtons.insert(button) }
+                else if kind == "up" { heldButtons.remove(button) }
+            }
+            lock.unlock()
 ```
 
 This also disposes of a concern the spec raised: it warned that disabling and
