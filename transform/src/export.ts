@@ -120,6 +120,29 @@ export async function exportSession(
   if (encode && micAudio) micDecoded = await decodeAllAudio(micAudio);
   const micRealSampleRate = micDecoded?.[0]!.sampleRate;
   const micRealChannels = micDecoded?.[0]!.numberOfChannels;
+  // STC-233. Configuring from chunk 0 assumes the decoded track is UNIFORM —
+  // measured on real hardware NOT to be: the encoder still failed with
+  // "x2ch ... last chunk sent: ... numberOfChannels=1" even after this fix,
+  // meaning some chunk partway through decodeAllAudio's own output reports a
+  // DIFFERENT channel count (or rate) than chunk 0 does. Scanning here fails
+  // fast, at decode time, with the exact chunk and values that diverge —
+  // instead of failing 300+ chunks into encoding with only the last chunk's
+  // shape to go on. Whether this is a genuine mid-recording device change
+  // (a Bluetooth mic switching A2DP/HFP profiles mid-take is exactly the
+  // CoreAudio hazard this ticket's own device-picker design exists to avoid
+  // triggering) or an artifact of decode is what this diagnostic is for.
+  if (micDecoded) {
+    for (let i = 1; i < micDecoded.length; i++) {
+      const d = micDecoded[i]!;
+      if (d.numberOfChannels !== micRealChannels || d.sampleRate !== micRealSampleRate) {
+        throw new Error(
+          `mic.m4a's decoded track is not uniform: chunk 0 is ${micRealChannels}ch/${micRealSampleRate}Hz, ` +
+          `chunk ${i} of ${micDecoded.length} is ${d.numberOfChannels}ch/${d.sampleRate}Hz ` +
+          `(chunk 0 timestamp ${micDecoded[0]!.timestamp}us, chunk ${i} timestamp ${d.timestamp}us)`,
+        );
+      }
+    }
+  }
 
   if (encode) {
     muxer = new Muxer({
