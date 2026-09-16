@@ -12,11 +12,18 @@
   been used. Off is deliberately not offered (rule 1: Record always counts
   down).
 - **Second display: both routes work.** §6 is confirmed.
-- **Two bugs found.** One is fixed (see §7); one is still open and §8 is how to
-  pin it down.
+- **The wedge is FIXED and confirmed** (§7). Interrupting a self-timer no longer
+  leaves the app unable to record.
+- **The "pill did not collapse" report was a MISREAD, and the correction is
+  worth keeping** (§8): Record works and the pill collapses when the take is
+  started from the main window. The take that did not collapse was started from
+  the **menu bar**, which does not start recordings at all — it only captures
+  stills. That is STC-388's whole subject, not a defect here.
 
-The rest is still unlooked-at. What follows is what a Mac settles, in the order
-worth doing it.
+**Second hardware pass, same day:** all five checks confirmed. Nothing in this
+runbook is open.
+
+What follows is the procedure, kept so it can be re-run against a later change.
 
 Everything below assumes a build: `node app/build.mjs && npm run app:start`.
 
@@ -81,7 +88,10 @@ is taken milliseconds after the panel goes, and the panel's window id is also
 passed in `excludeWindowIds` precisely because the hide alone is a race. Look at
 `frame.png`.
 
-Also check a **floating thumbnail panel** is not in either:
+Also check a **floating thumbnail panel** is not in either — **first confirm
+Profile › Still capture does not have "Skip it — straight to clipboard" ticked.**
+With it on there is no panel by design, and its absence reads as a bug (it did,
+on the first pass):
 
 - Take two or three screenshots and leave the panels sitting there.
 - Press Record. They should **settle** (save or copy, per the preference) rather
@@ -150,7 +160,7 @@ With a second display:
   nothing else needs. If that fallback puts it somewhere silly in practice,
   that is the thing to report.
 
-## 7. The wedge, fixed — confirm it is gone
+## 7. The wedge, fixed — CONFIRMED 2026-09-16
 
 Reported on the first pass: interrupting a self-timer with another capture
 showed "A capture is already in progress", and **nothing could record after
@@ -173,28 +183,32 @@ To confirm by hand:
 3. **Then record something, and capture a still.** Both must work. That is the
    half that used to be broken.
 
-## 8. The one bug still open: Record did not collapse to the pill
+**Run and passed.** Record is refused *during* the countdown (intended — the
+message says a capture is in progress) and works again the moment the
+self-timer completes. The app no longer wedges.
 
-Also reported on the first pass, and **not yet explained**: after the countdown
-ran and the take started, the main window showed the library instead of
-collapsing into the pill. The take itself was created, so the recording did
-start — this is the pill, not the start.
+## 8. The pill — NOT a bug, and the correction is the useful part
 
-Nothing in this ticket touches the pill: `attachPillToSupervisor` reconciles
-off the supervisor's own heartbeat and neither `recorder:start`'s countdown nor
-the panel window is in that path. It cannot be reproduced in the Linux sandbox
-at all — Xvfb has no window manager there, and `pill.e2e.test.ts` already
-records that a bare `win.setSize()` does nothing in it — so this needs the Mac.
+First reported as: after the countdown, the take started but the main window
+showed the library instead of collapsing into the pill.
 
-Two checks, in this order, and the first is the one that matters:
+**Resolved on the second pass: Record from the main window collapses the pill
+correctly.** The take that did not was started from the **menu bar**, and the
+menu bar has never been able to start a recording — `CAPTURE_ACTIONS` is stills
+only, so every menu-bar item is a still capture. Nothing was wrong with the
+pill, and nothing in this ticket was in its path, which is what the first
+analysis said and could not prove from Linux.
 
-1. **Does the pill work on `master`?** Switch to master, build, press Record.
-   If the window does not collapse there either, this is not STC-391's and
-   belongs to whatever landed before it.
-2. If master IS fine, then on this branch: does the window collapse **at all**,
-   even for a frame, before the library comes back? A collapse-then-restore
-   points at `sup.state` flickering; never collapsing at all points at the
-   heartbeat reconcile not firing.
+That gap is [STC-388](https://linear.app/studio-cartelli/issue/STC-388)'s
+entire subject — "menu bar and hotkeys can start a recording; today they only
+capture" — and STC-391 is what unblocks it: the countdown STC-388's flow needs
+now exists, and `CaptureAction` already holds an action that is not an instant
+still.
+
+**The lesson worth keeping: "Record did not do X" needs the ENTRY POINT stated
+with it.** Three doors reach capture and only one of them reaches recording at
+all, so a report that names the symptom without the door sends the next person
+looking at the mechanism rather than at which mechanism ran.
 
 ## What is deliberately not here
 
