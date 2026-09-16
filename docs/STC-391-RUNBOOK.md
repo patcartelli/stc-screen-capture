@@ -27,18 +27,61 @@ What follows is the procedure, kept so it can be re-run against a later change.
 
 Everything below assumes a build: `node app/build.mjs && npm run app:start`.
 
-## 0. The one design claim no test here could check
+## 0. The one design claim no test here could check — IT FAILED, and the fix is unverified
 
-The panel **takes focus when it appears**, and that is what makes Return and
-Escape work without registering either as a global shortcut. Registering them
-globally was rejected on purpose: a bare Return grabbed machine-wide for three
-seconds would be eaten from the very dropdown the self-timer exists to
-photograph.
+**Reported on hardware 2026-09-16, after the ticket merged: the panel does not
+get focus. The library window comes forward and takes it instead — from the
+menu bar as well.** So the mechanism this section describes was not happening
+at all: Escape and Return were dead from the start, and the buttons were the
+only way to cancel or skip, not the fallback.
 
-The cost is that clicking into another app during the countdown takes the
-keyboard with it. §3 is where that gets judged, and it is the item most likely
-to send this back for a redesign — the way STC-381's outline went round four
-times.
+The design claim, unchanged, is that the panel **takes focus when it appears**,
+and that focus is what makes Return and Escape work without registering either
+as a global shortcut. Registering them globally was rejected on purpose: a bare
+Return grabbed machine-wide for three seconds would be eaten from the very
+dropdown the self-timer exists to photograph.
+
+### What was actually wrong, and it is not this ticket's code
+
+`overlay-session.ts` called `app.focus({ steal: true })` so a hotkey or
+menu-bar capture starting from the background could reach Escape. On macOS that
+is an APPLICATION-level activation: it raises every ordinary window the app
+has, and the main window is one. So the library came forward, and once the
+overlay was torn down the main window was the app's remaining ordinary window
+and took key status back off the countdown panel.
+
+That line is STC-292's, from 2026-09-08, and **its own comment asserted the
+opposite** — "the main window is not activated by this; only the overlay is."
+It was never true. Nothing depended on who held focus until the countdown did,
+so a still capture raising the library cost nothing and nobody looked. This is
+the same shape as several entries in CLAUDE.md: a claim written in a comment,
+never checked, and only made visible by the first feature that relied on it.
+
+### The fix, and why it carries a fallback
+
+Both windows are **NSPanels** now (`type: "panel"`, from `panel-focus.ts`),
+which macOS will let become key without activating their application, and the
+`app.focus({ steal: true })` is gone from the open path. `focusPanel` asks for
+the keyboard and then CHECKS whether it arrived, escalating to the old
+activation only if it did not — because panel key semantics are the OS's, and
+the failure mode if they differ is a dead Escape on an overlay covering the
+whole screen, which is worse than a raised library.
+
+**None of this has run on a Mac.** `type: "panel"` is macOS-only; this sandbox
+has no window manager at all, so focus and window ordering are meaningless
+here, and the Linux E2E run proves only that nothing throws. What to check:
+
+1. From another app, press ⌃⌥⇧⌘5. **The library must not come forward** — not
+   when the overlay opens, not when the countdown appears.
+2. With the countdown up and nothing else clicked, press **Escape**. It must
+   cancel. Then run it again and press **Return**: it must fire immediately.
+3. Check the console for `could not take key focus; activated the app
+   instead`. If that line is there, the panel path did not take and you are
+   seeing the old behaviour deliberately — report it, because the fallback
+   working is a different outcome from the fix working.
+4. The overlay's own Escape, from a background hotkey (STC-292's case), must
+   still dismiss it. **This is the regression risk**: if panels cannot take key
+   here, the fallback is what keeps this working.
 
 ## 1. Record counts down
 
@@ -110,16 +153,29 @@ on the first pass):
    open.** That is the whole feature.
 5. The shot must contain the open dropdown.
 
+**Run 2026-09-16 and the result is NOT a pass — it is contaminated.** The
+overlay opened, the countdown ran and the shot did contain the open dropdown,
+so the feature does what it is for. But the library came forward through the
+whole flow (§0), and the verdict given — "it feels like extra work, but maybe
+acceptable" — was reached against a flow carrying that noise. The library
+appearing is itself extra work, and it is not the cost this section asks about.
+**Re-run this once §0's fix is on hardware**, with the library staying put, and
+judge the keyboard question on its own.
+
 What is being judged, and it is §0's claim:
 
 - Does clicking into the other app to open that dropdown feel like it cost
   anything? The panel loses focus, so **Esc and Return stop working** from that
-  moment — Cancel and Skip are still one click away.
+  moment — Cancel and Skip are still one click away. NB this is the cost of
+  clicking AWAY, which is by design; §0's bug was that the panel never had the
+  keyboard in the first place. Do not confuse the two.
 - Is that acceptable, or does the countdown need to hold the keyboard some
   other way? If it does, the answer is probably not a global Escape; say what
   the problem actually felt like and it can be designed against.
 - Is 3 s enough to get to a dropdown in another app? This is the strongest
   argument for a longer default, and the one most worth reporting a number for.
+  The duration is a control now (Profile › Countdown, 3/5/10 s), so if 3 s is
+  short this is a question about the DEFAULT rather than a missing feature.
 
 Then confirm it is **one shot, not a mode**: press ⌃⌥⇧⌘1 straight afterwards.
 It must capture immediately, with no countdown.
