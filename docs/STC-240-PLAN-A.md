@@ -153,8 +153,13 @@ check("close with nothing open adds nothing", g6.intervals.count, 1)
 
 // ── json shape ──────────────────────────────────────────────────────────────
 let j = PauseInterval(startNs: 12, endNs: 34).json
-check("json startNs", j["startNs"] as? Int, 12)
-check("json endNs", j["endNs"] as? Int, 34)
+// Unwrapped deliberately. `check`'s two `some Equatable` parameters infer
+// INDEPENDENTLY, so `as? Int` gives an Int? that stringifies as "Optional(12)"
+// and can never equal the literal 12 — an assertion that fails for a reason
+// that has nothing to do with its subject. -1 is a safe sentinel: both fields
+// are non-negative by construction.
+check("json startNs", j["startNs"] as? Int ?? -1, 12)
+check("json endNs", j["endNs"] as? Int ?? -1, 34)
 
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
