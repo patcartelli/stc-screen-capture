@@ -208,6 +208,14 @@ describe("capture — pause and resume on a live take (STC-240)", () => {
     // polled mid-take: heartbeat stats land on the LOSSY stdout channel at a
     // 2 s default interval, so a test timing itself against them would be
     // racing a channel designed to drop messages.
+    //
+    // THIS IS THE LOAD-BEARING ASSERTION OF THIS TEST. Display frames flow
+    // continuously and unconditionally at capture's own frame rate — nothing
+    // needs to move for one to arrive — so `framesPaused` discriminates
+    // whether the display gate exists REGARDLESS of what the machine running
+    // this test is doing. It is what catches a broken/removed display gate;
+    // the events-inside-the-pause assertion below cannot be trusted to (see
+    // its own comment).
     expect(stopped.framesPaused as number,
       "frames arrived during the pause and were gated").toBeGreaterThan(0);
     expect(stopped.frames as number, "the take still recorded").toBeGreaterThan(0);
@@ -229,6 +237,20 @@ describe("capture — pause and resume on a live take (STC-240)", () => {
     // have drifted — and PR B would then cut a real sample out of the export,
     // which looks like correct video. Half-open, so the synthetic re-anchor AT
     // endNs is outside the span and needs no exception carved for it.
+    //
+    // THIS ONLY DISCRIMINATES WHEN REAL INPUT ACTUALLY LANDED DURING THE
+    // PAUSE. Nothing moves the mouse on an automated, idle machine, so
+    // "no events inside the span" is trivially true whether the tap gate
+    // exists or not — the repo's own recorded trap: an empty events.json
+    // does not mean the tap is broken, verifying input needs deliberate
+    // input. Confirmed directly: with the tap-gate drop line removed from
+    // `handleTapEvent` (Capture.swift), a run producing 0 real events left
+    // this assertion PASSING — it is the `framesPaused` assertion above,
+    // not this one, that catches a broken display gate. This assertion is
+    // real and stays (a machine that DOES generate input during the pause
+    // — a stray moved pointer, a scheduled job — is still held to it), but
+    // its silence on an idle run is not evidence the tap gate works. See
+    // the vacuity notice just below.
     const events = load("events.json");
     const inside = events.events.filter(
       (e: { t: number }) => e.t >= span.startNs && e.t < span.endNs);
@@ -238,5 +260,26 @@ describe("capture — pause and resume on a live take (STC-240)", () => {
     const anchor = events.events.find(
       (e: { t: number; kind: string }) => e.kind === "move" && e.t === span.endNs);
     expect(anchor, "a resume must leave one synthetic move at its own instant").toBeTruthy();
+
+    // Vacuity notice, not a failure. Two of the helper's own synthetics land
+    // just outside the span by construction — `recordResumeAnchor`'s move at
+    // exactly `span.endNs`, and `recordHeldButtonReleases`'s `up`(s) at
+    // `span.startNs - 1` — so neither can ever land INSIDE it and neither
+    // counts as "real input during the pause". If nothing else exists in
+    // `events.json` at all, this run had nothing for the invariant assertion
+    // above to discriminate on, and its PASS says nothing about the tap
+    // gate. `process.stderr.write`, not `console.warn`: vitest discards
+    // console output from tests, and a skip/vacuity notice that vanishes is
+    // this repo's own recorded trap.
+    const real = events.events.filter((e: { t: number; kind: string }) =>
+      !(e.kind === "move" && e.t === span.endNs) &&
+      !(e.kind === "up" && e.t === span.startNs - 1));
+    if (real.length === 0) {
+      process.stderr.write(
+        "[pause-resume] VACUOUS: no real input events were recorded on this " +
+        "take at all, so the events-inside-the-pause assertion had nothing " +
+        "to discriminate on — the tap gate is UNPROVEN by this run. Only " +
+        "framesPaused (above) is evidence the display gate works.\n");
+    }
   }, 90_000);
 });
