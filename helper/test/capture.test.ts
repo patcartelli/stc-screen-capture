@@ -233,3 +233,31 @@ describe("shutdown vs. an in-flight stop (STC-376)", () => {
     expect(existsSync(join(dir, "anchors.json"))).toBe(true);
   }, 60_000);
 });
+
+// STC-240 (task 5). No grant needed: both commands are refused before
+// CaptureSession is ever touched when nothing is recording.
+describe("pause and resume dispatch (STC-240)", () => {
+  test("pause and resume are refused when nothing is recording", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+
+    h.send({ cmd: "pause", seq: 1 });
+    const p = await waitFor(() => h.fd3.find((l) => l.seq === 1), 15_000, "pause reply");
+    expect(p.ev).toBe("error");
+    expect(p.code).toBe("bad-state");
+
+    h.send({ cmd: "resume", seq: 2 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 2), 15_000, "resume reply");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("bad-state");
+  }, 30_000);
+
+  test("an unknown command is still unknown — the new cases did not widen the switch", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "paws", seq: 1 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 1), 15_000, "unknown reply");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("unknown-command");
+  }, 30_000);
+});

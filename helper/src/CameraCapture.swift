@@ -45,6 +45,12 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     private let t0Ns: UInt64
     private let queue = DispatchQueue(label: "stc.capture.camera")
 
+    /// The take's pause gate (STC-240) — not a copy of its state. A camera
+    /// frame written during a pause would be carried into the cut: the first
+    /// frame after a resume selects the newest camera frame at or before it,
+    /// which would be one from inside the paused span.
+    private let pauseGate: PauseGate
+
     private var session: AVCaptureSession?
     private var writer: AVAssetWriter?
     private let gate = WriterGate()
@@ -95,9 +101,10 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     static let width = 1280
     static let height = 720
 
-    init(dir: URL, t0Ns: UInt64) {
+    init(dir: URL, t0Ns: UInt64, pauseGate: PauseGate) {
         self.dir = dir
         self.t0Ns = t0Ns
+        self.pauseGate = pauseGate
     }
 
     func start() -> Result<String, Error> {
@@ -265,6 +272,8 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             }
             monotonicGuardPtsNs = rel
             lock.unlock()
+
+            if pauseGate.isPaused(atNs: rel) { return }
 
             let outcome = gate.append(pb, at: CMTime(value: rel, timescale: 1_000_000_000))
             guard outcome == .appended else { return }

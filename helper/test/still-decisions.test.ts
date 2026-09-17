@@ -28,6 +28,10 @@ describe("still decisions (STC-289)", () => {
       label: "still",
       sources: [
         "helper/src/StillDecisions.swift",
+        // AnchorsDoc.swift's anchorsDocument(...) now takes a [PauseInterval]
+        // (STC-240), declared in PauseDecisions.swift — needed to compile
+        // even though this harness never calls anchorsDocument itself.
+        "helper/src/PauseDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         // For cursorShapeNames — the still writes the same list the recording
         // path classifies into (STC-309), so it is not declared twice.

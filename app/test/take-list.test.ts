@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTakeLabel } from "../src/takes.js";
 import { listTakes } from "../src/library.js";
+import { SUPPORTED_ANCHORS_VERSIONS } from "../src/library-items.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "stc-lib-")); });
@@ -86,6 +87,33 @@ describe("listTakes — anchors version support (STC-262)", () => {
       .toEqual(transform.slice().sort());
   });
 
+  // The two lists agreeing with EACH OTHER is not enough — that is exactly
+  // what happened here: STC-240 minted schema/anchors-5.schema.json and, per
+  // its own plan doc, believed session.ts would "ignore the key it cannot
+  // parse" — a false claim (session.ts refuses the VERSION, not the key), so
+  // BOTH lists stayed stale at [1,2,3,4] together and the test above kept
+  // passing throughout. A guard that only checks internal agreement cannot
+  // catch two copies drifting from the SOURCE OF TRUTH in lockstep.
+  // transform/test/project-version-seam.test.ts already learned this lesson
+  // for project documents (`isProjectVersion` accepts exactly the versions
+  // with a schema on disk); this is the same check one document over.
+  test("the accepted anchors versions cover every anchors schema on disk", () => {
+    const schemaDir = join(__dirname, "..", "..", "schema");
+    const schemas = readdirSync(schemaDir)
+      .map((f) => /^anchors-(\d+)\.schema\.json$/.exec(f)?.[1])
+      .filter((n): n is string => !!n)
+      .map(Number)
+      .sort((a, b) => a - b);
+    expect(schemas.length, "no anchors-N.schema.json files found — schema dir moved?")
+      .toBeGreaterThan(0);
+    // Minting schema/anchors-N.schema.json without wiring SUPPORTED_ANCHORS_VERSIONS
+    // (this file) and session.ts's guard must fail RIGHT HERE, not a day later
+    // when a real take of that version shows up as an invalid tile.
+    expect([...SUPPORTED_ANCHORS_VERSIONS].sort((a, b) => a - b),
+           `SUPPORTED_ANCHORS_VERSIONS is [${SUPPORTED_ANCHORS_VERSIONS}], schema files on disk are [${schemas}]`)
+      .toEqual(schemas);
+  });
+
   // STC-370: a region/window-scope take writes v3 with a `scope` block. The
   // scanner must not have gone stale the same way it did for v2 (STC-262) —
   // this is the positive half of that same lesson, not only "not rejected".
@@ -111,16 +139,34 @@ describe("listTakes — anchors version support (STC-262)", () => {
     expect(takes[0]!.name).toBe("2026-08-27_13-00-00");
   });
 
+  // STC-240 PR A: a paused take writes v5 with a `pauses` block. Same lesson
+  // as the v3/scope and v4/mic tests above, one version up — and the one
+  // this exact family of test would have caught, had it existed, before
+  // session.ts and library-items.ts drifted (see the "unsupported version"
+  // test below for the drift itself). `pauses` is accepted-and-IGNORED by
+  // the transform in PR A: nothing here reads it yet, so the take loads and
+  // plays back with the paused span still present. PR B teaches the export
+  // to cut it.
+  test("a v5 take with a pauses block is listed, not rejected as unsupported", async () => {
+    makeTake("2026-08-27_14-00-00", {
+      anchors: v2Anchors({ version: 5, pauses: [{ startNs: 1_000_000_000, endNs: 2_000_000_000 }] }),
+    });
+    const { takes, invalid } = await listTakes(env());
+    expect(invalid, JSON.stringify(invalid)).toEqual([]);
+    expect(takes.length).toBe(1);
+    expect(takes[0]!.name).toBe("2026-08-27_14-00-00");
+  });
+
   test("a version this build does not know is still rejected, by name", async () => {
-    // Widening must not become "accept anything". Version 5, not 4: STC-233
-    // made 4 a real, supported version (a mic-requested take's mic block),
-    // so it is no longer a stand-in for "unknown future version" — the same
-    // thing already happened once to 3 (STC-370).
-    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 5 }) });
+    // Widening must not become "accept anything". Version 6, not 5: STC-240
+    // made 5 a real, supported version (a paused take's `pauses` block), so
+    // it is no longer a stand-in for "unknown future version" — the same
+    // thing already happened to 3 (STC-370) and to 4 (STC-233).
+    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 6 }) });
     const { takes, invalid } = await listTakes(env());
     expect(takes).toEqual([]);
     expect(invalid.length).toBe(1);
-    expect(invalid[0]!.reason).toMatch(/version 5 is not supported/);
+    expect(invalid[0]!.reason).toMatch(/version 6 is not supported/);
   });
 });
 

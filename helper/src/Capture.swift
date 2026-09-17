@@ -97,6 +97,39 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private var events: [[String: Any]] = []
     private var framesAppended = 0
     private var framesDropped = 0
+    /// Frames the stream delivered while paused. Counted APART from
+    /// `framesDropped`, which means "the writer would not take it" — folding
+    /// paused frames in would make every paused take look as though it had
+    /// dropped frames, and a diagnostic that lies is worse than none. Same
+    /// reasoning as `tapDisablesAfterStop` sitting apart from `tapReenables`.
+    private var framesPaused = 0
+
+    /// Tap events AND cursor-shape samples dropped by the pause gate.
+    /// Counted together because neither has any other automated coverage:
+    /// on an idle machine no mouse events occur during a pause, so the
+    /// events-invariant assertion in capture.grant.test.ts is vacuous
+    /// (proven by mutation — removing the tap gate does not fail it), and
+    /// posting synthetic input to get real coverage would need an
+    /// Accessibility grant this repo does not ask for. This is a WIRING
+    /// WITNESS, not a proof: it moves 0 -> nonzero on the same runs
+    /// `framesPaused` does, and it moves too if either gate line is
+    /// deleted, which is more evidence than existed before it. It proves
+    /// the gate was ASKED, never that dropping was correct.
+    private var eventsPaused = 0
+
+    /// Owns this take's pause intervals (STC-240). Handed to the camera and
+    /// mic captures too, so all five writers (display frames here, the tap
+    /// here, camera frames, mic samples, and the cursor-shape sampler here)
+    /// answer one question.
+    let pauseGate = PauseGate()
+
+    /// Buttons this take has RECORDED a `down` for and not yet an `up`.
+    ///
+    /// Not a query of the OS: what must stay consistent is `events.json`
+    /// itself, because `cursor.ts` derives "pressed" as a PREFIX SUM over the
+    /// file's own down(+1)/up(-1) events. Only events this take actually wrote
+    /// may count toward it.
+    private var heldButtons: Set<Int> = []
     private var framesNonMonotonic = 0
     private var lastPtsNs: Int64 = -1
     private var firstFramePtsNs: Int64 = -1
@@ -562,7 +595,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self.lock.unlock()
             if stoppingAlready { return }
 
-            let cam = CameraCapture(dir: dir, t0Ns: t0Ns)
+            let cam = CameraCapture(dir: dir, t0Ns: t0Ns, pauseGate: self.pauseGate)
             let result = cam.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
@@ -617,7 +650,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self.lock.unlock()
             if stoppingAlready { return }
 
-            let m = MicCapture(dir: dir, t0Ns: t0Ns, deviceUid: deviceUid)
+            let m = MicCapture(dir: dir, t0Ns: t0Ns, deviceUid: deviceUid, pauseGate: self.pauseGate)
             let result = m.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
@@ -747,6 +780,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             case .nonMonotonic:
                 framesNonMonotonic += 1; lock.unlock(); return
             case .accept(let pts):
+                // Paused: the frame is real and correctly timed, and must not
+                // reach the writer, advance `lastPtsNs`, or become
+                // `firstFramePtsNs` — a take paused from its very first
+                // instant has no first frame until it resumes.
+                if pauseGate.isPaused(atNs: pts) {
+                    framesPaused += 1; lock.unlock(); return
+                }
                 ptsNs = pts
                 lastPtsNs = pts
                 if firstFramePtsNs < 0 { firstFramePtsNs = pts }
@@ -933,11 +973,29 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         case .ignore, .beforeStart:
             return
         case .event(let t, let kind, let button):
+            // Nothing is recorded while paused (STC-240). The tap stays LIVE —
+            // tearing it down and re-creating it would re-enter the Input
+            // Monitoring path STC-315 mapped, and `tapCreate` fails
+            // synchronously, so a resume could fail in a way a pause cannot
+            // report. Dropping the event is the cheap, reversible half.
+            if pauseGate.isPaused(atNs: Int64(t)) {
+                lock.lock(); eventsPaused += 1; lock.unlock()
+                return
+            }
             let loc = event.location
             var e: [String: Any] = ["t": t, "kind": kind, "x": loc.x, "y": loc.y]
             if let button { e["button"] = button }
             lock.lock()
             events.append(e)
+            // Track what is held so a pause can release it (see
+            // recordHeldButtonReleases). Updated only for events this take
+            // actually RECORDS, which is what keeps it in step with the prefix
+            // sum cursor.ts computes over the same file. It sits after the
+            // paused check by construction, so nothing dropped can reach it.
+            if let button {
+                if kind == "down" { heldButtons.insert(button) }
+                else if kind == "up" { heldButtons.remove(button) }
+            }
             lock.unlock()
         }
     }
@@ -948,6 +1006,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private func recordCursorShape(_ shape: String, observedNs: UInt64) {
         // Mirrors decideCursorEvent's .beforeStart: the schema requires t >= 0.
         guard observedNs >= t0Ns else { return }
+        if pauseGate.isPaused(atNs: Int64(observedNs - t0Ns)) {
+            lock.lock(); eventsPaused += 1; lock.unlock()
+            return
+        }
         lock.lock()
         events.append(["t": Int(observedNs - t0Ns), "kind": "cursor", "shape": shape])
         cursorEvents += 1
@@ -956,6 +1018,121 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - stats and stop
 
+    var isPaused: Bool { pauseGate.isPaused }
+
+    /// Session-relative, from the helper's own clock — the same instant the
+    /// five gates then test every sample against, which is what makes the
+    /// sidecar and the disk agree by construction rather than by inspection.
+    ///
+    /// The GATE opens BEFORE `recordHeldButtonReleases` runs, not after.
+    /// Between reading `tNs` and opening the span there are two lock
+    /// round-trips and a `CGEvent(source:)` allocation in the release path —
+    /// not microseconds — and a tap event evaluated in that window with
+    /// `t >= tNs` used to be appended with a timestamp already inside the
+    /// span the next line was about to open. Gating first closes that: an
+    /// event with `t >= tNs` is now dropped by the gate itself (the
+    /// invariant holds), and an event with `t < tNs` is still accepted but
+    /// lies OUTSIDE the span either way, so nothing regresses. It also
+    /// removes a hazard the old order carried: a REDUNDANT pause (one
+    /// already open) used to still run `recordHeldButtonReleases`, which
+    /// could write a synthetic `up` at `tNs2 - 1` — INSIDE the
+    /// already-open span. Guarding first means a redundant pause writes
+    /// nothing at all.
+    @discardableResult
+    func pause() -> Bool {
+        let tNs = Int64(Clock.nowNs() - t0Ns)
+        guard pauseGate.pause(atNs: tNs) else { return false }
+        recordHeldButtonReleases(atNs: tNs)
+        return true
+    }
+
+    /// Release anything still held, immediately BEFORE the span opens.
+    ///
+    /// The mirror of `recordResumeAnchor`: one synthetic event at each end of
+    /// a pause. Without it, holding a button, pausing, letting go while
+    /// paused, then resuming records the `down` and DROPS the `up` — and since
+    /// `cursor.ts` computes pressed as a prefix sum, the depth never returns
+    /// to zero. The cursor then renders pressed for the entire rest of the
+    /// export, and `zoom.ts`, which treats a move while a button is held as a
+    /// DRAG, opens a zoom window on every later move. One dropped event and
+    /// the take is wrong from that instant to its end — while reading as a
+    /// transform bug rather than a helper one.
+    ///
+    /// `tNs - 1`, not `tNs`, so the invariant stays absolute: no sample on
+    /// disk has a pts inside a pause interval, with no carve-out for our own
+    /// synthetics. At nanosecond resolution the offset is not physical.
+    ///
+    /// A button still physically held at resume produces no new `down` (the
+    /// press happened before the pause), so the pointer reads as un-pressed
+    /// for the remainder of that drag. A known, bounded inaccuracy, and
+    /// strictly better than a take stuck pressed to its end.
+    private func recordHeldButtonReleases(atNs tNs: Int64) {
+        guard tNs > 0 else { return }          // the schema requires t >= 0
+        lock.lock()
+        let held = heldButtons
+        heldButtons.removeAll()
+        lock.unlock()
+        guard !held.isEmpty else { return }
+        // If the allocation fails the coordinates are lost, but the RELEASE
+        // matters far more than where it happened: x/y on an `up` only satisfy
+        // the schema — cursor.ts takes position from moves — while a missing
+        // `up` sticks the pressed state for the whole export.
+        let loc = CGEvent(source: nil)?.location ?? .zero
+        lock.lock()
+        for b in held.sorted() {
+            events.append(["t": Int(tNs - 1), "kind": "up",
+                           "x": loc.x, "y": loc.y, "button": b])
+        }
+        lock.unlock()
+    }
+
+    @discardableResult
+    func resume() -> Bool {
+        let tNs = Int64(Clock.nowNs() - t0Ns)
+        let changed = pauseGate.resume(atNs: tNs)
+        if changed { recordResumeAnchor(atNs: tNs) }
+        return changed
+    }
+
+    /// One synthetic move at the resume instant, carrying where the pointer
+    /// actually is (STC-240), in the tap's own coordinate space.
+    ///
+    /// Without it the cursor sim — which eases toward the pointer at 120 Hz —
+    /// holds at its pre-pause position and then visibly GLIDES across the cut
+    /// to wherever the mouse ended up, because every real move in between was
+    /// discarded. With it, the first frame after the seam is already correct.
+    ///
+    /// Deliberately indistinguishable from a real move: a `synthetic: true`
+    /// field would be a fact about the helper rather than about the take, and
+    /// nothing downstream would branch on it.
+    private func recordResumeAnchor(atNs tNs: Int64) {
+        // CGEvent, NOT NSEvent.mouseLocation — the two are in different
+        // coordinate spaces and only one of them matches this array.
+        //
+        // Every move in `events` carries the tap's `event.location`:
+        // CoreGraphics global points, origin TOP-left, y down.
+        // `NSEvent.mouseLocation` is a Cocoa global point: origin BOTTOM-left,
+        // y up, flipped against the MAIN display's height whatever display the
+        // pointer is actually over. `StillDecisions.swift`'s `localizeCursor`
+        // is where that flip is owned, and it is the ONE flip in the system
+        // precisely so everything downstream of events.json can assume
+        // top-left.
+        //
+        // Writing an unconverted Cocoa point into this array would put the
+        // synthetic anchor at a mirrored y — a cursor that jumps across the
+        // seam and snaps back one frame later. Since the anchor exists to make
+        // the seam land cleanly, that bug would defeat the feature while
+        // looking implemented.
+        //
+        // A nil event (the allocation failing) costs the anchor, not the take:
+        // the seam degrades to the glide this function exists to remove, which
+        // is the old behaviour rather than a new fault.
+        guard let loc = CGEvent(source: nil)?.location else { return }
+        lock.lock()
+        events.append(["t": Int(tNs), "kind": "move", "x": loc.x, "y": loc.y])
+        lock.unlock()
+    }
+
     func stats() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         // `events` counts everything in the file, cursor events included;
@@ -963,6 +1140,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // two side by side and a take with no pointer motion still reads as
         // such.
         return ["frames": framesAppended, "dropped": framesDropped,
+                "framesPaused": framesPaused,
+                "eventsPaused": eventsPaused,
+                "paused": pauseGate.isPaused,
                 "nonMonotonic": framesNonMonotonic, "events": events.count,
                 "cursorEvents": cursorEvents,
                 "tapReenables": tapReenables,
@@ -1046,6 +1226,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             answered = true
             answerLock.unlock()
             guard let self else { return }
+            // Read BEFORE writeSidecars closes the open pause span below, so
+            // `s["paused"]` reflects the instant of the stop rather than the
+            // finished document — a take stopped while paused correctly
+            // answers `paused: true` here even though anchors.json will carry
+            // a CLOSED interval once writeSidecars has run.
             var s = self.stats()
             if actualReason != reason { s["stopWarning"] = "writer did not finalise in time" }
             self.writeSidecars(reason: actualReason)
@@ -1148,6 +1333,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // loader accepts both; fixtures/basic was already v2. Time-ordered on
         // the way out because two clocks feed `events` (see orderedEvents).
         write(["version": 2, "events": orderedEvents(evs)] as [String: Any], to: "events.json")
+        // Stop while paused: the open span closes at the stop instant, so the
+        // sidecar describes the whole take rather than trailing off.
+        let stopTNs = Int64(Clock.nowNs() - t0Ns)
+        pauseGate.close(atNs: stopTNs)
+        let pauses = pauseGate.intervals
         // Exact, from the helper's own clock. The same offset survives in the
         // file only as a timescale-quantised empty edit, so this is what a
         // reader checks its recovered value against.
@@ -1164,8 +1354,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             mic: micT,
             micRequested: wantMicUid != nil,
             scope: captureScope,
+            pauses: pauses,
             stopReason: reason,
-            stopTNs: Int(Clock.nowNs() - t0Ns))
+            stopTNs: Int(stopTNs))
         write(doc, to: "anchors.json")
     }
 

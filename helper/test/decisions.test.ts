@@ -11,9 +11,12 @@ describe("capture decisions", () => {
         // parseStartRequest and chooseDisplayForWindow reuse them rather
         // than keeping a second copy of "what a rect/id looks like").
         // AnchorsDoc.swift because StillDecisions.swift's shotDocument
-        // references DisplayGeometry, which lives there — the same trio
-        // still-decisions.test.ts already compiles together.
+        // references DisplayGeometry, which lives there — the same set
+        // still-decisions.test.ts already compiles together. PauseDecisions.swift
+        // because AnchorsDoc.swift's anchorsDocument(...) now takes a
+        // [PauseInterval] (STC-240), declared there.
         "helper/src/StillDecisions.swift",
+        "helper/src/PauseDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/src/CaptureDecisions.swift",
         "helper/test/decisions/main.swift",

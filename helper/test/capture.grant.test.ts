@@ -162,3 +162,170 @@ describe("capture — a real recording (requires Screen Recording)", () => {
     expect(typeof anchors.t0Ns).toBe("string");
   }, 120_000);
 });
+
+describe("capture — pause and resume on a live take (STC-240)", () => {
+  test("the display gate fires, and nothing on disk sits inside a pause", async () => {
+    const probe = await tryOneRecording();
+    if (probe.ev !== "started") throw explainFailedStart(probe, "pause/resume");
+
+    const dir = session();
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "start", dir, seq: 1 });
+    expect((await waitFor(() => h.fd3.find((l) => l.seq === 1), 20_000, "started")).ev)
+      .toBe("started");
+
+    await sleep(1000);
+    h.send({ cmd: "pause", seq: 2 });
+    const paused = await waitFor(() => h.fd3.find((l) => l.seq === 2), 10_000, "paused");
+    expect(paused.ev).toBe("paused");
+    expect(paused.paused).toBe(true);
+    expect(paused.changed).toBe(true);
+
+    // 2 s, not 200 ms: a short pause is indistinguishable from a momentarily
+    // idle screen, which VFR legitimately emits no frames for. At 60 fps this
+    // span would carry ~120 frames if the gate did nothing.
+    await sleep(2000);
+
+    // Idempotence on the real helper, not only in the pure tests.
+    h.send({ cmd: "pause", seq: 3 });
+    const again = await waitFor(() => h.fd3.find((l) => l.seq === 3), 10_000, "pause again");
+    expect(again.ev).toBe("paused");
+    expect(again.changed).toBe(false);
+
+    h.send({ cmd: "resume", seq: 4 });
+    const resumed = await waitFor(() => h.fd3.find((l) => l.seq === 4), 10_000, "resumed");
+    expect(resumed.ev).toBe("resumed");
+    expect(resumed.paused).toBe(false);
+    expect(resumed.changed).toBe(true);
+
+    await sleep(1000);
+    h.send({ cmd: "stop", seq: 5 });
+    const stopped = await waitFor(() => h.fd3.find((l) => l.seq === 5), 30_000, "stopped");
+    expect(stopped.ev).toBe("stopped");
+
+    // The display gate fired. Read from the stop reply's own stats rather than
+    // polled mid-take: heartbeat stats land on the LOSSY stdout channel at a
+    // 2 s default interval, so a test timing itself against them would be
+    // racing a channel designed to drop messages.
+    //
+    // THIS IS THE LOAD-BEARING ASSERTION OF THIS TEST. On any screen with
+    // motion on it, display frames flow continuously at capture's own frame
+    // rate with nothing needing to move deliberately for one to arrive, so
+    // `framesPaused` discriminates whether the display gate exists
+    // regardless of what INPUT the machine running this test is producing.
+    // It is what catches a broken/removed display gate; the
+    // events-inside-the-pause assertion below cannot be trusted to (see its
+    // own comment).
+    //
+    // NOT unconditional, though: `decideFrame` (Capture.swift) has a
+    // `.skip` branch — "idle/blank/suppressed: VFR emits nothing" — that
+    // sits UPSTREAM of the `framesPaused` increment. A screen that is
+    // genuinely static for the entire 2 s pause (no cursor blink, no
+    // window animation, nothing redrawing) can legitimately emit zero
+    // frames under VFR, and `framesPaused` would then read 0 for a reason
+    // that has nothing to do with whether the pause gate works. The
+    // failure message below says so, because that is where someone
+    // debugging a red run will actually look.
+    expect(stopped.framesPaused as number,
+      "frames arrived during the pause and were gated — 0 can also mean " +
+      "the screen was completely static for the whole pause, since VFR " +
+      "emits nothing then (decideFrame's .skip branch, upstream of this " +
+      "counter); re-run with some on-screen motion during the pause before " +
+      "treating this as a broken display gate").toBeGreaterThan(0);
+    expect(stopped.frames as number, "the take still recorded").toBeGreaterThan(0);
+
+    const load = (f: string) => JSON.parse(readFileSync(join(dir, f), "utf8"));
+    const anchors = load("anchors.json");
+    expect(anchors.version).toBe(5);
+    expect(anchors.pauses).toHaveLength(1);
+    const [span] = anchors.pauses;
+    expect(span.endNs).toBeGreaterThan(span.startNs);
+
+    const ajv = new Ajv({ allErrors: true, strict: true });
+    const validate = ajv.compile(JSON.parse(
+      readFileSync(join(root, "schema/anchors-5.schema.json"), "utf8")));
+    expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
+
+    // THE INVARIANT — for events.json ONLY. The helper's drop rule and the
+    // transform's cut rule are the same predicate over the same intervals,
+    // so a survivor means they have drifted — and PR B would then cut a real
+    // sample out of the export, which looks like correct video. Half-open,
+    // so the synthetic re-anchor AT endNs is outside the span and needs no
+    // exception carved for it.
+    //
+    // This assertion covers events.json ONLY. The tap fires synchronously on
+    // the event itself, so the events invariant is genuinely absolute — no
+    // tolerance. display.mp4 does NOT get the same absolute guarantee: the
+    // display gate tests `displayTime`, the scheduled VBL presentation time,
+    // ~7 ms AHEAD OF DELIVERY, so a frame already in flight when a pause
+    // opens can carry a pts up to one frame interval inside the span and
+    // still be written. Nothing here checks display.mp4 against the pause
+    // intervals (there is no equivalent assertion for it), and PR B's cut
+    // must tolerate that one-frame slop rather than treating it as a
+    // drifted invariant. See docs/STC-240-DESIGN.md's "Disk and the sidecar
+    // agree by construction" for the full account.
+    //
+    // THIS ONLY DISCRIMINATES WHEN REAL INPUT ACTUALLY LANDED DURING THE
+    // PAUSE. Nothing moves the mouse on an automated, idle machine, so
+    // "no events inside the span" is trivially true whether the tap gate
+    // exists or not — the repo's own recorded trap: an empty events.json
+    // does not mean the tap is broken, verifying input needs deliberate
+    // input. Confirmed directly: with the tap-gate drop line removed from
+    // `handleTapEvent` (Capture.swift), a run producing 0 real events left
+    // this assertion PASSING — it is the `framesPaused` assertion above,
+    // not this one, that catches a broken display gate. This assertion is
+    // real and stays (a machine that DOES generate input during the pause
+    // — a stray moved pointer, a scheduled job — is still held to it), but
+    // its silence on an idle run is not evidence the tap gate works. See
+    // the vacuity notice just below.
+    const events = load("events.json");
+    const inside = events.events.filter(
+      (e: { t: number }) => e.t >= span.startNs && e.t < span.endNs);
+    expect(inside, `events recorded inside the pause: ${JSON.stringify(inside)}`).toEqual([]);
+
+    // And the one thing that must exist at the seam.
+    const anchor = events.events.find(
+      (e: { t: number; kind: string }) => e.kind === "move" && e.t === span.endNs);
+    expect(anchor, "a resume must leave one synthetic move at its own instant").toBeTruthy();
+
+    // Vacuity notice, not a failure. Two of the helper's own synthetics land
+    // just outside the span by construction — `recordResumeAnchor`'s move at
+    // exactly `span.endNs`, and `recordHeldButtonReleases`'s `up`(s) at
+    // `span.startNs - 1` — so neither can ever land INSIDE it and neither
+    // counts as "real input during the pause". `process.stderr.write`, not
+    // `console.warn`: vitest discards console output from tests, and a
+    // skip/vacuity notice that vanishes is this repo's own recorded trap.
+    //
+    // What this count can and cannot prove, stated precisely rather than
+    // implied: `real` counts non-synthetic events across the WHOLE take,
+    // not just near the pause window — there is no honest way to know what
+    // would have landed inside the span had the tap gate been absent, and a
+    // window-with-a-margin heuristic would only be a guess wearing a
+    // number. So:
+    //   - real.length === 0 PROVES the invariant assertion above had
+    //     nothing to discriminate on. That is exactly what it measures,
+    //     and the notice below fires only on that case.
+    //   - real.length > 0 does NOT prove the assertion discriminated —
+    //     those events could all sit well outside the pause window (before
+    //     it opened, after it closed) with nothing real ever landing near
+    //     the span. It only means the assertion MIGHT have discriminated,
+    //     so its silence is deliberately not read as reassurance either.
+    const real = events.events.filter((e: { t: number; kind: string }) =>
+      !(e.kind === "move" && e.t === span.endNs) &&
+      !(e.kind === "up" && e.t === span.startNs - 1));
+    if (real.length === 0) {
+      process.stderr.write(
+        "[pause-resume] VACUOUS: no real (non-synthetic) input events were " +
+        "recorded anywhere in this take, so the events-inside-the-pause " +
+        "assertion above had nothing at all to discriminate on — the tap " +
+        "gate is UNPROVEN by this run. (A nonzero count here would not have " +
+        "proven the opposite: it only means real events existed SOMEWHERE " +
+        "in the take, not that any landed near the pause.) Only " +
+        "framesPaused is evidence the display gate works. stats().eventsPaused " +
+        `was ${stopped.eventsPaused}: a wiring witness (it moves 0 -> nonzero on ` +
+        "the same runs framesPaused does, and moves if either gate line is " +
+        "deleted), not proof of a correct drop on THIS idle run.\n");
+    }
+  }, 90_000);
+});
