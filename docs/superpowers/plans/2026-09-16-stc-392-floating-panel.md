@@ -8,7 +8,9 @@
 
 **Tech Stack:** TypeScript, Electron (main + three sandboxed renderers), vitest (unit) + Playwright-driven Electron (e2e). No new dependencies.
 
-**Spec:** Linear STC-392 — https://linear.app/studio-cartelli/issue/STC-392 (body reproduced under "The spec, verbatim" below). Related: STC-393 (temp storage, merged `8326038`), STC-343/STC-296 (the panel as built), STC-395 (GIF/Video output — blocked on this).
+**Spec:** Linear STC-392 — https://linear.app/studio-cartelli/issue/STC-392. Related: STC-393 (temp storage, merged `8326038`), STC-343/STC-296 (the panel as built), STC-395 (GIF/Video output — blocked on this).
+
+> **Revised 2026-09-17 against a changed spec.** The body this plan was first written against (read 2026-09-16 16:31Z) gained five `decided 2026-09-16` blocks afterwards. One confirms a decision the plan had argued toward (the Reconcile item); four change the work. **Read the ticket, not the "verbatim" copy below** — that copy is the *old* body, kept only so a reader can see what moved. Every task below has been re-argued against the current one; the four deltas are called out in D1/D6/D7/D8/D9.
 
 ---
 
@@ -48,7 +50,7 @@
 
 Recorded here because each one changes the task list, and a later reader needs to know they were chosen rather than defaulted into.
 
-**D1 — The Reconcile item: confirm what you chose to keep, undo what you never saved.**
+**D1 — The Reconcile item: confirm what you chose to keep, undo what you never saved.** *(2026-09-17: the spec now decides this itself — "split by where the take lives. Deleting a take still in temp storage (this panel) → timed undo. Deleting from the library → confirmation dialog." Identical to what this section argued toward, so it stands unchanged and is now quoted rather than reasoned.)*
 The panel is a pre-keep surface — a take sitting in temp storage that the user has not said yes to — so its ✕ trashes with a timed undo and no modal. The library is a post-keep surface, so `take:delete`'s existing confirmation dialog stays exactly as it is. This is already what the code does (`main.ts:1443` argues for no confirm on a seconds-old shot; `main.ts:1111` argues for a modal on a recording that is minutes of work); STC-392 adds only the toast. The rule now has one sentence and one owner: `panel-actions.ts`'s `trashStyle(origin)`.
 
 **D2 — A recording's panel shows no picture in v1.**
@@ -68,6 +70,30 @@ The first two describe a clock that no longer exists — a stored `settleAction`
 
 ---
 
+## Decisions forced by the 2026-09-17 spec revision
+
+**D7 — The stack caps at 3 visible, and nothing is ever dropped.** *(new spec block: "Max 3 panels visible, newest on top with focus. Older panels collapse into a '+N' badge; clicking expands a list of waiting takes with the same actions. Nothing is dropped, only hidden.")*
+
+Two changes, and the second is the load-bearing one. `MAX_STACKED` goes 5 → 3, which is a constant. But today the panel pushed past the cap is **settled** — `presentThumbnail` calls `settleAndDestroy()` on the overflow, which under the old model exported the shot and destroyed its window. That was safe precisely *because* the panel had a default outcome; STC-392 removed the default outcome, so the same eviction now destroys a take nobody decided on. "Nothing is dropped, only hidden" is therefore not a UI nicety — it is the correctness half of this ticket applied to the case a burst of captures produces. The overflow panels stay alive and hidden, and the badge is how they are reachable.
+
+**D8 — Quit warns when takes are unhandled, and never blocks a system shutdown.** *(new spec block: "Warn: 'N takes aren't saved.' Save All / Quit Anyway / Cancel (default). Logout / restart / shutdown skips the warning so it never blocks the system; recovery covers those takes.")*
+
+This replaces Task 3's "quit destroys the panels and leaves the takes in temp for recovery". Recovery is still the backstop and still correct — the warning is what stops a user reaching it by accident. **Quit Anyway does not delete**, so the recovery prompt is exactly where those takes reappear; only Save All changes anything on disk.
+
+The one genuinely uncertain mechanic: telling a user ⌘Q apart from a logout. On macOS, Electron's `powerMonitor` exposes `shutdown` on Linux and Windows but its macOS coverage is version-dependent, and `app.on("before-quit")` fires for both. The implementer verifies which signal actually arrives on macOS 27 before building on it; if none does, the fallback is to warn always and say so in the runbook, because a warning that occasionally appears during a logout is a smaller fault than one that blocks a shutdown — and this checkout cannot settle it.
+
+**D9 — Copy on a recording exists, and hands over a clone that outlives the take.** *(new spec block: "Copy on a recording writes an APFS clone (`clonefile`) to temp; the clipboard references the clone. Trash deletes only the take, so the paste still works. Clones purge after 24h, except a clone that is still the current clipboard item at purge time (one pasteboard check at purge, no polling). Stills unchanged: the clipboard holds image data.")*
+
+This overturns D6's Copy half. The mechanism is the interesting part and it is exactly right: a file-URL clipboard entry pointing into a take directory would break the moment the ticket's own "Copy, then Trash" sequence ran, and copying the bytes would cost a full duplicate of a multi-gigabyte recording. `clonefile(2)` is copy-on-write on APFS — the clone costs metadata until one side is written to, and it survives the original's deletion.
+
+**Q1 — ANSWERED 2026-09-17: Copy on a recording is deferred to STC-395.** `actionsFor({kind:"recording"})` stays `["save","edit","trash"]` and D6 stands unchanged — the ticket's two blocks are in tension with each other (Copy needs a format; its format picker is out of scope here), and the trap below is the third reason.
+
+**Ruling that follows from it: the clone machinery is NOT built in this ticket.** With Copy-on-recording deferred, `clonefile` + the 24h purge + the pasteboard check have no consumer — the spec is explicit that "stills are unchanged: the clipboard holds image data", so no still puts a file reference on the pasteboard to keep alive. Building it now would be infrastructure with nothing calling it, which the review rubric treats as a defect and which would rot before STC-395 arrives. What *is* preserved is the decision: the block is quoted verbatim into `docs/STC-392-RUNBOOK.md` and onto STC-395, so the mechanism arrives with its reasoning attached rather than being re-derived. **Cost if wrong:** STC-395 builds it instead, with the design already written down; nothing is lost but the ordering.
+
+**The question, and the reason it was asked.** The spec says a recording's Copy clones "the take", but a fresh take's only video is `display.mp4`, and `CLAUDE.md` carries a standing trap about that file: **"A raw `display.mp4` never has a cursor — `showsCursor` is off by design and the pointer exists only in an export."** So Copy-on-recording as specified hands someone a video of their screen with no pointer in it, which is the failure mode the constitution warns about by name. The rendered output that *would* have a cursor does not exist at panel time — rendering is the editor's job and runs at 1.52x realtime — and the format picker that would choose it is STC-395, explicitly out of scope. Both readings are buildable and the work differs; this is asked rather than ruled because the answer changes what the action *is*, not how it is coded.
+
+---
+
 ## File structure
 
 **New**
@@ -83,7 +109,9 @@ The first two describe a clock that no longer exists — a stored `settleAction`
 | `app/test/pending-trash.test.ts` | The undo window's decisions, with an injected clock. |
 | `app/test/panel-waits.e2e.test.ts` | The contract this ticket reverses: a panel left alone is still there, and its take is still in temp. |
 | `app/test/recording-panel.e2e.test.ts` | A recording's clean stop puts up a panel, and does *not* put the take in the library. |
-| `docs/STC-392-RUNBOOK.md` | What only hardware can settle: focus, the toast's real appearance, panels moving out of a recording's frame. |
+| `app/src/quit-guard.ts` | Whether a quit warns, Electron-free (D8). |
+| `app/test/quit-guard.test.ts` | Its three cases, the system-initiated one included. |
+| `docs/STC-392-RUNBOOK.md` | What only hardware can settle: focus, the toast's real appearance, panels moving out of a recording's frame, whether macOS 27 distinguishes a logout from ⌘Q, and the deferred clonefile design. |
 
 **Modified**
 
@@ -263,6 +291,10 @@ Create `app/src/panel-actions.ts`:
  * the pointer. An action that looks like it worked is worse than an absent one.
  *
  * Both come back for free when their blocking ticket lands: one row each.
+ *
+ * NOTE (2026-09-17): the spec's "Copy → Trash on recordings" block overturns
+ * the Copy half — see D6/Q1 in the plan. `actionsFor` gains `copy` for a
+ * recording once Q1 is answered; the Edit half stands.
  */
 
 export type PanelAction = "copy" | "save" | "edit" | "trash";
@@ -743,7 +775,7 @@ export function afterCapture(): void {
 
 with `takeFocus()` on the session delegating to `focusPanel(this.win)` and refusing when `!hasPainted`.
 
-8. `closeThumbnail()`: replace the `settleAndDestroy` loop with `dismissNow`, and update its doc — quit no longer exports, it leaves takes in temp for recovery.
+8. `closeThumbnail()`: replace the `settleAndDestroy` loop with `dismissNow`, and update its doc — quit no longer exports, it leaves takes in temp for recovery. **Task 5c puts a warning in front of this** (D8); this task builds the teardown it runs after, and the two must agree that Quit Anyway deletes nothing.
 
 9. Add `dismissThumbnail(dir: string)` so main can close one specific panel after performing its action. It needs the session to expose which take it is showing, which it currently keeps private inside `opts`:
 
@@ -963,10 +995,15 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button"
  * Every action has a keyboard path (STC-392 focus rule 4).
  *
  * The accelerators are the system's own for these verbs — ⌘C, ⌘S, ⌘E — and
- * Delete/Backspace for the ✕, which is what the Finder uses for the same
- * gesture. Dispatched through `perform`, so a keyboard Save and a clicked
- * Save are the same code path and cannot disagree about whether the panel
- * closes.
+ * **⌘⌫ for the ✕, never a bare Delete or Backspace** (the spec's own guard,
+ * decided 2026-09-16). This panel takes focus the instant it appears, over
+ * whatever the user was typing into a moment earlier; a bare ⌫ bound to a
+ * destructive action means a stray keystroke aimed at another app's text
+ * field deletes a capture. ⌘⌫ is also what the Finder actually uses for
+ * "move to Trash" — the bare key there deletes *text*, not files.
+ *
+ * Dispatched through `perform`, so a keyboard Save and a clicked Save are the
+ * same code path and cannot disagree about whether the panel closes.
  *
  * Escape no longer closes the panel. It used to settle-and-close, which was
  * the timeout's manual equivalent; with no "close without deciding" in the
@@ -977,11 +1014,35 @@ const KEYS: ReadonlyArray<[PanelAction, (e: KeyboardEvent) => boolean]> = [
   ["copy",  (e) => e.metaKey && e.key.toLowerCase() === "c"],
   ["save",  (e) => e.metaKey && e.key.toLowerCase() === "s"],
   ["edit",  (e) => e.metaKey && e.key.toLowerCase() === "e"],
-  ["trash", (e) => !e.metaKey && (e.key === "Backspace" || e.key === "Delete")],
+  // ⌘⌫, never bare — see the block comment above. Both key names, because
+  // Backspace is what the laptop keyboard sends and Delete is the full-size one.
+  ["trash", (e) => e.metaKey && (e.key === "Backspace" || e.key === "Delete")],
 ];
 
+/**
+ * When this panel started accepting keys.
+ *
+ * The panel takes focus the instant it appears (focus rule 1), over whatever
+ * the user was typing into. Keystrokes already in flight when it grabbed the
+ * keyboard were aimed at the previous app and land here instead — so the first
+ * `SETTLE_KEYS_MS` of the panel's life ignore input entirely. The spec calls
+ * for "~300ms"; it is a constant rather than a literal because it is a
+ * duration with a reason, and a second copy of it in a test would be the
+ * defect this repo names five ways.
+ *
+ * Note this is a settling window, not a debounce: it starts once, at paint,
+ * and never re-arms. A panel the user has been looking at for a minute must
+ * not swallow a keystroke.
+ */
+const SETTLE_KEYS_MS = 300;
+let keysLiveAt = Number.POSITIVE_INFINITY;   // set to `performance.now() + SETTLE_KEYS_MS` at paint
+
 document.addEventListener("keydown", (e) => {
+  // Escape is exempt: backing out of redact mode is not destructive, and a
+  // user who has just started a drag they did not mean must be able to cancel
+  // it in the same 300 ms.
   if (redacting && e.key === "Escape") { setRedacting(false); return; }
+  if (performance.now() < keysLiveAt) return;
   for (const [action, matches] of KEYS) {
     if (!matches(e) || !available.has(action)) continue;
     e.preventDefault();
@@ -990,6 +1051,10 @@ document.addEventListener("keydown", (e) => {
   }
 });
 ```
+
+Set `keysLiveAt = performance.now() + SETTLE_KEYS_MS` in the `requestAnimationFrame` callback that already sends `{ kind: "painted" }` — the same moment the window is shown and can first hold the keyboard. A `silent` panel never paints and never listens, which is correct: it has no keyboard and no user.
+
+**Test it where it can fail.** Add to `app/test/panel-waits.e2e.test.ts` a case that dispatches `Meta+Backspace` into the panel within the first 100 ms and asserts the take is still in temp, then dispatches it again after 500 ms and asserts it is gone. A guard nobody has watched fire is indistinguishable from one that cannot fire.
 
 6. `discard()` keeps its `"discarding"` event and its restore-on-failure, but delegates to `perform("trash")` so the swipe, the ✕, the ⌫ key and the context menu are one path. Rule 5's comment in `thumbnail.ts` already says why they must be.
 
@@ -1200,6 +1265,159 @@ Expected: PASS. `nothing-lost.e2e.test.ts` will fail on its "ignoring it still w
 ```bash
 git add app/src/main.ts app/test/panel-waits.e2e.test.ts app/test/nothing-lost.e2e.test.ts
 git commit -m "STC-392: main performs the panel's actions, and Copy no longer promotes"
+```
+
+---
+
+### Task 5b: The stack caps at three, and nothing is dropped (D7)
+
+**Files:**
+- Modify: `app/src/thumbnail.ts` — `MAX_STACKED` 5 → 3; add `visibleCount`/`hiddenCount` helpers
+- Modify: `app/src/thumbnail-window.ts` — overflow no longer settles; `restack` hides past the cap
+- Modify: `app/renderer/thumbnail.html`, `app/src/thumbnail-renderer.ts` — the `+N` badge and its list
+- Test: `app/test/thumbnail.test.ts`, `app/test/panel-waits.e2e.test.ts`
+
+**Interfaces:**
+- Consumes: `MAX_STACKED`, `stackPosition` (Task 2).
+- Produces: `hiddenCount(total: number): number`; `presentThumbnail` no longer destroys anything.
+
+- [ ] **Step 1: Write the failing test — the eviction is the bug**
+
+```ts
+describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
+  test("a fourth capture hides the oldest rather than settling it", () => {
+    // THIS IS THE LOAD-BEARING HALF. `presentThumbnail` used to call
+    // `settleAndDestroy()` on whatever went past the cap, which was safe only
+    // because a panel HAD a default outcome — the timeout's export. STC-392
+    // removed the default outcome, so the same eviction now destroys a take
+    // nobody decided on. "Nothing is dropped, only hidden" is the correctness
+    // half of this ticket applied to a burst of captures, not a UI nicety.
+    expect(MAX_STACKED).toBe(3);
+    expect(hiddenCount(3)).toBe(0);
+    expect(hiddenCount(4)).toBe(1);
+    expect(hiddenCount(9)).toBe(6);
+  });
+
+  test("the badge counts every panel the stack is not showing", () => {
+    // The badge's number and the number of live-but-hidden panels are one
+    // value. Two ways to count them would be the defect; `hiddenCount` is the
+    // only one, and the renderer is handed its answer rather than deriving it.
+    for (const total of [1, 3, 4, 12]) {
+      expect(hiddenCount(total)).toBe(Math.max(0, total - MAX_STACKED));
+    }
+  });
+});
+```
+
+Add an e2e that fires five captures and asserts **five** panel windows exist with three visible — the old behaviour left four windows, one of them already destroyed.
+
+- [ ] **Step 2: Run and watch it fail**
+
+```
+npx vitest run app/test/thumbnail.test.ts
+```
+Expected: FAIL — `MAX_STACKED` is 5 and `hiddenCount` does not exist.
+
+- [ ] **Step 3: Change the cap and delete the eviction**
+
+In `thumbnail.ts`, `MAX_STACKED = 3` with its doc rewritten (the old one cites "five captures in five seconds" from STC-296's acceptance list — that number is superseded, and leaving the old justification under a new value is how a constant comes to mean nothing). Add `hiddenCount`.
+
+In `thumbnail-window.ts`, `presentThumbnail` loses its overflow loop entirely:
+
+```ts
+export function presentThumbnail(opts: PresentOptions): void {
+  panels.unshift(new ThumbnailSession(opts));
+  // No eviction. Everything past the cap is HIDDEN by `restack`, not settled —
+  // see `thumbnail.ts`'s MAX_STACKED doc. A panel destroyed here would be a
+  // take the user never decided on, which is the one thing this ticket exists
+  // to make impossible.
+  restack();
+}
+
+function restack(): void {
+  panels.forEach((p, i) => {
+    p.moveToStackIndex(i);
+    // Past the cap: alive, hidden, reachable through the badge.
+    if (i >= MAX_STACKED) p.hideForOverflow(); else p.reshowFromOverflow();
+  });
+  // The newest panel carries the badge — it is the one on top and the one
+  // with focus, so it is where a count of what is waiting belongs.
+  panels[0]?.setHiddenCount(hiddenCount(panels.length));
+}
+```
+
+`hideForOverflow`/`reshowFromOverflow` must not collide with `hide()`/`reshow()`, which `beforeCapture`/`afterCapture` own for a different reason — a panel hidden for a capture AND hidden for overflow must stay hidden when only one of the two lifts. Track the two reasons as separate booleans and show only when both are clear; a single flag is the bug this warns about.
+
+- [ ] **Step 4: The badge**
+
+A `+N` pill in the card's action row, `hidden` when N is 0. Clicking it sends `{ kind: "showOverflow" }`; main answers by bringing every hidden panel back at a stacked offset (the spec's "clicking expands a list of waiting takes with the same actions" — they are already panels with the same actions, so *expanding the stack* is the list, and no second list UI is built).
+
+**Ruling recorded in the plan rather than left to the implementer:** the spec says "clicking expands a list of waiting takes with the same actions". A separate list window would be a second surface with a second copy of the action row — the defect this repo names five ways. Showing the hidden panels themselves *is* a list of waiting takes with the same actions, because they are the same component. If the visual result is wrong on hardware, the runbook has the item.
+
+- [ ] **Step 5: Run, typecheck, commit**
+
+```
+npm run typecheck && npx vitest run app/test
+git commit -m "STC-392: the stack caps at three, and stops destroying what it evicts"
+```
+
+---
+
+### Task 5c: Quitting with unhandled takes (D8)
+
+**Files:**
+- Modify: `app/src/main.ts` — `before-quit`, and the `window-all-closed`/shutdown path (~line 460)
+- Create: `app/src/quit-guard.ts` — the decision, Electron-free
+- Test: `app/test/quit-guard.test.ts`, `app/test/quit.e2e.test.ts`
+
+**Interfaces:**
+- Consumes: `thumbnailCount()` (existing), `promoteTake` (existing).
+- Produces: `quitDecision(input: { unhandled: number; systemInitiated: boolean }): "quit" | "warn"`; `QuitChoice = "save-all" | "quit-anyway" | "cancel"`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+describe("quitting with takes nobody has decided on (STC-392 D8)", () => {
+  test("no unhandled takes, no warning", () => {
+    expect(quitDecision({ unhandled: 0, systemInitiated: false })).toBe("quit");
+  });
+
+  test("unhandled takes and a user-initiated quit warns", () => {
+    expect(quitDecision({ unhandled: 2, systemInitiated: false })).toBe("warn");
+  });
+
+  test("a logout, restart or shutdown NEVER warns, however many are waiting", () => {
+    // The spec's own reason: "so it never blocks the system; recovery covers
+    // those takes." A modal nobody is looking at, holding up a shutdown, is a
+    // worse failure than the takes it was protecting — and it is not even
+    // protecting them, because Quit Anyway does not delete and recovery finds
+    // them either way.
+    expect(quitDecision({ unhandled: 9, systemInitiated: true })).toBe("quit");
+  });
+});
+```
+
+- [ ] **Step 2: Run, watch it fail, write the module**
+
+`quit-guard.ts` is three lines of logic and a long comment explaining why the system-initiated case is not a special case but the *primary* one. Cancel is `defaultId` **and** `cancelId` — the spec names it the default, and a dialog whose Escape key does something other than its default button is its own defect.
+
+- [ ] **Step 3: Wire it, and find out what macOS actually sends**
+
+`app.on("before-quit", (e) => …)`. The uncertain part is `systemInitiated`: Electron's `powerMonitor` documents `shutdown` for Linux and Windows, and macOS coverage is version-dependent. **Verify what arrives on macOS 27 before building on it** — subscribe to `powerMonitor.on("shutdown")`, log it, and trigger a real logout.
+
+If nothing distinguishes the two, the fallback is `systemInitiated: false` always — warn every time — and a runbook item saying so. A warning that occasionally appears during a logout is a smaller fault than one that blocks a shutdown, and this checkout cannot settle which happens. **Do not guess and leave it silent**: whichever way it lands, say which in a comment, because a reader six months from now cannot tell a verified answer from an assumed one.
+
+- [ ] **Step 4: Save All**
+
+Promotes every panel's take in turn, then quits. Failures are reported and do **not** cancel the quit — a user who chose Save All and hit a full disk must not be trapped in a dialog loop; the takes that failed stay in temp and recovery finds them, which is the same backstop Quit Anyway relies on.
+
+- [ ] **Step 5: e2e, typecheck, commit**
+
+Extend `app/test/quit.e2e.test.ts` (it already drives a real quit) with a stubbed dialog, the same way `crash-recovery.e2e.test.ts` stubs one — including its timing note: the stub has to land in the instant after `electron.launch()` resolves, before `firstWindow()`.
+
+```
+npm run typecheck && npx vitest run app/test
+git commit -m "STC-392: quitting with unsaved takes asks, unless the system is going down"
 ```
 
 ---
@@ -1821,6 +2039,10 @@ git commit -m "STC-392: the runbook, and one line in the constitution"
 | Focus rule 2 (out of the frame) | Task 9 Step 5, asserted in Task 10 |
 | Focus rule 3 (newest gets focus) | Task 3's `afterCapture` |
 | Focus rule 4 (keyboard paths) | Task 4's `KEYS` |
+| Focus 1 guards: ⌘⌫ only, ~300ms settling window | Task 4 (`SETTLE_KEYS_MS`), asserted in `panel-waits.e2e.test.ts` |
+| Stacking cap: 3 visible, +N badge, nothing dropped | Task 5b (D7) |
+| Quit with unhandled takes | Task 5c (D8) |
+| Copy → Trash on recordings (clonefile, 24h purge) | Deferred to STC-395 (Q1); the block is quoted into the runbook and onto STC-395 |
 | Reconcile the confirm/undo conflict | D1, owned by `trashStyle` |
 | Depends on temp storage | Task 5 + Task 9 — nothing promotes but Save and Edit |
 
