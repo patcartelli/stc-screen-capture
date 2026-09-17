@@ -47,27 +47,35 @@
  * direction to choose between the two outcomes.
  *
  * **6. A discard must never race the panel's own timeout, and asking it not
- * to is not enough — it has to be TOLD.** `deleteShot` is an async round
- * trip; the timer that can settle-and-hide the very same panel lives in a
+ * to is not enough — it has to be TOLD.** The trash is an async round trip;
+ * the timer that can settle-and-hide the very same panel lives in a
  * different process and has no way to know a discard is already in flight.
  * Before this rule was enforced, a timeout landing in that gap would hide
  * the window, and a delete that then FAILED would strand its own recovery —
  * the renderer restoring the panel and reporting the error — inside a
  * window main had already hidden, headed for a silent destroy at
- * `SETTLE_BACKSTOP_MS` regardless. The fix is a `discarding` event sent as
- * the FIRST thing `discard()` does, before anything async: found reviewing
- * this module for the study, the same shape of defect as the scrubber's
- * rubber-band sign bug and the selection overlay's resize floor — a real
- * gap neither the panel's own tests nor its window's could see, because
- * proving it needs a live race no deterministic test can reliably produce.
- * `thumbnail-discard-race.test.ts` pins the source properties that make the
- * race impossible by construction instead.
+ * `SETTLE_BACKSTOP_MS` regardless. The fix, as first built for STC-343, was a
+ * `discarding` event sent as the FIRST thing the (then only) trash path —
+ * `discard()` — did, before anything async: found reviewing this module for
+ * the study, the same shape of defect as the scrubber's rubber-band sign bug
+ * and the selection overlay's resize floor — a real gap neither the panel's
+ * own tests nor its window's could see, because proving it needs a live race
+ * no deterministic test can reliably produce.
  *
- * (STC-392: the panel's own TIMEOUT is gone, so this exact race cannot recur
- * in the form found here. The `discarding` event stays regardless — a discard
- * still races anything else that can hide or destroy the window out from
- * under an in-flight delete, which today means the overflow eviction above
- * `MAX_STACKED` and the app quitting, not a clock.)
+ * (STC-392: the panel's own TIMEOUT is gone, so the ORIGINAL race — against a
+ * timer — cannot recur in the form found here. **The event also moved**:
+ * STC-392 collapsed the four ways to trash a take (the ✕ button, ⌘⌫, the
+ * context menu, and the swipe's `discard()`) onto ONE function,
+ * `thumbnail-renderer.ts`'s `run()`, and the `discarding` send moved WITH the
+ * trash logic into `run`'s trash branch — `discard()` itself no longer sends
+ * it; it delegates to `perform("trash")`, which reaches `run`. That is what
+ * gives all four gestures the same head start rather than only the swipe
+ * having one. The event stays regardless — a discard still races anything
+ * else that can hide or destroy the window asynchronously, which today means
+ * the overflow eviction above `MAX_STACKED` and the app quitting, not a
+ * clock. `thumbnail-discard-race.test.ts` pins the current source properties
+ * — ordering inside `run()`, and that `discard()` itself no longer sends the
+ * event — rather than reproducing the race live.)
  *
  * **7. Drag-out commits SOONER than discard, on purpose.** `DRAG_START_PX`
  * (12) is well under `SWIPE_DISCARD_PX` (90): a drag-out handed to a
@@ -369,6 +377,23 @@ export interface Bounds { x: number; y: number; width: number; height: number }
  * would have stayed green while the real card ran off the bottom.
  */
 export const PANEL_SIZE: Size = { width: 260, height: 210 };
+
+/**
+ * Redact mode's WINDOW size (STC-297). Bigger than the panel needs to be for
+ * its own controls, and deliberately: at the panel's normal size one preview
+ * pixel of a 4K capture is ~14 real ones, so placing a box over an email
+ * address would be guesswork. This is the size at which a line of text is a
+ * targetable thing. It is still the same panel in the same corner — the
+ * still EDITOR is STC-300, and this stops well short of one.
+ *
+ * Lives here, not in `thumbnail-window.ts` (which resizes the real window to
+ * it) or `thumbnail-renderer.ts` (which derives its own canvas box from it,
+ * `REDACT_BOX = REDACT_SIZE - CARD_CHROME`, the same allowance `CARD_BOX` is
+ * derived from `PANEL_SIZE` with) — one number, read by both, rather than a
+ * window size in one file and an independently-tuned "canvas box" in the
+ * other that a comment merely CLAIMED was derived from it.
+ */
+export const REDACT_SIZE: Size = { width: 520, height: 420 };
 
 /**
  * Where the panel sits within a display's WORK AREA (not its full bounds) —

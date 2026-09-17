@@ -1581,26 +1581,37 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
 });
 
 /**
- * Store this shot's redaction regions (STC-297), so they survive the panel and
- * the app.
+ * Store this shot's redaction regions (STC-297) and decoration mode
+ * (STC-392 review, I2), so they survive the panel and the app.
  *
- * The renderer sends REGIONS, never a document. That is the whole shape of
- * this handler: `shot.json` IS the still — the description is the artefact and
- * the pixels are derived (shot.ts's header) — so letting a sandboxed renderer
- * hand over a replacement document would let it rewrite the display, the crop,
- * the frame's filename and the capture time of a file the app then treats as
- * authoritative. Instead the stored document is read, the ONE field the panel
- * is allowed to change is replaced, and the result goes back through
- * `parseShot` before anything is written — so a region the schema would refuse
- * cannot reach the disk, and neither can a document this process did not
- * already have.
+ * The renderer sends REGIONS and a MODE, never a document. That is the whole
+ * shape of this handler: `shot.json` IS the still — the description is the
+ * artefact and the pixels are derived (shot.ts's header) — so letting a
+ * sandboxed renderer hand over a replacement document would let it rewrite
+ * the display, the crop, the frame's filename and the capture time of a file
+ * the app then treats as authoritative. Instead the stored document is read,
+ * only the fields the panel is allowed to change are replaced, and the
+ * result goes back through `parseShot` before anything is written — so a
+ * region the schema would refuse cannot reach the disk, and neither can a
+ * document this process did not already have.
+ *
+ * Widening this channel to carry `mode` alongside `redactions` is still safe
+ * under that rule, and it is why the mode never rode along before: `mode` is
+ * a closed, low-risk enum — `parseShot` already refuses anything not in
+ * `DECORATION_MODES` (and refuses a `WINDOW_MODES` value on a shot that
+ * cannot carry it), the same way it already refuses a malformed redaction —
+ * so it costs the handler nothing more than the redactions already spend to
+ * keep "the renderer may change a shot's decoration and nothing else about
+ * it" true. `mode` is optional on the wire (`undefined` keeps the stored
+ * value) so a redaction-only call — the undo button, a drawn box — need not
+ * repeat a mode nothing about it changed.
  *
  * The write is not atomic and deliberately is not: the alternative is a temp
  * file plus a rename in the take directory, and a half-written `shot.json`
  * from a crash mid-write costs the DECORATION, never the capture — `frame.png`
  * is untouched here and is what the shot actually is.
  */
-ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown) => {
+ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown) => {
   if (!insideCaptureRoot(process.env, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
@@ -1608,7 +1619,11 @@ ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown) =
   const stored = parseShot(JSON.parse(await readFile(file, "utf8")));
   const next = parseShot({
     ...stored,
-    decoration: { ...stored.decoration, redactions },
+    decoration: {
+      ...stored.decoration,
+      redactions,
+      ...(mode !== undefined ? { mode } : {}),
+    },
   });
   // Through `shotForWrite`, which decides the VERSION: a shot with no
   // annotations stays shot-1 and must not carry the v2-only key, since shot-1

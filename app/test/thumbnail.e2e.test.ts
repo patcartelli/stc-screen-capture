@@ -43,12 +43,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 interface Launched {
   win: Page;
   recordings: string;
+  temp: string;
   destDir: string;
   stillLog: string;
 }
 
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
+  const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
   const destDir = mkdtempSync(join(tmpdir(), "stc-thumb-dest-"));
   const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
@@ -64,13 +66,13 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
     args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
+      ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp, STC_HELPER_BIN: FAKE_HELPER,
       STC_FAKE_STILL_LOG: stillLog, STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
-  return { win, recordings, destDir, stillLog };
+  return { win, recordings, temp, destDir, stillLog };
 }
 
 /** The floating panel, once it is up. Identified by its URL, like the overlay's own helper. */
@@ -231,8 +233,8 @@ describe("the post-capture floating thumbnail", () => {
     }
   }, 60_000);
 
-  test("the skip preference bypasses the panel entirely and copies rather than saves", async () => {
-    const { win, destDir, stillLog } = await launch();
+  test("the skip preference bypasses the panel entirely, copies, AND promotes", async () => {
+    const { win, recordings, temp, destDir, stillLog } = await launch();
     await win.evaluate(async () => {
       await (window as any).recorder.setSettings({ thumbnail: { skip: true } });
     });
@@ -251,8 +253,14 @@ describe("the post-capture floating thumbnail", () => {
     // checkable now is that it does not OUTLAST its own export.
     await noThumbnailWindow(15_000);
     // The ticket's own words are "go straight to clipboard" — never the
-    // destination folder, and never the library either (a silent panel only
-    // ever performs Copy, which does not promote).
+    // destination folder. `skip` has no panel, so it can never reach a Save
+    // button; the ONLY way a skip capture avoids the 7-day temp purge is if
+    // the silent path promotes it itself, through `panel:save`, after a
+    // successful copy (see `thumbnail-renderer.ts`'s silent branch). So it
+    // DOES land in the library, unlike a plain Copy from a shown panel, which
+    // deliberately still does not promote (`panel-waits.e2e.test.ts`).
+    await expect.poll(() => readdirSync(temp).length, { timeout: 15_000 }).toBe(0);
+    expect(ownTakes(recordings).length).toBe(1);
     expect(readdirSync(destDir).length).toBe(0);
     const exported = readRequests(stillLog).find((x) => x.rgba !== undefined);
     expect(exported?.clipboard).toBe(true);

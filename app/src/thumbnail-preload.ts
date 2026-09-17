@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { PanelTake } from "./panel-actions.js";
+import type { DecorationMode } from "@transform/shot.js";
 
 /**
  * The floating thumbnail's bridge (STC-296) — deliberately narrower than the
@@ -15,11 +16,13 @@ import type { PanelTake } from "./panel-actions.js";
 contextBridge.exposeInMainWorld("thumb", {
   getFrame: (dir: string, name: string) => ipcRenderer.invoke("still:frame", dir, name),
   getSettings: () => ipcRenderer.invoke("recorder:getSettings"),
-  // Regions only — main re-reads the stored document and re-validates it, so
-  // this window can change a shot's redactions and nothing else about it
-  // (STC-297; see the handler's own note).
-  writeShot: (dir: string, redactions: unknown) =>
-    ipcRenderer.invoke("still:writeShot", dir, redactions),
+  // Redactions and the decoration mode — main re-reads the stored document
+  // and re-validates it, so this window can change a shot's redactions and
+  // its mode and nothing else about it (STC-297; widened for `mode` by
+  // STC-392 review, I2 — see the handler's own note for why that widening
+  // is still safe: `mode` is a closed enum `parseShot` already checks).
+  writeShot: (dir: string, redactions: unknown, mode?: DecorationMode) =>
+    ipcRenderer.invoke("still:writeShot", dir, redactions, mode),
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   reveal: () => ipcRenderer.invoke("still:reveal"),
   // The right-click menu (STC-296 follow-up). Main builds and pops it up and

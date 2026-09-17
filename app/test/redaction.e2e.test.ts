@@ -27,7 +27,8 @@ afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function launch(): Promise<{ win: Page; destDir: string; recordings: string }> {
+async function launch(extraEnv: Record<string, string> = {}):
+  Promise<{ win: Page; destDir: string; recordings: string }> {
   const { dir: recordings } = makeTakeFolder();
   const destDir = mkdtempSync(join(tmpdir(), "stc-redact-dest-"));
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
@@ -41,12 +42,53 @@ async function launch(): Promise<{ win: Page; destDir: string; recordings: strin
     cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
-      STC_NO_SHUTTER: "1",
+      STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
   return { win, destDir, recordings };
+}
+
+/** The overlay window, once it is up — `still-overlay.e2e.test.ts`'s own helper. */
+async function overlayWindow(ms = 15_000): Promise<Page> {
+  const start = Date.now();
+  for (;;) {
+    for (const p of app!.windows()) if (p.url().includes("overlay.html")) return p;
+    if (Date.now() - start > ms) {
+      throw new Error(`no overlay window appeared within ${ms}ms; windows: `
+        + JSON.stringify(app!.windows().map((p) => p.url())));
+    }
+    await sleep(50);
+  }
+}
+
+/** Push one event through the overlay's own bridge, as the DOM handlers would. */
+async function sendOverlay(overlay: Page, event: unknown): Promise<void> {
+  await overlay.evaluate((e) => (window as any).overlay.send(e), event);
+}
+
+/**
+ * A WINDOW shot, its panel, in redact mode — the mode-persistence test (I2)
+ * needs alpha (`availableModes()` offers only `selected-area` for a crop),
+ * so it cannot reuse `redactingPanel`'s plain display capture.
+ *
+ * Drives the overlay's own bridge the way `still-overlay.e2e.test.ts` does
+ * (real input would be testing the window server's hit-testing, which
+ * belongs on the Mac) to pick the stand-in's Finder window.
+ */
+async function windowShotPanel(win: Page): Promise<{ panel: Page; dir: string }> {
+  await win.click("#capturestill");
+  const overlay = await overlayWindow();
+  await sendOverlay(overlay, { t: "key", key: " " });
+  await sendOverlay(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
+  await sendOverlay(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
+
+  const panel = await thumbnailWindow();
+  await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
+    .toContain("in");
+  const dir = await panel.evaluate(() => new URLSearchParams(location.search).get("dir")!);
+  return { panel, dir };
 }
 
 async function thumbnailWindow(ms = 15_000): Promise<Page> {
@@ -186,6 +228,47 @@ describe("redaction", () => {
                       { timeout: 15_000 }).toBe(false);
   }, 60_000);
 
+  test("a swipe starting on the panel's chrome does not discard while redacting (STC-392 review, I4)", async () => {
+    // The old collapsed/expanded panel could not hit this: redact mode implied
+    // expanded, and only the bare (collapsed) thumbnail could start a swipe at
+    // all. STC-392's one-card panel removed that door, and a drag beginning
+    // on the card's own chrome — the status line, the controls' padding, not
+    // the canvas a redaction drag claims — could still read as a swipe and
+    // discard the take out from under an in-progress redaction. This drives
+    // exactly that gesture: a press-drag-release on `#status`, well clear of
+    // the canvas and of every button/select, dragged far enough (150px,
+    // > SWIPE_DISCARD_PX) toward the discard edge that an unguarded card
+    // would throw the take away.
+    const { win, recordings } = await launch();
+    const { panel, dir } = await redactingPanel(win);
+
+    const status = await panel.locator("#status").boundingBox();
+    expect(status).toBeTruthy();
+    const y = status!.y + status!.height / 2;
+    const x0 = status!.x + 20;
+    await panel.mouse.move(x0, y);
+    await panel.mouse.down();
+    // Two moves, matching `dragBox`'s own reasoning: a single move can be
+    // coalesced with the press, and dominantly horizontal so the gesture
+    // would classify as `discard` rather than `drag-out` if it were ever
+    // read as a swipe at all — bottom-right is the default corner, whose
+    // discard direction is rightward (`discardDirection`).
+    await panel.mouse.move(x0 + 75, y);
+    await panel.mouse.move(x0 + 150, y);
+    await panel.mouse.up();
+
+    // Nothing to poll FOR — a discard would close the panel and delete the
+    // take, so this waits out the round trip either would have taken and
+    // then asserts neither happened.
+    await sleep(1500);
+    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(existsSync(join(dir, "shot.json"))).toBe(true);
+    expect(storedRegions(dir)).toHaveLength(0);
+    // And the take was never promoted or trashed out of the library either.
+    const ownRecordings = readdirSync(recordings).filter((n) => n !== "2026-08-24_10-00-00");
+    expect(ownRecordings).toHaveLength(0);
+  }, 60_000);
+
   test("a click is not a region", async () => {
     const { win } = await launch();
     const { panel, dir } = await redactingPanel(win);
@@ -223,5 +306,38 @@ describe("redaction", () => {
     const savedShots = readdirSync(recordings).filter((n) => n !== "2026-08-24_10-00-00");
     expect(savedShots).toHaveLength(1);
     expect(storedRegions(join(recordings, savedShots[0]!))).toHaveLength(1);
+  }, 60_000);
+
+  test("Save persists the chosen Style, not just redactions (STC-392 review, I2)", async () => {
+    // `still:writeShot` used to accept redactions only, so picking a Style
+    // other than the one the capture was taken with and pressing Save left
+    // the stored document — and therefore the library tile — showing the
+    // OLD mode. Needs a WINDOW shot: a display crop's `availableModes()` is
+    // `["selected-area"]` alone (no alpha), so there is nothing to switch to.
+    const { win, recordings } = await launch({ STC_OVERLAY_SYNTHETIC_INPUT: "1" });
+    const { panel, dir } = await windowShotPanel(win);
+
+    // The stand-in writes a fresh window shot as "window-only" (see
+    // `_fake-helper.mjs`) — pick a DIFFERENT mode so a no-op write could not
+    // pass this test by accident.
+    expect(parseShot(JSON.parse(readFileSync(join(dir, "shot.json"), "utf8"))).decoration.mode)
+      .toBe("window-only");
+    await panel.selectOption("#mode", "window-shadow");
+    // The write is a round trip to main and back, same as a redaction's.
+    await expect.poll(
+      () => parseShot(JSON.parse(readFileSync(join(dir, "shot.json"), "utf8"))).decoration.mode,
+      { timeout: 15_000 },
+    ).toBe("window-shadow");
+
+    await panel.click("#save");
+    await expect.poll(
+      () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+      { timeout: 15_000 },
+    ).toBe(0);
+    const savedShots = readdirSync(recordings).filter((n) => n !== "2026-08-24_10-00-00");
+    expect(savedShots).toHaveLength(1);
+    const saved = parseShot(
+      JSON.parse(readFileSync(join(recordings, savedShots[0]!, "shot.json"), "utf8")));
+    expect(saved.decoration.mode).toBe("window-shadow");
   }, 60_000);
 });

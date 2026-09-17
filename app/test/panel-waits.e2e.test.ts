@@ -137,6 +137,32 @@ describe("the panel waits (STC-392)", () => {
     expect(electronApp.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
   }, 40_000);
 
+  test("the Style picker and Redact are disabled while Copy is in flight (STC-392 review, M6)", async () => {
+    // `setActionsEnabled` used to cover `#actions button` only. A mode change
+    // re-runs `draw()`, which REASSIGNS `composite`, and `run("copy")` reads
+    // `composite` after two `await`s (`awaitComposite`, then `getImageData`)
+    // — a Style pick or a Redact toggle landing in that window exports a
+    // picture the status line's claimed mode does not match. Disabling is
+    // synchronous, the very first thing `perform()` does before its own
+    // first `await`, so it has already happened by the time `panel.click`'s
+    // promise (which waits out the real DOM click dispatch) resolves.
+    const { app: electronApp } = await launchWithPanel();
+    const panel = panelWindow(electronApp);
+    await panel.click("#copy");
+    expect(await panel.evaluate(() => (document.getElementById("mode") as HTMLSelectElement).disabled))
+      .toBe(true);
+    expect(await panel.evaluate(() => (document.getElementById("redact") as HTMLButtonElement).disabled))
+      .toBe(true);
+
+    await panel.waitForFunction(() => document.getElementById("status")!.textContent === "Copied");
+    // Re-enabled once the action settles — Copy does not close the panel, so
+    // there is a "back to normal" state to check, unlike Save/Edit/Trash.
+    expect(await panel.evaluate(() => (document.getElementById("mode") as HTMLSelectElement).disabled))
+      .toBe(false);
+    expect(await panel.evaluate(() => (document.getElementById("redact") as HTMLButtonElement).disabled))
+      .toBe(false);
+  }, 40_000);
+
   test("Save promotes, and closes the panel", async () => {
     const { app: electronApp, temp, recordings } = await launchWithPanel();
     const panel = panelWindow(electronApp);

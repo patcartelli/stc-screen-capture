@@ -7,7 +7,7 @@ import { normaliseRegion, undoLast } from "@transform/still-redact";
 import { withTimeout } from "@transform/timeout";
 import {
   classifyDrag, discardDirection, isDiscardSwipe, parseCorner, swipeOffset,
-  SETTLE_READY_MS, PANEL_SIZE, type Size,
+  SETTLE_READY_MS, PANEL_SIZE, REDACT_SIZE, type Size,
 } from "./thumbnail.js";
 import { colorSpaceFor, planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import {
@@ -65,7 +65,8 @@ declare global {
       dragFile(req: Record<string, unknown>): Promise<{ ok: boolean; file?: string; detail?: string }>;
       startDrag(file: string): void;
       reveal(): Promise<boolean>;
-      writeShot(dir: string, redactions: unknown): Promise<{ ok: boolean; redactions: number }>;
+      writeShot(dir: string, redactions: unknown, mode?: DecorationMode):
+        Promise<{ ok: boolean; redactions: number }>;
       event(ev: { kind: "painted" | "discarding" | "done" }
                 | { kind: "redact"; on: boolean }): void;
     };
@@ -147,11 +148,19 @@ const CARD_BOX: Size = {
  * Redact mode's canvas box (STC-297) — bigger than the panel needs to be for
  * its own controls, and deliberately: at `CARD_BOX` size one preview pixel of
  * a 4K capture is ~14 real ones, so placing a box over an email address would
- * be guesswork. Independent of `CARD_BOX` on purpose: `thumbnail-window.ts`'s
- * `REDACT_SIZE` resizes the WINDOW for redact mode too, so this is already
- * derived from a different window size than `CARD_BOX` is.
+ * be guesswork. ACTUALLY derived from `REDACT_SIZE` (`thumbnail.ts` — the
+ * window `thumbnail-window.ts` resizes to for redact mode) by the SAME
+ * `CARD_CHROME` allowance `CARD_BOX` is derived from `PANEL_SIZE` with
+ * (STC-392 review, M5 — this used to be two independently-tuned literals
+ * that a comment merely claimed agreed with each other, the same shape
+ * `CARD_BOX` itself was rescued from). 480x320 here, comfortably above
+ * `CARD_BOX`'s 220x110 and still the size a line of text in a 4K capture
+ * needs to be a targetable thing.
  */
-const REDACT_BOX = { width: 500, height: 300 };
+const REDACT_BOX: Size = {
+  width: REDACT_SIZE.width - CARD_CHROME.width,
+  height: REDACT_SIZE.height - CARD_CHROME.height,
+};
 
 /**
  * The smallest drag that is a region, in VIEW pixels (STC-297).
@@ -355,18 +364,32 @@ async function runExport(action: ExportAction): Promise<boolean> {
 const available = new Set(actionsFor(take));
 
 /**
- * Disable (or re-enable) every VISIBLE `#actions` button.
+ * Disable (or re-enable) every VISIBLE `#actions` button, plus the Style
+ * `<select>` and Redact — everything on the card that can change what
+ * `composite` IS while an action is reading it.
  *
  * Not per-button: while ANY of the four is deciding an outcome, none of the
  * others may start a second one on the same take — two actions racing each
  * other is exactly the shape of bug `busy` exists to rule out. Hidden buttons
  * (this take does not have the action) are left alone; there is nothing to
  * show as disabled.
+ *
+ * The Style select and Redact are not `#actions` buttons and are not gated
+ * by `busy` in their own handlers (STC-392 review, M6) — `modeSel`'s
+ * `change` calls `draw()`, which REASSIGNS `composite`, and `run("copy")`
+ * reads `composite` after two `await`s (`awaitComposite`, then
+ * `getImageData`). A mode change or a Redact toggle landing in that window
+ * exports a picture that does not match the mode the status line still
+ * claims. Disabling the elements is enough on its own — a disabled `<select>`
+ * or `<button>` fires no `change`/`click` at all — so neither handler needs
+ * its own `busy` check.
  */
 function setActionsEnabled(on: boolean): void {
   for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button")) {
     if (!btn.hidden) btn.disabled = !on;
   }
+  modeSel.disabled = !on;
+  redactBtn.disabled = !on;
 }
 
 /**
@@ -455,24 +478,29 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button"
 // ---- redaction (STC-297) ---------------------------------------------------
 
 /**
- * Store the regions on the shot document.
+ * Store the mode and the regions on the shot document.
  *
  * Written on every change rather than on the way out, because there is no
  * reliable way out: the panel can be replaced by the next capture, and a
- * redaction the user drew and watched appear must not depend on them then
- * finding the right button. Failures are reported and not thrown — the
- * regions are already in the composite either way, so a failed write costs
- * the ADJUSTABILITY of this shot later, never the fill in the file being
- * exported now.
+ * redaction the user drew — or a Style they picked — must not depend on them
+ * then finding the right button. `currentMode` rides along on every call,
+ * not only the ones a mode change makes, because a Save that follows a
+ * redaction must not revert a Style choice that hasn't been re-saved for its
+ * own reason — one write, the document's current idea of both fields, same
+ * as `currentShot()` composes them for the preview. Failures are reported
+ * and not thrown — the change is already in the composite either way, so a
+ * failed write costs the ADJUSTABILITY of this shot later, never what Save
+ * is about to promote or Copy is about to export now.
  */
-async function persistRegions(): Promise<void> {
+async function persistDecoration(): Promise<void> {
   // The drag file is now wrong in the way that matters most: it still has
-  // whatever the box was drawn over legible in it.
+  // whatever the box was drawn over legible in it, or was rendered in the
+  // preset that is no longer current.
   void refreshDragFile();
   try {
-    await window.thumb.writeShot(dir, regions);
+    await window.thumb.writeShot(dir, regions, currentMode);
   } catch (e: any) {
-    setStatus(`Redacted, but could not store it: ${e?.message ?? e}`);
+    setStatus(`Could not store that: ${e?.message ?? e}`);
   }
 }
 
@@ -533,7 +561,7 @@ canvas.addEventListener("pointerup", (e) => {
   if (!region) { paintView(); return; }
   regions = [...regions, region];
   void draw();
-  void persistRegions();
+  void persistDecoration();
   setStatus(`${regions.length} ${regions.length === 1 ? "box" : "boxes"}.`);
 });
 
@@ -550,8 +578,11 @@ modeSel.addEventListener("click", (e) => e.stopPropagation());
 modeSel.addEventListener("change", () => {
   currentMode = modeSel.value as DecorationMode;
   // `draw` first: the file is rendered FROM the composite, so refreshing it
-  // before the redraw would write the previous preset.
-  void draw().then(refreshDragFile);
+  // before the redraw would write the previous preset. `persistDecoration`
+  // does the drag-file refresh AND the write to `shot.json` (STC-392 review,
+  // I2) — a chosen Style used to never reach the document at all, so Save
+  // silently kept whatever mode the capture was taken with.
+  void draw().then(persistDecoration);
 });
 
 redactBtn.addEventListener("click", (e) => {
@@ -564,7 +595,7 @@ undoBtn.addEventListener("click", (e) => {
   if (regions.length === 0) return;
   regions = undoLast(regions);
   void draw();
-  void persistRegions();
+  void persistDecoration();
   setStatus(regions.length === 0
     ? "No boxes." : `${regions.length} ${regions.length === 1 ? "box" : "boxes"}.`);
 });
@@ -694,6 +725,19 @@ card.addEventListener("pointerdown", (e) => {
   // guard `perform` itself uses, so a swipe cannot start mid-Save any more
   // than a second click could.
   if (busy) return;
+  // Never while redacting (STC-392 review, I4). Swipe is the ONE gesture in
+  // this panel that destroys a capture, and redact mode is the one mode
+  // where the pointer is already busy dragging a box over something private
+  // — a drag that starts on the CANVAS is already claimed by the redaction
+  // handler below (`e.stopPropagation()` there), but the card's own chrome
+  // (the status line, the controls' padding) is not, and before this guard a
+  // drag starting there while redacting still read as a swipe and could
+  // discard the take out from under an in-progress redaction. The old
+  // collapsed/expanded panel never had this hole: redact mode implied
+  // expanded, and only the bare (collapsed) thumbnail could start a swipe at
+  // all. That protection went with the expand door STC-392 removed, and
+  // nothing replaced it until now.
+  if (redacting) return;
   // Not on a control. Every button and the mode `<select>` need their own
   // click and (for the select) their own pointer events to reach them
   // untouched — `card.setPointerCapture` below redirects EVERY later pointer
@@ -846,8 +890,19 @@ void (async () => {
   // copies to the clipboard the instant it can (`PresentOptions.silent`'s own
   // doc, `thumbnail-window.ts`) and reports "done" itself, since Copy alone
   // never closes a panel that has controls to click — this one has none.
+  //
+  // `skip` means "never show me the panel, copy it and get out of my way" —
+  // it does NOT mean "never keep it". A silent panel has no Save button this
+  // take could ever reach, so if the copy succeeds this is the one place
+  // that promotes it, through the same `panel:save` channel the button uses
+  // rather than a second promote path. Copy itself still never promotes
+  // (`run`'s "copy" branch, unchanged) — that rule is pinned by
+  // `panel-waits.e2e.test.ts` and stands; without this call, though, a skip
+  // capture would sit in temp storage until the 7-day purge, nagging from
+  // the crash-recovery dialog the whole time, because it is the one
+  // preference whose entire point is "copy it and get on with it".
   if (silent) {
-    await run("copy");
+    if (await run("copy")) await window.thumb.save(dir);
     window.thumb.event({ kind: "done" });
     return;
   }

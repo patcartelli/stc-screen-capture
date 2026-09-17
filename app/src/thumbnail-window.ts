@@ -1,7 +1,7 @@
 import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
-  positionFor, stackPosition, MAX_STACKED, PANEL_SIZE,
+  positionFor, stackPosition, MAX_STACKED, PANEL_SIZE, REDACT_SIZE,
   type Corner, type Size,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
@@ -43,15 +43,10 @@ import { type PanelTake } from "./panel-actions.js";
  * nobody ever sees.
  */
 
-/**
- * Redact mode's size (STC-297). Bigger than the panel needs to be for its own
- * controls, and deliberately: at the panel's normal size one preview pixel of
- * a 4K capture is ~14 real ones, so placing a box over an email address would
- * be guesswork. This is the size at which a line of text is a target. It is
- * still the same panel in the same corner — the still EDITOR is STC-300, and
- * this stops well short of one.
- */
-const REDACT_SIZE: Size = { width: 520, height: 420 };
+// Redact mode's size (STC-297) — `REDACT_SIZE` itself now lives in
+// `thumbnail.ts`, imported above, so `thumbnail-renderer.ts` can derive its
+// own canvas box from the SAME number rather than an independently-tuned one
+// (STC-392 review, M5).
 const CORNER_MARGIN = 20;
 
 /**
