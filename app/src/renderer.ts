@@ -4,10 +4,6 @@ interface DisplayInfo {
   pointW: number; pointH: number; pixelW: number; pixelH: number;
   originX?: number; originY?: number;
 }
-/** STC-233. Mirrors Watchers.enumerateDevices's own "mics" shape. */
-interface MicInfo {
-  name: string; uid: string; bluetooth: boolean;
-}
 interface StillSettingsView {
   format: string; quality: number; scale: string;
   stripMetadata: boolean; template: string; destination: string | null;
@@ -100,6 +96,7 @@ import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
 import { MODEL_CODE } from "./product.js";
+import { micLabel, type MicInfo } from "./mic-devices.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
@@ -235,10 +232,6 @@ displaySel.addEventListener("change", async () => {
  */
 const micSel = $("mic") as HTMLSelectElement;
 let storedMicUid: string | null = null;
-
-function micLabel(m: MicInfo): string {
-  return m.bluetooth ? `${m.name} (Bluetooth)` : m.name;
-}
 
 async function refreshMics(): Promise<void> {
   let mics: MicInfo[] = [];
