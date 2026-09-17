@@ -61,7 +61,7 @@ Every task leaves the tree compiling and green. The removals come **last** on pu
 
 **Deleted**
 - `app/src/scope-indicator.ts`, `app/src/scope-indicator-window.ts`, `app/renderer/scope-indicator.html`
-- `app/test/scope-indicator.test.ts`, `app/test/scope-indicator.e2e.test.ts`, `app/test/scope-picker.e2e.test.ts`
+- `app/test/scope-indicator.test.ts`, `app/test/scope-indicator.e2e.test.ts` (Task 8), `app/test/scope-picker.e2e.test.ts` (Task 6, which invalidates it)
 
 ---
 
@@ -1017,7 +1017,8 @@ npx vitest run app/test/record-options.test.ts
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/src/record-options.ts app/test/record-options.test.ts
+git add app/src/mic-devices.ts app/src/renderer.ts \
+        app/src/record-options.ts app/test/record-options.test.ts
 git commit -m "STC-388: the options bar's decisions, with no screen
 
 Pure, beside selection.ts and overlay-hittest.ts for the same reason: the bar
@@ -1709,18 +1710,26 @@ ipcMain.handle("shortcuts:set", async (_e, action: BindableAction, accelerator: 
   if (!BINDABLE_ACTIONS.includes(action)) throw new Error(`unknown action: ${action}`);
 ```
 
-- [ ] **Step 5: Typecheck and run the full suite**
+- [ ] **Step 5: Delete the test this task invalidates**
+
+```bash
+git rm app/test/scope-picker.e2e.test.ts
+```
+
+`scope-picker.e2e.test.ts` drives `recorder:pickCaptureTarget` and asserts that the Record button records the sticky scope it picked. This task is what makes that false, so this task is what removes it — leaving it to Task 8 would mean three commits in a row with a red suite, and a test asserting the OLD contract is a finding, not something to carry. Its replacement is Task 9.
+
+- [ ] **Step 6: Typecheck and run the full suite**
 
 ```bash
 npm run typecheck && npm test
 ```
 
-Expected: `typecheck` clean. `npm test` — `scope-picker.e2e.test.ts` may now fail, because `recorder:pickCaptureTarget` still exists but the Record button no longer consults the sticky scope. **That is the new contract, not a regression**; Task 8 deletes that file. Note the failure and continue; do not weaken the test.
+Expected: three typecheck passes clean, and the whole suite **green**. If anything else fails, it is a real regression in this task — do not defer it to Task 8.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add app/src/main.ts
+git add -A app/src/main.ts app/test/scope-picker.e2e.test.ts
 git commit -m "STC-388: one Record flow in main, with three doors and a toggling hotkey
 
 recorder:start now carries no parameters at all. Scope is chosen fresh in an
@@ -1810,7 +1819,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `app/src/settings.ts` — drop `ScopeSettings`, `ScopeRegion`, `DEFAULT_SCOPE_SETTINGS`, `cleanScope`, the `scope` field and both call sites
 - Modify: `app/src/main.ts` — drop `pickCaptureTarget`, `recorder:pickCaptureTarget`, every `flashScopeIndicator`/`hideScopeIndicator` call and their import, `countdownDisplayFor`
-- Delete: `app/src/scope-indicator.ts`, `app/src/scope-indicator-window.ts`, `app/renderer/scope-indicator.html`, `app/test/scope-indicator.test.ts`, `app/test/scope-indicator.e2e.test.ts`, `app/test/scope-picker.e2e.test.ts`
+- Delete: `app/src/scope-indicator.ts`, `app/src/scope-indicator-window.ts`, `app/renderer/scope-indicator.html`, `app/test/scope-indicator.test.ts`, `app/test/scope-indicator.e2e.test.ts` (`scope-picker.e2e.test.ts` is already gone — Task 6 removed it, being the change that invalidated it)
 - Test: `app/test/settings.test.ts` gains the stray-key test
 
 - [ ] **Step 1: Write the failing test**
@@ -1846,8 +1855,7 @@ Expected: FAIL — `scope` is still a field.
 ```bash
 git rm app/src/scope-indicator.ts app/src/scope-indicator-window.ts \
        app/renderer/scope-indicator.html \
-       app/test/scope-indicator.test.ts app/test/scope-indicator.e2e.test.ts \
-       app/test/scope-picker.e2e.test.ts
+       app/test/scope-indicator.test.ts app/test/scope-indicator.e2e.test.ts
 ```
 
 In `app/src/settings.ts`: delete `ScopeRegion`, `ScopeSettings`, `DEFAULT_SCOPE_SETTINGS`, `cleanScope`, the `scope` field on `Settings` and its long doc comment, `scope:` in `DEFAULT_SETTINGS`, `scope: cleanScope(doc.scope)` in `readSettings`, and both `scope:` lines in `writeSettings`.
