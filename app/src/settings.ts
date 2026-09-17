@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  SHOT_ACTIONS, DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
+  BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
 } from "./hotkeys.js";
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import {
@@ -351,7 +351,10 @@ function cleanShortcuts(v: unknown): Shortcuts {
   const raw = (v && typeof v === "object" && !Array.isArray(v))
     ? v as Record<string, unknown> : {};
   const out = {} as Shortcuts;
-  for (const action of SHOT_ACTIONS) {
+  // BINDABLE_ACTIONS, not SHOT_ACTIONS: Record is bindable and is not a shot
+  // (STC-388), and a loop over the narrower list would leave `record`
+  // undefined in a Shortcuts that claims to be total.
+  for (const action of BINDABLE_ACTIONS) {
     const stored = raw[action];
     if (stored === null) { out[action] = null; continue; }
     const parsed = typeof stored === "string" ? parseAccelerator(stored) : undefined;

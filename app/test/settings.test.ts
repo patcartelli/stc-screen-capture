@@ -6,7 +6,7 @@ import {
   readSettings, writeSettings, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
   DEFAULT_THUMBNAIL_SETTINGS, DEFAULT_SCOPE_SETTINGS,
 } from "../src/settings.js";
-import { SHOT_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
+import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
 
 /**
@@ -167,7 +167,8 @@ describe("the capture shortcuts", () => {
   test("default to the hyperkey row when nothing has been saved", () => {
     expect(readSettings(dir()).shortcuts).toEqual({
       region: `${HYPER}+1`, window: `${HYPER}+2`, display: `${HYPER}+3`,
-      // STC-391. 5 rather than 4, leaving 4 for the Record flow (STC-388).
+      // STC-388: Record takes 4, the slot STC-391 left open for it.
+      record: `${HYPER}+4`,
       "self-timer": `${HYPER}+5`,
     });
   });
@@ -225,7 +226,37 @@ describe("the capture shortcuts", () => {
     // The declared list rather than three literals: the fault this catches is
     // `regoin` reaching the file, which it still catches, and it does not go
     // stale the next time an action is added.
-    expect(Object.keys(stored.shortcuts).sort()).toEqual([...SHOT_ACTIONS].sort());
+    expect(Object.keys(stored.shortcuts).sort()).toEqual([...BINDABLE_ACTIONS].sort());
+  });
+});
+
+describe("the Record binding (STC-388)", () => {
+  test("a settings file written before Record existed gains its default", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({
+      shortcuts: {
+        region: "Control+Alt+Shift+Command+1",
+        window: "Control+Alt+Shift+Command+2",
+        display: "Control+Alt+Shift+Command+3",
+        "self-timer": "Control+Alt+Shift+Command+5",
+      },
+    }));
+    // Absent means "never set" and takes the default — the rule every other
+    // binding already follows. An upgrade must not cost the user the feature.
+    expect(readSettings(d).shortcuts.record).toBe(DEFAULT_SHORTCUTS.record);
+  });
+
+  test("a deliberately unbound Record survives a round trip", () => {
+    const d = dir();
+    writeSettings(d, { shortcuts: { ...DEFAULT_SHORTCUTS, record: null } });
+    expect(readSettings(d).shortcuts.record).toBeNull();
+  });
+
+  test("every bindable action is cleaned, not just the shots", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ shortcuts: {} }));
+    const s = readSettings(d).shortcuts;
+    for (const a of BINDABLE_ACTIONS) expect(s[a]).toBe(DEFAULT_SHORTCUTS[a]);
   });
 });
 
