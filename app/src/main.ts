@@ -4,7 +4,7 @@ import {
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
-  SHOT_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts,
+  SHOT_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
   type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { installTray, type TrayHandle } from "./tray.js";
@@ -957,8 +957,13 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     }
     let ok = false;
     try {
-      ok = globalShortcut.register(plan.accelerator,
-                                   () => { void captureAndAnnounce(plan.action, "hotkey"); });
+      // STC-388: `plan.action` is a BindableAction now, and `record` has no
+      // handler yet — later tasks wire the Record flow to its own hotkey.
+      // Guarding here rather than widening `captureAndAnnounce` keeps the
+      // typechecker refusing a Shot call for an action that cannot produce one.
+      ok = globalShortcut.register(plan.accelerator, () => {
+        if (isShotAction(plan.action)) void captureAndAnnounce(plan.action, "hotkey");
+      });
     } catch {
       // A binding Electron cannot even parse. Reported as unavailable rather
       // than crashing the app on a preferences file someone edited by hand.

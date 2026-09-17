@@ -35,26 +35,43 @@
 /**
  * What a global shortcut can be bound to.
  *
- * Three of these take a shot immediately. `self-timer` (STC-391) does NOT —
- * it starts a countdown first — and that is the structural point of it being
- * here: this list was built when every action was an instant still, and under
- * the old name `CaptureAction` that made the name one word short of the truth.
- * `ShotAction` (STC-398) is the better name for exactly that reason: it names
- * the OUTCOME rather than the timing, and all four produce a shot.
+ * ONE ordered list, and everything else derives from it. The order is
+ * load-bearing twice: it is the order preferences lists actions in, and the
+ * order `planShortcuts` resolves duplicates in (first claimant keeps the key).
+ * A second hand-written list in a different order would be CLAUDE.md's
+ * restated-ordering trap — "a list written in the reader's order, compared in
+ * the code's order, matches nothing and looks implemented" — so `SHOT_ACTIONS`
+ * is filtered from this rather than typed out again.
  *
- * Nothing in this module cares which — an action is a thing a key starts, and
- * `main.ts` decides what it starts — but `captureStill` and `trayTemplate`
- * both iterate it, so anything added here has to be something both can honour.
+ * `record` (STC-388) is the first member that does not produce a shot, which is
+ * why the shot-only list still has to exist: `captureStill` takes a
+ * `ShotAction` and the typechecker must refuse to hand it `record`.
  *
- * The VALUES are the ids `settings.json` stores bindings against and may not
- * be renamed without a settings migration; the type's name is free.
+ * The VALUES are the ids `settings.json` stores bindings against. The four shot
+ * ids may not be renamed without a settings migration; `record` is new here and
+ * is frozen from this commit on.
  */
-export type ShotAction = "region" | "window" | "display" | "self-timer";
+export const BINDABLE_ACTIONS = [
+  "region", "window", "display", "record", "self-timer",
+] as const;
 
-/** Order matters: it is the order preferences lists, and the order duplicate
- * detection resolves in — the first action to claim an accelerator keeps it. */
-export const SHOT_ACTIONS: readonly ShotAction[] =
-  ["region", "window", "display", "self-timer"];
+export type BindableAction = (typeof BINDABLE_ACTIONS)[number];
+
+/** Motion. Exactly one member, named so the shot type can Exclude it. */
+export type RecordAction = "record";
+
+/**
+ * Stills (STC-398): it names the OUTCOME rather than the timing, and all four
+ * produce a shot — `self-timer` after a countdown, the rest immediately.
+ */
+export type ShotAction = Exclude<BindableAction, RecordAction>;
+
+export function isShotAction(a: BindableAction): a is ShotAction {
+  return a !== "record";
+}
+
+/** DERIVED, never restated — see `BINDABLE_ACTIONS`. */
+export const SHOT_ACTIONS: readonly ShotAction[] = BINDABLE_ACTIONS.filter(isShotAction);
 
 /**
  * What each action is CALLED (STC-398).
@@ -75,10 +92,13 @@ export const SHOT_ACTIONS: readonly ShotAction[] =
  * which has called it Area since STC-374; the two naming the same rectangle
  * differently was a small existing inconsistency worth closing while here.
  */
-export const ACTION_LABELS: Record<ShotAction, string> = {
+export const ACTION_LABELS: Record<BindableAction, string> = {
   region: "Shot Area",
   window: "Shot Window",
   display: "Shot Full Display",
+  // "Record", bare: STC-398 settled that motion keeps this word while stills
+  // became "Shot", so it needs no qualifier to be unambiguous in the menu.
+  record: "Record",
   // Named for what it does rather than for the countdown it shows: the
   // countdown is the mechanism, "with a delay" is the reason anyone reaches
   // for it. It is one shot, not a mode that stays on (STC-391).
@@ -86,7 +106,7 @@ export const ACTION_LABELS: Record<ShotAction, string> = {
 };
 
 /** `null` is a deliberately unbound action, which is not a failure. */
-export type Shortcuts = Record<ShotAction, string | null>;
+export type Shortcuts = Record<BindableAction, string | null>;
 
 /**
  * All four modifiers at once — what a caps-lock "hyperkey" remap sends.
@@ -102,6 +122,9 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   region: `${HYPER}+1`,
   window: `${HYPER}+2`,
   display: `${HYPER}+3`,
+  // The slot STC-391 deliberately left open, in a comment naming this ticket:
+  // 1/2/3 shot, 4 records, 5 shoots on a timer — adjacent, not interleaved.
+  record: `${HYPER}+4`,
   // 5, not 4: the ticket names it, and it leaves 4 free for whatever the
   // Record flow (STC-388) binds — the two are a pair in the user's head and
   // will read better adjacent than interleaved.
@@ -255,7 +278,7 @@ function canonicalKey(token: string): string | undefined {
 // ── planning a whole set ────────────────────────────────────────────────────
 
 export interface ShortcutPlan {
-  action: ShotAction;
+  action: BindableAction;
   /** The normalised accelerator when it is bindable; otherwise what was asked
    * for, verbatim, so the UI can show the user their own text back. */
   accelerator: string | null;
@@ -268,14 +291,14 @@ export interface ShortcutPlan {
 /**
  * What each action would bind to, before anything is registered.
  *
- * Duplicates are resolved in `SHOT_ACTIONS` order rather than rejected on
+ * Duplicates are resolved in `BINDABLE_ACTIONS` order rather than rejected on
  * both sides: two actions on one key can only fire one of them, and silently
  * letting the pair through would give the user a binding whose behaviour
  * depends on registration order.
  */
 export function planShortcuts(s: Shortcuts): ShortcutPlan[] {
   const taken = new Set<string>();
-  return SHOT_ACTIONS.map((action): ShortcutPlan => {
+  return BINDABLE_ACTIONS.map((action): ShortcutPlan => {
     const wanted = s[action];
     if (wanted == null || wanted === "") return { action, accelerator: null };
     const parsed = parseAccelerator(wanted);
@@ -322,7 +345,7 @@ export function explainShortcut(r: ShortcutReport): string | undefined {
     case "reserved":
       return "macOS has already claimed this one.";
     case "duplicate":
-      return "Another capture action already uses this.";
+      return "Another action already uses this.";
     case "unavailable":
       return "Something else on this Mac already holds this shortcut.";
   }
