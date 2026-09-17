@@ -12,12 +12,23 @@ import { makeTakeFolder } from "./_take-fixture.js";
  * The panel's own STATE — `idle` or `open` — is decided by a pure function
  * and checked with no window at all in `thumbnail.test.ts`. What this file
  * exists for is the wiring that cannot see: that a capture really puts a
- * separate `BrowserWindow` on screen, that clicking it really expands that
- * window rather than just a DOM class, and that a showing panel really gets
- * excluded from the NEXT capture's request. What ignoring the panel does is
- * `panel-waits.e2e.test.ts`'s claim now — "there is no path where a capture
- * is silently lost" is still the promise, kept by the panel staying put
- * rather than by a timeout writing a file nobody asked for.
+ * separate `BrowserWindow` on screen, that clicking Save/Close/Copy really
+ * calls through to the export handler and really destroys the window on
+ * Save/Close, and that a showing panel really gets excluded from the NEXT
+ * capture's request. What ignoring the panel does is `panel-waits.e2e.test.ts`'s
+ * claim now — "there is no path where a capture is silently lost" is still
+ * the promise, kept by the panel staying put rather than by a timeout
+ * writing a file nobody asked for.
+ *
+ * NOT covered here since STC-392: the OS window used to resize between a
+ * collapsed and an expanded size on click (`"expanded"` event,
+ * `thumbnail-window.ts`) — that event and the resize are both gone, and the
+ * window is fixed at `PANEL_SIZE` regardless of what the DOM's own
+ * `.expanded` class (still toggled by a click, still asserted below) thinks
+ * it is laying out inside. `thumbnail-renderer.ts`'s collapsed/expanded CSS
+ * sizing is untouched pending the renderer-wiring task, so what it draws no
+ * longer matches the window it draws inside — a real, currently-unfixed
+ * layout mismatch this file does not attempt to hide or assert around.
  *
  * `export-still` is faked here the same way `capture-still` already is: the
  * bytes are never inspected, only that the file the app asked for exists and

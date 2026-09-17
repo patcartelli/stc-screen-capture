@@ -2,10 +2,11 @@ import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
   positionFor, stackPosition, MAX_STACKED, PANEL_SIZE,
-  type Corner, type Size,
+  type Corner, type Size, type PanelSettleQuery,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
+import { type TakeOrigin } from "./panel-actions.js";
 
 /**
  * The post-capture floating thumbnail's window (STC-296, reworked by
@@ -54,11 +55,22 @@ const REDACT_SIZE: Size = { width: 520, height: 420 };
 const CORNER_MARGIN = 20;
 
 /**
- * How long to wait for the renderer's "done" after telling it to settle,
- * before giving up and destroying the window anyway. A hidden window that
- * never closes is invisible on screen but not gone — it would still show up
- * in `app.getAllWindows()`, in Mission Control's spaces bookkeeping, and in
- * the next capture's exclusion list forever pointing at a stale id.
+ * How long a future renderer round trip would get before this gives up on it
+ * and destroys the window anyway — reserved, not currently armed by
+ * anything.
+ *
+ * `dismissNow` is synchronous (hide, then destroy), so nothing today asks the
+ * renderer to do work before closing and nothing needs bounding. This exists
+ * for Task 4's export-then-close, which reintroduces exactly that: a hidden
+ * window waiting on a composite-and-export it cannot see the progress of. A
+ * hidden window that never closes is invisible on screen but not gone — it
+ * would still show up in `app.getAllWindows()`, in Mission Control's spaces
+ * bookkeeping, and in the next capture's exclusion list forever pointing at a
+ * stale id — which is the fault this bound exists to prevent once something
+ * arms it again. Kept, rather than deleted with the rest of the timeout,
+ * because `SETTLE_READY_MS` (`thumbnail.ts`) is checked against it —
+ * `app/test/thumbnail-bounds.test.ts` — so the two cannot drift apart before
+ * either is wired back up.
  */
 export const SETTLE_BACKSTOP_MS = 15_000;
 
@@ -74,21 +86,22 @@ export interface PresentOptions {
    * The "skip the panel" preference: never shown, settled the instant it has
    * composited. Still a real (hidden) window rather than a second compositing
    * path — reusing the one the panel already has is exactly what STC-293's
-   * Note forbids a second implementation of. Fixed to "copy" the moment it
-   * composites — never a stored preference, the same reason `"none"` below is
-   * not one either.
+   * Note forbids a second implementation of. Fixed to `"copy"` in the query
+   * built below the moment it composites — never a stored preference, the
+   * same reason `origin` is a call-site fact rather than one.
    */
   silent?: boolean;
   /**
-   * A shot RE-OPENED from the library (STC-294), not a fresh capture.
-   *
-   * It is already on disk, so ignoring it must do nothing at all — unlike a
-   * fresh capture, where the panel is the only place the shot exists at all.
-   * A call-site fact, not a preference: nothing in `settings.ts` can set it,
-   * the same reason the old `PanelSettle`'s `"none"` was unreachable from
-   * `parseSettleAction`.
+   * Whether anyone has said yes to this take yet — `panel-actions.ts`'s own
+   * type, not a second spelling of it. `"library"` is a shot RE-OPENED
+   * (STC-294): already on disk, so ignoring it must do nothing at all, unlike
+   * a `"fresh"` capture, where the panel is the only place the shot exists.
+   * Required, not optional, because every caller has an answer — a capture
+   * `main.ts` just made is always `"fresh"`, `still:reopen` is always
+   * `"library"` — and a call site that forgot to say which would rather be a
+   * type error than default to the wrong one.
    */
-  reopened?: boolean;
+  origin: TakeOrigin;
 }
 
 type ThumbEvent =
@@ -98,10 +111,16 @@ type ThumbEvent =
   /**
    * A discard has committed — the swipe passed its threshold, or the
    * right-click Delete — and the renderer is about to ask main to trash the
-   * capture (STC-343). Stopping in flight anything else that could hide or
-   * destroy this same window (the overflow eviction above `MAX_STACKED`, quit)
-   * closes the gap before `deleteShot` resolves rather than narrowing it — see
-   * `thumbnail.ts`'s module doc for the STC-392 update to this reasoning.
+   * capture (STC-343).
+   *
+   * Currently a NO-OP on this side (see `onEvent`'s branch): the race it
+   * guarded was against the panel's own timeout, which is gone. Kept as a
+   * real event rather than deleted because the shape of the race survives —
+   * a discard is still an async round trip (`deleteShot`), and anything that
+   * can hide or destroy this same window WHILE it is in flight (Task 4's
+   * export-then-close is the next thing that will be able to) still needs to
+   * hear about it first. `thumbnail.ts`'s module doc has the STC-392 update
+   * to the original race this closed.
    */
   | { kind: "discarding" }
   | { kind: "done" };
@@ -110,9 +129,10 @@ type ThumbEvent =
  * Every panel on screen, NEWEST FIRST.
  *
  * Was a single slot until stacking: a capture arriving while a panel was up
- * replaced it. It still settles what it displaces — that was always true, and
- * is why nothing was lost by replacing — but a burst of captures now leaves a
- * legible stack instead of one survivor.
+ * replaced it. It still DISMISSES what it displaces — nothing exported, the
+ * take left in temp storage — which is the same "nothing is lost" promise
+ * replacing always kept, now kept the STC-392 way. A burst of captures leaves
+ * a legible stack instead of one survivor.
  */
 let panels: ThumbnailSession[] = [];
 
@@ -176,19 +196,24 @@ export async function beforeCapture(): Promise<number[]> {
 export function afterCapture(): void {
   for (const p of panels) p.reshow();
   // STC-392 focus rule 3: "when panels come back, the most recent one gets
-  // focus." `panels[0]` IS the most recent — the list is newest-first, the
-  // same ordering `stackPosition` reads for its index. Asserted rather than
-  // assumed in `thumbnail.test.ts`'s stacking block, because "newest first"
-  // is a convention two modules share and a reversed list would put focus on
-  // the oldest while every position stayed correct.
+  // focus." `panels[0]` IS the most recent — `presentThumbnail` always
+  // `unshift`s the newest onto the front, the same ordering `stackPosition`
+  // reads for its index (asserted in `thumbnail.test.ts`'s stacking block,
+  // for POSITION — that block does not and cannot drive this file, since it
+  // imports no Electron). Focus rules 1 and 3 have NO test of their own: OS
+  // key-focus is not observable from a pure test, and this sandbox's own
+  // runbook history (STC-391) says even a real E2E run cannot see it either
+  // — only a person running the app can. Stated here rather than implied.
   panels[0]?.takeFocus();
 }
 
 /**
  * Tears down whatever panel is on screen. Resolves once every window is
- * actually gone (bounded by `SETTLE_BACKSTOP_MS`), so a caller that awaits
- * this before quitting cannot destroy the process out from under a window
- * still tearing itself down.
+ * actually gone, so a caller that awaits this before quitting cannot destroy
+ * the process out from under a window still tearing itself down.
+ * `dismissNow` is synchronous (hide, then destroy) — there is no wait left
+ * to bound here; `waitUntilClosed` resolves from the `"closed"` event Electron
+ * fires once `destroy()` has actually run.
  *
  * Nothing is exported and nothing is deleted (STC-392): a take still showing
  * when this runs is left exactly where `capture-still` wrote it, in temp
@@ -230,15 +255,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 class ThumbnailSession {
   private readonly win: BrowserWindow;
-  private backstop?: NodeJS.Timeout;
   private done = false;
   /**
    * It has painted at least once, so it is a panel the user has SEEN.
    *
-   * `showInactive` is called on the one-time `painted` event, so re-showing a
-   * panel hidden for a capture cannot go through that path — and showing one
-   * that has never painted would flash the desktop through a transparent
-   * window, which is the reason `show: false` is set in the first place.
+   * `win.show()` plus `focusNow()` runs on the one-time `painted` event (focus
+   * rule 1), so re-showing a panel hidden for a capture (`reshow`, below)
+   * cannot go through that path — and showing one that has never painted
+   * would flash the desktop through a transparent window, which is the
+   * reason `show: false` is set in the first place.
    */
   private hasPainted = false;
   /** Where in the stack this panel currently sits; 0 is the newest. */
@@ -273,6 +298,15 @@ class ThumbnailSession {
     });
     this.win.setAlwaysOnTop(true, "screen-saver");
     this.win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // Neither branch below is a stored PREFERENCE — see `PresentOptions`'s
+    // doc on `silent`/`origin`. `PanelSettleQuery` (`thumbnail.ts`) is the one
+    // declaration both this and `thumbnail-renderer.ts`'s parse of the same
+    // param share, so a typo here is a type error rather than a silent
+    // fall-through to "save". Absent entirely for an ordinary fresh capture,
+    // which is what makes the renderer's own default (save on Close) right
+    // for it.
+    const settleQuery: PanelSettleQuery | undefined =
+      opts.silent ? "copy" : opts.origin === "library" ? "none" : undefined;
     this.win.loadFile(join(opts.rendererDir, "thumbnail.html"), {
       query: {
         dir: opts.dir,
@@ -280,19 +314,15 @@ class ThumbnailSession {
         // The view needs it too, and only for the swipe: which way is
         // off-screen is a property of where the panel was put.
         corner: opts.corner,
-        // Neither of these is a stored PREFERENCE — see `PresentOptions`'s
-        // doc on `silent` and `reopened`. Absent for an ordinary fresh
-        // capture, which is what makes the renderer's own default (save on
-        // close) the right one for it.
-        ...(opts.silent ? { silent: "1", settleAction: "copy" } : {}),
-        ...(opts.reopened ? { settleAction: "none" } : {}),
+        ...(opts.silent ? { silent: "1" } : {}),
+        ...(settleQuery ? { settleAction: settleQuery } : {}),
       },
     });
     this.win.webContents.on("ipc-message", (_e, channel, ev: ThumbEvent) => {
       if (channel === "thumbnail:event") this.onEvent(ev);
     });
     this.win.on("closed", () => {
-      this.done = true; this.clearTimers();
+      this.done = true;
       this.leaveStack();
       this.resolveClosed();
     });
@@ -315,10 +345,12 @@ class ThumbnailSession {
       this.win.show();
       this.focusNow();
     } else if (ev.kind === "redact") {
-      this.clearTimers();
       this.resizeTo(ev.on ? REDACT_SIZE : PANEL_SIZE);
     } else if (ev.kind === "discarding") {
-      this.clearTimers();
+      // No-op today — see the `ThumbEvent` doc on this case. Kept as its own
+      // branch, not folded into the default no-match, so the next thing that
+      // needs to hear about a discard in flight has an obvious place to add
+      // real logic rather than a new branch to discover.
     } else if (ev.kind === "done") {
       this.destroy();
     }
@@ -336,18 +368,6 @@ class ThumbnailSession {
     const { x, y } = stackPosition(this.stackIndex, this.corner, this.workArea(),
                                    size, CORNER_MARGIN);
     this.win.setBounds({ x, y, width: size.width, height: size.height });
-  }
-
-  /**
-   * Cancel the one bound this session can still have outstanding: a backstop
-   * armed by some future round trip through the renderer (Task 4's
-   * export-then-close). There is no timer to cancel any more — kept as its
-   * own method anyway so every call site that used to mean "stop the clock"
-   * still reads the same, now meaning "stop waiting on the renderer".
-   */
-  private clearTimers(): void {
-    if (this.backstop) clearTimeout(this.backstop);
-    this.backstop = undefined;
   }
 
   /**
@@ -432,7 +452,6 @@ class ThumbnailSession {
   private destroy(): void {
     if (this.done) return;
     this.done = true;
-    this.clearTimers();
     if (!this.win.isDestroyed()) this.win.destroy();
     this.leaveStack();
   }

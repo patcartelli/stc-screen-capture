@@ -113,22 +113,38 @@ export function parseCorner(v: unknown): Corner {
 }
 
 /**
+ * The two non-default values `thumbnail-window.ts` may put in the panel's
+ * `settleAction` URL query param, and `thumbnail-renderer.ts` parses back out
+ * — named and shared here so a typo on either end is a type error instead of
+ * silently degrading to "save" (the untransmitted default, read when the
+ * param is absent or unrecognised — see `thumbnail-renderer.ts`'s own local
+ * union, which adds it back). Not a preference: see `PresentOptions`'s
+ * `silent`/`origin` docs in `thumbnail-window.ts` for what selects between
+ * them.
+ */
+export type PanelSettleQuery = "copy" | "none";
+
+/**
  * How long a settle waits for the panel's FIRST composite before giving up.
  *
- * A settle can arrive before the panel has drawn — `onSettle` is registered
- * ahead of the load that reads `frame.png`, decodes it and draws it, and a
- * second capture settles the outgoing panel whenever it lands. Without a wait
- * that reached the export with no composite, refused, and destroyed the window
- * having written nothing: silent, because the take directory still held the
- * raw capture and only the decorated file was missing.
- *
- * MUST stay below `SETTLE_BACKSTOP_MS` in `thumbnail-window.ts` — main
- * destroys the window that long after asking it to settle, so a wait at or
- * above the backstop can never complete and would be a slower way of losing
- * the same shot. `app/test/thumbnail-bounds.test.ts` asserts that clearance
- * rather than leaving it true by luck: CLAUDE.md has learned three times that
- * a new bound must be checked against every bound already covering the same
- * code.
+ * `onSettle` is registered ahead of the load that reads `frame.png`, decodes
+ * it and draws it, so a settle CAN arrive before the panel has drawn. Without
+ * a wait that reached the export with no composite, refused, and destroyed
+ * the window having written nothing: silent, because the take directory still
+ * held the raw capture and only the decorated file was missing. That was
+ * found through a second capture settling the outgoing panel before it had
+ * painted (STC-296, #102) — a path STC-392 removed along with the rest of the
+ * timeout: nothing sends a settle signal to an outgoing panel any more, and
+ * every surviving caller of `settle()` in `thumbnail-renderer.ts` (Close,
+ * Escape, a silent panel's own immediate export) runs AFTER the panel has
+ * already painted, so this wait resolves at once today. Kept rather than
+ * deleted because Task 4's export-then-close reintroduces a renderer round
+ * trip this is meant to bound, and `SETTLE_BACKSTOP_MS` in
+ * `thumbnail-window.ts` — reserved the same way, not currently armed by
+ * anything — is checked against it for exactly that reason:
+ * `app/test/thumbnail-bounds.test.ts` asserts the clearance between the two
+ * numbers rather than leaving it true by luck, so they cannot drift apart
+ * silently before either is wired back up.
  */
 export const SETTLE_READY_MS = 10_000;
 
@@ -175,33 +191,38 @@ export function dismiss(): ThumbnailState { return { kind: "idle" }; }
  * pressed the shortcut looks at the corner, and finding their newest shot
  * anywhere else would make the stack a puzzle rather than a record.
  *
- * ## "Drains oldest-first on timeout" is not built here
+ * ## "Drains oldest-first on timeout" is gone with the timeout (STC-392)
  *
- * The ticket asks for it and the existing code already does it: each session
- * arms its own timer when it paints, so panels that appeared in order expire
- * in order. It is a property of every panel keeping its OWN timer — which is
- * the thing a central drain queue would have taken away. Worth stating,
- * because a queue is the obvious way to build a behaviour that is already
- * free.
+ * The ticket asked for it and it used to be free: each session armed its own
+ * timer when it painted, so panels that appeared in order expired in order,
+ * with no queue needed. There is no timer left to do that ordering FOR —
+ * nothing drains on its own any more. What survives is the overflow eviction
+ * above `MAX_STACKED`, which still dismisses the OLDEST panel to make room
+ * (`thumbnail-window.ts`'s `presentThumbnail`), because `panels` stays
+ * ordered newest-first regardless of why an entry leaves it.
  */
 
 /**
  * How far each older panel is pushed in, in points.
  *
- * Enough to leave a legible sliver of the one behind against a 150 px
- * collapsed panel, and no more: the stack is a reminder that shots are
- * waiting, not a UI to read.
+ * Enough to leave a legible sliver of the one behind against the panel's own
+ * `PANEL_SIZE`, and no more: the stack is a reminder that shots are waiting,
+ * not a UI to read.
  */
 export const STACK_STEP_PX = 26;
 
 /**
- * How many panels may be on screen before the oldest is settled to make room.
+ * How many panels may be on screen before the oldest is dismissed to make
+ * room.
  *
  * Five, matching the ticket's own acceptance case ("five captures in five
  * seconds"). A cap rather than an unbounded stack because the panels are
  * always-on-top and a rapid burst would otherwise wall off the screen — and
- * nothing is lost by capping, since the panel pushed out is SETTLED, exactly
- * as a replaced panel already was.
+ * nothing is LOST by capping, since the panel pushed out is DISMISSED
+ * (`thumbnail-window.ts`'s `dismissNow`), its take left in temp storage for
+ * STC-393's recovery to find, exactly like any other panel this module tears
+ * down without a decision. Before STC-392 the evicted panel was SETTLED
+ * (composited and exported); that changed with the rest of the timeout.
  */
 export const MAX_STACKED = 5;
 

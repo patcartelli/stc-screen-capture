@@ -26,17 +26,18 @@ const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
-interface Launched { win: Page; recordings: string; errors: string[] }
+interface Launched { win: Page; recordings: string; destDir: string; errors: string[] }
 
 /** `seed` populates the recordings root before Electron ever sees it. */
 async function launch(seed: (recordings: string) => void): Promise<Launched> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-libe2e-"));
   seed(recordings);
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+  const destDir = mkdtempSync(join(tmpdir(), "stc-dest-"));
   // Seeded on DISK: `recorder:setSettings` deliberately strips
   // `still.destination` (STC-293 review, #92).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: mkdtempSync(join(tmpdir(), "stc-dest-")) },
+    still: { destination: destDir },
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],
@@ -55,7 +56,20 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
   win.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   win.on("pageerror", (e) => errors.push(String(e)));
   await win.waitForSelector("#capturestill");
-  return { win, recordings, errors };
+  return { win, recordings, destDir, errors };
+}
+
+/** The floating panel, once it is up — same idiom as `thumbnail.e2e.test.ts`. */
+async function thumbnailWindow(ms = 15_000): Promise<Page> {
+  const start = Date.now();
+  for (;;) {
+    for (const p of app!.windows()) if (p.url().includes("thumbnail.html")) return p;
+    if (Date.now() - start > ms) {
+      throw new Error(`no thumbnail window appeared within ${ms}ms; windows: `
+        + JSON.stringify(app!.windows().map((p) => p.url())));
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 /** Poll for a cached thumbnail, and report the renderer's own errors if it never arrives. */
@@ -273,5 +287,44 @@ describe("duplicate", () => {
     if (existsSync(join(copy, THUMBNAIL_FILE))) {
       expect(readFileSync(join(copy, THUMBNAIL_FILE)).equals(SENTINEL)).toBe(false);
     }
+  }, 60_000);
+
+  /**
+   * Re-opening a shot from the library (STC-294) goes through `still:reopen`
+   * with `origin: "library"` (STC-392 review finding 3) — and until this
+   * test, nothing anywhere actually invoked `still:reopen`. That gap is what
+   * this pins: opening a KEPT shot and clicking Close must do nothing to it —
+   * no re-export, no second copy — the opposite of what an ordinary fresh
+   * capture's panel does on Close (`thumbnail.e2e.test.ts`'s "Copy does not
+   * close the panel — Save and Close both do").
+   */
+  test("re-opening a shot from the library and closing it exports nothing (STC-294/STC-392)", async () => {
+    const { win, recordings, destDir } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
+    const before = readFileSync(join(original, "shot.json"), "utf8");
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+
+    await clickAction(win, 0, "open");
+    const panel = await thumbnailWindow();
+    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
+      .toContain("in");
+    // #close is only visible once expanded — the same click
+    // `thumbnail.e2e.test.ts`'s own Close-button tests make first.
+    await panel.click("#card");
+    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
+      .toContain("expanded");
+
+    await panel.click("#close");
+    await expect.poll(
+      () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+      { timeout: 15_000 },
+    ).toBe(0);
+
+    // Nothing exported, nothing duplicated, and the original untouched.
+    expect(readdirSync(destDir)).toEqual([]);
+    expect(readdirSync(recordings)).toEqual(["2026-09-08_12-00-00"]);
+    expect(readFileSync(join(original, "shot.json"), "utf8")).toBe(before);
   }, 60_000);
 });

@@ -255,10 +255,17 @@ describe("stacking (STC-296 follow-up)", () => {
     // than the old collapsed thumbnail because its actions are always visible.
     // The old test measured the collapsed size and would have stayed green
     // while five of the real card ran off the screen.
+    //
+    // All four CORNERS, not just bottom-right (restored after STC-392 review
+    // finding 7): a top corner pushes the stack DOWN rather than up, and the
+    // `workArea.y` floor is exactly the case only a top corner can fail —
+    // bottom-right alone would leave it unasserted.
     const workArea = { x: 0, y: 0, width: 1440, height: 900 };
-    const oldest = stackPosition(MAX_STACKED - 1, "bottom-right", workArea, PANEL_SIZE);
-    expect(oldest.y).toBeGreaterThanOrEqual(workArea.y);
-    expect(oldest.y + PANEL_SIZE.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+    for (const corner of CORNERS) {
+      const oldest = stackPosition(MAX_STACKED - 1, corner, workArea, PANEL_SIZE);
+      expect(oldest.y).toBeGreaterThanOrEqual(workArea.y);
+      expect(oldest.y + PANEL_SIZE.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+    }
     // Composition, not magnitude: the clearance must come from the stack's own
     // arithmetic, not from slack in a display that happens to be tall.
     const consumed = PANEL_SIZE.height + (MAX_STACKED - 1) * STACK_STEP_PX + 2 * 20;

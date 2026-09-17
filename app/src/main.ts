@@ -303,6 +303,9 @@ async function recoverUnsavedTakes(): Promise<void> {
         const shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
         presentThumbnail({
           dir: t.dir, shot, corner: thumbnail.corner,
+          // A recovered temp take has never been decided on — nobody has
+          // said yes to it, the same as an ordinary fresh capture.
+          origin: "fresh",
           dist: here, rendererDir: join(here, "..", "renderer"),
         });
       } catch (e) {
@@ -802,6 +805,7 @@ async function captureStill(action: ShotAction, source: CaptureSource): Promise<
       const { thumbnail } = readSettings(app.getPath("userData"));
       presentThumbnail({
         dir, shot: r.shot, corner: thumbnail.corner,
+        origin: "fresh",
         dist: here, rendererDir: join(here, "..", "renderer"),
         ...(thumbnail.skip ? { silent: true } : {}),
       });
@@ -1058,11 +1062,13 @@ ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuf
  * re-capturing. It is the same panel a fresh capture gets — not a second still
  * UI, which is what STC-293's Note and STC-300's gate both forbid.
  *
- * `reopened: true` is the one difference and it still matters post-STC-392:
+ * `origin: "library"` is the one difference and it still matters post-STC-392:
  * neither a fresh capture nor a re-opened one closes itself any more, but a
  * fresh capture's panel still SAVES on an explicit Close (the renderer's own
  * default), because the panel is the only place it exists — a re-opened shot
  * is already on disk, and a second copy on Close is not what a glance meant.
+ * `app/test/library.e2e.test.ts`'s "re-opening a shot from the library and
+ * closing it exports nothing" is what actually invokes this handler.
  */
 /** The stored document for one shot, so the library can render its decoration. */
 ipcMain.handle("library:shot", async (_e, dir: string) => {
@@ -1080,7 +1086,7 @@ ipcMain.handle("still:reopen", async (_e, dir: string) => {
   const { thumbnail } = readSettings(app.getPath("userData"));
   presentThumbnail({
     dir, shot, corner: thumbnail.corner,
-    reopened: true,
+    origin: "library",
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
   return { ok: true };
