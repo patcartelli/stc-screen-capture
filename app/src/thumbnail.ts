@@ -251,16 +251,21 @@ export function visibleCount(total: number): number {
 }
 
 /**
- * How many of `total` panels the cap leaves HIDDEN — the badge's number, and
- * its ONLY source.
+ * How many of `total` panels the cap SHOULD leave HIDDEN, by the ticket's own
+ * arithmetic — the badge's number whenever `restack`'s own invariant holds
+ * (every panel below `visibleCount(total)` shown, every one at or past it
+ * hidden).
  *
- * `thumbnail-window.ts`'s `restack` calls this once per stack change and
- * hands the answer to the newest panel (`setHiddenCount`); the renderer draws
- * whatever it is given and derives nothing of its own. Two ways to count the
- * same thing is this codebase's most repeated defect (CLAUDE.md), and a
- * badge computing its own count from, say, the number of panels it can see
- * would be exactly that — a second copy of a number that already has one
- * owner.
+ * This is NOT what the running app reads to fill the badge (STC-392 review,
+ * I1 — an earlier version of this doc claimed it was, and that claim went
+ * stale the moment `showAllOverflow` existed: expanding the stack un-hides
+ * everything while `total` stays the same, which this formula cannot see).
+ * `thumbnail-window.ts`'s `restack`/`showAllOverflow` read the panels'
+ * own `isOverflowHidden` flags instead (`overflowHiddenCount`), which is
+ * correct in both states. This function is the pure, deterministic
+ * definition of what those flags should add up to whenever the cap alone is
+ * deciding — asserted directly in `thumbnail.test.ts`, and useful there
+ * precisely because nothing here needs a window to check.
  */
 export function hiddenCount(total: number): number {
   return Math.max(0, total - MAX_STACKED);

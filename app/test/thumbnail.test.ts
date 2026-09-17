@@ -52,14 +52,16 @@ describe("the panel state machine (STC-392: it waits)", () => {
 });
 
 describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
-  test("a fourth capture hides the oldest rather than settling it", () => {
-    // THIS IS THE LOAD-BEARING HALF. `presentThumbnail` used to call
-    // `settleAndDestroy()` (later `dismissNow()`) on whatever went past the
-    // cap, which was safe only because a panel HAD a default outcome — the
-    // timeout's export. STC-392 removed the default outcome, so the same
-    // eviction now destroys a take nobody decided on. "Nothing is dropped,
-    // only hidden" is the correctness half of this ticket applied to a burst
-    // of captures, not a UI nicety.
+  test("hiddenCount's arithmetic: nothing hidden at the cap, one at four, six at nine", () => {
+    // This is PURE ARITHMETIC over `hiddenCount` — it would pass unchanged
+    // under the old destroy-on-overflow behaviour too, since nothing here
+    // touches a window or a panel's lifecycle. It is not where "nothing is
+    // dropped, only hidden" is proven; that is
+    // `panel-waits.e2e.test.ts`'s "five captures in a burst leave FIVE alive
+    // panel windows" — a real `BrowserWindow` count against `dismissNow()`
+    // actually being called or not is the only thing that can tell hidden
+    // apart from destroyed. What this test pins is narrower and still worth
+    // having: the formula's own numbers, checked with no window at all.
     expect(MAX_STACKED).toBe(3);
     expect(hiddenCount(3)).toBe(0);
     expect(hiddenCount(4)).toBe(1);

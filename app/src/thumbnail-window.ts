@@ -1,7 +1,7 @@
 import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
-  positionFor, stackPosition, MAX_STACKED, hiddenCount, PANEL_SIZE, REDACT_SIZE,
+  positionFor, stackPosition, visibleCount, PANEL_SIZE, REDACT_SIZE,
   type Corner, type Size,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
@@ -21,8 +21,8 @@ import { type PanelTake } from "./panel-actions.js";
  * pushed past the cap is HIDDEN (`hideForOverflow`), never dismissed — Task
  * 5b (STC-392 D7) removed the eviction that used to destroy it. It stays
  * alive exactly where `capture-still` wrote it, reachable through the newest
- * panel's `+N` badge (`hiddenCount`, `thumbnail.ts`; clicking it is
- * `showAllOverflow` below). Nothing about a hidden-for-overflow panel is a
+ * panel's `+N` badge (`overflowHiddenCount`, below; clicking it is
+ * `showAllOverflow`). Nothing about a hidden-for-overflow panel is a
  * decision — it still waits for one, same as a visible panel.
  *
  * ## The panel takes focus when it appears (STC-392 focus rule 1)
@@ -179,18 +179,44 @@ export function presentThumbnail(opts: PresentOptions): void {
  * that happens rather than catching up a beat late.
  */
 function restack(): void {
+  // `visibleCount`, not a bare `i >= MAX_STACKED` comparison written twice —
+  // this IS the production use of that helper (`thumbnail.ts` review, I6):
+  // the number of panels this loop is about to leave shown is exactly what
+  // `visibleCount` is defined to answer, so naming it here is the same
+  // quantity, not a restatement of it.
+  const visible = visibleCount(panels.length);
   panels.forEach((p, i) => {
     p.moveToStackIndex(i);
     // Past the cap: alive, hidden, reachable through the badge — never
     // settled, never destroyed. `thumbnail.ts`'s `MAX_STACKED` doc is the
     // rest of this reasoning.
-    if (i >= MAX_STACKED) p.hideForOverflow(); else p.reshowFromOverflow();
+    if (i >= visible) p.hideForOverflow(); else p.reshowFromOverflow();
   });
   // The newest panel carries the badge: it is the one on top and the one
   // with focus, so it is where a count of what is waiting belongs. Every
   // other panel's count is cleared — a panel that used to be newest and is
   // not any more must not go on showing a stale number.
-  panels.forEach((p, i) => p.setHiddenCount(i === 0 ? hiddenCount(panels.length) : 0));
+  //
+  // Counted from the panels THEMSELVES (`overflowHiddenCount`, below), not
+  // recomputed from `thumbnail.ts`'s `hiddenCount(panels.length)` formula.
+  // That formula is only true while the invariant this very loop just
+  // enforced (index `< visible` ⇒ shown, `>=` ⇒ hidden) still holds —
+  // `showAllOverflow` deliberately breaks it for a moment, and asking the
+  // formula for the count in that moment would answer for an invariant that
+  // is not currently true. Reading the panels' own flags back is correct
+  // regardless of which function last touched them, which is what "one
+  // source" has to mean here (STC-392 review, I1).
+  panels.forEach((p, i) => p.setHiddenCount(i === 0 ? overflowHiddenCount() : 0));
+}
+
+/**
+ * How many panels the overflow cap has ACTUALLY hidden right now, read from
+ * the panels themselves rather than recomputed from a count and a constant.
+ * See `restack`'s own doc for why the formula in `thumbnail.ts` cannot
+ * stand in for this everywhere it might be asked.
+ */
+function overflowHiddenCount(): number {
+  return panels.filter((p) => p.isOverflowHidden).length;
 }
 
 /**
@@ -207,10 +233,10 @@ function restack(): void {
  */
 function showAllOverflow(): void {
   for (const p of panels) p.reshowFromOverflow();
-  // Nothing is hidden by the cap right now, so the badge has nothing left to
-  // count — cleared here rather than waiting for the next `restack`, which
-  // may not come for a while if nothing else changes.
-  panels[0]?.setHiddenCount(0);
+  // Read back from the panels, exactly like `restack` does — this is 0
+  // because the loop just above cleared every panel's flag, not because 0
+  // was asserted independently of that fact (STC-392 review, I1).
+  panels[0]?.setHiddenCount(overflowHiddenCount());
 }
 
 /**
@@ -517,6 +543,14 @@ class ThumbnailSession {
   }
 
   /**
+   * Whether the overflow cap currently has this panel hidden — read-only,
+   * for `overflowHiddenCount` (module scope, above) to total up. This is the
+   * badge's real source of truth: the FLAG itself, not a formula that
+   * assumes nothing has overridden it (STC-392 review, I1).
+   */
+  get isOverflowHidden(): boolean { return this.hiddenForOverflow; }
+
+  /**
    * The one place both hide reasons are read together. Shown only when
    * NEITHER is set AND the panel has painted; hidden if EITHER reason is
    * set — an overflow-hidden panel mid a capture, or a capture-hidden panel
@@ -536,10 +570,14 @@ class ThumbnailSession {
 
   /**
    * Tell this panel's card how many panels the overflow cap is hiding right
-   * now (`thumbnail.ts`'s `hiddenCount` — the badge's ONE source; this
-   * method only carries the answer across the process boundary, it does not
-   * compute one of its own). `restack` calls this on every panel after every
-   * stack change, 0 for everything but the newest.
+   * now — this method only carries the answer across the process boundary,
+   * it does not compute one of its own. Callers (`restack`, `showAllOverflow`)
+   * both derive that number from `overflowHiddenCount()`, which counts the
+   * panels' own `isOverflowHidden` flags rather than re-deriving it from a
+   * count and `MAX_STACKED` — see `restack`'s doc for why that formula is
+   * not safe to use as a second way to ask (STC-392 review, I1). `restack`
+   * calls this on every panel after every stack change, 0 for everything but
+   * the newest.
    */
   setHiddenCount(n: number): void {
     if (this.done || this.win.isDestroyed()) return;
@@ -557,9 +595,19 @@ class ThumbnailSession {
    * painted (focus rule 3: the most recent panel gets focus back after a
    * capture). Refuses on one that has never painted, for the same reason
    * `reshow` does — there is nothing on screen yet to focus.
+   *
+   * Also refuses on either hide reason (STC-392 review, safe-guard note): a
+   * panel that is not supposed to be ON SCREEN must not be handed the
+   * keyboard either. Not reachable in practice today — the only caller,
+   * `afterCapture`, calls `reshow()` on `panels[0]` in the very same pass
+   * before this, and the newest panel (index 0) is never overflow-hidden —
+   * so this changes no observed behaviour. It is here anyway because a
+   * guard that holds only by call-site convention is one future caller away
+   * from being silently wrong, and this one costs a single early return.
    */
   takeFocus(): void {
     if (this.done || this.win.isDestroyed() || !this.hasPainted) return;
+    if (this.hiddenForCapture || this.hiddenForOverflow) return;
     this.focusNow();
   }
 
