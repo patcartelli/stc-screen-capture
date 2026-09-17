@@ -278,6 +278,54 @@ function lockSettings(locked: boolean): void {
   displaySel.disabled = locked;
   micSel.disabled = locked;
 }
+
+/**
+ * The ONE place `recording`, the button's label, `#state` and `lockSettings`
+ * are ever written (STC-388 review, Finding 2).
+ *
+ * Before this, each was set inline inside the Record button's OWN click
+ * handler — sound while every take began and ended at that button, and wrong
+ * the moment the hotkey and the tray item became two more doors to the same
+ * state with no window listening. `recorder.on("recorder:recording-state",
+ * …)` below is what calls this for a take THIS window did not itself start
+ * or stop; the click handler calls it for one it did. Either way this is the
+ * only function that writes any of these four things.
+ */
+function applyRecordingState(recording_: boolean): void {
+  recording = recording_;
+  recordBtn.textContent = recording ? "Stop" : "Record";
+  setState(recording ? "recording" : "idle");
+  // The device is opened at start and closed at stop, so the setting must
+  // not appear changeable mid-take — it would misdescribe the recording.
+  lockSettings(recording);
+}
+
+/**
+ * Finding 7 (folded into Finding 2's fix, same review): camera and mic are
+ * ALSO settable from the options bar (main.ts:620, STC-388), not only from
+ * this window's own checkbox and select — so a take this window did not
+ * itself start may be running with settings the DOM still disagrees with.
+ * Re-reads the stored settings rather than trusting `cameraBox.checked`/
+ * `storedMicUid` as they stand, and is called for a self-initiated start too
+ * (the overlay's bar can change either mid-flow, even from this window's own
+ * button), not only an externally-reconciled one.
+ */
+async function refreshCaptureSettingsForRecording(): Promise<void> {
+  try {
+    const s = await recorder.getSettings();
+    cameraBox.checked = s.camera;
+    storedMicUid = s.micDeviceUid;
+    micSel.value = storedMicUid ?? "";
+  } catch {
+    // Best-effort — the "opening…" labels below still reflect whatever the
+    // DOM already had, which is no worse than before this fix existed.
+  }
+  // Reset per take, and say "opening…" rather than "—": the camera opens
+  // off the critical path, so there IS a window where it is neither absent
+  // nor live, and that window is the whole complaint (STC-287).
+  setCamera(cameraBox.checked ? "opening…" : "off");
+  setMic(storedMicUid != null ? "opening…" : "off");
+}
 // ---- profile sheet (STC-374) ------------------------------------------------
 //
 // "A panel inside this window, not a fourth window" — still-capture
@@ -460,25 +508,13 @@ recordBtn.addEventListener("click", async () => {
         alertUser(START_FAULTS[String(r.code)] ?? `Could not start: ${r.code}\n${r.detail ?? ""}`);
         setState("idle");
       } else {
-        recording = true;
-        // Reset per take, and say "opening…" rather than "—": the camera opens
-        // off the critical path, so there IS a window where it is neither
-        // absent nor live, and that window is the whole complaint (STC-287).
-        setCamera(cameraBox.checked ? "opening…" : "off");
-        setMic(storedMicUid != null ? "opening…" : "off");
-      // The device is opened at start and closed at stop, so the setting must
-      // not appear changeable mid-take — it would misdescribe the recording.
-      lockSettings(true);
+        applyRecordingState(true);
+        await refreshCaptureSettingsForRecording();
         currentDir = r.dir;
-        recordBtn.textContent = "Stop";
-        setState("recording");
       }
     } else {
       await recorder.stop();
-      recording = false;
-      lockSettings(false);
-      recordBtn.textContent = "Record";
-      setState("idle");
+      applyRecordingState(false);
       await refreshTakes();
     }
   } catch (e: any) {
@@ -497,8 +533,13 @@ recorder.on("helper:ready", (l) => {
   if (!recording) setState("idle");
   // No precondition left to check (STC-388): Record opens the scope overlay
   // itself, so there is nothing that can be unset when the button is
-  // pressed. It is disabled only while a take is running, which the click
-  // handler's own disabled toggling already owns.
+  // pressed. It is disabled only while a REQUEST FROM THIS WINDOW is in
+  // flight (deferred minor #7, STC-388 review) — never merely because a take
+  // is running, which the click handler's own start/`finally` toggling
+  // already owns: `recording === true` shows "Stop" and stays pressable, or
+  // a take begun by the hotkey or the tray (Finding 2's reconciliation,
+  // `recorder:recording-state`) would leave this window with a disabled
+  // button it could never use to stop its own recording.
   if (!recording) recordBtn.disabled = false;
 });
 
@@ -536,10 +577,8 @@ const ENDED_BY_HELPER: Record<string, string> = {
 recorder.on("helper:recording-ended", (i) => {
   // The helper stopped by itself — a display change, or a display stream that
   // died. The file is valid; what would be wrong is leaving the button saying
-  // "Stop".
-  recording = false;
-  recordBtn.textContent = "Record";
-  setState("idle");
+  // "Stop" (or, before Finding 2's fix, the pickers still locked).
+  applyRecordingState(false);
   refreshTakes();
   const why = ENDED_BY_HELPER[String(i.reason)] ?? `Recording stopped by the recorder (${i.reason}).`;
   alertUser(`${why}\nWhat was captured up to that point was saved.`);
@@ -547,10 +586,32 @@ recorder.on("helper:recording-ended", (i) => {
 });
 
 recorder.on("helper:recording-lost", (i) => {
-  recording = false;
-  recordBtn.textContent = "Record";
-  setState("idle");
+  applyRecordingState(false);
   alertUser(`The recorder quit while recording — that take was not saved.\n${i.dir ?? ""}`);
+});
+
+/**
+ * STC-388 review, Finding 2 (CRITICAL). A take begun or ended by the hotkey
+ * or the tray never reached this window before — `stopRecording()` emits
+ * nothing at all (`endRecording` is only for a stop the HELPER decided on),
+ * and a hotkey-initiated `runRecordFlow` never touches this window either.
+ * `main.ts`'s `reconcileWindowRecording` is what notices, off `sup.state` —
+ * CLAUDE.md's own named authority — and this applies it.
+ *
+ * Guarded on an actual disagreement: a start or stop THIS window itself
+ * asked for already applied `applyRecordingState` synchronously inside the
+ * click handler, so by the time this fires (bounded by the next heartbeat,
+ * same latency the tray already accepts) `s.recording === recording` and
+ * there is nothing to do — this is only for the door that did NOT go through
+ * that handler.
+ */
+recorder.on("recorder:recording-state", (s: { recording: boolean; dir?: string }) => {
+  if (s.recording === recording) return;
+  applyRecordingState(s.recording);
+  if (s.recording) {
+    currentDir = s.dir;
+    void refreshCaptureSettingsForRecording();
+  }
 });
 
 /**
@@ -932,8 +993,18 @@ async function refreshTakes(): Promise<void> {
 
 
 recorder.status().then((s) => {
-  setState(s.state);
   if (s.pid) $("pid").textContent = String(s.pid);
+  // STC-388 review, Finding 2: a window opened (or reopened via "Open
+  // Library") WHILE a take started elsewhere is already running gets no
+  // transition to react to — `reconcileWindowRecording` only sends on a
+  // CHANGE, and this window has never seen one. Read the current state
+  // directly rather than waiting for the next one.
+  if (s.state === "recording") {
+    applyRecordingState(true);
+    void refreshCaptureSettingsForRecording();
+  } else {
+    setState(s.state);
+  }
   // A helper that could not be spawned at all fails in milliseconds — every
   // restart the supervisor allows has already been used up before this page
   // exists, so the gave-up event above was emitted to nobody. Read the state

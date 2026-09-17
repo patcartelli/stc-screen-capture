@@ -69,7 +69,13 @@ contextBridge.exposeInMainWorld("recorder", {
                       // from) the pill. The renderer has no other way to know
                       // its own window shrank — `pill-window.ts` drives the
                       // resize from main, not from anything in this page.
-                      "pill:state"];
+                      "pill:state",
+                      // STC-388 review, Finding 2: a take started or stopped
+                      // by the hotkey or the tray, reaching the window that
+                      // did not ask for it. `main.ts`'s `reconcileWindowRecording`
+                      // is the one place this is ever sent, off the same
+                      // `sup.state` authority the tray already reconciles from.
+                      "recorder:recording-state"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);

@@ -84,13 +84,18 @@ export const SHOT_ACTIONS: readonly ShotAction[] = BINDABLE_ACTIONS.filter(isSho
  * data model rather than contradicting it. Motion stays "Record".
  *
  * These are LABELS only. The action ids they key off (`region`, `window`,
- * `display`, `self-timer`) are unchanged and are what `settings.json`
- * persists a user's bindings against — renaming a label cannot cost anyone
- * a hotkey, which is this ticket's own acceptance criterion.
+ * `display`, `record`, `self-timer` — STC-388 review, Finding 10: `record`
+ * belongs in this list too now, not just the original four `ShotAction`s)
+ * are unchanged and are what `settings.json` persists a user's bindings
+ * against — renaming a label cannot cost anyone a hotkey, which is this
+ * ticket's own acceptance criterion.
  *
- * "Area" rather than "Region" to match the Scope picker in the main window,
- * which has called it Area since STC-374; the two naming the same rectangle
- * differently was a small existing inconsistency worth closing while here.
+ * "Area" rather than "Region": STC-374 had a Scope picker in the main window
+ * that called the same rectangle Area, and this matched it. STC-388 deleted
+ * that picker outright (task 6, "remove the sticky scope"), so the
+ * justification is gone — "Area" stays anyway, since it is still the better
+ * word and nothing needs re-litigating, but nothing in the main window
+ * governs this label's naming any more.
  */
 export const ACTION_LABELS: Record<BindableAction, string> = {
   region: "Shot Area",
@@ -125,9 +130,12 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   // The slot STC-391 deliberately left open, in a comment naming this ticket:
   // 1/2/3 shot, 4 records, 5 shoots on a timer — adjacent, not interleaved.
   record: `${HYPER}+4`,
-  // 5, not 4: the ticket names it, and it leaves 4 free for whatever the
-  // Record flow (STC-388) binds — the two are a pair in the user's head and
-  // will read better adjacent than interleaved.
+  // 5, not 4: the ticket names it, and 4 is Record's own default above —
+  // the two are a pair in the user's head and read better adjacent than
+  // interleaved (STC-388 review, Finding 10: this used to say 4 was left
+  // FREE for Record to bind later; STC-388 landed and bound it, so the slot
+  // is no longer free, it is taken — deliberately, by design, right next to
+  // this one).
   "self-timer": `${HYPER}+5`,
 };
 

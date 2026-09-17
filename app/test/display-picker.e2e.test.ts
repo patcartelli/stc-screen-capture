@@ -87,12 +87,18 @@ describe("the display picker", () => {
   // from the overlay every time Record is pressed, and "the old sticky-scope
   // settings path is gone" (main.ts's own comment on `runRecordFlow`) is
   // literal — `stored.displayId` is read nowhere in the recording path
-  // anymore. Source (`#display`) still exists, but it now governs only the
-  // "Screen" scope a STILL capture uses (STC-374/382); picking "Display 2"
-  // here and then pressing Record no longer sends displayId: 2, because the
-  // overlay never looks at it. What the helper is actually told is the
-  // display the selection was DRAGGED on — still a real, checkable claim,
-  // and still the one this test exists to make: the display has to reach the
+  // anymore. Source (`#display`) still exists in the window, and its stored
+  // value still round-trips (the test above this one), but as of this review
+  // NOTHING in the shipped app currently reads `Settings.displayId` at all —
+  // `captureStill` takes its display from the CURSOR's position (STC-374's
+  // `getDisplayNearestPoint`), not from this setting, and a recording is
+  // scoped from the overlay every time, per this file's own header. Do not
+  // invent a new purpose for the control here; whether `#display` should
+  // still exist, and what it should mean if it does, is unscoped follow-up
+  // work for STC-388 rather than something this test can settle. What the
+  // helper is actually told, and what this test still checks, is the display
+  // the selection was DRAGGED on — a real, checkable claim regardless of
+  // what `#display` does or doesn't feed: the display has to reach the
   // process that opens the stream.
   test("recording sends the displayId of the display the selection was made on", async () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
@@ -120,23 +126,26 @@ describe("the display picker", () => {
 
   // The old "Automatic sends no displayId at all" test asserted a dead
   // contract too — there is no "Automatic" choice for a recording's target
-  // any more, sticky or otherwise. The natural replacement would be a WINDOW
-  // pick, which sends windowId instead of displayId — but driving one
-  // uncovered a real gap this file should not paper over: `OverlaySession
-  // .push()` (overlay-session.ts) derives the options bar's layout from
-  // `state.rect` (`barLayout(selection, display)` in record-options.ts), and
-  // a window-mode outcome never sets `state.rect` — `selection.ts`'s
-  // `reduce`/`confirm` only ever attach a bare `windowId` for that kind. So
-  // the bar's `hidden` attribute never clears for a window pick and its
-  // Record control can never be pressed: completing a RECORDING by picking a
-  // window is unreachable through the shipped app today, not merely untested.
-  // That is `app/src/overlay-session.ts`, out of this ticket's scope to fix
-  // (task-6b-report.md carries the finding); a test driving that path would
-  // just hang on `awaitOptionsBar` forever, which is not this test's subject.
+  // any more, sticky or otherwise. The natural replacement is a WINDOW pick,
+  // which sends windowId instead of displayId.
   //
-  // The nearest TRUE analogue of "some payload conspicuously omits a field",
-  // reachable today: expanding to the whole display sends its displayId with
-  // no `region` at all, unlike a dragged region, which always carries both.
+  // STC-388 review, Finding 4: an earlier version of this comment said
+  // completing a recording by picking a window was UNREACHABLE through the
+  // shipped app — `OverlaySession.push()` derived the options bar's layout
+  // from `state.rect` alone, which a window-mode outcome never sets, so the
+  // bar's `hidden` attribute never cleared and its Record control could never
+  // be pressed. That was true when written and was FIXED three commits later
+  // by `anchorRectFor` (overlay-session.ts), which derives the anchor from
+  // the PENDING outcome instead — the picked window's own bounds in window
+  // mode. `record-flow.e2e.test.ts`'s "expand" describe block now drives a
+  // window pick through the real overlay end to end (including pressing the
+  // bar's own Record control), so the path this comment used to call
+  // unreachable is exercised elsewhere in this suite. This file keeps using
+  // `expand` for the test below rather than a window pick, for an unrelated
+  // reason that is still true: it is the nearest analogue of "some payload
+  // conspicuously omits a field" — expanding to the whole display sends its
+  // displayId with no `region` at all, unlike a dragged region, which always
+  // carries both.
   test("expanding to the full display sends its displayId with no region", async () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const { dir: recordings } = makeTakeFolder();

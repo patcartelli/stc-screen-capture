@@ -158,10 +158,24 @@ describe("Record in the menu bar (STC-388)", () => {
     expect(item.accelerator).toBe(DEFAULT_SHORTCUTS.record);
   });
 
-  test("mid-take the item says Stop Recording and stays clickable", () => {
-    // The hotkey toggles, so the menu item must too — an item that went grey
-    // the moment a take started would be the only entry point that cannot
-    // stop one, which is the gap this ticket exists to close.
+  test("mid-take the item says Stop Recording and stays clickable — the NORMAL state", () => {
+    // STC-388 review, Finding 10 (deferred minor #2): the only test of this
+    // used `busy: true`, which is a compound state (a shot ALSO in flight
+    // during a recording) — the ordinary mid-take state, `busy: false`, had
+    // never been exercised. The hotkey toggles, so the menu item must too —
+    // an item that went grey the moment a take started would be the only
+    // entry point that cannot stop one, which is the gap this ticket exists
+    // to close.
+    const item = trayTemplate({ ...ctx, recording: true, busy: false })
+      .find((i) => i.id === "action:record")!;
+    expect(item.label).toBe(STOP_RECORDING_LABEL);
+    expect(item.enabled).toBe(true);
+  });
+
+  test("mid-take, WITH a shot also in flight, the item still says Stop Recording and stays clickable", () => {
+    // The compound state the original test above covered — kept as its own
+    // case rather than folded away, since `busy: true` disabling the SHOT
+    // actions (the test two below) must not also disable Record.
     const item = trayTemplate({ ...ctx, recording: true, busy: true })
       .find((i) => i.id === "action:record")!;
     expect(item.label).toBe(STOP_RECORDING_LABEL);

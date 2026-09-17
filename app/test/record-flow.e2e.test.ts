@@ -272,6 +272,52 @@ describe("the marquee stays adjustable with the bar up", () => {
     // living in the overlay window at all, not a side effect of the resize.
     expect(await overlay.getAttribute("#bar", "hidden")).toBeNull();
   }, 120_000);
+
+  test("Record commits the ADJUSTED rect, not the one Enter confirmed (Finding 1, STC-388 review)", async () => {
+    // Before the fix, `case "record"` in overlay-session.ts committed
+    // `this.pending` — set only on Enter — so a handle drag AFTER Enter
+    // changed the bar's own `#ctl-size` readout while Record still sent the
+    // helper the pre-drag rect. This drives drag -> Enter -> adjust -> Record
+    // end to end and asserts the HELPER's own start request, not just the
+    // readout, so both symptoms named in the finding are checked directly.
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    await win.click("#record");
+    const overlay = await overlayWindow();
+    const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
+    const scaleFactor: number = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().scaleFactor);
+    const from = { x: b.x + 100, y: b.y + 80 };
+    const to = { x: from.x + 200, y: from.y + 100 };
+    await send(overlay, { t: "pointerdown", at: from });
+    await send(overlay, { t: "pointermove", at: to });
+    await send(overlay, { t: "pointerup", at: to });
+    await awaitConfirmable(overlay);
+    await send(overlay, { t: "key", key: "Enter" }); // pending = R1 (200x100 pts)
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+    const beforeReadout = (await overlay.textContent("#ctl-size"))?.trim();
+    expect(beforeReadout).toBe(`${Math.round(200 * scaleFactor)} × ${Math.round(100 * scaleFactor)}`);
+
+    // Adjust the marquee AFTER Enter — no new outcome, so pre-fix `pending`
+    // stayed R1 while the readout moved on.
+    const adjustedTo = { x: to.x + 80, y: to.y + 80 };
+    await send(overlay, { t: "pointerdown", at: to, handle: "se" });
+    await send(overlay, { t: "pointermove", at: adjustedTo });
+    await send(overlay, { t: "pointerup", at: adjustedTo });
+    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).not.toBe(beforeReadout);
+    const afterReadout = (await overlay.textContent("#ctl-size"))?.trim();
+    expect(afterReadout).toBe(`${Math.round(280 * scaleFactor)} × ${Math.round(180 * scaleFactor)}`);
+
+    await send(overlay, { t: "control", id: "record" });
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect(cmd.windowId).toBeUndefined();
+    expect(cmd.region).toBeDefined();
+    const committed = `${Math.round(cmd.region.width * scaleFactor)} × ${Math.round(cmd.region.height * scaleFactor)}`;
+    // The real assertion: what got committed is what the readout showed —
+    // the ADJUSTED rect (280x180 pts) — not the stale R1 (200x100 pts).
+    expect(committed).toBe(afterReadout);
+    expect(committed).not.toBe(beforeReadout);
+  }, 120_000);
 });
 
 describe("expand", () => {
@@ -327,26 +373,135 @@ describe("expand", () => {
   }, 120_000);
 });
 
-describe("the hotkey toggles", () => {
-  test("with a take running, firing the Record action stops it", async () => {
+/**
+ * Fires the REAL tray callback (main.ts's `installTray(...)`'s `onSelect`),
+ * not `sup.stopRecording()`/`runRecordFlow` one layer below it. `tray.ts`
+ * exposes it on `globalThis` for exactly this — the same reason `__stcTray`
+ * already exists — because Electron has no synthetic click for a `Tray`'s
+ * menu and Playwright cannot press a global hotkey at the window server
+ * (hotkeys.e2e.test.ts's own header). "action:record" is the SAME id the
+ * menu-bar Record item and ⌃⌥⇧⌘4 both resolve to.
+ */
+async function fireTrayRecord(): Promise<void> {
+  await app!.evaluate(() => (globalThis as any).__stcTrayOnSelect("action:record"));
+}
+
+const pickersLocked = (win: Page): Promise<boolean> =>
+  win.evaluate(() => {
+    const camera = document.getElementById("camera") as HTMLInputElement;
+    const display = document.getElementById("display") as HTMLSelectElement;
+    const mic = document.getElementById("mic") as HTMLSelectElement;
+    return camera.disabled && display.disabled && mic.disabled;
+  });
+
+describe("the hotkey/tray toggles reach the main window (Finding 2, STC-388 review)", () => {
+  test("a tray-initiated STOP clears the window's Stop/recording/locked state", async () => {
+    // Started from the WINDOW's own button — this test is about the STOP
+    // direction, so how the take began does not matter. The finding's bug is
+    // that a stop from a DIFFERENT door than the one that started it left the
+    // window believing a recording was still live.
     const { win, startLog } = await launch();
     await withoutCountdown(win);
     await startRecordFlow(app!, win);
 
     await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
     await expect.poll(async () => (await status(win)).state, { timeout: 15_000 }).toBe("recording");
+    await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Stop");
+    await expect.poll(() => pickersLocked(win), { timeout: 15_000 }).toBe(true);
 
-    // `onRecordHotkey` (main.ts) — bound to the global shortcut and the
-    // menu-bar item, neither of which this process can press (Playwright can
-    // drive a page's keyboard; it cannot press a key at the window server,
-    // hotkeys.e2e.test.ts's own header) — calls `sup.stopRecording()` when a
-    // take is running. `recorder:stop`'s IPC handler calls exactly that same
-    // function. This is the seam hotkeys.e2e.test.ts's own "full-display
-    // capture" test already relies on: an IPC channel reaching the identical
-    // main-process function a hotkey press would, rather than a synthesised
-    // keypress.
-    await win.evaluate(() => (window as any).recorder.stop());
+    // The tray's own callback, exactly as the menu bar or ⌃⌥⇧⌘4 would reach
+    // it — `onRecordHotkey` — not `recorder.stop()`/`sup.stopRecording()` one
+    // layer below it, which is what this test asserted before this fix and
+    // is exactly the gap Finding 2 named: the window has NOTHING wired to a
+    // stop that did not come through its own click handler.
+    await fireTrayRecord();
 
     await expect.poll(async () => (await status(win)).state, { timeout: 15_000 }).not.toBe("recording");
+    // Before Finding 2's fix: none of this ever changed. The button kept
+    // reading "Stop", `#state` stayed "recording", and the pickers stayed
+    // locked for the rest of the session — pressing "Stop" then requested
+    // `stop` on an already-idle helper and wedged the window.
+    await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Record");
+    await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
+    await expect.poll(() => pickersLocked(win), { timeout: 15_000 }).toBe(false);
+  }, 120_000);
+
+  test("a tray-initiated START locks the window and shows Stop", async () => {
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    expect(await win.textContent("#record")).toBe("Record");
+    expect(await pickersLocked(win)).toBe(false);
+
+    // The tray's own callback with nothing recording opens the SAME overlay
+    // `runRecordFlow("menu-bar")` always has — the window never clicked
+    // anything. Driven the same way `_record-flow.ts` drives the window
+    // door, just starting from the tray instead of `win.click("#record")`.
+    await fireTrayRecord();
+    const overlay = await overlayWindow();
+    const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
+    const from = { x: b.x + 100, y: b.y + 80 };
+    const to = { x: from.x + 200, y: from.y + 100 };
+    await send(overlay, { t: "pointerdown", at: from });
+    await send(overlay, { t: "pointermove", at: to });
+    await send(overlay, { t: "pointerup", at: to });
+    await awaitConfirmable(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+    await send(overlay, { t: "control", id: "record" });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    await expect.poll(async () => (await status(win)).state, { timeout: 15_000 }).toBe("recording");
+    // Before Finding 2's fix: the window never learned any of this happened.
+    // The button kept reading "Record" and the pickers stayed editable
+    // mid-take — the comment above `lockSettings(true)` says that must never
+    // happen — and pressing Record then asked the helper to start a SECOND
+    // take, answered `already-recording`, a code with no `START_FAULTS`
+    // entry, surfacing a raw error string.
+    await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Stop");
+    await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("recording");
+    await expect.poll(() => pickersLocked(win), { timeout: 15_000 }).toBe(true);
+  }, 120_000);
+});
+
+describe("recordFlowActive guards its own gap (Finding 6, STC-388 review)", () => {
+  test("a second call in the SAME synchronous tick is refused, not a second flow", async () => {
+    const { win, startLog, tempTakes } = await launch();
+    await withoutCountdown(win);
+
+    // Two calls in one synchronous tick, exploiting exactly the gap Finding 6
+    // names: `runRecordFlow`'s guard and its `recordFlowActive = true` now
+    // both run BEFORE its first `await` (`sup.listWindows()`), so calling it
+    // twice with nothing awaited in between means the first call's sync
+    // prefix — guard included — completes before the second call's guard
+    // ever runs. Before the fix, the flag was set only AFTER two awaited
+    // helper round trips, so this exact pattern passed the guard twice.
+    await app!.evaluate(() => {
+      const onSelect = (globalThis as any).__stcTrayOnSelect;
+      onSelect("action:record");
+      onSelect("action:record");
+    });
+
+    // Only ONE overlay ever opens — the second call never reached
+    // `recordFlowBody`/`openOverlay` at all.
+    await sleep(300);
+    expect(app!.windows().filter((p) => p.url().includes("overlay.html")).length).toBe(1);
+
+    // Drive the one real flow through to a take, and confirm exactly ONE
+    // `start` reached the helper — not two racing for the same temp dir.
+    const overlay = await overlayWindow();
+    await dragARegion(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+    await send(overlay, { t: "control", id: "record" });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    await expect.poll(async () => (await status(win)).state, { timeout: 15_000 }).toBe("recording");
+    // No alert from a second flow's `bad-state` reaching the window.
+    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(readdirSync(tempTakes).length).toBe(1);
+    // Settled: no further start ever lands, even after giving a stray second
+    // flow time to have reached the helper.
+    await sleep(500);
+    expect(readLines(startLog).length).toBe(1);
   }, 120_000);
 });

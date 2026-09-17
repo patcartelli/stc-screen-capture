@@ -269,6 +269,15 @@ function startSupervisor(): void {
   sup.on("stats", reconcileTrayRecording);
   sup.on("recording-ended", reconcileTrayRecording);
   sup.on("recording-lost", reconcileTrayRecording);
+  // STC-388 review, Finding 2: the MAIN WINDOW has exactly the same problem
+  // the tray already had one door earlier — a take begun or ended by the
+  // hotkey or the tray never told it anything, because `recording`, the
+  // button label, `#state` and `lockSettings` were written only inside the
+  // window's OWN click handler. `reconcileWindowRecording` is that same fix,
+  // one surface over, off the same three events.
+  sup.on("stats", reconcileWindowRecording);
+  sup.on("recording-ended", reconcileWindowRecording);
+  sup.on("recording-lost", reconcileWindowRecording);
 }
 
 /**
@@ -282,6 +291,35 @@ function reconcileTrayRecording(): void {
   if (recording === trayKnownRecording) return;
   trayKnownRecording = recording;
   tray?.update({ shortcuts, busy: capturing, recording });
+}
+
+/**
+ * The window's own half of the same fix (STC-388 review, Finding 2).
+ *
+ * `sup.state` is CLAUDE.md's own named authority ("anything holding recording
+ * state must reconcile, or it sits there believing a recording is live"),
+ * and this is that rule applied to the main window rather than to the tray:
+ * `HelperSupervisor.stopRecording()` (a hotkey or tray-initiated stop) and
+ * `runRecordFlow` (a hotkey or tray-initiated start) both change it with no
+ * window listening at all today.
+ *
+ * Sent on EVERY stats tick, deliberately NOT gated on a transition tracked in
+ * here the way `reconcileTrayRecording` gates on `trayKnownRecording` — a
+ * MAIN-side "last known" tracker cannot stay correct, because a
+ * self-initiated start or stop updates the RENDERER synchronously (the click
+ * handler) without ever touching one. A window-initiated take that starts
+ * and stops again faster than one stats tick apart (exactly what this fix's
+ * own E2E test does, with no countdown in the way) would leave such a
+ * tracker at its initial `false` through the whole cycle — "false, now
+ * false" reads as no transition, and a real external stop right after would
+ * be silently dropped, the same class of bug this finding exists to fix.
+ * The renderer's own guard (`recorder:recording-state`'s listener) is what
+ * dedupes a message that agrees with what it already believes; this is the
+ * same cost `helper:stats` already pays every ~500ms.
+ */
+function reconcileWindowRecording(): void {
+  const recording = sup?.state === "recording";
+  send("recorder:recording-state", { recording, dir: recording ? sup?.recordingDir : undefined });
 }
 
 /**
@@ -575,28 +613,45 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
   if (!sup) return { ok: false, code: "no-supervisor" };
   // A shot in flight owns the overlay, the countdown panel and the helper's
   // attention. Refused with something to read rather than left to race.
-  if (capturing || overlayIsOpen() || countdownIsOpen()) {
+  //
+  // FINDING 6 (STC-388 review, HIGH). `recordFlowActive` is now part of THIS
+  // guard, and is set below in the SAME synchronous block as this check —
+  // never after an `await`. It used to be set only after two awaited helper
+  // round trips (`listWindows`/`micsForBar`), which is exactly the window a
+  // second ⌃⌥⇧⌘4 press is plausible in: nothing has appeared on screen yet.
+  // That press would pass this guard a second time — `overlayIsOpen()` and
+  // `countdownIsOpen()` are both still false, since neither has opened — and
+  // with the countdown set to Off (a shipped option) both flows could reach
+  // `sup.startRecording()` with different temp dirs, the second answered
+  // `bad-state` for a take that DID start. Checking the flag here closes
+  // that: a second call inside the gap now sees it already true.
+  if (capturing || overlayIsOpen() || countdownIsOpen() || recordFlowActive) {
     return { ok: false, code: "capture-in-flight" };
   }
   if (sup.state === "recording") return { ok: false, code: "already-recording" };
 
-  let windows: WindowInfo[] = [];
-  try {
-    windows = windowsFromReply(await sup.listWindows());
-  } catch {
-    // Without a Screen Recording grant the helper cannot enumerate anything.
-    // Area mode needs no window list, so the overlay still opens; window mode
-    // will offer nothing to click, same as a shot.
-  }
-
-  const stored = readSettings(app.getPath("userData"));
-  const mics = await micsForBar();
-
-  // The flag covers the overlay AND the countdown, because ⌃⌥⇧⌘4 must be able
-  // to cancel either — and it is cleared in a `finally` so a throw anywhere
-  // inside cannot leave the hotkey believing a flow is still up.
+  // Set HERE — synchronously, before any `await` — not after the helper round
+  // trips below. The flag covers the overlay AND the countdown, because
+  // ⌃⌥⇧⌘4 must be able to cancel either, and it is cleared in a `finally` so a
+  // throw anywhere inside (or a second flow's own `finally` running while
+  // this one is still live) cannot leave the hotkey believing a flow is still
+  // up, and cannot clear a DIFFERENT flow's flag out from under it — the flag
+  // is now set for the whole synchronous stretch a second call could arrive
+  // in, so there is no gap left for a second flow to exist at all.
   recordFlowActive = true;
   try {
+    let windows: WindowInfo[] = [];
+    try {
+      windows = windowsFromReply(await sup.listWindows());
+    } catch {
+      // Without a Screen Recording grant the helper cannot enumerate anything.
+      // Area mode needs no window list, so the overlay still opens; window mode
+      // will offer nothing to click, same as a shot.
+    }
+
+    const stored = readSettings(app.getPath("userData"));
+    const mics = await micsForBar();
+
     return await recordFlowBody(source, stored, mics, windows);
   } finally {
     recordFlowActive = false;

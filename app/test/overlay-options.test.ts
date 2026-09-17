@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { nextPhase, fullDisplayFor, anchorRectFor } from "../src/overlay-session.js";
+import { nextPhase, fullDisplayFor, anchorRectFor, barBelongsOn } from "../src/overlay-session.js";
 import { barLayout, CONTROL_IDS, expandedSelection, sizeLabel } from "../src/record-options.js";
 import { confirm } from "../src/selection.js";
 import type {
@@ -162,5 +162,36 @@ describe("expand + a window pick: always a REGION, never a stale pair (STC-388)"
       mode: "window", rect: expandedSelection(display), hoveredWindowId: 7,
     };
     expect(confirm(stateWithModeUnchanged, ctx)).toEqual({ kind: "window", windowId: 7 });
+  });
+});
+
+describe("the bar belongs on ONE display, not every window's own (Finding 5, STC-388 review)", () => {
+  // A real second display is unobservable both in this sandbox and on CI
+  // (docs/STC-388-RUNBOOK.md) — this is the only place the rule can be
+  // checked at all, with two synthetic displays standing in for real ones.
+  const displayA: DisplayInfo = { id: 1, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, scaleFactor: 1 };
+  const displayB: DisplayInfo = { id: 2, bounds: { x: 1920, y: 0, width: 1920, height: 1080 }, scaleFactor: 1 };
+  const anchorOnA: Rect = { x: 100, y: 100, width: 200, height: 100 };
+
+  test("belongs on the display the anchor is actually on", () => {
+    expect(barBelongsOn(anchorOnA, displayA.id, [displayA, displayB])).toBe(true);
+  });
+
+  test("does NOT belong on a display the anchor never touches — the bug this fixes", () => {
+    // Before this fix, `push()` built a layout for EVERY window unconditionally:
+    // `barLayout`/`micMenuLayout` clamp into whichever display's bounds they
+    // are handed, so display B got a fully visible, fully live copy of a bar
+    // that belongs on display A.
+    expect(barBelongsOn(anchorOnA, displayB.id, [displayA, displayB])).toBe(false);
+  });
+
+  test("a window straddling both displays follows dominantDisplay's own call, not a second rule", () => {
+    const straddling: Rect = { x: 1800, y: 100, width: 400, height: 100 }; // mostly on B
+    expect(barBelongsOn(straddling, displayB.id, [displayA, displayB])).toBe(true);
+    expect(barBelongsOn(straddling, displayA.id, [displayA, displayB])).toBe(false);
+  });
+
+  test("no anchor (select phase) belongs nowhere", () => {
+    expect(barBelongsOn(undefined, displayA.id, [displayA, displayB])).toBe(false);
   });
 });
