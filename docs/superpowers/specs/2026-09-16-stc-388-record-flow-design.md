@@ -194,11 +194,16 @@ asserted individually rather than as one blob:
 
 1. **Below the marquee by default**, horizontally centred on it.
 2. **Flips above** when below would not fit inside the display.
-3. **Clamped inside the display** on both axes when neither placement fits — a
-   bar off the edge of the screen is a bar with an unreachable Record button.
-4. **Never overlaps the marquee** in either placement. This is separate from
-   rules 1–2 and is asserted separately, because a flip that lands on top of the
-   selection satisfies "fits on screen" and still hides what is being recorded.
+3. **Never overlaps the marquee** in either of those placements. Asserted
+   separately from rules 1–2, because a flip that lands on top of the selection
+   satisfies "fits on screen" and still hides what is being recorded.
+4. **Falls back to `inside`** — anchored to the selection's bottom inner edge
+   and clamped to the display — when neither below nor above fits. A marquee
+   covering the whole display leaves nowhere that satisfies rule 3, so rule 3
+   cannot be absolute; making the fallback an explicit third `placement` keeps
+   that honest and lets the view style it, rather than silently producing a bar
+   half off the screen with an unreachable Record button. The test asserts
+   `inside` appears **only** when neither other placement fits.
 
 Per CLAUDE.md, the composition is asserted, not the magnitude: each term is
 named and required, then mutated to watch the assertion fail.
