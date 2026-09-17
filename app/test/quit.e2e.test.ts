@@ -377,4 +377,72 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     // naturally elapsed.
     expect(existsSync(join(temp, before[0]!))).toBe(false);
   }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + 60_000);
+
+  /**
+   * Pins the SYNCHRONOUS ordering ruling 2 actually rests on (STC-392
+   * review, I3) — "a promised deletion is not counted as unhandled" passing
+   * above proves the OUTCOME, but every assertion that leads to it goes
+   * through `expect.poll`, which cannot tell "happens in the same tick" from
+   * "happens eventually, fast enough that nobody noticed". `panel:trash`'s
+   * own handler calls `pendingTrash.promise(dir)` then `dismissThumbnail(dir)`
+   * with no `await` between them, and `dismissThumbnail`'s `dismissNow()` is
+   * itself documented synchronous (`thumbnail-window.ts`) — so by the time
+   * the IPC call this test awaits below RESOLVES, the panel has already left
+   * `panels`, with nothing left to poll for.
+   */
+  /**
+   * `panelCount()` (above) reads Playwright's own window list, which moves
+   * with the REAL native window closing — it says nothing about
+   * `thumbnail-window.ts`'s internal `panels` array, which is what
+   * `unsavedTakeDirs()` (and so `before-quit`'s `unhandled` count) actually
+   * reads. Those two are today updated together, synchronously, inside
+   * `destroy()` — but nothing external can observe THAT array directly, so
+   * the only way to pin "the removal happens in the same tick" from outside
+   * `main.ts` is to check the thing that is actually observable and actually
+   * matters: the quit warning's own count, read immediately after the
+   * trashed panel's real window has closed, with no further wait in between.
+   */
+  test("the quit warning's count already excludes a just-trashed take, checked the instant its window closes (review I3)", async () => {
+    const { win } = await launchWithHelper();
+    const r1: any = await captureDisplay(win);
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(1);
+    const r2: any = await captureDisplay(win);
+    expect(r2.ok).toBe(true);
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(2);
+
+    const dir1 = r1.dir as string;
+    const panel1 = app!.windows().find((p) =>
+      p.url().includes("thumbnail.html") && new URL(p.url()).searchParams.get("dir") === dir1)!;
+
+    // Trash DESTROYS this very panel's window as part of handling the IPC
+    // call that presses it, so awaiting `window.thumb.trash(dir)`'s own
+    // resolution from inside the panel's page cannot work — the page (and
+    // Playwright's channel to it) is gone before a reply could ever arrive.
+    // The window's own `"closed"` event is the synchronization point
+    // instead — EVENT-driven, not a fixed interval an `expect.poll` would
+    // re-check.
+    const closed = app!.evaluate(({ BrowserWindow }, url) => new Promise<void>((resolve) => {
+      const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL() === url);
+      if (!w || w.isDestroyed()) { resolve(); return; }
+      w.once("closed", () => resolve());
+    }), panel1.url());
+    // Not awaited for its own resolution — `.click()` resolves once the
+    // click event is dispatched, well before the IPC round trip it triggers
+    // finishes, so this line returning is not a synchronization point.
+    await panel1.click("#trash");
+    await closed;
+
+    // Quit IMMEDIATELY — nothing waited beyond the window actually closing.
+    // If the removal from `panels` (what `unsavedTakeDirs` reads) were ever
+    // deferred to AFTER the window closes — a plausible-looking refactor
+    // that moved the bookkeeping into an async callback — this reads the
+    // STALE count and the dialog says "2 takes aren't saved" instead of "1".
+    const { calls, lastArgs } = await stubQuitDialog(1); // Quit Anyway.
+    await app!.evaluate(({ app: electronApp }) => electronApp.quit());
+    await expect.poll(() => calls(), { timeout: POLL_MS }).toBe(1);
+    expect((await lastArgs()).message).toBe("1 take isn't saved");
+
+    await app!.close();
+    app = undefined;
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 3 * POLL_MS + 30_000);
 });

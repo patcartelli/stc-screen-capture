@@ -333,6 +333,21 @@ export function dismissThumbnail(dir: string): void {
   for (const p of [...panels]) if (p.takeDir === dir) p.dismissNow();
 }
 
+/**
+ * The `take` a currently-open panel for this dir was presented with, if any.
+ *
+ * The one place `main.ts`'s `panel:trash` should read `origin` from (STC-392
+ * review, I7) — the panel this handler is ALWAYS reached from already
+ * carries the fact `trashStyle` needs, so re-deriving it from the path
+ * (`insideTempTakesRoot`) a second time is the same answer from a second
+ * source, which is this codebase's most repeated defect the moment the two
+ * sources are ever asked to disagree. `undefined` when no panel matches —
+ * every real caller has one, since this window is where the ✕ was pressed.
+ */
+export function takeFor(dir: string): PanelTake | undefined {
+  return panels.find((p) => p.takeDir === dir)?.take;
+}
+
 /** Whether any panel is on screen right now, for tests. */
 export function thumbnailIsOpen(): boolean { return panels.length > 0; }
 

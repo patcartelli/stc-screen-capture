@@ -117,7 +117,7 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
 
   if (captures > 0) {
     await expect.poll(() => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
-                       { timeout: 15_000 }).toBe(captures);
+                       { timeout: POLL_MS }).toBe(captures);
   }
   return { win, app, temp, recordings, destDir };
 }
@@ -200,7 +200,7 @@ describe("the panel waits (STC-392)", () => {
     const panel = panelWindow(electronApp);
     await panel.click("#save");
     await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
-                       { timeout: 15_000 }).toBe(0);
+                       { timeout: POLL_MS }).toBe(0);
 
     expect(readdirSync(temp)).toEqual([]);
     expect(readdirSync(recordings).filter((n) => !n.startsWith(".") && n !== "2026-08-24_10-00-00"))
@@ -238,7 +238,7 @@ describe("the panel waits (STC-392)", () => {
     if (elapsed < 500) await sleep(500 - elapsed);
     await pressTrashKey();
     await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
-                       { timeout: 15_000 }).toBe(0);
+                       { timeout: POLL_MS }).toBe(0);
     // STC-392 Task 6 changed what "deletes" means: the panel closes on the
     // spot (it just did, above), but the take itself is only PROMISED —
     // still sitting in temp storage until the undo window elapses. The old

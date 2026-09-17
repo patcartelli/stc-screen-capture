@@ -44,7 +44,7 @@ import type { WindowInfo } from "./selection.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
-  unsavedTakeDirs,
+  unsavedTakeDirs, takeFor,
 } from "./thumbnail-window.js";
 import { promotes, trashStyle } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
@@ -520,7 +520,13 @@ function runQuitTeardown(): void {
   // answer when the process is going away underneath it.
   cancelCountdown();
   hideUndoToast();
-  Promise.all(pendingTrash.all().map((d) =>
+  // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
+  // is still armed for as long as this chain's own `await`s give the event
+  // loop a turn, and reading non-destructively would let it ALSO pick up
+  // whatever this commits, handing the same directory to `shell.trashItem`
+  // twice. Draining removes them from `pendingTrash` in this same tick, so
+  // whichever of the two runs first is the only one that ever sees them.
+  Promise.all(pendingTrash.drainAll().map((d) =>
     shell.trashItem(d).catch((e) => console.error("[trash] could not commit:", d, e))))
     .then(() => closeThumbnail())
     .catch(() => {})
@@ -1276,26 +1282,44 @@ ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
  * finding. Both callers already validate the directory against their own
  * root before reaching this; it does not re-check.
  */
-async function trashWithConfirmation(dir: string): Promise<{ ok: boolean; detail?: string }> {
+async function trashWithConfirmation(
+  dir: string,
+): Promise<{ ok: boolean; detail?: string; cancelled?: boolean }> {
   if (!win) return { ok: false, detail: "no window" };
-  const { response } = await dialog.showMessageBox(win, {
-    type: "warning",
-    buttons: ["Move to Trash", "Cancel"],
-    defaultId: 1,
-    cancelId: 1,
-    message: "Move this take to the Trash?",
-    detail: dir,
-  });
-  if (response !== 0) return { ok: false, detail: "cancelled" };
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: "warning",
+      buttons: ["Move to Trash", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      message: "Move this take to the Trash?",
+      detail: dir,
+    });
+    // Cancelling is a decision, not a fault (STC-392 review, I5) — the same
+    // rule `runExport`'s Save As cancel already follows
+    // (`thumbnail-renderer.ts`): `cancelled` is a field of its own, checked
+    // by the renderer BEFORE `!r.ok`, so a Cancel reads as nothing happened
+    // rather than "Could not delete: cancelled".
+    if (response !== 0) return { ok: false, cancelled: true };
 
-  // A window with this take open no longer has anywhere valid to write.
-  for (const [sid, d] of openTakes) if (d === dir) openTakes.delete(sid);
-  await shell.trashItem(dir);
-  // No-op unless a panel is showing this take (the `panel:trash` "confirm"
-  // path — a re-opened library shot); `take:delete`'s own caller (the
-  // library grid) never has one open for the take it is deleting.
-  dismissThumbnail(dir);
-  return { ok: true };
+    // A window with this take open no longer has anywhere valid to write.
+    for (const [sid, d] of openTakes) if (d === dir) openTakes.delete(sid);
+    await shell.trashItem(dir);
+    // No-op unless a panel is showing this take (the `panel:trash` "confirm"
+    // path — a re-opened library shot); `take:delete`'s own caller (the
+    // library grid) never has one open for the take it is deleting.
+    dismissThumbnail(dir);
+    return { ok: true };
+  } catch (e: any) {
+    // STC-392 review, I2: `dialog.showMessageBox` and `shell.trashItem` were
+    // previously UNCAUGHT here, so a rejection (a real Trash failure, say)
+    // escaped as an unhandled promise rejection in the renderer's `perform()`
+    // — `setStatus` never ran and `discard()`'s restore-on-failure never
+    // fired, leaving a panel that looked hidden-but-alive with no message and
+    // no way back. Caught and reported the same way every other take-moving
+    // handler in this file already is (`panel:save`/`panel:edit`).
+    return { ok: false, detail: String(e?.message ?? e) };
+  }
 }
 
 ipcMain.handle("take:delete", async (_e, dir: string) => {
@@ -1698,7 +1722,13 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
-  const origin = insideTempTakesRoot(process.env, dir) ? "fresh" : "library";
+  // The panel's OWN `take.origin` (STC-392 review, I7) — not re-derived from
+  // the path a second time. The path-based answer is kept only as a
+  // fallback for the case no panel is open for this dir, which should never
+  // happen in practice (this handler is always reached from that panel's own
+  // renderer) but must still answer something rather than throw.
+  const origin = takeFor(dir)?.origin
+    ?? (insideTempTakesRoot(process.env, dir) ? "fresh" : "library");
   if (trashStyle(origin) === "confirm") return trashWithConfirmation(dir);
 
   if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }

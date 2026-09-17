@@ -332,3 +332,74 @@ describe("duplicate", () => {
     expect(readFileSync(join(original, "shot.json"), "utf8")).toBe(before);
   }, 60_000);
 });
+
+/**
+ * The panel's OTHER Trash style — a re-opened library shot, `trashStyle`'s
+ * "confirm" (STC-392 D1), reached via `trashWithConfirmation` (STC-392
+ * review). Both tests here open a shot from the grid exactly like the test
+ * above, then actually press Trash — which that one never does.
+ */
+describe("the panel's confirm-style Trash (STC-392 review, I2/I5)", () => {
+  async function openReopenedPanel(win: Page): Promise<Page> {
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await clickAction(win, 0, "open");
+    const panel = await thumbnailWindow();
+    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
+      .toContain("in");
+    return panel;
+  }
+
+  test("cancelling reports nothing wrong, and the take is untouched (review I5)", async () => {
+    const { win, recordings } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
+    const panel = await openReopenedPanel(win);
+
+    // A call counter, not just a stubbed response — an empty status line
+    // proves nothing on its own (it is also the panel's INITIAL state), so
+    // the assertion needs proof the round trip to main actually happened.
+    await app!.evaluate(({ dialog }) => {
+      (globalThis as any).__dialogCalls = 0;
+      dialog.showMessageBox = async () => {
+        (globalThis as any).__dialogCalls++;
+        return { response: 1, checkboxChecked: false }; // Cancel
+      };
+    });
+    await panel.click("#trash");
+    await expect.poll(() => app!.evaluate(() => (globalThis as any).__dialogCalls ?? 0),
+                       { timeout: 15_000 }).toBe(1);
+
+    // Cancelling is a decision, not a fault (I5) — the same rule
+    // `runExport`'s Save As cancel already follows. The OLD behaviour read
+    // "Could not delete: cancelled" on this line.
+    expect(await panel.evaluate(() => document.getElementById("status")!.textContent)).toBe("");
+    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(existsSync(original)).toBe(true);
+  }, 60_000);
+
+  test("a failed trash reports the error and leaves the panel open (review I2)", async () => {
+    const { win, recordings } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
+    const panel = await openReopenedPanel(win);
+
+    await app!.evaluate(({ dialog, shell }) => {
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); // Move to Trash
+      shell.trashItem = async () => { throw new Error("simulated Trash failure"); };
+    });
+    await panel.click("#trash");
+
+    // The OLD `trashWithConfirmation` left `dialog.showMessageBox` and
+    // `shell.trashItem` uncaught, so this rejection would have escaped as an
+    // unhandled promise rejection in the renderer's `perform()` — no status
+    // line, no restore, a panel that looks hidden-but-alive with no way
+    // back (review I2). A message actually reaching the status line, with
+    // the panel still open, is the proof the rejection was caught.
+    await expect.poll(() => panel.evaluate(() => document.getElementById("status")!.textContent),
+                       { timeout: 15_000 }).toContain("Could not delete");
+    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(existsSync(original)).toBe(true);
+  }, 60_000);
+});

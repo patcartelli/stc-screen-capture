@@ -59,4 +59,25 @@ describe("the undo window", () => {
     expect(p.due(5_000 + UNDO_WINDOW_MS - 1)).toEqual([]);
     expect(p.due(5_000 + UNDO_WINDOW_MS)).toEqual(["/t/a"]);
   });
+
+  // STC-392 review, I4: the quit commit must DRAIN, not merely read, or the
+  // periodic sweep (`main.ts`'s `due()` interval) racing the quit teardown's
+  // own async chain can hand the same directory to `shell.trashItem` twice.
+  test("drainAll takes everything AND empties the map, unlike all()", () => {
+    const p = new PendingTrash();
+    p.promise("/t/a", 0);
+    p.promise("/t/b", 0);
+    expect(p.drainAll().sort()).toEqual(["/t/a", "/t/b"]);
+    // Taken: a second read sees nothing, so a caller racing this one (the
+    // periodic sweep) cannot also commit the same directories.
+    expect(p.all()).toEqual([]);
+    expect(p.drainAll()).toEqual([]);
+  });
+
+  test("drainAll does not hand back an already-undone promise", () => {
+    const p = new PendingTrash();
+    p.promise("/t/a", 0);
+    expect(p.undo("/t/a")).toBe(true);
+    expect(p.drainAll()).toEqual([]);
+  });
 });

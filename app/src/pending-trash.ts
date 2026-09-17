@@ -20,7 +20,7 @@ import { UNDO_WINDOW_MS } from "./panel-actions.js";
  * A promised deletion still sitting in temp storage when the app quits would
  * be found by STC-393's recovery prompt on the next launch and offered back
  * as an unsaved take — the app handing someone a thing they deleted eight
- * seconds before they quit. So `all()` exists, and `main.ts`'s shutdown
+ * seconds before they quit. So `drainAll()` exists, and `main.ts`'s shutdown
  * commits every outstanding promise before the recovery path can ever see
  * them. The direction that fails safe here is honouring the delete, not
  * resurrecting it.
@@ -71,8 +71,33 @@ export class PendingTrash {
     return out;
   }
 
-  /** Everything still outstanding — the shutdown commit's whole input. */
+  /**
+   * Everything still outstanding, LOOKED AT without being taken. Read-only
+   * on purpose (`pending-trash.test.ts`'s own "everything still promised is
+   * nameable" test relies on this not mutating) — for anything that
+   * actually COMMITS what it reads, see `drainAll()` below.
+   */
   all(): string[] {
     return [...this.promised.keys()];
+  }
+
+  /**
+   * Every promise still outstanding, taken all at once and removed —
+   * `main.ts`'s shutdown commit uses this, not `all()` (STC-392 review, I4).
+   *
+   * `all()` alone would let the periodic sweep (`pendingTrash.due()`,
+   * `main.ts`'s 1s interval) ALSO pick up the same directories while the
+   * quit teardown's own async chain (`closeThumbnail`/`closeOverlay`/
+   * `sup.shutdown`) is still running — both callers would then hand the
+   * same path to `shell.trashItem`, and the second call is exactly the
+   * "reports a failure for something that worked" one-shot `due()` already
+   * exists to prevent, just reached from a second direction. `drainAll`
+   * closes it the same way: whichever caller's read happens first empties
+   * the map for the other.
+   */
+  drainAll(): string[] {
+    const out = this.all();
+    this.promised.clear();
+    return out;
   }
 }

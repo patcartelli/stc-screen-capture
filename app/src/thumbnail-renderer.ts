@@ -61,7 +61,13 @@ declare global {
       /** The three actions that CHANGE where a take lives (STC-392) — see `panel-actions.ts`. */
       save(dir: string): Promise<{ ok: boolean; dir?: string; detail?: string }>;
       edit(dir: string): Promise<{ ok: boolean; detail?: string }>;
-      trash(dir: string): Promise<{ ok: boolean; detail?: string }>;
+      trash(dir: string): Promise<{
+        ok: boolean; detail?: string;
+        /** A library-origin take's confirm dialog was declined (STC-392 D1's
+         * "confirm" style, `trashWithConfirmation`) — a decision, not a
+         * fault (STC-392 review, I5). */
+        cancelled?: boolean;
+      }>;
       dragFile(req: Record<string, unknown>): Promise<{ ok: boolean; file?: string; detail?: string }>;
       startDrag(file: string): void;
       reveal(): Promise<boolean>;
@@ -473,6 +479,11 @@ async function run(action: PanelAction): Promise<boolean> {
   // trash
   window.thumb.event({ kind: "discarding" });
   const r = await window.thumb.trash(dir);
+  // Cancelling the confirm dialog (a library-origin take, D1) is a decision,
+  // not a fault (STC-392 review, I5) — the same rule `runExport`'s Save As
+  // cancel already follows, checked before the generic failure branch so a
+  // Cancel never reads as "Could not delete: cancelled".
+  if (r.cancelled) { setStatus(""); return false; }
   if (!r.ok) { setStatus(`Could not delete: ${r.detail ?? "unknown error"}`); return false; }
   return true;
 }
