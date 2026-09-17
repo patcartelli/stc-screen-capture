@@ -63,6 +63,15 @@
     button:disabled:hover { background: rgba(255, 255, 255, 0.12); }
     button[hidden] { display: none; }
     #trash { margin-left: auto; padding: 4px 9px; }
+    /*
+      The overflow badge (Task 5b / STC-392 D7) — how many captures the
+      MAX_STACKED cap is hiding behind this one, reachable through the SAME
+      panel component rather than a second list UI. No `data-action`: it is
+      not one of `panel-actions.ts`'s four take actions, and
+      `thumbnail-renderer.ts` scopes its action-row queries to
+      `[data-action]` specifically so this button is left alone by both.
+    */
+    #overflow { font-weight: 600; }
     #status { opacity: 0.75; margin-top: 4px; min-height: 1.2em; }
     /* redact mode (STC-297): the panel grows so a box can be placed over a
        line of text rather than over a fifth of the screenshot. */
@@ -92,6 +101,7 @@
         <button id="copy" data-action="copy">Copy</button>
         <button id="save" data-action="save">Save</button>
         <button id="edit" data-action="edit">Edit</button>
+        <button id="overflow" title="Show the waiting captures" hidden>+0</button>
         <button id="trash" data-action="trash" title="Delete this take">✕</button>
       </div>
       <div class="row" id="redactrow">

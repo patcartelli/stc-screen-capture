@@ -4,6 +4,7 @@ import { mkdtempSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { MAX_STACKED } from "../src/thumbnail.js";
 
 /**
  * The contract STC-392 reverses, end to end.
@@ -209,4 +210,181 @@ describe("the panel waits (STC-392)", () => {
                        { timeout: 15_000 }).toBe(0);
     expect(readdirSync(temp).length).toBe(0);
   }, 40_000);
+});
+
+/**
+ * The stack caps at three, and drops nothing (Task 5b / STC-392 D7).
+ *
+ * `thumbnail.test.ts` proves `hiddenCount`'s arithmetic with no window at
+ * all; this is the wiring that arithmetic cannot see — that a burst of real
+ * captures really leaves every `BrowserWindow` alive, that only `MAX_STACKED`
+ * of them are actually `isVisible()`, and that the two independent hide
+ * reasons (`hiddenForCapture`/`hiddenForOverflow`, `thumbnail-window.ts`)
+ * really do compose rather than one clobbering the other.
+ */
+describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
+  /** Every thumbnail window's url and real on-screen visibility, read from the main process. */
+  async function thumbnailPanels(electronApp: ElectronApplication):
+      Promise<{ url: string; visible: boolean }[]> {
+    return electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .filter((w) => w.webContents.getURL().includes("thumbnail.html"))
+        .map((w) => ({ url: w.webContents.getURL(), visible: w.isVisible() })));
+  }
+
+  async function launchBare(extraEnv: Record<string, string> = {}) {
+    const { dir: recordings } = makeTakeFolder();
+    const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
+    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+    app = await electron.launch({
+      args: [root, `--user-data-dir=${userData}`],
+      cwd: root,
+      env: {
+        ...process.env,
+        STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp,
+        STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1", ...extraEnv,
+      },
+    });
+    const win = await app.firstWindow();
+    await win.waitForSelector("#capturestill");
+    return { win, recordings, temp };
+  }
+
+  async function captureDisplay(win: Page): Promise<void> {
+    const r = await win.evaluate(() => (window as any).recorder.captureStill("display"));
+    if (!r.ok) throw new Error(`captureStill("display") failed: ${JSON.stringify(r)}`);
+  }
+
+  test("five captures in a burst leave FIVE alive panel windows, only MAX_STACKED visible", async () => {
+    // THIS IS THE LOAD-BEARING HALF. `presentThumbnail` used to call
+    // `settleAndDestroy()` (later `dismissNow()`) on whatever a burst pushed
+    // past the cap — safe only because a panel had a default outcome (the
+    // timeout's export), which STC-392 removed. The old behaviour here would
+    // leave FOUR windows, the fifth already destroyed with its take exported
+    // to nobody's request. "Nothing is dropped, only hidden" means the count
+    // below is 5, not `MAX_STACKED`.
+    const { win } = await launchBare();
+    for (let i = 0; i < 5; i++) await captureDisplay(win);
+
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.length),
+                       { timeout: 15_000 }).toBe(5);
+    // A window's `isVisible()` only settles once its OWN page has painted
+    // (`ThumbnailSession`'s `hasPainted` gate) — `presentThumbnail` returns
+    // as soon as the `BrowserWindow` exists, well before `loadFile` has run
+    // far enough to send `"painted"`. Poll the visible count itself rather
+    // than reading it once right after the length settles.
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.filter((x) => x.visible).length),
+                       { timeout: 15_000 }).toBe(MAX_STACKED);
+    const panels = await thumbnailPanels(app!);
+    expect(panels.length).toBe(5);
+    expect(panels.filter((p) => !p.visible).length).toBe(5 - MAX_STACKED);
+  }, 60_000);
+
+  test("the newest panel's badge counts exactly the hidden ones", async () => {
+    // Ruling 2: the badge's count has ONE owner (`hiddenCount`), and the
+    // renderer is handed the answer rather than deriving it. This is the
+    // closest an E2E can get to proving that without reaching into the
+    // renderer's own module graph — it reads what the DOM actually shows.
+    const { win } = await launchBare();
+    for (let i = 0; i < 4; i++) await captureDisplay(win);
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.length),
+                       { timeout: 15_000 }).toBe(4);
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.filter((x) => x.visible).length),
+                       { timeout: 15_000 }).toBe(MAX_STACKED);
+
+    // The newest panel is the one most recently presented — `thumbnailPanels`
+    // has no ordering guarantee, so ask Electron for the frontmost by y
+    // (bottom-right default corner: newest has the LARGEST y — the same
+    // reasoning `crash-recovery.e2e.test.ts` already uses for this).
+    const withY = await app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .filter((w) => w.webContents.getURL().includes("thumbnail.html"))
+        .map((w) => ({ url: w.webContents.getURL(), y: w.getBounds().y })));
+    const newestUrl = [...withY].sort((a, b) => b.y - a.y)[0]!.url;
+    const newest = app!.windows().find((p) => p.url() === newestUrl)!;
+
+    await expect.poll(() => newest.textContent("#overflow"), { timeout: 15_000 }).toBe("+1");
+    expect(await newest.isHidden("#overflow")).toBe(false);
+  }, 60_000);
+
+  test("clicking the badge expands the stack — the hidden panel IS the list", async () => {
+    // Ruling 3: no second list UI. The spec's "clicking expands a list of
+    // waiting takes with the same actions" is satisfied by un-hiding the
+    // existing panel — there is no separate window or list view to open, so
+    // the only observable effect of a click is that a panel already in
+    // `app.windows()` becomes visible.
+    const { win } = await launchBare();
+    for (let i = 0; i < 4; i++) await captureDisplay(win);
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.length),
+                       { timeout: 15_000 }).toBe(4);
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.filter((x) => x.visible).length),
+                       { timeout: 15_000 }).toBe(MAX_STACKED);
+
+    const withY = await app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .filter((w) => w.webContents.getURL().includes("thumbnail.html"))
+        .map((w) => ({ url: w.webContents.getURL(), y: w.getBounds().y })));
+    const newestUrl = [...withY].sort((a, b) => b.y - a.y)[0]!.url;
+    const newest = app!.windows().find((p) => p.url() === newestUrl)!;
+    await expect.poll(() => newest.textContent("#overflow"), { timeout: 15_000 }).toBe("+1");
+
+    await newest.click("#overflow");
+
+    // Every window that existed before the click still exists (no new
+    // window opened, no second surface) and all four are now visible.
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.filter((x) => x.visible).length),
+                       { timeout: 15_000 }).toBe(4);
+    const after = await thumbnailPanels(app!);
+    expect(after.length).toBe(4);
+    // The badge itself has nothing left to announce.
+    await expect.poll(() => newest.textContent("#overflow"), { timeout: 15_000 }).toBe("+0");
+  }, 60_000);
+
+  test("a cancelled capture's hide/reshow cycle does not un-hide an overflow-hidden panel", async () => {
+    // Ruling 1: two independent hide reasons. `beforeCapture` hides EVERY
+    // panel (even ones already hidden by the cap) so it cannot appear in its
+    // own screenshot; `afterCapture` lifts only that one reason. If the two
+    // reasons shared one flag, `afterCapture`'s `reshow()` would incorrectly
+    // un-hide the overflow panel here — and nothing else runs afterwards to
+    // mask it, because a CANCELLED capture never reaches `presentThumbnail`
+    // (no `restack()` to re-apply the cap). This is deliberately the
+    // discriminating case a completed capture cannot be: a completed one
+    // always ends in `restack()`, which would re-hide an incorrectly-shown
+    // overflow panel and hide the bug along with it.
+    const { win } = await launchBare({ STC_OVERLAY_SYNTHETIC_INPUT: "1" });
+    for (let i = 0; i < 4; i++) await captureDisplay(win);
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.length),
+                       { timeout: 15_000 }).toBe(4);
+    // Same paint-settle reasoning as the burst test above.
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.filter((x) => x.visible).length),
+                       { timeout: 15_000 }).toBe(MAX_STACKED);
+
+    const before = await thumbnailPanels(app!);
+    expect(before.filter((p) => p.visible).length).toBe(MAX_STACKED);
+    const hiddenUrl = before.find((p) => !p.visible)!.url;
+
+    // A region capture, cancelled: `hideThumbnailForCapture` hides every
+    // panel, the overlay opens, Escape cancels it, and `showThumbnailsAfterCapture`
+    // runs in `captureStill`'s `finally` with NO new panel ever presented.
+    const captured = win.evaluate(() => (window as any).recorder.captureStill("region"));
+    let overlay: Page | undefined;
+    const overlayDeadline = Date.now() + 15_000;
+    while (!overlay && Date.now() < overlayDeadline) {
+      overlay = app!.windows().find((p) => p.url().includes("overlay.html"));
+      if (!overlay) await sleep(50);
+    }
+    if (!overlay) throw new Error("no overlay window appeared");
+    await overlay.evaluate(() => (window as any).overlay.send({ t: "key", key: "Escape" }));
+    const r = await captured;
+    expect(r.cancelled).toBe(true);
+
+    // Give `afterCapture`'s `showInactive()` calls a moment to actually land.
+    await sleep(300);
+    const after = await thumbnailPanels(app!);
+    expect(after.length).toBe(4);
+    const stillHidden = after.find((p) => p.url === hiddenUrl);
+    expect(stillHidden?.visible).toBe(false);
+    // Every OTHER panel came back — the capture-hide reason was lifted.
+    expect(after.filter((p) => p.url !== hiddenUrl && p.visible).length).toBe(MAX_STACKED);
+  }, 60_000);
 });

@@ -5,6 +5,7 @@ import {
   discardDirection, isHorizontal, swipeOffset, isDiscardSwipe, SWIPE_DISCARD_PX,
   classifyDrag, DRAG_START_PX,
   stackPosition, STACK_STEP_PX, MAX_STACKED, PANEL_SIZE,
+  hiddenCount, visibleCount,
   CORNERS,
 } from "../src/thumbnail.js";
 
@@ -43,8 +44,52 @@ describe("the panel state machine (STC-392: it waits)", () => {
                         "DEFAULT_THUMBNAIL_TIMEOUT_MS", "MIN_THUMBNAIL_TIMEOUT_MS"]) {
       expect(Object.keys(mod)).not.toContain(gone);
     }
-    for (const present of ["show", "dismiss", "positionFor", "stackPosition"]) {
+    for (const present of ["show", "dismiss", "positionFor", "stackPosition",
+                           "hiddenCount", "visibleCount"]) {
       expect(Object.keys(mod)).toContain(present);
+    }
+  });
+});
+
+describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
+  test("a fourth capture hides the oldest rather than settling it", () => {
+    // THIS IS THE LOAD-BEARING HALF. `presentThumbnail` used to call
+    // `settleAndDestroy()` (later `dismissNow()`) on whatever went past the
+    // cap, which was safe only because a panel HAD a default outcome — the
+    // timeout's export. STC-392 removed the default outcome, so the same
+    // eviction now destroys a take nobody decided on. "Nothing is dropped,
+    // only hidden" is the correctness half of this ticket applied to a burst
+    // of captures, not a UI nicety.
+    expect(MAX_STACKED).toBe(3);
+    expect(hiddenCount(3)).toBe(0);
+    expect(hiddenCount(4)).toBe(1);
+    expect(hiddenCount(9)).toBe(6);
+  });
+
+  test("the badge counts every panel the stack is not showing", () => {
+    // The badge's number and the number of live-but-hidden panels are one
+    // value. Two ways to count them would be the defect; `hiddenCount` is the
+    // only one, and the renderer (`thumbnail-window.ts`'s `restack`) is
+    // handed its answer rather than deriving it.
+    for (const total of [1, 3, 4, 12]) {
+      expect(hiddenCount(total)).toBe(Math.max(0, total - MAX_STACKED));
+    }
+  });
+
+  test("hiddenCount never goes negative, and visibleCount never exceeds the cap", () => {
+    expect(hiddenCount(0)).toBe(0);
+    expect(hiddenCount(1)).toBe(0);
+    expect(visibleCount(0)).toBe(0);
+    expect(visibleCount(2)).toBe(2);
+    expect(visibleCount(MAX_STACKED)).toBe(MAX_STACKED);
+    expect(visibleCount(MAX_STACKED + 5)).toBe(MAX_STACKED);
+  });
+
+  test("visible plus hidden always accounts for every panel", () => {
+    // The two counts are the same fact read two ways — asserted directly so
+    // they cannot drift apart even though each has its own formula.
+    for (const total of [0, 1, 2, 3, 4, 7, 20]) {
+      expect(visibleCount(total) + hiddenCount(total)).toBe(total);
     }
   });
 });
@@ -272,8 +317,15 @@ describe("stacking (STC-296 follow-up)", () => {
     expect(consumed).toBeLessThanOrEqual(workArea.height);
   });
 
-  test("the cap matches the acceptance case it exists for", () => {
-    // "Five captures in five seconds produce five recoverable shots."
-    expect(MAX_STACKED).toBeGreaterThanOrEqual(5);
+  test("the cap matches the ticket's own words, restated for Task 5b (STC-392 D7)", () => {
+    // This used to assert the OLD contract — "five captures in five seconds
+    // produce five recoverable shots" (STC-296), when a panel pushed past
+    // the cap settled itself and "recoverable" meant "exported". That
+    // premise is gone: the cap is now a VISIBILITY limit, not a survival
+    // one, and the ticket's own words for it are "max 3 panels visible".
+    // Five captures still produce five recoverable takes — none of them are
+    // ever destroyed by the cap now — but that is `hiddenCount`'s claim
+    // above, not this constant's.
+    expect(MAX_STACKED).toBe(3);
   });
 });

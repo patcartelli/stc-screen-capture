@@ -57,4 +57,13 @@ contextBridge.exposeInMainWorld("thumb", {
   // the identical reason; `thumbnail-window.ts`'s `ThumbEvent` is the one
   // place this shape is decided.
   event: (ev: unknown) => ipcRenderer.send("thumbnail:event", ev),
+  // The overflow badge's count (Task 5b / STC-392 D7) — `thumbnail.ts`'s
+  // `hiddenCount` is its only source; this channel just carries the answer
+  // across the process boundary, the same `on`/return-an-unsubscribe shape
+  // `overlay-preload.ts`'s `onState` already uses.
+  onHiddenCount: (cb: (n: number) => void) => {
+    const listener = (_e: unknown, n: number) => cb(n);
+    ipcRenderer.on("thumbnail:hiddenCount", listener);
+    return () => ipcRenderer.removeListener("thumbnail:hiddenCount", listener);
+  },
 });

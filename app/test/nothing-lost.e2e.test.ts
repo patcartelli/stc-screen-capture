@@ -168,11 +168,19 @@ describe("gate 4: nothing is lost in a burst of captures", () => {
    * panels alive at once — still true post-STC-392, only none of them ever
    * settle on their own any more.
    *
-   * `N` is 5 because the ticket says five, and `MAX_STACKED` happens to be 5
-   * as well, so today this burst fills the stack exactly and evicts nothing.
-   * Lower the cap and the same burst would additionally exercise overflow
-   * eviction — which DISMISSES rather than exports the evicted panel now, so
-   * it would no longer be "the same assertion, broader" the way it used to be.
+   * `N` is 5 because the ticket says five. It USED to also equal
+   * `MAX_STACKED`, so this burst filled the stack exactly and evicted
+   * nothing — worth recording as history rather than deleting outright,
+   * because it explains why this assertion once needed no further comment.
+   * Task 5b (STC-392 D7) lowered `MAX_STACKED` to 3, so this same burst now
+   * DOES push two panels over the cap. That no longer threatens this
+   * assertion the way it once would have: overflow used to DISMISS (destroy)
+   * the evicted panel, which really would have meant fewer than N windows
+   * and fewer than N recoverable shots. It no longer destroys anything —
+   * a panel past the cap is HIDDEN, not torn down — so `N` windows and `N`
+   * shots in temp storage both still hold; only the VISIBLE count is now
+   * `MAX_STACKED` rather than `N`, which this gate does not assert on either
+   * side and so is silent about here on purpose.
    */
   test(`ignoring all ${N} panels still exports none of them`, async () => {
     const { win, recordings, tempTakes, destDir } = await launch();

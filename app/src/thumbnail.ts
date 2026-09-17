@@ -34,9 +34,11 @@
  * not a separate calculation from a lone panel.** `stackPosition(0, ...)` IS
  * `positionFor(...)`, so the single-panel case cannot drift from the stacked
  * one; it is the same formula asked for index zero. "Drains oldest-first on
- * timeout" (STC-296's original wording) no longer applies post-STC-392 — a
- * stack over `MAX_STACKED` still evicts the oldest to make room, but nothing
- * times out any more; see `thumbnail-window.ts`'s `dismissNow`.
+ * timeout" (STC-296's original wording) no longer applies post-STC-392 — and
+ * as of Task 5b (STC-392 D7), a stack over `MAX_STACKED` no longer evicts
+ * anything either. The panels past the cap stay alive, only HIDDEN, and
+ * `hiddenCount` is how many of them there are — see `thumbnail-window.ts`'s
+ * `restack`, which hides and reshows rather than destroying.
  *
  * **5. Only ONE gesture destroys a capture, and it needs the corner to mean
  * anything.** A swipe toward the panel's OWN corner discards; the same delta
@@ -191,10 +193,22 @@ export function dismiss(): ThumbnailState { return { kind: "idle" }; }
  * The ticket asked for it and it used to be free: each session armed its own
  * timer when it painted, so panels that appeared in order expired in order,
  * with no queue needed. There is no timer left to do that ordering FOR —
- * nothing drains on its own any more. What survives is the overflow eviction
- * above `MAX_STACKED`, which still dismisses the OLDEST panel to make room
- * (`thumbnail-window.ts`'s `presentThumbnail`), because `panels` stays
- * ordered newest-first regardless of why an entry leaves it.
+ * nothing drains on its own any more.
+ *
+ * ## Past the cap, a panel is HIDDEN, never destroyed (STC-392 D7 / Task 5b)
+ *
+ * `presentThumbnail` used to call `settleAndDestroy()` — later `dismissNow()`
+ * — on whatever a burst of captures pushed past `MAX_STACKED`. That was safe
+ * only under the OLD design, where a panel had a default outcome: it timed
+ * out, exported the shot, and closed. STC-392 removed the default outcome, so
+ * the same eviction would destroy a take nobody had decided on — a capture
+ * silently lost, which is the one thing this whole ticket exists to prevent.
+ * "Nothing is dropped, only hidden" is that correctness property applied to a
+ * burst rather than to a single panel: `thumbnail-window.ts`'s `restack`
+ * hides everything at index `MAX_STACKED` or past it and reshows everything
+ * before it, so `panels` staying ordered newest-first is what makes "the
+ * newest three are visible" and "the rest are one `hiddenCount` away from
+ * being visible again" the same fact read two ways.
  */
 
 /**
@@ -207,19 +221,50 @@ export function dismiss(): ThumbnailState { return { kind: "idle" }; }
 export const STACK_STEP_PX = 26;
 
 /**
- * How many panels may be on screen before the oldest is dismissed to make
- * room.
+ * How many panels may be VISIBLE at once, newest on top.
  *
- * Five, matching the ticket's own acceptance case ("five captures in five
- * seconds"). A cap rather than an unbounded stack because the panels are
- * always-on-top and a rapid burst would otherwise wall off the screen — and
- * nothing is LOST by capping, since the panel pushed out is DISMISSED
- * (`thumbnail-window.ts`'s `dismissNow`), its take left in temp storage for
- * STC-393's recovery to find, exactly like any other panel this module tears
- * down without a decision. Before STC-392 the evicted panel was SETTLED
- * (composited and exported); that changed with the rest of the timeout.
+ * Three (STC-392 D7 / Task 5b, down from the original five). The number was
+ * never the point — "five captures in five seconds" was STC-296's acceptance
+ * case for a design where the panel pushed out settled itself, so a bigger
+ * cap cost nothing but screen space. That is not what this constant is
+ * bounding any more: this ticket's own text is "max 3 panels visible", and
+ * the reason a cap exists at all is unchanged — the panels are
+ * always-on-top, and an unbounded stack would wall off the screen during a
+ * burst. Nothing PAST the cap is lost, and that is the load-bearing half:
+ * `thumbnail-window.ts`'s `restack` HIDES a panel at index `MAX_STACKED` or
+ * beyond rather than destroying it, and it stays reachable through the
+ * `hiddenCount` badge on the front panel. A panel is only ever torn down by a
+ * decided action (Save, Edit, Trash) or the app quitting — never by this cap.
  */
-export const MAX_STACKED = 5;
+export const MAX_STACKED = 3;
+
+/**
+ * How many of `total` panels the cap leaves VISIBLE — never more than
+ * `MAX_STACKED`, never negative.
+ *
+ * The counterpart to `hiddenCount`, kept beside it so the two cannot drift:
+ * `visibleCount(n) + hiddenCount(n) === n` for every `n`, asserted in
+ * `thumbnail.test.ts`.
+ */
+export function visibleCount(total: number): number {
+  return Math.min(total, MAX_STACKED);
+}
+
+/**
+ * How many of `total` panels the cap leaves HIDDEN — the badge's number, and
+ * its ONLY source.
+ *
+ * `thumbnail-window.ts`'s `restack` calls this once per stack change and
+ * hands the answer to the newest panel (`setHiddenCount`); the renderer draws
+ * whatever it is given and derives nothing of its own. Two ways to count the
+ * same thing is this codebase's most repeated defect (CLAUDE.md), and a
+ * badge computing its own count from, say, the number of panels it can see
+ * would be exactly that — a second copy of a number that already has one
+ * owner.
+ */
+export function hiddenCount(total: number): number {
+  return Math.max(0, total - MAX_STACKED);
+}
 
 /**
  * Where the panel at `index` sits, 0 being the newest.

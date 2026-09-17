@@ -1,7 +1,7 @@
 import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
-  positionFor, stackPosition, MAX_STACKED, PANEL_SIZE, REDACT_SIZE,
+  positionFor, stackPosition, MAX_STACKED, hiddenCount, PANEL_SIZE, REDACT_SIZE,
   type Corner, type Size,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
@@ -17,11 +17,13 @@ import { type PanelTake } from "./panel-actions.js";
  * selection overlay. There is no timer here any more — see the module doc on
  * `thumbnail.ts`'s `ThumbnailState` for why.
  *
- * Captures STACK, newest at the corner, up to `MAX_STACKED`. A panel pushed
- * out by the cap is DISMISSED (`dismissNow`), never merely dropped — nothing
- * exported, and the take stays in temp storage for STC-393's recovery to
- * find, the same as any other panel this module tears down without a
- * decision having been made.
+ * Captures STACK, newest at the corner, up to `MAX_STACKED` VISIBLE. A panel
+ * pushed past the cap is HIDDEN (`hideForOverflow`), never dismissed — Task
+ * 5b (STC-392 D7) removed the eviction that used to destroy it. It stays
+ * alive exactly where `capture-still` wrote it, reachable through the newest
+ * panel's `+N` badge (`hiddenCount`, `thumbnail.ts`; clicking it is
+ * `showAllOverflow` below). Nothing about a hidden-for-overflow panel is a
+ * decision — it still waits for one, same as a visible panel.
  *
  * ## The panel takes focus when it appears (STC-392 focus rule 1)
  *
@@ -115,48 +117,100 @@ type ThumbEvent =
    * guarded was against the panel's own timeout, which is gone. Kept as a
    * real event rather than deleted because the shape of the race survives —
    * a discard is still an async round trip (`window.thumb.trash`, the
-   * `panel:trash` handler in `main.ts`), and anything that can hide or
-   * destroy this same window WHILE it is in flight — today, the overflow
-   * eviction above `MAX_STACKED` (`presentThumbnail`, below) — still needs to
-   * hear about it first. `thumbnail.ts`'s module doc has the STC-392 update
-   * to the original race this closed.
+   * `panel:trash` handler in `main.ts`), and anything that can act on this
+   * same window WHILE it is in flight — today, `restack` hiding it past the
+   * cap (`hideForOverflow`, below; Task 5b changed this from a destroy to a
+   * hide, but the race it could land inside is the same shape) — still needs
+   * to hear about it first. `thumbnail.ts`'s module doc has the STC-392
+   * update to the original race this closed.
    */
   | { kind: "discarding" }
-  | { kind: "done" };
+  | { kind: "done" }
+  /**
+   * The `+N` badge was clicked (Task 5b / STC-392 D7) — bring every
+   * overflow-hidden panel back on screen. Any panel can send this in
+   * principle (`onEvent` is per-window), but only the newest ever carries a
+   * nonzero badge (`restack` below), so in practice it is always that one.
+   */
+  | { kind: "showOverflow" };
 
 /**
- * Every panel on screen, NEWEST FIRST.
+ * Every panel that exists, NEWEST FIRST — not just the visible ones.
  *
  * Was a single slot until stacking: a capture arriving while a panel was up
- * replaced it. It still DISMISSES what it displaces — nothing exported, the
- * take left in temp storage — which is the same "nothing is lost" promise
- * replacing always kept, now kept the STC-392 way. A burst of captures leaves
- * a legible stack instead of one survivor.
+ * replaced it, destroying whatever it displaced. Stacking kept every panel
+ * alive instead of settling the outgoing one; Task 5b (STC-392 D7) goes
+ * further and keeps every panel alive PAST the visible cap too — this array
+ * holds every panel from the newest down to whatever the badge is counting,
+ * and `restack` is what decides which of them are actually on screen.
  */
 let panels: ThumbnailSession[] = [];
 
 /**
- * Put the panel on screen for a fresh capture, replacing whatever panel — if
- * any — was already showing.
+ * Put the panel on screen for a fresh capture, joining the stack in front of
+ * whatever was already there.
+ *
+ * No eviction here any more (Task 5b / STC-392 D7) — every panel past the
+ * cap is HIDDEN by `restack`, not settled or destroyed. `presentThumbnail`
+ * calling `settleAndDestroy()`/`dismissNow()` on whatever it pushed past
+ * `MAX_STACKED` was safe only under the OLD design, where a panel had a
+ * default outcome (the timeout's export); STC-392 removed that default, so
+ * the same eviction would destroy a take the user never decided on. A panel
+ * destroyed here would be exactly that — the one thing this ticket exists to
+ * make impossible.
  */
 export function presentThumbnail(opts: PresentOptions): void {
   panels.unshift(new ThumbnailSession(opts));
-  // Over the cap, the oldest is DISMISSED to make room — its take stays in
-  // temp storage, findable by STC-393's recovery, rather than exported.
-  const overflow = panels.slice(MAX_STACKED);
-  for (const old of overflow) old.dismissNow();
   restack();
 }
 
 /**
- * Put every panel where its position in the stack says it belongs.
+ * Put every panel where its position in the stack says it belongs, and show
+ * or hide it accordingly.
  *
- * Called whenever the list changes — a new capture, or one settling out of the
- * middle — because every panel's place is a function of the whole stack, not
- * of where it happened to start.
+ * Called whenever the list changes — a new capture, or one leaving the stack
+ * from anywhere in it — because every panel's place (and whether it is
+ * visible at all) is a function of the whole stack, not of where it happened
+ * to start.
+ *
+ * Positions EVERY panel, hidden ones included: a panel hidden by the cap
+ * today may be un-hidden by a later restack (something ahead of it closes,
+ * or the badge is clicked), and it needs to already be where it belongs when
+ * that happens rather than catching up a beat late.
  */
 function restack(): void {
-  panels.forEach((p, i) => p.moveToStackIndex(i));
+  panels.forEach((p, i) => {
+    p.moveToStackIndex(i);
+    // Past the cap: alive, hidden, reachable through the badge — never
+    // settled, never destroyed. `thumbnail.ts`'s `MAX_STACKED` doc is the
+    // rest of this reasoning.
+    if (i >= MAX_STACKED) p.hideForOverflow(); else p.reshowFromOverflow();
+  });
+  // The newest panel carries the badge: it is the one on top and the one
+  // with focus, so it is where a count of what is waiting belongs. Every
+  // other panel's count is cleared — a panel that used to be newest and is
+  // not any more must not go on showing a stale number.
+  panels.forEach((p, i) => p.setHiddenCount(i === 0 ? hiddenCount(panels.length) : 0));
+}
+
+/**
+ * Bring every overflow-hidden panel back on screen at once — the badge's
+ * "clicking expands a list of waiting takes with the same actions" (Task 5b
+ * / STC-392 D7).
+ *
+ * Not a second list UI: these ARE the waiting takes, already positioned by
+ * `restack` (every panel is repositioned whether visible or not, including
+ * hidden ones — see `restack`'s own doc), so showing them again is the whole
+ * of "expanding the stack". `MAX_STACKED` itself is unchanged — the next
+ * `restack` (a new capture, or any panel closing) re-applies the cap and
+ * re-hides whatever is still past it.
+ */
+function showAllOverflow(): void {
+  for (const p of panels) p.reshowFromOverflow();
+  // Nothing is hidden by the cap right now, so the badge has nothing left to
+  // count — cleared here rather than waiting for the next `restack`, which
+  // may not come for a while if nothing else changes.
+  panels[0]?.setHiddenCount(0);
 }
 
 /**
@@ -191,6 +245,15 @@ export async function beforeCapture(): Promise<number[]> {
  * used to be destroyed), so without this a cancelled selection would leave
  * the whole stack invisible — with nothing left to bring it back, since
  * nothing times out any more.
+ *
+ * `reshow` only lifts the CAPTURE reason a panel might be hidden for. A
+ * panel also hidden by the overflow cap (`hideForOverflow`) stays hidden
+ * regardless — two independent reasons, two independent flags, and this call
+ * only ever clears one of them. A single shared "hidden" boolean would mean
+ * this line un-hides an overflow panel the cap still wants hidden, which
+ * would put it back in front of the NEXT capture too — the exact failure
+ * `beforeCapture` exists to prevent, reintroduced by the very call meant to
+ * undo it.
  */
 export function afterCapture(): void {
   for (const p of panels) p.reshow();
@@ -265,6 +328,34 @@ class ThumbnailSession {
    * reason `show: false` is set in the first place.
    */
   private hasPainted = false;
+  /**
+   * Two independent reasons a panel can be off screen, tracked SEPARATELY
+   * (Task 5b / STC-392 D7). A capture hides every panel so it cannot appear
+   * in its own screenshot (`beforeCapture`/`afterCapture`); the overflow cap
+   * hides whatever `restack` pushes past `MAX_STACKED`. Either can be true
+   * while the other is not — a panel mid-capture-hide can ALSO be past the
+   * cap, and a panel past the cap can ALSO be caught by a capture starting.
+   * Folding these into one boolean would mean lifting either reason un-hides
+   * a panel the OTHER reason still wants hidden: `afterCapture`'s `reshow`
+   * would un-hide an overflow panel, putting it back in the very next
+   * capture's pixels — precisely the failure `beforeCapture` exists to
+   * prevent, reintroduced by the call meant to undo it. `updateVisibility`
+   * is the one place both are read; a panel is shown only when NEITHER is
+   * set.
+   */
+  private hiddenForCapture = false;
+  private hiddenForOverflow = false;
+  /**
+   * The last badge count `setHiddenCount` was given, kept even when it
+   * cannot be DELIVERED yet. `restack` runs synchronously right after a new
+   * panel is constructed — before `loadFile`'s page has run far enough to
+   * register the `ipcRenderer.on` listener `onHiddenCount` sets up — so a
+   * `webContents.send` that early would be lost the same way
+   * `overlay-session.ts`'s `push` is deliberately deferred to
+   * `ready-to-show` rather than sent at construction. The `painted` branch
+   * of `onEvent` below re-sends this once it is safe to.
+   */
+  private hiddenCountValue = 0;
   /** Where in the stack this panel currently sits; 0 is the newest. */
   private stackIndex = 0;
   private readonly corner: Corner;
@@ -332,12 +423,19 @@ class ThumbnailSession {
     if (this.done) return;
     if (ev.kind === "painted") {
       this.hasPainted = true;
-      // STC-392 focus rule 1: "the panel takes focus when it appears."
-      // `showInactive` was right when the panel was a transient notice you
-      // could ignore; a panel that waits for a decision and cannot be typed
-      // at is a panel whose keyboard paths (rule 4) do not exist.
-      this.win.show();
-      this.focusNow();
+      // Deferred from `setHiddenCount` — see `hiddenCountValue`'s own doc for
+      // why this could not simply be sent when it was first set.
+      this.win.webContents.send("thumbnail:hiddenCount", this.hiddenCountValue);
+      // STC-392 focus rule 1: "the panel takes focus when it appears." Only
+      // when neither hide reason is set — a panel can in principle be pushed
+      // past the cap before its own first paint lands (a burst arriving
+      // faster than one page can load), and painting is not a reason to
+      // override the cap. `updateVisibility` will show it (without focus)
+      // once whichever reason applies is lifted.
+      if (!this.hiddenForCapture && !this.hiddenForOverflow) {
+        this.win.show();
+        this.focusNow();
+      }
     } else if (ev.kind === "redact") {
       this.resizeTo(ev.on ? REDACT_SIZE : PANEL_SIZE);
     } else if (ev.kind === "discarding") {
@@ -345,6 +443,8 @@ class ThumbnailSession {
       // branch, not folded into the default no-match, so the next thing that
       // needs to hear about a discard in flight has an obvious place to add
       // real logic rather than a new branch to discover.
+    } else if (ev.kind === "showOverflow") {
+      showAllOverflow();
     } else if (ev.kind === "done") {
       this.destroy();
     }
@@ -365,15 +465,91 @@ class ThumbnailSession {
   }
 
   /**
-   * Show a panel that was hidden for a capture.
+   * Lift the CAPTURE hide reason. Does not itself take focus —
+   * `afterCapture`'s caller decides which panel in the stack gets that
+   * (focus rule 3), and it would be wrong for every reshown panel to grab
+   * it.
    *
-   * Only one that has already painted: see `hasPainted`. Does not itself take
-   * focus — `afterCapture`'s caller decides which panel in the stack gets that
-   * (focus rule 3), and it would be wrong for every reshown panel to grab it.
+   * Clears the FLAG unconditionally, whether or not this panel has painted
+   * yet — only the visual act of showing it waits on that (`updateVisibility`
+   * no-ops before paint, and the `"painted"` branch of `onEvent` re-checks
+   * both flags once it fires). A five-capture burst can call `hide()` on a
+   * panel and then `afterCapture`'s `reshow()` on it again before its OWN
+   * first paint has ever landed; gating the CLEAR on `hasPainted` — an
+   * earlier version of this method did — left the flag stuck `true` forever,
+   * because nothing calls `reshow` a second time once a capture cycle has
+   * moved on. Caught by `panel-waits.e2e.test.ts`'s burst test hanging at 1
+   * visible panel instead of `MAX_STACKED`.
+   *
+   * Does NOT show the window directly — `updateVisibility` does, and only if
+   * `hiddenForOverflow` is ALSO clear. See `hiddenForCapture`'s own doc for
+   * why the two reasons cannot share one flag.
    */
   reshow(): void {
+    if (this.done || this.win.isDestroyed()) return;
+    this.hiddenForCapture = false;
+    this.updateVisibility();
+  }
+
+  /**
+   * Push this panel past the visible cap (Task 5b / STC-392 D7) — alive,
+   * hidden, reachable through the badge. Not gated on `hasPainted`: a panel
+   * that has never shown itself is already invisible (`show: false` at
+   * construction), so hiding it early costs nothing and saves a branch here
+   * from having to reason about the two flags plus a third state.
+   */
+  hideForOverflow(): void {
+    if (this.done || this.win.isDestroyed()) return;
+    this.hiddenForOverflow = true;
+    this.updateVisibility();
+  }
+
+  /**
+   * Lift the OVERFLOW hide reason — this panel is back within `MAX_STACKED`,
+   * or the badge was clicked. Clears the flag unconditionally, exactly like
+   * `reshow` — see that method's doc for why gating the clear itself on
+   * `hasPainted` is the bug rather than the safeguard it looks like.
+   */
+  reshowFromOverflow(): void {
+    if (this.done || this.win.isDestroyed()) return;
+    this.hiddenForOverflow = false;
+    this.updateVisibility();
+  }
+
+  /**
+   * The one place both hide reasons are read together. Shown only when
+   * NEITHER is set AND the panel has painted; hidden if EITHER reason is
+   * set — an overflow-hidden panel mid a capture, or a capture-hidden panel
+   * just pushed past the cap, both land here and both stay hidden. A no-op
+   * before the first paint (`hasPainted` false) is deliberate: there is
+   * nothing on screen yet to show, and the `"painted"` branch of `onEvent`
+   * is what checks the flags again once there is.
+   */
+  private updateVisibility(): void {
     if (this.done || this.win.isDestroyed() || !this.hasPainted) return;
-    if (!this.win.isVisible()) this.win.showInactive();
+    if (this.hiddenForCapture || this.hiddenForOverflow) {
+      if (this.win.isVisible()) this.win.hide();
+    } else if (!this.win.isVisible()) {
+      this.win.showInactive();
+    }
+  }
+
+  /**
+   * Tell this panel's card how many panels the overflow cap is hiding right
+   * now (`thumbnail.ts`'s `hiddenCount` — the badge's ONE source; this
+   * method only carries the answer across the process boundary, it does not
+   * compute one of its own). `restack` calls this on every panel after every
+   * stack change, 0 for everything but the newest.
+   */
+  setHiddenCount(n: number): void {
+    if (this.done || this.win.isDestroyed()) return;
+    // Remembered regardless of whether it can be delivered right now — see
+    // `hiddenCountValue`'s own doc. Only actually sent once painted; a send
+    // before the page has registered its `ipcRenderer.on` listener would be
+    // silently lost, the same reason `overlay-session.ts`'s `push` waits for
+    // `ready-to-show` rather than firing at construction.
+    this.hiddenCountValue = n;
+    if (this.hasPainted) this.win.webContents.send("thumbnail:hiddenCount", n);
   }
 
   /**
@@ -402,11 +578,18 @@ class ThumbnailSession {
     });
   }
 
-  /** Hides the window and returns its CGWindowID, for `beforeCapture`. */
+  /**
+   * Sets the CAPTURE hide reason, hides the window and returns its
+   * CGWindowID, for `beforeCapture`. Unconditional — hiding an already
+   * overflow-hidden window is a no-op on the window itself, and the flag
+   * still needs setting so a later `reshow` alone (without an intervening
+   * `reshowFromOverflow`) correctly leaves it hidden.
+   */
   hide(): number | undefined {
     if (this.done || this.win.isDestroyed()) return undefined;
     let id: number | undefined;
     try { id = windowIdOf(this.win.getMediaSourceId()); } catch { /* not available; hide still stands */ }
+    this.hiddenForCapture = true;
     this.win.hide();
     return id;
   }
@@ -453,9 +636,12 @@ class ThumbnailSession {
   /**
    * Drop out of the stack and close the gap.
    *
-   * A panel can leave from the MIDDLE — a dismiss, or the overflow eviction —
-   * so the ones behind it have to move up. Without the restack they would
-   * keep a hole where it was, which reads as a panel that failed to appear.
+   * A panel can leave from the MIDDLE — any of Save, Edit or Trash can be
+   * performed on a panel that is not the newest — so the ones behind it have
+   * to move up. Without the restack they would keep a hole where it was,
+   * which reads as a panel that failed to appear. (The overflow cap no
+   * longer removes anything from `panels` at all, as of Task 5b — it only
+   * hides; this restack is purely about a panel actually CLOSING.)
    */
   private leaveStack(): void {
     const at = panels.indexOf(this);

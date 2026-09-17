@@ -67,8 +67,10 @@ declare global {
       reveal(): Promise<boolean>;
       writeShot(dir: string, redactions: unknown, mode?: DecorationMode):
         Promise<{ ok: boolean; redactions: number }>;
-      event(ev: { kind: "painted" | "discarding" | "done" }
+      event(ev: { kind: "painted" | "discarding" | "done" | "showOverflow" }
                 | { kind: "redact"; on: boolean }): void;
+      /** The overflow badge's count (Task 5b / STC-392 D7) — see `thumbnail-preload.ts`. */
+      onHiddenCount(cb: (n: number) => void): () => void;
     };
   }
 }
@@ -81,6 +83,7 @@ const statusEl = $("status");
 const redactBtn = $("redact") as HTMLButtonElement;
 const undoBtn = $("undo") as HTMLButtonElement;
 const doneRedactBtn = $("donedact") as HTMLButtonElement;
+const overflowBtn = $("overflow") as HTMLButtonElement;
 
 const params = new URLSearchParams(location.search);
 /**
@@ -385,7 +388,13 @@ const available = new Set(actionsFor(take));
  * its own `busy` check.
  */
 function setActionsEnabled(on: boolean): void {
-  for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button")) {
+  // `[data-action]` — not every button in `#actions`: the overflow badge
+  // (Task 5b / STC-392 D7) lives in this same row and carries no
+  // `data-action`, since it is not one of `panel-actions.ts`'s four take
+  // actions. Left enabled deliberately — expanding the stack to look at a
+  // waiting take is not an action ON this one, so an in-flight Save/Edit/
+  // Trash on THIS take has no reason to block it.
+  for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button[data-action]")) {
     if (!btn.hidden) btn.disabled = !on;
   }
   modeSel.disabled = !on;
@@ -468,12 +477,40 @@ async function run(action: PanelAction): Promise<boolean> {
   return true;
 }
 
-/** Hide the actions this take does not have — see `panel-actions.ts`'s two absences. */
-for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button")) {
+/**
+ * Hide the actions this take does not have — see `panel-actions.ts`'s two
+ * absences. Scoped to `[data-action]` for the same reason `setActionsEnabled`
+ * is: the overflow badge sits in this row, is not one of the four take
+ * actions, and must not be run through `available.has(undefined)` (always
+ * false) or bound to `perform()`, which only understands `PanelAction`.
+ */
+for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button[data-action]")) {
   const action = btn.dataset.action as PanelAction;
   btn.hidden = !available.has(action);
   btn.addEventListener("click", (e) => { e.stopPropagation(); void perform(action); });
 }
+
+/**
+ * The `+N` overflow badge (Task 5b / STC-392 D7) — hidden when nothing is
+ * hidden. `n` is `thumbnail.ts`'s `hiddenCount`, computed once in
+ * `thumbnail-window.ts`'s `restack` and handed to this window over
+ * `onHiddenCount`; nothing here derives its own count (ruling 2 — one owner).
+ */
+window.thumb.onHiddenCount((n) => {
+  overflowBtn.hidden = n <= 0;
+  overflowBtn.textContent = `+${n}`;
+});
+
+/**
+ * Clicking it asks main to bring every hidden panel back — "clicking expands
+ * a list of waiting takes with the same actions" (the ticket's own words).
+ * The hidden panels ARE that list; there is no second list UI here, only
+ * this one event (`showAllOverflow`, `thumbnail-window.ts`).
+ */
+overflowBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  window.thumb.event({ kind: "showOverflow" });
+});
 
 // ---- redaction (STC-297) ---------------------------------------------------
 
