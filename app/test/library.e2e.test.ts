@@ -37,7 +37,6 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
   // `still.destination` (STC-293 review, #92).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
     still: { destination: mkdtempSync(join(tmpdir(), "stc-dest-")) },
-    thumbnail: { timeoutMs: 60_000 },
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],

@@ -1,56 +1,54 @@
-import { BrowserWindow, screen } from "electron";
+import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
-  clampTimeoutMs, positionFor, stackPosition, MAX_STACKED,
-  type Corner, type Size, type PanelSettle,
+  positionFor, stackPosition, MAX_STACKED, PANEL_SIZE,
+  type Corner, type Size,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
+import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 
 /**
- * The post-capture floating thumbnail's window (STC-296).
+ * The post-capture floating thumbnail's window (STC-296, reworked by
+ * STC-392).
  *
  * `thumbnail.ts` decides what STATE a panel is in; this owns the real
- * `BrowserWindow`s and the real timers that state describes, the same split
- * `overlay-session.ts` makes for the selection overlay.
+ * `BrowserWindow`s the same split `overlay-session.ts` makes for the
+ * selection overlay. There is no timer here any more — see the module doc on
+ * `thumbnail.ts`'s `ThumbnailState` for why.
  *
  * Captures STACK, newest at the corner, up to `MAX_STACKED`. A panel pushed
- * out by the cap is SETTLED, never merely dropped — the promise that made
- * replacing safe before stacking existed, and the reason a burst of captures
- * has never cost anyone a shot.
+ * out by the cap is DISMISSED (`dismissNow`), never merely dropped — nothing
+ * exported, and the take stays in temp storage for STC-393's recovery to
+ * find, the same as any other panel this module tears down without a
+ * decision having been made.
  *
- * Every panel keeps its OWN timer, armed when it paints, which is what makes
- * the ticket's "drains oldest-first on timeout" true without a queue: panels
- * that appeared in order expire in order. A central drain would have taken
- * that away and then had to reimplement it.
+ * ## The panel takes focus when it appears (STC-392 focus rule 1)
  *
- * ## Timeout dismissal must never block on a render (the ticket's own words)
- *
- * When the timer fires, or when a capture arrives and needs the outgoing panel
- * out of the way, this hides the window IMMEDIATELY and only afterwards tells
- * the renderer to composite and export the shot. The window stays alive but
- * invisible until the renderer confirms it is done — visually gone at once,
- * while the save it promised still happens. A backstop bounds that wait: a
- * renderer that never answers must not leak a hidden window forever.
+ * A panel that waits for a decision and cannot be typed at is a panel whose
+ * keyboard paths do not exist. `onEvent`'s `"painted"` branch calls
+ * `focusPanel`, not `showInactive` — through `panel-focus.ts`, not
+ * `win.focus()`, because an application-level activation on macOS raises the
+ * main window too (STC-391's follow-up, 5850e4f). The window is created with
+ * `type: PANEL_WINDOW_TYPE` for the same reason: an NSPanel can become key
+ * without activating its application.
  *
  * ## The `skip` panel drives itself
  *
- * A `silent` panel is never shown at all — there is nothing to animate or
- * expand into — so it has no reason to wait on a "painted" round trip through
- * main the way a visible panel does before its timer can start. It composites
- * and exports itself the moment `draw()` finishes (`?silent=1`,
- * `thumbnail-renderer.ts`) and reports only `"done"` when it is. One fewer
- * message crossing the process boundary for a window nobody ever sees.
+ * A `silent` panel is never shown at all — there is nothing to animate into —
+ * so it has no reason to wait on a "painted" round trip through main the way
+ * a visible panel does. It composites and exports itself the moment `draw()`
+ * finishes (`?silent=1`, `thumbnail-renderer.ts`) and reports only `"done"`
+ * when it is. One fewer message crossing the process boundary for a window
+ * nobody ever sees.
  */
 
-const COLLAPSED_SIZE: Size = { width: 220, height: 150 };
-const EXPANDED_SIZE: Size = { width: 300, height: 260 };
 /**
  * Redact mode's size (STC-297). Bigger than the panel needs to be for its own
- * controls, and deliberately: at the expanded size one preview pixel of a 4K
- * capture is ~14 real ones, so placing a box over an email address would be
- * guesswork. This is the size at which a line of text is a target. It is still
- * the same panel in the same corner — the still EDITOR is STC-300, and this
- * stops well short of one.
+ * controls, and deliberately: at the panel's normal size one preview pixel of
+ * a 4K capture is ~14 real ones, so placing a box over an email address would
+ * be guesswork. This is the size at which a line of text is a target. It is
+ * still the same panel in the same corner — the still EDITOR is STC-300, and
+ * this stops well short of one.
  */
 const REDACT_SIZE: Size = { width: 520, height: 420 };
 const CORNER_MARGIN = 20;
@@ -69,8 +67,6 @@ export interface PresentOptions {
   /** The shot document exactly as `capture-still` wrote it — not yet parsed. */
   shot: unknown;
   corner: Corner;
-  timeoutMs: number;
-  settleAction: PanelSettle;
   /** Where `thumbnail.html` and its preload live. */
   dist: string;
   rendererDir: string;
@@ -78,27 +74,34 @@ export interface PresentOptions {
    * The "skip the panel" preference: never shown, settled the instant it has
    * composited. Still a real (hidden) window rather than a second compositing
    * path — reusing the one the panel already has is exactly what STC-293's
-   * Note forbids a second implementation of.
+   * Note forbids a second implementation of. Fixed to "copy" the moment it
+   * composites — never a stored preference, the same reason `"none"` below is
+   * not one either.
    */
   silent?: boolean;
+  /**
+   * A shot RE-OPENED from the library (STC-294), not a fresh capture.
+   *
+   * It is already on disk, so ignoring it must do nothing at all — unlike a
+   * fresh capture, where the panel is the only place the shot exists at all.
+   * A call-site fact, not a preference: nothing in `settings.ts` can set it,
+   * the same reason the old `PanelSettle`'s `"none"` was unreachable from
+   * `parseSettleAction`.
+   */
+  reopened?: boolean;
 }
 
 type ThumbEvent =
   | { kind: "painted" }
-  | { kind: "expanded" }
   /** Redact mode opening or closing (STC-297), which the panel is resized for. */
   | { kind: "redact"; on: boolean }
   /**
    * A discard has committed — the swipe passed its threshold, or the
    * right-click Delete — and the renderer is about to ask main to trash the
-   * capture (STC-343). The panel's own timeout has no idea a discard is in
-   * flight, so without this it can fire in the gap between here and the
-   * delete resolving: `settleAndDestroy()` would hide the window and arm its
-   * own backstop, and if the delete then FAILS, the renderer's recovery (it
-   * restores the panel and reports the error) happens inside a window main
-   * has already hidden — invisible, and still headed for a silent destroy at
-   * `SETTLE_BACKSTOP_MS` regardless of the failure. Stopping the timer the
-   * moment the gesture commits closes the gap rather than narrowing it.
+   * capture (STC-343). Stopping in flight anything else that could hide or
+   * destroy this same window (the overflow eviction above `MAX_STACKED`, quit)
+   * closes the gap before `deleteShot` resolves rather than narrowing it — see
+   * `thumbnail.ts`'s module doc for the STC-392 update to this reasoning.
    */
   | { kind: "discarding" }
   | { kind: "done" };
@@ -119,10 +122,10 @@ let panels: ThumbnailSession[] = [];
  */
 export function presentThumbnail(opts: PresentOptions): void {
   panels.unshift(new ThumbnailSession(opts));
-  // Over the cap, the oldest is SETTLED to make room — never merely dropped,
-  // which is the same promise replacing always kept.
+  // Over the cap, the oldest is DISMISSED to make room — its take stays in
+  // temp storage, findable by STC-393's recovery, rather than exported.
   const overflow = panels.slice(MAX_STACKED);
-  for (const old of overflow) old.settleAndDestroy();
+  for (const old of overflow) old.dismissNow();
   restack();
 }
 
@@ -167,26 +170,54 @@ export async function beforeCapture(): Promise<number[]> {
  * from a capture — including a cancelled one. `beforeCapture` hides panels
  * that are not about to be replaced (a stack persists where a single panel
  * used to be destroyed), so without this a cancelled selection would leave
- * the whole stack invisible while its timers ran on, and the shots would
- * settle out of sight.
+ * the whole stack invisible — with nothing left to bring it back, since
+ * nothing times out any more.
  */
 export function afterCapture(): void {
   for (const p of panels) p.reshow();
+  // STC-392 focus rule 3: "when panels come back, the most recent one gets
+  // focus." `panels[0]` IS the most recent — the list is newest-first, the
+  // same ordering `stackPosition` reads for its index. Asserted rather than
+  // assumed in `thumbnail.test.ts`'s stacking block, because "newest first"
+  // is a convention two modules share and a reversed list would put focus on
+  // the oldest while every position stayed correct.
+  panels[0]?.takeFocus();
 }
 
 /**
- * Tears down whatever panel is on screen, settling it first — quit must not
- * abandon an unsaved capture. Resolves once the window is actually gone
- * (bounded by `SETTLE_BACKSTOP_MS`, same as the timeout path), so a caller
- * that awaits this before quitting cannot destroy the process out from under
- * the export it just asked for.
+ * Tears down whatever panel is on screen. Resolves once every window is
+ * actually gone (bounded by `SETTLE_BACKSTOP_MS`), so a caller that awaits
+ * this before quitting cannot destroy the process out from under a window
+ * still tearing itself down.
+ *
+ * Nothing is exported and nothing is deleted (STC-392): a take still showing
+ * when this runs is left exactly where `capture-still` wrote it, in temp
+ * storage, for STC-393's recovery to find on the next launch. Before this
+ * ticket the same call SETTLED every panel — composited, exported, then
+ * destroyed — because a timeout was still the promise that "nothing is lost
+ * by doing nothing" leaned on. That promise is kept a different way now: the
+ * panel waits for a person, and quitting without answering it is a choice
+ * the recovery prompt gives them the chance to revisit, not a silent export.
  */
 export function closeThumbnail(): Promise<void> {
-  // A copy: settling mutates `panels` as each one closes.
+  // A copy: dismissing mutates `panels` as each one closes.
   const all = [...panels];
   if (all.length === 0) return Promise.resolve();
-  for (const p of all) p.settleAndDestroy();
+  for (const p of all) p.dismissNow();
   return Promise.all(all.map((p) => p.waitUntilClosed())).then(() => undefined);
+}
+
+/**
+ * Close the panel showing this take, once its action has been performed.
+ *
+ * Matched on the dir the panel was PRESENTED with, so it must be called
+ * before anything reassigns that dir — `panel:save` promotes first and then
+ * dismisses, which works because `promoteTake` returns a new path and leaves
+ * the panel's own `opts.dir` alone. A dismiss that ran after the panel had
+ * learned its new home would match nothing and leave the window up.
+ */
+export function dismissThumbnail(dir: string): void {
+  for (const p of [...panels]) if (p.takeDir === dir) p.dismissNow();
 }
 
 /** Whether any panel is on screen right now, for tests. */
@@ -199,10 +230,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 class ThumbnailSession {
   private readonly win: BrowserWindow;
-  private timer?: NodeJS.Timeout;
   private backstop?: NodeJS.Timeout;
   private done = false;
-  private expanded = false;
   /**
    * It has painted at least once, so it is a panel the user has SEEN.
    *
@@ -214,29 +243,6 @@ class ThumbnailSession {
   private hasPainted = false;
   /** Where in the stack this panel currently sits; 0 is the newest. */
   private stackIndex = 0;
-  /**
-   * Whether the page has loaded far enough to be listening.
-   *
-   * `webContents.send` to a renderer whose scripts have not run yet is DROPPED
-   * — silently, with no error and no queue — so a settle sent into that window
-   * is simply lost, and `SETTLE_BACKSTOP_MS` then destroys it having exported
-   * nothing.
-   *
-   * **Nothing has been observed failing here, and that is stated rather than
-   * implied.** It was STC-301 gate 4's first hypothesis, it was implemented,
-   * and the measurement did not move — the real cause was in the renderer
-   * (`runExport`'s `if (!composite) return false`, fixed by #102). The path
-   * that motivated it is gone as well: a capture used to REPLACE and settle a
-   * panel that might still be loading, and captures stack now (#104). What is
-   * left is the overflow eviction above `MAX_STACKED`, which settles the
-   * OLDEST panel and so will almost always have painted.
-   *
-   * Kept anyway because it is orthogonal to stacking and cheap, and because
-   * the renderer's own bounded wait can only run if the message ARRIVES. Read
-   * it as a guard, not as a fix for a measured fault.
-   */
-  private loaded = false;
-  private pendingSettle = false;
   private readonly corner: Corner;
   private resolveClosed!: () => void;
   private readonly closed: Promise<void>;
@@ -246,12 +252,16 @@ class ThumbnailSession {
     this.corner = opts.corner;
     // At the corner: a new panel is always the newest, so index 0. `restack`
     // moves the ones behind it immediately afterwards.
-    const { x, y } = positionFor(this.corner, this.workArea(), COLLAPSED_SIZE, CORNER_MARGIN);
+    const { x, y } = positionFor(this.corner, this.workArea(), PANEL_SIZE, CORNER_MARGIN);
     this.win = new BrowserWindow({
-      x, y, width: COLLAPSED_SIZE.width, height: COLLAPSED_SIZE.height,
+      x, y, width: PANEL_SIZE.width, height: PANEL_SIZE.height,
       transparent: true, frame: false, hasShadow: false,
       resizable: false, movable: false, minimizable: false, maximizable: false,
       fullscreenable: false, skipTaskbar: true,
+      // An NSPanel: it must be able to hold the keyboard WITHOUT activating
+      // the app, or focusing it raises the main window — see `panel-focus.ts`
+      // and the class doc's focus rule 1.
+      type: PANEL_WINDOW_TYPE,
       // Not shown before its first paint — the same reason the overlay isn't:
       // a transparent window shown empty flashes the desktop through it.
       show: false,
@@ -267,24 +277,19 @@ class ThumbnailSession {
       query: {
         dir: opts.dir,
         shot: JSON.stringify(opts.shot),
-        settleAction: opts.settleAction,
         // The view needs it too, and only for the swipe: which way is
         // off-screen is a property of where the panel was put.
         corner: opts.corner,
-        ...(opts.silent ? { silent: "1" } : {}),
+        // Neither of these is a stored PREFERENCE — see `PresentOptions`'s
+        // doc on `silent` and `reopened`. Absent for an ordinary fresh
+        // capture, which is what makes the renderer's own default (save on
+        // close) the right one for it.
+        ...(opts.silent ? { silent: "1", settleAction: "copy" } : {}),
+        ...(opts.reopened ? { settleAction: "none" } : {}),
       },
     });
     this.win.webContents.on("ipc-message", (_e, channel, ev: ThumbEvent) => {
       if (channel === "thumbnail:event") this.onEvent(ev);
-    });
-    // The renderer registers its listeners at module scope, so this is the
-    // first moment a `send` can be heard. A settle that arrived before it is
-    // delivered here rather than lost.
-    this.win.webContents.once("did-finish-load", () => {
-      this.loaded = true;
-      if (this.pendingSettle && !this.done && !this.win.isDestroyed()) {
-        this.win.webContents.send("thumbnail:settle");
-      }
     });
     this.win.on("closed", () => {
       this.done = true; this.clearTimers();
@@ -302,24 +307,17 @@ class ThumbnailSession {
   private onEvent(ev: ThumbEvent): void {
     if (this.done) return;
     if (ev.kind === "painted") {
-      // Never sent by a `silent` panel — see the class doc's "drives itself".
       this.hasPainted = true;
-      this.win.showInactive();
-      this.armTimer();
-    } else if (ev.kind === "expanded") {
-      this.expanded = true;
-      this.clearTimers();
-      this.resizeTo(EXPANDED_SIZE);
+      // STC-392 focus rule 1: "the panel takes focus when it appears."
+      // `showInactive` was right when the panel was a transient notice you
+      // could ignore; a panel that waits for a decision and cannot be typed
+      // at is a panel whose keyboard paths (rule 4) do not exist.
+      this.win.show();
+      this.focusNow();
     } else if (ev.kind === "redact") {
-      // Redact mode is only ever entered from the expanded panel, so the timer
-      // is already cancelled; clearing again costs nothing and means this does
-      // not depend on that staying true.
-      this.expanded = true;
       this.clearTimers();
-      this.resizeTo(ev.on ? REDACT_SIZE : EXPANDED_SIZE);
+      this.resizeTo(ev.on ? REDACT_SIZE : PANEL_SIZE);
     } else if (ev.kind === "discarding") {
-      // Not `expanded` — a discarded panel is not an expanded one, and
-      // `armTimer`'s own guard is moot once the timer it would check is gone.
       this.clearTimers();
     } else if (ev.kind === "done") {
       this.destroy();
@@ -340,31 +338,54 @@ class ThumbnailSession {
     this.win.setBounds({ x, y, width: size.width, height: size.height });
   }
 
-  private armTimer(): void {
-    this.timer = setTimeout(() => {
-      if (this.done || this.expanded) return;
-      this.settleAndDestroy();
-    }, clampTimeoutMs(this.opts.timeoutMs));
-  }
-
+  /**
+   * Cancel the one bound this session can still have outstanding: a backstop
+   * armed by some future round trip through the renderer (Task 4's
+   * export-then-close). There is no timer to cancel any more — kept as its
+   * own method anyway so every call site that used to mean "stop the clock"
+   * still reads the same, now meaning "stop waiting on the renderer".
+   */
   private clearTimers(): void {
-    if (this.timer) clearTimeout(this.timer);
     if (this.backstop) clearTimeout(this.backstop);
-    this.timer = undefined;
     this.backstop = undefined;
   }
 
   /**
    * Show a panel that was hidden for a capture.
    *
-   * Only one that has already painted: see `hasPainted`. Never re-arms the
-   * timer — it was armed when the panel first appeared and has been running
-   * throughout, which is what keeps a panel's lifetime the length the user was
-   * promised rather than being extended by every capture that hides it.
+   * Only one that has already painted: see `hasPainted`. Does not itself take
+   * focus — `afterCapture`'s caller decides which panel in the stack gets that
+   * (focus rule 3), and it would be wrong for every reshown panel to grab it.
    */
   reshow(): void {
     if (this.done || this.win.isDestroyed() || !this.hasPainted) return;
     if (!this.win.isVisible()) this.win.showInactive();
+  }
+
+  /**
+   * Give this panel the keyboard again, the same way it did when it first
+   * painted (focus rule 3: the most recent panel gets focus back after a
+   * capture). Refuses on one that has never painted, for the same reason
+   * `reshow` does — there is nothing on screen yet to focus.
+   */
+  takeFocus(): void {
+    if (this.done || this.win.isDestroyed() || !this.hasPainted) return;
+    this.focusNow();
+  }
+
+  /**
+   * The one call to `focusPanel`, shared by the initial paint and by
+   * `takeFocus` — through `panel-focus.ts`, not `win.focus()`, because an
+   * application-level activation on macOS raises the main window too, the
+   * exact fault STC-391's follow-up (5850e4f) spent a session finding. The
+   * window is created with `type: PANEL_WINDOW_TYPE` for the same reason.
+   */
+  private focusNow(): void {
+    void focusPanel(this.win, () => app.focus({ steal: true })).then((took) => {
+      if (took === "escalated") {
+        console.warn("[thumbnail] the panel could not take key focus; activated the app instead");
+      }
+    });
   }
 
   /** Hides the window and returns its CGWindowID, for `beforeCapture`. */
@@ -377,21 +398,35 @@ class ThumbnailSession {
   }
 
   /**
-   * Hide now, tell the renderer to composite-and-export in the background, and
-   * destroy once it confirms — or after the backstop, whichever is first. Safe
-   * to call more than once; only the first call does anything.
+   * Which take this panel is showing.
+   *
+   * Exposed because main's handlers are reached from the RENDERER, and a
+   * renderer names a take, never a window — the same rule `still:deleteShot`
+   * and `still:revealShot` already follow. `readonly` via the getter: a panel
+   * whose directory could be reassigned from outside would be a second owner
+   * of a value `promoteTake` already moves.
    */
-  settleAndDestroy(): void {
+  get takeDir(): string { return this.opts.dir; }
+
+  /**
+   * Take the panel off the screen without deciding anything.
+   *
+   * This used to be `settleAndDestroy`, and the difference is the whole
+   * ticket: it told the renderer to composite-and-export first, because a
+   * panel that vanished on a timeout still had to keep "nothing is lost by
+   * doing nothing". Nothing times out now, so the only callers left are the
+   * ones where the take's fate is decided elsewhere — the renderer has just
+   * performed a Save, an Edit or a Trash — or where there is no fate to
+   * decide, which is the app shutting down.
+   *
+   * A take still in temp storage when this runs is not lost either: STC-393's
+   * recovery prompt finds it on the next launch. That is the promise now, and
+   * it is a better one than a silent export nobody asked for.
+   */
+  dismissNow(): void {
     if (this.done) return;
-    this.clearTimers();
     this.hide();
-    if (this.win.isDestroyed()) { this.destroy(); return; }
-    // Held until the page is listening, rather than sent into a void — see
-    // `loaded`. The backstop is armed either way, so a page that never loads
-    // still gets torn down instead of leaking a hidden window.
-    if (this.loaded) this.win.webContents.send("thumbnail:settle");
-    else this.pendingSettle = true;
-    this.backstop = setTimeout(() => this.destroy(), SETTLE_BACKSTOP_MS);
+    this.destroy();
   }
 
   private destroy(): void {
@@ -405,8 +440,8 @@ class ThumbnailSession {
   /**
    * Drop out of the stack and close the gap.
    *
-   * A panel can settle from the MIDDLE — its own timeout, or a click on Close
-   * — so the ones behind it have to move up. Without the restack they would
+   * A panel can leave from the MIDDLE — a dismiss, or the overflow eviction —
+   * so the ones behind it have to move up. Without the restack they would
    * keep a hole where it was, which reads as a panel that failed to appear.
    */
   private leaveStack(): void {

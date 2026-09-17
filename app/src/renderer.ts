@@ -14,8 +14,6 @@ interface StillSettingsView {
 }
 interface ThumbnailSettingsView {
   corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
-  timeoutMs: number;
-  settleAction: "save" | "copy";
   skip: boolean;
 }
 interface ScopeSettingsView {
@@ -854,17 +852,16 @@ const fmtSize = (b: number) =>
 // compact window now (STC-296, "the whole still UI in v1";
 // app/renderer/thumbnail.html, app/src/thumbnail-renderer.ts). What remains
 // here is the two things that are genuinely PREFERENCES rather than per-shot
-// controls: the destination folder, and where and how long the thumbnail
-// shows itself. Both are read through the same `recorder:getSettings` /
-// `recorder:setSettings` every other preference in this window uses.
+// controls: the destination folder, and where the thumbnail shows itself.
+// STC-392 removed the third one, how long it waited before closing itself —
+// it does not any more. Both are read through the same `recorder:getSettings`
+// / `recorder:setSettings` every other preference in this window uses.
 
 function showDestination(dest: string | null): void {
   $("stilldest").textContent = dest ?? "beside the shot";
 }
 
 const thumbCornerSel = $("thumbcorner") as HTMLSelectElement;
-const thumbTimeoutInput = $("thumbtimeout") as HTMLInputElement;
-const thumbSettleSel = $("thumbsettle") as HTMLSelectElement;
 const thumbSkipBox = $("thumbskip") as HTMLInputElement;
 const countdownSel = $("countdownms") as HTMLSelectElement;
 
@@ -882,8 +879,6 @@ async function loadStillPreferences(): Promise<void> {
   const { still, thumbnail, countdownMs } = await recorder.getSettings();
   showDestination(still.destination);
   thumbCornerSel.value = thumbnail.corner;
-  thumbTimeoutInput.value = String(Math.round(thumbnail.timeoutMs / 1000));
-  thumbSettleSel.value = thumbnail.settleAction;
   thumbSkipBox.checked = thumbnail.skip;
   // A stored value that is not one of the offered options — 0, or a number
   // someone typed into the file — leaves the select showing nothing rather
@@ -906,16 +901,6 @@ $("stillcleardest").addEventListener("click", async () => {
 });
 thumbCornerSel.addEventListener("change", () => {
   void patchThumbnail({ corner: thumbCornerSel.value as AppSettings["thumbnail"]["corner"] });
-});
-thumbTimeoutInput.addEventListener("change", () => {
-  const seconds = Number(thumbTimeoutInput.value);
-  // An out-of-range or unparsable value is left for `readSettings`'s own
-  // floor to correct rather than validated twice — the same rule every other
-  // preference in this window follows for its own stored validator.
-  if (Number.isFinite(seconds)) void patchThumbnail({ timeoutMs: Math.round(seconds * 1000) });
-});
-thumbSettleSel.addEventListener("change", () => {
-  void patchThumbnail({ settleAction: thumbSettleSel.value as AppSettings["thumbnail"]["settleAction"] });
 });
 thumbSkipBox.addEventListener("change", () => void patchThumbnail({ skip: thumbSkipBox.checked }));
 countdownSel.addEventListener("change", () => {

@@ -293,8 +293,8 @@ async function recoverUnsavedTakes(): Promise<void> {
   // Oldest first: `presentThumbnail` always unshifts its newest call to the
   // front of the stack, so presenting in this order leaves the genuinely
   // most-recent recovered take frontmost — matching the ticket's "most
-  // recent first, and focuses it" for the one part of that rule this app can
-  // still express (`showInactive`, not real OS focus — see thumbnail-window.ts).
+  // recent first, and focuses it" (STC-392 focus rule 1 does the actual
+  // focusing now; see thumbnail-window.ts).
   const ordered = [...orphaned].reverse();
   const { thumbnail } = readSettings(app.getPath("userData"));
   for (const t of ordered) {
@@ -302,9 +302,8 @@ async function recoverUnsavedTakes(): Promise<void> {
       try {
         const shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
         presentThumbnail({
-          dir: t.dir, shot, corner: thumbnail.corner, timeoutMs: thumbnail.timeoutMs,
+          dir: t.dir, shot, corner: thumbnail.corner,
           dist: here, rendererDir: join(here, "..", "renderer"),
-          settleAction: thumbnail.settleAction,
         });
       } catch (e) {
         console.error("[recovery] could not reopen a recovered still:", t.dir, e);
@@ -446,9 +445,10 @@ app.on("before-quit", (e) => {
   e.preventDefault();
   quitting = true;
   // An overlay still up at quit would outlive its window list and sit on the
-  // screen with nothing left to answer it. A thumbnail still up is worse if
-  // left alone — its shot would never be saved — so closing it SETTLES it
-  // (STC-296), not merely discards the window.
+  // screen with nothing left to answer it. A thumbnail still up is closed
+  // WITHOUT exporting or deleting anything (STC-392) — its take is left in
+  // temp storage, where STC-393's recovery prompt offers it back on the next
+  // launch, rather than a quit silently deciding "save" on the user's behalf.
   globalShortcut.unregisterAll();
   tray?.destroy();
   tray = undefined;
@@ -587,9 +587,12 @@ ipcMain.handle("recorder:start", async () => {
   }
   // Any floating panel still on screen would be IN the take, and unlike a
   // still capture there is no exclusion list for `start` to be added to.
-  // SETTLED rather than hidden (`closeThumbnail`, the same call quit makes):
-  // hiding it for the length of a recording would leave its own timer running
-  // out of sight, and the shot would settle where nobody could act on it.
+  // CLOSED rather than merely hidden (`closeThumbnail`, the same call quit
+  // makes) — hiding it for the length of a recording would leave it sitting
+  // out of sight with nothing to bring it back, since nothing times out any
+  // more. Its take is left in temp storage rather than exported (STC-392); a
+  // pending panel deliberately bumped by starting a recording is a choice the
+  // recovery prompt can still surface later, not a silent save.
   // After the countdown, so a cancelled one costs a pending panel nothing.
   await closeThumbnail().catch(() => {});
   // Temp storage, not the library (STC-393): the take is not real until a
@@ -789,17 +792,18 @@ async function captureStill(action: ShotAction, source: CaptureSource): Promise<
     // renderer: a capture from the hotkey or the menu bar has no window at
     // all, and the panel is the only place a decorated still can be gotten out
     // of the app in v1. `skip` bypasses it entirely: the ticket's own words are
-    // "go straight to clipboard", so a silent capture always copies, whatever
-    // the (otherwise inapplicable) settle-action preference says.
+    // "go straight to clipboard", so a silent capture always copies — fixed by
+    // `thumbnail-window.ts` the moment `silent` is set, never a preference
+    // (STC-392 removed the general settle-action one this used to fall back to).
     // Never lets a panel failure cost the CAPTURE — the shot is already on
     // disk in `dir` by this point, the same "nothing lost by doing nothing"
     // rule the old still panel followed for exactly this reason.
     try {
       const { thumbnail } = readSettings(app.getPath("userData"));
       presentThumbnail({
-        dir, shot: r.shot, corner: thumbnail.corner, timeoutMs: thumbnail.timeoutMs,
+        dir, shot: r.shot, corner: thumbnail.corner,
         dist: here, rendererDir: join(here, "..", "renderer"),
-        ...(thumbnail.skip ? { settleAction: "copy" as const, silent: true } : { settleAction: thumbnail.settleAction }),
+        ...(thumbnail.skip ? { silent: true } : {}),
       });
     } catch (e) {
       console.error("[thumbnail] could not present:", e);
@@ -1054,10 +1058,11 @@ ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuf
  * re-capturing. It is the same panel a fresh capture gets — not a second still
  * UI, which is what STC-293's Note and STC-300's gate both forbid.
  *
- * `settleAction: "none"` is the one difference and it matters: ignoring a
- * FRESH capture must still save it, because the panel is the only place it
- * exists; ignoring a re-opened one must do nothing at all, because it is
- * already on disk and a second copy is not what a glance meant.
+ * `reopened: true` is the one difference and it still matters post-STC-392:
+ * neither a fresh capture nor a re-opened one closes itself any more, but a
+ * fresh capture's panel still SAVES on an explicit Close (the renderer's own
+ * default), because the panel is the only place it exists — a re-opened shot
+ * is already on disk, and a second copy on Close is not what a glance meant.
  */
 /** The stored document for one shot, so the library can render its decoration. */
 ipcMain.handle("library:shot", async (_e, dir: string) => {
@@ -1074,8 +1079,8 @@ ipcMain.handle("still:reopen", async (_e, dir: string) => {
   const shot = parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
   const { thumbnail } = readSettings(app.getPath("userData"));
   presentThumbnail({
-    dir, shot, corner: thumbnail.corner, timeoutMs: thumbnail.timeoutMs,
-    settleAction: "none",
+    dir, shot, corner: thumbnail.corner,
+    reopened: true,
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
   return { ok: true };

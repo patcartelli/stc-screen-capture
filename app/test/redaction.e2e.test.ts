@@ -34,7 +34,7 @@ async function launch(): Promise<{ win: Page; destDir: string; recordings: strin
   // Seeded on disk, never through `recorder:setSettings` — that channel
   // deliberately strips `still.destination` (STC-293 review, #92).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir }, thumbnail: { timeoutMs: 60_000 },
+    still: { destination: destDir },
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],

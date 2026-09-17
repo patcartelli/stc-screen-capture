@@ -6,16 +6,18 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 
 /**
- * The post-capture floating thumbnail, end to end (STC-296).
+ * The post-capture floating thumbnail, end to end (STC-296, reworked by
+ * STC-392).
  *
- * The panel's own STATE — showing, expanded, expired — is decided by a pure
- * function and checked with no window at all in `thumbnail.test.ts`. What
- * this file exists for is the wiring that cannot see: that a capture really
- * puts a separate `BrowserWindow` on screen, that clicking it really expands
- * that window rather than just a DOM class, that ignoring it really writes a
- * file (the ticket's own acceptance criterion — "there is no path where a
- * capture is silently lost"), and that a showing panel really gets excluded
- * from the NEXT capture's request.
+ * The panel's own STATE — `idle` or `open` — is decided by a pure function
+ * and checked with no window at all in `thumbnail.test.ts`. What this file
+ * exists for is the wiring that cannot see: that a capture really puts a
+ * separate `BrowserWindow` on screen, that clicking it really expands that
+ * window rather than just a DOM class, and that a showing panel really gets
+ * excluded from the NEXT capture's request. What ignoring the panel does is
+ * `panel-waits.e2e.test.ts`'s claim now — "there is no path where a capture
+ * is silently lost" is still the promise, kept by the panel staying put
+ * rather than by a timeout writing a file nobody asked for.
  *
  * `export-still` is faked here the same way `capture-still` already is: the
  * bytes are never inspected, only that the file the app asked for exists and
@@ -37,9 +39,6 @@ interface Launched {
   stillLog: string;
 }
 
-/** A short timeout so the "ignore it" tests do not cost the suite minutes — the floor is 3 s. */
-const TEST_TIMEOUT_MS = 3000;
-
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
   const destDir = mkdtempSync(join(tmpdir(), "stc-thumb-dest-"));
@@ -49,10 +48,9 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   // That channel deliberately strips `still.destination` (STC-293 review,
   // #92): a renderer may not choose where main writes, precisely the thing an
   // E2E test setting up its own fixture would otherwise look like. A real
-  // destination (not "beside the shot") makes a settled export easy to find,
-  // and a short timeout keeps the ignore-it path from costing minutes.
+  // destination (not "beside the shot") makes a settled export easy to find.
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir }, thumbnail: { timeoutMs: 3000 },
+    still: { destination: destDir },
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],
@@ -140,14 +138,10 @@ describe("the post-capture floating thumbnail", () => {
     expect(readdirSync(destDir).length).toBe(1);
   }, 60_000);
 
-  test("ignoring it still saves — nothing is lost by doing nothing", async () => {
-    const { win, destDir } = await launch();
-    await captureDisplay(win);
-    await thumbnailWindow();
-    // No click at all: the timeout is the only thing that can end this.
-    await noThumbnailWindow(TEST_TIMEOUT_MS + 10_000);
-    expect(readdirSync(destDir).length).toBe(1);
-  }, 60_000);
+  // "Ignoring it still saves" (the old contract) is now
+  // `panel-waits.e2e.test.ts`'s "left alone, the panel is still there and the
+  // take is still in temp" — a different claim about the same pixels, so it
+  // lives in its own file rather than being loosened here (STC-392).
 
   test("Copy does not close the panel — Save and Close both do", async () => {
     const { win } = await launch();
@@ -165,13 +159,6 @@ describe("the post-capture floating thumbnail", () => {
 
   test("a second capture STACKS rather than replacing — both panels stay", async () => {
     const { win } = await launch();
-    // A long timeout, so no panel's own clock can settle anything inside this
-    // test: what is under test is what a second capture does to the first
-    // panel, and a settle firing meanwhile would make the count depend on how
-    // long assembling two windows happened to take.
-    await win.evaluate(async () => {
-      await (window as any).recorder.setSettings({ thumbnail: { timeoutMs: 60_000 } });
-    });
     await captureDisplay(win);
     const firstUrl = (await thumbnailWindow()).url();
 
@@ -188,25 +175,26 @@ describe("the post-capture floating thumbnail", () => {
     }, { timeout: 15_000 }).toBe(true);
   }, 60_000);
 
-  test("every stacked capture still settles — nothing is lost by doing nothing", async () => {
+  test("every stacked capture still WAITS — nothing is lost by doing nothing (STC-392)", async () => {
     const { win, destDir } = await launch();
-    // The floor (3 s), so both panels settle on their OWN timers inside this
-    // test. That is the point: with stacking, nothing settles the first panel
-    // on the second's behalf any more, so "the outgoing shot is not lost"
-    // stopped being a property of replacement and became a property of each
-    // panel keeping its own clock. If per-session timers were ever replaced by
-    // one central drain, this is the test that would notice.
-    await win.evaluate(async () => {
-      await (window as any).recorder.setSettings({ thumbnail: { timeoutMs: 3_000 } });
-    });
+    // Re-anchored for STC-392: with the clock gone, "nothing is lost" is no
+    // longer a property of every panel settling on its own timer — it is a
+    // property of every panel still being there, undecided, with its shot
+    // still in temp storage. Two panels rather than `panel-waits.e2e.test.ts`'s
+    // one, because that is what stacking adds: nothing here settles the FIRST
+    // panel on the second's behalf, the same as before, just for a different
+    // reason (there is no settling at all).
     await captureDisplay(win);
     const r2 = await captureDisplay(win);
     expect(r2.ok).toBe(true);
 
-    // TWO files, one per capture — the ticket's "five captures in five seconds
-    // produce five recoverable shots", at the smallest size that can fail.
-    await expect.poll(() => readdirSync(destDir).length, { timeout: 20_000 }).toBe(2);
-    await noThumbnailWindow();
+    await expect.poll(() => {
+      const urls = app!.windows().map((p) => p.url()).filter((u) => u.includes("thumbnail.html"));
+      return urls.length;
+    }, { timeout: 15_000 }).toBe(2);
+
+    // Nothing exported for either capture.
+    expect(readdirSync(destDir).length).toBe(0);
   }, 60_000);
 
   test("a showing panel is excluded from the next capture's request, when an id resolves", async () => {

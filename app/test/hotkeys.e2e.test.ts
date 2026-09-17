@@ -279,8 +279,7 @@ describe("a full-display capture", () => {
     // The action a hotkey reaches with nothing on screen: no selection, no
     // dimming, no window. It goes through the same main-process entry point
     // the hotkey and the menu bar call.
-    const { win, recordings, stillLog } = await launch();
-    const before = readdirSync(recordings).length;
+    const { win, stillLog } = await launch();
 
     const r = await win.evaluate(() => (window as any).recorder.captureStill("display"));
     expect(r.ok).toBe(true);
@@ -297,13 +296,12 @@ describe("a full-display capture", () => {
     expect(req.excludeWindowIds).toBeUndefined();
     expect(typeof req.displayId).toBe("number");
 
-    // The shot lands in temp storage first and only reaches the library once
-    // the floating panel settles (STC-393) — up to `DEFAULT_THUMBNAIL_TIMEOUT_MS`
-    // later, not synchronously with the capture request answering.
-    await expect.poll(() => readdirSync(recordings).length, { timeout: 15_000 }).toBe(before + 1);
-    const dirs = readdirSync(recordings);
-    const shotDir = join(recordings, dirs.find((d) => !d.startsWith("2026-08-24"))!);
-    const shot = parseShot(JSON.parse(readFileSync(join(shotDir, "shot.json"), "utf8")));
+    // The shot lands in TEMP storage (STC-393), synchronously with the
+    // capture request answering — `r.dir` names it directly. Before STC-392
+    // this polled the LIBRARY instead, because the floating panel promoted it
+    // there on its own timeout; nothing promotes it any more, so the take
+    // stays exactly where `capture-still` put it until a person decides.
+    const shot = parseShot(JSON.parse(readFileSync(join(r.dir, "shot.json"), "utf8")));
     expect(shot.kind).toBe("display-crop");
   }, 120_000);
 
