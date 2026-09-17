@@ -4,10 +4,10 @@
  *
  * Same split the rest of this project uses for a windowed interaction
  * (`selection.ts` / `overlay-session.ts`, `still-decorate.ts` / `still-render.ts`):
- * what the panel IS at any moment — showing, expanded, expired — lives here and
- * is exercised by `app/test/thumbnail.test.ts` with no window and no timer.
- * `app/src/thumbnail-window.ts` owns the real `BrowserWindow` and the real
- * `setTimeout`; it asks this module what they mean.
+ * what the panel IS at any moment — `idle` or `open` — lives here and is
+ * exercised by `app/test/thumbnail.test.ts` with no window and no clock.
+ * `app/src/thumbnail-window.ts` owns the real `BrowserWindow`; it asks this
+ * module what that means.
  *
  * This is STC-343, the third study in STC-338's series (scrubber → selection
  * overlay handles → floating thumbnail motion → take library). STC-296 shipped
@@ -21,31 +21,22 @@
  * THE RULES
  * ════════════════════════════════════════════════════════════════════════
  *
- * **1. The panel is exactly three states, and expanding is a ONE-WAY door.**
- * `idle` → `showing` → `expanded`. There is no second timeout after expand,
- * the same way macOS's own screenshot thumbnail waits forever once Markup is
- * open — getting back to `idle` needs an explicit action (Copy, Save, Close,
- * or a discard), never a clock.
- *
- * **2. The clock is always a PARAMETER, never read internally.** `show` and
- * `isExpired` take `now` rather than calling `Date.now()`, the same rule
- * `render()` follows for the transform: a decision that reads its own clock
- * cannot be replayed in a test, and "the timeout fired" needs to be
- * producible on demand rather than waited for.
- *
- * **3. The timeout floor is enforced on every READ, not just at the edges of
- * a settings form.** `clampTimeoutMs` runs on whatever a stored preference
- * or a hand-edited file happens to hold, because a panel that CAN be
- * configured to vanish instantly is a panel that can lose a capture nobody
- * had time to look at — which is exactly what "nothing is lost by doing
- * nothing" forbids.
+ * **1–3 (STC-343, superseded by STC-392). There is no clock in this module any
+ * more.** The original three rules here described a `showing` state with an
+ * `expiresAt`, a `now` parameter threaded through `show`/`isExpired` so the
+ * timeout could be replayed in a test, and a floor (`clampTimeoutMs`)
+ * enforced on every read of a stored preference. STC-392 reverses the
+ * ticket's own premise — "the panel never closes on its own" — so all three
+ * are gone rather than kept and disabled: a clock nobody can see is worse
+ * than no clock. See the doc on `ThumbnailState` for what replaced them.
  *
  * **4. Multiple captures STACK, newest at the corner — and a stack of one is
  * not a separate calculation from a lone panel.** `stackPosition(0, ...)` IS
  * `positionFor(...)`, so the single-panel case cannot drift from the stacked
  * one; it is the same formula asked for index zero. "Drains oldest-first on
- * timeout" needs no queue either — every panel arms its OWN timer when it
- * paints, so panels that appeared in order expire in order by construction.
+ * timeout" (STC-296's original wording) no longer applies post-STC-392 — a
+ * stack over `MAX_STACKED` still evicts the oldest to make room, but nothing
+ * times out any more; see `thumbnail-window.ts`'s `dismissNow`.
  *
  * **5. Only ONE gesture destroys a capture, and it needs the corner to mean
  * anything.** A swipe toward the panel's OWN corner discards; the same delta
@@ -71,6 +62,12 @@
  * proving it needs a live race no deterministic test can reliably produce.
  * `thumbnail-discard-race.test.ts` pins the source properties that make the
  * race impossible by construction instead.
+ *
+ * (STC-392: the panel's own TIMEOUT is gone, so this exact race cannot recur
+ * in the form found here. The `discarding` event stays regardless — a discard
+ * still races anything else that can hide or destroy the window out from
+ * under an in-flight delete, which today means the overflow eviction above
+ * `MAX_STACKED` and the app quitting, not a clock.)
  *
  * **7. Drag-out commits SOONER than discard, on purpose.** `DRAG_START_PX`
  * (12) is well under `SWIPE_DISCARD_PX` (90): a drag-out handed to a
@@ -116,21 +113,6 @@ export function parseCorner(v: unknown): Corner {
 }
 
 /**
- * The ticket's own numbers: "default ~6 s, configurable, never less than 3."
- * The floor is not a taste — a panel that can be configured to vanish
- * instantly is a panel that can lose a capture nobody had time to look at,
- * which is exactly what "nothing is ever lost by doing nothing" forbids.
- */
-export const DEFAULT_THUMBNAIL_TIMEOUT_MS = 6000;
-export const MIN_THUMBNAIL_TIMEOUT_MS = 3000;
-
-/** A stored value is trusted only as far as it is a finite number at or above the floor. */
-export function clampTimeoutMs(v: unknown): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.round(v) : DEFAULT_THUMBNAIL_TIMEOUT_MS;
-  return Math.max(MIN_THUMBNAIL_TIMEOUT_MS, n);
-}
-
-/**
  * How long a settle waits for the panel's FIRST composite before giving up.
  *
  * A settle can arrive before the panel has drawn — `onSettle` is registered
@@ -150,75 +132,33 @@ export function clampTimeoutMs(v: unknown): number {
  */
 export const SETTLE_READY_MS = 10_000;
 
-/** What "ignoring the panel" does with the shot — a preference (ticket's Preferences section). */
-export type SettleAction = "save" | "copy";
-
-export function parseSettleAction(v: unknown): SettleAction {
-  return v === "copy" ? "copy" : "save";
-}
-
 /**
- * What the PANEL may be told to do on settle — a superset of the preference.
+ * The panel's own state machine, after STC-392: two states, and only a person
+ * moves between them.
  *
- * `"none"` closes without exporting anything, and exists for exactly one
- * caller: a shot RE-OPENED from the library (STC-294). A fresh capture exists
- * nowhere but the panel, which is why ignoring it still saves — "there is no
- * path where a capture is silently lost" is STC-296's own acceptance
- * criterion. A re-opened shot is already on disk, so applying that rule to it
- * would mean glancing at yesterday's screenshot and silently writing a second
- * copy of it into the destination folder, which is the app inventing work
- * nobody asked for.
+ * It used to be three — `idle` → `showing` → `expanded` — with a deadline on
+ * `showing` and `isExpired` as a second way out. STC-392 reverses that: "the
+ * panel never closes on its own. It waits for you to choose an action." A
+ * state machine with a clock in it could not express that, so the clock is
+ * gone rather than set to infinity, which would have left a timeout nobody
+ * could see and everybody would have had to reason about.
  *
- * It is deliberately NOT reachable from `parseSettleAction`, so no stored
- * preference and no settings round trip can ever select it: a user who chose
- * "none" for their captures would be choosing to lose them.
+ * The expand door went with it (D3). It existed to keep controls out of the
+ * way until the timeout had passed; with nothing to pass, a panel that waits
+ * forever while showing no buttons is the weaker reading of "waits for you to
+ * choose an action".
  */
-export type PanelSettle = SettleAction | "none";
-
-/**
- * The panel's own state machine. `showing` while the timeout can still fire;
- * `expanded` once the user has clicked it, which is a ONE-WAY door in this
- * slice — there is no second timeout after expand, the same way macOS's own
- * screenshot thumbnail waits forever once Markup is open. Getting back to
- * `idle` from `expanded` needs an explicit action (Copy, Save, or Close), never
- * a clock.
- */
-export type ThumbnailState =
-  | { kind: "idle" }
-  | { kind: "showing"; expiresAt: number }
-  | { kind: "expanded" };
+export type ThumbnailState = { kind: "idle" } | { kind: "open" };
 
 export function initialState(): ThumbnailState { return { kind: "idle" }; }
 
-/**
- * A capture arrived. Always transitions to `showing`, whatever the previous
- * state was — a second capture while one panel is still up REPLACES it
- * (stacking is deferred, see the module doc), and the caller is the one
- * responsible for destroying whatever window the previous state pointed at.
- */
-export function show(now: number, timeoutMs: number): ThumbnailState {
-  return { kind: "showing", expiresAt: now + clampTimeoutMs(timeoutMs) };
-}
-
-/** The click. A no-op from `idle` — there is nothing to expand — and idempotent from `expanded`. */
-export function expand(state: ThumbnailState): ThumbnailState {
-  return state.kind === "idle" ? state : { kind: "expanded" };
-}
+/** A capture arrived. There is no second argument any more; there is no clock. */
+export function show(): ThumbnailState { return { kind: "open" }; }
 
 /**
- * Whether the panel should settle now — the timeout firing while still
- * collapsed. Never true once expanded: the click already means the user is
- * looking at it, and settling out from under them would be the "copy and
- * vanish" behaviour the ticket explicitly rejects.
- */
-export function isExpired(state: ThumbnailState, now: number): boolean {
-  return state.kind === "showing" && now >= state.expiresAt;
-}
-
-/**
- * Back to nothing on screen — a completed settle (timeout or explicit Close),
- * or a finished Copy/Save. Idempotent, the same rule `overlay-session.ts`'s
- * `finish` follows: whichever path gets here first is the answer.
+ * Back to nothing on screen. Reached only by an action the user chose — Save,
+ * Edit or Trash — or by the app shutting down. Idempotent, the same rule
+ * `overlay-session.ts`'s `finish` follows.
  */
 export function dismiss(): ThumbnailState { return { kind: "idle" }; }
 
@@ -410,6 +350,17 @@ export function classifyDrag(dx: number, dy: number, corner: Corner): DragIntent
 
 export interface Size { width: number; height: number }
 export interface Bounds { x: number; y: number; width: number; height: number }
+
+/**
+ * The one size the card is (D3).
+ *
+ * Wider and taller than the old 220×150 collapsed thumbnail, because the
+ * actions are on it from the moment it appears rather than behind a click.
+ * `app/test/thumbnail.test.ts` asserts a full stack of FIVE of these still
+ * fits a 1440×900 work area — the old test measured the collapsed size and
+ * would have stayed green while the real card ran off the bottom.
+ */
+export const PANEL_SIZE: Size = { width: 260, height: 210 };
 
 /**
  * Where the panel sits within a display's WORK AREA (not its full bounds) —

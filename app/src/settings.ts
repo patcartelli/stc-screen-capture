@@ -9,8 +9,8 @@ import {
   type ExportOptions,
 } from "@transform/still-export.js";
 import {
-  DEFAULT_CORNER, DEFAULT_THUMBNAIL_TIMEOUT_MS, clampTimeoutMs, parseCorner, parseSettleAction,
-  type Corner, type SettleAction,
+  DEFAULT_CORNER, parseCorner,
+  type Corner,
 } from "./thumbnail.js";
 import {
   DEFAULT_EMBED_TEMPLATE, DEFAULT_SLUG, slugIsValid,
@@ -180,10 +180,6 @@ export const DEFAULT_SHARE_SETTINGS: ShareSettings = {
 
 export interface ThumbnailSettings {
   corner: Corner;
-  /** Milliseconds; never below `MIN_THUMBNAIL_TIMEOUT_MS` (thumbnail.ts). */
-  timeoutMs: number;
-  /** What an ignored (timed-out) or explicitly closed panel does with the shot. */
-  settleAction: SettleAction;
   /**
    * "Some days you take twenty shots and want none of this" (the ticket's own
    * words). When set, a capture never shows the panel at all and goes straight
@@ -194,7 +190,7 @@ export interface ThumbnailSettings {
 }
 
 export const DEFAULT_THUMBNAIL_SETTINGS: ThumbnailSettings = {
-  corner: DEFAULT_CORNER, timeoutMs: DEFAULT_THUMBNAIL_TIMEOUT_MS, settleAction: "save", skip: false,
+  corner: DEFAULT_CORNER, skip: false,
 };
 
 export interface StillSettings extends ExportOptions {
@@ -258,8 +254,6 @@ function cleanThumbnail(v: unknown): ThumbnailSettings {
   const d = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
   return {
     corner: parseCorner(d.corner),
-    timeoutMs: clampTimeoutMs(d.timeoutMs),
-    settleAction: parseSettleAction(d.settleAction),
     skip: d.skip === true,
   };
 }

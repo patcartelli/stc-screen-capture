@@ -363,23 +363,23 @@ describe("the still export preferences (STC-293)", () => {
 });
 
 /**
- * The post-capture floating thumbnail's preferences (STC-296): where it sits,
- * how long it waits, and what ignoring it does. `thumbnail.ts` owns the
- * validation rules (the timeout floor, the corner enum); this only checks that
- * `settings.ts` applies them the same way every other block here is applied —
- * falls back field by field, and a partial update leaves the rest alone.
+ * The post-capture floating thumbnail's preferences (STC-296, narrowed by
+ * STC-392): where it sits, and whether it shows at all. `thumbnail.ts` owns
+ * the validation rule (the corner enum); this only checks that `settings.ts`
+ * applies it the same way every other block here is applied — falls back
+ * field by field, and a partial update leaves the rest alone.
  */
 describe("the thumbnail preferences (STC-296)", () => {
-  test("defaults: bottom-right, 6 s, save, not skipped", () => {
+  test("defaults: bottom-right, not skipped", () => {
     const t = readSettings(dir()).thumbnail;
-    expect(t).toEqual({ corner: "bottom-right", timeoutMs: 6000, settleAction: "save", skip: false });
+    expect(t).toEqual({ corner: "bottom-right", skip: false });
   });
 
   test("round-trips a full change", () => {
     const d = dir();
-    writeSettings(d, { thumbnail: { corner: "top-left", timeoutMs: 4000, settleAction: "copy", skip: true } });
+    writeSettings(d, { thumbnail: { corner: "top-left", skip: true } });
     expect(readSettings(d).thumbnail)
-      .toEqual({ corner: "top-left", timeoutMs: 4000, settleAction: "copy", skip: true });
+      .toEqual({ corner: "top-left", skip: true });
   });
 
   test("changing one field does not drop the others", () => {
@@ -391,19 +391,12 @@ describe("the thumbnail preferences (STC-296)", () => {
     expect(t.skip).toBe(true);
   });
 
-  test("a timeout below the floor is raised to it, never stored as given", () => {
-    const d = dir();
-    writeFileSync(join(d, "settings.json"), JSON.stringify({ thumbnail: { timeoutMs: 500 } }));
-    expect(readSettings(d).thumbnail.timeoutMs).toBe(3000);
-  });
-
-  test("an unknown corner or settle action falls back rather than reaching the window", () => {
+  test("an unknown corner falls back rather than reaching the window", () => {
     const d = dir();
     writeFileSync(join(d, "settings.json"),
-                  JSON.stringify({ thumbnail: { corner: "middle", settleAction: "delete" } }));
+                  JSON.stringify({ thumbnail: { corner: "middle" } }));
     const t = readSettings(d).thumbnail;
     expect(t.corner).toBe("bottom-right");
-    expect(t.settleAction).toBe("save");
   });
 
   test("a non-boolean skip is not a preference, and falls back to off", () => {
@@ -424,6 +417,30 @@ describe("the thumbnail preferences (STC-296)", () => {
     writeSettings(d, { still: { ...readSettings(d).still, format: "heic" } });
     expect(readSettings(d).thumbnail.skip).toBe(true);
     expect(readSettings(d).still.format).toBe("heic");
+  });
+
+  test("the panel's clock is not a preference any more (STC-392)", () => {
+    // Both described a timeout that no longer exists. A stored `settleAction`
+    // after this ticket would be a preference with no code path, which is
+    // worse than no preference: it reads as configurable and changes nothing.
+    const s = readSettings(dir());
+    expect(s.thumbnail).not.toHaveProperty("timeoutMs");
+    expect(s.thumbnail).not.toHaveProperty("settleAction");
+    // The controls: what SURVIVES, so this cannot pass by the block being gone.
+    expect(s.thumbnail).toHaveProperty("corner");
+    expect(s.thumbnail).toHaveProperty("skip");
+  });
+
+  test("a settings file written before STC-392 loses the two dead keys", () => {
+    // Someone upgrading has both in their settings.json. `cleanThumbnail` must
+    // drop them rather than carrying them forward forever.
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({
+      thumbnail: { corner: "top-left", skip: false, timeoutMs: 9000, settleAction: "copy" },
+    }));
+    const s = readSettings(d);
+    expect(s.thumbnail.corner).toBe("top-left");
+    expect(s.thumbnail).not.toHaveProperty("timeoutMs");
   });
 });
 
