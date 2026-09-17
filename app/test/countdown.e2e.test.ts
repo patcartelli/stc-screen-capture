@@ -22,13 +22,12 @@ import { startRecordFlow } from "./_record-flow.js";
  * and a skipped one has to fill them long before its own clock would have.
  * So the cancel tests use a countdown far longer than the test, and a start
  * arriving at all would fail them on its own — they do not rely on asserting
- * before a timer that was going to fire anyway (the trap
- * `scope-indicator.e2e.test.ts` records one ticket over).
+ * before a timer that was going to fire anyway.
  *
  * ## What this CANNOT check here
  *
- * The same limit `pill.e2e.test.ts` and `scope-indicator.e2e.test.ts` already
- * document: Xvfb has no window manager, so nothing here asserts where the
+ * The same limit `pill.e2e.test.ts` already documents: Xvfb has no window
+ * manager, so nothing here asserts where the
  * panel actually sits on screen, whether the sweep looks smooth, or whether
  * three seconds is the right number. `docs/STC-391-RUNBOOK.md` owns all of
  * that.

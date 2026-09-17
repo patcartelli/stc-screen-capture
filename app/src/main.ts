@@ -37,7 +37,6 @@ import {
 import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
-import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
@@ -489,7 +488,6 @@ app.on("before-quit", (e) => {
   globalShortcut.unregisterAll();
   tray?.destroy();
   tray = undefined;
-  hideScopeIndicator();
   // A countdown at quit answers its caller `cancelled`, so the capture or the
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
@@ -540,12 +538,6 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
     clean.share = rest as Partial<Settings>["share"];
   }
   const saved = writeSettings(app.getPath("userData"), clean);
-  // STC-381: a kind change or Clear cancels an in-progress flash (a pick
-  // followed immediately by changing your mind) — this is the only door
-  // `renderer.ts` uses to write `scope` (a kind change, `clearSource`), so
-  // gating on `clean.scope` being present catches every real case. A fresh
-  // pick starts its OWN flash from `pickCaptureTarget`, below.
-  if (clean.scope) hideScopeIndicator();
   return saved;
 });
 
@@ -580,11 +572,6 @@ type RecordResult =
  * is main's, so the outcome is already here.
  */
 async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
-  // STC-381: before anything else, even the refusals below — a flash still on
-  // screen (Record pressed right after a sticky-scope pick, STC-374's own
-  // "Choose window…"/"Choose area…" buttons) must never survive into a live
-  // take, whether or not the take starts.
-  hideScopeIndicator();
   if (!sup) return { ok: false, code: "no-supervisor" };
   // A shot in flight owns the overlay, the countdown panel and the helper's
   // attention. Refused with something to read rather than left to race.
@@ -728,63 +715,6 @@ async function micsForBar(): Promise<MicInfo[]> {
     return [];
   }
 }
-
-/**
- * Choose what a RECORDING scopes to (STC-370's region/window capability,
- * wired to the window now) — a region or a window, through the same overlay
- * `capture-still` uses (STC-290). Persists the pick as the sticky `scope`
- * preference; a take does not need re-choosing every time it runs, the same
- * way a chosen display stays chosen (STC-247).
- *
- * Guarded the same way `captureStill` is: one overlay at a time, and never
- * while a take is already running — the scope a live recording is using
- * cannot be changed out from under it.
- */
-async function pickCaptureTarget(kind: "region" | "window"):
-  Promise<{ ok: boolean; cancelled?: boolean; scope?: Settings["scope"] }> {
-  if (!sup) return { ok: false };
-  if (sup.state === "recording" || capturing || overlayIsOpen()) return { ok: false };
-
-  let windows: WindowInfo[] = [];
-  try {
-    windows = windowsFromReply(await sup.listWindows());
-  } catch {
-    // Without a Screen Recording grant the helper cannot enumerate anything.
-    // Region mode needs no window list, so the overlay still opens; window
-    // mode will simply offer nothing to click, same as still capture.
-  }
-
-  const { outcome } = await openOverlay({
-    windows, mode: kind, dist: here, renderer: join(here, "..", "renderer"),
-  });
-  if (outcome.kind === "cancelled") return { ok: true, cancelled: true };
-
-  // Trust what the overlay actually produced, not the mode it was opened in —
-  // the mode toggle inside it still works, the same reasoning
-  // `selectRegionOrWindow` already follows for still capture.
-  const pickedWindow = outcome.kind === "window"
-    ? windows.find((x) => x.id === outcome.windowId) : undefined;
-  const scope: Settings["scope"] = outcome.kind === "region"
-    ? { kind: "region", windowId: null, windowLabel: null,
-        region: { displayId: outcome.displayId, ...outcome.crop } }
-    : { kind: "window", region: null, windowId: outcome.windowId,
-        windowLabel: (() => {
-          const label = [pickedWindow?.app, pickedWindow?.title].filter(Boolean).join(" — ");
-          return label || `Window ${outcome.windowId}`;
-        })() };
-  const saved = writeSettings(app.getPath("userData"), { scope });
-  // STC-381: confirm the fresh pick with a brief outline, then get out of
-  // the way — CONFIRMED ON HARDWARE that showing it persistently on every
-  // main-window focus reads as naggy rather than helpful, so this is now
-  // the ONLY place the indicator is ever shown. `pickedWindow` is already in
-  // hand from the `windows` list fetched above, so this needs no second
-  // helper round trip for a fresh bounds lookup.
-  flashScopeIndicator({ scope: saved.scope, liveWindow: pickedWindow, rendererDir: join(here, "..", "renderer") });
-  return { ok: true, scope: saved.scope };
-}
-
-ipcMain.handle("recorder:pickCaptureTarget", async (_e, kind: string) =>
-  kind === "region" || kind === "window" ? pickCaptureTarget(kind) : { ok: false });
 
 /**
  * Select, then capture one frame (STC-290 handing off to STC-289), or capture a

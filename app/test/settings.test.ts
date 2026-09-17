@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readSettings, writeSettings, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
-  DEFAULT_THUMBNAIL_SETTINGS, DEFAULT_SCOPE_SETTINGS,
+  DEFAULT_THUMBNAIL_SETTINGS,
 } from "../src/settings.js";
 import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
@@ -24,8 +24,7 @@ describe("the camera preference", () => {
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
-                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS });
+                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS });
     expect(DEFAULT_SETTINGS.camera).toBe(false);
   });
 
@@ -63,8 +62,7 @@ describe("the camera preference", () => {
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
-                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS });
+                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS });
   });
 
   test("an unwritable directory does not throw — the preference is not worth a crash", () => {
@@ -117,8 +115,7 @@ describe("the display preference (STC-247)", () => {
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
-                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS });
+                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS });
   });
 });
 
@@ -458,73 +455,16 @@ describe("the thumbnail preferences (STC-296)", () => {
   });
 });
 
-describe("the capture scope (STC-370/STC-374)", () => {
-  test("defaults to the whole display, nothing picked", () => {
-    expect(readSettings(dir()).scope).toEqual(DEFAULT_SCOPE_SETTINGS);
-  });
-
-  test("round-trips a region", () => {
-    const d = dir();
-    writeSettings(d, { scope: { kind: "region", region: { displayId: 2, x: 10, y: 20, width: 300, height: 200 },
-                                 windowId: null, windowLabel: null } });
-    expect(readSettings(d).scope).toEqual({
-      kind: "region", region: { displayId: 2, x: 10, y: 20, width: 300, height: 200 },
-      windowId: null, windowLabel: null,
-    });
-  });
-
-  test("round-trips a window and its cosmetic label", () => {
-    const d = dir();
-    writeSettings(d, { scope: { kind: "window", region: null, windowId: 4242, windowLabel: "Safari — Example" } });
-    expect(readSettings(d).scope).toEqual({
-      kind: "window", region: null, windowId: 4242, windowLabel: "Safari — Example",
-    });
-  });
-
-  // `kind` is kept even with nothing valid picked for it — "window scope, no
-  // window yet" is a real state the source control has to show, not an error
-  // to correct here. `recorder:start` is where that combination is refused.
-  test("kind survives a region or window that fails validation", () => {
-    const d = dir();
-    writeFileSync(join(d, "settings.json"),
-                  JSON.stringify({ scope: { kind: "window", windowId: "not-a-number" } }));
-    const scope = readSettings(d).scope;
-    expect(scope.kind).toBe("window");
-    expect(scope.windowId).toBeNull();
-  });
-
-  test("an unknown kind falls back to display", () => {
-    const d = dir();
-    writeFileSync(join(d, "settings.json"), JSON.stringify({ scope: { kind: "fullscreen" } }));
-    expect(readSettings(d).scope.kind).toBe("display");
-  });
-
-  // Same rule `parseRect` enforces helper-side: a region needs a display to be
-  // local to and four finite, positive-sized numbers, or it is not a region.
-  test("a region missing its display, or with a non-positive size, is dropped", () => {
-    const d = dir();
-    for (const bad of [
-      { x: 0, y: 0, width: 100, height: 100 }, // no displayId
-      { displayId: 1, x: 0, y: 0, width: 0, height: 100 },
-      { displayId: 1, x: 0, y: 0, width: 100, height: -1 },
-      { displayId: 1, x: "0", y: 0, width: 100, height: 100 },
-    ]) {
-      writeFileSync(join(d, "settings.json"), JSON.stringify({ scope: { kind: "region", region: bad } }));
-      expect(readSettings(d).scope.region, JSON.stringify(bad)).toBeNull();
-    }
-  });
-
-  test("a scope change leaves the display id and other preferences alone, and vice versa", () => {
-    const d = dir();
-    writeSettings(d, { displayId: 2 });
-    writeSettings(d, { scope: { kind: "window", region: null, windowId: 7, windowLabel: null } });
-    expect(readSettings(d).displayId).toBe(2);
-    expect(readSettings(d).scope.kind).toBe("window");
-  });
-
-  test("a scope block of the wrong shape falls back whole", () => {
-    const d = dir();
-    writeFileSync(join(d, "settings.json"), JSON.stringify({ scope: "window please" }));
-    expect(readSettings(d).scope).toEqual(DEFAULT_SCOPE_SETTINGS);
-  });
+test("a settings file from before STC-388 keeps a stray scope key, harmlessly", () => {
+  // readSettings builds a fresh document field by field, so a key nothing
+  // reads is simply never read — there is nothing to migrate, and a rollback
+  // finds its own data intact.
+  const d = dir();
+  writeFileSync(join(d, "settings.json"), JSON.stringify({
+    camera: true,
+    scope: { kind: "window", windowId: 42, windowLabel: "Safari — x", region: null },
+  }));
+  const s = readSettings(d);
+  expect(s.camera).toBe(true);
+  expect((s as unknown as Record<string, unknown>).scope).toBeUndefined();
 });
