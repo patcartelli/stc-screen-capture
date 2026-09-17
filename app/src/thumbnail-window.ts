@@ -339,6 +339,21 @@ export function thumbnailIsOpen(): boolean { return panels.length > 0; }
 /** How many are stacked right now, for tests. */
 export function thumbnailCount(): number { return panels.length; }
 
+/**
+ * Directories of every panel still showing a take nobody has saved
+ * (STC-392 D8) — what Task 5c's quit warning counts and what "Save All"
+ * promotes.
+ *
+ * Filtered to `origin: "fresh"` deliberately: a `library`-origin panel
+ * (STC-294's reopen) is already on disk with nothing to promote — quitting
+ * past it loses nothing, so it is not "unhandled" the way a take that exists
+ * ONLY because this panel is open would be. Counting every open panel here
+ * would warn on a quit that could not lose anything.
+ */
+export function unsavedTakeDirs(): string[] {
+  return panels.filter((p) => p.take.origin === "fresh").map((p) => p.takeDir);
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 class ThumbnailSession {
@@ -652,6 +667,14 @@ class ThumbnailSession {
    * of a value `promoteTake` already moves.
    */
   get takeDir(): string { return this.opts.dir; }
+
+  /**
+   * What this panel is showing — `panel-actions.ts`'s own `PanelTake`,
+   * handed back verbatim. `unsavedTakeDirs` (below) is the one reader: it
+   * needs `origin` to tell a fresh capture from a reopened one, the same
+   * distinction the constructor's own doc comment already explains.
+   */
+  get take(): PanelTake { return this.opts.take; }
 
   /**
    * Take the panel off the screen without deciding anything.

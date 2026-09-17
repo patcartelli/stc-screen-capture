@@ -1,6 +1,6 @@
 import {
   app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage,
-  type IpcMainInvokeEvent,
+  powerMonitor, type IpcMainInvokeEvent,
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
@@ -44,8 +44,10 @@ import type { WindowInfo } from "./selection.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
+  unsavedTakeDirs,
 } from "./thumbnail-window.js";
 import { promotes } from "./panel-actions.js";
+import { quitDecision } from "./quit-guard.js";
 import { openEditor } from "./editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
@@ -379,7 +381,20 @@ function migrateLegacyAppData(): void {
   }
 }
 
+/**
+ * Set once, if ever, by `powerMonitor`'s own `shutdown` event — see the
+ * long comment at `quitDecision`'s call site in `before-quit` for what this
+ * is and is not known to do on this machine.
+ */
+let systemShuttingDown = false;
+
 app.whenReady().then(async () => {
+  // Subscribed before anything else touches quit machinery, so there is no
+  // window during startup where a shutdown notification could arrive and be
+  // missed. See the comment at `quitDecision`'s call site for the whole
+  // story; this line by itself proves only that the module is reachable.
+  powerMonitor.on("shutdown", () => { systemShuttingDown = true; });
+
   // FIRST, before anything reads settings or looks for unsaved takes — both
   // of those resolve paths that this rename moved (STC-397).
   migrateLegacyAppData();
@@ -444,15 +459,22 @@ app.on("window-all-closed", async () => {
 // Electron does not await an async listener here, so the first pass holds
 // the quit until the shutdown has actually finished, then re-issues it.
 let quitting = false;
-app.on("before-quit", (e) => {
-  if (quitting) return;
-  e.preventDefault();
-  quitting = true;
-  // An overlay still up at quit would outlive its window list and sit on the
-  // screen with nothing left to answer it. A thumbnail still up is closed
-  // WITHOUT exporting or deleting anything (STC-392) — its take is left in
-  // temp storage, where STC-393's recovery prompt offers it back on the next
-  // launch, rather than a quit silently deciding "save" on the user's behalf.
+
+/**
+ * The teardown every quit eventually runs, whichever path decided to allow
+ * it — a plain quit with nothing unsaved, "Quit Anyway", or "Save All" once
+ * the promotions it does are finished.
+ *
+ * An overlay still up at quit would outlive its window list and sit on the
+ * screen with nothing left to answer it. A thumbnail still up is closed
+ * WITHOUT exporting or deleting anything (STC-392 D7) — its take is left
+ * exactly where it is (in the library if `before-quit` already promoted it
+ * for Save All, in temp storage otherwise), where STC-393's recovery prompt
+ * offers a temp one back on the next launch. Nothing here ever deletes a
+ * take (ruling 3) — `closeThumbnail`'s own doc comment says the same of the
+ * windows it destroys.
+ */
+function runQuitTeardown(): void {
   globalShortcut.unregisterAll();
   tray?.destroy();
   tray = undefined;
@@ -468,6 +490,80 @@ app.on("before-quit", (e) => {
     .then(() => (sup ? sup.shutdown() : Promise.resolve()))
     .catch(() => {})
     .finally(() => app.quit());
+}
+
+app.on("before-quit", (e) => {
+  if (quitting) return;
+  e.preventDefault();
+
+  const unhandled = unsavedTakeDirs().length;
+  /**
+   * STC-392 D8 — telling a user-initiated ⌘Q apart from a logout, restart or
+   * shutdown so the warning below can skip the second case (see
+   * `quit-guard.ts`'s module doc for WHY it must skip it, not just that it
+   * does).
+   *
+   * WHAT WAS ACTUALLY CHECKED, on this machine (`sw_vers`: macOS 27.0,
+   * arm64) with the Electron version this app is built against
+   * (`node_modules/electron`: 43.4.1): that build's own bundled type
+   * declarations (`node_modules/electron/electron.d.ts`, the `powerMonitor`
+   * `'shutdown'` event) are annotated `@platform linux,darwin` — darwin
+   * support here is NEWER than the "documented for Linux and Windows" belief
+   * this ticket started from, which was true of older Electron releases and
+   * is not true of this one.
+   *
+   * That is a claim about the DOCS, not an observation of the EVENT firing.
+   * Actually confirming it needs a real logout or restart, and this session
+   * deliberately did not trigger one: doing so would have ended this dev
+   * session (and everything else running on the machine) along with the
+   * app, which is a destructive action nobody asked for just to answer a
+   * question the code below already degrades safely without an answer to.
+   * `systemShuttingDown` (above) starts false and is flipped only by a real
+   * `powerMonitor` `'shutdown'` callback — if that callback never arrives
+   * (wrong event, wrong platform build, anything), every quit reads as
+   * user-initiated and this warns every time, which IS the ticket's own
+   * documented fallback ("warn every time" is a smaller fault than blocking
+   * a shutdown), arrived at by construction rather than by a flag nobody
+   * checks. Confirming the event actually fires needs a person, on this
+   * hardware, watching a real logout — see docs/STC-392-RUNBOOK.md.
+   */
+  const decision = quitDecision({ unhandled, systemInitiated: systemShuttingDown });
+  if (decision === "quit") {
+    quitting = true;
+    runQuitTeardown();
+    return;
+  }
+
+  // decision === "warn": a person is still at the keyboard and there is
+  // something to lose. Ruling 1: Cancel is both `defaultId` AND `cancelId` —
+  // buttons[2] — so Escape does the same thing Return-on-nothing-pressed
+  // does, rather than picking the FIRST button the way a dialog that only
+  // sets `cancelId` would.
+  void dialog.showMessageBox({
+    type: "warning",
+    buttons: ["Save All", "Quit Anyway", "Cancel"],
+    defaultId: 2,
+    cancelId: 2,
+    message: unhandled === 1 ? "1 take isn't saved" : `${unhandled} takes aren't saved`,
+    detail: "Save All writes them to your library, then quits. Quit Anyway leaves them where "
+      + "they are — nothing is deleted, and they're offered back the next time you open the app.",
+  }).then(async ({ response }) => {
+    if (response === 2) return; // Cancel: quit stays prevented, `quitting` stays false.
+    if (response === 0) {
+      // Save All must not trap the user (ruling 2): a promotion that fails
+      // (a full disk, say) is reported and skipped, never retried and never
+      // turned into a second dialog. The take that failed stays in temp
+      // storage, which is the same backstop Quit Anyway already relies on —
+      // STC-393's recovery prompt finds it on the next launch either way.
+      for (const dir of unsavedTakeDirs()) {
+        await promoteTake(process.env, dir).catch((err) => {
+          console.error("[quit] could not save a take before quitting:", dir, err);
+        });
+      }
+    }
+    quitting = true;
+    runQuitTeardown();
+  });
 });
 
 ipcMain.handle("recorder:getSettings", async (): Promise<Settings> =>
