@@ -79,3 +79,46 @@ implying a check that isn't happening — `quitDecision` itself does not care
 where `systemInitiated` comes from, so removing the listener only changes
 the app from "warns every time, with an unused best-effort exception" to
 "warns every time," which is already its own fallback behaviour today.
+
+---
+
+## §2 — Task 6, the timed undo toast: written and E2E-tested on Linux, so
+## its LOOK and FEEL are unseen
+
+`panel:trash` on a fresh take no longer deletes anything on the spot — it
+promises to (`pending-trash.ts`), closes the panel, and shows a small toast
+in the same corner the panel was in, with an 8 s (`UNDO_WINDOW_MS`) progress
+bar and an Undo button. Everything MECHANICAL is proven end to end by
+`app/test/panel-waits.e2e.test.ts`'s "Trash is a promise you can take back"
+block: the toast appears, Undo re-presents the panel with the take intact,
+and letting it run out empties temp storage. None of that says whether it
+READS right.
+
+**What to look at:**
+
+1. Trash a fresh capture (self-timer off is fine) and watch the toast land —
+   does it appear where the panel just was, or does it jump? `positionFor`
+   uses the same corner and the same `positionFor` call the panel does, so it
+   should not jump, but nobody has watched it happen on a real display.
+2. **Does the toast steal focus?** It should not — `showInactive()`
+   (`toast-window.ts`) is deliberate, so clicking into another app right
+   after pressing Trash should keep working normally, and the toast should
+   never come frontmost over whatever you click into next. If it DOES read as
+   taking focus, that is `ruling 1` failing on real hardware in a way no test
+   here can see (this sandbox cannot observe OS key status at all — see the
+   STC-391 follow-up entry in CLAUDE.md for the identical gap on the
+   countdown panel, found only by a person on a Mac).
+3. **Does the progress bar actually reach empty right as the file goes?**
+   The bar's `animation-duration` and the timer that calls `shell.trashItem`
+   are two different mechanisms driven by the same `UNDO_WINDOW_MS` constant
+   (ruling 2) — they SHOULD look synchronized, but the bar is CSS running in
+   the toast's own renderer and the commit is `main.ts`'s 1 s sweep interval,
+   so there is up to ~1 s of slop nothing here measures.
+4. Press Undo at various points — right away, and right at the last moment
+   before the bar empties — and confirm the panel that comes back looks and
+   behaves like a fresh one (Copy/Save/Trash all present and working), not a
+   half-restored one.
+5. Trash several captures in a row before any toast expires, and confirm
+   only ONE toast is ever on screen (`showUndoToast`'s "one instance"
+   design) — the earlier promise should still be kept on schedule even
+   though its own toast never got to finish.

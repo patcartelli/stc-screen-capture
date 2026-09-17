@@ -46,11 +46,13 @@ import {
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
   unsavedTakeDirs,
 } from "./thumbnail-window.js";
-import { promotes } from "./panel-actions.js";
+import { promotes, trashStyle } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
 import { openEditor } from "./editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
+import { PendingTrash } from "./pending-trash.js";
+import { showUndoToast, hideUndoToast } from "./toast-window.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -148,6 +150,19 @@ let lastStillFile: string | undefined;
 function insideCaptureRoot(env: NodeJS.ProcessEnv, dir: string): boolean {
   return insideTakesRoot(env, dir) || insideTempTakesRoot(env, dir);
 }
+
+/**
+ * Deletions the ✕ has promised but not yet committed (STC-392 Task 6). One
+ * instance for the whole process, the same reason `openTakes` and `tray`
+ * above are module-level rather than per-window — a promised deletion
+ * outlives the panel it was pressed from.
+ */
+const pendingTrash = new PendingTrash();
+
+/** How often to check for a promise whose undo window has elapsed. Small
+ * enough that the toast's own bar (driven by the identical `UNDO_WINDOW_MS`)
+ * and the moment the file actually moves cannot drift far apart. */
+const TRASH_SWEEP_INTERVAL_MS = 1_000;
 
 // The renderer is sandboxed and cannot read files. It gets bytes over IPC and
 // never names a path: it may ask for one of a few fixed filenames, and only
@@ -419,6 +434,16 @@ app.whenReady().then(async () => {
     console.error("[temp-takes] could not create the temp root:", e);
   });
   setInterval(() => { void purgeStaleTempTakes(process.env).catch(() => {}); }, TEMP_PURGE_INTERVAL_MS);
+  // Keeps every promise `panel:trash` makes (STC-392 Task 6): whatever
+  // `pendingTrash.due()` hands back has had its whole undo window elapse, so
+  // it is committed to the real Trash here rather than on any UI timer.
+  setInterval(() => {
+    for (const dir of pendingTrash.due()) {
+      shell.trashItem(dir).catch((e) => {
+        console.error("[trash] could not commit a promised deletion:", dir, e);
+      });
+    }
+  }, TRASH_SWEEP_INTERVAL_MS);
 
   startSupervisor();
   shortcuts = readSettings(app.getPath("userData")).shortcuts;
@@ -473,6 +498,17 @@ let quitting = false;
  * offers a temp one back on the next launch. Nothing here ever deletes a
  * take (ruling 3) — `closeThumbnail`'s own doc comment says the same of the
  * windows it destroys.
+ *
+ * The one EXCEPTION to "nothing here deletes a take" is a promise `panel:trash`
+ * already made (STC-392 Task 6, `pending-trash.ts`): quitting KEEPS it rather
+ * than losing it, because a promised deletion left sitting in temp storage
+ * would be found by STC-393's recovery prompt on the next launch and offered
+ * back as an "unsaved take" — the app handing someone a thing they deliberately
+ * deleted. That commit runs BEFORE `closeThumbnail()`, not after: a toast's
+ * Undo racing the quit calls `presentThumbnail` again (see `panel:undoTrash`),
+ * and ordering it first means that re-presented panel is still in the list
+ * `closeThumbnail()` reads and tears down, rather than appearing after that
+ * step has already run and outliving it.
  */
 function runQuitTeardown(): void {
   globalShortcut.unregisterAll();
@@ -483,7 +519,10 @@ function runQuitTeardown(): void {
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
   cancelCountdown();
-  closeThumbnail()
+  hideUndoToast();
+  Promise.all(pendingTrash.all().map((d) =>
+    shell.trashItem(d).catch((e) => console.error("[trash] could not commit:", d, e))))
+    .then(() => closeThumbnail())
     .catch(() => {})
     .then(() => closeOverlay())
     .catch(() => {})
@@ -496,6 +535,15 @@ app.on("before-quit", (e) => {
   if (quitting) return;
   e.preventDefault();
 
+  // A take `panel:trash` has PROMISED to delete (Task 6) is not counted here,
+  // and needs no extra check to arrange that: `panel:trash` dismisses the
+  // panel the instant it promises the deletion (see that handler), and
+  // `unsavedTakeDirs()` only ever counts takes with an OPEN panel — so a
+  // pending-trash take has already left this list by the time this line
+  // runs. The user already decided its fate; counting it would inflate the
+  // warning ("3 takes aren't saved" when one is being deleted on purpose) and
+  // "Save All" would promote it into the library, resurrecting the very take
+  // the ✕ was pressed on.
   const unhandled = unsavedTakeDirs().length;
   /**
    * STC-392 D8 — telling a user-initiated ⌘Q apart from a logout, restart or
@@ -1218,29 +1266,44 @@ ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
   return true;
 });
 
-ipcMain.handle("take:delete", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
-    throw new Error("refusing to delete a path outside the recordings folder");
-  }
-  if (!win) throw new Error("no window");
-
-  // The only irreversible action in the app, so it asks first — and then does
-  // not actually destroy anything: shell.trashItem moves the take to the Trash,
-  // where a mistaken click is one restore away. Never unlink.
+/**
+ * Ask first, then move to the Trash — never `rm`, so a mistaken click is one
+ * Finder restore away. `take:delete`'s original body (STC-294), lifted out
+ * here (STC-392 Task 6) so `panel:trash`'s "confirm" style (`trashStyle`,
+ * `panel-actions.ts`) can call the SAME dialog rather than a second copy
+ * asking the same question with a second string — two modals for one
+ * question is exactly the "one value, two copies" defect this codebase keeps
+ * finding. Both callers already validate the directory against their own
+ * root before reaching this; it does not re-check.
+ */
+async function trashWithConfirmation(dir: string): Promise<{ ok: boolean; detail?: string }> {
+  if (!win) return { ok: false, detail: "no window" };
   const { response } = await dialog.showMessageBox(win, {
     type: "warning",
     buttons: ["Move to Trash", "Cancel"],
     defaultId: 1,
     cancelId: 1,
-    message: "Move this recording to the Trash?",
+    message: "Move this take to the Trash?",
     detail: dir,
   });
-  if (response !== 0) return { deleted: false };
+  if (response !== 0) return { ok: false, detail: "cancelled" };
 
   // A window with this take open no longer has anywhere valid to write.
   for (const [sid, d] of openTakes) if (d === dir) openTakes.delete(sid);
   await shell.trashItem(dir);
-  return { deleted: true };
+  // No-op unless a panel is showing this take (the `panel:trash` "confirm"
+  // path — a re-opened library shot); `take:delete`'s own caller (the
+  // library grid) never has one open for the take it is deleting.
+  dismissThumbnail(dir);
+  return { ok: true };
+}
+
+ipcMain.handle("take:delete", async (_e, dir: string) => {
+  if (!insideTakesRoot(process.env, dir)) {
+    throw new Error("refusing to delete a path outside the recordings folder");
+  }
+  const r = await trashWithConfirmation(dir);
+  return { deleted: r.ok };
 });
 
 ipcMain.handle("preview:open", async (e, dir: string) => {
@@ -1619,28 +1682,65 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
  * Throw a take away (STC-296's right-click Delete, and now the ✕ button, the
  * ⌘⌫ key and the swipe).
  *
- * To the TRASH, never `rm`, and with no confirmation. `recorder:deleteTake`
- * puts a modal in front of the same call and that is right there — a recording
- * is minutes of work and the library is a place you browse. A take whose panel
- * is still on screen is seconds old with the pointer already on it, and the
- * Trash is what makes "no confirmation" safe rather than reckless.
- *
- * The undo window (`trashStyle`/`UNDO_WINDOW_MS`, `panel-actions.ts`) is a
- * later ticket; this is the straight-to-Trash behaviour the swipe already
- * had, so the action works from the moment its button exists.
+ * Two styles, decided by `trashStyle(origin)` (`panel-actions.ts`, D1) —
+ * never a second opinion here about which take gets which: a take re-opened
+ * from the library is already kept, so deleting it is destroying something
+ * the user chose and gets `trashWithConfirmation`'s modal, the same one
+ * `take:delete` uses. A fresh capture still in temp storage gets the timed
+ * undo (STC-392 Task 6, `pending-trash.ts`): nothing is trashed yet. The ✕
+ * PROMISES to, closes the panel, and puts up a toast; the promise is kept by
+ * the sweep in `app.whenReady()` once `UNDO_WINDOW_MS` elapses, or broken by
+ * `panel:undoTrash` before then. `shell.trashItem` has no inverse, so this is
+ * the only version of "undo" that does not lie about what the filesystem can
+ * do — see `pending-trash.ts`'s module doc for the whole reasoning.
  */
 ipcMain.handle("panel:trash", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
+  const origin = insideTempTakesRoot(process.env, dir) ? "fresh" : "library";
+  if (trashStyle(origin) === "confirm") return trashWithConfirmation(dir);
+
   if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
+  pendingTrash.promise(dir);
+  dismissThumbnail(dir);
+  showUndoToast({
+    dir, corner: readSettings(app.getPath("userData")).thumbnail.corner,
+    dist: here, rendererDir: join(here, "..", "renderer"),
+  });
+  return { ok: true };
+});
+
+/**
+ * Break a promise `panel:trash` made, and bring the panel back.
+ *
+ * `false` when there was nothing to take back — `PendingTrash.undo` already
+ * refuses a take that was never promised or has already been committed, so a
+ * stale toast (or a doubled click) cannot reopen a panel for a take already
+ * in the Trash. On success the panel is re-presented from the STORED shot
+ * document, exactly like `still:reopen`/crash recovery — nothing was ever
+ * moved, so the take is still sitting in temp storage under `dir`.
+ */
+ipcMain.handle("panel:undoTrash", async (_e, dir: string) => {
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) return false;
+  if (!pendingTrash.undo(dir)) return false;
+  hideUndoToast();
   try {
-    await shell.trashItem(dir);
-    dismissThumbnail(dir);
-    return { ok: true };
-  } catch (err: any) {
-    return { ok: false, detail: String(err?.message ?? err) };
+    const shot = JSON.parse(await readFile(join(dir, "shot.json"), "utf8"));
+    const { thumbnail } = readSettings(app.getPath("userData"));
+    presentThumbnail({
+      dir, shot, corner: thumbnail.corner,
+      // A promise only ever exists for a take Save/Save-All could otherwise
+      // resurrect (`trashStyle` above), which is exactly `origin: "fresh"` —
+      // an undone deletion is nothing more than the panel it was closed from,
+      // reopened.
+      take: { kind: "shot", origin: "fresh" },
+      dist: here, rendererDir: join(here, "..", "renderer"),
+    });
+  } catch (e) {
+    console.error("[trash] could not re-present after undo:", dir, e);
   }
+  return true;
 });
 
 /** Show the last SAVED still in the Finder. Takes no path — see `lastStillFile`. */

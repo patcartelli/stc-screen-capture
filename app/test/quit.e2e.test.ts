@@ -293,4 +293,88 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     // backstop Quit Anyway relies on, reached from the other direction.
     expect(existsSync(join(temp, before[0]!))).toBe(true);
   }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + 60_000);
+
+  /**
+   * STC-392 Task 6's two quit-path interactions, both against the real quit
+   * flow rather than reasoned about: a promised deletion must not inflate
+   * the warning or be resurrected by Save All (ruling 2), and quitting must
+   * KEEP the promise rather than abandon it in temp storage (ruling 1).
+   */
+  test("a promised deletion (Task 6) is not counted as unhandled, and Save All does not resurrect it", async () => {
+    const { win, recordings, temp } = await launchWithHelper();
+    const r1: any = await captureDisplay(win);
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(1);
+    const r2: any = await captureDisplay(win);
+    expect(r2.ok).toBe(true);
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(2);
+    expect(tempTakes(temp).length).toBe(2);
+
+    // Trash the FIRST capture — promised, not committed. The panel it was
+    // pressed from is matched by its own `dir` query param
+    // (`crash-recovery.e2e.test.ts`'s own pattern for telling panels apart).
+    const dir1 = r1.dir as string;
+    const panel1 = app!.windows().find((p) =>
+      p.url().includes("thumbnail.html") && new URL(p.url()).searchParams.get("dir") === dir1)!;
+    await panel1.click("#trash");
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(1);
+    // Still in temp — only promised, well inside the 8s undo window.
+    expect(tempTakes(temp).length).toBe(2);
+
+    const { calls, lastArgs } = await stubQuitDialog(0); // Save All is buttons[0].
+    await app!.evaluate(({ app: electronApp }) => electronApp.quit());
+    await expect.poll(() => calls(), { timeout: POLL_MS }).toBe(1);
+    // ONE take counted, not two — ruling 2's whole point. Counting the
+    // promised one would have read "2 takes aren't saved" here.
+    expect((await lastArgs()).message).toBe("1 take isn't saved");
+
+    await app!.close();
+    app = undefined;
+
+    // Save All promoted the ONE real unsaved take. The promised deletion was
+    // never in its list, so it was never resurrected into the library —
+    // exactly the failure ruling 2 exists to prevent.
+    expect(libraryTakes(recordings).length).toBe(1);
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 3 * POLL_MS + 60_000);
+
+  test("quitting commits every outstanding promised deletion before it exits (Task 6 ruling 1)", async () => {
+    const { win, recordings, temp } = await launchWithHelper();
+    await captureDisplay(win);
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(1);
+    const before = tempTakes(temp);
+    expect(before.length).toBe(1);
+
+    const panel = app!.windows().find((p) => p.url().includes("thumbnail.html"))!;
+    await panel.click("#trash");
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(0);
+    // Still there — only promised, well inside the 8s undo window. If the
+    // quit below relied on the periodic sweep alone (rather than committing
+    // `pendingTrash.all()` itself), this take would still be here when the
+    // process exits.
+    expect(tempTakes(temp)).toEqual(before);
+
+    // No unhandled takes left (ruling 2 excludes the promised one) — a plain
+    // quit, no dialog. Same file-log pattern as "a reopened LIBRARY take does
+    // not count as unhandled" above: the whole point of this test is that
+    // the app quits with nothing left to read an in-process counter back out
+    // of, so a stubbed dialog's calls are logged to a file instead.
+    const dialogLog = join(mkdtempSync(join(tmpdir(), "stc-quitdialog-")), "calls.txt");
+    await app!.evaluate(({ dialog }, logPath) => {
+      const fs = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+      // Answers Quit Anyway if it is ever somehow reached, so a wrongly
+      // shown dialog does not also hang the test.
+      dialog.showMessageBox = (async () => {
+        fs.appendFileSync(logPath, "called\n");
+        return { response: 1, checkboxChecked: false };
+      }) as any;
+    }, dialogLog);
+
+    await app!.close();
+    app = undefined;
+
+    expect(existsSync(dialogLog) ? readFileSync(dialogLog, "utf8") : "").toBe("");
+    // Ruling 1: the promise was KEPT before the process went, not abandoned
+    // — the take is gone from temp storage even though the 8s window never
+    // naturally elapsed.
+    expect(existsSync(join(temp, before[0]!))).toBe(false);
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + 60_000);
 });

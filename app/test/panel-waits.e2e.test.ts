@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { MAX_STACKED } from "../src/thumbnail.js";
+import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 
 /**
  * The contract STC-392 reverses, end to end.
@@ -41,6 +42,20 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * `bc9faaf`.
  */
 const LONGER_THAN_ANY_OLD_TIMEOUT_MS = 8_000;
+
+/**
+ * Playwright's own defaults sit OUTSIDE every bound a test writes.
+ * `electron.launch()` and `page.waitForSelector()` (both inside `launch`,
+ * below) are never given an override, so both run at Playwright's 30s
+ * default — 60s of overhead every test in this file pays before its own
+ * `expect.poll`s even start (STC-392 review, I3; `bc9faaf`'s rule). File-
+ * scoped rather than declared once per `describe` — two copies of the same
+ * overhead is the "one value, two copies" defect this codebase keeps naming.
+ */
+const PLAYWRIGHT_LAUNCH_OVERHEAD_MS = 60_000;
+
+/** One `expect.poll`'s own bound, used to size a declared timeout from how many of these a test makes. */
+const POLL_MS = 15_000;
 
 interface PanelLaunch {
   win: Page;
@@ -224,8 +239,90 @@ describe("the panel waits (STC-392)", () => {
     await pressTrashKey();
     await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
                        { timeout: 15_000 }).toBe(0);
-    expect(readdirSync(temp).length).toBe(0);
+    // STC-392 Task 6 changed what "deletes" means: the panel closes on the
+    // spot (it just did, above), but the take itself is only PROMISED —
+    // still sitting in temp storage until the undo window elapses. The old
+    // contract asserted `0` here; the new one is the whole point of this
+    // ticket, exercised end to end by "pressing Trash promises a deletion..."
+    // below.
+    expect(readdirSync(temp).length).toBe(1);
   }, 40_000);
+});
+
+/**
+ * The timed undo (STC-392 Task 6). `shell.trashItem` has no inverse, so
+ * Trash does not trash anything on the spot: it PROMISES to
+ * (`pending-trash.ts`), closes the panel, and puts up a toast. These three
+ * tests are the whole promise, watched end to end — pressing Trash, taking
+ * it back, and letting it stand.
+ */
+describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
+  /** The toast window for whichever take was just trashed, once one is up. */
+  function toastWindow(electronApp: ElectronApplication): Page | undefined {
+    return electronApp.windows().find((p) => p.url().includes("toast.html"));
+  }
+
+  test("pressing Trash closes the panel, puts up an undo toast, and leaves the take in temp", async () => {
+    const { app: electronApp, temp } = await launch();
+    await panelWindow(electronApp).click("#trash");
+
+    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+                       { timeout: POLL_MS }).toBe(0);
+    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("toast.html")).length,
+                       { timeout: POLL_MS }).toBe(1);
+    // Promised, not committed: `panel:trash`'s whole point for a fresh take.
+    expect(readdirSync(temp).length).toBe(1);
+    // Declared timeout: PLAYWRIGHT_LAUNCH_OVERHEAD_MS (60s, electron.launch +
+    // waitForSelector, both inside `launch`) + `launch`'s own capture-count
+    // poll (15s) + two polls here (15s each) = 105s summed; declared above
+    // that.
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 3 * POLL_MS + 30_000);
+
+  test("pressing Undo brings the panel back, and the take is still in temp", async () => {
+    const { app: electronApp, temp } = await launch();
+    await panelWindow(electronApp).click("#trash");
+    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("toast.html")).length,
+                       { timeout: POLL_MS }).toBe(1);
+
+    await toastWindow(electronApp)!.click("#undo");
+
+    // The toast goes...
+    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("toast.html")).length,
+                       { timeout: POLL_MS }).toBe(0);
+    // ...and the panel comes back — ruling 4: an undo re-presents it.
+    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+                       { timeout: POLL_MS }).toBe(1);
+    // Nothing was ever moved.
+    expect(readdirSync(temp).length).toBe(1);
+    // The re-presented panel still has a working Trash — undo did not spend
+    // the take's only chance at one.
+    expect(await panelWindow(electronApp).isVisible("#trash")).toBe(true);
+    // Declared timeout: PLAYWRIGHT_LAUNCH_OVERHEAD_MS (60s) + `launch`'s own
+    // capture-count poll (15s) + three polls here (15s each) = 120s summed;
+    // declared above that.
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 4 * POLL_MS + 30_000);
+
+  test("letting the toast expire commits the deletion — temp ends up empty", async () => {
+    const { app: electronApp, temp } = await launch();
+    await panelWindow(electronApp).click("#trash");
+    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("toast.html")).length,
+                       { timeout: POLL_MS }).toBe(1);
+    // Still there right after the promise, before any window has elapsed.
+    expect(readdirSync(temp).length).toBe(1);
+
+    // Bounded at UNDO_WINDOW_MS plus a margin comfortably past
+    // `TRASH_SWEEP_INTERVAL_MS` (main.ts) so the sweep has certainly run
+    // again after the window elapses — the note this task's brief itself
+    // calls out: waiting OUT the real undo window, not racing it.
+    await expect.poll(() => readdirSync(temp).length,
+                       { timeout: UNDO_WINDOW_MS + 4_000 }).toBe(0);
+    // The toast took itself down on the same schedule.
+    expect(electronApp.windows().some((p) => p.url().includes("toast.html"))).toBe(false);
+    // Declared timeout: PLAYWRIGHT_LAUNCH_OVERHEAD_MS (60s) + `launch`'s own
+    // capture-count poll (15s) + the toast-appear poll (15s) + the undo-
+    // window poll (UNDO_WINDOW_MS + 4s) = 94s + UNDO_WINDOW_MS summed;
+    // declared above that.
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + UNDO_WINDOW_MS + 4_000 + 30_000);
 });
 
 /**
@@ -247,21 +344,6 @@ describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
         .filter((w) => w.webContents.getURL().includes("thumbnail.html"))
         .map((w) => ({ url: w.webContents.getURL(), visible: w.isVisible() })));
   }
-
-  /**
-   * Playwright's own defaults sit OUTSIDE every bound a test writes, and the
-   * declared timeouts below used to ignore them — `bc9faaf`'s rule ("a
-   * test's own timeout must exceed the bounds waiting inside it") applies
-   * just as much to bounds Playwright supplies as to ones this file writes.
-   * Neither `electron.launch()` nor `page.waitForSelector()` (inside
-   * `launch`, above) is given an override, so both run at Playwright's 30s
-   * default — 60s of overhead every test below pays before its own
-   * `expect.poll`s even start (STC-392 review, I3).
-   */
-  const PLAYWRIGHT_LAUNCH_OVERHEAD_MS = 60_000;
-
-  /** One `expect.poll`'s own bound, used to size a declared timeout from how many of these a test makes. */
-  const POLL_MS = 15_000;
 
   test("five captures in a burst leave FIVE alive panel windows, only MAX_STACKED visible", async () => {
     // THIS IS THE LOAD-BEARING HALF. `presentThumbnail` used to call

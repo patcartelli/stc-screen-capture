@@ -30,5 +30,6 @@
   },
   "include": ["app/src/**/*.ts", "harness/vite.config.ts", "vitest.*.ts"],
   "exclude": ["app/src/renderer.ts", "app/src/overlay.ts", "app/src/thumbnail-renderer.ts",
-              "app/src/library-view.ts", "app/src/editor.ts", "app/src/countdown-renderer.ts"]
+              "app/src/library-view.ts", "app/src/editor.ts", "app/src/countdown-renderer.ts",
+              "app/src/toast-renderer.ts"]
 }

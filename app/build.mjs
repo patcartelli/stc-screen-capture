@@ -25,4 +25,8 @@ await build({ ...common, entryPoints: ["app/src/editor.ts"], outfile: "app/dist/
 // one surface, in its own window with its own, narrowest bridge.
 await build({ ...common, entryPoints: ["app/src/countdown-preload.ts"], outfile: "app/dist/countdown-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/countdown-renderer.ts"], outfile: "app/dist/countdown-renderer.js", format: "iife", platform: "browser" });
+// The undo toast (STC-392 Task 6) — its own window, its own narrowest bridge,
+// the same reason every other floating surface above is separate.
+await build({ ...common, entryPoints: ["app/src/toast-preload.ts"], outfile: "app/dist/toast-preload.cjs", format: "cjs" });
+await build({ ...common, entryPoints: ["app/src/toast-renderer.ts"], outfile: "app/dist/toast-renderer.js", format: "iife", platform: "browser" });
 console.log("app built -> app/dist/");
