@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "stc:project-6",
   "title": "stc project (edit document), v6",
-  "description": "Everything the user can change after recording. render(project, session, t) is a pure function of this document plus the session data. v6 adds `overrides`: manual zoom overrides — a discriminated union. The 'geometry' variant (STC-330) tunes a DERIVED window, keyed by its startNs (as a string). The 'manual' variant (STC-331) authors a window with no auto-zoom counterpart at all, carrying its own startNs/endNs and a REQUIRED easing, since there is no derived window or project default timing to fall back to. Both variants' rect is UV over the CAPTURE, the same space a redaction lives in. Absent on every document written before project-6; parseProject fills []. A later manual-override phase (STC-329) adds a union variant here, not a migration.",
+  "description": "Everything the user can change after recording. render(project, session, t) is a pure function of this document plus the session data. v6 adds `overrides`: manual zoom overrides — a discriminated union. The 'geometry' variant (STC-330) tunes a DERIVED window, keyed by its startNs (as a string). The 'manual' variant (STC-331) authors a window with no auto-zoom counterpart at all, carrying its own startNs/endNs and a REQUIRED easing, since there is no derived window or project default timing to fall back to. The 'removed' and 'retime' variants (STC-329) act on a DERIVED window without touching its crop: 'removed' drops it outright; 'retime' shifts its startNs and/or endNs (either optional, for a one-edge drag) while keeping the SAME windowId — the window's original derived startNs, unaffected by the retime. Every variant with a rect uses UV over the CAPTURE, the same space a redaction lives in. Absent on every document written before project-6; parseProject fills [].",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -251,6 +251,54 @@
                   "standard",
                   "snappy"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "STC-329: drops a DERIVED window outright — it never plays, not even at its old crop. windowId matches that window's original startNs, the same key the geometry variant uses.",
+            "required": [
+              "kind",
+              "windowId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "removed"
+              },
+              "windowId": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "STC-329: shifts a DERIVED window's startNs and/or endNs, keeping its ORIGINAL startNs as windowId so a geometry override (or a later retime) keyed on it still finds the window. At least one bound is required — an entry naming neither shifts nothing.",
+            "required": [
+              "kind",
+              "windowId"
+            ],
+            "anyOf": [
+              { "required": ["startNs"] },
+              { "required": ["endNs"] }
+            ],
+            "properties": {
+              "kind": {
+                "const": "retime"
+              },
+              "windowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "startNs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "endNs": {
+                "type": "integer",
+                "minimum": 0
               }
             }
           }

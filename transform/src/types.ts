@@ -195,10 +195,21 @@ export interface Zoom {
  * case to resolve for it. `id` is take-local exactly like a derived
  * window's `startNs`-as-`windowId`, just freshly minted rather than
  * derived, since there is no natural value to match against.
+ *
+ * The third and fourth variants (project-6, STC-329) act on a DERIVED window
+ * without touching its crop at all — `kind: "removed"` drops it outright, so
+ * it never plays; `kind: "retime"` shifts its `startNs` and/or `endNs` (either
+ * bound optional, for a one-edge drag) while its `windowId` stays pinned to
+ * the window's ORIGINAL derived `startNs` — `zoom-override.ts`'s
+ * `resolvedWindows` is what applies both, and a `geometry` override for the
+ * same `windowId` still composes with a `retime` exactly as it would with an
+ * unretimed window: retiming changes WHEN, never WHERE.
  */
 export type ZoomOverride =
   | { kind: "geometry"; windowId: string; rect: { x: number; y: number; width: number; height: number }; easing?: ZoomPreset }
-  | { kind: "manual"; id: string; startNs: number; endNs: number; rect: { x: number; y: number; width: number; height: number }; easing: ZoomPreset };
+  | { kind: "manual"; id: string; startNs: number; endNs: number; rect: { x: number; y: number; width: number; height: number }; easing: ZoomPreset }
+  | { kind: "removed"; windowId: string }
+  | { kind: "retime"; windowId: string; startNs?: number; endNs?: number };
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {

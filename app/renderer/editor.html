@@ -102,11 +102,15 @@
       transform-origin: 0 0;
     }
     /* #override-blocks-dynamic holds every button layoutOverrideBlocks()
-       rebuilds (STC-330's derived blocks, STC-331's committed manual ones);
-       #manualdraft is a SEPARATE, never-rebuilt sibling for whichever manual
-       window is currently being created or edited, so its resize handles
-       keep pointer capture across a drag (editor.ts's updateManualDraftBlock
-       says why a rebuild there would break it). Both are plain 100% boxes —
+       rebuilds (STC-330's derived blocks, STC-331's committed manual ones —
+       NEVER the one currently being edited, of either kind, which lives on
+       #manualdraft below instead); #manualdraft is a SEPARATE, never-rebuilt
+       sibling for whichever window is currently being created or edited —
+       a manual one (STC-331) OR a derived one under retime (STC-329's edge
+       handles, reusing the same element and the same handles) — so its
+       resize handles keep pointer capture across a drag (editor.ts's
+       updateManualDraftBlock says why a rebuild there would break it). Both
+       are plain 100% boxes —
        #override-blocks itself is what receives the pan/zoom transform, and
        CSS transforms apply to a whole subtree, so neither child needs its
        own. */
@@ -138,10 +142,11 @@
        this plus .selected, since it is only ever shown while being edited. */
     .zoomblock.manual { border: 1px dashed var(--zoom); background: rgba(216,138,59,.08); }
     #manualdraft[hidden] { display: none; }
-    /* The two edges a manual window's own timing is dragged from — pinned to
-       the block's edges via negative offsets (so they sit HALF outside a
-       narrow block rather than being squeezed inside it) exactly the way
-       .timeline .handle sits astride the trim lane's own edges. */
+    /* The two edges a window's own timing is dragged from — a manual
+       window's (STC-331) or, since STC-329, a DERIVED window's own retime —
+       pinned to the block's edges via negative offsets (so they sit HALF
+       outside a narrow block rather than being squeezed inside it) exactly
+       the way .timeline .handle sits astride the trim lane's own edges. */
     .manualhandle { position: absolute; top: 0; width: 8px; height: 100%; margin: 0; padding: 0;
                     border: none; background: transparent; cursor: ew-resize; }
     .manualhandle.start { left: -4px; }
@@ -278,9 +283,10 @@
       <div id="zoom-canvas-wrap"><canvas id="zoom-curve"></canvas></div>
       <div id="override-blocks">
         <div id="override-blocks-dynamic"></div>
-        <!-- STC-331: the window currently being created or edited — see the
-             CSS comment above for why this is not rebuilt like the dynamic
-             blocks above it. No `zoomblock` class here: editor.ts's
+        <!-- STC-331/STC-329: the window currently being created or edited —
+             a manual one being authored, or a DERIVED one under retime — see
+             the CSS comment above for why this is not rebuilt like the
+             dynamic blocks above it. No `zoomblock` class here: editor.ts's
              updateManualDraftBlock applies it only while shown, since a
              hidden element still matches a `.zoomblock` DOM query (a
              visibility check is a separate question from a class match) and
@@ -316,6 +322,12 @@
       <option value="snappy">Snappy</option>
     </select>
     <button id="overrideclear" disabled>Remove override</button>
+    <!-- STC-329: a DERIVED window's own delete — drops it outright (it never
+         plays), distinct from #overrideclear's "reset its crop but keep it
+         playing". Hidden while editing a manual window, whose own single
+         Delete action is #overrideclear (a manual window's rect IS its
+         existence, so there is nothing to reset it back to). -->
+    <button id="overridedelete" hidden>Delete window</button>
     <button id="overridedone">Done</button>
   </div>
 

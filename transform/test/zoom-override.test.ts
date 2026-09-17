@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   windowId, overrideFor, resolvedCrop, resolvedEasingName, groupByEasing, nearestWindow,
-  manualWindows, rectFromGesture, DEFAULT_OVERRIDE_RECT_FRACTION, MIN_DRAG_UV,
+  manualWindows, resolvedWindows, rectFromGesture, DEFAULT_OVERRIDE_RECT_FRACTION, MIN_DRAG_UV,
   type CombinedZoomWindow,
 } from "../src/zoom-override.js";
 import { createZoomSim, inWindow, ZOOM_PRESETS, type ZoomPreset, type ZoomWindow } from "../src/zoom.js";
@@ -271,6 +271,86 @@ describe("groupByEasing mixes derived and manual windows", () => {
     const groups = groupByEasing([...derived, m!], undefined, "calm");
     expect(groups.get("calm")).toEqual(derived);
     expect(groups.get("snappy")).toEqual([m]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STC-329: delete or retime a DERIVED window
+// ---------------------------------------------------------------------------
+
+describe("resolvedWindows", () => {
+  test("no overrides: the list passes through unchanged", () => {
+    const windows = [w(0, 100), w(1000, 1100)];
+    expect(resolvedWindows(windows, undefined)).toEqual(windows);
+    expect(resolvedWindows(windows, [])).toEqual(windows);
+  });
+
+  test("a removed override drops that window and leaves the others alone", () => {
+    const windows = [w(0, 100), w(1000, 1100), w(2000, 2100)];
+    const overrides: ZoomOverride[] = [{ kind: "removed", windowId: "1000" }];
+    expect(resolvedWindows(windows, overrides)).toEqual([windows[0], windows[2]]);
+  });
+
+  test("a retime override shifts start and/or end while other windows are untouched", () => {
+    const windows = [w(0, 100), w(1000, 1100)];
+    const overrides: ZoomOverride[] = [{ kind: "retime", windowId: "1000", startNs: 1500, endNs: 1900 }];
+    const [first, second] = resolvedWindows(windows, overrides);
+    expect(first).toEqual(windows[0]);
+    expect(second!.startNs).toBe(1500);
+    expect(second!.endNs).toBe(1900);
+  });
+
+  test("a retime naming only one bound leaves the other at its derived value", () => {
+    const windows = [w(1000, 1100)];
+    const startOnly = resolvedWindows(windows, [{ kind: "retime", windowId: "1000", startNs: 500 }]);
+    expect(startOnly[0]).toEqual({ startNs: 500, endNs: 1100, events: [], id: "1000" });
+    const endOnly = resolvedWindows(windows, [{ kind: "retime", windowId: "1000", endNs: 5000 }]);
+    expect(endOnly[0]).toEqual({ startNs: 1000, endNs: 5000, events: [], id: "1000" });
+  });
+
+  test("a retimed window keeps its ORIGINAL identity — windowId still finds it by the old startNs", () => {
+    const windows = [w(1000, 1100)];
+    const [retimed] = resolvedWindows(windows, [{ kind: "retime", windowId: "1000", startNs: 9000, endNs: 9500 }]);
+    expect(windowId(retimed!)).toBe("1000");
+    expect(retimed!.startNs).toBe(9000);
+  });
+
+  test("a retimed window keeps its original events — WHERE resolution still keys off the real triggers", () => {
+    const trigger = { t: 1000, kind: "down", x: 0, y: 0, button: 0 } as const;
+    const windows = [{ startNs: 700, endNs: 3500, events: [trigger] }];
+    const [retimed] = resolvedWindows(windows, [{ kind: "retime", windowId: "700", startNs: 5000, endNs: 8000 }]);
+    expect(retimed!.events).toEqual([trigger]);
+  });
+
+  test("removed wins outright — a retime for the same windowId is moot", () => {
+    const windows = [w(1000, 1100)];
+    const overrides: ZoomOverride[] = [
+      { kind: "removed", windowId: "1000" },
+      { kind: "retime", windowId: "1000", startNs: 2000, endNs: 2500 },
+    ];
+    expect(resolvedWindows(windows, overrides)).toEqual([]);
+  });
+
+  test("an override naming a windowId this take has no window for is simply unused", () => {
+    const windows = [w(0, 100)];
+    const overrides: ZoomOverride[] = [
+      { kind: "removed", windowId: "999999" },
+      { kind: "retime", windowId: "888888", startNs: 1, endNs: 2 },
+    ];
+    expect(resolvedWindows(windows, overrides)).toEqual(windows);
+  });
+
+  test("retiming twice in sequence (re-editing) still resolves by the original id, not the intermediate bounds", () => {
+    // zoom-override.ts's own contract: the LIVE overrides table only ever
+    // holds ONE entry per windowId (the editor replaces, never appends), so
+    // this proves resolvedWindows itself does not care how many times a
+    // window has been retimed — only the current table state.
+    const windows = [w(1000, 1100)];
+    const first = resolvedWindows(windows, [{ kind: "retime", windowId: "1000", startNs: 4000, endNs: 4500 }]);
+    expect(windowId(first[0]!)).toBe("1000");
+    const second = resolvedWindows(windows, [{ kind: "retime", windowId: "1000", startNs: 7000, endNs: 7500 }]);
+    expect(second[0]!.startNs).toBe(7000);
+    expect(windowId(second[0]!)).toBe("1000");
   });
 });
 
