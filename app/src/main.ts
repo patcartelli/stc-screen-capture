@@ -4,7 +4,7 @@ import {
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
-  SHOT_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
+  SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
   type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { installTray, type TrayHandle } from "./tray.js";
@@ -410,8 +410,11 @@ app.whenReady().then(async () => {
   tray = installTray({ shortcuts, busy: capturing }, (id) => {
     if (id === "library") return openLibrary();
     if (id === "quit") return app.quit();
-    const action = SHOT_ACTIONS.find((a) => id === `capture:${a}`);
-    if (action) void captureStill(action, "menu-bar");
+    const action = BINDABLE_ACTIONS.find((a) => id === `action:${a}`);
+    if (!action) return;
+    // STC-388 Task 6 replaces this branch with runRecordFlow("menu-bar").
+    if (!isShotAction(action)) return;
+    void captureStill(action, "menu-bar");
   });
   applyShortcuts(shortcuts);
   createWindow();
