@@ -3,6 +3,11 @@ import type {
 } from "./selection.js";
 import { pixelSize, rectContains } from "./selection.js";
 import { HANDLES, handleAt, handlePoint } from "./overlay-hittest.js";
+import {
+  controlAt, controlEnabled, micItemAt, sizeLabel,
+  type BarLayout, type ControlId, type MicMenuLayout, type OptionsState,
+} from "./record-options.js";
+import { micLabel } from "./mic-devices.js";
 
 /**
  * The overlay's view (STC-290). It draws state and reports input; it decides
@@ -32,11 +37,18 @@ interface OverlayPayload {
   state: SelectionState;
   /** What would be captured right now, so the readout can show the truth. */
   preview?: SelectionOutcome;
+  /** STC-388 — absent on a shot overlay, which never leaves "select". */
+  phase?: "select" | "options";
+  options?: OptionsState;
+  bar?: BarLayout;
+  micMenu?: MicMenuLayout;
 }
 
 const $ = (id: string) => document.getElementById(id)!;
 const marquee = $("marquee"), highlight = $("highlight");
 const sizeChip = $("size"), titleChip = $("title"), legend = $("legend");
+const bar = $("bar"), micmenu = $("micmenu");
+const ctl = (id: ControlId) => $(`ctl-${id}`);
 
 /** Where this window's display sits in the global space. Set on first state. */
 let origin: Point = { x: 0, y: 0 };
@@ -99,6 +111,47 @@ function renderLegend(mode: string): void {
   legend.style.display = "block";
 }
 
+/**
+ * Draw the options bar (STC-388). Every rect comes from the payload already
+ * decided by `record-options.ts`; this converts global points to this window's
+ * local space and sets text, and does no geometry of its own.
+ */
+function renderBar(p: OverlayPayload): void {
+  if (p.phase !== "options" || !p.bar || !p.options || !p.display) {
+    bar.hidden = true; micmenu.hidden = true; return;
+  }
+  const l = toLocal(p.bar.rect);
+  bar.hidden = false;
+  bar.style.left = `${l.x}px`; bar.style.top = `${l.y}px`;
+  bar.style.width = `${l.width}px`; bar.style.height = `${l.height}px`;
+  for (const c of p.bar.controls) {
+    const el = ctl(c.id), r = toLocal(c.rect);
+    el.style.width = `${r.width}px`; el.style.height = `${r.height}px`;
+    el.dataset.enabled = controlEnabled(c.id, p.options) ? "1" : "0";
+  }
+  const sel = p.state.rect;
+  ctl("size").textContent = sel ? sizeLabel(sel, p.display) : "—";
+  ctl("expand").dataset.on = p.options.fullDisplay ? "1" : "0";
+  ctl("camera").dataset.on = p.options.camera ? "1" : "0";
+  const mic = p.options.mics.find((m) => m.uid === p.options!.micDeviceUid);
+  // micLabel, not a second spelling — see mic-devices.ts.
+  ctl("mic").textContent = `Mic: ${mic ? micLabel(mic) : "Off"}`;
+
+  if (!p.micMenu) { micmenu.hidden = true; return; }
+  const m = toLocal(p.micMenu.rect);
+  micmenu.hidden = false;
+  micmenu.style.left = `${m.x}px`; micmenu.style.top = `${m.y}px`;
+  micmenu.style.width = `${m.width}px`; micmenu.style.height = `${m.height}px`;
+  micmenu.replaceChildren(...p.micMenu.items.map((it) => {
+    const row = document.createElement("div");
+    row.className = "item";
+    row.style.height = `${it.rect.height}px`;
+    row.textContent = it.label;
+    row.dataset.on = it.uid === p.options!.micDeviceUid ? "1" : "0";
+    return row;
+  }));
+}
+
 function render(p: OverlayPayload): void {
   current = p;
   // The last state this window was told to draw, for a failing test to report.
@@ -117,6 +170,7 @@ function render(p: OverlayPayload): void {
   document.body.classList.toggle("window-mode", state.mode === "window");
   document.body.classList.toggle("has-selection", state.rect !== undefined);
   renderLegend(state.mode);
+  renderBar(p);
 
   if (state.mode === "window") {
     hide(marquee, sizeChip, ...handles.values());
@@ -205,6 +259,21 @@ if (!SYNTHETIC_INPUT) installRealInput();
 
 function installRealInput(): void {
 window.addEventListener("pointerdown", (e) => {
+  // The bar sits over the scrim, so a press on it must not also start a new
+  // marquee underneath. First refusal, then the selection as before.
+  if (current?.phase === "options" && current.bar) {
+    const g = toGlobal(e);
+    if (current.micMenu) {
+      const item = micItemAt(g, current.micMenu);
+      if (item) { send({ t: "micPick", uid: item.uid }); return; }
+    }
+    const hit = controlAt(g, current.bar);
+    if (hit) {
+      if (controlEnabled(hit, current.options!)) send({ t: "control", id: hit });
+      return;
+    }
+    if (current.micMenu) { send({ t: "micPick", uid: current.options!.micDeviceUid }); return; }
+  }
   const state = current?.state;
   const at = toGlobal(e);
   let handle: Handle | undefined;

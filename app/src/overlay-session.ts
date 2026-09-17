@@ -2,10 +2,14 @@ import { app, BrowserWindow, ipcMain, screen } from "electron";
 import { join } from "node:path";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import {
-  reduce, confirm, initialState,
+  reduce, confirm, dominantDisplay, initialState,
   type DisplayInfo, type Mode, type SelectionContext, type SelectionEvent,
   type SelectionOutcome, type SelectionState, type WindowInfo,
 } from "./selection.js";
+import {
+  barLayout, controlAt, expandedSelection, micItemAt, micMenuLayout,
+  type ControlId, type OptionsState,
+} from "./record-options.js";
 
 /**
  * The selection overlay's windows and lifecycle (STC-290).
@@ -41,6 +45,39 @@ export interface OverlayResult {
    * already happened and the exclusion is the second belt.
    */
   excludeWindowIds: number[];
+  /** Present only when `purpose` was `"record"`. */
+  options?: OptionsState;
+}
+
+export type OverlayPurpose = "shot" | "record";
+export type OverlayPhase = "select" | "options";
+
+/** Events the overlay window can send. The selection ones are `selection.ts`'s
+ * own and are reduced by it; the rest belong to the options bar and are handled
+ * here, which is what keeps `selection.ts` unchanged by STC-388. */
+export type OverlayEvent =
+  | SelectionEvent
+  | { t: "control"; id: ControlId }
+  | { t: "micPick"; uid: string | null };
+
+/**
+ * What an outcome means, given what the overlay was opened for.
+ *
+ * Pure and exported so `app/test/overlay-options.test.ts` can settle the phase
+ * rule without an Electron window — the session below does no reasoning of its
+ * own about it, it just does what this says.
+ */
+export function nextPhase(purpose: OverlayPurpose, phase: OverlayPhase,
+                          outcome: SelectionOutcome):
+  { act: "finish" | "options"; outcome: SelectionOutcome } {
+  // Cancelled always ends it: the caller's cleanup is the same either way, and
+  // a cancel that only backed out of the options bar would strand the user in
+  // a selection they have already said no to.
+  if (outcome.kind === "cancelled") return { act: "finish", outcome };
+  if (purpose === "shot") return { act: "finish", outcome };
+  // Both phases land here: the first outcome opens the bar, and a later one
+  // (the marquee stays live) replaces what would be recorded.
+  return { act: "options", outcome };
 }
 
 /**
@@ -96,6 +133,17 @@ export interface OpenOptions {
   /** Where the overlay's HTML and preload live. Injected so tests can point elsewhere. */
   dist: string;
   renderer: string;
+  /**
+   * What the overlay is being opened for (STC-388).
+   *
+   * `"shot"` is the historical behaviour and the default, so every still path
+   * is untouched: confirm resolves. `"record"` adds a second phase — the
+   * options bar, with the marquee still live — and resolves only when Record
+   * is pressed.
+   */
+  purpose?: OverlayPurpose;
+  /** The sticky options the bar opens with, and the devices it can offer. */
+  initialOptions?: Pick<OptionsState, "micDeviceUid" | "camera" | "mics">;
 }
 
 /**
@@ -103,6 +151,13 @@ export interface OpenOptions {
  * cancelled. Never rejects: a failure to build the windows resolves as a
  * cancellation, because a selection that cannot be made is indistinguishable
  * from one the user declined to make, and the caller's cleanup is the same.
+ *
+ * DELIBERATELY UNBOUNDED, in both phases. Every other wait in this app carries
+ * a `withTimeout` and a reason, because mp4box, VideoDecoder and SCStream all
+ * signal trouble by never calling back. This one waits on a PERSON: a bound
+ * would mean tearing an overlay off the screen mid-drag, or starting a take the
+ * user had not committed to. Escape and ⌃⌥⇧⌘4 are the ways out, and quit calls
+ * `closeOverlay`, so it is bounded by the user rather than by a clock.
  */
 export async function openOverlay(opts: OpenOptions): Promise<OverlayResult> {
   // One at a time. A second hotkey press while the overlay is up must not
@@ -137,11 +192,21 @@ class OverlaySession {
   private settle!: (r: OverlayResult) => void;
   readonly promise: Promise<OverlayResult>;
   private done = false;
+  private phase: OverlayPhase = "select";
+  private pending: SelectionOutcome | undefined;
+  private options: OptionsState;
 
   constructor(private readonly opts: OpenOptions) {
     this.state = initialState(opts.mode ?? "region");
     this.ctx = { displays: screen.getAllDisplays().map(toDisplayInfo), windows: opts.windows };
     this.promise = new Promise<OverlayResult>((res) => { this.settle = res; });
+    this.options = {
+      micDeviceUid: opts.initialOptions?.micDeviceUid ?? null,
+      camera: opts.initialOptions?.camera ?? false,
+      mics: opts.initialOptions?.mics ?? [],
+      fullDisplay: false,
+      micMenuOpen: false,
+    };
   }
 
   /**
@@ -254,24 +319,87 @@ class OverlaySession {
   private push(w: BrowserWindow): void {
     if (w.isDestroyed()) return;
     const d = this.ctx.displays.find((x) => x.id === this.displayOf.get(w));
+    const sel = this.state.rect;
+    const layout = this.phase === "options" && d && sel ? barLayout(sel, d) : undefined;
     w.webContents.send("overlay:state", {
       display: d,
       displays: this.ctx.displays,
       windows: this.ctx.windows,
       state: this.state,
       preview: confirm(this.state, this.ctx),
+      phase: this.phase,
+      options: this.phase === "options" ? this.options : undefined,
+      bar: layout,
+      micMenu: layout && d ? micMenuLayout(layout, this.options, d) : undefined,
     });
   }
 
   private broadcast(): void { for (const w of this.windows) this.push(w); }
 
-  private onEvent = (_e: unknown, ev: SelectionEvent): void => {
+  private onEvent = (_e: unknown, ev: OverlayEvent): void => {
     if (this.done) return;
+    if (ev.t === "control") return this.onControl(ev.id);
+    if (ev.t === "micPick") {
+      this.options = { ...this.options, micDeviceUid: ev.uid, micMenuOpen: false };
+      return this.broadcast();
+    }
     const r = reduce(this.state, ev, this.ctx);
     this.state = r.state;
+    if (r.outcome) {
+      const next = nextPhase(this.opts.purpose ?? "shot", this.phase, r.outcome);
+      if (next.act === "finish") { this.broadcast(); void this.finish(next.outcome); return; }
+      this.phase = "options";
+      this.pending = next.outcome;
+    }
     this.broadcast();
-    if (r.outcome) void this.finish(r.outcome);
   };
+
+  /**
+   * A press on the options bar. Only reachable in the options phase, which only
+   * a `"record"` overlay ever enters.
+   */
+  private onControl(id: ControlId): void {
+    if (this.phase !== "options") return;
+    switch (id) {
+      case "size":
+        return;                       // a readout, not a button
+      case "expand": {
+        const d = this.displayForSelection();
+        if (!d) return;
+        // The FLAG and the rect together, in one place: a rect covering the
+        // display without the flag would take the helper's crop path instead
+        // of its full-display one (record-options.ts).
+        this.state = { ...this.state, rect: expandedSelection(d) };
+        this.options = { ...this.options, fullDisplay: true, micMenuOpen: false };
+        const outcome = confirm(this.state, this.ctx);
+        if (outcome) this.pending = outcome;
+        return this.broadcast();
+      }
+      case "mic":
+        if (this.options.mics.length === 0) return;
+        this.options = { ...this.options, micMenuOpen: !this.options.micMenuOpen };
+        return this.broadcast();
+      case "camera":
+        this.options = { ...this.options, camera: !this.options.camera, micMenuOpen: false };
+        return this.broadcast();
+      case "record": {
+        const outcome = this.pending ?? confirm(this.state, this.ctx);
+        // No outcome means the marquee has been dragged to nothing since the
+        // bar opened. Ignored rather than finished: starting a take with no
+        // target is the failure `no-capture-target` used to report, and the
+        // user is one drag away from a valid one.
+        if (!outcome) return;
+        return void this.finish(outcome);
+      }
+    }
+  }
+
+  /** Which display the current marquee belongs to, for `expand`. */
+  private displayForSelection(): DisplayInfo | undefined {
+    const r = this.state.rect;
+    if (!r) return this.ctx.displays[0];
+    return dominantDisplay(r, this.ctx.displays) ?? this.ctx.displays[0];
+  }
 
   async cancel(): Promise<void> { await this.finish({ kind: "cancelled" }); }
 
@@ -301,6 +429,9 @@ class OverlaySession {
     for (const w of this.windows) if (!w.isDestroyed()) w.destroy();
     this.windows.length = 0;
     this.displayOf.clear();
-    this.settle({ outcome, excludeWindowIds });
+    this.settle({
+      outcome, excludeWindowIds,
+      ...(this.opts.purpose === "record" ? { options: this.options } : {}),
+    });
   }
 }
