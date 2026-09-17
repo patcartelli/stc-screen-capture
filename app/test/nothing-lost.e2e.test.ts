@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseShot } from "../../transform/src/shot.js";
 import { SETTLE_READY_MS } from "../src/thumbnail.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * STC-301 gate 4 — nothing lost.
@@ -103,6 +104,7 @@ async function launch(): Promise<Launched> {
       STC_NO_SHUTTER: "1",
     },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
   return { win, recordings, tempTakes, destDir };

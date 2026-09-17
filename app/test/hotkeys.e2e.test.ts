@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 import { parseShot } from "../../transform/src/shot.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * Global shortcuts and menu-bar capture, end to end (STC-292).
@@ -52,6 +53,7 @@ async function launch(o: { userData?: string; recordings?: string; stillLog?: st
       STC_NO_SHUTTER: "1",
     },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   // The shortcuts editor moved behind the profile sheet (STC-374) — open it
   // once per launch so every selector below can still reach it directly.

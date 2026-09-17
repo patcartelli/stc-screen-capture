@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * The selection overlay, end to end (STC-290).
@@ -49,6 +50,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
     env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes, STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_STILL_LOG: stillLog, STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
   return { win, recordings, tempTakes, stillLog };

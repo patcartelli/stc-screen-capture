@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { MAX_STACKED } from "../src/thumbnail.js";
 import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * The contract STC-392 reverses, end to end.
@@ -103,6 +104,7 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
       STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
   // NOT a click on the button: `#capturestill` opens the SELECTION overlay

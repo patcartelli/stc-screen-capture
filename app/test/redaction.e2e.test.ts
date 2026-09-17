@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * Redaction, end to end (STC-297).
@@ -45,6 +46,7 @@ async function launch(extraEnv: Record<string, string> = {}):
       STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
   return { win, destDir, recordings };

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withCountdown } from "./_countdown-fixture.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * The countdown, wired through the real app (STC-391).
@@ -71,6 +72,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
            STC_FAKE_START_LOG: startLog, STC_FAKE_STILL_LOG: stillLog,
            STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#record");
   return { win, startLog, stillLog, tempTakes };
@@ -320,6 +322,7 @@ describe("the countdown duration is choosable (STC-391, from hardware)", () => {
                STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
                STC_HELPER_BIN: FAKE_HELPER },
       });
+      await stubQuitDialog(app);
       const w = await app.firstWindow();
       await w.waitForSelector("#record");
       await w.click("#profile");

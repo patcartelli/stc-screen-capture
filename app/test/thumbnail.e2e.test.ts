@@ -4,6 +4,7 @@ import { mkdtempSync, existsSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * The post-capture floating thumbnail, end to end (STC-296, reworked by
@@ -70,6 +71,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
       STC_FAKE_STILL_LOG: stillLog, STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
   return { win, recordings, temp, destDir, stillLog };
