@@ -81,6 +81,36 @@ export function nextPhase(purpose: OverlayPurpose, phase: OverlayPhase,
 }
 
 /**
+ * The bar's anchor rect, in GLOBAL points — ONE notion of "the thing being
+ * recorded" (STC-388), used for the bar's layout, the mic menu's layout, the
+ * size readout, and `expand`'s choice of display. Pure and exported, same
+ * reason as `nextPhase`/`fullDisplayFor`: `app/test/overlay-options.test.ts`
+ * settles it with no Electron window.
+ *
+ * Region mode's own live marquee (`stateRect`), unchanged from before this
+ * ticket. Window mode never sets a rect at all — `selection.ts`'s pointerdown
+ * and Enter paths attach only a bare `windowId` to a window outcome, and every
+ * `rect` assignment in that file is on the region-mode path — so falling back
+ * to `stateRect` there is undefined, which was the bug: no anchor, no bar, no
+ * Record control, Escape the only way out. This looks the PENDING outcome's
+ * window up in the window list instead: `pending` is what Record would
+ * actually commit, which is the only notion of "the thing being recorded"
+ * this file is allowed to have — not a second one derived from `hoveredWindowId`
+ * or from `state.mode`, either of which could disagree with it (a mode toggle
+ * after a pick changes `state.mode` and `hoveredWindowId` without producing a
+ * new outcome — rule 11 in `selection.ts` — so `pending` is the only field
+ * that is guaranteed to still describe what Record would do).
+ */
+export function anchorRectFor(pending: SelectionOutcome | undefined,
+                              stateRect: Rect | undefined,
+                              windows: WindowInfo[]): Rect | undefined {
+  if (pending?.kind === "window") {
+    return windows.find((w) => w.id === pending.windowId)?.bounds;
+  }
+  return stateRect;
+}
+
+/**
  * Whether a `reduce` call actually moved the marquee, not merely re-sent it.
  *
  * A value comparison, not a geometry inference: it asks "is this the same
@@ -356,12 +386,17 @@ class OverlaySession {
     return w;
   }
 
+  /** The bar's anchor rect right now — see `anchorRectFor`'s own doc. */
+  private anchorRect(): Rect | undefined {
+    return anchorRectFor(this.pending, this.state.rect, this.ctx.windows);
+  }
+
   /** Hand one window everything it needs to draw the current state. */
   private push(w: BrowserWindow): void {
     if (w.isDestroyed()) return;
     const d = this.ctx.displays.find((x) => x.id === this.displayOf.get(w));
-    const sel = this.state.rect;
-    const layout = this.phase === "options" && d && sel ? barLayout(sel, d) : undefined;
+    const anchor = this.phase === "options" ? this.anchorRect() : undefined;
+    const layout = anchor && d ? barLayout(anchor, d) : undefined;
     w.webContents.send("overlay:state", {
       display: d,
       displays: this.ctx.displays,
@@ -372,6 +407,10 @@ class OverlaySession {
       options: this.phase === "options" ? this.options : undefined,
       bar: layout,
       micMenu: layout && d ? micMenuLayout(layout, this.options, d) : undefined,
+      // The same anchor the layout above was built from — never `state.rect`
+      // a second time, which is undefined in window mode (the readout would
+      // silently go back to reading a value that does not exist there).
+      anchor,
     });
   }
 
@@ -396,6 +435,18 @@ class OverlaySession {
       if (next.act === "finish") { this.broadcast(); void this.finish(next.outcome); return; }
       this.phase = "options";
       this.pending = next.outcome;
+      // A fresh WINDOW pick can arrive with the rect unchanged from before it
+      // (window-mode reduce never touches `state.rect`), so the `rectChanged`
+      // comparison above would not have cleared `fullDisplay` here — and a
+      // window outcome can never BE the full display, so it must never carry
+      // that flag. This is the same class of bug `fullDisplayFor` already
+      // exists to prevent (STC-388 review, the stale-pair fix 5850e4f
+      // preceded), just reached from a path a value comparison on the rect
+      // cannot see: cleared explicitly rather than adding a second geometry
+      // inference to catch it.
+      if (next.outcome.kind === "window" && this.options.fullDisplay) {
+        this.options = { ...this.options, fullDisplay: false };
+      }
     }
     this.broadcast();
   };
@@ -413,12 +464,24 @@ class OverlaySession {
         const d = this.displayForSelection();
         if (!d) return;
         const prevRect = this.state.rect;
-        // The FLAG and the rect together, in one place: a rect covering the
-        // display without the flag would take the helper's crop path instead
-        // of its full-display one (record-options.ts). `fullDisplayFor` with
-        // `didExpand: true` is what actually sets it — the literal here would
+        // STC-388: what expand means when a WINDOW is picked. `confirm`
+        // chooses its path from `state.mode` alone (selection.ts) — a window
+        // outcome carries no rect at all, so leaving mode at "window" here
+        // would set a full-display RECT that `confirm` never looks at, and
+        // then go on confirming the windowId it was hovering. That is
+        // `fullDisplay: true` riding along with a `{kind:"window"}` outcome,
+        // exactly the stale-pair bug 5850e4f already fixed once (a marquee
+        // change surviving past a flag that no longer described it). There is
+        // no separate "expand this window" meaning to preserve — a window and
+        // the display it sits on are never the same rect — so expand always
+        // means "the whole display, as a region" and switches mode to match,
+        // regardless of what mode it was pressed from. The FLAG and the rect
+        // move together, in one place: a rect covering the display without
+        // the flag would take the helper's crop path instead of its
+        // full-display one (record-options.ts). `fullDisplayFor` with
+        // `didExpand: true` is what actually sets it — a literal here would
         // duplicate that rule as a second copy of the same answer.
-        this.state = { ...this.state, rect: expandedSelection(d) };
+        this.state = { ...this.state, mode: "region", rect: expandedSelection(d) };
         this.options = {
           ...this.options,
           fullDisplay: fullDisplayFor(this.options.fullDisplay, true, prevRect, this.state.rect),
@@ -447,9 +510,13 @@ class OverlaySession {
     }
   }
 
-  /** Which display the current marquee belongs to, for `expand`. */
+  /** Which display the current anchor belongs to, for `expand` — the SAME
+   * anchor the bar and the readout use, so a window pick expands to the
+   * display the window is actually on rather than falling back to
+   * `displays[0]`, which `state.rect` alone (undefined in window mode) would
+   * have forced. */
   private displayForSelection(): DisplayInfo | undefined {
-    const r = this.state.rect;
+    const r = this.anchorRect();
     if (!r) return this.ctx.displays[0];
     return dominantDisplay(r, this.ctx.displays) ?? this.ctx.displays[0];
   }

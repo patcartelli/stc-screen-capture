@@ -42,6 +42,13 @@ interface OverlayPayload {
   options?: OptionsState;
   bar?: BarLayout;
   micMenu?: MicMenuLayout;
+  /**
+   * STC-388 — the bar's anchor rect, in GLOBAL points: the marquee in region
+   * mode, the picked window's own bounds in window mode (`anchorRectFor`,
+   * overlay-session.ts). The size readout reads THIS, never `state.rect`
+   * directly — that is undefined for a window pick, which was the bug.
+   */
+  anchor?: Rect;
 }
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -129,7 +136,12 @@ function renderBar(p: OverlayPayload): void {
     el.style.width = `${r.width}px`; el.style.height = `${r.height}px`;
     el.dataset.enabled = controlEnabled(c.id, p.options) ? "1" : "0";
   }
-  const sel = p.state.rect;
+  // The anchor, not `p.state.rect` — the latter is undefined for a window
+  // pick (selection.ts never sets one), which used to leave this reading "—"
+  // for every window take. `p.anchor` is the SAME rect `barLayout` above was
+  // built from (overlay-session.ts's `push`), so the readout cannot disagree
+  // with the bar it is drawn inside of.
+  const sel = p.anchor;
   ctl("size").textContent = sel ? sizeLabel(sel, p.display) : "—";
   ctl("expand").dataset.on = p.options.fullDisplay ? "1" : "0";
   ctl("camera").dataset.on = p.options.camera ? "1" : "0";

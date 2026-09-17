@@ -137,16 +137,15 @@ export interface RecordFlowOptions {
    * resolves the outcome immediately (selection.ts) — the same shape
    * `still-overlay.e2e.test.ts`'s own window-mode test drives.
    *
-   * KNOWN GAP, found while writing this helper and left unfixed here — see
-   * task-6b-report.md: `OverlaySession.push()` (overlay-session.ts) derives
-   * the options bar's layout from `state.rect` (`barLayout` in
-   * record-options.ts), and a window-mode outcome never sets `state.rect` —
+   * Fixed as of STC-388's follow-up: `OverlaySession.push()` used to derive
+   * the options bar's layout from `state.rect` alone (`barLayout` in
+   * record-options.ts), and a window-mode outcome never sets one —
    * `selection.ts`'s `reduce`/`confirm` attach only a bare `windowId` for
-   * that kind. So the bar's `hidden` attribute never clears for a window
-   * pick, and `awaitOptionsBar` below will time out rather than proceed.
-   * This option is kept rather than removed because the caller-side contract
-   * — pick a window, not a region — is real and correct; what is missing is
-   * in `app/src/`, out of this ticket's scope to fix.
+   * that kind, so the bar's `hidden` attribute never cleared and
+   * `awaitOptionsBar` below timed out. `push()` now derives the bar's ANCHOR
+   * from the pending outcome (`anchorRectFor`, overlay-session.ts) — the
+   * picked window's own bounds in window mode, the live marquee in region
+   * mode — so this path works the same as the region one below.
    */
   windowAt?: { x: number; y: number };
   /**
