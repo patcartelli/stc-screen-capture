@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
+import { startRecordFlow } from "./_record-flow.js";
 
 /**
  * The camera toggle, end to end through the real app.
@@ -37,6 +38,10 @@ async function launch(opts: {
       ...process.env,
       STC_RECORDINGS_DIR: opts.recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_HELPER_BIN: FAKE_HELPER,
+      // Record now opens the real overlay (STC-388) — same reason
+      // `still-overlay.e2e.test.ts` sets this: without it the overlay's real
+      // DOM listeners install and race this file's own synthetic input.
+      STC_OVERLAY_SYNTHETIC_INPUT: "1",
       ...(opts.startLog ? { STC_FAKE_START_LOG: opts.startLog } : {}),
       ...(opts.camera ? { STC_FAKE_CAMERA: opts.camera } : {}),
     },
@@ -80,7 +85,7 @@ describe("the camera toggle", () => {
     await win.check("#camera");
     await expect.poll(() => win.isChecked("#camera")).toBe(true);
 
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
 
     const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
@@ -98,7 +103,7 @@ describe("the camera toggle", () => {
 
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
 
     const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
@@ -204,7 +209,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     const win = await launch({ ...dirs(), camera: "FaceTime HD Camera" });
     await win.waitForSelector("#camera");
     if (!(await win.isChecked("#camera"))) await win.click("#camera");
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
       .toContain("FaceTime HD Camera");
   }, 60_000);
@@ -215,7 +220,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     const win = await launch({ ...dirs(), camera: "fail" });
     await win.waitForSelector("#camera");
     if (!(await win.isChecked("#camera"))) await win.click("#camera");
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
       .toContain("failed");
     await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
@@ -246,7 +251,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     if (!(await win.isChecked("#camera"))) await win.click("#camera");
     await observeTextSequence(win, "camera-state");
 
-    await win.click("#record");
+    await startRecordFlow(app!, win);
 
     await expect.poll(
       async () => (await textSequence(win, "camera-state")).some((s) => s.includes("no frames")),

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { startRecordFlow } from "./_record-flow.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -31,7 +32,12 @@ describe("quitting while recording", () => {
       env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
              // Slow enough that a quit which does not wait for the stop leaves
              // the process before the quit command is ever written.
-             STC_FAKE_CMD_LOG: log, STC_FAKE_STOP_DELAY_MS: "1500" },
+             STC_FAKE_CMD_LOG: log, STC_FAKE_STOP_DELAY_MS: "1500",
+             // Record now opens the real overlay (STC-388) — same reason
+             // `still-overlay.e2e.test.ts` sets this: without it the
+             // overlay's real DOM listeners install and race the flow
+             // helper's own synthetic input.
+             STC_OVERLAY_SYNTHETIC_INPUT: "1" },
     });
     const win = await app.firstWindow();
     await win.waitForLoadState("domcontentloaded");
@@ -40,7 +46,7 @@ describe("quitting while recording", () => {
     // and the take, and a `start` in the log either way.
     await withoutCountdown(win);
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
 
     // Playwright's close() quits the app the way Cmd-Q does: through app.quit()
@@ -50,9 +56,12 @@ describe("quitting while recording", () => {
 
     // The subject is the ORDER of the lifecycle: stop before quit. Enumeration
     // commands (`devices`, which the display picker issues when the helper
-    // comes up — STC-247) are not part of that order and may land anywhere
-    // before the take, so they are filtered rather than pinned.
-    const lifecycle = readFileSync(log, "utf8").trim().split("\n").filter((c) => c !== "devices");
+    // comes up — STC-247; `windows`, which `runRecordFlow` issues to list the
+    // overlay's window-mode targets before it ever opens — STC-388) are not
+    // part of that order and may land anywhere before the take, so they are
+    // filtered rather than pinned.
+    const lifecycle = readFileSync(log, "utf8").trim().split("\n")
+      .filter((c) => c !== "devices" && c !== "windows");
     expect(lifecycle).toEqual(["start", "stop", "quit"]);
   }, 120_000);
 });
