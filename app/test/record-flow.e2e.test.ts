@@ -400,14 +400,45 @@ describe("the hotkey/tray toggles reach the main window (Finding 2, STC-388 revi
     // direction, so how the take began does not matter. The finding's bug is
     // that a stop from a DIFFERENT door than the one that started it left the
     // window believing a recording was still live.
+    //
+    // `app/test/timeout-budget.test.ts` caught this test with ZERO clearance
+    // (8 x 15s inner bounds under a 120s outer one — exactly equal, the case
+    // that guard exists for). Fixed by REDUCING what the test waits on, not
+    // by picking a bigger round number: the pre- and post-stop checks were
+    // each three or four separate polls for facts that only matter TOGETHER
+    // (the button's text, `#state`, and the pickers' locked-ness are one
+    // claim about "what the window shows right now", not three), so each
+    // group is now ONE predicate. Composed here, not asserted as a round
+    // number, the same way the countdown test above does:
+    //   - `startRecordFlow` (`_record-flow.ts`) itself hides up to THREE
+    //     internal 15s bounds (the overlay appearing, a confirmable drag, the
+    //     options bar appearing) that this file's guard cannot see, the same
+    //     hidden cost the countdown test already accounts for by name.
+    //   - the three bounds still visible to the guard, below.
+    const RECORD_FLOW_STEPS_MS = 3 * 15_000;
+    const START_LOG_MS = 15_000;
+    const PRE_STOP_MS = 15_000;
+    const POST_STOP_MS = 15_000;
+    const composedFloorMs = RECORD_FLOW_STEPS_MS + START_LOG_MS + PRE_STOP_MS + POST_STOP_MS;
+    const OUTER_MS = 120_000; // the literal on this test's own `}, N)` below
+    expect(OUTER_MS).toBeGreaterThan(composedFloorMs);
+
     const { win, startLog } = await launch();
     await withoutCountdown(win);
     await startRecordFlow(app!, win);
 
     await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
-    await expect.poll(async () => (await status(win)).state, { timeout: 15_000 }).toBe("recording");
-    await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Stop");
-    await expect.poll(() => pickersLocked(win), { timeout: 15_000 }).toBe(true);
+
+    // The starting condition this test needs — recording, showing "Stop",
+    // pickers locked — as ONE predicate rather than three independent polls.
+    const uiNow = async () => {
+      const [state, label, locked] = await Promise.all([
+        status(win).then((s) => s.state), win.textContent("#record"), pickersLocked(win),
+      ]);
+      return { state, label, locked };
+    };
+    await expect.poll(uiNow, { timeout: 15_000 })
+      .toEqual({ state: "recording", label: "Stop", locked: true });
 
     // The tray's own callback, exactly as the menu bar or ⌃⌥⇧⌘4 would reach
     // it — `onRecordHotkey` — not `recorder.stop()`/`sup.stopRecording()` one
@@ -416,14 +447,20 @@ describe("the hotkey/tray toggles reach the main window (Finding 2, STC-388 revi
     // stop that did not come through its own click handler.
     await fireTrayRecord();
 
-    await expect.poll(async () => (await status(win)).state, { timeout: 15_000 }).not.toBe("recording");
-    // Before Finding 2's fix: none of this ever changed. The button kept
-    // reading "Stop", `#state` stayed "recording", and the pickers stayed
-    // locked for the rest of the session — pressing "Stop" then requested
-    // `stop` on an already-idle helper and wedged the window.
-    await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Record");
-    await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
-    await expect.poll(() => pickersLocked(win), { timeout: 15_000 }).toBe(false);
+    // The actual subject, as one predicate: before Finding 2's fix NONE of
+    // this ever changed — the button kept reading "Stop", `#state` stayed
+    // "recording", and the pickers stayed locked for the rest of the session
+    // — pressing "Stop" then requested `stop` on an already-idle helper and
+    // wedged the window.
+    const uiAfter = async () => {
+      const [state, label, stateText, locked] = await Promise.all([
+        status(win).then((s) => s.state), win.textContent("#record"),
+        win.textContent("#state"), pickersLocked(win),
+      ]);
+      return { state, label, stateText, locked };
+    };
+    await expect.poll(uiAfter, { timeout: 15_000 })
+      .toEqual({ state: "idle", label: "Record", stateText: "idle", locked: false });
   }, 120_000);
 
   test("a tray-initiated START locks the window and shows Stop", async () => {
