@@ -116,7 +116,7 @@ export function promotes(action: PanelAction): boolean {
  * has not kept yet. A modal there is friction bought with nothing, and a
  * timed undo is the cheaper promise.
  *
- * Both are already the code's behaviour — `still:deleteShot` does not confirm,
+ * Both are already the code's behaviour — `panel:trash` does not confirm,
  * `take:delete` does — and each file already argues for its own half. This
  * ticket adds only the toast, and this function is the one place the split is
  * stated rather than implied by which handler you happened to reach.

@@ -113,38 +113,25 @@ export function parseCorner(v: unknown): Corner {
 }
 
 /**
- * The two non-default values `thumbnail-window.ts` may put in the panel's
- * `settleAction` URL query param, and `thumbnail-renderer.ts` parses back out
- * — named and shared here so a typo on either end is a type error instead of
- * silently degrading to "save" (the untransmitted default, read when the
- * param is absent or unrecognised — see `thumbnail-renderer.ts`'s own local
- * union, which adds it back). Not a preference: see `PresentOptions`'s
- * `silent`/`origin` docs in `thumbnail-window.ts` for what selects between
- * them.
- */
-export type PanelSettleQuery = "copy" | "none";
-
-/**
- * How long a settle waits for the panel's FIRST composite before giving up.
+ * How long `run("copy")` waits for the panel's FIRST composite before giving
+ * up (`thumbnail-renderer.ts`'s `awaitComposite`) — Copy is the one action
+ * that reads `composite` directly (`runExport`); Save, Edit and Trash never
+ * touch it.
  *
- * `onSettle` is registered ahead of the load that reads `frame.png`, decodes
- * it and draws it, so a settle CAN arrive before the panel has drawn. Without
- * a wait that reached the export with no composite, refused, and destroyed
- * the window having written nothing: silent, because the take directory still
- * held the raw capture and only the decorated file was missing. That was
- * found through a second capture settling the outgoing panel before it had
- * painted (STC-296, #102) — a path STC-392 removed along with the rest of the
- * timeout: nothing sends a settle signal to an outgoing panel any more, and
- * every surviving caller of `settle()` in `thumbnail-renderer.ts` (Close,
- * Escape, a silent panel's own immediate export) runs AFTER the panel has
- * already painted, so this wait resolves at once today. Kept rather than
- * deleted because Task 4's export-then-close reintroduces a renderer round
- * trip this is meant to bound, and `SETTLE_BACKSTOP_MS` in
- * `thumbnail-window.ts` — reserved the same way, not currently armed by
- * anything — is checked against it for exactly that reason:
- * `app/test/thumbnail-bounds.test.ts` asserts the clearance between the two
- * numbers rather than leaving it true by luck, so they cannot drift apart
- * silently before either is wired back up.
+ * In practice this never actually waits: `draw()` is awaited, and only then
+ * is the panel shown and its buttons made reachable (focus rule 1's
+ * `"painted"` event fires after it) — a silent panel's own auto-copy is the
+ * same order, since it runs after the same `await draw()` — so a Copy cannot
+ * land before the composite exists. It is a bound anyway rather than a bare
+ * `if (!composite) return false`, because "cannot happen today" is a claim
+ * about the current wiring, not a proof — every wait in this codebase needs
+ * a bound and a reason (CLAUDE.md), and the reason here is that nothing
+ * re-verifies the ordering above every time this file changes. Kept aligned
+ * with `SETTLE_BACKSTOP_MS` in `thumbnail-window.ts` — reserved the same
+ * way, not currently armed by anything — because `app/test/
+ * thumbnail-bounds.test.ts` asserts the clearance between the two numbers
+ * rather than leaving it true by luck, so they cannot drift apart silently
+ * before either is wired back up.
  */
 export const SETTLE_READY_MS = 10_000;
 

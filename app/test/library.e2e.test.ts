@@ -291,14 +291,19 @@ describe("duplicate", () => {
 
   /**
    * Re-opening a shot from the library (STC-294) goes through `still:reopen`
-   * with `origin: "library"` (STC-392 review finding 3) — and until this
-   * test, nothing anywhere actually invoked `still:reopen`. That gap is what
-   * this pins: opening a KEPT shot and clicking Close must do nothing to it —
-   * no re-export, no second copy — the opposite of what an ordinary fresh
-   * capture's panel does on Close (`thumbnail.e2e.test.ts`'s "Copy does not
-   * close the panel — Save and Close both do").
+   * with `take: { kind: "shot", origin: "library" }` (STC-392 review finding
+   * 3, restated for STC-392's action table) — and until this test, nothing
+   * anywhere actually invoked `still:reopen`. That gap is what this pins.
+   *
+   * STC-392 removed the panel's own "do nothing and close" affordance
+   * entirely — there is no Close button and Escape no longer settles — so a
+   * re-opened shot's panel does not close itself the way this test used to
+   * check. What is left to claim, and what actually matters: `actionsFor`
+   * gives a `"library"`-origin shot only Copy and Trash (no Save — there is
+   * nothing left to promote), and the panel does not export or duplicate
+   * anything just by being SHOWN.
    */
-  test("re-opening a shot from the library and closing it exports nothing (STC-294/STC-392)", async () => {
+  test("re-opening a shot from the library offers only Copy and Trash, and never exports on its own (STC-294/STC-392)", async () => {
     const { win, recordings, destDir } = await launch((dir) => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
@@ -310,19 +315,18 @@ describe("duplicate", () => {
     const panel = await thumbnailWindow();
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
       .toContain("in");
-    // #close is only visible once expanded — the same click
-    // `thumbnail.e2e.test.ts`'s own Close-button tests make first.
-    await panel.click("#card");
-    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
-      .toContain("expanded");
 
-    await panel.click("#close");
-    await expect.poll(
-      () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
-      { timeout: 15_000 },
-    ).toBe(0);
+    // Copy and Trash only — no Save, because there is nothing to promote; no
+    // Edit, because a shot never gets one (`panel-actions.ts`'s own table).
+    expect(await panel.isVisible("#copy")).toBe(true);
+    expect(await panel.isVisible("#trash")).toBe(true);
+    expect(await panel.isHidden("#save")).toBe(true);
+    expect(await panel.isHidden("#edit")).toBe(true);
 
-    // Nothing exported, nothing duplicated, and the original untouched.
+    // And it stays open, undecided — nothing exported, nothing duplicated,
+    // and the original untouched, just by having been shown.
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
     expect(readdirSync(destDir)).toEqual([]);
     expect(readdirSync(recordings)).toEqual(["2026-09-08_12-00-00"]);
     expect(readFileSync(join(original, "shot.json"), "utf8")).toBe(before);

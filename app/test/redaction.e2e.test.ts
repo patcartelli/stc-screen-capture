@@ -98,9 +98,10 @@ async function redactingPanel(win: Page): Promise<{ panel: Page; dir: string }> 
   const r = await win.evaluate(() => (window as any).recorder.captureStill("display"));
   expect(r.ok).toBe(true);
   const panel = await thumbnailWindow();
-  await panel.click("#card");
+  // Every control this take has is on the card from the moment it paints
+  // (STC-392) — no click-to-expand step left before Redact is reachable.
   await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
-    .toContain("expanded");
+    .toContain("in");
   await panel.click("#redact");
   await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
     .toContain("redacting");
@@ -198,32 +199,27 @@ describe("redaction", () => {
     expect(storedRegions(dir)).toHaveLength(0);
   }, 60_000);
 
-  test("the stored regions reach the export, not just the preview", async () => {
-    const { win, destDir, recordings } = await launch();
+  test("the stored regions reach the promoted take, not just the preview", async () => {
+    const { win, recordings } = await launch();
     const { panel, dir } = await redactingPanel(win);
     await dragBox(panel, [0.25, 0.3], [0.75, 0.65]);
     await expect.poll(() => storedRegions(dir).length, { timeout: 15_000 }).toBe(1);
 
-    // Saving from redact mode goes through the same funnel every other exit
-    // does, with the regions the panel is showing — a redaction visible in the
-    // panel and missing from the file is the failure this pins.
+    // Save PROMOTES the take (STC-393's `promoteTake`) rather than writing a
+    // destination-folder file (STC-392, D5 — `panel:save` never calls
+    // `still:export`) — the library renders a shot from its own stored
+    // document, so a redaction visible in the panel and missing from that
+    // document is the failure this pins now.
     await panel.click("#save");
     await expect.poll(
       () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
       { timeout: 15_000 },
     ).toBe(0);
-    const saved = readdirSync(destDir);
-    expect(saved).toHaveLength(1);
-    expect(readFileSync(join(destDir, saved[0]!)).length).toBeGreaterThan(0);
-    // A save moves the take out of temp storage into the library (STC-393) —
-    // `dir` is stale once the panel has closed, so the document is looked up
-    // by the name `promoteTake` keeps (nothing else was ever going to be in
-    // this freshly isolated recordings root). The document that produced the
-    // export still carries the region, so re-opening the shot later
-    // (STC-294) finds it rather than a flattened picture.
-    // `launch()` seeds the library with its own fixture take (`makeTakeFolder`)
-    // for the app to have something to show at boot — filtered out here so
-    // this only names the take THIS test just captured and saved.
+    // `dir` is stale once the panel has closed, so the promoted take is
+    // looked up by name instead. `launch()` seeds the library with its own
+    // fixture take (`makeTakeFolder`) for the app to have something to show
+    // at boot — filtered out here so this only names the take THIS test just
+    // captured and saved.
     const savedShots = readdirSync(recordings).filter((n) => n !== "2026-08-24_10-00-00");
     expect(savedShots).toHaveLength(1);
     expect(storedRegions(join(recordings, savedShots[0]!))).toHaveLength(1);

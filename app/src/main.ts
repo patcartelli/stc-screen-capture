@@ -9,7 +9,7 @@ import {
 } from "./hotkeys.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
-  thumbnailMenuTemplate, type ThumbMenuContext, type ThumbMenuId,
+  buildThumbMenu, type ThumbMenuContext, type ThumbMenuId,
 } from "./thumbnail-menu.js";
 import { playShutter } from "./shutter.js";
 import {
@@ -43,8 +43,9 @@ import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js
 import type { WindowInfo } from "./selection.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
-  afterCapture as showThumbnailsAfterCapture, closeThumbnail,
+  afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
 } from "./thumbnail-window.js";
+import { promotes } from "./panel-actions.js";
 import { openEditor } from "./editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
@@ -305,7 +306,7 @@ async function recoverUnsavedTakes(): Promise<void> {
           dir: t.dir, shot, corner: thumbnail.corner,
           // A recovered temp take has never been decided on — nobody has
           // said yes to it, the same as an ordinary fresh capture.
-          origin: "fresh",
+          take: { kind: "shot", origin: "fresh" },
           dist: here, rendererDir: join(here, "..", "renderer"),
         });
       } catch (e) {
@@ -805,7 +806,7 @@ async function captureStill(action: ShotAction, source: CaptureSource): Promise<
       const { thumbnail } = readSettings(app.getPath("userData"));
       presentThumbnail({
         dir, shot: r.shot, corner: thumbnail.corner,
-        origin: "fresh",
+        take: { kind: "shot", origin: "fresh" },
         dist: here, rendererDir: join(here, "..", "renderer"),
         ...(thumbnail.skip ? { silent: true } : {}),
       });
@@ -1062,13 +1063,15 @@ ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuf
  * re-capturing. It is the same panel a fresh capture gets — not a second still
  * UI, which is what STC-293's Note and STC-300's gate both forbid.
  *
- * `origin: "library"` is the one difference and it still matters post-STC-392:
- * neither a fresh capture nor a re-opened one closes itself any more, but a
- * fresh capture's panel still SAVES on an explicit Close (the renderer's own
- * default), because the panel is the only place it exists — a re-opened shot
- * is already on disk, and a second copy on Close is not what a glance meant.
- * `app/test/library.e2e.test.ts`'s "re-opening a shot from the library and
- * closing it exports nothing" is what actually invokes this handler.
+ * `take: { kind: "shot", origin: "library" }` is the one difference and it
+ * still matters post-STC-392: `actionsFor` (`panel-actions.ts`) gives a
+ * re-opened shot only Copy and Trash — no Save, because it is already on
+ * disk and there is nothing to promote, where a fresh capture also gets
+ * Save. Neither panel closes itself any more; both wait for a person to
+ * choose one of the actions they actually have.
+ * `app/test/library.e2e.test.ts`'s "re-opening a shot from the library
+ * offers only Copy and Trash, and never exports on its own" is what actually
+ * invokes this handler.
  */
 /** The stored document for one shot, so the library can render its decoration. */
 ipcMain.handle("library:shot", async (_e, dir: string) => {
@@ -1086,7 +1089,7 @@ ipcMain.handle("still:reopen", async (_e, dir: string) => {
   const { thumbnail } = readSettings(app.getPath("userData"));
   presentThumbnail({
     dir, shot, corner: thumbnail.corner,
-    origin: "library",
+    take: { kind: "shot", origin: "library" },
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
   return { ok: true };
@@ -1246,16 +1249,21 @@ ipcMain.handle("still:export", async (_e, req: {
   // every saved frame.
   const options = resolveExportOptions(stored, req.options);
 
-  // The decision point (STC-393): every `still:export` call — Save, Copy,
-  // and Save As alike — is a "keep it" outcome, the only thing this panel
-  // model has that isn't an explicit discard. If the take is still in temp,
-  // promote it to the library FIRST, so `fallbackDir` below (the "beside the
-  // shot" default) resolves inside the take's final home rather than a
-  // directory about to be moved out from under the file just written there.
-  // `dir` is reassigned rather than left as `req.dir` so the reply can hand
-  // the renderer its new location.
+  // The decision point, narrowed by STC-392 (D5). It used to be "every
+  // `still:export` call is a keep", which was true while Copy was terminal.
+  // The panel now stays open after a Copy so the user can still Save — or
+  // Trash — and a Copy that had promoted would leave that Trash deleting
+  // something already sitting in the library.
+  //
+  // `req.target.file` is the predicate, not an action name: this handler is
+  // reached by the panel, the main window and the editor alike, and "does
+  // this export write a file" is the one question all three can answer.
+  // Save As is a file write and so promotes, which is correct — it is a save
+  // that asks first, not a different outcome. `dir` is reassigned rather
+  // than left as `req.dir` so the reply can hand the renderer its new
+  // location.
   let dir = req.dir && insideCaptureRoot(process.env, req.dir) ? req.dir : undefined;
-  if (dir) {
+  if (dir && req.target.file) {
     try { dir = await promoteTake(process.env, dir); }
     catch (e) {
       console.error("[still] could not move the shot into the library:", dir, e);
@@ -1346,7 +1354,7 @@ ipcMain.handle("still:chooseDestination", async () => {
 /**
  * The floating thumbnail's right-click menu (STC-296 follow-up).
  *
- * Built here and popped up here: `thumbnailMenuTemplate` decides the contents
+ * Built here and popped up here: `buildThumbMenu` decides the contents
  * where a test can read them, and this turns them into the one thing no test
  * can — a real `Menu`. Answers with the chosen id, or `null` when the menu was
  * dismissed, so the renderer performs the action with the same code its own
@@ -1357,7 +1365,12 @@ ipcMain.handle("thumbnail:menu", async (e, ctx: ThumbMenuContext) => {
   return await new Promise<ThumbMenuId | null>((resolve) => {
     let answered = false;
     const answer = (id: ThumbMenuId | null) => { if (!answered) { answered = true; resolve(id); } };
-    const menu = Menu.buildFromTemplate(thumbnailMenuTemplate({
+    const menu = Menu.buildFromTemplate(buildThumbMenu({
+      // A malformed or absent `take` defaults to a fresh shot — the widest
+      // set of the four actions minus Edit — rather than throwing and losing
+      // the whole menu over one bad field on a channel only this app's own
+      // renderer ever calls.
+      take: ctx?.take ?? { kind: "shot", origin: "fresh" },
       redacting: ctx?.redacting === true, busy: ctx?.busy === true,
     }).map((item) => item.type === "separator"
       ? { type: "separator" as const }
@@ -1449,24 +1462,85 @@ ipcMain.handle("still:revealShot", async (_e, dir: string) => {
 });
 
 /**
- * Throw a shot away (STC-296's right-click Delete).
+ * The panel's three take-moving actions (STC-392).
+ *
+ * Separate from `still:export` on purpose: that handler answers "turn these
+ * pixels into a file or a clipboard entry", which the editor and the main
+ * window ask too. These three answer "what happens to this TAKE", which only
+ * the panel asks — and each of them is reached by up to four different
+ * gestures in the panel (a button, the ⌘ keyboard accelerator, the context
+ * menu, and for trash a swipe), so a single handler each is what keeps those
+ * from drifting.
+ *
+ * Every one validates the directory against the capture roots before it acts.
+ * The renderer names a take; it never hands main a path to act on.
+ */
+ipcMain.handle("panel:save", async (_e, dir: string) => {
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
+    return { ok: false, detail: "not a take this app wrote" };
+  }
+  try {
+    // Asked, not assumed: `promotes("save")` is `panel-actions.ts`'s own
+    // answer, not a second place this handler decides "save promotes" for
+    // itself. If that predicate ever disagreed with what this does, the two
+    // copies of "save promotes" this repo has already paid for five ways
+    // (CLAUDE.md) would be back, just split across a renderer file and this
+    // one instead of two renderer files.
+    const promoted = promotes("save") ? await promoteTake(process.env, dir) : dir;
+    dismissThumbnail(dir);
+    return { ok: true, dir: promoted };
+  } catch (e: any) {
+    return { ok: false, detail: String(e?.message ?? e) };
+  }
+});
+
+/**
+ * Edit promotes first, and not as a convenience: `editor:open` refuses any
+ * path outside the recordings root, so a take in temp storage cannot be
+ * opened at all. The editor's own Save is about the EXPORT — the ticket's
+ * "you may only be trimming" — not about whether the take is kept, which is
+ * what this promote settles.
+ */
+ipcMain.handle("panel:edit", async (_e, dir: string) => {
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
+    return { ok: false, detail: "not a take this app wrote" };
+  }
+  try {
+    // Same reasoning as `panel:save` above: `promotes("edit")` is asked, not
+    // hardcoded — this handler has no opinion of its own about whether Edit
+    // promotes.
+    const opened = promotes("edit") ? await promoteTake(process.env, dir) : dir;
+    openEditor({ dir: opened, name: basename(opened),
+                 dist: here, rendererDir: join(here, "..", "renderer") });
+    dismissThumbnail(dir);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, detail: String(e?.message ?? e) };
+  }
+});
+
+/**
+ * Throw a take away (STC-296's right-click Delete, and now the ✕ button, the
+ * ⌘⌫ key and the swipe).
  *
  * To the TRASH, never `rm`, and with no confirmation. `recorder:deleteTake`
  * puts a modal in front of the same call and that is right there — a recording
- * is minutes of work and the library is a place you browse. A shot whose panel
+ * is minutes of work and the library is a place you browse. A take whose panel
  * is still on screen is seconds old with the pointer already on it, and the
  * Trash is what makes "no confirmation" safe rather than reckless.
  *
- * The caller is responsible for having stopped its own settle first: this
- * removes the directory the panel would otherwise export from.
+ * The undo window (`trashStyle`/`UNDO_WINDOW_MS`, `panel-actions.ts`) is a
+ * later ticket; this is the straight-to-Trash behaviour the swipe already
+ * had, so the action works from the moment its button exists.
  */
-ipcMain.handle("still:deleteShot", async (_e, dir: string) => {
+ipcMain.handle("panel:trash", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
-    return { ok: false, detail: "not a shot this app wrote" };
+    return { ok: false, detail: "not a take this app wrote" };
   }
-  if (!existsSync(dir)) return { ok: true };
+  if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
   try {
     await shell.trashItem(dir);
+    dismissThumbnail(dir);
     return { ok: true };
   } catch (err: any) {
     return { ok: false, detail: String(err?.message ?? err) };

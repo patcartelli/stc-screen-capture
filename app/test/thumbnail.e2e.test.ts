@@ -12,23 +12,20 @@ import { makeTakeFolder } from "./_take-fixture.js";
  * The panel's own STATE — `idle` or `open` — is decided by a pure function
  * and checked with no window at all in `thumbnail.test.ts`. What this file
  * exists for is the wiring that cannot see: that a capture really puts a
- * separate `BrowserWindow` on screen, that clicking Save/Close/Copy really
- * calls through to the export handler and really destroys the window on
- * Save/Close, and that a showing panel really gets excluded from the NEXT
- * capture's request. What ignoring the panel does is `panel-waits.e2e.test.ts`'s
- * claim now — "there is no path where a capture is silently lost" is still
- * the promise, kept by the panel staying put rather than by a timeout
- * writing a file nobody asked for.
+ * separate `BrowserWindow` on screen with the right buttons for its take,
+ * that clicking Save/Copy/Trash really calls through to the right handler
+ * and really destroys the window when the action is one that closes it, and
+ * that a showing panel really gets excluded from the NEXT capture's request.
+ * What ignoring the panel does is `panel-waits.e2e.test.ts`'s claim now —
+ * "there is no path where a capture is silently lost" is still the promise,
+ * kept by the panel staying put rather than by a timeout writing a file
+ * nobody asked for.
  *
- * NOT covered here since STC-392: the OS window used to resize between a
- * collapsed and an expanded size on click (`"expanded"` event,
- * `thumbnail-window.ts`) — that event and the resize are both gone, and the
- * window is fixed at `PANEL_SIZE` regardless of what the DOM's own
- * `.expanded` class (still toggled by a click, still asserted below) thinks
- * it is laying out inside. `thumbnail-renderer.ts`'s collapsed/expanded CSS
- * sizing is untouched pending the renderer-wiring task, so what it draws no
- * longer matches the window it draws inside — a real, currently-unfixed
- * layout mismatch this file does not attempt to hide or assert around.
+ * NOT covered here since STC-392: there is no collapsed/expanded window size
+ * any more (`thumbnail-window.ts`'s window is fixed at `PANEL_SIZE`) and no
+ * `#card` click to get from one to the other — every control this take has
+ * is on the card from the moment it paints, so there is nothing left to
+ * "expand" into.
  *
  * `export-still` is faked here the same way `capture-still` already is: the
  * bytes are never inspected, only that the file the app asked for exists and
@@ -106,8 +103,13 @@ async function captureDisplay(win: Page): Promise<any> {
   return win.evaluate(() => (window as any).recorder.captureStill("display"));
 }
 
+/** Live take directories under `recordings`, excluding the fixture `makeTakeFolder` seeds. */
+function ownTakes(recordings: string): string[] {
+  return readdirSync(recordings).filter((n) => !n.startsWith(".") && n !== "2026-08-24_10-00-00");
+}
+
 describe("the post-capture floating thumbnail", () => {
-  test("a capture puts a separate, painted panel on screen", async () => {
+  test("a capture puts a separate, painted panel on screen showing its own actions", async () => {
     const { win } = await launch();
     const r = await captureDisplay(win);
     expect(r.ok).toBe(true);
@@ -115,29 +117,20 @@ describe("the post-capture floating thumbnail", () => {
     const panel = await thumbnailWindow();
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
       .toContain("in");
-    // Not the expanded panel yet — nobody has clicked it.
-    expect(await panel.evaluate(() => document.getElementById("card")!.className)).not.toContain("expanded");
+    // A fresh SHOT: copy, save and trash, and no edit — `panel-actions.ts`'s
+    // own table, drawn onto the DOM (`actionsFor`).
+    expect(await panel.isVisible("#copy")).toBe(true);
+    expect(await panel.isVisible("#save")).toBe(true);
+    expect(await panel.isVisible("#trash")).toBe(true);
+    expect(await panel.isHidden("#edit")).toBe(true);
   }, 60_000);
 
-  test("clicking it expands into the mode picker, redact, copy and save", async () => {
-    const { win } = await launch();
+  test("Save promotes the take into the library and closes the panel — it writes no destination-folder file", async () => {
+    const { win, recordings, destDir } = await launch();
     await captureDisplay(win);
     const panel = await thumbnailWindow();
-    await panel.click("#card");
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
-      .toContain("expanded");
-    // Redact was a disabled stub through STC-296 and is live as of STC-297.
-    expect(await panel.isDisabled("#redact")).toBe(false);
-    expect(await panel.isVisible("#mode")).toBe(true);
-  }, 60_000);
-
-  test("Save in the expanded panel writes the decorated file and closes the panel", async () => {
-    const { win, destDir } = await launch();
-    await captureDisplay(win);
-    const panel = await thumbnailWindow();
-    await panel.click("#card");
-    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
-      .toContain("expanded");
+      .toContain("in");
 
     // Not a status-text poll: a successful Save sends "done" moments after
     // setting its own confirmation text, and main destroys the window on
@@ -146,7 +139,12 @@ describe("the post-capture floating thumbnail", () => {
     // window closing IS the confirmation this path is being tested for.
     await panel.click("#save");
     await noThumbnailWindow(15_000);
-    expect(readdirSync(destDir).length).toBe(1);
+    // `panel:save` PROMOTES the take (STC-393's `promoteTake`) — it does not
+    // call `still:export`, so the configured destination folder stays empty.
+    // The library IS the destination now; a separate copy there is
+    // `still:export`'s job (Copy, Save As), not Save's.
+    expect(ownTakes(recordings).length).toBe(1);
+    expect(readdirSync(destDir).length).toBe(0);
   }, 60_000);
 
   // "Ignoring it still saves" (the old contract) is now
@@ -154,17 +152,19 @@ describe("the post-capture floating thumbnail", () => {
   // take is still in temp" — a different claim about the same pixels, so it
   // lives in its own file rather than being loosened here (STC-392).
 
-  test("Copy does not close the panel — Save and Close both do", async () => {
-    const { win } = await launch();
+  test("Copy does not close the panel — Save and Trash both do", async () => {
+    const { win, recordings } = await launch();
     await captureDisplay(win);
     const panel = await thumbnailWindow();
-    await panel.click("#card");
     await panel.click("#copy");
     await expect.poll(() => panel.textContent("#status"), { timeout: 15_000 }).toMatch(/^Copied/);
     // Still here — a quick share should not cost the chance to also Save.
     expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    // And Copy never promoted it (STC-392's D5) — the take the Trash below
+    // removes is still the one in temp, not a copy already in the library.
+    expect(ownTakes(recordings).length).toBe(0);
 
-    await panel.click("#close");
+    await panel.click("#trash");
     await noThumbnailWindow();
   }, 60_000);
 
@@ -250,8 +250,9 @@ describe("the post-capture floating thumbnail", () => {
     // the background — see thumbnail-window.ts's `silent` mode — so what is
     // checkable now is that it does not OUTLAST its own export.
     await noThumbnailWindow(15_000);
-    // The ticket's own words are "go straight to clipboard" — never the file
-    // destination, whatever the (otherwise inapplicable) settle-action says.
+    // The ticket's own words are "go straight to clipboard" — never the
+    // destination folder, and never the library either (a silent panel only
+    // ever performs Copy, which does not promote).
     expect(readdirSync(destDir).length).toBe(0);
     const exported = readRequests(stillLog).find((x) => x.rgba !== undefined);
     expect(exported?.clipboard).toBe(true);

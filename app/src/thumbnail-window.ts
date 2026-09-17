@@ -2,11 +2,11 @@ import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
   positionFor, stackPosition, MAX_STACKED, PANEL_SIZE,
-  type Corner, type Size, type PanelSettleQuery,
+  type Corner, type Size,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
-import { type TakeOrigin } from "./panel-actions.js";
+import { type PanelTake } from "./panel-actions.js";
 
 /**
  * The post-capture floating thumbnail's window (STC-296, reworked by
@@ -83,25 +83,28 @@ export interface PresentOptions {
   dist: string;
   rendererDir: string;
   /**
-   * The "skip the panel" preference: never shown, settled the instant it has
-   * composited. Still a real (hidden) window rather than a second compositing
-   * path — reusing the one the panel already has is exactly what STC-293's
-   * Note forbids a second implementation of. Fixed to `"copy"` in the query
-   * built below the moment it composites — never a stored preference, the
-   * same reason `origin` is a call-site fact rather than one.
+   * The "skip the panel" preference: never shown, and copies to the
+   * clipboard the instant it has composited. Still a real (hidden) window
+   * rather than a second compositing path — reusing the one the panel
+   * already has is exactly what STC-293's Note forbids a second
+   * implementation of. The renderer decides to do this itself, from `silent`
+   * alone — never a stored preference, the same reason `take` below is a
+   * call-site fact rather than one.
    */
   silent?: boolean;
   /**
-   * Whether anyone has said yes to this take yet — `panel-actions.ts`'s own
-   * type, not a second spelling of it. `"library"` is a shot RE-OPENED
-   * (STC-294): already on disk, so ignoring it must do nothing at all, unlike
-   * a `"fresh"` capture, where the panel is the only place the shot exists.
-   * Required, not optional, because every caller has an answer — a capture
-   * `main.ts` just made is always `"fresh"`, `still:reopen` is always
-   * `"library"` — and a call site that forgot to say which would rather be a
-   * type error than default to the wrong one.
+   * What the panel is showing — `panel-actions.ts`'s own type, not a second
+   * spelling of it. Decides which of the four actions the card draws
+   * (`actionsFor`) and what Save and Trash MEAN: `origin: "library"` is a
+   * shot RE-OPENED (STC-294), already on disk, so there is nothing to
+   * promote and ignoring it must do nothing at all — unlike a `"fresh"`
+   * capture, where the panel is the only place the take exists. Required,
+   * not optional, because every caller has an answer — a capture `main.ts`
+   * just made is always `{ kind: "shot", origin: "fresh" }`, `still:reopen`
+   * is always `origin: "library"` — and a call site that forgot to say which
+   * would rather be a type error than default to the wrong one.
    */
-  origin: TakeOrigin;
+  take: PanelTake;
 }
 
 type ThumbEvent =
@@ -116,9 +119,10 @@ type ThumbEvent =
    * Currently a NO-OP on this side (see `onEvent`'s branch): the race it
    * guarded was against the panel's own timeout, which is gone. Kept as a
    * real event rather than deleted because the shape of the race survives —
-   * a discard is still an async round trip (`deleteShot`), and anything that
-   * can hide or destroy this same window WHILE it is in flight (Task 4's
-   * export-then-close is the next thing that will be able to) still needs to
+   * a discard is still an async round trip (`window.thumb.trash`, the
+   * `panel:trash` handler in `main.ts`), and anything that can hide or
+   * destroy this same window WHILE it is in flight — today, the overflow
+   * eviction above `MAX_STACKED` (`presentThumbnail`, below) — still needs to
    * hear about it first. `thumbnail.ts`'s module doc has the STC-392 update
    * to the original race this closed.
    */
@@ -298,24 +302,19 @@ class ThumbnailSession {
     });
     this.win.setAlwaysOnTop(true, "screen-saver");
     this.win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    // Neither branch below is a stored PREFERENCE — see `PresentOptions`'s
-    // doc on `silent`/`origin`. `PanelSettleQuery` (`thumbnail.ts`) is the one
-    // declaration both this and `thumbnail-renderer.ts`'s parse of the same
-    // param share, so a typo here is a type error rather than a silent
-    // fall-through to "save". Absent entirely for an ordinary fresh capture,
-    // which is what makes the renderer's own default (save on Close) right
-    // for it.
-    const settleQuery: PanelSettleQuery | undefined =
-      opts.silent ? "copy" : opts.origin === "library" ? "none" : undefined;
+    // `take` is what decides which buttons the card draws and what Save and
+    // Trash mean — `panel-actions.ts`'s own type, passed through verbatim
+    // rather than reduced to a settle-action string the renderer would have
+    // to decode back into a decision it already had here.
     this.win.loadFile(join(opts.rendererDir, "thumbnail.html"), {
       query: {
         dir: opts.dir,
         shot: JSON.stringify(opts.shot),
+        take: JSON.stringify(opts.take),
         // The view needs it too, and only for the swipe: which way is
         // off-screen is a property of where the panel was put.
         corner: opts.corner,
         ...(opts.silent ? { silent: "1" } : {}),
-        ...(settleQuery ? { settleAction: settleQuery } : {}),
       },
     });
     this.win.webContents.on("ipc-message", (_e, channel, ev: ThumbEvent) => {
@@ -421,7 +420,7 @@ class ThumbnailSession {
    * Which take this panel is showing.
    *
    * Exposed because main's handlers are reached from the RENDERER, and a
-   * renderer names a take, never a window — the same rule `still:deleteShot`
+   * renderer names a take, never a window — the same rule `panel:trash`
    * and `still:revealShot` already follow. `readonly` via the getter: a panel
    * whose directory could be reassigned from outside would be a second owner
    * of a value `promoteTake` already moves.
