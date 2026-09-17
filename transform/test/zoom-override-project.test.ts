@@ -129,6 +129,74 @@ describe("parseProject", () => {
       expect(parseProject(roundTripped, 640, 360, duration).overrides).toEqual(p.overrides);
     });
   });
+
+  // STC-329: delete or retime a DERIVED window — no crop or easing of its own.
+  describe("the removed and retime variants", () => {
+    test("a well-formed removed override carries only its windowId", () => {
+      const doc = baseDoc([{ kind: "removed", windowId: "1000" }]);
+      expect(parseProject(doc, 640, 360, duration).overrides).toEqual([{ kind: "removed", windowId: "1000" }]);
+    });
+
+    test("a well-formed retime override carries whichever bounds it named", () => {
+      const doc = baseDoc([{ kind: "retime", windowId: "1000", startNs: 500, endNs: 2000 }]);
+      expect(parseProject(doc, 640, 360, duration).overrides).toEqual([
+        { kind: "retime", windowId: "1000", startNs: 500, endNs: 2000 },
+      ]);
+    });
+
+    test("a retime naming only one bound carries only that one — the other is absent, not defaulted", () => {
+      const startOnly = parseProject(baseDoc([{ kind: "retime", windowId: "1000", startNs: 500 }]), 640, 360, duration);
+      expect(startOnly.overrides![0]).toEqual({ kind: "retime", windowId: "1000", startNs: 500 });
+      expect("endNs" in startOnly.overrides![0]!).toBe(false);
+
+      const endOnly = parseProject(baseDoc([{ kind: "retime", windowId: "1000", endNs: 2000 }]), 640, 360, duration);
+      expect(endOnly.overrides![0]).toEqual({ kind: "retime", windowId: "1000", endNs: 2000 });
+    });
+
+    test("a retime naming neither bound is dropped — an override that shifts nothing is pointless", () => {
+      const doc = baseDoc([{ kind: "retime", windowId: "1000" }]);
+      expect(parseProject(doc, 640, 360, duration).overrides).toEqual([]);
+    });
+
+    test("a missing windowId, or a non-integer/negative startNs or endNs, drops the offending bound (or the entry)", () => {
+      const doc = baseDoc([
+        { kind: "removed" }, // no windowId
+        { kind: "retime", windowId: "a", startNs: -1, endNs: 2000 }, // bad start, good end -> keeps endNs only
+        { kind: "retime", windowId: "b", startNs: 500, endNs: 1.5 }, // bad end, good start -> keeps startNs only
+        { kind: "retime" }, // no windowId at all
+      ]);
+      const overrides = parseProject(doc, 640, 360, duration).overrides!;
+      expect(overrides).toEqual([
+        { kind: "retime", windowId: "a", endNs: 2000 },
+        { kind: "retime", windowId: "b", startNs: 500 },
+      ]);
+    });
+
+    test("all four variants coexist in one array", () => {
+      const doc = baseDoc([
+        { kind: "geometry", windowId: "1000", rect: { x: 0, y: 0, width: 1, height: 1 } },
+        { kind: "manual", id: "m1", startNs: 0, endNs: 1000, rect: { x: 0, y: 0, width: 1, height: 1 }, easing: "calm" },
+        { kind: "removed", windowId: "2000" },
+        { kind: "retime", windowId: "3000", startNs: 100, endNs: 200 },
+      ]);
+      const overrides = parseProject(doc, 640, 360, duration).overrides!;
+      expect(overrides.map((o) => o.kind)).toEqual(["geometry", "manual", "removed", "retime"]);
+    });
+
+    test("a round trip through write and parse keeps both fields, and validates against project-6", () => {
+      const p = defaultProject(640, 360);
+      p.overrides = [
+        { kind: "removed", windowId: "1000" },
+        { kind: "retime", windowId: "2000", startNs: 100, endNs: 200 },
+        { kind: "retime", windowId: "3000", endNs: 900 },
+      ];
+      const written = projectForWrite(p, duration);
+      expect(written.version).toBe(6);
+      expect(validate6(written), JSON.stringify(validate6.errors)).toBe(true);
+      const roundTripped = JSON.parse(JSON.stringify(written));
+      expect(parseProject(roundTripped, 640, 360, duration).overrides).toEqual(p.overrides);
+    });
+  });
 });
 
 describe("projectForWrite emits the minimum version that can express it", () => {
@@ -284,6 +352,129 @@ describe("render reads overrides", () => {
     const before = JSON.stringify(p);
     for (const t of [0, 2000 * MS, 5000 * MS]) render(p, session, t);
     expect(JSON.stringify(p)).toBe(before);
+  });
+});
+
+describe("render reads removed/retime overrides on a derived window (STC-329)", () => {
+  const MS = 1_000_000;
+  // One click at t=2000ms: window is [1700ms, 4500ms] (300ms lead, 2500ms hold).
+  const events: SessionEvent[] = [
+    { t: 2000 * MS, kind: "down", x: 10, y: 10, button: 0 },
+    { t: 2050 * MS, kind: "up", x: 10, y: 10, button: 0 },
+  ];
+  const session = {
+    anchors: {
+      version: 2, timebase: { numer: 125, denom: 3 }, t0Ns: "0",
+      display: { id: 1, pointWidth: 1920, pointHeight: 1080, pixelWidth: 1920,
+                 pixelHeight: 1080, backingScale: 1, originX: 0, originY: 0 },
+      capture: { width: 1920, height: 1080, codec: "h264", firstFrameNs: 0 },
+      files: { display: "display.mp4" }, stop: { t: duration, reason: "user" },
+    },
+    events, frames: [0, 16_000_000, 32_000_000],
+  } as unknown as Session;
+
+  const WINDOW_ID = String(1700 * MS);
+  const TARGET = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+  const projectWith = (overrides: Project["overrides"]): Project =>
+    ({ ...defaultProject(1920, 1080), overrides });
+
+  test("a removed window never zooms, at its old span or anywhere else", () => {
+    const p = projectWith([{ kind: "removed", windowId: WINDOW_ID }]);
+    expect(render(p, session, 3000 * MS).zoom.amount).toBe(0); // deep inside where the window used to be
+    expect(render(p, session, 1750 * MS).zoom.amount).toBe(0); // just after it would have opened
+  });
+
+  test("removing one window leaves an unrelated window untouched", () => {
+    const twoClicks: SessionEvent[] = [
+      ...events,
+      { t: 10000 * MS, kind: "down", x: 5, y: 5, button: 0 },
+      { t: 10050 * MS, kind: "up", x: 5, y: 5, button: 0 },
+    ];
+    const s2: Session = { ...session, events: twoClicks };
+    const p = projectWith([{ kind: "removed", windowId: WINDOW_ID }]);
+    expect(render(p, s2, 3000 * MS).zoom.amount).toBe(0); // the removed one
+    expect(render(p, s2, 11000 * MS).zoom.amount).toBeGreaterThan(0.95); // the other, untouched
+  });
+
+  test("a retimed window is silent at its OLD span and zooms at its NEW one", () => {
+    const p = projectWith([{ kind: "retime", windowId: WINDOW_ID, startNs: 8000 * MS, endNs: 10500 * MS }]);
+    expect(render(p, session, 3000 * MS).zoom.amount).toBe(0); // old span: nothing plays there any more
+    expect(render(p, session, 9500 * MS).zoom.amount).toBeGreaterThan(0.95); // new span: settled
+  });
+
+  test("retime composes with a geometry override on the SAME windowId — WHEN moves, WHERE stays the tuned crop", () => {
+    const p = projectWith([
+      { kind: "geometry", windowId: WINDOW_ID, rect: TARGET },
+      { kind: "retime", windowId: WINDOW_ID, startNs: 8000 * MS, endNs: 10500 * MS },
+    ]);
+    const fs = render(p, session, 9500 * MS); // deep inside the NEW span
+    expect(fs.zoom.amount).toBeGreaterThan(0.95);
+    expect(fs.zoom.crop.x).toBeCloseTo(TARGET.x, 1);
+    expect(fs.zoom.crop.width).toBeCloseTo(TARGET.width, 1);
+  });
+
+  test("a retime naming only startNs leaves endNs at its derived value", () => {
+    // Derived window is [1700ms, 4500ms]; shifting only the start to 4000ms
+    // should still close out around the original 4500ms end.
+    const p = projectWith([{ kind: "retime", windowId: WINDOW_ID, startNs: 4000 * MS }]);
+    expect(render(p, session, 1750 * MS).zoom.amount).toBe(0); // no longer starts this early
+    expect(render(p, session, 4300 * MS).zoom.amount).toBeGreaterThan(0.9); // settled before the untouched end
+  });
+
+  test("seeking straight to a tick in the retimed span gives the same crop as stepping there", () => {
+    const p = projectWith([{ kind: "retime", windowId: WINDOW_ID, startNs: 8000 * MS, endNs: 10500 * MS }]);
+    const t = 9200 * MS;
+    const seeked = render(p, session, t).zoom;
+    const s2: Session = { ...session, events: [...events] };
+    for (let u = 0; u < t; u += 8_333_333) render(p, s2, u);
+    const stepped = render(p, s2, t).zoom;
+    expect(stepped).toEqual(seeked);
+  });
+
+  // The regression this override family exists to catch: stage 2's derived
+  // crop is memoised per SESSION (render.ts's derivedCropCache), and before
+  // retiming existed a window's own startNs/endNs never changed within one
+  // session's lifetime, so keying that cache on id alone was safe. A retime
+  // breaks that assumption — the SAME session and windowId now need to
+  // resolve to DIFFERENT stage-2 answers depending on which retime a given
+  // render's project carries, and a cache keyed on id alone would let
+  // whichever retime rendered FIRST silently answer for the other.
+  //
+  // Built so the two bounds get genuinely different WHERE signals rather
+  // than just different numbers: window A's [1900ms, 3000ms] covers a
+  // change-track frame with a hot cell far from the click (bottom-right of
+  // a 20x20 grid), which the burst classifier survives — a real change-track
+  // crop. Window B's [6000ms, 7100ms] covers none of those frames, so
+  // `deriveZoomCrop` falls all the way through to the CURSOR fallback,
+  // which centres near the click instead (top-left, x=10 of a 1920-wide
+  // display). If retimed B ever answered with A's cached change-track crop,
+  // it would land bottom-right, not top-left.
+  test("two different retimes of the SAME window, in the SAME session, resolve to different stage-2 signals (no stale cache)", () => {
+    const gridWidth = 20, gridHeight = 20;
+    const frames = [];
+    for (let t = 1900 * MS; t <= 3000 * MS; t += 100 * MS) {
+      const cells = new Array(gridWidth * gridHeight).fill(0);
+      if (t === 2100 * MS) cells[15 * gridWidth + 15] = 0.6; // one hot cell, near the trigger, far from the click
+      frames.push({ t, cells, changedFraction: 0 });
+    }
+    const changes = { version: 1 as const, gridWidth, gridHeight, threshold: 0.08, frames };
+    const sessionWithChanges: Session = { ...session, changes };
+
+    const pA = projectWith([{ kind: "retime", windowId: WINDOW_ID, startNs: 1900 * MS, endNs: 3000 * MS }]);
+    const pB = projectWith([{ kind: "retime", windowId: WINDOW_ID, startNs: 6000 * MS, endNs: 7100 * MS }]);
+
+    // Render A first so a session-keyed (not bounds-keyed) cache would have
+    // something stale to hand back to B.
+    const cropA = render(pA, sessionWithChanges, 2900 * MS).zoom.crop;
+    const cropB = render(pB, sessionWithChanges, 7000 * MS).zoom.crop;
+    expect(cropA.x).toBeGreaterThan(0.4); // change-track: bottom-right cell
+    expect(cropB.x).toBeLessThan(0.1);    // cursor fallback: near the click
+
+    // And the reverse order — B first, then A — must not leak the other way.
+    const cropB2 = render(pB, sessionWithChanges, 7000 * MS).zoom.crop;
+    const cropA2 = render(pA, sessionWithChanges, 2900 * MS).zoom.crop;
+    expect(cropB2.x).toBeLessThan(0.1);
+    expect(cropA2.x).toBeGreaterThan(0.4);
   });
 });
 

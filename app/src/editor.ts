@@ -62,7 +62,7 @@ import {
 import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
-import { windowId, overrideFor, rectFromGesture } from "@transform/zoom-override";
+import { windowId, overrideFor, resolvedWindows, rectFromGesture } from "@transform/zoom-override";
 import type { Rect } from "@transform/spaces";
 import {
   clampTrimFrame, decideKey, formatReadout, formatShuttle, frameAtFraction, frameToNs,
@@ -403,6 +403,11 @@ function overridesWithoutWindow(overrides: Project["overrides"], id: string): No
   return (overrides ?? []).filter((o) => !(o.kind === "geometry" && o.windowId === id));
 }
 
+/** Strips a `retime` entry for `id` (STC-329) — the sibling of `overridesWithoutWindow`'s geometry-only filter, kept separate rather than folded in: a geometry drag and a retime drag commit independently (dragging the rect must not discard a prior retime, and vice versa). */
+function overridesWithoutRetime(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
+  return (overrides ?? []).filter((o) => !(o.kind === "retime" && o.windowId === id));
+}
+
 function overridesWithoutManual(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
   return (overrides ?? []).filter((o) => !(o.kind === "manual" && o.id === id));
 }
@@ -453,33 +458,29 @@ function drawOverrideBox(rect: Rect | null): void {
   box.style.height = `${rect.height * 100}%`;
 }
 
-/** The DYNAMIC blocks only — derived windows and committed manual ones. The
- *  currently-edited manual window (new or existing) is NOT drawn here; it
- *  lives on the static #manualdraft element so its resize handles survive a
- *  rebuild mid-drag (updateManualDraftBlock's own note). */
+/** The DYNAMIC blocks only — derived windows (at their RESOLVED position —
+ *  `resolvedWindows` applies any `removed`/`retime` override, STC-329 — a
+ *  removed one is dropped from the list outright) and committed manual ones.
+ *  The currently-edited window of EITHER kind is NOT drawn here; it lives on
+ *  the static #manualdraft element so its resize handles survive a rebuild
+ *  mid-drag (updateManualDraftBlock's own note). */
 function layoutOverrideBlocks(): void {
   const container = $("override-blocks-dynamic") as HTMLElement;
   container.replaceChildren();
   if (!player || !openSession) return;
   const d = player.durationNs || 1;
-  for (const w of zoomWindows(openSession.events)) {
+  for (const w of resolvedWindows(zoomWindows(openSession.events), openProject?.overrides)) {
     const id = windowId(w);
+    if (id === editingWindowId) continue; // shown on #manualdraft instead
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "zoomblock";
-    if (id === editingWindowId) btn.classList.add("selected");
-    // The window being edited reads its OWN draft, not project.overrides —
-    // that field has this window's entry removed for as long as editing
-    // lasts (see the header above), so reading it here would show the dot
-    // vanishing the instant a block is opened rather than when it is empty.
-    const overridden = id === editingWindowId ? !!draftRect : !!overrideFor(openProject?.overrides, w);
-    if (overridden) btn.classList.add("overridden");
+    if (overrideFor(openProject?.overrides, w)) btn.classList.add("overridden");
     btn.style.left = `${(w.startNs / d) * 100}%`;
     btn.style.width = `${Math.max(0, ((w.endNs - w.startNs) / d) * 100)}%`;
     btn.setAttribute("aria-label", `Zoom window at ${fmtClock(w.startNs)}`);
     btn.addEventListener("click", () => {
-      const p = id === editingWindowId ? closeOverrideEditor() : selectDerivedWindow(w);
-      void p.catch((e: any) => alertUser(String(e?.message ?? e)));
+      void selectDerivedWindow(w).catch((e: any) => alertUser(String(e?.message ?? e)));
     });
     container.appendChild(btn);
   }
@@ -503,17 +504,43 @@ function layoutOverrideBlocks(): void {
   }
 }
 
-/** Writes the current draft into project.overrides (replacing any prior
- *  entry for this window) and persists — an empty draft means "no override". */
+/**
+ * Writes the current draft into project.overrides and persists — an empty
+ * draft means "no geometry override" (unchanged since STC-330).
+ *
+ * A `retime` entry (STC-329) is written or cleared independently, alongside
+ * whatever this call decides about geometry: dragging the rect must not
+ * discard a prior retime, and dragging an edge must not discard a prior
+ * geometry override — the two compose (render.ts's own header says why:
+ * retime changes WHEN, geometry/stage 2 still decide WHERE). Whether a
+ * retime is needed is decided against the window's TRUE derived bounds,
+ * looked up fresh here rather than trusted from whatever seeded
+ * `draftManualStart`/`End` — those were seeded from the ALREADY-resolved
+ * (possibly already-retimed) window, so comparing against them would miss a
+ * retime that exactly undoes a previous one.
+ */
 async function commitDraft(): Promise<void> {
-  if (!openProject || !editingWindowId) return;
-  const withoutThis = overridesWithoutWindow(openProject.overrides, editingWindowId);
-  openProject.overrides = draftRect
-    ? [...withoutThis, {
-        kind: "geometry" as const, windowId: editingWindowId, rect: draftRect,
+  if (!openProject || !editingWindowId || !openSession) return;
+  const id = editingWindowId;
+  const withoutGeometry = overridesWithoutWindow(openProject.overrides, id);
+  const withGeometry = draftRect
+    ? [...withoutGeometry, {
+        kind: "geometry" as const, windowId: id, rect: draftRect,
         ...(draftEasing ? { easing: draftEasing } : {}),
       }]
-    : withoutThis;
+    : withoutGeometry;
+
+  const raw = zoomWindows(openSession.events).find((w) => windowId(w) === id);
+  const withoutRetime = overridesWithoutRetime(withGeometry, id);
+  const startChanged = !!raw && draftManualStart !== raw.startNs;
+  const endChanged = !!raw && draftManualEnd !== raw.endNs;
+  openProject.overrides = (startChanged || endChanged)
+    ? [...withoutRetime, {
+        kind: "retime" as const, windowId: id,
+        ...(startChanged ? { startNs: draftManualStart } : {}),
+        ...(endChanged ? { endNs: draftManualEnd } : {}),
+      }]
+    : withoutRetime;
   await persistProject();
 }
 
@@ -551,16 +578,20 @@ async function commitManualDraft(): Promise<void> {
  * in the DOM would still count as one to any query that does not also
  * check visibility — which is exactly how `.zoomblock` counts are read in
  * this file's own E2E suite.
+ *
+ * Shown for EITHER kind of edit now (STC-329 gave a derived window its own
+ * edge handles) — `.manual` is the one visual distinction that still
+ * matters, and it is applied only for `editingManualId`.
  */
 function updateManualDraftBlock(): void {
   const el = $("manualdraft") as HTMLElement;
-  if (!editingManualId || !player) {
+  if ((!editingManualId && !editingWindowId) || !player) {
     el.setAttribute("hidden", "");
     el.className = "";
     return;
   }
   el.removeAttribute("hidden");
-  el.className = "zoomblock manual selected";
+  el.className = editingManualId ? "zoomblock manual selected" : "zoomblock selected";
   const d = player.durationNs || 1;
   el.style.left = `${(draftManualStart / d) * 100}%`;
   el.style.width = `${Math.max(0, ((draftManualEnd - draftManualStart) / d) * 100)}%`;
@@ -574,9 +605,13 @@ function openOverrideEditorUI(): void {
   const clear = $("overrideclear") as HTMLButtonElement;
   clear.disabled = !draftRect;
   clear.textContent = editingManualId ? "Delete window" : "Remove override";
-  ($("overridehint") as HTMLElement).textContent = editingManualId
-    ? "Drag a rect on the preview to zoom into it · drag the block's edges to change its timing"
-    : "Drag a rect on the preview to zoom into it";
+  // STC-329: a derived window's OWN delete — hidden for a manual one, whose
+  // single delete action stays #overrideclear (there is no crop to reset a
+  // manual window BACK to).
+  const del = $("overridedelete") as HTMLButtonElement;
+  if (editingWindowId) del.removeAttribute("hidden"); else del.setAttribute("hidden", "");
+  ($("overridehint") as HTMLElement).textContent =
+    "Drag a rect on the preview to zoom into it · drag the block's edges to change its timing";
   ($("overridebar") as HTMLElement).removeAttribute("hidden");
   ($("rectoverlay") as HTMLElement).removeAttribute("hidden");
   drawOverrideBox(draftRect);
@@ -589,8 +624,10 @@ async function commitCurrentEdit(): Promise<void> {
   else if (editingManualId) await commitManualDraft();
 }
 
-async function closeOverrideEditor(): Promise<void> {
-  await commitCurrentEdit();
+/** The teardown half of leaving edit mode — shared by a normal close (which
+ *  commits first) and a delete (which does not: there is nothing left to
+ *  commit for a window that no longer exists). */
+function resetEditingState(): void {
   editingWindowId = null;
   editingManualId = null;
   draftRect = null;
@@ -602,6 +639,34 @@ async function closeOverrideEditor(): Promise<void> {
   ($("overridebar") as HTMLElement).setAttribute("hidden", "");
   ($("rectoverlay") as HTMLElement).setAttribute("hidden", "");
   drawOverrideBox(null);
+}
+
+async function closeOverrideEditor(): Promise<void> {
+  await commitCurrentEdit();
+  resetEditingState();
+  layoutOverrideBlocks();
+  updateManualDraftBlock();
+}
+
+/**
+ * STC-329: drops the DERIVED window under edit outright — it never plays
+ * again, not even at its old crop. A separate action from `commitDraft`
+ * (Done/Escape), because "delete" and "commit whatever is drafted" are
+ * different intents: Done never has to interpret an empty draftRect as
+ * "the user wants this window gone" the way a manual window's does.
+ * Any prior `geometry`/`retime` entry for this id is stripped along with
+ * it — moot once the window never plays, and leaving them would carry dead
+ * weight into every future write.
+ */
+async function deleteDerivedWindow(): Promise<void> {
+  if (!openProject || !editingWindowId) return;
+  const id = editingWindowId;
+  const withoutTuning = (openProject.overrides ?? []).filter(
+    (o) => !((o.kind === "geometry" || o.kind === "retime") && o.windowId === id),
+  );
+  openProject.overrides = [...withoutTuning, { kind: "removed" as const, windowId: id }];
+  resetEditingState();
+  await persistProject();
   layoutOverrideBlocks();
   updateManualDraftBlock();
 }
@@ -614,6 +679,11 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   const existing = overrideFor(openProject.overrides, w);
   draftRect = existing?.rect ?? null;
   draftEasing = existing?.easing ?? "";
+  // Seeded from `w`'s own (already RESOLVED, possibly already-retimed)
+  // bounds — re-opening a retimed window edits from where it currently
+  // plays, not from the original derivation.
+  draftManualStart = w.startNs;
+  draftManualEnd = w.endNs;
   openProject.overrides = overridesWithoutWindow(openProject.overrides, id);
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((w.startNs + w.endNs) / 2));
@@ -733,6 +803,9 @@ $("overridepreset").addEventListener("change", () => {
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
   void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+$("overridedelete").addEventListener("click", () => {
+  void deleteDerivedWindow().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 $("overridedone").addEventListener("click", () => {
   void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));

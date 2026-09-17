@@ -11,9 +11,14 @@ import { ZOOM_PRESET_NAMES, type ZoomPreset, type ZoomWindow } from "./zoom.js";
  * it (an override always wins over a derivation, manual or automatic).
  */
 
-/** A derived window's override key: its `startNs`, as a string (types.ts). */
-export function windowId(window: Pick<ZoomWindow, "startNs">): string {
-  return String(window.startNs);
+/**
+ * A derived window's override key: its `startNs`, as a string (types.ts) —
+ * or, once `resolvedWindows` below has retimed it, the PINNED `id` it was
+ * given at retime time, which is that original `startNs`. A window straight
+ * out of `zoomWindows` never carries `.id`, so this is unchanged for one.
+ */
+export function windowId(window: Pick<ZoomWindow, "startNs" | "id">): string {
+  return window.id ?? String(window.startNs);
 }
 
 /**
@@ -30,10 +35,61 @@ export function windowId(window: Pick<ZoomWindow, "startNs">): string {
 export function overrideFor(
   overrides: readonly ZoomOverride[] | undefined,
   window: Pick<ZoomWindow, "startNs">,
-): ZoomOverride | undefined {
+): Extract<ZoomOverride, { kind: "geometry" }> | undefined {
   if (!overrides) return undefined;
   const id = windowId(window);
-  return overrides.find((o) => o.kind === "geometry" && o.windowId === id);
+  return overrides.find(
+    (o): o is Extract<ZoomOverride, { kind: "geometry" }> => o.kind === "geometry" && o.windowId === id,
+  );
+}
+
+/**
+ * Applies `removed` and `retime` (STC-329) to a take's DERIVED windows —
+ * `zoom.ts`'s own `zoomWindows` output — before they are spliced together
+ * with any manual windows and grouped/simmed. Called once per render, on the
+ * RAW per-session memo (render.ts's `windowsFor`), so it must stay cheap and
+ * must not itself be memoised: the window list it returns has to track
+ * `project.overrides` live.
+ *
+ * `removed` drops the window outright — it never plays, not even at its old
+ * crop, and a `retime` for the same id is moot. `retime` produces a NEW
+ * window object with `startNs`/`endNs` shifted (either bound may be absent,
+ * for a one-edge drag) and `id` PINNED to the window's original `startNs` —
+ * `windowId()` reads `.id` first, precisely so a `geometry` override (or a
+ * later re-edit's own `retime`) keyed on that original id still finds this
+ * window after its bounds move. `events` — the window's own trigger events —
+ * pass through unchanged: retiming moves WHEN a window plays, not what stage
+ * 2 / the cursor fallback read to decide WHERE, which is why a `retime` and
+ * a `geometry` override on the same window compose with no special case
+ * (render.ts's own header says the same of a `geometry` override and stage
+ * 2/the cursor fallback).
+ */
+export function resolvedWindows(
+  windows: readonly ZoomWindow[],
+  overrides: readonly ZoomOverride[] | undefined,
+): ZoomWindow[] {
+  if (!overrides) return windows.slice();
+  const removed = new Set(
+    overrides.filter((o): o is Extract<ZoomOverride, { kind: "removed" }> => o.kind === "removed")
+      .map((o) => o.windowId),
+  );
+  const retimes = new Map(
+    overrides.filter((o): o is Extract<ZoomOverride, { kind: "retime" }> => o.kind === "retime")
+      .map((o) => [o.windowId, o]),
+  );
+  const out: ZoomWindow[] = [];
+  for (const window of windows) {
+    const id = windowId(window);
+    if (removed.has(id)) continue;
+    const retime = retimes.get(id);
+    if (!retime) { out.push(window); continue; }
+    out.push({
+      ...window, id,
+      startNs: retime.startNs ?? window.startNs,
+      endNs: retime.endNs ?? window.endNs,
+    });
+  }
+  return out;
 }
 
 type ManualOverride = Extract<ZoomOverride, { kind: "manual" }>;

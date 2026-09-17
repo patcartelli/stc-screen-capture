@@ -8,7 +8,8 @@ import {
   ZOOM_PRESETS, createZoomSim, zoomWindows, type ZoomPreset, type ZoomSim, type ZoomWindow,
 } from "./zoom.js";
 import {
-  groupByEasing, manualWindows, nearestWindow, resolvedCrop, windowId, type CombinedZoomWindow,
+  groupByEasing, manualWindows, nearestWindow, resolvedCrop, resolvedWindows, windowId,
+  type CombinedZoomWindow,
 } from "./zoom-override.js";
 import { deriveZoomCrop } from "./zoom-change.js";
 import { DEFAULT_ZOOM } from "./trim.js";
@@ -146,23 +147,26 @@ const zoomCache = new WeakMap<Session, Map<string, Map<ZoomPreset, ZoomSim>>>();
 
 /**
  * Stage 2's derived crop (STC-326), memoised per window — it is a pure
- * function of the window, `session.changes` and the display block, none of
- * which change during a render session, so computing it once per window
- * rather than once per render call is a memo and not a behaviour change.
- * Keyed on `windowId` (the window's own `startNs` as a string) rather than
- * on the window object itself, matching `zoom-override.ts`'s own reasoning
- * for the same key.
+ * function of the window, `session.changes` and the display block, so
+ * computing it once per DISTINCT window rather than once per render call is
+ * a memo and not a behaviour change. Keyed on `windowId` PLUS the window's
+ * own `startNs`/`endNs` (STC-329), not `windowId` alone: a `retime` override
+ * can change a window's bounds without changing its identity, and unlike
+ * every other input here, bounds now CAN change within one session's
+ * lifetime (a user retiming the same window twice while editing). `events`
+ * needs no place in the key — it is fixed per id, retiming never touches it
+ * (zoom-override.ts's `resolvedWindows`).
  */
 const derivedCropCache = new WeakMap<Session, Map<string, Rect | null>>();
 
 function derivedCropFor(session: Session, window: ZoomWindow): Rect | null {
   let byWindow = derivedCropCache.get(session);
   if (!byWindow) { byWindow = new Map(); derivedCropCache.set(session, byWindow); }
-  const id = windowId(window);
-  if (!byWindow.has(id)) {
-    byWindow.set(id, deriveZoomCrop(window, session.changes, session.anchors.display));
+  const key = `${windowId(window)}:${window.startNs}:${window.endNs}`;
+  if (!byWindow.has(key)) {
+    byWindow.set(key, deriveZoomCrop(window, session.changes, session.anchors.display));
   }
-  return byWindow.get(id)!;
+  return byWindow.get(key)!;
 }
 
 function windowsFor(session: Session): ZoomWindow[] {
@@ -182,7 +186,11 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   }
 
   const zoom = project.zoom ?? DEFAULT_ZOOM;
-  const derived = windowsFor(session);
+  // resolvedWindows (STC-329) applies `removed`/`retime` to the RAW,
+  // override-independent memo — cheap, and NOT itself memoised, so it always
+  // reflects the CURRENT project.overrides rather than whichever one first
+  // populated windowsFor's cache.
+  const derived = resolvedWindows(windowsFor(session), project.overrides);
   const manual = manualWindows(project.overrides);
   // Manual windows (STC-331) splice in alongside the derived ones so a
   // single `groupByEasing`/`nearestWindow` pass sees both — no second

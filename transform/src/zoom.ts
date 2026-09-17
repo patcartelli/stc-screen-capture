@@ -90,6 +90,16 @@ export interface ZoomWindow {
   endNs: number;
   /** the triggers this window was built from, in time order */
   events: SessionEvent[];
+  /**
+   * The window's override key, PINNED independent of `startNs` (STC-329).
+   * `zoomWindows`'s own output never sets this — `windowId()` (zoom-override.ts)
+   * falls back to `String(startNs)`, unchanged from before this field existed.
+   * Only a RETIMED window (`resolvedWindows`) sets it, to the original derived
+   * `startNs` it had before the retime moved it — so a `geometry`/`retime`
+   * override keyed on that original id still finds the window after its
+   * bounds change.
+   */
+  id?: string;
 }
 
 /**
