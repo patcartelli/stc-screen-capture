@@ -173,6 +173,27 @@ export interface OptionsState {
    * bounds" would be a second rule for one answer, and would silently reclassify
    * a user who happened to drag to the edges. So it is a flag the control sets,
    * and `startParams` omits `region` when it is set.
+   *
+   * **Cleared the moment the marquee actually changes, after being set (review
+   * finding, STC-388).** The marquee stays adjustable through the whole options
+   * phase — that is this task's own point — and the bar's first refusal only
+   * intercepts presses ON the bar itself; a resize handle or the marquee body
+   * falls through to the ordinary `SelectionEvent` path untouched. Left alone,
+   * `expand` → drag a handle to shrink the rect → Record would settle `{
+   * outcome: <small region>, options: { fullDisplay: true } }`, an inconsistent
+   * pair that sends a custom region down the helper's full-display path. The
+   * fix is NOT a second "does this rect equal the display bounds" check — that
+   * is the exact inference this field's own doc forbids one paragraph up. It is
+   * the narrower, true statement that an explicit "whole display" assertion is
+   * invalidated by a subsequent manual adjustment: `fullDisplayFor(current,
+   * didExpand, prevRect, nextRect)` in `overlay-session.ts` returns `true` only
+   * when `didExpand` is `true` (the assertion itself), and otherwise clears an
+   * already-true `current` the instant `prevRect` and `nextRect` differ BY
+   * VALUE — a before/after comparison of the same rect across time, never a
+   * comparison of the new rect against anything external, so it never looks at
+   * what the new rect IS. A duplicate event that changes nothing (e.g. a
+   * pointermove landing on the same point) must not read as a redraw and must
+   * not clear the flag.
    */
   fullDisplay: boolean;
 }

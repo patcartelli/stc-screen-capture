@@ -3,11 +3,11 @@ import { join } from "node:path";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import {
   reduce, confirm, dominantDisplay, initialState,
-  type DisplayInfo, type Mode, type SelectionContext, type SelectionEvent,
+  type DisplayInfo, type Mode, type Rect, type SelectionContext, type SelectionEvent,
   type SelectionOutcome, type SelectionState, type WindowInfo,
 } from "./selection.js";
 import {
-  barLayout, controlAt, expandedSelection, micItemAt, micMenuLayout,
+  barLayout, expandedSelection, micMenuLayout,
   type ControlId, type OptionsState,
 } from "./record-options.js";
 
@@ -78,6 +78,47 @@ export function nextPhase(purpose: OverlayPurpose, phase: OverlayPhase,
   // Both phases land here: the first outcome opens the bar, and a later one
   // (the marquee stays live) replaces what would be recorded.
   return { act: "options", outcome };
+}
+
+/**
+ * Whether a `reduce` call actually moved the marquee, not merely re-sent it.
+ *
+ * A value comparison, not a geometry inference: it asks "is this the same
+ * rect as before", never "what does this rect equal now" — the latter is what
+ * `OptionsState.fullDisplay`'s doc forbids. A duplicate pointermove landing on
+ * an unchanged position must not read as a redraw.
+ */
+function rectChanged(a: Rect | undefined, b: Rect | undefined): boolean {
+  if (a === b) return false;
+  if (!a || !b) return true;
+  return a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height;
+}
+
+/**
+ * How `OptionsState.fullDisplay` evolves as the marquee changes (STC-388).
+ *
+ * Pure and exported, same reason as `nextPhase`: `app/test/overlay-options.test.ts`
+ * settles it without an Electron window, and the session calls this after
+ * every `reduce` (and after `expand`) rather than reasoning about the flag
+ * itself.
+ *
+ * `didExpand` is the ONLY way this returns `true` — an explicit assertion from
+ * the one control that means "the whole display", never re-derived from a
+ * rect's numbers, because "does this rect equal the display bounds" would be
+ * a second rule for the same answer and would misfire for anyone who happened
+ * to drag to the edges (record-options.ts). But an assertion made once does
+ * not survive the user redrawing the marquee afterwards: once `current` is
+ * `true`, this clears it the moment the rect actually changes. That is a
+ * before-versus-after comparison of the SAME rect across time — never a
+ * comparison of the new rect against anything — so it is the narrower, true
+ * statement that a manual adjustment invalidates an earlier claim, not the
+ * inference this flag exists to avoid.
+ */
+export function fullDisplayFor(current: boolean, didExpand: boolean,
+                               prevRect: Rect | undefined, nextRect: Rect | undefined): boolean {
+  if (didExpand) return true;
+  if (!current) return false;
+  return !rectChanged(prevRect, nextRect);
 }
 
 /**
@@ -343,8 +384,13 @@ class OverlaySession {
       this.options = { ...this.options, micDeviceUid: ev.uid, micMenuOpen: false };
       return this.broadcast();
     }
+    const prevRect = this.state.rect;
     const r = reduce(this.state, ev, this.ctx);
     this.state = r.state;
+    const fullDisplay = fullDisplayFor(this.options.fullDisplay, false, prevRect, this.state.rect);
+    if (fullDisplay !== this.options.fullDisplay) {
+      this.options = { ...this.options, fullDisplay };
+    }
     if (r.outcome) {
       const next = nextPhase(this.opts.purpose ?? "shot", this.phase, r.outcome);
       if (next.act === "finish") { this.broadcast(); void this.finish(next.outcome); return; }
@@ -366,11 +412,18 @@ class OverlaySession {
       case "expand": {
         const d = this.displayForSelection();
         if (!d) return;
+        const prevRect = this.state.rect;
         // The FLAG and the rect together, in one place: a rect covering the
         // display without the flag would take the helper's crop path instead
-        // of its full-display one (record-options.ts).
+        // of its full-display one (record-options.ts). `fullDisplayFor` with
+        // `didExpand: true` is what actually sets it — the literal here would
+        // duplicate that rule as a second copy of the same answer.
         this.state = { ...this.state, rect: expandedSelection(d) };
-        this.options = { ...this.options, fullDisplay: true, micMenuOpen: false };
+        this.options = {
+          ...this.options,
+          fullDisplay: fullDisplayFor(this.options.fullDisplay, true, prevRect, this.state.rect),
+          micMenuOpen: false,
+        };
         const outcome = confirm(this.state, this.ctx);
         if (outcome) this.pending = outcome;
         return this.broadcast();
