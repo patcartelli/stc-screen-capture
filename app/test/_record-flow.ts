@@ -161,6 +161,20 @@ export interface RecordFlowOptions {
    */
   fullDisplay?: boolean;
   /**
+   * With `windowAt`: press `expand` AFTER the window is picked, rather than
+   * skipping it (task 9, STC-388). `overlay-session.ts`'s `onControl("expand")`
+   * always converts the pending outcome to a full-display REGION and flips
+   * `state.mode` back to `"region"`, whatever mode it was pressed from — there
+   * is no "expand this window" meaning to preserve, since a window and the
+   * display it sits on are never the same rect. Nothing else in this suite
+   * drives that combination through the real overlay: `fullDisplay` above is
+   * deliberately ignored with `windowAt`, so without this flag the two options
+   * can never be sent together, and the only existing coverage of "expand
+   * after a window pick" is a hand-built state passed straight to `confirm()`
+   * in `overlay-options.test.ts` — the mechanism, not the wiring.
+   */
+  expandAfterWindow?: boolean;
+  /**
    * How long to wait for each stage (the overlay appearing, a confirmable
    * drag, the bar appearing) — not the enclosing test's own timeout.
    */
@@ -199,5 +213,6 @@ export async function startRecordFlow(
 
   await awaitOptionsBar(overlay, ms);
   if (opts.fullDisplay && !opts.windowAt) await send(overlay, { t: "control", id: "expand" });
+  if (opts.expandAfterWindow && opts.windowAt) await send(overlay, { t: "control", id: "expand" });
   await send(overlay, { t: "control", id: "record" });
 }
