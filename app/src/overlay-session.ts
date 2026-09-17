@@ -551,26 +551,52 @@ class OverlaySession {
         // see `anchorRectFor` — so Record has to commit what the readout
         // shows, not what was last confirmed.
         //
-        // WINDOW kind is the one case that must NOT be re-derived here.
-        // `anchorRectFor` never re-reads window mode's live state either — it
-        // always resolves a window pick through `pending`'s own `windowId` —
-        // because `state.hoveredWindowId` is rewritten on every pointermove,
-        // INCLUDING a move that lands on the options bar itself once it is
-        // open (the bar overlaps real screen space the pointer keeps crossing
-        // to reach Record). A hover is not a commit, so a fresh `confirm()`
-        // there would risk reading whatever the pointer happens to be sitting
-        // on rather than the window the user actually clicked — a live
-        // "correction" that WEAKENS the guarantee rather than restating it.
-        // `pending` is the last COMMITTED pick and stays authoritative for
-        // window kind unconditionally, exactly as the bar's own readout
-        // already treats it; every other outcome kind is re-read from the
-        // live state so Record can never commit something the bar did not
-        // just show.
-        const outcome = this.pending?.kind === "window" ? this.pending : confirm(this.state, this.ctx);
+        // Keyed on `this.state.mode`, not on `pending`'s kind (STC-388
+        // RE-REVIEW, regression fix over the Finding 1 patch above). The
+        // hazard is "don't commit a mere HOVER", and a hover is a property of
+        // the LIVE state the user is in right now, not of what was last
+        // committed — `pending` records the latter, `state.mode` the former,
+        // and Space can move the two out of sync with no new outcome at all
+        // (selection.ts's " " handler only sets `mode`/`hoveredWindowId`,
+        // forwarded in any phase — `overlay.ts` has no phase gate on it).
+        // Keying on `pending?.kind === "window"` missed exactly this: drag a
+        // region, Enter (`pending` = region, `mode` = "region"), press Space
+        // (`mode` flips to "window", `pending` untouched) — `pending.kind`
+        // was still `"region"`, so the old guard took the `confirm()` branch
+        // WHILE `state.mode` was `"window"`, confirming whatever the pointer
+        // happened to be hovering (or silently doing nothing, if nothing
+        // `fullyVisible` was under it) — a hover the user never clicked.
+        //
+        // In window mode this ALWAYS uses `pending`, never `confirm()` — even
+        // when something IS validly hovered. Only a CLICK produces a window
+        // outcome (`reduce`'s `pointerdown` branch is the sole place one is
+        // created, and it is what calls `setPending`); a hover is never a
+        // commit, in EITHER direction — Record must not upgrade one into a
+        // commit just because the pointer happens to be sitting on something
+        // capturable. This is exactly what `anchorRectFor` already does for
+        // the readout, which is what makes them agree: it never reads
+        // `state.mode` either, just `pending`'s kind and the kept `state.rect`.
+        //
+        // DECIDED: hovering nothing falls back to `pending` (the last real
+        // commit — almost always the region from before Space was pressed)
+        // rather than a silent no-op. `confirm()` returns `undefined` in
+        // window mode when nothing `fullyVisible` is under the pointer, and
+        // the alternative to falling back — doing nothing at all — is the
+        // worst of the three options on a button whose entire job is to
+        // commit: no capture starts and nothing tells the user why. Falling
+        // back to `pending` is also the only one of the three that matches
+        // what the bar is ALREADY showing (`anchorRectFor`'s own answer for
+        // this exact state), so it is not a new rule, just this call site
+        // finally agreeing with the readout the way region mode already does.
+        const outcome = this.state.mode === "window" ? this.pending : confirm(this.state, this.ctx);
         // No outcome means the marquee has been dragged to nothing since the
-        // bar opened. Ignored rather than finished: starting a take with no
-        // target is the failure `no-capture-target` used to report, and the
-        // user is one drag away from a valid one.
+        // bar opened (region mode), or nothing has ever been committed yet
+        // (window mode, `pending` still undefined — not reachable once the
+        // options phase is entered, since that transition itself requires an
+        // outcome, but checked rather than assumed). Ignored rather than
+        // finished: starting a take with no target is the failure
+        // `no-capture-target` used to report, and the user is one
+        // drag/click away from a valid one.
         if (!outcome) return;
         return void this.finish(outcome);
       }

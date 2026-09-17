@@ -505,3 +505,66 @@ describe("recordFlowActive guards its own gap (Finding 6, STC-388 review)", () =
     expect(readLines(startLog).length).toBe(1);
   }, 120_000);
 });
+
+describe("Space after Enter must not let Record commit a mere hover (re-review regression)", () => {
+  // Regression found in the scoped re-review of ee79b93: `case "record"`
+  // keyed its guard on `this.pending?.kind === "window"`, but the hazard it
+  // exists to prevent — committing a HOVER instead of a click — is keyed on
+  // `this.state.mode`, not on what was last committed. Sequence: drag a
+  // region, Enter (`pending` = region, `state.mode` = "region"). Press Space
+  // — reachable from the options phase, since `overlay.ts` forwards it in
+  // any phase — which flips `state.mode` to "window" and sets
+  // `hoveredWindowId` from the current pointer, with NO new outcome
+  // (selection.ts's Space handler). `pending.kind` is still `"region"`, so
+  // the old guard took the `confirm(this.state, this.ctx)` branch — with
+  // `state.mode === "window"` — either committing whatever was merely
+  // hovered, or (nothing hoverable under the pointer) silently doing
+  // nothing at all.
+  test("hovering a real window after Space does not commit it — the region is committed instead", async () => {
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    await win.click("#record");
+    const overlay = await overlayWindow();
+    await dragARegion(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+
+    // Toggle to window mode and HOVER a real window — the stand-in's Finder
+    // window, the same point `still-overlay.e2e.test.ts` and this file's own
+    // "expand" tests use for a window pick — but never click it.
+    await send(overlay, { t: "key", key: " " });
+    await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
+
+    await send(overlay, { t: "control", id: "record" });
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    // The real assertion: NOT the hovered window. Before the fix this was
+    // `windowId: 4711` (or whichever stand-in window sits under the point).
+    expect(cmd.windowId).toBeUndefined();
+    expect(cmd.region).toBeDefined();
+  }, 120_000);
+
+  test("hovering NOTHING after Space still commits the pending region, rather than a silent no-op", async () => {
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    await win.click("#record");
+    const overlay = await overlayWindow();
+    await dragARegion(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+
+    // Toggle to window mode, but hover empty desktop — well clear of the
+    // stand-in's two windows (bounds up to x:1000,y:750 — see _fake-helper.mjs).
+    const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
+    await send(overlay, { t: "key", key: " " });
+    await send(overlay, { t: "pointermove", at: { x: b.x + b.width - 20, y: b.y + b.height - 20 } });
+
+    await send(overlay, { t: "control", id: "record" });
+    // The decided answer (not a silent no-op): falls back to the pending
+    // region, the last thing actually committed.
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect(cmd.windowId).toBeUndefined();
+    expect(cmd.region).toBeDefined();
+  }, 120_000);
+});
