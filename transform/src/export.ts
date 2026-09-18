@@ -43,8 +43,18 @@ export interface ExportResult {
    * two sinks that both ignore the camera agree perfectly.
    */
   cameraDecodedFrames: number;
-  /** STC-233. Audio chunks encoded into the output; 0 for a take with no mic track. */
+  /** STC-233. Audio chunks HANDED to the encoder; 0 for a take with no mic track. */
   micEncodedChunks: number;
+  /**
+   * Diagnostic (2026-09-18): audio chunks the encoder actually PRODUCED and
+   * passed to `muxer.addAudioChunk`. Should equal `micEncodedChunks` when
+   * things are working; a real hardware export sent 504 chunks IN and
+   * produced a completely empty audio track (`nb_samples: 0`) with no error
+   * anywhere, so this number is what tells apart "the encoder never emitted
+   * anything for what it was fed" from "it emitted, but muxing it produced
+   * no written sample" — two different bugs with the identical symptom.
+   */
+  audioOutputChunks: number;
   durationMs: number;
   cancelled: boolean;
 }
@@ -120,6 +130,7 @@ export async function exportSession(
   let encoderError: Error | null = null;
   let audioEncoder: AudioEncoder | undefined;
   let audioEncoderError: Error | null = null;
+  let audioOutputChunks = 0;
   // A track with no samples has nothing to encode and nothing to trust for
   // its own real parameters — treated the same as no mic track at all.
   const audioParams = decodedAudio && decodedAudio.length > 0
@@ -170,7 +181,13 @@ export async function exportSession(
 
     if (audioParams) {
       audioEncoder = new AudioEncoder({
-        output: (chunk, meta) => muxer!.addAudioChunk(chunk, meta),
+        // Counted separately from `micEncodedChunks` (which only counts
+        // calls INTO the encoder) so a hardware run can tell "the encoder
+        // never produced output for what it was handed" apart from "it
+        // produced output but muxer.addAudioChunk didn't result in a
+        // written sample" — two very different bugs that look identical
+        // from the export's own success/failure alone.
+        output: (chunk, meta) => { audioOutputChunks++; muxer!.addAudioChunk(chunk, meta); },
         error: (e) => { audioEncoderError = e instanceof Error ? e : new Error(String(e)); },
       });
       // AAC-LC, matching what MicCapture.swift already wrote at capture time
@@ -315,6 +332,7 @@ export async function exportSession(
       decodedFrames: source.decodedCount,
       cameraDecodedFrames: cameraSource?.decodedCount ?? 0,
       micEncodedChunks: cancelled ? 0 : micEncodedChunks,
+      audioOutputChunks: cancelled ? 0 : audioOutputChunks,
       durationMs: Math.round(performance.now() - t0),
       cancelled,
     };

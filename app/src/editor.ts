@@ -1258,6 +1258,7 @@ async function runExport(): Promise<void> {
       preEncodeHash: result.hash,
       encodedBytes: result.encodedBytes,
       micEncodedChunks: result.micEncodedChunks,
+      audioOutputChunks: result.audioOutputChunks,
       output: exporting.output,
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {
