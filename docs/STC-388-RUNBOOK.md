@@ -120,34 +120,24 @@ never ran.
    side (`dominantDisplay`'s own tie-break). Confirm the bar appears on the
    display holding the larger share of the rect, and nowhere else.
 
-## §5. Does the four-step flow feel like ONE gesture, and does the legend mislead?
+## §5. Does the flow feel like ONE gesture, and does the legend match it?
 
-The flow is: pick scope (drag or window-click) → adjust in the options phase
-→ countdown → recording starts. Four steps, three of which happen in the same
-overlay window with no visible seam between "selecting" and "reviewing".
+The flow is: pick scope (release a region drag or click a window) → adjust in
+the options phase → countdown → recording starts. Four steps, three of which
+happen in the same overlay window with no visible seam between "selecting"
+and "reviewing".
 
-1. Run the flow start to finish, at a normal pace — drag, Enter, maybe adjust
+1. Run the flow start to finish, at a normal pace — drag and release, maybe adjust
    the marquee, press Record, watch the countdown, watch the take start.
    **Does it feel like four separate decisions, or like one continuous
    motion?** This is a taste question with no test behind it; say what,
    specifically, felt like a seam if anything did (the bar's appearance? the
    countdown replacing the bar? something else?).
 
-2. **The legend is the concrete thing to check, and it is very likely
-   wrong.** `overlay.ts`'s `renderLegend` is called on every render regardless
-   of `phase` or `purpose` — it always says `↵ capture · Esc cancel` (region
-   mode) or `Click capture window · Space region · Esc cancel` (window mode),
-   text that was written for the STILLS flow, where Enter/Return genuinely
-   captures immediately. In a RECORD flow's options phase, Enter does not
-   capture anything — it only re-confirms whatever the current marquee is
-   (Finding 1's own subject), and the actual commit is the bar's own Record
-   control, a mouse target the legend never mentions. Confirm this readout
-   yourself: press Enter after the bar is up and check what happens (nothing
-   starts; the pending selection updates) against what the legend claims
-   ("↵ capture"). If it reads as actively misleading during a Record flow —
-   promising a capture that Enter does not do — that is a real finding for a
-   follow-up ticket, not a mechanism to fix here; note whether it is
-   confusing in practice or merely inconsistent on paper.
+2. **Read the legend at both points.** While selecting, it must name drag or
+   click as the completion gesture — not Enter. Once the options bar opens it
+   must name the Record button as the commitment. For a still, releasing a
+   region captures immediately; there is no Enter step to advertise.
 
 ## §6. The custom-drawn mic menu, while the overlay holds key focus
 
@@ -168,7 +158,8 @@ comment, because a native menu would take key focus off the overlay the way
    MENU, or cancel the WHOLE overlay? Either could be the intended behaviour;
    what matters is which one it actually is, since nothing here specifies it.
 4. Click a mic entry. The menu should close and the bar's mic control should
-   reflect the new choice. Click OUTSIDE the menu (elsewhere on the overlay,
+   reflect the new choice. Its rows should show the normal selection cursor.
+   Click OUTSIDE the menu (elsewhere on the overlay,
    not on a control) — does it close the menu without changing the
    selection, the way a normal dropdown would?
 5. With the menu open, move the mouse to a SECOND display (if connected) and

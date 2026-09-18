@@ -81,6 +81,21 @@ export function nextPhase(purpose: OverlayPurpose, phase: OverlayPhase,
 }
 
 /**
+ * Releasing a valid region is the user's selection gesture — no extra Enter
+ * is needed. `selection.ts` deliberately leaves that policy to its caller so
+ * the same pure reducer can still support a live, adjustable marquee here.
+ *
+ * In a record flow this enters (or refreshes) options; for a still it finishes
+ * immediately. A pointer-up that did not finish a region drag, or is still
+ * mid-drag, remains a no-op.
+ */
+export function outcomeOnRelease(ev: SelectionEvent, state: SelectionState,
+                                 ctx: SelectionContext): SelectionOutcome | undefined {
+  if (ev.t !== "pointerup" || state.mode !== "region" || state.drag) return undefined;
+  return confirm(state, ctx);
+}
+
+/**
  * The bar's anchor rect, in GLOBAL points — ONE notion of "the thing being
  * recorded" (STC-388), used for the bar's layout, the mic menu's layout, the
  * size readout, and `expand`'s choice of display. Pure and exported, same
@@ -237,10 +252,9 @@ export interface OpenOptions {
   /**
    * What the overlay is being opened for (STC-388).
    *
-   * `"shot"` is the historical behaviour and the default, so every still path
-   * is untouched: confirm resolves. `"record"` adds a second phase — the
-   * options bar, with the marquee still live — and resolves only when Record
-   * is pressed.
+   * A released region (or a clicked window) finishes a `"shot"` immediately.
+   * `"record"` adds a second phase — the options bar, with the marquee still
+   * live — and resolves only when Record is pressed.
    */
   purpose?: OverlayPurpose;
   /** The sticky options the bar opens with, and the devices it can offer. */
@@ -482,8 +496,12 @@ class OverlaySession {
     if (fullDisplay !== this.options.fullDisplay) {
       this.options = { ...this.options, fullDisplay };
     }
-    if (r.outcome) {
-      const next = nextPhase(this.opts.purpose ?? "shot", this.phase, r.outcome);
+    // A region's pointer-up is its confirmation. This lives above the shared
+    // reducer, rather than changing `selection.ts`, because a still resolves
+    // here while a recording moves into its adjustable options phase.
+    const outcome = r.outcome ?? outcomeOnRelease(ev, this.state, this.ctx);
+    if (outcome) {
+      const next = nextPhase(this.opts.purpose ?? "shot", this.phase, outcome);
       if (next.act === "finish") { this.broadcast(); void this.finish(next.outcome); return; }
       this.phase = "options";
       // A fresh WINDOW pick can arrive with the rect unchanged from before it

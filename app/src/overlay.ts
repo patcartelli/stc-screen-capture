@@ -140,13 +140,17 @@ function hide(...els: HTMLElement[]): void {
   for (const el of els) el.style.display = "none";
 }
 
-function renderLegend(mode: string): void {
-  legend.innerHTML = mode === "window"
-    ? `<kbd>Click</kbd> capture window <span class="sep">·</span>` +
-      `<kbd>Space</kbd> region <span class="sep">·</span><kbd>Esc</kbd> cancel`
-    : `<kbd>Drag</kbd> region <span class="sep">·</span>` +
-      `<kbd>Space</kbd> window <span class="sep">·</span>` +
-      `<kbd>↵</kbd> capture <span class="sep">·</span><kbd>Esc</kbd> cancel`;
+function renderLegend(mode: string, phase: OverlayPayload["phase"]): void {
+  if (phase === "options") {
+    legend.innerHTML = `Adjust selection <span class="sep">·</span>` +
+      `Click <b>Record</b> <span class="sep">·</span><kbd>Esc</kbd> cancel`;
+  } else {
+    legend.innerHTML = mode === "window"
+      ? `<kbd>Click</kbd> select window <span class="sep">·</span>` +
+        `<kbd>Space</kbd> region <span class="sep">·</span><kbd>Esc</kbd> cancel`
+      : `<kbd>Drag</kbd> region <span class="sep">·</span>` +
+        `<kbd>Space</kbd> window <span class="sep">·</span><kbd>Esc</kbd> cancel`;
+  }
   legend.style.bottom = "48px";
   legend.style.display = "block";
 }
@@ -180,7 +184,8 @@ function renderBar(p: OverlayPayload): void {
   ctl("camera").dataset.on = p.options.camera ? "1" : "0";
   const mic = p.options.mics.find((m) => m.uid === p.options!.micDeviceUid);
   // micLabel, not a second spelling — see mic-devices.ts.
-  ctl("mic").textContent = `Mic: ${mic ? micLabel(mic) : "Off"}`;
+  ctl("mic").textContent = `🔊 ${mic ? micLabel(mic) : "Off"}`;
+  ctl("mic").setAttribute("aria-label", `Input: ${mic ? micLabel(mic) : "Off"}`);
 
   if (!p.micMenu) { micmenu.hidden = true; return; }
   const m = toLocal(p.micMenu.rect);
@@ -215,7 +220,7 @@ function render(p: OverlayPayload): void {
   const { state } = p;
   document.body.classList.toggle("window-mode", state.mode === "window");
   document.body.classList.toggle("has-selection", state.rect !== undefined);
-  renderLegend(state.mode);
+  renderLegend(state.mode, p.phase);
   renderBar(p);
 
   if (state.mode === "window") {

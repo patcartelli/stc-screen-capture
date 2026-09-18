@@ -117,7 +117,7 @@ async function dragARegion(overlay: Page): Promise<void> {
 }
 
 describe("the bar's appearance", () => {
-  test("the bar appears only after a selection, not while still dragging", async () => {
+  test("the bar appears as soon as a region selection ends, not while it is dragged", async () => {
     const { win } = await launch();
     await win.click("#record");
     const overlay = await overlayWindow();
@@ -139,19 +139,10 @@ describe("the bar's appearance", () => {
     await sleep(300);
     expect(await overlay.getAttribute("#bar", "hidden")).not.toBeNull();
 
-    // The drag has ended (pointerup), but region mode only confirms on
-    // Enter (selection.ts) — still nothing to show a bar for.
+    // Releasing a valid region is the selection. It must be enough to make
+    // the options phase visible; Enter is not a second required gesture.
     await send(overlay, { t: "pointermove", at: to });
     await send(overlay, { t: "pointerup", at: to });
-    await sleep(300);
-    expect(await overlay.getAttribute("#bar", "hidden")).not.toBeNull();
-    // `#ctl-record` has never been rendered with real geometry either — its
-    // `data-enabled` attribute is only ever set inside the options-phase
-    // branch of `renderBar` (overlay.ts).
-    expect(await overlay.getAttribute("#ctl-record", "data-enabled")).toBeNull();
-
-    await awaitConfirmable(overlay);
-    await send(overlay, { t: "key", key: "Enter" });
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
     expect(await overlay.getAttribute("#ctl-record", "data-enabled")).toBe("1");
   }, 120_000);
@@ -204,10 +195,10 @@ describe("Escape writes nothing, at either phase", () => {
     const before = readdirSync(tempTakes).length;
     await win.click("#record");
     const overlay = await overlayWindow();
-    // A drawn, confirmable marquee — the case where something COULD have
-    // been written, the same choice still-overlay.e2e.test.ts makes for its
-    // own cancelled-shot test.
-    await dragARegion(overlay);
+    // Escape during a drag, before release has selected a scope.
+    const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
+    await send(overlay, { t: "pointerdown", at: { x: b.x + 100, y: b.y + 80 } });
+    await send(overlay, { t: "pointermove", at: { x: b.x + 300, y: b.y + 180 } });
     await send(overlay, { t: "key", key: "Escape" });
 
     await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,

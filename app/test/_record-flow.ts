@@ -7,7 +7,7 @@ import type { ElectronApplication, Page } from "playwright";
  * Task 6 made scope a per-take choice: `#record` now opens the same selection
  * overlay `#capturestill` already uses, instead of starting a recording on
  * the spot, and only the bar's own Record control — pressed after a scope is
- * confirmed — ever calls `startRecording`. Four E2E files press Record only
+ * released — ever calls `startRecording`. Four E2E files press Record only
  * to get a take RUNNING so they can test something else (the countdown panel,
  * the camera toggle, the display picker, quitting mid-take), and all four
  * hung the identical way once that landed: `win.click("#record")` then
@@ -73,30 +73,6 @@ async function overlayWindow(app: ElectronApplication, ms: number): Promise<Page
     if (Date.now() - start > ms) {
       throw new Error(`no overlay window appeared within ${ms}ms; windows: ` +
                       JSON.stringify(app.windows().map((p) => p.url())));
-    }
-    await sleep(50);
-  }
-}
-
-/**
- * Wait until a drag has produced a selection Enter would actually confirm.
- *
- * `#size` is drawn from `confirm()`'s own result (overlay.ts), so text in
- * that chip IS the precondition Return needs — `still-overlay.e2e.test.ts`
- * found what happens without this check: `reduce` treats an unconfirmable
- * Return as a no-op, the overlay hangs open, and the caller's promise never
- * settles. The failure message carries the overlay's own state rather than
- * leaving the next reader to guess why.
- */
-async function awaitConfirmable(overlay: Page, ms: number): Promise<void> {
-  const start = Date.now();
-  for (;;) {
-    if ((await overlay.textContent("#size"))?.trim()) return;
-    if (Date.now() - start > ms) {
-      const seen = await overlay.evaluate(() => JSON.stringify((window as any).__overlayState ?? null));
-      throw new Error(
-        `the drag never produced a confirmable selection within ${ms}ms — ` +
-        `Return would be a no-op and the overlay would hang. Overlay state: ${seen}`);
     }
     await sleep(50);
   }
@@ -207,8 +183,6 @@ export async function startRecordFlow(
     await send(overlay, { t: "pointerdown", at: region.from });
     await send(overlay, { t: "pointermove", at: region.to });
     await send(overlay, { t: "pointerup", at: region.to });
-    await awaitConfirmable(overlay, ms);
-    await send(overlay, { t: "key", key: "Enter" });
   }
 
   await awaitOptionsBar(overlay, ms);

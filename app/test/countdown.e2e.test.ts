@@ -119,8 +119,8 @@ async function overlayPage(ms = 15_000): Promise<Page> {
   }
 }
 
-/** Drags out an area in the overlay and confirms it — the self-timer's own
- * scope step, which the ticket makes a SEPARATE step before the countdown. */
+/** Drags out an area in the overlay — release is the self-timer's scope step,
+ * which remains SEPARATE from the countdown. */
 async function pickAnArea(): Promise<void> {
   const overlay = await overlayPage();
   const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
@@ -130,8 +130,6 @@ async function pickAnArea(): Promise<void> {
   await send({ t: "pointerdown", at: from });
   await send({ t: "pointermove", at: to });
   await send({ t: "pointerup", at: to });
-  await expect.poll(() => overlay.textContent("#size"), { timeout: 15_000 }).toBeTruthy();
-  await send({ t: "key", key: "Enter" });
 }
 
 describe("Record always counts down", () => {

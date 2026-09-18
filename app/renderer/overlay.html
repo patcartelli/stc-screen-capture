@@ -109,7 +109,7 @@
   #micmenu { position: fixed; border-radius: 8px; background: rgba(28,28,30,.96);
              box-shadow: 0 6px 24px rgba(0,0,0,.45); overflow: hidden;
              font: 13px -apple-system, system-ui; color: #fff; }
-  #micmenu .item { display: flex; align-items: center; padding: 0 10px; }
+  #micmenu .item { display: flex; align-items: center; padding: 0 10px; cursor: pointer; }
   #micmenu .item[data-on="1"]::before { content: "✓ "; }
 </style>
 </head>
@@ -123,7 +123,7 @@
   <div id="bar" hidden>
     <div class="ctl" id="ctl-size"></div>
     <div class="ctl" id="ctl-expand" title="Record the whole display">⤢</div>
-    <div class="ctl" id="ctl-mic">Mic: Off</div>
+    <div class="ctl" id="ctl-mic" aria-label="Input: Off">🔊 Off</div>
     <div class="ctl" id="ctl-camera" title="Camera">◉</div>
     <div class="ctl primary" id="ctl-record">Record</div>
   </div>

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { nextPhase, fullDisplayFor, anchorRectFor, barBelongsOn } from "../src/overlay-session.js";
+import { nextPhase, outcomeOnRelease, fullDisplayFor, anchorRectFor, barBelongsOn } from "../src/overlay-session.js";
 import { barLayout, CONTROL_IDS, expandedSelection, sizeLabel } from "../src/record-options.js";
 import { confirm } from "../src/selection.js";
 import type {
@@ -37,6 +37,28 @@ describe("what an outcome means, per purpose (STC-388)", () => {
         expect(nextPhase(p, ph, cancelled)).toEqual({ act: "finish", outcome: cancelled });
       }
     }
+  });
+});
+
+describe("releasing a region is the confirmation gesture", () => {
+  const ctx: SelectionContext = { displays: [{
+    id: 1, bounds: displayRect, scaleFactor: 1,
+  }], windows: [] };
+  const completeRegion: SelectionState = {
+    mode: "region", rect: { x: 100, y: 100, width: 400, height: 300 },
+  };
+
+  test("a completed region turns pointer-up into the outcome both flows use", () => {
+    expect(outcomeOnRelease({ t: "pointerup", at: { x: 500, y: 400 } }, completeRegion, ctx))
+      .toMatchObject({ kind: "region", displayId: 1, crop: completeRegion.rect });
+  });
+
+  test("an incomplete drag or a non-release event does not confirm", () => {
+    expect(outcomeOnRelease({ t: "pointerup", at: { x: 500, y: 400 } }, {
+      ...completeRegion, drag: { kind: "new", anchor: { x: 100, y: 100 } },
+    }, ctx)).toBeUndefined();
+    expect(outcomeOnRelease({ t: "pointermove", at: { x: 500, y: 400 } }, completeRegion, ctx))
+      .toBeUndefined();
   });
 });
 
