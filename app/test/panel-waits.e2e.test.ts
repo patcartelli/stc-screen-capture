@@ -229,9 +229,14 @@ describe("the panel waits (STC-392)", () => {
 
     // Well inside the settle window — dispatched immediately on detecting
     // paint, so this lands within `SETTLE_KEYS_MS`'s first 100ms in practice.
+    // The elapsed check has to happen right here, at press time: it is
+    // asserting the PRESS landed inside the window, and `SETTLE_KEYS_MS`
+    // itself is 300ms, so a bound measured after an added sleep(100) has no
+    // margin left over CI's own jitter (measured failing at 322ms on a real
+    // CI run — the sleep, not the press, was what blew the budget).
     await pressTrashKey();
-    await sleep(100);
     expect(Date.now() - paintedAt).toBeLessThan(300);
+    await sleep(100);
     expect(readdirSync(temp).length).toBe(1);
     expect(electronApp.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
 
