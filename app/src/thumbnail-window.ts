@@ -1,8 +1,8 @@
 import { BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
-  clampTimeoutMs, positionFor, stackPosition, MAX_STACKED,
-  type Corner, type Size, type PanelSettle,
+  clampTimeoutMs, positionFor, stackLayout, MAX_STACKED,
+  type Corner, type Size, type Bounds, type PanelSettle,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
 
@@ -114,14 +114,13 @@ type ThumbEvent =
 let panels: ThumbnailSession[] = [];
 
 /**
- * Put the panel on screen for a fresh capture, replacing whatever panel — if
- * any — was already showing.
+ * Add a fresh capture to the visible stack.
  */
 export function presentThumbnail(opts: PresentOptions): void {
   panels.unshift(new ThumbnailSession(opts));
   // Over the cap, the oldest is SETTLED to make room — never merely dropped,
   // which is the same promise replacing always kept.
-  const overflow = panels.slice(MAX_STACKED);
+  const overflow = panels.filter((p) => p.isStacked()).slice(MAX_STACKED);
   for (const old of overflow) old.settleAndDestroy();
   restack();
 }
@@ -134,7 +133,18 @@ export function presentThumbnail(opts: PresentOptions): void {
  * of where it happened to start.
  */
 function restack(): void {
-  panels.forEach((p, i) => p.moveToStackIndex(i));
+  const groups = new Map<string, ThumbnailSession[]>();
+  for (const panel of panels.filter((p) => p.isStacked())) {
+    const key = panel.stackKey();
+    const group = groups.get(key) ?? [];
+    group.push(panel);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    const first = group[0]!;
+    const bounds = stackLayout(group.map((p) => p.size()), first.corner, first.workArea, CORNER_MARGIN);
+    group.forEach((p, i) => p.moveTo(bounds[i]!));
+  }
 }
 
 /**
@@ -212,8 +222,8 @@ class ThumbnailSession {
    * window, which is the reason `show: false` is set in the first place.
    */
   private hasPainted = false;
-  /** Where in the stack this panel currently sits; 0 is the newest. */
-  private stackIndex = 0;
+  /** Settling windows keep exporting but no longer occupy a visible slot. */
+  private settling = false;
   /**
    * Whether the page has loaded far enough to be listening.
    *
@@ -237,16 +247,18 @@ class ThumbnailSession {
    */
   private loaded = false;
   private pendingSettle = false;
-  private readonly corner: Corner;
+  readonly corner: Corner;
+  readonly workArea: Bounds;
   private resolveClosed!: () => void;
   private readonly closed: Promise<void>;
 
   constructor(private readonly opts: PresentOptions) {
     this.closed = new Promise((res) => { this.resolveClosed = res; });
     this.corner = opts.corner;
+    this.workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     // At the corner: a new panel is always the newest, so index 0. `restack`
     // moves the ones behind it immediately afterwards.
-    const { x, y } = positionFor(this.corner, this.workArea(), COLLAPSED_SIZE, CORNER_MARGIN);
+    const { x, y } = positionFor(this.corner, this.workArea, COLLAPSED_SIZE, CORNER_MARGIN);
     this.win = new BrowserWindow({
       x, y, width: COLLAPSED_SIZE.width, height: COLLAPSED_SIZE.height,
       transparent: true, frame: false, hasShadow: false,
@@ -295,12 +307,8 @@ class ThumbnailSession {
 
   waitUntilClosed(): Promise<void> { return this.closed; }
 
-  private workArea(): { x: number; y: number; width: number; height: number } {
-    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  }
-
   private onEvent(ev: ThumbEvent): void {
-    if (this.done) return;
+    if (this.done || (this.settling && ev.kind !== "done")) return;
     if (ev.kind === "painted") {
       // Never sent by a `silent` panel — see the class doc's "drives itself".
       this.hasPainted = true;
@@ -327,17 +335,12 @@ class ThumbnailSession {
   }
 
   /**
-   * Grow or shrink in place, staying in ITS corner. Recomputed rather than
-   * kept as an offset: a panel in the bottom-right that grew by moving its
-   * origin would walk off the bottom of the display.
+   * Reflow every preview when one grows or shrinks, preserving their order.
    */
   private resizeTo(size: Size): void {
     if (this.done || this.win.isDestroyed()) return;
-    // Through `stackPosition`, not `positionFor`: a panel expanded from the
-    // middle of a stack must grow where it IS, not jump to the corner.
-    const { x, y } = stackPosition(this.stackIndex, this.corner, this.workArea(),
-                                   size, CORNER_MARGIN);
-    this.win.setBounds({ x, y, width: size.width, height: size.height });
+    this.win.setSize(size.width, size.height);
+    restack();
   }
 
   private armTimer(): void {
@@ -363,7 +366,7 @@ class ThumbnailSession {
    * promised rather than being extended by every capture that hides it.
    */
   reshow(): void {
-    if (this.done || this.win.isDestroyed() || !this.hasPainted) return;
+    if (this.done || this.settling || this.opts.silent || this.win.isDestroyed() || !this.hasPainted) return;
     if (!this.win.isVisible()) this.win.showInactive();
   }
 
@@ -382,9 +385,11 @@ class ThumbnailSession {
    * to call more than once; only the first call does anything.
    */
   settleAndDestroy(): void {
-    if (this.done) return;
+    if (this.done || this.settling) return;
+    this.settling = true;
     this.clearTimers();
     this.hide();
+    restack();
     if (this.win.isDestroyed()) { this.destroy(); return; }
     // Held until the page is listening, rather than sent into a void — see
     // `loaded`. The backstop is armed either way, so a page that never loads
@@ -416,14 +421,17 @@ class ThumbnailSession {
     restack();
   }
 
-  /** Move to the place `index` in the stack says, keeping its current size. */
-  moveToStackIndex(index: number): void {
+  isStacked(): boolean { return !this.done && !this.settling && !this.opts.silent; }
+
+  stackKey(): string {
+    return `${this.corner}:${this.workArea.x}:${this.workArea.y}`;
+  }
+
+  size(): Size { return this.win.getBounds(); }
+
+  moveTo(bounds: Bounds): void {
     if (this.done || this.win.isDestroyed()) return;
-    this.stackIndex = index;
-    const { width, height } = this.win.getBounds();
-    const { x, y } = stackPosition(index, this.corner, this.workArea(),
-                                   { width, height }, CORNER_MARGIN);
-    this.win.setBounds({ x, y, width, height });
+    this.win.setBounds(bounds);
   }
 }
 

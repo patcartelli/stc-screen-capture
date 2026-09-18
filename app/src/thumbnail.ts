@@ -41,9 +41,9 @@
  * nothing" forbids.
  *
  * **4. Multiple captures STACK, newest at the corner — and a stack of one is
- * not a separate calculation from a lone panel.** `stackPosition(0, ...)` IS
+ * not a separate calculation from a lone panel.** The first result of `stackLayout(...)` is
  * `positionFor(...)`, so the single-panel case cannot drift from the stacked
- * one; it is the same formula asked for index zero. "Drains oldest-first on
+ * one; both use the same corner calculation. "Drains oldest-first on
  * timeout" needs no queue either — every panel arms its OWN timer when it
  * paints, so panels that appeared in order expire in order by construction.
  *
@@ -98,10 +98,8 @@
  *
  * **10. Growing or shrinking in place stays anchored to the panel's OWN
  * corner, whatever size it grows to.** Expand and Redact resize through
- * `stackPosition`, never `positionFor` — a panel mid-stack that grew by
- * jumping to the bare corner would abandon the place in the stack it was
- * shown at, and one that grew by moving its origin would walk off the edge
- * it is anchored to.
+ * `stackLayout` for the whole stack, so its neighbours move to leave room
+ * for the controls. Each column stays anchored to the chosen edge.
  */
 
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -191,10 +189,8 @@ export type ThumbnailState =
 export function initialState(): ThumbnailState { return { kind: "idle" }; }
 
 /**
- * A capture arrived. Always transitions to `showing`, whatever the previous
- * state was — a second capture while one panel is still up REPLACES it
- * (stacking is deferred, see the module doc), and the caller is the one
- * responsible for destroying whatever window the previous state pointed at.
+ * A capture arrived. Its new panel starts in `showing`; the window manager
+ * keeps each existing panel and its state independently.
  */
 export function show(now: number, timeoutMs: number): ThumbnailState {
   return { kind: "showing", expiresAt: now + clampTimeoutMs(timeoutMs) };
@@ -245,40 +241,39 @@ export function dismiss(): ThumbnailState { return { kind: "idle" }; }
  * free.
  */
 
-/**
- * How far each older panel is pushed in, in points.
- *
- * Enough to leave a legible sliver of the one behind against a 150 px
- * collapsed panel, and no more: the stack is a reminder that shots are
- * waiting, not a UI to read.
- */
-export const STACK_STEP_PX = 26;
+/** Space between fully visible previews (STC-426), in screen points. */
+export const STACK_GAP_PX = 12;
 
-/**
- * How many panels may be on screen before the oldest is settled to make room.
- *
- * Five, matching the ticket's own acceptance case ("five captures in five
- * seconds"). A cap rather than an unbounded stack because the panels are
- * always-on-top and a rapid burst would otherwise wall off the screen — and
- * nothing is lost by capping, since the panel pushed out is SETTLED, exactly
- * as a replaced panel already was.
- */
+/** Older captures beyond this cap settle using their existing save/copy preference. */
 export const MAX_STACKED = 5;
 
 /**
- * Where the panel at `index` sits, 0 being the newest.
- *
- * Built on `positionFor`, so a stack of one is in precisely the place a lone
- * panel was — the single-panel case cannot drift from the stacked one because
- * it is not a separate calculation.
+ * Newest first, vertically inward from the chosen corner. Each slot uses the
+ * panel's actual size, including expanded/redaction controls. If the next
+ * panel cannot fit vertically, continue in a column further into the display.
+ * This keeps a short display from clipping older captures or overlapping them.
  */
-export function stackPosition(index: number, corner: Corner, workArea: Bounds,
-                              size: Size, margin = 20): { x: number; y: number } {
-  const base = positionFor(corner, workArea, size, margin);
-  // Older panels move DOWN from a top corner and UP from a bottom one: always
-  // further into the screen, never off the edge it is anchored to.
-  const inward = corner.startsWith("top") ? 1 : -1;
-  return { x: base.x, y: base.y + index * STACK_STEP_PX * inward };
+export function stackLayout(sizes: readonly Size[], corner: Corner, workArea: Bounds,
+                            margin = 20): Bounds[] {
+  let vertical = 0;
+  let horizontal = 0;
+  let columnWidth = 0;
+  return sizes.map((size) => {
+    if (vertical > 0 && vertical + size.height > workArea.height - 2 * margin) {
+      horizontal += columnWidth + STACK_GAP_PX;
+      vertical = 0;
+      columnWidth = 0;
+    }
+    const base = positionFor(corner, workArea, size, margin);
+    const bounds = {
+      ...size,
+      x: base.x + horizontal * (corner.endsWith("left") ? 1 : -1),
+      y: base.y + vertical * (corner.startsWith("top") ? 1 : -1),
+    };
+    vertical += size.height + STACK_GAP_PX;
+    columnWidth = Math.max(columnWidth, size.width);
+    return bounds;
+  });
 }
 
 // ── swipe to discard ────────────────────────────────────────────────────────
