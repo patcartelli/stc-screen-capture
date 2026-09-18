@@ -92,7 +92,7 @@
 
   /* The options bar (STC-388) and its mic menu. Same dark-chip look as
      #legend/.chip rather than a second visual language. */
-  #bar { position: fixed; display: flex; align-items: center; gap: 8px;
+  #bar { position: absolute; display: flex; align-items: center; gap: 8px;
          padding: 0 10px; border-radius: 10px; background: rgba(28,28,30,.92);
          box-shadow: 0 6px 24px rgba(0,0,0,.45); font: 13px -apple-system, system-ui; color: #fff; }
   #bar .ctl { display: flex; align-items: center; justify-content: center;
@@ -100,7 +100,7 @@
   #bar .ctl[data-on="1"] { background: rgba(10,132,255,.85); }
   #bar .ctl[data-enabled="0"] { opacity: .4; }
   #bar .ctl.primary { background: #ff453a; font-weight: 600; }
-  #micmenu { position: fixed; border-radius: 8px; background: rgba(28,28,30,.96);
+  #micmenu { position: absolute; border-radius: 8px; background: rgba(28,28,30,.96);
              box-shadow: 0 6px 24px rgba(0,0,0,.45); overflow: hidden;
              font: 13px -apple-system, system-ui; color: #fff; }
   #micmenu .item { display: flex; align-items: center; padding: 0 10px; }

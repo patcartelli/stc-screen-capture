@@ -154,6 +154,15 @@ describe("the bar's appearance", () => {
     await send(overlay, { t: "key", key: "Enter" });
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
     expect(await overlay.getAttribute("#ctl-record", "data-enabled")).toBe("1");
+    // `barLayout` returns coordinates local to the overlay panel. Fixed
+    // positioning treated them as viewport coordinates on macOS, visibly
+    // pinning the bar at the bottom regardless of the selection; both the bar
+    // and its menu therefore have to use the panel's absolute coordinate
+    // system.
+    expect(await overlay.evaluate(() => ({
+      bar: getComputedStyle(document.querySelector("#bar")!).position,
+      micMenu: getComputedStyle(document.querySelector("#micmenu")!).position,
+    }))).toEqual({ bar: "absolute", micMenu: "absolute" });
   }, 120_000);
 });
 
