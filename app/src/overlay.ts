@@ -60,6 +60,10 @@ const ctl = (id: ControlId) => $(`ctl-${id}`);
 /** Where this window's display sits in the global space. Set on first state. */
 let origin: Point = { x: 0, y: 0 };
 let current: OverlayPayload | undefined;
+/** The active window-to-display expansion, if any. A new draw invalidates an
+ * older animation so a late animation frame cannot put the marquee back where
+ * it was. */
+let expandAnimation = 0;
 const handles = new Map<Handle, HTMLElement>();
 
 for (const h of HANDLES) {
@@ -84,6 +88,35 @@ function place(el: HTMLElement, r: Rect): void {
   el.style.width = `${r.width}px`;
   el.style.height = `${r.height}px`;
   el.style.display = "block";
+}
+
+/**
+ * Make the one discontinuous selection change legible: Expand changes a
+ * picked window into its containing display, and an instant replacement made
+ * it look as though the control had done nothing. Ordinary marquee updates
+ * remain direct; only this explicit window-to-display action animates.
+ */
+function expandMarquee(from: Rect, to: Rect): void {
+  const id = ++expandAnimation;
+  marquee.classList.remove("expand-transition");
+  place(marquee, from);
+  // Commit the start rectangle before enabling the transition. Without this
+  // layout read Chromium is allowed to coalesce both placements into one
+  // paint, which is precisely the invisible state change this is for.
+  void marquee.offsetWidth;
+  marquee.classList.add("expand-transition");
+  requestAnimationFrame(() => {
+    if (id === expandAnimation) place(marquee, to);
+  });
+  window.setTimeout(() => {
+    if (id === expandAnimation) marquee.classList.remove("expand-transition");
+  }, 220);
+}
+
+function placeMarquee(rect: Rect): void {
+  expandAnimation += 1;
+  marquee.classList.remove("expand-transition");
+  place(marquee, rect);
 }
 
 /**
@@ -165,6 +198,7 @@ function renderBar(p: OverlayPayload): void {
 }
 
 function render(p: OverlayPayload): void {
+  const previous = current;
   current = p;
   // The last state this window was told to draw, for a failing test to report.
   // A selection that cannot be confirmed makes Return a no-op and the overlay
@@ -213,7 +247,15 @@ function render(p: OverlayPayload): void {
   if (!state.rect) { hide(marquee, sizeChip, ...handles.values()); return; }
 
   const local = toLocal(state.rect);
-  place(marquee, local);
+  // Only the display that owns both bars performs this animation. Other
+  // overlay windows receive the shared state too, but have no visible source
+  // window to expand from.
+  const animateWindowExpand = p.phase === "options" && p.options?.fullDisplay
+    && p.bar !== undefined && previous?.phase === "options"
+    && previous.state.mode === "window" && previous.anchor !== undefined
+    && previous.bar !== undefined;
+  if (animateWindowExpand) expandMarquee(toLocal(previous.anchor!), local);
+  else placeMarquee(local);
   for (const h of HANDLES) {
     const el = handles.get(h)!;
     // Handles only while the gesture is over: they are for adjusting a

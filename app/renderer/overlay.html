@@ -27,6 +27,12 @@
     border: 1px solid rgba(255, 255, 255, 0.95);
     display: none;
   }
+  /* Only Expand adds this class. Drawing and resizing a marquee must stay
+     under the pointer, rather than easing after it. */
+  #marquee.expand-transition {
+    transition: left 180ms ease-out, top 180ms ease-out,
+                width 180ms ease-out, height 180ms ease-out;
+  }
   /* Before the first drag the whole display is dimmed, with no hole at all. */
   #scrim {
     position: absolute; inset: 0;

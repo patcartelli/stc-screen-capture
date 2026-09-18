@@ -344,6 +344,30 @@ describe("expand", () => {
     expect(cmd.windowId).toBeUndefined();
   }, 120_000);
 
+  test("expanding a picked window visibly grows its marquee to the display", async () => {
+    const { win } = await launch();
+    await win.click("#record");
+    const overlay = await overlayWindow();
+    const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
+
+    // A real window selection reaches the same options bar as a region does.
+    // This is intentionally separate from the eventual helper command: the
+    // contract here is the otherwise purely visual acknowledgement that
+    // Expand changed the capture target.
+    await send(overlay, { t: "key", key: " " });
+    await send(overlay, { t: "pointermove", at: { x: b.x + 200, y: b.y + 200 } });
+    await send(overlay, { t: "pointerdown", at: { x: b.x + 200, y: b.y + 200 } });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+
+    await send(overlay, { t: "control", id: "expand" });
+    await expect.poll(() => overlay.evaluate(() => {
+      const el = document.getElementById("marquee")!;
+      const state = (window as any).__overlayState;
+      return el.classList.contains("expand-transition") && state.mode === "region";
+    }), { timeout: 15_000 }).toBe(true);
+    expect(await overlay.evaluate(() => (window as any).__overlayState.rect)).toEqual(b);
+  }, 120_000);
+
   test("pressed while a WINDOW is picked settles as a full-display take, not a window one", async () => {
     // This combination was, until this test, proven only at the mechanism
     // level (a hand-built state passed straight to `confirm()` in
