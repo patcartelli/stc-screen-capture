@@ -188,6 +188,37 @@ describe("the post-capture floating thumbnail", () => {
     }, { timeout: 15_000 }).toBe(true);
   }, 60_000);
 
+  test("previews do not overlap when expanded, redacted, or removed (STC-426)", async () => {
+    const { win } = await launch();
+    await win.evaluate(() => (window as any).recorder.setSettings({ thumbnail: { timeoutMs: 60_000 } }));
+    for (let i = 0; i < 3; i++) await captureDisplay(win);
+    await expect.poll(() => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length).toBe(3);
+    const bounds = () => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .filter((w) => w.webContents.getURL().includes("thumbnail.html") && w.isVisible())
+      .map((w) => w.getBounds()));
+    const separated = async (count: number) => {
+      await expect.poll(async () => {
+        const all = await bounds();
+        return all.length === count && all.every((a, i) => all.slice(i + 1).every((b) =>
+          a.x + a.width <= b.x || b.x + b.width <= a.x ||
+          a.y + a.height <= b.y || b.y + b.height <= a.y));
+      }).toBe(true);
+    };
+    await separated(3);
+    const panel = await thumbnailWindow();
+    await panel.click("#card");
+    await expect.poll(async () => (await bounds()).some((b) => b.height === 260)).toBe(true);
+    await separated(3);
+    await panel.click("#redact");
+    await expect.poll(async () => (await bounds()).some((b) => b.height === 420)).toBe(true);
+    await separated(3);
+    // Closing a real window removes its slot, even without a renderer event.
+    await app!.evaluate(({ BrowserWindow }, url) => {
+      BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === url)!.destroy();
+    }, panel.url());
+    await separated(2);
+  }, 60_000);
+
   test("every stacked capture still settles — nothing is lost by doing nothing", async () => {
     const { win, destDir } = await launch();
     // The floor (3 s), so both panels settle on their OWN timers inside this
