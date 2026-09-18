@@ -125,6 +125,31 @@ export async function exportSession(
   const audioParams = decodedAudio && decodedAudio.length > 0
     ? { sampleRate: decodedAudio[0]!.sampleRate, numberOfChannels: decodedAudio[0]!.numberOfChannels }
     : null;
+  // Configuring from chunk 0 assumes the decoded track is UNIFORM — observed
+  // on real hardware NOT always to be: mic.m4a can decode with a DIFFERENT
+  // channel count or sample rate partway through than its own first chunk
+  // reports (a Bluetooth mic switching A2DP/HFP profile mid-take is one
+  // candidate; unconfirmed — see docs/STC-233-RUNBOOK.md). Configuring the
+  // encoder from chunk 0 and then feeding it a later, disagreeing chunk hits
+  // the exact same "Input audio buffer is incompatible with codec
+  // parameters" this file exists to avoid, just later and with the two
+  // wrong values happening to have swapped which one is "the container's".
+  // Scanning here fails fast, at decode time, with the actual chunk index
+  // and values that diverge — instead of failing part way through encoding
+  // with only the last chunk's shape to go on.
+  if (decodedAudio && audioParams) {
+    for (let i = 1; i < decodedAudio.length; i++) {
+      const d = decodedAudio[i]!;
+      if (d.numberOfChannels !== audioParams.numberOfChannels || d.sampleRate !== audioParams.sampleRate) {
+        throw new Error(
+          `mic.m4a's decoded track is not uniform: chunk 0 is ` +
+          `${audioParams.numberOfChannels}ch/${audioParams.sampleRate}Hz, chunk ${i} of ` +
+          `${decodedAudio.length} is ${d.numberOfChannels}ch/${d.sampleRate}Hz ` +
+          `(chunk 0 timestamp ${decodedAudio[0]!.timestamp}us, chunk ${i} timestamp ${d.timestamp}us)`,
+        );
+      }
+    }
+  }
   if (encode) {
     muxer = new Muxer({
       target: new ArrayBufferTarget(),
@@ -216,30 +241,52 @@ export async function exportSession(
     }
 
     let micEncodedChunks = 0;
-    if (audioEncoder && decodedAudio && !cancelled) {
-      if (audioEncoderError) throw audioEncoderError;
-      // The export window in the SAME session-relative ns every other track
-      // in this file uses — `endNs` is one past the last included video
-      // frame, the export's own timeline boundary, not a separate audio cut.
-      const endNs = exportFrameTimeNs(from + total);
-      // Already decoded up front, above, so the encoder could be configured
-      // from the real thing it is about to receive — see that comment.
-      for (const data of decodedAudio) {
-        // AudioData.timestamp is MICROSECONDS on the same session-relative
-        // origin demux-audio.ts produced — clip to the export window and
-        // retime to clip-relative, exactly as the VideoFrame above.
-        const sampleNs = data.timestamp * 1000;
-        if (sampleNs >= originNs && sampleNs < endNs && !audioEncoderError) {
-          const retimed = retimeAudioData(data, Math.round((sampleNs - originNs) / 1000));
-          audioEncoder.encode(retimed);
-          retimed.close();
-          micEncodedChunks++;
+    if (audioEncoder && decodedAudio && audioParams && !cancelled) {
+      // The encoder's error callback fires ASYNCHRONOUSLY and names no
+      // offending chunk — "Input audio buffer is incompatible with codec
+      // parameters" gives no way to tell a sample-rate/channel mismatch from
+      // a format one. It can also surface AFTER the loop below, as a
+      // rejection of flush(), once several chunks are already queued — so a
+      // single checked `audioEncoderError` can miss it. The whole block is
+      // wrapped instead: whatever throws is enriched with what was actually
+      // sent and what the encoder was configured for, so a failure here is a
+      // diagnosis, not a second blind guess.
+      let lastSent: string | undefined;
+      try {
+        if (audioEncoderError) throw audioEncoderError;
+        // The export window in the SAME session-relative ns every other
+        // track in this file uses — `endNs` is one past the last included
+        // video frame, the export's own timeline boundary, not a separate
+        // audio cut.
+        const endNs = exportFrameTimeNs(from + total);
+        // Already decoded up front, above, so the encoder could be
+        // configured from the real thing it is about to receive.
+        for (const data of decodedAudio) {
+          // AudioData.timestamp is MICROSECONDS on the same session-relative
+          // origin demux-audio.ts produced — clip to the export window and
+          // retime to clip-relative, exactly as the VideoFrame above.
+          const sampleNs = data.timestamp * 1000;
+          if (sampleNs >= originNs && sampleNs < endNs && !audioEncoderError) {
+            const retimed = retimeAudioData(data, Math.round((sampleNs - originNs) / 1000));
+            lastSent = `format=${retimed.format} sampleRate=${retimed.sampleRate} ` +
+              `numberOfChannels=${retimed.numberOfChannels} numberOfFrames=${retimed.numberOfFrames}`;
+            audioEncoder.encode(retimed);
+            retimed.close();
+            micEncodedChunks++;
+          }
         }
+        if (audioEncoderError) throw audioEncoderError;
+        // Same reasoning as the video encoder's own unbounded final flush
+        // below: an encoder that never finishes would hang the export at 100%.
+        await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export");
+      } catch (e) {
+        const cause = e instanceof Error ? e.message : String(e);
+        throw new Error(
+          `${cause} — encoder configured for mp4a.40.2 ${audioParams.sampleRate}Hz ` +
+          `x${audioParams.numberOfChannels}ch; ${micEncodedChunks} chunk(s) encoded before this` +
+          (lastSent ? `; last chunk sent: ${lastSent}` : "; no chunk was sent"),
+        );
       }
-      if (audioEncoderError) throw audioEncoderError;
-      // Same reasoning as the video encoder's own unbounded final flush below:
-      // an encoder that never finishes would hang the export at 100%.
-      await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export");
     }
 
     let encodedBytes = 0;
