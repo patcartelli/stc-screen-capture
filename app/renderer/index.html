@@ -409,6 +409,10 @@
       redact, copy, save — is the thumbnail's own compact panel now
       (app/renderer/thumbnail.html, "the whole still UI in v1"); nothing here
       previews or exports a shot.
+
+      STC-392: the panel no longer closes itself, so there is no timeout or
+      settle-action preference to offer here any more — it waits for you to
+      choose an action.
     -->
     <div class="stillrow">
       <span>Saving to</span>
@@ -422,12 +426,6 @@
         <option value="bottom-left">Bottom left</option>
         <option value="top-right">Top right</option>
         <option value="top-left">Top left</option>
-      </select></label>
-      <label title="Never less than 3 seconds">Closes after
-        <input id="thumbtimeout" type="number" min="3" max="60" step="1" style="width:3.5em">s</label>
-      <label>then <select id="thumbsettle">
-        <option value="save">Save</option>
-        <option value="copy">Copy</option>
       </select></label>
       <label title="Skip the panel entirely and copy every shot straight to the clipboard">
         <input type="checkbox" id="thumbskip"> Skip it — straight to clipboard</label>

@@ -1,12 +1,12 @@
 import { describe, test, expect } from "vitest";
 import {
-  initialState, show, expand, isExpired, dismiss, positionFor,
-  clampTimeoutMs, parseCorner, parseSettleAction,
+  initialState, show, dismiss, positionFor,
+  parseCorner,
   discardDirection, isHorizontal, swipeOffset, isDiscardSwipe, SWIPE_DISCARD_PX,
   classifyDrag, DRAG_START_PX,
-  stackPosition, STACK_STEP_PX, MAX_STACKED,
-  DEFAULT_THUMBNAIL_TIMEOUT_MS, MIN_THUMBNAIL_TIMEOUT_MS, CORNERS,
-  type ThumbnailState,
+  stackPosition, STACK_STEP_PX, MAX_STACKED, PANEL_SIZE,
+  hiddenCount, visibleCount,
+  CORNERS,
 } from "../src/thumbnail.js";
 
 /**
@@ -17,70 +17,82 @@ import {
  * everything that can be settled by argument.
  */
 
-describe("the panel state machine", () => {
+describe("the panel state machine (STC-392: it waits)", () => {
   test("starts idle", () => {
     expect(initialState()).toEqual({ kind: "idle" });
   });
 
-  test("a capture always shows the panel, from idle or from a still-open one", () => {
-    const now = 1_000;
-    expect(show(now, 6000)).toEqual({ kind: "showing", expiresAt: 7000 });
-    // A second capture while the panel is EXPANDED still produces a fresh
-    // `showing` state — stacking is deferred (see the module doc), so this
-    // slice replaces rather than queues, and the caller is the one that
-    // destroys whatever window the old state pointed at.
-    const expanded: ThumbnailState = { kind: "expanded" };
-    expect(show(now, 6000)).not.toBe(expanded);
-    expect(show(now, 6000).kind).toBe("showing");
+  test("a capture opens it, and there is nowhere else for it to go on its own", () => {
+    // The whole of STC-392: `showing` used to carry an `expiresAt`, and
+    // `isExpired` used to be the second way out. Both are gone — the only
+    // transition off `open` is `dismiss`, which a user action calls.
+    expect(show()).toEqual({ kind: "open" });
   });
 
-  test("clicking expands, and is idempotent once already expanded", () => {
-    const showing = show(0, 6000);
-    expect(expand(showing)).toEqual({ kind: "expanded" });
-    expect(expand(expand(showing))).toEqual({ kind: "expanded" });
-  });
-
-  test("clicking idle does nothing — there is nothing to expand", () => {
-    expect(expand(initialState())).toEqual({ kind: "idle" });
-  });
-
-  test("isExpired is true only once showing and past its own deadline", () => {
-    const showing = show(0, 3000);
-    expect(isExpired(showing, 2999)).toBe(false);
-    expect(isExpired(showing, 3000)).toBe(true);
-    expect(isExpired(showing, 999_999)).toBe(true);
-  });
-
-  test("isExpired is never true once expanded — the click cancels the clock", () => {
-    const expanded = expand(show(0, 3000));
-    expect(isExpired(expanded, 999_999)).toBe(false);
-  });
-
-  test("isExpired is false for idle", () => {
-    expect(isExpired(initialState(), 999_999)).toBe(false);
-  });
-
-  test("dismiss always returns to idle", () => {
+  test("dismiss always returns to idle, and is idempotent", () => {
     expect(dismiss()).toEqual({ kind: "idle" });
+    expect(dismiss()).toEqual(dismiss());
+  });
+
+  test("the module exports no clock at all", async () => {
+    // A structural guard with a control: the names below were the panel's
+    // timeout, and a re-introduced one would be a second way for a take to be
+    // decided without the user. The control asserts the guard can see names
+    // that ARE there, so a typo in the list cannot make this pass vacuously.
+    const mod = await import("../src/thumbnail.js");
+    for (const gone of ["isExpired", "clampTimeoutMs", "parseSettleAction",
+                        "DEFAULT_THUMBNAIL_TIMEOUT_MS", "MIN_THUMBNAIL_TIMEOUT_MS"]) {
+      expect(Object.keys(mod)).not.toContain(gone);
+    }
+    for (const present of ["show", "dismiss", "positionFor", "stackPosition",
+                           "hiddenCount", "visibleCount"]) {
+      expect(Object.keys(mod)).toContain(present);
+    }
   });
 });
 
-describe("the timeout preference", () => {
-  test("an absent or non-numeric value is the default", () => {
-    for (const bad of [undefined, null, "6000", {}, NaN, Infinity]) {
-      expect(clampTimeoutMs(bad), JSON.stringify(bad)).toBe(DEFAULT_THUMBNAIL_TIMEOUT_MS);
+describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
+  test("hiddenCount's arithmetic: nothing hidden at the cap, one at four, six at nine", () => {
+    // This is PURE ARITHMETIC over `hiddenCount` — it would pass unchanged
+    // under the old destroy-on-overflow behaviour too, since nothing here
+    // touches a window or a panel's lifecycle. It is not where "nothing is
+    // dropped, only hidden" is proven; that is
+    // `panel-waits.e2e.test.ts`'s "five captures in a burst leave FIVE alive
+    // panel windows" — a real `BrowserWindow` count against `dismissNow()`
+    // actually being called or not is the only thing that can tell hidden
+    // apart from destroyed. What this test pins is narrower and still worth
+    // having: the formula's own numbers, checked with no window at all.
+    expect(MAX_STACKED).toBe(3);
+    expect(hiddenCount(3)).toBe(0);
+    expect(hiddenCount(4)).toBe(1);
+    expect(hiddenCount(9)).toBe(6);
+  });
+
+  test("the badge counts every panel the stack is not showing", () => {
+    // The badge's number and the number of live-but-hidden panels are one
+    // value. Two ways to count them would be the defect; `hiddenCount` is the
+    // only one, and the renderer (`thumbnail-window.ts`'s `restack`) is
+    // handed its answer rather than deriving it.
+    for (const total of [1, 3, 4, 12]) {
+      expect(hiddenCount(total)).toBe(Math.max(0, total - MAX_STACKED));
     }
   });
 
-  test("never less than the floor — the ticket's own rule", () => {
-    expect(clampTimeoutMs(0)).toBe(MIN_THUMBNAIL_TIMEOUT_MS);
-    expect(clampTimeoutMs(-500)).toBe(MIN_THUMBNAIL_TIMEOUT_MS);
-    expect(clampTimeoutMs(2999)).toBe(MIN_THUMBNAIL_TIMEOUT_MS);
+  test("hiddenCount never goes negative, and visibleCount never exceeds the cap", () => {
+    expect(hiddenCount(0)).toBe(0);
+    expect(hiddenCount(1)).toBe(0);
+    expect(visibleCount(0)).toBe(0);
+    expect(visibleCount(2)).toBe(2);
+    expect(visibleCount(MAX_STACKED)).toBe(MAX_STACKED);
+    expect(visibleCount(MAX_STACKED + 5)).toBe(MAX_STACKED);
   });
 
-  test("a value at or above the floor is kept, rounded", () => {
-    expect(clampTimeoutMs(3000)).toBe(3000);
-    expect(clampTimeoutMs(10_000.6)).toBe(10_001);
+  test("visible plus hidden always accounts for every panel", () => {
+    // The two counts are the same fact read two ways — asserted directly so
+    // they cannot drift apart even though each has its own formula.
+    for (const total of [0, 1, 2, 3, 4, 7, 20]) {
+      expect(visibleCount(total) + hiddenCount(total)).toBe(total);
+    }
   });
 });
 
@@ -92,15 +104,6 @@ describe("the corner preference", () => {
   test("anything else falls back to the default rather than to nothing", () => {
     for (const bad of [undefined, null, "middle", 1, {}]) {
       expect(parseCorner(bad)).toBe("bottom-right");
-    }
-  });
-});
-
-describe("the settle-action preference", () => {
-  test("only \"copy\" is copy; everything else is the save default", () => {
-    expect(parseSettleAction("copy")).toBe("copy");
-    for (const other of ["save", undefined, null, "COPY", 1, {}]) {
-      expect(parseSettleAction(other), JSON.stringify(other)).toBe("save");
     }
   });
 });
@@ -294,18 +297,37 @@ describe("stacking (STC-296 follow-up)", () => {
     }
   });
 
-  test("a full stack still fits the work area", () => {
-    // MAX_STACKED panels at STACK_STEP_PX apart must not walk off the screen,
-    // or the oldest becomes unreachable rather than merely behind.
+  test("a full stack of the ONE panel size still fits the work area", () => {
+    // Re-anchored for STC-392 (D3): the card is one size now, and it is taller
+    // than the old collapsed thumbnail because its actions are always visible.
+    // The old test measured the collapsed size and would have stayed green
+    // while five of the real card ran off the screen.
+    //
+    // All four CORNERS, not just bottom-right (restored after STC-392 review
+    // finding 7): a top corner pushes the stack DOWN rather than up, and the
+    // `workArea.y` floor is exactly the case only a top corner can fail —
+    // bottom-right alone would leave it unasserted.
+    const workArea = { x: 0, y: 0, width: 1440, height: 900 };
     for (const corner of CORNERS) {
-      const last = stackPosition(MAX_STACKED - 1, corner, workArea, size);
-      expect(last.y).toBeGreaterThanOrEqual(workArea.y);
-      expect(last.y + size.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+      const oldest = stackPosition(MAX_STACKED - 1, corner, workArea, PANEL_SIZE);
+      expect(oldest.y).toBeGreaterThanOrEqual(workArea.y);
+      expect(oldest.y + PANEL_SIZE.height).toBeLessThanOrEqual(workArea.y + workArea.height);
     }
+    // Composition, not magnitude: the clearance must come from the stack's own
+    // arithmetic, not from slack in a display that happens to be tall.
+    const consumed = PANEL_SIZE.height + (MAX_STACKED - 1) * STACK_STEP_PX + 2 * 20;
+    expect(consumed).toBeLessThanOrEqual(workArea.height);
   });
 
-  test("the cap matches the acceptance case it exists for", () => {
-    // "Five captures in five seconds produce five recoverable shots."
-    expect(MAX_STACKED).toBeGreaterThanOrEqual(5);
+  test("the cap matches the ticket's own words, restated for Task 5b (STC-392 D7)", () => {
+    // This used to assert the OLD contract — "five captures in five seconds
+    // produce five recoverable shots" (STC-296), when a panel pushed past
+    // the cap settled itself and "recoverable" meant "exported". That
+    // premise is gone: the cap is now a VISIBILITY limit, not a survival
+    // one, and the ticket's own words for it are "max 3 panels visible".
+    // Five captures still produce five recoverable takes — none of them are
+    // ever destroyed by the cap now — but that is `hiddenCount`'s claim
+    // above, not this constant's.
+    expect(MAX_STACKED).toBe(3);
   });
 });

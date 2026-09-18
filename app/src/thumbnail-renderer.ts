@@ -7,33 +7,40 @@ import { normaliseRegion, undoLast } from "@transform/still-redact";
 import { withTimeout } from "@transform/timeout";
 import {
   classifyDrag, discardDirection, isDiscardSwipe, parseCorner, swipeOffset,
-  SETTLE_READY_MS,
+  SETTLE_READY_MS, PANEL_SIZE, REDACT_SIZE, type Size,
 } from "./thumbnail.js";
 import { colorSpaceFor, planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
+import {
+  actionsFor, closesPanel, type PanelAction, type PanelTake,
+} from "./panel-actions.js";
 
 /**
- * The floating thumbnail's view (STC-296). It draws the shot and reports
- * clicks; every DECISION about what the shot means or where it goes is
- * `still-decorate.ts` / `still-export.ts` / `still-io.ts`'s, the same split
- * every other view in this app keeps.
+ * The floating thumbnail's view (STC-296, rebuilt on `panel-actions.ts` by
+ * STC-392). It draws the take and reports clicks; every DECISION about what
+ * an action DOES to the panel or the take is `panel-actions.ts`'s
+ * (`closesPanel`), `still-decorate.ts` / `still-export.ts`'s (what a Copy
+ * produces) or `main.ts`'s (`panel:save`/`panel:edit`/`panel:trash` — what
+ * happens to the take itself), the same split every other view in this app
+ * keeps.
  *
- * ## This is the whole still UI in v1 (the ticket's own words)
+ * ## One card, five actions, four keyboard paths (STC-392)
  *
- * There is no editor behind this panel until STC-300, so the preset picker
- * here IS how a capture gets decorated, and Redact (STC-297) is the only
- * place a capture can be made safe to share at all. Redact mode grows the
- * window rather than opening a second one: the panel is already the surface
- * the shot belongs to, and a still EDITOR is a different ticket.
+ * There is no collapsed/expanded distinction any more: the window is fixed
+ * at `PANEL_SIZE` (`thumbnail-window.ts`) and every control this take has is
+ * on the card from the moment it paints. `perform()` is the one place an
+ * action's rules are written — see its own doc — so a keyboard Save, a
+ * clicked Save and a menu Save cannot drift apart.
  *
  * ## What is deliberately not here
  *
- * Multiple captures stacking rather than replacing is the one follow-up left
- * — see CLAUDE.md. The right-click menu (`thumbnail-menu.ts`),
- * swipe-to-discard and drag-out have landed. Format, quality and scale are NOT controls here either: they are
- * `still` settings, read once from the stored preference, the same as every
- * other exit out of the app. Only the decoration MODE is a per-shot choice,
- * because the ticket names it as one ("the five output modes as a preset
- * picker") and the other three are not.
+ * There is no still editor until STC-300, so the preset picker here IS how a
+ * capture gets decorated, and Redact (STC-297) is the only place a capture
+ * can be made safe to share at all. Redact mode grows the window rather than
+ * opening a second one: the panel is already the surface the shot belongs
+ * to, and a still EDITOR is a different ticket. Format, quality and scale
+ * are NOT controls here either: they are `still` settings, read once from
+ * the stored preference, the same as every other exit out of the app. Only
+ * the decoration MODE is a per-shot choice.
  */
 
 declare global {
@@ -49,16 +56,27 @@ declare global {
         /** Present when the take moved out of temp storage into the library (STC-393). */
         dir?: string;
       }>;
-      menu(ctx: { redacting: boolean; busy: boolean }): Promise<string | null>;
+      menu(ctx: { take: PanelTake; redacting: boolean; busy: boolean }): Promise<string | null>;
       revealShot(dir: string): Promise<boolean>;
-      deleteShot(dir: string): Promise<{ ok: boolean; detail?: string }>;
+      /** The three actions that CHANGE where a take lives (STC-392) — see `panel-actions.ts`. */
+      save(dir: string): Promise<{ ok: boolean; dir?: string; detail?: string }>;
+      edit(dir: string): Promise<{ ok: boolean; detail?: string }>;
+      trash(dir: string): Promise<{
+        ok: boolean; detail?: string;
+        /** A library-origin take's confirm dialog was declined (STC-392 D1's
+         * "confirm" style, `trashWithConfirmation`) — a decision, not a
+         * fault (STC-392 review, I5). */
+        cancelled?: boolean;
+      }>;
       dragFile(req: Record<string, unknown>): Promise<{ ok: boolean; file?: string; detail?: string }>;
       startDrag(file: string): void;
       reveal(): Promise<boolean>;
-      writeShot(dir: string, redactions: unknown): Promise<{ ok: boolean; redactions: number }>;
-      event(ev: { kind: "painted" | "expanded" | "discarding" | "done" }
+      writeShot(dir: string, redactions: unknown, mode?: DecorationMode):
+        Promise<{ ok: boolean; redactions: number }>;
+      event(ev: { kind: "painted" | "discarding" | "done" | "showOverflow" }
                 | { kind: "redact"; on: boolean }): void;
-      onSettle(cb: () => void): () => void;
+      /** The overflow badge's count (Task 5b / STC-392 D7) — see `thumbnail-preload.ts`. */
+      onHiddenCount(cb: (n: number) => void): () => void;
     };
   }
 }
@@ -68,42 +86,90 @@ const card = $("card");
 const canvas = $("thumbcanvas") as HTMLCanvasElement;
 const modeSel = $("mode") as HTMLSelectElement;
 const statusEl = $("status");
-const copyBtn = $("copy") as HTMLButtonElement;
-const saveBtn = $("save") as HTMLButtonElement;
-const closeBtn = $("close") as HTMLButtonElement;
 const redactBtn = $("redact") as HTMLButtonElement;
 const undoBtn = $("undo") as HTMLButtonElement;
 const doneRedactBtn = $("donedact") as HTMLButtonElement;
+const overflowBtn = $("overflow") as HTMLButtonElement;
 
 const params = new URLSearchParams(location.search);
 /**
- * The shot's own directory — temp storage until an export promotes it to the
+ * The shot's own directory — temp storage until an action promotes it to the
  * library (STC-393), `let` rather than `const` for exactly that reason: every
  * later call (redact, reveal, discard) reads this same variable, and a stale
  * reference to a directory `promoteTake` has already moved would fail.
  */
 let dir = params.get("dir") ?? "";
-// "none" is the re-opened case (STC-294): close without exporting, because
-// the shot is already on disk and a second copy is not what a glance meant.
-const settleParam = params.get("settleAction");
-const settleAction = settleParam === "copy" ? "copy"
-                   : settleParam === "none" ? "none"
-                   : "save";
+/**
+ * What this panel is showing — `panel-actions.ts`'s own type, parsed back out
+ * of the query `thumbnail-window.ts` built it from. A malformed or absent
+ * value defaults to a fresh shot (the widest set of the four actions minus
+ * Edit) rather than throwing and leaving the panel with no buttons at all —
+ * the same defensive default `main.ts`'s `thumbnail:menu` handler uses for
+ * the identical field.
+ */
+function parseTake(v: string | null): PanelTake {
+  try {
+    const parsed = JSON.parse(v ?? "null");
+    if (parsed && (parsed.kind === "shot" || parsed.kind === "recording")
+        && (parsed.origin === "fresh" || parsed.origin === "library")) {
+      return parsed as PanelTake;
+    }
+  } catch { /* falls through to the default below */ }
+  return { kind: "shot", origin: "fresh" };
+}
+const take: PanelTake = parseTake(params.get("take"));
+// A recording has no picture in v1 (D2) — `#takecard` stands in for the
+// canvas (`thumbnail.html`'s own markup comment). Nothing presents one of
+// these today (`main.ts` only ever sends `kind: "shot"`), so this is the
+// whole of that wiring: no recording-specific frame fetch exists to guard.
+if (take.kind === "recording") {
+  ($("takecard") as HTMLElement).hidden = false;
+  ($("thumbwrap") as HTMLElement).hidden = true;
+}
 const shot: Shot = parseShot(JSON.parse(params.get("shot") ?? "null"));
 /**
  * The "skip the panel" preference (STC-296): this window is never shown at
- * all, so it composites and exports itself the instant it can rather than
+ * all, so it composites and copies itself the instant it can rather than
  * waiting on a "painted" round trip through main first — there is nothing to
- * animate or expand into, so nothing to wait for.
+ * animate into, so nothing to wait for.
  */
 const silent = params.get("silent") === "1";
 /** Which way this panel leaves the screen — see `discardDirection`. */
 const corner = parseCorner(params.get("corner"));
 
-/** How big the collapsed, expanded and redacting canvases are allowed to be, in CSS px. */
-const COLLAPSED_BOX = { width: 200, height: 118 };
-const EXPANDED_BOX = { width: 280, height: 130 };
-const REDACT_BOX = { width: 500, height: 300 };
+/**
+ * The canvas's own box, in CSS px — derived from `PANEL_SIZE` (the WINDOW,
+ * `thumbnail.ts`) rather than tuned on its own. Two independently-guessed
+ * box sizes for one card was the old collapsed/expanded shape (STC-392
+ * removed it); `CARD_CHROME` is the one number that says how much of the
+ * fixed window is NOT canvas — the card's own inset (`#card { inset: 8px }`
+ * in thumbnail.html, both sides), `#thumbwrap`'s own padding, and the space
+ * `#controls` (the style row, the actions row, the status line) takes below
+ * it — so the window and the box it draws inside cannot drift apart the way
+ * the old fixed sizes and `COLLAPSED_BOX`/`EXPANDED_BOX` already had.
+ */
+const CARD_CHROME: Size = { width: 40, height: 100 };
+const CARD_BOX: Size = {
+  width: PANEL_SIZE.width - CARD_CHROME.width,
+  height: PANEL_SIZE.height - CARD_CHROME.height,
+};
+/**
+ * Redact mode's canvas box (STC-297) — bigger than the panel needs to be for
+ * its own controls, and deliberately: at `CARD_BOX` size one preview pixel of
+ * a 4K capture is ~14 real ones, so placing a box over an email address would
+ * be guesswork. ACTUALLY derived from `REDACT_SIZE` (`thumbnail.ts` — the
+ * window `thumbnail-window.ts` resizes to for redact mode) by the SAME
+ * `CARD_CHROME` allowance `CARD_BOX` is derived from `PANEL_SIZE` with
+ * (STC-392 review, M5 — this used to be two independently-tuned literals
+ * that a comment merely claimed agreed with each other, the same shape
+ * `CARD_BOX` itself was rescued from). 480x320 here, comfortably above
+ * `CARD_BOX`'s 220x110 and still the size a line of text in a 4K capture
+ * needs to be a targetable thing.
+ */
+const REDACT_BOX: Size = {
+  width: REDACT_SIZE.width - CARD_CHROME.width,
+  height: REDACT_SIZE.height - CARD_CHROME.height,
+};
 
 /**
  * The smallest drag that is a region, in VIEW pixels (STC-297).
@@ -120,8 +186,11 @@ let frame: ImageBitmap | undefined;
 let currentMode: DecorationMode = shot.decoration.mode;
 /** The full-resolution composite, kept apart from the (scaled-down) view canvas. */
 let composite: HTMLCanvasElement | undefined;
-let expanded = false;
-let settling = false;
+/**
+ * An action is in flight — set for the whole of `perform()`, not merely the
+ * network round trip inside it, so a second click cannot start a SECOND
+ * action on the same take while the first is still deciding its outcome.
+ */
 let busy = false;
 /**
  * The regions, seeded from the document rather than from nothing: a shot that
@@ -187,7 +256,7 @@ async function draw(): Promise<void> {
   renderStill(ctx as never, { frame, redactionFills }, plan.layout);
   composite = out;
 
-  const box = redacting ? REDACT_BOX : expanded ? EXPANDED_BOX : COLLAPSED_BOX;
+  const box = redacting ? REDACT_BOX : CARD_BOX;
   const fit = Math.min(1, box.width / out.width, box.height / out.height);
   canvas.width = Math.max(1, Math.round(out.width * fit));
   canvas.height = Math.max(1, Math.round(out.height * fit));
@@ -237,12 +306,15 @@ function paintView(marquee?: { x: number; y: number; width: number; height: numb
  * picker, and "keep everything, in a format that can" needs no guess at all.
  */
 /**
- * `save-as` is a save that asks first. It is a third ACTION rather than an
- * option on `save`, because the two differ in what the user has already told
- * the app: a plain save has a destination and needs no interaction, and the
- * whole design of this panel is that the silent path stays silent.
+ * `save-as` is a save that asks first. It is a panel FACILITY rather than one
+ * of `panel-actions.ts`'s four take actions (`copy`/`save`/`edit`/`trash`):
+ * "save" there means "keep this take in the library" (`panel:save` promotes
+ * it, and writes no file of its own — the library renders the decoration
+ * from the stored shot document, same as any other library tile). Save As
+ * still goes through `still:export` like Copy, because it produces an actual
+ * FILE at a place the user chooses, which promoting a directory does not.
  */
-type ExportAction = "copy" | "save" | "save-as";
+type ExportAction = "copy" | "save-as";
 
 async function runExport(action: ExportAction): Promise<boolean> {
   if (!composite) return false;
@@ -295,35 +367,188 @@ async function runExport(action: ExportAction): Promise<boolean> {
   return true;
 }
 
-function expand(): void {
-  if (expanded) return;
-  expanded = true;
-  card.classList.add("expanded");
-  window.thumb.event({ kind: "expanded" });
-  void draw();
+// ---- the four take actions (STC-392) ---------------------------------------
+
+/** This take's own actions, in the order `panel-actions.ts` lays them out. */
+const available = new Set(actionsFor(take));
+
+/**
+ * Disable (or re-enable) every VISIBLE `#actions` button, plus the Style
+ * `<select>` and Redact — everything on the card that can change what
+ * `composite` IS while an action is reading it.
+ *
+ * Not per-button: while ANY of the four is deciding an outcome, none of the
+ * others may start a second one on the same take — two actions racing each
+ * other is exactly the shape of bug `busy` exists to rule out. Hidden buttons
+ * (this take does not have the action) are left alone; there is nothing to
+ * show as disabled.
+ *
+ * The Style select and Redact are not `#actions` buttons and are not gated
+ * by `busy` in their own handlers (STC-392 review, M6) — `modeSel`'s
+ * `change` calls `draw()`, which REASSIGNS `composite`, and `run("copy")`
+ * reads `composite` after two `await`s (`awaitComposite`, then
+ * `getImageData`). A mode change or a Redact toggle landing in that window
+ * exports a picture that does not match the mode the status line still
+ * claims. Disabling the elements is enough on its own — a disabled `<select>`
+ * or `<button>` fires no `change`/`click` at all — so neither handler needs
+ * its own `busy` check.
+ */
+function setActionsEnabled(on: boolean): void {
+  // `[data-action]` — not every button in `#actions`: the overflow badge
+  // (Task 5b / STC-392 D7) lives in this same row and carries no
+  // `data-action`, since it is not one of `panel-actions.ts`'s four take
+  // actions. Left enabled deliberately — expanding the stack to look at a
+  // waiting take is not an action ON this one, so an in-flight Save/Edit/
+  // Trash on THIS take has no reason to block it.
+  for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button[data-action]")) {
+    if (!btn.hidden) btn.disabled = !on;
+  }
+  modeSel.disabled = !on;
+  redactBtn.disabled = !on;
 }
+
+/**
+ * Bounded wait for the panel's first composite (SETTLE_READY_MS,
+ * `thumbnail.ts`) — only Copy reads `composite` (`runExport`); Save, Edit and
+ * Trash never touch it. See `SETTLE_READY_MS`'s own doc for why this bound
+ * exists even though the ordering elsewhere in this file means it never
+ * actually waits today.
+ */
+let markReady!: () => void;
+const ready = new Promise<void>((res) => { markReady = res; });
+
+async function awaitComposite(): Promise<boolean> {
+  try {
+    await withTimeout(ready, SETTLE_READY_MS, "the panel did not composite in time");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Perform one action, and do to the panel whatever `panel-actions.ts` says
+ * that action does to it.
+ *
+ * ONE function for all four, rather than a handler each, because the rule
+ * that differs between them — whether the panel closes — is not written here.
+ * Four handlers each remembering to close (or not) is four chances for Copy to
+ * grow a close nobody asked for, which is precisely the behaviour this ticket
+ * exists to remove. Returns whether the action succeeded, so a caller with its
+ * own visual state to restore on failure (`discard`'s slide-out) can tell.
+ */
+async function perform(action: PanelAction): Promise<boolean> {
+  if (busy) return false;
+  busy = true;
+  setActionsEnabled(false);
+  try {
+    const ok = await run(action);
+    // Only a SUCCESSFUL action closes. A failed Save leaves the panel exactly
+    // as it was, with the reason in the status line — the same rule `discard`
+    // already followed for a failed trash, and the reason it is safe for the
+    // panel to be the only place this take exists.
+    if (ok && closesPanel(action)) window.thumb.event({ kind: "done" });
+    return ok;
+  } finally {
+    busy = false;
+    setActionsEnabled(true);
+  }
+}
+
+async function run(action: PanelAction): Promise<boolean> {
+  if (action === "copy") {
+    setStatus("Copying…");
+    if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
+    return runExport("copy");
+  }
+  if (action === "save") {
+    setStatus("Saving…");
+    const r = await window.thumb.save(dir);
+    if (!r.ok) { setStatus(`Could not save: ${r.detail ?? "unknown error"}`); return false; }
+    // The take has moved out of temp storage — every later call in this window
+    // (reveal, trash) must use its new home. Same reason `dir` is a `let`.
+    if (r.dir) dir = r.dir;
+    setStatus("Saved");
+    return true;
+  }
+  if (action === "edit") {
+    const r = await window.thumb.edit(dir);
+    if (!r.ok) setStatus(`Could not open the editor: ${r.detail ?? "unknown error"}`);
+    return r.ok;
+  }
+  // trash
+  window.thumb.event({ kind: "discarding" });
+  const r = await window.thumb.trash(dir);
+  // Cancelling the confirm dialog (a library-origin take, D1) is a decision,
+  // not a fault (STC-392 review, I5) — the same rule `runExport`'s Save As
+  // cancel already follows, checked before the generic failure branch so a
+  // Cancel never reads as "Could not delete: cancelled".
+  if (r.cancelled) { setStatus(""); return false; }
+  if (!r.ok) { setStatus(`Could not delete: ${r.detail ?? "unknown error"}`); return false; }
+  return true;
+}
+
+/**
+ * Hide the actions this take does not have — see `panel-actions.ts`'s two
+ * absences. Scoped to `[data-action]` for the same reason `setActionsEnabled`
+ * is: the overflow badge sits in this row, is not one of the four take
+ * actions, and must not be run through `available.has(undefined)` (always
+ * false) or bound to `perform()`, which only understands `PanelAction`.
+ */
+for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button[data-action]")) {
+  const action = btn.dataset.action as PanelAction;
+  btn.hidden = !available.has(action);
+  btn.addEventListener("click", (e) => { e.stopPropagation(); void perform(action); });
+}
+
+/**
+ * The `+N` overflow badge (Task 5b / STC-392 D7) — hidden when nothing is
+ * hidden. `n` is `thumbnail.ts`'s `hiddenCount`, computed once in
+ * `thumbnail-window.ts`'s `restack` and handed to this window over
+ * `onHiddenCount`; nothing here derives its own count (ruling 2 — one owner).
+ */
+window.thumb.onHiddenCount((n) => {
+  overflowBtn.hidden = n <= 0;
+  overflowBtn.textContent = `+${n}`;
+});
+
+/**
+ * Clicking it asks main to bring every hidden panel back — "clicking expands
+ * a list of waiting takes with the same actions" (the ticket's own words).
+ * The hidden panels ARE that list; there is no second list UI here, only
+ * this one event (`showAllOverflow`, `thumbnail-window.ts`).
+ */
+overflowBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  window.thumb.event({ kind: "showOverflow" });
+});
 
 // ---- redaction (STC-297) ---------------------------------------------------
 
 /**
- * Store the regions on the shot document.
+ * Store the mode and the regions on the shot document.
  *
  * Written on every change rather than on the way out, because there is no
- * reliable way out: the panel can be replaced by the next capture or settled
- * by its own timeout, and a redaction the user drew and watched appear must
- * not depend on them then finding the right button. Failures are reported and
- * not thrown — the regions are already in the composite either way, so a
- * failed write costs the ADJUSTABILITY of this shot later, never the fill in
- * the file being exported now.
+ * reliable way out: the panel can be replaced by the next capture, and a
+ * redaction the user drew — or a Style they picked — must not depend on them
+ * then finding the right button. `currentMode` rides along on every call,
+ * not only the ones a mode change makes, because a Save that follows a
+ * redaction must not revert a Style choice that hasn't been re-saved for its
+ * own reason — one write, the document's current idea of both fields, same
+ * as `currentShot()` composes them for the preview. Failures are reported
+ * and not thrown — the change is already in the composite either way, so a
+ * failed write costs the ADJUSTABILITY of this shot later, never what Save
+ * is about to promote or Copy is about to export now.
  */
-async function persistRegions(): Promise<void> {
+async function persistDecoration(): Promise<void> {
   // The drag file is now wrong in the way that matters most: it still has
-  // whatever the box was drawn over legible in it.
+  // whatever the box was drawn over legible in it, or was rendered in the
+  // preset that is no longer current.
   void refreshDragFile();
   try {
-    await window.thumb.writeShot(dir, regions);
+    await window.thumb.writeShot(dir, regions, currentMode);
   } catch (e: any) {
-    setStatus(`Redacted, but could not store it: ${e?.message ?? e}`);
+    setStatus(`Could not store that: ${e?.message ?? e}`);
   }
 }
 
@@ -384,69 +609,11 @@ canvas.addEventListener("pointerup", (e) => {
   if (!region) { paintView(); return; }
   regions = [...regions, region];
   void draw();
-  void persistRegions();
+  void persistDecoration();
   setStatus(`${regions.length} ${regions.length === 1 ? "box" : "boxes"}.`);
 });
 
-/** Ends the interaction: exports (per `settleAction`) and tells main to destroy the window. */
-/**
- * Resolved once the panel has composited for the first time.
- *
- * `onSettle` is registered before the load below has read `frame.png`,
- * decoded it and drawn it — so a settle CAN arrive with no composite yet.
- * Before this existed, that reached `runExport`, hit its `if (!composite)`
- * guard, returned false, and the `finally` destroyed the window having
- * exported nothing. Silently: the take directory still held `shot.json` and
- * `frame.png`, so nothing looked broken, but the decorated file the panel
- * promised was never written.
- *
- * The path there is a SECOND CAPTURE arriving while the first panel is still
- * loading, since `presentThumbnail` settles the outgoing one. The timeout
- * path was never exposed — its timer is armed on `painted`, which is after
- * the first draw — which is exactly why this survived: the case everyone
- * tests is the safe one.
- */
-let markReady!: () => void;
-const ready = new Promise<void>((res) => { markReady = res; });
-
-async function settle(): Promise<void> {
-  if (settling) return;
-  settling = true;
-  try {
-    // `"none"` is a shot RE-OPENED from the library (STC-294): it is already on
-    // disk and nothing is going to be exported, so there is nothing to wait
-    // for. Waiting for a composite in order not to use it would be delay
-    // bought with nothing — and, on a slow decode, a panel that appears to
-    // hang before closing.
-    if (settleAction !== "none") {
-      // Bounded, and the bound has a reason: a panel whose frame never decodes
-      // must not hold the window open until main's backstop kills it with no
-      // explanation. Timing out still falls through to `runExport`, which
-      // refuses honestly rather than pretending.
-      try {
-        await withTimeout(ready, SETTLE_READY_MS,
-                          "the panel did not composite in time to settle");
-      } catch {
-        setStatus("Could not prepare the shot in time.");
-      }
-      await runExport(settleAction);
-    }
-  }
-  finally { window.thumb.event({ kind: "done" }); }
-}
-
-// ---- wiring ----------------------------------------------------------------
-
-card.addEventListener("click", (e) => {
-  // A swipe ends with a click event too, and expanding a panel the user has
-  // just thrown at the edge of the screen would be the opposite of what they
-  // did. `swiped` is cleared on the next pointerdown, not here, because the
-  // click arrives after pointerup.
-  if (swiped) return;
-  // Once expanded, the card is a panel with its own controls; only the
-  // collapsed thumbnail itself is a single big click target.
-  if (!expanded && e.target !== copyBtn && e.target !== saveBtn) expand();
-});
+// ---- wiring ------------------------------------------------------------------
 
 for (const m of availableModes()) {
   const opt = document.createElement("option");
@@ -459,29 +626,11 @@ modeSel.addEventListener("click", (e) => e.stopPropagation());
 modeSel.addEventListener("change", () => {
   currentMode = modeSel.value as DecorationMode;
   // `draw` first: the file is rendered FROM the composite, so refreshing it
-  // before the redraw would write the previous preset.
-  void draw().then(refreshDragFile);
-});
-
-copyBtn.addEventListener("click", async (e) => {
-  e.stopPropagation();
-  if (busy) return;
-  busy = true;
-  setStatus("Copying…");
-  await runExport("copy");
-  busy = false;
-});
-
-saveBtn.addEventListener("click", async (e) => {
-  e.stopPropagation();
-  if (busy || settling) return;
-  busy = true;
-  setStatus("Saving…");
-  const ok = await runExport("save");
-  busy = false;
-  // A save is usually the end of the interaction; a copy is not (someone may
-  // still want to save afterwards), which is why only this path auto-closes.
-  if (ok) { settling = true; window.thumb.event({ kind: "done" }); }
+  // before the redraw would write the previous preset. `persistDecoration`
+  // does the drag-file refresh AND the write to `shot.json` (STC-392 review,
+  // I2) — a chosen Style used to never reach the document at all, so Save
+  // silently kept whatever mode the capture was taken with.
+  void draw().then(persistDecoration);
 });
 
 redactBtn.addEventListener("click", (e) => {
@@ -494,14 +643,74 @@ undoBtn.addEventListener("click", (e) => {
   if (regions.length === 0) return;
   regions = undoLast(regions);
   void draw();
-  void persistRegions();
+  void persistDecoration();
   setStatus(regions.length === 0
     ? "No boxes." : `${regions.length} ${regions.length === 1 ? "box" : "boxes"}.`);
 });
 
 doneRedactBtn.addEventListener("click", (e) => { e.stopPropagation(); setRedacting(false); });
 
-closeBtn.addEventListener("click", (e) => { e.stopPropagation(); void settle(); });
+// ---- keyboard paths (STC-392 focus rule 4) ----------------------------------
+
+/**
+ * Every action has a keyboard path (STC-392 focus rule 4).
+ *
+ * The accelerators are the system's own for these verbs — ⌘C, ⌘S, ⌘E — and
+ * **⌘⌫ for the ✕, never a bare Delete or Backspace** (the spec's own guard,
+ * decided 2026-09-16). This panel takes focus the instant it appears, over
+ * whatever the user was typing into a moment earlier; a bare ⌫ bound to a
+ * destructive action means a stray keystroke aimed at another app's text
+ * field deletes a capture. ⌘⌫ is also what the Finder actually uses for
+ * "move to Trash" — the bare key there deletes *text*, not files.
+ *
+ * Dispatched through `perform`, so a keyboard Save and a clicked Save are the
+ * same code path and cannot disagree about whether the panel closes.
+ *
+ * Escape no longer closes the panel. It used to settle-and-close, which was
+ * the timeout's manual equivalent; with no "close without deciding" in the
+ * action table, Escape's only job left is backing out of redact mode — which
+ * was always the thing someone halfway through covering an address reaches for.
+ */
+const KEYS: ReadonlyArray<[PanelAction, (e: KeyboardEvent) => boolean]> = [
+  ["copy",  (e) => e.metaKey && e.key.toLowerCase() === "c"],
+  ["save",  (e) => e.metaKey && e.key.toLowerCase() === "s"],
+  ["edit",  (e) => e.metaKey && e.key.toLowerCase() === "e"],
+  // ⌘⌫, never bare — see the block comment above. Both key names, because
+  // Backspace is what the laptop keyboard sends and Delete is the full-size one.
+  ["trash", (e) => e.metaKey && (e.key === "Backspace" || e.key === "Delete")],
+];
+
+/**
+ * How long after paint this panel starts accepting keys.
+ *
+ * The panel takes focus the instant it appears (focus rule 1), over whatever
+ * the user was typing into. Keystrokes already in flight when it grabbed the
+ * keyboard were aimed at the previous app and land here instead — so the first
+ * `SETTLE_KEYS_MS` of the panel's life ignore input entirely. The spec calls
+ * for "~300ms"; it is a constant rather than a literal because it is a
+ * duration with a reason, and a second copy of it in a test would be the
+ * defect this repo names five ways.
+ *
+ * Note this is a settling window, not a debounce: it starts once, at paint,
+ * and never re-arms. A panel the user has been looking at for a minute must
+ * not swallow a keystroke.
+ */
+const SETTLE_KEYS_MS = 300;
+let keysLiveAt = Number.POSITIVE_INFINITY;   // set to `performance.now() + SETTLE_KEYS_MS` at paint
+
+document.addEventListener("keydown", (e) => {
+  // Escape is exempt: backing out of redact mode is not destructive, and a
+  // user who has just started a drag they did not mean must be able to cancel
+  // it in the same 300 ms.
+  if (redacting && e.key === "Escape") { setRedacting(false); return; }
+  if (performance.now() < keysLiveAt) return;
+  for (const [action, matches] of KEYS) {
+    if (!matches(e) || !available.has(action)) continue;
+    e.preventDefault();
+    void perform(action);
+    return;
+  }
+});
 
 // ---- swipe to discard (STC-296 follow-up) ----------------------------------
 
@@ -558,22 +767,36 @@ async function refreshDragFile(): Promise<void> {
   if (mine !== dragGeneration) return;
   if (r.ok && r.file) dragFile = r.file;
 }
-/**
- * The last gesture threw the shot away.
- *
- * Read by the `click` handler, which fires AFTER `pointerup` — so it is
- * cleared on the next `pointerdown` rather than at the end of the swipe, or
- * the click that concludes a swipe would expand the panel the user has just
- * discarded.
- */
-let swiped = false;
 
 card.addEventListener("pointerdown", (e) => {
-  swiped = false;
-  // Only the collapsed thumbnail swipes. Expanded, the card is a panel of
-  // controls and — in redact mode — a drag surface with a completely
-  // different meaning, and one drag cannot mean both.
-  if (expanded || settling) return;
+  // Only when nothing is already deciding an outcome for this take — the same
+  // guard `perform` itself uses, so a swipe cannot start mid-Save any more
+  // than a second click could.
+  if (busy) return;
+  // Never while redacting (STC-392 review, I4). Swipe is the ONE gesture in
+  // this panel that destroys a capture, and redact mode is the one mode
+  // where the pointer is already busy dragging a box over something private
+  // — a drag that starts on the CANVAS is already claimed by the redaction
+  // handler below (`e.stopPropagation()` there), but the card's own chrome
+  // (the status line, the controls' padding) is not, and before this guard a
+  // drag starting there while redacting still read as a swipe and could
+  // discard the take out from under an in-progress redaction. The old
+  // collapsed/expanded panel never had this hole: redact mode implied
+  // expanded, and only the bare (collapsed) thumbnail could start a swipe at
+  // all. That protection went with the expand door STC-392 removed, and
+  // nothing replaced it until now.
+  if (redacting) return;
+  // Not on a control. Every button and the mode `<select>` need their own
+  // click and (for the select) their own pointer events to reach them
+  // untouched — `card.setPointerCapture` below redirects EVERY later pointer
+  // event on this gesture to `card`, buttons included, which is exactly the
+  // regression a real pointer click on Copy/Save/Edit/Trash hit the moment
+  // the old collapsed/expanded split (where only the bare thumbnail, never a
+  // button, could start a swipe) went away with STC-392's one-card panel.
+  // Found by an E2E `panel.click()` failing while `.click()` in the page
+  // succeeded — the same pointer-vs-programmatic gap a hidden BrowserWindow
+  // cannot surface any other way.
+  if ((e.target as HTMLElement).closest("button, select")) return;
   swipeFrom = { x: e.clientX, y: e.clientY };
   // Transition off while the card tracks the pointer; back on for the release
   // so both outcomes animate. See `#card.dragging` in thumbnail.html.
@@ -597,7 +820,6 @@ card.addEventListener("pointermove", (e) => {
     // Not ready yet: say so rather than dragging the wrong picture. See
     // `dragFile`'s note — an undecorated file would look like success.
     if (!file) { setStatus("Still preparing — try again in a moment."); return; }
-    swiped = true;
     window.thumb.startDrag(file);
     return;
   }
@@ -618,13 +840,11 @@ card.addEventListener("pointerup", (e) => {
   const dx = e.clientX - from.x;
   const dy = e.clientY - from.y;
   if (!isDiscardSwipe(dx, dy, corner)) {
-    // Short of the threshold: back to its corner, and the click that follows
-    // is a real click, so it still expands.
+    // Short of the threshold: back to its corner.
     card.style.transform = "";
     card.style.opacity = "";
     return;
   }
-  swiped = true;
   void discard();
 });
 
@@ -641,113 +861,111 @@ card.addEventListener("pointercancel", () => {
 
 /**
  * Throw the shot away — the swipe's outcome, and the same thing the
- * right-click Delete does: to the Trash, not `rm`.
+ * right-click Delete, the ⌘⌫ key and the ✕ button do: `perform("trash")`, so
+ * all four agree by construction rather than by four separate authors
+ * remembering the same rule.
  *
- * `settling` FIRST, before anything is awaited, for the same reason Delete
- * does it: the timeout can fire while the trash call is in flight, and a
- * settle that got through would export the shot being discarded.
+ * The slide-out animation is this function's own — `perform` has no opinion
+ * about the card's transform — so it is applied before the call and undone
+ * if the trash did not succeed, the same restore-on-failure the old direct
+ * `deleteShot` call made.
  */
 async function discard(): Promise<void> {
-  // Before anything async: stop the panel's own timeout racing this gesture.
-  // See thumbnail-window.ts's "discarding" handler — without it, a timeout
-  // landing in the gap before `deleteShot` resolves can hide the window and,
-  // if the delete then fails, strand the failure invisibly.
-  window.thumb.event({ kind: "discarding" });
-  settling = true;
   card.style.transform = `translateX(${420 * discardDirection(corner)}px)`;
   card.style.opacity = "0";
-  const r = await window.thumb.deleteShot(dir);
-  if (!r.ok) {
+  const ok = await perform("trash");
+  if (!ok) {
     // Nothing was thrown away, so the panel comes back rather than vanishing
-    // and leaving the user to guess whether the shot survived.
-    settling = false;
-    swiped = false;
+    // and leaving the user to guess whether the shot survived. The reason is
+    // already in the status line — `run`'s trash branch set it.
     card.style.transform = "";
     card.style.opacity = "";
-    setStatus(`Could not discard: ${r.detail ?? "unknown error"}`);
-    return;
   }
-  window.thumb.event({ kind: "done" });
 }
 
 /**
- * The right-click menu (STC-296's follow-up).
+ * The right-click menu (STC-296's follow-up, rebuilt on `panel-actions.ts` by
+ * STC-392).
  *
  * The menu is built and popped up by MAIN — `thumbnail-menu.ts` decides its
  * contents, `main.ts` turns them into a real `Menu`. This side reports the
- * gesture and performs whichever id comes back, so the five actions are the
- * same code paths the panel's own buttons use rather than a second set that
- * could drift from them.
+ * gesture and performs whichever id comes back: the four take actions go
+ * through the SAME `perform` the buttons and the keyboard use, so the menu
+ * cannot drift from them either.
  *
- * Available collapsed as well as expanded: the ticket puts the menu on the
- * thumbnail, and a shot whose panel has not been clicked yet is exactly when
- * "copy it and get on with what I was doing" is worth most.
+ * Available regardless of redact mode: the ticket puts the menu on the
+ * thumbnail, and "copy it and get on with what I was doing" is worth most
+ * exactly when nothing else has been touched yet.
  */
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   void (async () => {
-    const id = await window.thumb.menu({ redacting, busy });
+    const id = await window.thumb.menu({ take, redacting, busy });
     if (id === null) return;
-    if (id === "copy" || id === "save-as") {
+    if (id === "copy" || id === "save" || id === "edit" || id === "trash") {
+      void perform(id);
+      return;
+    }
+    if (id === "save-as") {
       if (busy) return;
       busy = true;
-      setStatus(id === "copy" ? "Copying…" : "Saving…");
-      const ok = await runExport(id);
+      setActionsEnabled(false);
+      setStatus("Saving…");
+      const ok = await runExport("save-as");
       busy = false;
-      // Same rule the Save button follows: a save ends the interaction, a copy
-      // does not. Cancelling the panel returns false, so it correctly does not
-      // close either.
-      if (ok && id === "save-as") { settling = true; window.thumb.event({ kind: "done" }); }
+      setActionsEnabled(true);
+      // Same rule Save follows: a successful save ends the interaction.
+      // Cancelling the panel returns false, so it correctly does not close.
+      if (ok) window.thumb.event({ kind: "done" });
       return;
     }
-    if (id === "redact") { expand(); setRedacting(!redacting); return; }
+    if (id === "redact") { setRedacting(!redacting); return; }
     if (id === "reveal") {
-      // The shot's own directory, not `still:reveal`'s last SAVED file: a panel
-      // that has not been settled yet has never saved anything, and revealing
-      // some earlier shot instead would be worse than doing nothing.
+      // The shot's own directory, not `still:reveal`'s last SAVED file: a take
+      // still in temp storage has never been exported anywhere else, and
+      // revealing some earlier shot instead would be worse than doing nothing.
       if (!await window.thumb.revealShot(dir)) setStatus("Nothing to show yet.");
-      return;
     }
-    // The same `discard()` the swipe uses. Two ways to throw a shot away that
-    // disagreed about where it went would be the defect, not the second
-    // gesture, and the cheapest way for them not to disagree is one function.
-    if (id === "delete") await discard();
   })();
 });
-
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape" || !expanded) return;
-  // Escape backs out of redact mode rather than out of the panel: someone
-  // halfway through covering an address reaches for it to cancel the drag,
-  // and having that settle-and-close the shot instead would be the panel
-  // punishing the most instinctive key on the board.
-  if (redacting) { setRedacting(false); return; }
-  void settle();
-});
-
-// The timeout fired (or a new capture is about to replace this panel). Main
-// has already hidden the window; this finishes the save in the background,
-// exactly what "timeout dismissal must never block on a render" requires.
-window.thumb.onSettle(() => { void settle(); });
 
 void (async () => {
   const bytes = await window.thumb.getFrame(dir, shot.frame.file);
   frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   await draw();
-  // Anything already waiting to settle can proceed now — and it must be here,
-  // after `draw()`, because `composite` is what a settle actually needs.
   markReady();
-  // A silent panel is never shown, so there is nothing to paint FOR — settle
-  // immediately, with no rAF and no round trip through main.
-  if (silent) { void settle(); return; }
-  // Painted — safe to show without a flash of empty content.
+  // A silent panel is never shown, so there is nothing to paint FOR: it
+  // copies to the clipboard the instant it can (`PresentOptions.silent`'s own
+  // doc, `thumbnail-window.ts`) and reports "done" itself, since Copy alone
+  // never closes a panel that has controls to click — this one has none.
+  //
+  // `skip` means "never show me the panel, copy it and get out of my way" —
+  // it does NOT mean "never keep it". A silent panel has no Save button this
+  // take could ever reach, so if the copy succeeds this is the one place
+  // that promotes it, through the same `panel:save` channel the button uses
+  // rather than a second promote path. Copy itself still never promotes
+  // (`run`'s "copy" branch, unchanged) — that rule is pinned by
+  // `panel-waits.e2e.test.ts` and stands; without this call, though, a skip
+  // capture would sit in temp storage until the 7-day purge, nagging from
+  // the crash-recovery dialog the whole time, because it is the one
+  // preference whose entire point is "copy it and get on with it".
+  if (silent) {
+    if (await run("copy")) await window.thumb.save(dir);
+    window.thumb.event({ kind: "done" });
+    return;
+  }
+  // Painted — safe to show without a flash of empty content, and the moment
+  // this panel starts accepting keys (after `SETTLE_KEYS_MS` — see the block
+  // comment above the keydown listener).
   requestAnimationFrame(() => {
+    keysLiveAt = performance.now() + SETTLE_KEYS_MS;
     card.classList.add("in");
     window.thumb.event({ kind: "painted" });
   });
   // Only NOW, and deliberately not awaited: the panel is on screen and idle
-  // for its whole timeout, so the export that a drag would otherwise have to
-  // wait for happens in time nobody is using. Nothing downstream waits on it
-  // — a drag that beats it is refused rather than served the wrong file.
+  // until a person acts, so the drag file that a drag-out would otherwise
+  // have to wait for happens in time nobody is using. Nothing downstream
+  // waits on it — a drag that beats it is refused rather than served the
+  // wrong file.
   void refreshDragFile();
 })();

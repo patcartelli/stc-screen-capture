@@ -28,17 +28,20 @@ function backstopMs(): number {
 
 describe("the settle chain", () => {
   test("the readiness wait clears the window's destroy backstop", () => {
-    // Below, not merely different: main destroys the window SETTLE_BACKSTOP_MS
-    // after asking it to settle, so a readiness wait at or above that can
-    // never finish — the panel would still lose the shot, just later.
+    // Below, not merely different: `SETTLE_BACKSTOP_MS` is reserved for a
+    // future destroy-after-settle timeout (`thumbnail-window.ts`'s own doc) —
+    // nothing arms it today, and main does not destroy the window on a delay
+    // any more. Pinned below it anyway, so the two numbers cannot drift apart
+    // before something wires the backstop back up: a readiness wait at or
+    // above it would already be too late for whatever uses it then.
     expect(SETTLE_READY_MS).toBeLessThan(backstopMs());
   });
 
   test("with room to spare — the export itself still has to run", () => {
     // The wait is not the whole settle: composite, encode and pasteboard all
-    // happen after it, inside the same backstop. A clearance of one
-    // millisecond would satisfy the assertion above and leave no time to do
-    // the work the wait exists to enable.
+    // would happen after it, inside the same backstop, once something arms
+    // it. A clearance of one millisecond would satisfy the assertion above
+    // and leave no time to do the work the wait exists to enable.
     expect(backstopMs() - SETTLE_READY_MS).toBeGreaterThanOrEqual(3_000);
   });
 

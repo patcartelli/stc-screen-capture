@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+  <title>deleted</title>
+  <style>
+    /*
+      STC-392 Task 6. Transparent and borderless, the same arrangement
+      `thumbnail.html`/`countdown.html` use — everything that reads as "a
+      toast" is this card's own background and shadow.
+    */
+    :root { color-scheme: light dark; }
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background: transparent; overflow: hidden;
+      font: 12px/1.4 -apple-system, system-ui, sans-serif;
+      -webkit-user-select: none; user-select: none;
+    }
+    #card {
+      position: absolute; inset: 6px;
+      border-radius: 12px;
+      background: rgba(30, 30, 32, 0.86);
+      color: #f2f2f2;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      cursor: default;
+    }
+    #row {
+      flex: 1;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 12px;
+      gap: 10px;
+    }
+    #label { font-size: 12px; }
+    button {
+      font: inherit; font-size: 12px;
+      padding: 4px 12px; border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08); color: inherit;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #bar-track { height: 3px; background: rgba(255, 255, 255, 0.12); }
+    /*
+      No `animation-name` here on purpose. `toast-renderer.ts` sets BOTH
+      `animationName` and `animationDuration` together, from the `ms` query
+      param `toast-window.ts` put on this page's URL — never a literal here.
+      Naming the animation in this stylesheet would start it at the CSS
+      default duration (0s) for the instant before the script runs; setting
+      both from script in the same tick means the bar never starts at the
+      wrong length. That is what keeps this bar and the real timer that
+      destroys the window (in main) unable to name two different lengths for
+      the one window the user is watching.
+    */
+    #bar {
+      height: 100%; width: 100%; background: #7aa2ff;
+      transform-origin: left;
+      animation-timing-function: linear;
+      animation-fill-mode: forwards;
+    }
+    @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+    /*
+      No `@media (prefers-reduced-motion: reduce)` rule here (STC-392 review,
+      I1) — one USED to live here (`#bar { animation: none; transform:
+      scaleX(0); }`) and did nothing: `toast-renderer.ts` sets `animationName`
+      and `animationDuration` as INLINE styles, and an inline style outranks
+      every stylesheet rule short of `!important`, media query included — so
+      the bar kept animating under reduced motion regardless, and the
+      `linear` timing-function above would ALSO have been reset to CSS's
+      default `ease` had that shorthand ever actually applied, on top of not
+      applying. `toast-renderer.ts` decides motion instead, the same way
+      `countdown-renderer.ts` decides it for the countdown ring — a decision
+      an inline style can defeat has to be made where the inline style is set.
+    */
+  </style>
+</head>
+<body>
+  <div id="card">
+    <div id="row">
+      <span id="label">Deleted</span>
+      <button id="undo" type="button">Undo</button>
+    </div>
+    <div id="bar-track"><div id="bar"></div></div>
+  </div>
+  <script src="../dist/toast-renderer.js"></script>
+</body>
+</html>

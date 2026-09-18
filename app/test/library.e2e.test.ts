@@ -26,18 +26,18 @@ const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
-interface Launched { win: Page; recordings: string; errors: string[] }
+interface Launched { win: Page; recordings: string; destDir: string; errors: string[] }
 
 /** `seed` populates the recordings root before Electron ever sees it. */
 async function launch(seed: (recordings: string) => void): Promise<Launched> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-libe2e-"));
   seed(recordings);
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+  const destDir = mkdtempSync(join(tmpdir(), "stc-dest-"));
   // Seeded on DISK: `recorder:setSettings` deliberately strips
   // `still.destination` (STC-293 review, #92).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: mkdtempSync(join(tmpdir(), "stc-dest-")) },
-    thumbnail: { timeoutMs: 60_000 },
+    still: { destination: destDir },
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],
@@ -56,7 +56,20 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
   win.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   win.on("pageerror", (e) => errors.push(String(e)));
   await win.waitForSelector("#capturestill");
-  return { win, recordings, errors };
+  return { win, recordings, destDir, errors };
+}
+
+/** The floating panel, once it is up — same idiom as `thumbnail.e2e.test.ts`. */
+async function thumbnailWindow(ms = 15_000): Promise<Page> {
+  const start = Date.now();
+  for (;;) {
+    for (const p of app!.windows()) if (p.url().includes("thumbnail.html")) return p;
+    if (Date.now() - start > ms) {
+      throw new Error(`no thumbnail window appeared within ${ms}ms; windows: `
+        + JSON.stringify(app!.windows().map((p) => p.url())));
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 /** Poll for a cached thumbnail, and report the renderer's own errors if it never arrives. */
@@ -274,5 +287,119 @@ describe("duplicate", () => {
     if (existsSync(join(copy, THUMBNAIL_FILE))) {
       expect(readFileSync(join(copy, THUMBNAIL_FILE)).equals(SENTINEL)).toBe(false);
     }
+  }, 60_000);
+
+  /**
+   * Re-opening a shot from the library (STC-294) goes through `still:reopen`
+   * with `take: { kind: "shot", origin: "library" }` (STC-392 review finding
+   * 3, restated for STC-392's action table) — and until this test, nothing
+   * anywhere actually invoked `still:reopen`. That gap is what this pins.
+   *
+   * STC-392 removed the panel's own "do nothing and close" affordance
+   * entirely — there is no Close button and Escape no longer settles — so a
+   * re-opened shot's panel does not close itself the way this test used to
+   * check. What is left to claim, and what actually matters: `actionsFor`
+   * gives a `"library"`-origin shot only Copy and Trash (no Save — there is
+   * nothing left to promote), and the panel does not export or duplicate
+   * anything just by being SHOWN.
+   */
+  test("re-opening a shot from the library offers only Copy and Trash, and never exports on its own (STC-294/STC-392)", async () => {
+    const { win, recordings, destDir } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
+    const before = readFileSync(join(original, "shot.json"), "utf8");
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+
+    await clickAction(win, 0, "open");
+    const panel = await thumbnailWindow();
+    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
+      .toContain("in");
+
+    // Copy and Trash only — no Save, because there is nothing to promote; no
+    // Edit, because a shot never gets one (`panel-actions.ts`'s own table).
+    expect(await panel.isVisible("#copy")).toBe(true);
+    expect(await panel.isVisible("#trash")).toBe(true);
+    expect(await panel.isHidden("#save")).toBe(true);
+    expect(await panel.isHidden("#edit")).toBe(true);
+
+    // And it stays open, undecided — nothing exported, nothing duplicated,
+    // and the original untouched, just by having been shown.
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(readdirSync(destDir)).toEqual([]);
+    expect(readdirSync(recordings)).toEqual(["2026-09-08_12-00-00"]);
+    expect(readFileSync(join(original, "shot.json"), "utf8")).toBe(before);
+  }, 60_000);
+});
+
+/**
+ * The panel's OTHER Trash style — a re-opened library shot, `trashStyle`'s
+ * "confirm" (STC-392 D1), reached via `trashWithConfirmation` (STC-392
+ * review). Both tests here open a shot from the grid exactly like the test
+ * above, then actually press Trash — which that one never does.
+ */
+describe("the panel's confirm-style Trash (STC-392 review, I2/I5)", () => {
+  async function openReopenedPanel(win: Page): Promise<Page> {
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await clickAction(win, 0, "open");
+    const panel = await thumbnailWindow();
+    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
+      .toContain("in");
+    return panel;
+  }
+
+  test("cancelling reports nothing wrong, and the take is untouched (review I5)", async () => {
+    const { win, recordings } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
+    const panel = await openReopenedPanel(win);
+
+    // A call counter, not just a stubbed response — an empty status line
+    // proves nothing on its own (it is also the panel's INITIAL state), so
+    // the assertion needs proof the round trip to main actually happened.
+    await app!.evaluate(({ dialog }) => {
+      (globalThis as any).__dialogCalls = 0;
+      dialog.showMessageBox = async () => {
+        (globalThis as any).__dialogCalls++;
+        return { response: 1, checkboxChecked: false }; // Cancel
+      };
+    });
+    await panel.click("#trash");
+    await expect.poll(() => app!.evaluate(() => (globalThis as any).__dialogCalls ?? 0),
+                       { timeout: 15_000 }).toBe(1);
+
+    // Cancelling is a decision, not a fault (I5) — the same rule
+    // `runExport`'s Save As cancel already follows. The OLD behaviour read
+    // "Could not delete: cancelled" on this line.
+    expect(await panel.evaluate(() => document.getElementById("status")!.textContent)).toBe("");
+    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(existsSync(original)).toBe(true);
+  }, 60_000);
+
+  test("a failed trash reports the error and leaves the panel open (review I2)", async () => {
+    const { win, recordings } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
+    const panel = await openReopenedPanel(win);
+
+    await app!.evaluate(({ dialog, shell }) => {
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); // Move to Trash
+      shell.trashItem = async () => { throw new Error("simulated Trash failure"); };
+    });
+    await panel.click("#trash");
+
+    // The OLD `trashWithConfirmation` left `dialog.showMessageBox` and
+    // `shell.trashItem` uncaught, so this rejection would have escaped as an
+    // unhandled promise rejection in the renderer's `perform()` — no status
+    // line, no restore, a panel that looks hidden-but-alive with no way
+    // back (review I2). A message actually reaching the status line, with
+    // the panel still open, is the proof the rejection was caught.
+    await expect.poll(() => panel.evaluate(() => document.getElementById("status")!.textContent),
+                       { timeout: 15_000 }).toContain("Could not delete");
+    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(existsSync(original)).toBe(true);
   }, 60_000);
 });
