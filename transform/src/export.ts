@@ -43,8 +43,18 @@ export interface ExportResult {
    * two sinks that both ignore the camera agree perfectly.
    */
   cameraDecodedFrames: number;
-  /** STC-233. Audio chunks encoded into the output; 0 for a take with no mic track. */
+  /** STC-233. Audio chunks HANDED to the encoder; 0 for a take with no mic track. */
   micEncodedChunks: number;
+  /**
+   * Diagnostic (2026-09-18): audio chunks the encoder actually PRODUCED and
+   * passed to `muxer.addAudioChunk`. Should equal `micEncodedChunks` when
+   * things are working; a real hardware export sent 504 chunks IN and
+   * produced a completely empty audio track (`nb_samples: 0`) with no error
+   * anywhere, so this number is what tells apart "the encoder never emitted
+   * anything for what it was fed" from "it emitted, but muxing it produced
+   * no written sample" — two different bugs with the identical symptom.
+   */
+  audioOutputChunks: number;
   durationMs: number;
   cancelled: boolean;
 }
@@ -97,22 +107,91 @@ export async function exportSession(
   // recording, not where this clip begins.
   const originNs = exportFrameTimeNs(from);
 
+  // Decoded UP FRONT, before the muxer/encoder are configured — not where the
+  // audio used to be decoded (after the video loop). The container's own
+  // `mp4a` sample-entry header (demux-audio.ts's `sampleRate`/
+  // `numberOfChannels`) is a SEPARATE claim from what the AAC bitstream
+  // actually decodes to, and AVAssetWriter's own files have been observed
+  // disagreeing between the two — the container header said stereo for a
+  // mono capture. `AudioEncoder.encode()` throws "Input audio buffer is
+  // incompatible with codec parameters" the instant a real `AudioData`'s
+  // channels/sampleRate differ from what `configure()` was told, so
+  // configuring the encoder from the container header while feeding it
+  // decoder output is exactly the "one value, two copies" shape this file
+  // keeps finding — except here the second copy is Chromium's decoder, not
+  // a second line of our own. Decoding first and reading the REAL values off
+  // the decoded `AudioData` closes that gap by construction: whatever the
+  // encoder is configured with is what it will actually receive.
   const encode = opts.encode ?? true;
+  const decodedAudio = micAudio && encode ? await decodeAllAudio(micAudio) : null;
+
   let muxer: Muxer<ArrayBufferTarget> | undefined;
   let encoder: VideoEncoder | undefined;
   let encoderError: Error | null = null;
   let audioEncoder: AudioEncoder | undefined;
   let audioEncoderError: Error | null = null;
+  let audioOutputChunks = 0;
+  // A track with no samples has nothing to encode and nothing to trust for
+  // its own real parameters — treated the same as no mic track at all.
+  const audioParams = decodedAudio && decodedAudio.length > 0
+    ? { sampleRate: decodedAudio[0]!.sampleRate, numberOfChannels: decodedAudio[0]!.numberOfChannels }
+    : null;
+  // Configuring from chunk 0 assumes the decoded track is UNIFORM — observed
+  // on real hardware NOT always to be: mic.m4a can decode with a DIFFERENT
+  // channel count or sample rate partway through than its own first chunk
+  // reports (a Bluetooth mic switching A2DP/HFP profile mid-take is one
+  // candidate; unconfirmed — see docs/STC-233-RUNBOOK.md). Configuring the
+  // encoder from chunk 0 and then feeding it a later, disagreeing chunk hits
+  // the exact same "Input audio buffer is incompatible with codec
+  // parameters" this file exists to avoid, just later and with the two
+  // wrong values happening to have swapped which one is "the container's".
+  // Scanning here fails fast, at decode time, with the actual chunk index
+  // and values that diverge — instead of failing part way through encoding
+  // with only the last chunk's shape to go on.
+  if (decodedAudio && audioParams) {
+    for (let i = 1; i < decodedAudio.length; i++) {
+      const d = decodedAudio[i]!;
+      if (d.numberOfChannels !== audioParams.numberOfChannels || d.sampleRate !== audioParams.sampleRate) {
+        throw new Error(
+          `mic.m4a's decoded track is not uniform: chunk 0 is ` +
+          `${audioParams.numberOfChannels}ch/${audioParams.sampleRate}Hz, chunk ${i} of ` +
+          `${decodedAudio.length} is ${d.numberOfChannels}ch/${d.sampleRate}Hz ` +
+          `(chunk 0 timestamp ${decodedAudio[0]!.timestamp}us, chunk ${i} timestamp ${d.timestamp}us)`,
+        );
+      }
+    }
+  }
   if (encode) {
     muxer = new Muxer({
       target: new ArrayBufferTarget(),
       video: { codec: "avc", width, height },
       // STC-233: an audio track option on the SAME muxer, not a second file —
       // mp4-muxer already supports this; nothing about the video half changes.
-      ...(micAudio
-        ? { audio: { codec: "aac" as const, numberOfChannels: micAudio.numberOfChannels, sampleRate: micAudio.sampleRate } }
+      ...(audioParams
+        ? { audio: { codec: "aac" as const, numberOfChannels: audioParams.numberOfChannels, sampleRate: audioParams.sampleRate } }
         : {}),
       fastStart: "in-memory",
+      // mp4-muxer's DEFAULT is "strict": every track's FIRST sample must
+      // have timestamp exactly 0 or addChunk throws. Video's always does —
+      // its first frame is `exportFrameTimeNs(from) - originNs === 0` by
+      // construction — but audio's first INCLUDED sample almost never lands
+      // exactly on `originNs`, so every retimed audio chunk's timestamp is a
+      // small positive number. That made EVERY `addAudioChunk` call throw,
+      // silently: the throw happens inside the AudioEncoder's own async
+      // `output` callback, outside this function's try/catch entirely, so
+      // nothing here ever saw it — the export reported success, the audio
+      // track's stsd was written correctly (synthesized from this Muxer
+      // config, not from any successfully-added sample), and `nb_samples`
+      // stayed 0. Confirmed on a real export: audioOutputChunks (507) far
+      // exceeded the audio track's actual sample count (0). "cross-track-
+      // offset" is mp4-muxer's own documented answer for exactly this
+      // shape — both tracks' timestamps already come from the SAME clock
+      // (`originNs`), so it offsets both by whichever track's first sample
+      // is earliest (video's, already 0), which is a no-op for video and
+      // leaves audio's true relative offset intact rather than "offset"'s
+      // per-track behaviour, which would independently zero audio's first
+      // sample and quietly shift it out of sync with the video.
+      firstTimestampBehavior: "cross-track-offset",
     });
     encoder = new VideoEncoder({
       output: (chunk, meta) => muxer!.addVideoChunk(chunk, meta),
@@ -121,9 +200,15 @@ export async function exportSession(
     // High @ L5.2 (PHASE-0 §8). NOT L4.0: its 2 Mpixel coded-area cap rejects 4K.
     encoder.configure({ codec: "avc1.640034", width, height, framerate: fps, bitrate: 12_000_000 });
 
-    if (micAudio) {
+    if (audioParams) {
       audioEncoder = new AudioEncoder({
-        output: (chunk, meta) => muxer!.addAudioChunk(chunk, meta),
+        // Counted separately from `micEncodedChunks` (which only counts
+        // calls INTO the encoder) so a hardware run can tell "the encoder
+        // never produced output for what it was handed" apart from "it
+        // produced output but muxer.addAudioChunk didn't result in a
+        // written sample" — two very different bugs that look identical
+        // from the export's own success/failure alone.
+        output: (chunk, meta) => { audioOutputChunks++; muxer!.addAudioChunk(chunk, meta); },
         error: (e) => { audioEncoderError = e instanceof Error ? e : new Error(String(e)); },
       });
       // AAC-LC, matching what MicCapture.swift already wrote at capture time
@@ -133,8 +218,8 @@ export async function exportSession(
       // the way the video's own GOP-aware muxing does not need to worry
       // about here either (every export frame is its own VideoFrame).
       audioEncoder.configure({
-        codec: "mp4a.40.2", sampleRate: micAudio.sampleRate,
-        numberOfChannels: micAudio.numberOfChannels, bitrate: 128_000,
+        codec: "mp4a.40.2", sampleRate: audioParams.sampleRate,
+        numberOfChannels: audioParams.numberOfChannels, bitrate: 128_000,
       });
     }
   }
@@ -194,33 +279,52 @@ export async function exportSession(
     }
 
     let micEncodedChunks = 0;
-    if (audioEncoder && micAudio && !cancelled) {
-      if (audioEncoderError) throw audioEncoderError;
-      // The export window in the SAME session-relative ns every other track
-      // in this file uses — `endNs` is one past the last included video
-      // frame, the export's own timeline boundary, not a separate audio cut.
-      const endNs = exportFrameTimeNs(from + total);
-      const decoded = await decodeAllAudio(micAudio);
+    if (audioEncoder && decodedAudio && audioParams && !cancelled) {
+      // The encoder's error callback fires ASYNCHRONOUSLY and names no
+      // offending chunk — "Input audio buffer is incompatible with codec
+      // parameters" gives no way to tell a sample-rate/channel mismatch from
+      // a format one. It can also surface AFTER the loop below, as a
+      // rejection of flush(), once several chunks are already queued — so a
+      // single checked `audioEncoderError` can miss it. The whole block is
+      // wrapped instead: whatever throws is enriched with what was actually
+      // sent and what the encoder was configured for, so a failure here is a
+      // diagnosis, not a second blind guess.
+      let lastSent: string | undefined;
       try {
-        for (const data of decoded) {
+        if (audioEncoderError) throw audioEncoderError;
+        // The export window in the SAME session-relative ns every other
+        // track in this file uses — `endNs` is one past the last included
+        // video frame, the export's own timeline boundary, not a separate
+        // audio cut.
+        const endNs = exportFrameTimeNs(from + total);
+        // Already decoded up front, above, so the encoder could be
+        // configured from the real thing it is about to receive.
+        for (const data of decodedAudio) {
           // AudioData.timestamp is MICROSECONDS on the same session-relative
           // origin demux-audio.ts produced — clip to the export window and
           // retime to clip-relative, exactly as the VideoFrame above.
           const sampleNs = data.timestamp * 1000;
           if (sampleNs >= originNs && sampleNs < endNs && !audioEncoderError) {
             const retimed = retimeAudioData(data, Math.round((sampleNs - originNs) / 1000));
+            lastSent = `format=${retimed.format} sampleRate=${retimed.sampleRate} ` +
+              `numberOfChannels=${retimed.numberOfChannels} numberOfFrames=${retimed.numberOfFrames}`;
             audioEncoder.encode(retimed);
             retimed.close();
             micEncodedChunks++;
           }
         }
-      } finally {
-        for (const d of decoded) d.close();
+        if (audioEncoderError) throw audioEncoderError;
+        // Same reasoning as the video encoder's own unbounded final flush
+        // below: an encoder that never finishes would hang the export at 100%.
+        await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export");
+      } catch (e) {
+        const cause = e instanceof Error ? e.message : String(e);
+        throw new Error(
+          `${cause} — encoder configured for mp4a.40.2 ${audioParams.sampleRate}Hz ` +
+          `x${audioParams.numberOfChannels}ch; ${micEncodedChunks} chunk(s) encoded before this` +
+          (lastSent ? `; last chunk sent: ${lastSent}` : "; no chunk was sent"),
+        );
       }
-      if (audioEncoderError) throw audioEncoderError;
-      // Same reasoning as the video encoder's own unbounded final flush below:
-      // an encoder that never finishes would hang the export at 100%.
-      await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export");
     }
 
     let encodedBytes = 0;
@@ -249,12 +353,14 @@ export async function exportSession(
       decodedFrames: source.decodedCount,
       cameraDecodedFrames: cameraSource?.decodedCount ?? 0,
       micEncodedChunks: cancelled ? 0 : micEncodedChunks,
+      audioOutputChunks: cancelled ? 0 : audioOutputChunks,
       durationMs: Math.round(performance.now() - t0),
       cancelled,
     };
   } finally {
     source.close();
     cameraSource?.close();
+    if (decodedAudio) for (const d of decodedAudio) d.close();
     if (encoder && encoder.state !== "closed") encoder.close();
     if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();
   }
