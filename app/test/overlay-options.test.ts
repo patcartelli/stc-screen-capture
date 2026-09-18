@@ -93,16 +93,16 @@ const windowPick: SelectionOutcome = { kind: "window", windowId: 7 };
 describe("the bar's anchor rect (STC-388)", () => {
   test("region mode: the anchor is the live marquee, exactly as before this ticket", () => {
     const rect: Rect = { x: 10, y: 10, width: 100, height: 80 };
-    expect(anchorRectFor(region, rect, windows)).toEqual(rect);
+    expect(anchorRectFor("region", region, rect, windows)).toEqual(rect);
     // No outcome confirmed yet (the select phase) falls back the same way.
-    expect(anchorRectFor(undefined, rect, windows)).toEqual(rect);
+    expect(anchorRectFor("region", undefined, rect, windows)).toEqual(rect);
   });
 
   test("window mode: the anchor is the PICKED WINDOW'S bounds — not the display's, and not undefined", () => {
     // state.rect is undefined here ON PURPOSE: selection.ts never sets one for
     // a window outcome, so an anchor that fell back to state.rect the way
     // region mode's does would be undefined too — the exact bug this fixes.
-    const anchor = anchorRectFor(windowPick, undefined, windows);
+    const anchor = anchorRectFor("window", windowPick, undefined, windows);
     expect(anchor).toEqual(windowBounds);
     expect(anchor).not.toEqual(display.bounds);
     expect(anchor).not.toBeUndefined();
@@ -110,13 +110,22 @@ describe("the bar's anchor rect (STC-388)", () => {
 
   test("a window that has since vanished from the list yields no anchor, not a stale one", () => {
     const pending: SelectionOutcome = { kind: "window", windowId: 999 };
-    expect(anchorRectFor(pending, undefined, windows)).toBeUndefined();
+    expect(anchorRectFor("window", pending, undefined, windows)).toBeUndefined();
+  });
+
+  test("switching from a picked window back to region mode anchors the live marquee", () => {
+    // Space remains available after the bar opens. In region mode Record
+    // commits confirm(state), so the bar must leave the old window and follow
+    // the new marquee too — otherwise the readout names one target while the
+    // helper receives another.
+    const rect: Rect = { x: 900, y: 100, width: 120, height: 90 };
+    expect(anchorRectFor("region", windowPick, rect, windows)).toEqual(rect);
   });
 });
 
 describe("a window selection produces a real bar layout (STC-388)", () => {
   test("barLayout is defined for a window pick, with every control laid out", () => {
-    const anchor = anchorRectFor(windowPick, undefined, windows);
+    const anchor = anchorRectFor("window", windowPick, undefined, windows);
     expect(anchor).toBeDefined();
     const layout = barLayout(anchor!, display);
     expect(layout).toBeDefined();
@@ -124,7 +133,7 @@ describe("a window selection produces a real bar layout (STC-388)", () => {
   });
 
   test("the W×H readout reflects the WINDOW, in pixels — not '—', not the display", () => {
-    const anchor = anchorRectFor(windowPick, undefined, windows)!;
+    const anchor = anchorRectFor("window", windowPick, undefined, windows)!;
     // scaleFactor 2: a 640x480 point window reads 1280x960 pixels.
     expect(sizeLabel(anchor, display)).toBe("1280 × 960");
     expect(sizeLabel(anchor, display)).not.toBe(sizeLabel(display.bounds, display));

@@ -605,3 +605,44 @@ describe("Space after Enter must not let Record commit a mere hover (re-review r
     expect(cmd.region).toBeDefined();
   }, 120_000);
 });
+
+describe("switching a picked window back to an area keeps the bar honest", () => {
+  test("the bar readout and Record both follow the new marquee", async () => {
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    await win.click("#record");
+    const overlay = await overlayWindow();
+    const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
+    const scaleFactor: number = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().scaleFactor);
+
+    // Pick the stand-in's Finder window first, which opens the options bar
+    // with a window outcome and no marquee rect.
+    await send(overlay, { t: "key", key: " " });
+    await send(overlay, { t: "pointermove", at: { x: b.x + 200, y: b.y + 200 } });
+    await send(overlay, { t: "pointerdown", at: { x: b.x + 200, y: b.y + 200 } });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+
+    // Space is still live in the options phase. Switch back to region mode
+    // and draw a distinctly sized marquee. Before this regression fix the
+    // bar stayed anchored to the pending window, while Record correctly sent
+    // this region — visible target and committed target diverged.
+    const from = { x: b.x + 100, y: b.y + 80 };
+    const to = { x: from.x + 200, y: from.y + 100 };
+    await send(overlay, { t: "key", key: " " });
+    await send(overlay, { t: "pointerdown", at: from });
+    await send(overlay, { t: "pointermove", at: to });
+    await send(overlay, { t: "pointerup", at: to });
+    await awaitConfirmable(overlay);
+
+    const expectedReadout = `${Math.round(200 * scaleFactor)} × ${Math.round(100 * scaleFactor)}`;
+    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).toBe(expectedReadout);
+
+    await send(overlay, { t: "control", id: "record" });
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect(cmd.windowId).toBeUndefined();
+    expect(cmd.region).toBeDefined();
+    expect(`${Math.round(cmd.region.width * scaleFactor)} × ${Math.round(cmd.region.height * scaleFactor)}`)
+      .toBe(expectedReadout);
+  }, 120_000);
+});

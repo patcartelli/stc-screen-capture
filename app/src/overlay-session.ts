@@ -92,19 +92,23 @@ export function nextPhase(purpose: OverlayPurpose, phase: OverlayPhase,
  * and Enter paths attach only a bare `windowId` to a window outcome, and every
  * `rect` assignment in that file is on the region-mode path — so falling back
  * to `stateRect` there is undefined, which was the bug: no anchor, no bar, no
- * Record control, Escape the only way out. This looks the PENDING outcome's
- * window up in the window list instead: `pending` is what Record would
- * actually commit, which is the only notion of "the thing being recorded"
- * this file is allowed to have — not a second one derived from `hoveredWindowId`
- * or from `state.mode`, either of which could disagree with it (a mode toggle
- * after a pick changes `state.mode` and `hoveredWindowId` without producing a
- * new outcome — rule 11 in `selection.ts` — so `pending` is the only field
- * that is guaranteed to still describe what Record would do).
+ * Record control, Escape the only way out. In window mode, this therefore
+ * looks the PENDING outcome's window up in the list: it is a real clicked
+ * target, unlike `hoveredWindowId`. In region mode, it follows the live
+ * marquee, which is exactly what `confirm(state)` will commit. Keeping a
+ * pending window after Space switched back to region mode was wrong: the bar
+ * named that window while Record captured the new marquee.
  */
-export function anchorRectFor(pending: SelectionOutcome | undefined,
+export function anchorRectFor(mode: Mode, pending: SelectionOutcome | undefined,
                               stateRect: Rect | undefined,
                               windows: WindowInfo[]): Rect | undefined {
-  if (pending?.kind === "window") {
+  // A picked window only remains the bar's target while the live interaction
+  // is still in window mode. Space is available after the options bar opens:
+  // switching back to region mode and drawing a marquee must move the bar and
+  // its readout to that marquee, because Record commits `confirm(state)` in
+  // region mode. Retaining the old pending window here made the UI name one
+  // target while Record captured another.
+  if (mode === "window" && pending?.kind === "window") {
     return windows.find((w) => w.id === pending.windowId)?.bounds;
   }
   return stateRect;
@@ -414,7 +418,7 @@ class OverlaySession {
 
   /** The bar's anchor rect right now — see `anchorRectFor`'s own doc. */
   private anchorRect(): Rect | undefined {
-    return anchorRectFor(this.pending, this.state.rect, this.ctx.windows);
+    return anchorRectFor(this.state.mode, this.pending, this.state.rect, this.ctx.windows);
   }
 
   /**
