@@ -1,8 +1,11 @@
 import { describe, test, expect } from "vitest";
 import {
-  TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, bgraFromMask, marqueeMask, trayTemplate,
+  TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, STOP_RECORDING_LABEL,
+  bgraFromMask, marqueeMask, trayTemplate,
 } from "../src/tray-menu.js";
-import { SHOT_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
+import {
+  BINDABLE_ACTIONS, SHOT_ACTIONS, DEFAULT_SHORTCUTS, HYPER,
+} from "../src/hotkeys.js";
 
 /**
  * The menu-bar item's contents and icon (STC-292).
@@ -18,12 +21,14 @@ describe("the menu", () => {
   const ids = (ctx: Parameters<typeof trayTemplate>[0]) =>
     trayTemplate(ctx).map((i) => i.id);
 
-  test("every capture action is offered, in the order preferences lists them", () => {
-    // Sliced by the LIST's own length, not by a literal 3 — the claim is
-    // "every capture action", and the literal made that claim go stale the
-    // first time an action was added (STC-391's self-timer).
-    expect(ids({ shortcuts: DEFAULT_SHORTCUTS }).slice(0, SHOT_ACTIONS.length))
-      .toEqual(SHOT_ACTIONS.map((a) => `capture:${a}`));
+  test("every shot action is offered, in the order preferences lists them", () => {
+    // Filtered to the shot ids rather than sliced by position: Record
+    // (STC-388) now sits BETWEEN the shots and the self-timer in
+    // `BINDABLE_ACTIONS`, so the shots are no longer a contiguous prefix of
+    // the template — only their own relative order is the claim here.
+    const shotIds = ids({ shortcuts: DEFAULT_SHORTCUTS })
+      .filter((id) => SHOT_ACTIONS.some((a) => id === `action:${a}`));
+    expect(shotIds).toEqual(SHOT_ACTIONS.map((a) => `action:${a}`));
   });
 
   test("there is a way back to a window and a way to quit", () => {
@@ -48,14 +53,18 @@ describe("the menu", () => {
     expect(region!.accelerator).toBeUndefined();
   });
 
-  test("a capture in flight disables the captures and nothing else", () => {
+  test("a shot in flight disables the shot actions and nothing else", () => {
+    // Deliberately filtered to SHOT_ACTIONS rather than `startsWith("action:")`
+    // — that prefix now also matches Record, which this scenario (busy, not
+    // recording) disables identically, but is a DIFFERENT claim covered by
+    // its own test below (STC-388).
     const busy = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS, busy: true });
-    const captures = busy.filter((i) => i.id.startsWith("capture:"));
-    // Every capture, however many there are — and the count is asserted too,
-    // so "disables the captures" cannot be satisfied by a filter that found
+    const shots = busy.filter((i) => SHOT_ACTIONS.some((a) => i.id === `action:${a}`));
+    // Every shot action, however many there are — and the count is asserted
+    // too, so "disables the shots" cannot be satisfied by a filter that found
     // none of them.
-    expect(captures).toHaveLength(SHOT_ACTIONS.length);
-    expect(captures.map((i) => i.enabled)).toEqual(SHOT_ACTIONS.map(() => false));
+    expect(shots).toHaveLength(SHOT_ACTIONS.length);
+    expect(shots.map((i) => i.enabled)).toEqual(SHOT_ACTIONS.map(() => false));
     expect(busy.find((i) => i.id === "library")!.enabled).not.toBe(false);
     expect(busy.find((i) => i.id === "quit")!.enabled).not.toBe(false);
   });
@@ -132,5 +141,57 @@ describe("the icon", () => {
       expect(bgra[i * 4 + 2]).toBe(0);
       expect(bgra[i * 4 + 3]).toBe(mask[i]);
     }
+  });
+});
+
+describe("Record in the menu bar (STC-388)", () => {
+  const ctx = { shortcuts: DEFAULT_SHORTCUTS };
+
+  test("every bindable action gets an item, in list order", () => {
+    const ids = trayTemplate(ctx).filter((i) => i.id.startsWith("action:")).map((i) => i.id);
+    expect(ids).toEqual(BINDABLE_ACTIONS.map((a) => `action:${a}`));
+  });
+
+  test("Record draws its own accelerator", () => {
+    const item = trayTemplate(ctx).find((i) => i.id === "action:record")!;
+    expect(item.label).toBe("Record");
+    expect(item.accelerator).toBe(DEFAULT_SHORTCUTS.record);
+  });
+
+  test("mid-take the item says Stop Recording and stays clickable — the NORMAL state", () => {
+    // STC-388 review, Finding 10 (deferred minor #2): the only test of this
+    // used `busy: true`, which is a compound state (a shot ALSO in flight
+    // during a recording) — the ordinary mid-take state, `busy: false`, had
+    // never been exercised. The hotkey toggles, so the menu item must too —
+    // an item that went grey the moment a take started would be the only
+    // entry point that cannot stop one, which is the gap this ticket exists
+    // to close.
+    const item = trayTemplate({ ...ctx, recording: true, busy: false })
+      .find((i) => i.id === "action:record")!;
+    expect(item.label).toBe(STOP_RECORDING_LABEL);
+    expect(item.enabled).toBe(true);
+  });
+
+  test("mid-take, WITH a shot also in flight, the item still says Stop Recording and stays clickable", () => {
+    // The compound state the original test above covered — kept as its own
+    // case rather than folded away, since `busy: true` disabling the SHOT
+    // actions (the test two below) must not also disable Record.
+    const item = trayTemplate({ ...ctx, recording: true, busy: true })
+      .find((i) => i.id === "action:record")!;
+    expect(item.label).toBe(STOP_RECORDING_LABEL);
+    expect(item.enabled).toBe(true);
+  });
+
+  test("a shot is still refused while something is in flight", () => {
+    const items = trayTemplate({ ...ctx, busy: true });
+    for (const a of SHOT_ACTIONS) {
+      expect(items.find((i) => i.id === `action:${a}`)!.enabled).toBe(false);
+    }
+  });
+
+  test("Record is refused while a SHOT is in flight — busy without recording", () => {
+    const item = trayTemplate({ ...ctx, busy: true }).find((i) => i.id === "action:record")!;
+    expect(item.enabled).toBe(false);
+    expect(item.label).toBe("Record");
   });
 });

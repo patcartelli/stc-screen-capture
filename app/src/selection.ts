@@ -95,11 +95,12 @@ import { rectToDisplayLocal, snapRectEdges } from "@transform/spaces.js";
  * mis-press between region and window costs nothing; the rect survives the
  * toggle either way.
  *
- * **12. A window-mode click confirms at once; region mode always waits for
- * Return.** The hover already showed exactly what would be taken, so in
- * window mode a second confirming gesture would be ceremony. A region is
- * drawn first and reviewed before it is confirmed, because unlike a window
- * click it can be adjusted.
+ * **12. Releasing a region and clicking a window are the confirmation
+ * gestures.** The hover already showed exactly what a window click takes, so
+ * a second confirming gesture would be ceremony. Region release similarly
+ * hands the completed marquee to the overlay session: a still captures at
+ * once, while a recording opens its adjustable options bar. Return remains a
+ * keyboard alternative for the pure reducer, not a required extra step.
  *
  * **13. Escape cancels from every state, and a selection that cannot be
  * confirmed makes Return a NO-OP rather than an error.** A window that closed

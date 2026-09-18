@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
-  ACTION_LABELS, SHOT_ACTIONS, DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
-  acceleratorFromKeyStroke, explainShortcut, formatAccelerator,
+  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
+  acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction,
   parseAccelerator, planShortcuts,
   type ShortcutReport, type Shortcuts,
 } from "../src/hotkeys.js";
@@ -98,9 +98,11 @@ describe("planning a whole set", () => {
     planShortcuts({ ...DEFAULT_SHORTCUTS, ...s });
 
   test("the defaults all plan clean, and differ from each other", () => {
+    // Every BINDABLE action now, not just the four shots (STC-388) — record
+    // is planned exactly like the rest.
     const p = plan({});
-    expect(p.map((x) => x.problem)).toEqual(SHOT_ACTIONS.map(() => undefined));
-    expect(new Set(p.map((x) => x.accelerator)).size).toBe(SHOT_ACTIONS.length);
+    expect(p.map((x) => x.problem)).toEqual(BINDABLE_ACTIONS.map(() => undefined));
+    expect(new Set(p.map((x) => x.accelerator)).size).toBe(BINDABLE_ACTIONS.length);
   });
 
   test("no default collides with a system binding", () => {
@@ -231,25 +233,88 @@ describe("stills are Shot (STC-398)", () => {
     }
   });
 
-  test("every label says Shot", () => {
-    for (const label of Object.values(ACTION_LABELS)) expect(label).toMatch(/^Shot\b/);
+  test("every SHOT label says Shot — Record (STC-388) is not a still and keeps its own word", () => {
+    for (const action of SHOT_ACTIONS) expect(ACTION_LABELS[action]).toMatch(/^Shot\b/);
   });
 
   test("the action IDS are untouched, so stored bindings still resolve", () => {
     // Exactly the keys a pre-rename settings.json holds. If this list ever has
     // to change, it needs a settings migration — not a relabel.
     expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer"]);
+    // DEFAULT_SHORTCUTS now also carries `record` (STC-388) — a fifth,
+    // brand-new key, not a rename of any of the four above.
     expect(Object.keys(DEFAULT_SHORTCUTS).sort())
-      .toEqual(["display", "region", "self-timer", "window"]);
+      .toEqual(["display", "record", "region", "self-timer", "window"]);
   });
 
   test("a binding stored before the rename still plans onto its action", () => {
-    // A real pre-rename shortcuts block, keyed by id rather than by label.
-    const stored = { region: `${HYPER}+1`, window: `${HYPER}+2`,
-                     display: `${HYPER}+3`, "self-timer": `${HYPER}+5` };
+    // A real pre-rename shortcuts block, keyed by id rather than by label —
+    // plus `record` (STC-388), since `Shortcuts` now covers every bindable
+    // action and a caller can no longer omit it.
+    const stored: Shortcuts = { region: `${HYPER}+1`, window: `${HYPER}+2`,
+                     display: `${HYPER}+3`, record: `${HYPER}+4`, "self-timer": `${HYPER}+5` };
     const planned = planShortcuts(stored);
     for (const p of planned) {
       expect(p.accelerator, `${p.action} lost its binding`).toBe(stored[p.action]);
     }
+  });
+});
+
+describe("Record is a bindable action, not a Shot (STC-388)", () => {
+  test("record is bindable but is not a shot", () => {
+    expect(BINDABLE_ACTIONS).toContain("record");
+    expect([...SHOT_ACTIONS] as string[]).not.toContain("record");
+    expect(isShotAction("record")).toBe(false);
+    for (const a of SHOT_ACTIONS) expect(isShotAction(a)).toBe(true);
+  });
+
+  test("SHOT_ACTIONS is DERIVED, so the two lists cannot disagree", () => {
+    // Not a second literal: every shot action must appear in the wider list,
+    // in the same relative order, and nothing else may be in it.
+    expect(SHOT_ACTIONS).toEqual(BINDABLE_ACTIONS.filter((a) => a !== "record"));
+    expect(new Set(BINDABLE_ACTIONS).size).toBe(BINDABLE_ACTIONS.length);
+  });
+
+  test("the four persisted shot ids are unchanged — renaming one costs a hotkey", () => {
+    expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer"]);
+  });
+
+  test("Record's default is the slot STC-391 left open", () => {
+    expect(DEFAULT_SHORTCUTS.record).toBe(`${HYPER}+4`);
+    expect(parseAccelerator(DEFAULT_SHORTCUTS.record!)).toEqual({
+      ok: true, accelerator: `${HYPER}+4`,
+    });
+  });
+
+  test("the action list and the numeric defaults cannot drift apart", () => {
+    // BINDABLE_ACTIONS' order is load-bearing twice over: it is the order
+    // preferences lists actions in, and the order planShortcuts resolves
+    // duplicates in. The numeric defaults are a second statement of the same
+    // ordering, so they are asserted to agree rather than left to drift.
+    const digits = BINDABLE_ACTIONS.map((a) => {
+      const acc = DEFAULT_SHORTCUTS[a];
+      expect(acc, `${a} has no default binding`).toBeTruthy();
+      const m = /^(.*)\+(\d)$/.exec(acc!);
+      expect(m, `${a}'s default is not HYPER+<digit>: ${acc}`).not.toBeNull();
+      expect(m![1]).toBe(HYPER);
+      return Number(m![2]);
+    });
+    expect(digits).toEqual([...digits].sort((x, y) => x - y));
+    expect(new Set(digits).size).toBe(digits.length);
+  });
+
+  test("every bindable action has a label, and Record's says Record", () => {
+    for (const a of BINDABLE_ACTIONS) expect(ACTION_LABELS[a]).toBeTruthy();
+    expect(ACTION_LABELS.record).toBe("Record");
+  });
+
+  test("planShortcuts covers record, and resolves a duplicate in list order", () => {
+    const plans = planShortcuts({
+      ...DEFAULT_SHORTCUTS, region: `${HYPER}+9`, record: `${HYPER}+9`,
+    });
+    expect(plans.map((p) => p.action)).toEqual([...BINDABLE_ACTIONS]);
+    // region comes first in BINDABLE_ACTIONS, so it keeps the key.
+    expect(plans.find((p) => p.action === "region")!.problem).toBeUndefined();
+    expect(plans.find((p) => p.action === "record")!.problem).toBe("duplicate");
   });
 });

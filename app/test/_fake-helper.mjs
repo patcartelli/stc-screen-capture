@@ -97,6 +97,21 @@ process.stdin.on("data", (chunk) => {
           });
           break;
         }
+        // STC-388 (task 9). The real helper creates the take's leaf directory
+        // itself once it actually begins writing frames — `newTempTakeDir`
+        // (temp-takes.ts) only NAMES one, and this stand-in used to create
+        // nothing for a `start`, unlike its own `capture-still` case a few
+        // lines down. That made "a take directory exists under the temp
+        // root" unobservable for a recording specifically, and it is also
+        // why `promoteTake`'s rename used to fail silently (caught by
+        // `HelperSupervisor.promote`, `recording-promote-failed`) on every
+        // successful start this stand-in has ever answered. Mirroring the
+        // still path here closes both gaps with one line, and only after the
+        // refusal above: a helper that refused to start writes nothing.
+        if (typeof cmd.dir === "string") {
+          try { mkdirSync(cmd.dir, { recursive: true }); }
+          catch { /* a test seam is not worth killing the stand-in */ }
+        }
         state = "recording";
         session = cmd.dir ?? null;
         recordingStartedAt = Date.now();
