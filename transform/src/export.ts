@@ -171,6 +171,27 @@ export async function exportSession(
         ? { audio: { codec: "aac" as const, numberOfChannels: audioParams.numberOfChannels, sampleRate: audioParams.sampleRate } }
         : {}),
       fastStart: "in-memory",
+      // mp4-muxer's DEFAULT is "strict": every track's FIRST sample must
+      // have timestamp exactly 0 or addChunk throws. Video's always does —
+      // its first frame is `exportFrameTimeNs(from) - originNs === 0` by
+      // construction — but audio's first INCLUDED sample almost never lands
+      // exactly on `originNs`, so every retimed audio chunk's timestamp is a
+      // small positive number. That made EVERY `addAudioChunk` call throw,
+      // silently: the throw happens inside the AudioEncoder's own async
+      // `output` callback, outside this function's try/catch entirely, so
+      // nothing here ever saw it — the export reported success, the audio
+      // track's stsd was written correctly (synthesized from this Muxer
+      // config, not from any successfully-added sample), and `nb_samples`
+      // stayed 0. Confirmed on a real export: audioOutputChunks (507) far
+      // exceeded the audio track's actual sample count (0). "cross-track-
+      // offset" is mp4-muxer's own documented answer for exactly this
+      // shape — both tracks' timestamps already come from the SAME clock
+      // (`originNs`), so it offsets both by whichever track's first sample
+      // is earliest (video's, already 0), which is a no-op for video and
+      // leaves audio's true relative offset intact rather than "offset"'s
+      // per-track behaviour, which would independently zero audio's first
+      // sample and quietly shift it out of sync with the video.
+      firstTimestampBehavior: "cross-track-offset",
     });
     encoder = new VideoEncoder({
       output: (chunk, meta) => muxer!.addVideoChunk(chunk, meta),
