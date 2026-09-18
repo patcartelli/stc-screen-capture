@@ -230,27 +230,51 @@ describe("the panel waits (STC-392)", () => {
   test("⌘⌫ within the first 100ms of paint is ignored; the same key after 500ms deletes", async () => {
     const { app: electronApp, temp } = await launch();
     const panel = panelWindow(electronApp);
-    await panel.waitForFunction(() => document.getElementById("card")!.className.includes("in"));
-    const paintedAt = Date.now();
 
     const pressTrashKey = () => panel.evaluate(() => document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true })));
 
-    // Well inside the settle window — dispatched immediately on detecting
-    // paint, so this lands within `SETTLE_KEYS_MS`'s first 100ms in practice.
-    // The elapsed check has to happen right here, at press time: it is
-    // asserting the PRESS landed inside the window, and `SETTLE_KEYS_MS`
-    // itself is 300ms, so a bound measured after an added sleep(100) has no
-    // margin left over CI's own jitter (measured failing at 322ms on a real
-    // CI run — the sleep, not the press, was what blew the budget).
-    await pressTrashKey();
-    expect(Date.now() - paintedAt).toBeLessThan(300);
+    /**
+     * Detecting paint with `waitForFunction` (an external poll over CDP) and
+     * then dispatching the key in a SEPARATE `evaluate()` round trip put an
+     * unbounded, CI-load-dependent gap between the renderer's own paint
+     * moment (`keysLiveAt`'s set point) and the actual press — on two
+     * separate loaded CI runs that gap alone reached or exceeded
+     * `SETTLE_KEYS_MS` (300ms), once making the test's own timing sanity
+     * check fail (322ms) and once making the REAL press land outside the
+     * window it was meant to test (the panel closed — CI run 35393009991).
+     * Neither was a product bug; both were about how late "detect paint"
+     * itself can be under load, which no Node-side clock can bound.
+     *
+     * Detecting paint AND dispatching the key now happen inside ONE
+     * `evaluate()` call, so the gap between them is a same-tick
+     * MutationObserver callback rather than a round trip through
+     * Playwright's CDP connection — structurally inside the settle window
+     * rather than merely likely to be, on any machine.
+     */
+    await panel.evaluate(() => new Promise<void>((resolve) => {
+      const card = document.getElementById("card")!;
+      const press = () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true }));
+        resolve();
+      };
+      if (card.className.includes("in")) { press(); return; }
+      new MutationObserver((_muts, obs) => {
+        if (card.className.includes("in")) { obs.disconnect(); press(); }
+      }).observe(card, { attributes: true, attributeFilter: ["class"] });
+    }));
+    const pressedAt = Date.now();
+
     await sleep(100);
     expect(readdirSync(temp).length).toBe(1);
     expect(electronApp.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
 
-    // Past it: the same key now reaches `perform("trash")`.
-    const elapsed = Date.now() - paintedAt;
+    // Past it: the same key now reaches `perform("trash")`. 500ms against a
+    // 300ms boundary is 200ms of margin — generous enough that the ordinary
+    // Node-side clock used everywhere else in this file is fine here; it is
+    // only the FIRST press, with zero margin against the same boundary, that
+    // needed the in-browser fix above.
+    const elapsed = Date.now() - pressedAt;
     if (elapsed < 500) await sleep(500 - elapsed);
     await pressTrashKey();
     await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
