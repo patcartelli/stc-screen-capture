@@ -30,7 +30,16 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+// `app.close()` now waits on `runQuitTeardown()`'s chain (STC-392 Task 6):
+// commit any pending trash (`shell.trashItem`), then closeThumbnail,
+// closeOverlay, sup.shutdown. Comfortably under 2s locally, every time — but
+// CI hit vitest's 10s hookTimeout default on this exact chain (run
+// 35391437745), which is `nothing-lost.e2e.test.ts`'s own reason for a
+// declared afterEach timeout (`TEARDOWN_MS`, `SETTLE_READY_MS + 20_000`).
+// Same shape, same fix, since there is no equivalent settle constant this
+// chain is bounded by to derive a tighter number from.
+const TEARDOWN_MS = 30_000;
+afterEach(async () => { await app?.close().catch(() => {}); app = undefined; }, TEARDOWN_MS);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
