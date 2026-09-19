@@ -5,6 +5,7 @@ import {
   displayToOutput, fixedCornerPipUv, mapPoint, mapVector, outputRect, pixelsToUv,
   pixelsToUvRect, pxPerPoint, rectToDisplayLocal, regionPointToPixels, roundRect,
   snapRectEdges, toDisplayLocal, unmapPoint, uvRectToPixels, uvToPixels, type Rect,
+  isWholeFrame, throughCrop, throughCropVector,
 } from "../src/spaces.js";
 
 const pipAnchors = JSON.parse(
@@ -308,5 +309,62 @@ describe("fixedCornerPipUv — the PiP is a crop in UV, not a corner in pixels",
     expect(pipRect(pip, output, cam)).toEqual(legacyPipRect(pip, output, cam));
     // 640-wide output at 25% is a 160px PiP; a 1280x720 camera makes it 90 tall.
     expect(pipRect(pip, output, cam)).toEqual({ x: 464, y: 254, width: 160, height: 90 });
+  });
+});
+
+describe("throughCrop — an output pixel re-placed for a canvas showing only a crop (STC-421)", () => {
+  const ref: Rect = { x: 0, y: 0, width: 1920, height: 1080 };
+
+  test("a point's UV over the crop becomes its UV over the canvas", () => {
+    // (960, 540) is UV (0.5, 0.5) of the capture; inside a crop starting at
+    // 0.1 and 0.5 wide that is 0.8 of the way across.
+    const crop = { x: 0.1, y: 0.1, width: 0.5, height: 0.5 };
+    const p = throughCrop({ x: 960, y: 540 }, crop, ref);
+    expect(p.x).toBeCloseTo(0.8 * 1920, 9);
+    expect(p.y).toBeCloseTo(0.8 * 1080, 9);
+  });
+
+  test("the crop's own corners land on the canvas's corners", () => {
+    const crop = { x: 0.25, y: 0.125, width: 0.5, height: 0.75 };
+    const tl = throughCrop(uvToPixels({ x: crop.x, y: crop.y }, ref), crop, ref);
+    const br = throughCrop(uvToPixels({ x: crop.x + crop.width, y: crop.y + crop.height }, ref), crop, ref);
+    expect(tl.x).toBeCloseTo(0, 9); expect(tl.y).toBeCloseTo(0, 9);
+    expect(br.x).toBeCloseTo(1920, 9); expect(br.y).toBeCloseTo(1080, 9);
+  });
+
+  test("a point outside the crop lands outside the canvas rather than being clamped", () => {
+    const crop = { x: 0.5, y: 0.5, width: 0.5, height: 0.5 };
+    const p = throughCrop({ x: 100, y: 100 }, crop, ref);
+    expect(p.x).toBeLessThan(0);
+    expect(p.y).toBeLessThan(0);
+  });
+
+  test("the whole-frame crop is the identity BIT-EXACTLY, not to within floating point", () => {
+    // The arithmetic alone is not: (p / w) * w differs from p by an ulp for
+    // some p. Swept rather than asserted at one point, and the CONTROL shows
+    // the raw arithmetic really does drift somewhere in this range — without
+    // it, the exactness claim would be indistinguishable from luck.
+    const whole = { x: 0, y: 0, width: 1, height: 1 };
+    let rawDrifted = false;
+    for (let i = 0; i < 2000; i++) {
+      const p = { x: i * 0.37 + 0.1, y: i * 0.29 + 0.7 };
+      expect(throughCrop(p, whole, ref)).toBe(p);
+      const raw = uvToPixels(pixelsToUv(p, uvRectToPixels(whole, ref)), ref);
+      if (raw.x !== p.x || raw.y !== p.y) rawDrifted = true;
+    }
+    expect(rawDrifted).toBe(true);
+    expect(throughCropVector({ x: 3, y: 4 }, whole)).toEqual({ x: 3, y: 4 });
+  });
+
+  test("throughCropVector scales by the crop's magnification and does not translate", () => {
+    const crop = { x: 0.3, y: 0.2, width: 0.5, height: 0.25 };
+    expect(throughCropVector({ x: 10, y: 10 }, crop)).toEqual({ x: 20, y: 40 });
+    expect(throughCropVector({ x: 0, y: 0 }, crop)).toEqual({ x: 0, y: 0 });
+  });
+
+  test("isWholeFrame is exact equality with {0,0,1,1}, not a tolerance", () => {
+    expect(isWholeFrame({ x: 0, y: 0, width: 1, height: 1 })).toBe(true);
+    expect(isWholeFrame({ x: 0, y: 0, width: 0.999999, height: 1 })).toBe(false);
+    expect(isWholeFrame({ x: 1e-9, y: 0, width: 1, height: 1 })).toBe(false);
   });
 });

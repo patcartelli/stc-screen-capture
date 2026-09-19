@@ -2,7 +2,8 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render } from "../src/render.js";
-import type { Anchors, Project, Session } from "../src/types.js";
+import type { Anchors, Project, Session, SessionEvent } from "../src/types.js";
+import { defaultProject } from "../src/trim.js";
 
 const root = join(__dirname, "..", "..");
 const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
@@ -251,5 +252,116 @@ describe("PiP placement and track bounds", () => {
     // passing, so both `undefined` and `null` fail this test.
     expect(seeked!.width).toBe(480);   // 3840 * 0.125
     expect(seeked!.height).toBe(270);  // 480 * 720/1280
+  });
+});
+
+/**
+ * STC-421: the cursor under an active zoom crop.
+ *
+ * The compositor draws `zoom.crop` (UV over the capture) scaled to the whole
+ * canvas, so anything drawn in output pixels on top of it has to go through
+ * the SAME crop — otherwise the picture zooms and the pointer stays where the
+ * un-zoomed frame would have put it, which is exactly what the Music Network
+ * take showed. The property under test is the ticket's own sentence: the
+ * cursor stays attached to the same SOURCE-space point. Read back through the
+ * crop, its UV over the capture must not move no matter what `amount` is.
+ */
+describe("render(): the cursor follows the zoom crop (STC-421)", () => {
+  const MS = 1_000_000;
+  const W = 1920, H = 1080;
+  // The pointer sits at display point (960, 540): UV (0.5, 0.5) over the
+  // capture, output pixel (960, 540) with no crop. One click there at
+  // t=2000ms opens a window [1700ms, 4500ms] (300ms lead, 2500ms hold).
+  const POINTER = { x: 960, y: 540 };
+  const events: SessionEvent[] = [
+    { t: 0, kind: "move", ...POINTER },
+    { t: 2000 * MS, kind: "down", ...POINTER, button: 0 },
+    { t: 2050 * MS, kind: "up", ...POINTER, button: 0 },
+  ];
+  const session = (): Session => ({
+    anchors: {
+      version: 2, timebase: { numer: 125, denom: 3 }, t0Ns: "0",
+      display: { id: 1, pointWidth: W, pointHeight: H, pixelWidth: W, pixelHeight: H,
+                 backingScale: 1, originX: 0, originY: 0 },
+      capture: { width: W, height: H, codec: "h264", firstFrameNs: 0 },
+      files: { display: "display.mp4" }, stop: { t: 12_000_000_000, reason: "user" },
+    },
+    events, frames: [0, 16_000_000, 32_000_000],
+  } as unknown as Session);
+
+  // An OFF-CENTRE crop, on purpose: a crop centred on the pointer maps the
+  // centre to the centre and would pass with the bug present. (0.5, 0.5)
+  // sits at 0.8 of the way across this rect on both axes.
+  const TARGET = { x: 0.1, y: 0.1, width: 0.5, height: 0.5 };
+  const overridden = (): Project => ({
+    ...defaultProject(W, H),
+    overrides: [{ kind: "geometry", windowId: String(1700 * MS), rect: TARGET }],
+  });
+
+  /** Where the drawn cursor points in the SOURCE, read back through the crop it was drawn over. */
+  const sourceUv = (fs: ReturnType<typeof render>) => ({
+    x: fs.zoom.crop.x + (fs.cursor.x / W) * fs.zoom.crop.width,
+    y: fs.zoom.crop.y + (fs.cursor.y / H) * fs.zoom.crop.height,
+  });
+
+  test("fully zoomed on a tuned window, the cursor lands where the crop puts its source point", () => {
+    const fs = render(overridden(), session(), 3000 * MS); // mid-hold, spring settled
+    expect(fs.zoom.amount).toBeGreaterThan(0.99);
+    expect(fs.zoom.crop.x).toBeCloseTo(TARGET.x, 2);
+    // (0.5 - 0.1) / 0.5 = 0.8 of the canvas on each axis.
+    expect(fs.cursor.x).toBeCloseTo(0.8 * W, 0);
+    expect(fs.cursor.y).toBeCloseTo(0.8 * H, 0);
+    // A 2x magnification of the content is a 2x pointer, or the arrow reads as
+    // having shrunk against the thing it is pointing at.
+    expect(fs.cursor.pxPerPoint).toBeCloseTo(2, 3);
+  });
+
+  test("through zoom-in, hold and zoom-out, the cursor's source point never moves", () => {
+    const s = session();
+    const p = overridden();
+    // Ticks spanning the whole window: before, ramping in, held, ramping out, after.
+    const samples = [1000, 1750, 1850, 2000, 2500, 3500, 4400, 4600, 4800, 5500].map((ms) => ms * MS);
+    const amounts = new Set<number>();
+    for (const t of samples) {
+      const fs = render(p, s, t);
+      amounts.add(Math.round(fs.zoom.amount * 100));
+      const uv = sourceUv(fs);
+      expect(uv.x, `at ${t / MS}ms (amount ${fs.zoom.amount.toFixed(3)})`).toBeCloseTo(0.5, 6);
+      expect(uv.y, `at ${t / MS}ms (amount ${fs.zoom.amount.toFixed(3)})`).toBeCloseTo(0.5, 6);
+    }
+    // The sweep must actually have crossed partial amounts — a sample set that
+    // only ever saw 0 and 1 would not be testing the blend.
+    expect(amounts.size).toBeGreaterThan(3);
+  });
+
+  test("the stage-2 cursor-fallback crop (every real take today) gets the same treatment", () => {
+    // NOT the centred pointer: the fallback crop is centred on the click, and
+    // a crop centred on the pointer maps centre to centre — the first draft of
+    // this test passed against the bug. A click near the corner forces the
+    // crop to clamp against the frame edge, so the pointer sits off-centre in
+    // it and the mapping actually has to be right.
+    const CORNER = { x: 100, y: 100 };
+    const s = session();
+    s.events = [
+      { t: 0, kind: "move", ...CORNER },
+      { t: 2000 * MS, kind: "down", ...CORNER, button: 0 },
+      { t: 2050 * MS, kind: "up", ...CORNER, button: 0 },
+    ];
+    const p: Project = { ...defaultProject(W, H), overrides: [] };
+    const fs = render(p, s, 3000 * MS);
+    expect(fs.zoom.crop).not.toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    expect(fs.zoom.crop.x).toBe(0); // clamped: the control, proving the pointer is off-centre in the crop
+    const uv = sourceUv(fs);
+    expect(uv.x).toBeCloseTo(CORNER.x / W, 6);
+    expect(uv.y).toBeCloseTo(CORNER.y / H, 6);
+  });
+
+  test("with the crop at the whole frame, nothing about the cursor changes", () => {
+    const off: Project = { ...defaultProject(W, H), zoom: { enabled: false, intensity: 1, preset: "standard" } };
+    const fs = render(off, session(), 3000 * MS);
+    expect(fs.zoom.crop).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    expect(fs.cursor.x).toBeCloseTo(960, 6);
+    expect(fs.cursor.y).toBeCloseTo(540, 6);
+    expect(fs.cursor.pxPerPoint).toBe(1);
   });
 });
