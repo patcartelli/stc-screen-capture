@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { FLASH_HOLD_MS, FLASH_FADE_MS } from "../src/scope-indicator-window.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { windowCount } from "./_windows.js";
 
 /** Total time the flash's window can exist, hold plus fade, before it
  * destroys itself with no further input. Any test proving an EARLY cancel
@@ -102,7 +103,7 @@ async function pickWindowScope(win: Page): Promise<void> {
   const overlay = await overlayWindow();
   await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
   await send(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
-  await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+  await expect.poll(() => windowCount(app!, "overlay.html"),
                     { timeout: 15_000 }).toBe(0);
   await expect.poll(() => win.textContent("#window-source-label"), { timeout: 10_000 })
     .toBe("Finder — Downloads");

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { parseShot } from "../../transform/src/shot.js";
 import { SETTLE_READY_MS } from "../src/thumbnail.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount } from "./_windows.js";
 
 /**
  * STC-301 gate 4 — nothing lost.
@@ -192,7 +193,7 @@ describe("gate 4: nothing is lost in a burst of captures", () => {
 
     // Waits on the durable artefact rather than on any panel's animation: N
     // real BrowserWindows on screen.
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+    await expect.poll(() => windowCount(app!, "thumbnail.html"),
                        { timeout: 60_000 }).toBe(N);
 
     // Nothing exported, nothing promoted to the library, and nothing lost

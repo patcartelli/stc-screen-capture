@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
+import { windowCount } from "./_windows.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -106,7 +107,7 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
   }
 
   async function panelCount(): Promise<number> {
-    return app!.windows().filter((p) => p.url().includes("thumbnail.html")).length;
+    return windowCount(app!, "thumbnail.html");
   }
 
   /** Take directory names actually kept in the library, excluding the fixture `makeTakeFolder` seeds. */
@@ -429,7 +430,8 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
    * `panels`, with nothing left to poll for.
    */
   /**
-   * `panelCount()` (above) reads Playwright's own window list, which moves
+   * `panelCount()` (above) counts the app's own BrowserWindows from the main
+   * process (STC-416's `windowCount`), which moves
    * with the REAL native window closing — it says nothing about
    * `thumbnail-window.ts`'s internal `panels` array, which is what
    * `unsavedTakeDirs()` (and so `before-quit`'s `unhandled` count) actually

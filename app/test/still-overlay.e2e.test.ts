@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount, hasWindow } from "./_windows.js";
 
 /**
  * The selection overlay, end to end (STC-290).
@@ -145,7 +146,7 @@ describe("the selection overlay", () => {
       .toMatch(/^Shot area/);
 
     // The overlay is gone, not merely hidden behind the main window.
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 10_000 }).toBe(0);
 
     // Exactly one new directory, holding a shot the real loader accepts. The
@@ -184,7 +185,7 @@ describe("the selection overlay", () => {
     await awaitConfirmable(overlay);
     await send(overlay, { t: "key", key: "Escape" });
 
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 10_000 }).toBe(0);
     // Nothing captured, nothing written, and no status claimed.
     expect(readdirSync(recordings)).toEqual(before);
@@ -244,7 +245,7 @@ describe("the selection overlay", () => {
     await sleep(300);
     expect(readRequests(stillLog)).toEqual([]);
     expect(readdirSync(recordings).length).toBe(before);
-    expect(app!.windows().some((p) => p.url().includes("overlay.html"))).toBe(true);
+    expect(await hasWindow(app!, "overlay.html")).toBe(true);
 
     // The overlay stays usable: a fully-visible window still captures normally.
     await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
@@ -279,7 +280,7 @@ describe("the selection overlay", () => {
     await win.click("#capturestill");
     const overlay = await overlayWindow();
     await send(overlay, { t: "key", key: "Escape" });
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 10_000 }).toBe(0);
   }, 120_000);
 });

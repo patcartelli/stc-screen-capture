@@ -8,6 +8,7 @@ import { MAX_STACKED } from "../src/thumbnail.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount, hasWindow } from "./_windows.js";
 
 /**
  * The contract STC-392 reverses, end to end.
@@ -161,7 +162,7 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
   }
 
   if (captures > 0) {
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+    await expect.poll(() => windowCount(app!, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(captures);
   }
   return { win, app, temp, recordings, destDir };
@@ -177,14 +178,12 @@ describe("the panel waits (STC-392)", () => {
     const { app: electronApp, temp, recordings, destDir } = await launch();
 
     // The panel is up (`launch` already waited for it).
-    let panels = electronApp.windows().filter((p) => p.url().includes("thumbnail.html"));
-    expect(panels.length).toBe(1);
+    expect(await windowCount(electronApp, "thumbnail.html")).toBe(1);
 
     await sleep(LONGER_THAN_ANY_OLD_TIMEOUT_MS);
 
     // Still up — this is the assertion the whole ticket is about.
-    panels = electronApp.windows().filter((p) => p.url().includes("thumbnail.html"));
-    expect(panels.length).toBe(1);
+    expect(await windowCount(electronApp, "thumbnail.html")).toBe(1);
     // And nothing was written anywhere, because nothing was decided.
     expect(readdirSync(destDir)).toEqual([]);
     // The take is exactly where STC-393 put it.
@@ -211,7 +210,7 @@ describe("the panel waits (STC-392)", () => {
     expect(readdirSync(recordings).filter((n) => !n.startsWith(".") && n !== "2026-08-24_10-00-00"))
       .toEqual([]);
     // And the panel is still up — the other half of the same rule.
-    expect(electronApp.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(await hasWindow(electronApp, "thumbnail.html")).toBe(true);
   }, 40_000);
 
   test("the Style picker and Redact are disabled while Copy is in flight (STC-392 review, M6)", async () => {
@@ -253,7 +252,7 @@ describe("the panel waits (STC-392)", () => {
     const { app: electronApp, temp, recordings } = await launch();
     const panel = panelWindow(electronApp);
     await panel.click("#save");
-    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+    await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(0);
 
     expect(readdirSync(temp)).toEqual([]);
@@ -343,7 +342,7 @@ describe("the panel waits (STC-392)", () => {
       const cap = await win.evaluate(() => (window as any).recorder.captureStill("display"));
       if (!cap.ok) throw new Error(`captureStill failed: ${JSON.stringify(cap)}`);
       panels++;
-      await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+      await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                          { timeout: POLL_MS }).toBe(panels);
       panel = electronApp.windows().find((p) => p.url().includes("thumbnail.html") && !before.has(p))!;
     }
@@ -359,7 +358,7 @@ describe("the panel waits (STC-392)", () => {
     expect(readdirSync(temp).length).toBe(panels);
     // Every panel is still there — the one just pressed inside its window
     // above all, but ALSO any earlier ones a late arrival left unpressed.
-    expect(electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length).toBe(panels);
+    expect(await windowCount(electronApp, "thumbnail.html")).toBe(panels);
 
     // Past it: the same key now reaches `perform("trash")`. 500ms against a
     // 300ms boundary is 200ms of margin — generous enough that the ordinary
@@ -371,7 +370,7 @@ describe("the panel waits (STC-392)", () => {
     await pressTrashKey();
     // Exactly the pressed panel goes; an unpressed earlier one (if a retry
     // happened) stays, which is what tells a real delete from a stray close.
-    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+    await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(panels - 1);
     // STC-392 Task 6 changed what "deletes" means: the panel closes on the
     // spot (it just did, above), but the take itself is only PROMISED —
@@ -400,9 +399,9 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
     const { app: electronApp, temp } = await launch();
     await panelWindow(electronApp).click("#trash");
 
-    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+    await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(0);
-    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("toast.html")).length,
+    await expect.poll(() => windowCount(electronApp, "toast.html"),
                        { timeout: POLL_MS }).toBe(1);
     // Promised, not committed: `panel:trash`'s whole point for a fresh take.
     expect(readdirSync(temp).length).toBe(1);
@@ -415,16 +414,16 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
   test("pressing Undo brings the panel back, and the take is still in temp", async () => {
     const { app: electronApp, temp } = await launch();
     await panelWindow(electronApp).click("#trash");
-    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("toast.html")).length,
+    await expect.poll(() => windowCount(electronApp, "toast.html"),
                        { timeout: POLL_MS }).toBe(1);
 
     await toastWindow(electronApp)!.click("#undo");
 
     // The toast goes...
-    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("toast.html")).length,
+    await expect.poll(() => windowCount(electronApp, "toast.html"),
                        { timeout: POLL_MS }).toBe(0);
     // ...and the panel comes back — ruling 4: an undo re-presents it.
-    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+    await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(1);
     // Nothing was ever moved.
     expect(readdirSync(temp).length).toBe(1);
@@ -439,7 +438,7 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
   test("letting the toast expire commits the deletion — temp ends up empty", async () => {
     const { app: electronApp, temp } = await launch();
     await panelWindow(electronApp).click("#trash");
-    await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("toast.html")).length,
+    await expect.poll(() => windowCount(electronApp, "toast.html"),
                        { timeout: POLL_MS }).toBe(1);
     // Still there right after the promise, before any window has elapsed.
     expect(readdirSync(temp).length).toBe(1);
@@ -451,7 +450,7 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
     await expect.poll(() => readdirSync(temp).length,
                        { timeout: UNDO_WINDOW_MS + 4_000 }).toBe(0);
     // The toast took itself down on the same schedule.
-    expect(electronApp.windows().some((p) => p.url().includes("toast.html"))).toBe(false);
+    expect(await hasWindow(electronApp, "toast.html")).toBe(false);
     // Declared timeout: PLAYWRIGHT_LAUNCH_OVERHEAD_MS (60s) + `launch`'s own
     // capture-count poll (15s) + the toast-appear poll (15s) + the undo-
     // window poll (UNDO_WINDOW_MS + 4s) = 94s + UNDO_WINDOW_MS summed;
@@ -556,16 +555,18 @@ describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
     await expect.poll(() => newest.textContent("#overflow"), { timeout: POLL_MS }).toBe("+1");
 
     // Every REAL `BrowserWindow` that exists right now, of ANY url — read
-    // from the MAIN process (`BrowserWindow.getAllWindows()`), not from
+    // from the MAIN process (`windowCount`, `_windows.ts`), not from
     // `app!.windows()`. Playwright's own window list only grows once it has
     // attached a driveable Page to a window's webContents, which can lag a
-    // freshly-created window by a beat; a count taken that way was tried
+    // freshly-created window by a beat (measured in `_windows.ts`, and never
+    // at all for a window that loads no url); a count taken that way was tried
     // first and, mutation-tested, missed a decoy window created alongside
-    // the un-hide (STC-392 review, I5 follow-up) — it is not scoped to
-    // `thumbnail.html` either, so a second list surface opened at some
-    // other url would be caught here even though it would slip past
+    // the un-hide (STC-392 review, I5 follow-up; STC-416 is the rest of the
+    // suite catching up). It is not scoped to `thumbnail.html` either, so a
+    // second list surface opened at some other url would be caught here even
+    // though it would slip past
     // `thumbnailPanels`.
-    const windowCountBefore = await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+    const windowCountBefore = await windowCount(app!);
 
     await newest.click("#overflow");
 
@@ -576,8 +577,7 @@ describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
                        { timeout: POLL_MS }).toBe(4);
     const after = await thumbnailPanels(app!);
     expect(after.length).toBe(4);
-    expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
-      .toBe(windowCountBefore);
+    expect(await windowCount(app!)).toBe(windowCountBefore);
     // The badge itself has nothing left to announce.
     await expect.poll(() => newest.textContent("#overflow"), { timeout: POLL_MS }).toBe("+0");
     // Declared timeout: 60s overhead + `launch`'s poll (15s) + visible-count

@@ -78,6 +78,7 @@ events → deterministic transform → CFR MP4 with cursor overlay.
 | `app/src/thumbnail.ts` | the post-capture floating thumbnail's pure decisions (STC-296), header rewritten as a 10-rule manifesto for the series' third study (STC-343) — rule 6 is the one that CHANGED: a discard now tells `thumbnail-window.ts` to stop the panel's own timer BEFORE the async delete, closing a race where a coincidental timeout could hide the window and strand a failed delete's recovery inside it. Showing/expanded state, the timeout floor, corner positioning, the swipe/drag-out gesture split, the stack's offsets, and `SETTLE_READY_MS`. No Electron, no DOM |
 | `app/src/thumbnail-window.ts` | the panels' real `BrowserWindow`s and their real timers — captures STACK here, newest at the corner, and each keeps its OWN timer, which is what makes "drains oldest-first" true with no queue. Sizing, corner placement, hide-and-reshow for a capture, settle-then-destroy. Handles the `discarding` event (STC-343) that clears a panel's timer the instant its own discard commits |
 | `app/renderer/thumbnail.html`, `app/src/thumbnail-preload.ts`, `app/src/thumbnail-renderer.ts` | the panel's view: collapsed thumbnail, expanded mode picker, redact, copy/save, the swipe and the drag-out. Reaches `still:export`/`still:frame` through its own, narrower bridge — the same main-process handlers every other exit uses. `thumbnail-preload.ts`'s `event` payload is `unknown` now (STC-343) — its own restated copy of the event union had already silently drifted from the real one (missing `"redact"`), the same "one value, two copies" defect this file keeps finding, fixed the way `overlay-preload.ts`'s `send` already was |
+| `app/test/_windows.ts` | counting windows from the MAIN process (STC-416) — `windowCount`/`windowUrls`/`hasWindow`, the ONE owner of `BrowserWindow.getAllWindows()` in the e2e suite. Its header is the measured table: `app.windows()` NEVER lists a `BrowserWindow` that loads no url, lists a loaded one 78-147 ms after creation, and keeps a destroyed one ~25 ms; a count SCOPED BY URL sees a fresh window only at navigation commit (~78-110 ms) from EITHER process. `app.windows()` stays for what it is for — getting a `Page` to click on; every count, presence and absence read goes through here. `windows-fixture.e2e.test.ts` pins the two deterministic discriminators and fails if the helper is switched back |
 | `app/test/thumbnail-discard-race.test.ts` | the discard/timeout race (STC-343), pinned at the SOURCE rather than reproduced live — the race needs a real window, a real timer and an injected delete failure to align at once, which is exactly the multi-way timing coincidence this repo has already paid for chasing as a live test |
 | `app/src/thumbnail-menu.ts` | the right-click menu's template — pure, because nothing in Electron reads a `Menu` back once it is popped up, the same position `tray-menu.ts` is in |
 | `docs/STC-296-RUNBOOK.md` | what to look at on the Mac for the panel: the corner, the animation, whether it really excludes itself from a capture. Predates drag-out, the right-click menu, swipe and stacking — its "What is deliberately not here" section is stale; see STC-343's own runbook for what those need |
@@ -2026,6 +2027,33 @@ reachable via KVC (`setValue(3, forKey: "captureResolution")`, verified in phase
   were watched failing: a blanket `catch(() => {})` loses the error-identity case, and dropping the
   `await closed` loses two.
 
+- **`app.windows()` is Playwright's list of attached PAGES, not the app's list of windows, and 45 e2e
+  assertions were counting with it (STC-416).** Measured on 2026-09-19, three runs each: a
+  `BrowserWindow` that never loads a url is NEVER in `app.windows()` (that is the decoy STC-392's
+  review planted and the assertion missed); one that loads appears 78-147 ms after creation; a
+  destroyed one stays listed ~25 ms. Watched on a real site, not only in a probe: `hotkeys.e2e`'s
+  "no overlay ever opening" PASSED with a decoy overlay created at the reply. Every count, presence
+  and absence read now goes through `app/test/_windows.ts` (main-process `getAllWindows()`), and
+  `app.windows()` is left exactly where it is right — `find`/`for…of` to get a `Page` to drive.
+  **The finding that changed the fix's shape: a count scoped by URL is NOT immediate from the main
+  process either.** `webContents.getURL()` is empty until the navigation commits (~78-110 ms), so
+  "no window whose url contains overlay.html" passed with the decoy from BOTH processes, and so did
+  an allow-list of urls — the real post-capture panel was the one still loading. The strong form of
+  "nothing appeared" is an exact UNSCOPED total, before and after (the STC-392 worked example had it
+  right); the hotkeys site asserts `before + 1` and names the one newcomer once it commits. The same
+  lag means **a `poll(count) → 0` can only claim the window it was tracking is gone** — it is
+  satisfied by its first sample, so a replacement appearing in the same tick is invisible to it
+  from either process (watched: a decoy spawned inside `destroy()` failed NONE of the 21
+  "went away" polls; the same decoy spawned at presentation failed every one). And **a
+  `poll(count) → N` proves AT LEAST N**: a `file:` load commits ~30 ms before an `about:blank#…`
+  one, and thumbnail.e2e's "a second capture STACKS" passed with two decoys up because its poll
+  sampled inside that gap — only a later exact read proves exactly N. Neither is a weakness to
+  fix by polling harder; both are what the assertion means, and both are written on the helper
+  so nobody reads more into it. 40 of the 45 converted sites were watched failing at their own
+  line (an at-present decoy for counts, hide-instead-of-destroy for "went away", a 300 ms vanish
+  for "still here"); the other five "still here" reads sit behind a click that needs the window
+  and share the watched sites' exact expression. Six mutation families, all in the PR, all
+  reverted.
 - **`app.focus({ steal: true })` raises EVERY ordinary window, and a comment saying otherwise survived
   eight days because nothing depended on it (STC-391 follow-up, 2026-09-16).** `overlay-session.ts` has
   called it since STC-292 so a hotkey or menu-bar capture starting in the background could reach Escape,

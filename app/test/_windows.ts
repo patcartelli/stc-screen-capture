@@ -30,6 +30,21 @@ import type { ElectronApplication } from "playwright";
  * example in panel-waits.e2e.test.ts does. Scoped counts are still the
  * right instrument for "went away" and "still here" (no lag at all) and for
  * "exactly N are up" (a decoy that has loaded but not attached is counted).
+ *
+ * Two things a POLL over these can and cannot claim, both watched under
+ * product-side decoys (STC-416's PR has the ledger):
+ *
+ *  - `expect.poll(() => windowCount(app, "x.html")).toBe(0)` is satisfied by
+ *    its FIRST sample. It proves the window it was tracking is gone; it says
+ *    nothing about a replacement created in the same tick, whose url has not
+ *    committed yet (a decoy spawned inside `destroy()` failed none of the
+ *    "went away" polls in the suite; the same decoy spawned at presentation
+ *    failed every one). That is the claim, not a weakness to poll harder at.
+ *  - `expect.poll(() => windowCount(app, "x.html")).toBe(N)` proves AT LEAST
+ *    N. A `file:` load commits ~30 ms before an `about:blank#…` one, and a
+ *    poll sampled inside that gap saw exactly N with N+1 on the way. Only an
+ *    exact read taken later — after the next action, or a settle — proves
+ *    exactly N. Most tests here already take one; a new test should.
  */
 
 /** How many BrowserWindows the main process has right now; optionally only those whose URL contains `urlPart`. */

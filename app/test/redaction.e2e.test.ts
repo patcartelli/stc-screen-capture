@@ -7,6 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount, hasWindow } from "./_windows.js";
 
 /**
  * Redaction, end to end (STC-297).
@@ -263,7 +264,7 @@ describe("redaction", () => {
     // take, so this waits out the round trip either would have taken and
     // then asserts neither happened.
     await sleep(1500);
-    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
     expect(existsSync(join(dir, "shot.json"))).toBe(true);
     expect(storedRegions(dir)).toHaveLength(0);
     // And the take was never promoted or trashed out of the library either.
@@ -297,7 +298,7 @@ describe("redaction", () => {
     // document is the failure this pins now.
     await panel.click("#save");
     await expect.poll(
-      () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+      () => windowCount(app!, "thumbnail.html"),
       { timeout: 15_000 },
     ).toBe(0);
     // `dir` is stale once the panel has closed, so the promoted take is
@@ -333,7 +334,7 @@ describe("redaction", () => {
 
     await panel.click("#save");
     await expect.poll(
-      () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+      () => windowCount(app!, "thumbnail.html"),
       { timeout: 15_000 },
     ).toBe(0);
     const savedShots = readdirSync(recordings).filter((n) => n !== "2026-08-24_10-00-00");

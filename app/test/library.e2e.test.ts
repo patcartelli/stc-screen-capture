@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
+import { hasWindow } from "./_windows.js";
 
 /**
  * The library grid, end to end (STC-294).
@@ -326,7 +327,7 @@ describe("duplicate", () => {
     // And it stays open, undecided — nothing exported, nothing duplicated,
     // and the original untouched, just by having been shown.
     await new Promise((r) => setTimeout(r, 1_000));
-    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
     expect(readdirSync(destDir)).toEqual([]);
     expect(readdirSync(recordings)).toEqual(["2026-09-08_12-00-00"]);
     expect(readFileSync(join(original, "shot.json"), "utf8")).toBe(before);
@@ -374,7 +375,7 @@ describe("the panel's confirm-style Trash (STC-392 review, I2/I5)", () => {
     // `runExport`'s Save As cancel already follows. The OLD behaviour read
     // "Could not delete: cancelled" on this line.
     expect(await panel.evaluate(() => document.getElementById("status")!.textContent)).toBe("");
-    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
     expect(existsSync(original)).toBe(true);
   }, 60_000);
 
@@ -399,7 +400,7 @@ describe("the panel's confirm-style Trash (STC-392 review, I2/I5)", () => {
     // the panel still open, is the proof the rejection was caught.
     await expect.poll(() => panel.evaluate(() => document.getElementById("status")!.textContent),
                        { timeout: 15_000 }).toContain("Could not delete");
-    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
     expect(existsSync(original)).toBe(true);
   }, 60_000);
 });

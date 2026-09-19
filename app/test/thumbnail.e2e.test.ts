@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount, hasWindow, windowUrls } from "./_windows.js";
 
 /**
  * The post-capture floating thumbnail, end to end (STC-296, reworked by
@@ -92,7 +93,7 @@ async function thumbnailWindow(ms = 15_000): Promise<Page> {
 
 async function noThumbnailWindow(ms = 15_000): Promise<void> {
   await expect.poll(
-    () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+    () => windowCount(app!, "thumbnail.html"),
     { timeout: ms },
   ).toBe(0);
 }
@@ -163,7 +164,7 @@ describe("the post-capture floating thumbnail", () => {
     await panel.click("#copy");
     await expect.poll(() => panel.textContent("#status"), { timeout: 15_000 }).toMatch(/^Copied/);
     // Still here — a quick share should not cost the chance to also Save.
-    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
     // And Copy never promoted it (STC-392's D5) — the take the Trash below
     // removes is still the one in temp, not a copy already in the library.
     expect(ownTakes(recordings).length).toBe(0);
@@ -184,8 +185,8 @@ describe("the post-capture floating thumbnail", () => {
     // REPLACED the first and this test required exactly one window. The
     // change is the feature, so the test states the new contract rather than
     // being relaxed to tolerate it.
-    await expect.poll(() => {
-      const urls = app!.windows().map((p) => p.url()).filter((u) => u.includes("thumbnail.html"));
+    await expect.poll(async () => {
+      const urls = (await windowUrls(app!)).filter((u) => u.includes("thumbnail.html"));
       return urls.length === 2 && urls.includes(firstUrl);
     }, { timeout: 15_000 }).toBe(true);
   }, 60_000);
@@ -204,8 +205,7 @@ describe("the post-capture floating thumbnail", () => {
     expect(r2.ok).toBe(true);
 
     await expect.poll(() => {
-      const urls = app!.windows().map((p) => p.url()).filter((u) => u.includes("thumbnail.html"));
-      return urls.length;
+      return windowCount(app!, "thumbnail.html");
     }, { timeout: 15_000 }).toBe(2);
 
     // Nothing exported for either capture.
