@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { MAX_STACKED } from "../src/thumbnail.js";
+import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 
@@ -30,15 +31,16 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-// `app.close()` now waits on `runQuitTeardown()`'s chain (STC-392 Task 6):
+// `app.close()` waits on `runQuitTeardown()`'s chain (STC-392 Task 6):
 // commit any pending trash (`shell.trashItem`), then closeThumbnail,
-// closeOverlay, sup.shutdown. Comfortably under 2s locally, every time — but
-// CI hit vitest's 10s hookTimeout default on this exact chain (run
-// 35391437745), which is `nothing-lost.e2e.test.ts`'s own reason for a
-// declared afterEach timeout (`TEARDOWN_MS`, `SETTLE_READY_MS + 20_000`).
-// Same shape, same fix, since there is no equivalent settle constant this
-// chain is bounded by to derive a tighter number from.
-const TEARDOWN_MS = 30_000;
+// closeOverlay, sup.shutdown. Comfortably under 100 ms on CI, every time it
+// completes — and on run 35454190145 it did NOT complete: with a trash
+// pending at quit, `shell.trashItem` never answered, the chain never reached
+// its first mark, and this hook hit its bound (STC-427). The commit is
+// bounded in `main.ts` now, so this bound DERIVES from that one, the way
+// `nothing-lost.e2e.test.ts`'s derives from `SETTLE_READY_MS`: the chain's
+// worst case plus room to observe it.
+const TEARDOWN_MS = TRASH_COMMIT_AT_QUIT_MS + 20_000;
 afterEach(async () => {
   const closing = app;
   app = undefined;
