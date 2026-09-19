@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -82,7 +83,8 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
   const PLAYWRIGHT_LAUNCH_OVERHEAD_MS = 60_000;
   const POLL_MS = 15_000;
 
-  async function launchWithHelper(): Promise<{ win: Page; recordings: string; temp: string }> {
+  async function launchWithHelper(extraEnv: Record<string, string> = {}):
+      Promise<{ win: Page; recordings: string; temp: string }> {
     const { dir: recordings } = makeTakeFolder();
     const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
     app = await electron.launch({
@@ -90,7 +92,7 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
       cwd: root,
       env: {
         ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp,
-        STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1",
+        STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1", ...extraEnv,
       },
     });
     const win = await app.firstWindow();
@@ -377,6 +379,42 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     // naturally elapsed.
     expect(existsSync(join(temp, before[0]!))).toBe(false);
   }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + 60_000);
+
+  /**
+   * The bound on that commit (STC-427). On CI run 35454190145 the promised
+   * deletion's `shell.trashItem` never answered, `runQuitTeardown`'s chain
+   * never reached its first link, and the app could not quit at all — a
+   * 30 s test-teardown hang with no `[quit] teardown` line ever printed. A
+   * quit that can hang forever is worse than a deletion that is not
+   * honoured, so the commit is bounded; the take is left in temp storage
+   * rather than removed some other way (`TRASH_COMMIT_AT_QUIT_MS`'s own
+   * note says why). `STC_QUIT_FAULT=trash-hangs` is what reaches the path:
+   * its natural trigger is the OS, one run in five, and a test that waits
+   * for that is a test that never runs.
+   */
+  test("a promised deletion whose commit never answers does not stop the app quitting (STC-427)", async () => {
+    const { win, temp } = await launchWithHelper({ STC_QUIT_FAULT: "trash-hangs" });
+    await captureDisplay(win);
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(1);
+    const before = tempTakes(temp);
+    expect(before.length).toBe(1);
+
+    const panel = app!.windows().find((p) => p.url().includes("thumbnail.html"))!;
+    await panel.click("#trash");
+    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(0);
+
+    // The quit must COMPLETE, inside the bound plus the rest of the chain —
+    // not merely fail to hang for as long as this test is willing to wait.
+    // The control for "the bound is what let it through" is the take: with
+    // the commit hung, it is still in temp storage after the process is gone.
+    const t0 = Date.now();
+    await app!.close();
+    app = undefined;
+    const took = Date.now() - t0;
+    expect(took).toBeGreaterThanOrEqual(TRASH_COMMIT_AT_QUIT_MS);
+    expect(took).toBeLessThan(TRASH_COMMIT_AT_QUIT_MS + 10_000);
+    expect(existsSync(join(temp, before[0]!))).toBe(true);
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + TRASH_COMMIT_AT_QUIT_MS + 30_000);
 
   /**
    * Pins the SYNCHRONOUS ordering ruling 2 actually rests on (STC-392

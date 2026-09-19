@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { MAX_STACKED } from "../src/thumbnail.js";
+import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 
@@ -30,16 +31,48 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-// `app.close()` now waits on `runQuitTeardown()`'s chain (STC-392 Task 6):
+// `app.close()` waits on `runQuitTeardown()`'s chain (STC-392 Task 6):
 // commit any pending trash (`shell.trashItem`), then closeThumbnail,
-// closeOverlay, sup.shutdown. Comfortably under 2s locally, every time — but
-// CI hit vitest's 10s hookTimeout default on this exact chain (run
-// 35391437745), which is `nothing-lost.e2e.test.ts`'s own reason for a
-// declared afterEach timeout (`TEARDOWN_MS`, `SETTLE_READY_MS + 20_000`).
-// Same shape, same fix, since there is no equivalent settle constant this
-// chain is bounded by to derive a tighter number from.
-const TEARDOWN_MS = 30_000;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; }, TEARDOWN_MS);
+// closeOverlay, sup.shutdown. Comfortably under 100 ms on CI, every time it
+// completes — and on run 35454190145 it did NOT complete: with a trash
+// pending at quit, `shell.trashItem` never answered, the chain never reached
+// its first mark, and this hook hit its bound (STC-427). The commit is
+// bounded in `main.ts` now, so this bound DERIVES from that one, the way
+// `nothing-lost.e2e.test.ts`'s derives from `SETTLE_READY_MS`: the chain's
+// worst case plus room to observe it.
+const TEARDOWN_MS = TRASH_COMMIT_AT_QUIT_MS + 20_000;
+afterEach(async () => {
+  const closing = app;
+  app = undefined;
+  if (!closing) return;
+  const t0 = Date.now();
+  await closing.close().catch(() => {});
+  // Anything over a few seconds is worth a line: CI has run this chain past
+  // the bound above with no record of how long it usually takes (STC-427).
+  const ms = Date.now() - t0;
+  if (ms > 3_000) process.stderr.write(`[panel-waits] app.close() took ${ms}ms\n`);
+}, TEARDOWN_MS);
+
+/**
+ * Electron's own stderr and its exit, forwarded into this test's log with the
+ * pid (STC-427). Playwright pipes them and nothing read them, so when the
+ * main process went away mid-test on CI the only record was Playwright's
+ * "Resulting promise was garbage collected" — which says the promise died and
+ * nothing about why. `[quit] teardown …` (main.ts) lands here too, which is
+ * how the 30 s teardown hangs get attributed to a stage.
+ */
+function forwardProcessOutput(electronApp: ElectronApplication): void {
+  const proc = electronApp.process();
+  const tag = `[electron ${proc.pid}]`;
+  const forward = (chunk: Buffer | string) => {
+    for (const line of String(chunk).split("\n")) {
+      if (line.trim()) process.stderr.write(`${tag} ${line}\n`);
+    }
+  };
+  proc.stderr?.on("data", forward);
+  proc.on("exit", (code, signal) =>
+    process.stderr.write(`${tag} exited code=${code} signal=${signal} at ${new Date().toISOString()}\n`));
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -113,6 +146,7 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
       STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
+  forwardProcessOutput(app);
   await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
@@ -187,15 +221,24 @@ describe("the panel waits (STC-392)", () => {
     // — a Style pick or a Redact toggle landing in that window exports a
     // picture the status line's claimed mode does not match. Disabling is
     // synchronous, the very first thing `perform()` does before its own
-    // first `await`, so it has already happened by the time `panel.click`'s
-    // promise (which waits out the real DOM click dispatch) resolves.
+    // first `await` — so the click and the read happen in ONE evaluate, the
+    // same tick. The first version clicked through Playwright and read
+    // `disabled` in a second round trip, and on a loaded CI runner the copy
+    // (a fake helper answers an export instantly) had already COMPLETED and
+    // re-enabled everything in between (run 35451943868, STC-427): a "while
+    // in flight" observation made after the flight landed. Same family as
+    // the ⌘⌫ test below — a claim about a window in time has to be measured
+    // from inside that window.
     const { app: electronApp } = await launch();
     const panel = panelWindow(electronApp);
-    await panel.click("#copy");
-    expect(await panel.evaluate(() => (document.getElementById("mode") as HTMLSelectElement).disabled))
-      .toBe(true);
-    expect(await panel.evaluate(() => (document.getElementById("redact") as HTMLButtonElement).disabled))
-      .toBe(true);
+    const duringCopy = await panel.evaluate(() => {
+      (document.getElementById("copy") as HTMLButtonElement).click();
+      return {
+        mode: (document.getElementById("mode") as HTMLSelectElement).disabled,
+        redact: (document.getElementById("redact") as HTMLButtonElement).disabled,
+      };
+    });
+    expect(duringCopy).toEqual({ mode: true, redact: true });
 
     await panel.waitForFunction(() => document.getElementById("status")!.textContent === "Copied");
     // Re-enabled once the action settles — Copy does not close the panel, so
@@ -228,13 +271,11 @@ describe("the panel waits (STC-392)", () => {
    * on both sides of the window.
    */
   test("⌘⌫ within the first 100ms of paint is ignored; the same key after 500ms deletes", async () => {
-    const { app: electronApp, temp } = await launch();
-    const panel = panelWindow(electronApp);
-
-    const pressTrashKey = () => panel.evaluate(() => document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true })));
+    const { app: electronApp, temp, win } = await launch();
 
     /**
+     * Press ⌘⌫ INSIDE the settle window, or say that it could not.
+     *
      * Detecting paint with `waitForFunction` (an external poll over CDP) and
      * then dispatching the key in a SEPARATE `evaluate()` round trip put an
      * unbounded, CI-load-dependent gap between the renderer's own paint
@@ -246,28 +287,79 @@ describe("the panel waits (STC-392)", () => {
      * Neither was a product bug; both were about how late "detect paint"
      * itself can be under load, which no Node-side clock can bound.
      *
-     * Detecting paint AND dispatching the key now happen inside ONE
-     * `evaluate()` call, so the gap between them is a same-tick
-     * MutationObserver callback rather than a round trip through
-     * Playwright's CDP connection — structurally inside the settle window
-     * rather than merely likely to be, on any machine.
+     * Detecting paint AND dispatching the key happen inside ONE `evaluate()`
+     * call, so when the paint has NOT happened yet the press is a same-tick
+     * MutationObserver callback — structurally inside the window.
+     *
+     * When the paint HAS already happened by the time this evaluate arrives,
+     * nothing structural holds: the first version pressed anyway, and on CI
+     * run 35447661063 (attempt 2) that press landed past `keysLiveAt`, was
+     * honoured, closed the panel, and the assertion below read a product
+     * failure into it (STC-427). So that branch now reads the renderer's OWN
+     * clock (`data-keys-live-at`, published at paint) and presses only if it
+     * is still inside the window — otherwise it reports `late`, no key is
+     * sent, and the test tries again on a FRESH panel. A press that cannot be
+     * placed inside the window is not a test of the window.
      */
-    await panel.evaluate(() => new Promise<void>((resolve) => {
+    const pressInsideWindow = (panel: Page) => panel.evaluate(() => new Promise<
+      { pressed: true } | { pressed: false; lateByMs: number }
+    >((resolve) => {
       const card = document.getElementById("card")!;
       const press = () => {
         document.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true }));
-        resolve();
+        resolve({ pressed: true });
       };
-      if (card.className.includes("in")) { press(); return; }
+      if (card.className.includes("in")) {
+        const liveAt = Number(card.dataset.keysLiveAt);
+        const lateBy = performance.now() - liveAt;
+        // Inside the window by a margin a dispatch cannot cross: the press is
+        // synchronous from here, so only a suspended tab could make 50ms
+        // of headroom insufficient.
+        if (Number.isFinite(liveAt) && lateBy < -50) press();
+        else resolve({ pressed: false, lateByMs: lateBy });
+        return;
+      }
       new MutationObserver((_muts, obs) => {
         if (card.className.includes("in")) { obs.disconnect(); press(); }
       }).observe(card, { attributes: true, attributeFilter: ["class"] });
     }));
+
+    // Up to four panels: the first from `launch()`, then a fresh capture per
+    // late arrival. Bounded so a runner that is ALWAYS late fails with a
+    // sentence rather than looping, and the count is asserted at the end so a
+    // retry cannot quietly hide a panel that closed for a real reason.
+    let panel = panelWindow(electronApp);
+    let panels = 1;
+    const lateArrivals: number[] = [];
+    for (;;) {
+      const r = await pressInsideWindow(panel);
+      if (r.pressed) break;
+      lateArrivals.push(Math.round(r.lateByMs));
+      if (panels >= 4) {
+        throw new Error(`could not reach a panel inside its settle window in ${panels} tries ` +
+                        `(late by ${lateArrivals.join(", ")} ms) — this runner is too slow to test the window`);
+      }
+      const before = new Set(electronApp.windows());
+      const cap = await win.evaluate(() => (window as any).recorder.captureStill("display"));
+      if (!cap.ok) throw new Error(`captureStill failed: ${JSON.stringify(cap)}`);
+      panels++;
+      await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+                         { timeout: POLL_MS }).toBe(panels);
+      panel = electronApp.windows().find((p) => p.url().includes("thumbnail.html") && !before.has(p))!;
+    }
+    if (lateArrivals.length) {
+      process.stderr.write(`[panel-waits] ⌘⌫: reached the window on panel ${panels} ` +
+                           `(earlier arrivals late by ${lateArrivals.join(", ")} ms)\n`);
+    }
+    const pressTrashKey = () => panel.evaluate(() => document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true })));
     const pressedAt = Date.now();
 
     await sleep(100);
-    expect(readdirSync(temp).length).toBe(1);
-    expect(electronApp.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(readdirSync(temp).length).toBe(panels);
+    // Every panel is still there — the one just pressed inside its window
+    // above all, but ALSO any earlier ones a late arrival left unpressed.
+    expect(electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length).toBe(panels);
 
     // Past it: the same key now reaches `perform("trash")`. 500ms against a
     // 300ms boundary is 200ms of margin — generous enough that the ordinary
@@ -277,16 +369,18 @@ describe("the panel waits (STC-392)", () => {
     const elapsed = Date.now() - pressedAt;
     if (elapsed < 500) await sleep(500 - elapsed);
     await pressTrashKey();
+    // Exactly the pressed panel goes; an unpressed earlier one (if a retry
+    // happened) stays, which is what tells a real delete from a stray close.
     await expect.poll(() => electronApp.windows().filter((p) => p.url().includes("thumbnail.html")).length,
-                       { timeout: POLL_MS }).toBe(0);
+                       { timeout: POLL_MS }).toBe(panels - 1);
     // STC-392 Task 6 changed what "deletes" means: the panel closes on the
     // spot (it just did, above), but the take itself is only PROMISED —
     // still sitting in temp storage until the undo window elapses. The old
     // contract asserted `0` here; the new one is the whole point of this
     // ticket, exercised end to end by "pressing Trash promises a deletion..."
     // below.
-    expect(readdirSync(temp).length).toBe(1);
-  }, 40_000);
+    expect(readdirSync(temp).length).toBe(panels);
+  }, 60_000);
 });
 
 /**

@@ -31,6 +31,27 @@ import { UNDO_WINDOW_MS } from "./panel-actions.js";
  * rule: `due` takes `now` rather than reading a clock, so "the undo expired"
  * is producible in a test rather than waited for.
  */
+/**
+ * How long a quit waits for ONE promised deletion to reach the Trash before
+ * quitting without it (STC-427).
+ *
+ * `shell.trashItem` normally answers in milliseconds; it also, on the macOS
+ * CI runner, sometimes never answers at all — one run in five, the app then
+ * unable to quit because the very first link of its teardown chain never
+ * settled. "Every wait needs a bound and a reason" (CLAUDE.md): this is the
+ * bound, and the reason is that a quit which can hang forever is worse than
+ * a deletion that is not honoured. On timeout the take is left where it is,
+ * in temp storage — nothing is lost, and it is deliberately NOT removed some
+ * other way: the ✕ promised the Trash, and a `rm` is a different promise.
+ * The cost, stated: STC-393's recovery prompt will offer it back on the next
+ * launch, once, for a deletion the user thought was done.
+ *
+ * 5 s is two orders of magnitude over a normal commit and far enough under
+ * the E2E teardown bounds that derive from it (`panel-waits.e2e.test.ts`)
+ * for the quit to be observed completing rather than timing out alongside.
+ */
+export const TRASH_COMMIT_AT_QUIT_MS = 5_000;
+
 export class PendingTrash {
   /** dir → the moment the promise was made. */
   private readonly promised = new Map<string, number>();

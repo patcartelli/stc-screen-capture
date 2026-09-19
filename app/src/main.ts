@@ -19,6 +19,7 @@ import {
 import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite } from "@transform/shot.js";
 import { isProjectVersion } from "@transform/project-version.js";
+import { withTimeout } from "@transform/timeout.js";
 import {
   DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, exportMediaName, planPublish,
   publicSrc, type PublishPlan,
@@ -51,7 +52,7 @@ import { quitDecision } from "./quit-guard.js";
 import { openEditor } from "./editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
-import { PendingTrash } from "./pending-trash.js";
+import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, hideUndoToast } from "./toast-window.js";
 
 /**
@@ -526,15 +527,34 @@ function runQuitTeardown(): void {
   // whatever this commits, handing the same directory to `shell.trashItem`
   // twice. Draining removes them from `pendingTrash` in this same tick, so
   // whichever of the two runs first is the only one that ever sees them.
+  // Each stage is timed and the whole chain reported on stderr at the end
+  // (STC-427): on CI this chain has exceeded a 30 s test-teardown bound with
+  // nothing saying WHICH stage took the time, and a wait nobody can attribute
+  // is a wait nobody can fix.
+  const t0 = Date.now();
+  const marks: string[] = [];
+  const mark = (what: string) => { marks.push(`${what}=${Date.now() - t0}ms`); };
+  // Each commit is BOUNDED (STC-427): on the macOS CI runner `shell.trashItem`
+  // sometimes never settled, and a chain whose first link never settles is
+  // an app that can never quit — seen as a 30 s test-teardown hang with no
+  // `[quit] teardown` line ever printed. `STC_QUIT_FAULT=trash-hangs` makes
+  // that exact path reachable on demand; its natural trigger is the OS.
+  const commit = (d: string): Promise<void> =>
+    process.env.STC_QUIT_FAULT === "trash-hangs" ? new Promise<void>(() => {}) : shell.trashItem(d);
   Promise.all(pendingTrash.drainAll().map((d) =>
-    shell.trashItem(d).catch((e) => console.error("[trash] could not commit:", d, e))))
-    .then(() => closeThumbnail())
+    withTimeout(commit(d), TRASH_COMMIT_AT_QUIT_MS, `committing a promised deletion at quit (${d})`)
+      .catch((e) => console.error("[trash] could not commit at quit — the take stays in temp storage:", d, e))))
+    .then(() => { mark("trash"); return closeThumbnail(); })
     .catch(() => {})
-    .then(() => closeOverlay())
+    .then(() => { mark("thumbnail"); return closeOverlay(); })
     .catch(() => {})
-    .then(() => (sup ? sup.shutdown() : Promise.resolve()))
+    .then(() => { mark("overlay"); return sup ? sup.shutdown() : Promise.resolve(); })
     .catch(() => {})
-    .finally(() => app.quit());
+    .finally(() => {
+      mark("helper");
+      console.error(`[quit] teardown ${marks.join(" ")}`);
+      app.quit();
+    });
 }
 
 app.on("before-quit", (e) => {

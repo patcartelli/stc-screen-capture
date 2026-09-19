@@ -959,6 +959,12 @@ void (async () => {
   // comment above the keydown listener).
   requestAnimationFrame(() => {
     keysLiveAt = performance.now() + SETTLE_KEYS_MS;
+    // Published on the card, in this page's own `performance.now()` clock, so
+    // a test that reaches this panel AFTER it painted can tell whether it is
+    // still inside the settle window rather than assuming (STC-427: on a
+    // loaded CI runner the assumption was wrong, the press was honoured, and
+    // "ignores a key inside the window" read as a product failure).
+    card.dataset.keysLiveAt = String(keysLiveAt);
     card.classList.add("in");
     window.thumb.event({ kind: "painted" });
   });
