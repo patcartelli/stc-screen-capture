@@ -1,5 +1,5 @@
-import { FULL_FRAME_UV, type FrameState } from "./render.js";
-import { uvRectToPixels } from "./spaces.js";
+import type { FrameState } from "./render.js";
+import { isWholeFrame, uvRectToPixels } from "./spaces.js";
 import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
 
 /**
@@ -66,7 +66,7 @@ function drawSource(
   height: number,
 ): void {
   const c = fs.zoom.crop;
-  if (c.x === 0 && c.y === 0 && c.width === 1 && c.height === 1) {
+  if (isWholeFrame(c)) {
     ctx.drawImage(frame, 0, 0, width, height);
     return;
   }

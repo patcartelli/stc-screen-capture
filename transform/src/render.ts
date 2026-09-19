@@ -2,7 +2,7 @@ import type { CursorState, CursorStyle, Project, Session } from "./types.js";
 import { frameIndexAt, tickOf } from "./time.js";
 import {
   displayToOutput, fixedCornerPipUv, lerpRect, mapPoint, mapVector, outputRect, roundRect,
-  uvRectToPixels, type Rect,
+  throughCrop, throughCropVector, uvRectToPixels, type Rect,
 } from "./spaces.js";
 import {
   ZOOM_PRESETS, createZoomSim, zoomWindows, type ZoomPreset, type ZoomSim, type ZoomWindow,
@@ -34,10 +34,14 @@ export interface FrameState {
   /** that frame's session-relative PTS ns, or null */
   framePtsNs: number | null;
   /**
-   * cursor in output pixel coordinates. `pxPerPoint` is how many output pixels
-   * one cursor point covers: the display-to-output ratio times the project's
-   * cursor scale, so the pointer keeps its on-screen size relative to the
-   * content at any export size. `style` picks the artwork set or the circle.
+   * cursor in output pixel coordinates — of the canvas AS DRAWN, i.e. already
+   * through `zoom.crop` (STC-421): the compositor draws the crop scaled to the
+   * whole canvas, so the pointer has to take the same step or it stays where
+   * the un-zoomed frame would have put it. `pxPerPoint` is how many output
+   * pixels one cursor point covers: the display-to-output ratio times the
+   * crop's magnification times the project's cursor scale, so the pointer
+   * keeps its on-screen size relative to the content at any export size AND
+   * at any zoom. `style` picks the artwork set or the circle.
    */
   cursor: CursorState & { pxPerPoint: number; style: CursorStyle };
   /** camera picture-in-picture, or null when there is none to draw */
@@ -215,10 +219,10 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   // global points → display-local points → output pixels. spaces.ts owns the
   // rule; this stays the only event-space conversion in the transform.
   const m = displayToOutput(session.anchors.display, project.output);
-  const at = mapPoint(m, s);
+  const full = mapPoint(m, s);
   // A velocity is a DIFFERENCE of global points, so it scales without
   // translating — hence the second call rather than a flag.
-  const vel = mapVector(m, { x: s.vx, y: s.vy });
+  const fullVel = mapVector(m, { x: s.vx, y: s.vy });
 
   // `enabled` short-circuits to a flat zero rather than skipping the sims,
   // so "off" and "on at intensity 0" are one code path to one visible
@@ -248,6 +252,21 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   const zoomTarget = nearWindow
     ? resolvedCrop(project.overrides, nearWindow) ?? derivedCropFor(session, nearWindow) ?? FULL_FRAME_UV
     : FULL_FRAME_UV;
+  const crop = lerpRect(FULL_FRAME_UV, zoomTarget, zoomAmount);
+
+  // The cursor is drawn IN the picture, and the picture the compositor draws
+  // is `crop` stretched over the canvas — so `full` (the pointer's place on
+  // an un-zoomed canvas) takes one more step through that same crop
+  // (STC-421). The PiP does not: it is drawn ON the canvas, over whatever the
+  // picture is doing. `pxPerPoint` scales by the crop's magnification for the
+  // same reason it already scales by the display-to-output ratio — the
+  // pointer's size is relative to the content it points at, and a 2x zoom of
+  // the content is a 2x pointer. `throughCrop`'s whole-frame case is the
+  // identity by construction, so a take with zoom off renders exactly what
+  // it did before this step existed.
+  const at = throughCrop(full, crop, outputRect(project.output));
+  const vel = throughCropVector(fullVel, crop);
+  const magnification = throughCropVector({ x: 1, y: 1 }, crop).x;
 
   return {
     tick,
@@ -262,9 +281,9 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
       visible: s.visible,
       shape: s.shape,
       style: project.cursor.style,
-      pxPerPoint: project.cursor.scale * m.sx,
+      pxPerPoint: project.cursor.scale * m.sx * magnification,
     },
     pip: pipStateAt(project, session, tNs),
-    zoom: { amount: zoomAmount, crop: lerpRect(FULL_FRAME_UV, zoomTarget, zoomAmount) },
+    zoom: { amount: zoomAmount, crop },
   };
 }
