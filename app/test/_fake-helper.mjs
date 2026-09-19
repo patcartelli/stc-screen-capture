@@ -240,8 +240,20 @@ process.stdin.on("data", (chunk) => {
         const dir = cmd.dir;
         try {
           mkdirSync(dir, { recursive: true });
-          const width = Math.max(1, Math.round((cmd.crop?.width ?? 1920) * 2));
-          const height = Math.max(1, Math.round((cmd.crop?.height ?? 1080) * 2));
+          // A display capture with no crop used to DECLARE the whole 1920x1080
+          // display at 2x — a 3840x2160 frame over a one-pixel PNG. Every
+          // panel then laid out a 4K composite, read 33 MB of RGBA back out of
+          // it and shipped that to the main process over IPC for the drag
+          // file, and a stack of five put main under enough GC pressure on
+          // the 7 GB CI runner that V8's inspector dropped an in-flight
+          // `evaluate` ("Resulting promise was garbage collected", STC-427 —
+          // the process was alive and tore down cleanly 100 ms later). The
+          // pixels were never real; the size does not need to be either. A
+          // 480x270 region at 2x keeps pxPerPoint at 2 and every document
+          // invariant intact at 1/64th of the memory.
+          const crop = cmd.crop ?? { x: 0, y: 0, width: 480, height: 270 };
+          const width = Math.max(1, Math.round(crop.width * 2));
+          const height = Math.max(1, Math.round(crop.height * 2));
           const shot = {
             version: 1,
             kind: cmd.kind === "window" ? "window" : "display-crop",
@@ -257,7 +269,7 @@ process.stdin.on("data", (chunk) => {
           if (cmd.kind === "window") {
             shot.window = { id: cmd.windowId, bounds: { x: 100, y: 100, width: 400, height: 300 } };
           } else {
-            shot.crop = cmd.crop ?? { x: 0, y: 0, width: 1920, height: 1080 };
+            shot.crop = crop;
           }
           writeFileSync(join(dir, "shot.json"), JSON.stringify(shot, null, 2));
           // A one-pixel PNG: the bytes are never inspected, only the existence.
