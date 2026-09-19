@@ -526,15 +526,26 @@ function runQuitTeardown(): void {
   // whatever this commits, handing the same directory to `shell.trashItem`
   // twice. Draining removes them from `pendingTrash` in this same tick, so
   // whichever of the two runs first is the only one that ever sees them.
+  // Each stage is timed and the whole chain reported on stderr at the end
+  // (STC-427): on CI this chain has exceeded a 30 s test-teardown bound with
+  // nothing saying WHICH stage took the time, and a wait nobody can attribute
+  // is a wait nobody can fix.
+  const t0 = Date.now();
+  const marks: string[] = [];
+  const mark = (what: string) => { marks.push(`${what}=${Date.now() - t0}ms`); };
   Promise.all(pendingTrash.drainAll().map((d) =>
     shell.trashItem(d).catch((e) => console.error("[trash] could not commit:", d, e))))
-    .then(() => closeThumbnail())
+    .then(() => { mark("trash"); return closeThumbnail(); })
     .catch(() => {})
-    .then(() => closeOverlay())
+    .then(() => { mark("thumbnail"); return closeOverlay(); })
     .catch(() => {})
-    .then(() => (sup ? sup.shutdown() : Promise.resolve()))
+    .then(() => { mark("overlay"); return sup ? sup.shutdown() : Promise.resolve(); })
     .catch(() => {})
-    .finally(() => app.quit());
+    .finally(() => {
+      mark("helper");
+      console.error(`[quit] teardown ${marks.join(" ")}`);
+      app.quit();
+    });
 }
 
 app.on("before-quit", (e) => {
