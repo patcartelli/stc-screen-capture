@@ -219,15 +219,24 @@ describe("the panel waits (STC-392)", () => {
     // — a Style pick or a Redact toggle landing in that window exports a
     // picture the status line's claimed mode does not match. Disabling is
     // synchronous, the very first thing `perform()` does before its own
-    // first `await`, so it has already happened by the time `panel.click`'s
-    // promise (which waits out the real DOM click dispatch) resolves.
+    // first `await` — so the click and the read happen in ONE evaluate, the
+    // same tick. The first version clicked through Playwright and read
+    // `disabled` in a second round trip, and on a loaded CI runner the copy
+    // (a fake helper answers an export instantly) had already COMPLETED and
+    // re-enabled everything in between (run 35451943868, STC-427): a "while
+    // in flight" observation made after the flight landed. Same family as
+    // the ⌘⌫ test below — a claim about a window in time has to be measured
+    // from inside that window.
     const { app: electronApp } = await launch();
     const panel = panelWindow(electronApp);
-    await panel.click("#copy");
-    expect(await panel.evaluate(() => (document.getElementById("mode") as HTMLSelectElement).disabled))
-      .toBe(true);
-    expect(await panel.evaluate(() => (document.getElementById("redact") as HTMLButtonElement).disabled))
-      .toBe(true);
+    const duringCopy = await panel.evaluate(() => {
+      (document.getElementById("copy") as HTMLButtonElement).click();
+      return {
+        mode: (document.getElementById("mode") as HTMLSelectElement).disabled,
+        redact: (document.getElementById("redact") as HTMLButtonElement).disabled,
+      };
+    });
+    expect(duringCopy).toEqual({ mode: true, redact: true });
 
     await panel.waitForFunction(() => document.getElementById("status")!.textContent === "Copied");
     // Re-enabled once the action settles — Copy does not close the panel, so
