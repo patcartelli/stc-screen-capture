@@ -16,7 +16,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication } from "playwright";
 import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
-import { launchWithTakeInEditor, dragOnStage, closeEditorWindow } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, dragOnStage, closeEditorWindow, pressOverrideDone } from "./_editor-fixture.js";
 
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
@@ -69,7 +69,7 @@ describe("dragging a rect", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.2, y: 0.2 }, { x: 0.7, y: 0.6 });
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => existsSync(join(takeDir, "project.json")), { timeout: 10_000 }).toBe(true);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
@@ -89,7 +89,7 @@ describe("dragging a rect", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }); // down+up at the same point
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.length ?? 0, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
@@ -106,7 +106,7 @@ describe("dragging a rect", () => {
     const { win } = await openPreview();
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.1, y: 0.1 }, { x: 0.4, y: 0.4 });
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => blockClass(win), { timeout: 10_000 }).toMatch(/\boverridden\b/);
   }, 30_000);
 });
@@ -117,14 +117,14 @@ describe("the preset picker", () => {
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 });
     await win.selectOption("#overridepreset", "snappy");
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.[0]?.easing, { timeout: 10_000 }).toBe("snappy");
 
     // Reopening the same block shows the stored preset, not the default.
     await win.click(".zoomblock");
     await expect.poll(() => win.inputValue("#overridepreset"), { timeout: 10_000 }).toBe("snappy");
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
   }, 30_000);
 });
 
@@ -133,7 +133,7 @@ describe("removing an override", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 });
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
 
     await win.click(".zoomblock");
@@ -151,7 +151,7 @@ describe("re-opening a block without dragging", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.15, y: 0.15 }, { x: 0.55, y: 0.55 });
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const before = readProject(takeDir).overrides[0];
 

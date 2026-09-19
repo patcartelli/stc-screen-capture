@@ -16,7 +16,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication, type Page } from "playwright";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { launchWithTakeInEditor, dragOnStage } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, dragOnStage, pressOverrideDone } from "./_editor-fixture.js";
 
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
@@ -88,7 +88,7 @@ describe("clicking the lane's empty background authors a new window", () => {
   test("committing writes a manual override at the default stage-1 shape, with the project's own preset", async () => {
     const { win, takeDir } = await openPreview();
     await clickEmptyLane(win);
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
@@ -111,7 +111,7 @@ describe("clicking the lane's empty background authors a new window", () => {
   test("a second manual window can coexist with the derived one", async () => {
     const { win, takeDir } = await openPreview();
     await clickEmptyLane(win);
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     expect(await win.locator(".zoomblock").count()).toBe(2); // 1 derived + 1 manual
   }, 30_000);
@@ -131,7 +131,7 @@ describe("resizing a manual window by its edges", () => {
     const after = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
     expect(parseFloat(after)).toBeGreaterThan(parseFloat(before));
 
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
     // Dragged to the lane's own end — within a frame or two of the take's duration.
@@ -142,7 +142,7 @@ describe("resizing a manual window by its edges", () => {
     const { win, takeDir } = await openPreview();
     await clickEmptyLane(win);
     await dragManualHandle(win, "start", 1.0); // try to drag start past end
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
     expect(o.endNs).toBeGreaterThan(o.startNs); // never crossed, never zero-width
@@ -154,7 +154,7 @@ describe("the rect tool on a manual window", () => {
     const { win, takeDir } = await openPreview();
     await clickEmptyLane(win);
     await dragOnStage(win, { x: 0.2, y: 0.2 }, { x: 0.6, y: 0.5 });
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
@@ -170,7 +170,7 @@ describe("the preset picker on a manual window", () => {
     const { win, takeDir } = await openPreview();
     await clickEmptyLane(win);
     await win.selectOption("#overridepreset", "snappy");
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.[0]?.easing, { timeout: 10_000 }).toBe("snappy");
   }, 30_000);
@@ -180,7 +180,7 @@ describe("deleting a manual window", () => {
   test("\"Delete window\" removes the whole entry, not just its geometry", async () => {
     const { win, takeDir } = await openPreview();
     await clickEmptyLane(win);
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
 
     await win.click(".zoomblock.manual");
@@ -197,7 +197,7 @@ describe("re-opening a manual window without dragging", () => {
     const { win, takeDir } = await openPreview();
     await clickEmptyLane(win);
     await dragOnStage(win, { x: 0.15, y: 0.15 }, { x: 0.55, y: 0.55 });
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const before = readProject(takeDir).overrides[0];
 

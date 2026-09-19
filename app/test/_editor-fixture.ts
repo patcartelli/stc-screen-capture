@@ -193,3 +193,24 @@ export async function dragOnStage(
   await win.mouse.move(b.x, b.y);
   await win.mouse.up();
 }
+
+/**
+ * Press Done in the override editor and wait until the editor has actually
+ * LEFT edit mode (STC-427).
+ *
+ * `closeOverrideEditor` (editor.ts) awaits the project write and only THEN
+ * runs `resetEditingState` + `updateManualDraftBlock`, which hide
+ * `#overridebar` and strip `zoomblock selected` off the static `#manualdraft`
+ * in one synchronous run. Every test that polled `project.json` for the
+ * committed override and then clicked `.zoomblock` again was polling a SIDE
+ * EFFECT that lands before the UI follows it: on a loaded CI runner the
+ * next click's locator snapshot caught `#manualdraft` still carrying the
+ * class, mid-hide, and waited 30 s for it to become visible (runs
+ * 35451943868 and 35452722657, two files, the same
+ * `locator resolved to <div id="manualdraft" class="zoomblock selected">`).
+ * `#overridebar` hidden is the signal the next click actually depends on.
+ */
+export async function pressOverrideDone(page: Page, timeout = 10_000): Promise<void> {
+  await page.click("#overridedone");
+  await page.waitForSelector("#overridebar", { state: "hidden", timeout });
+}

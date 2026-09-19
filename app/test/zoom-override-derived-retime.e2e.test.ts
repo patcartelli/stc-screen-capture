@@ -14,7 +14,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication, type Page } from "playwright";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { launchWithTakeInEditor, dragOnStage } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, dragOnStage, pressOverrideDone } from "./_editor-fixture.js";
 
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
@@ -79,7 +79,7 @@ describe("retiming a derived window by its edges", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragHandle(win, "start", 0.05); // well before the original 1705ms start
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
@@ -93,7 +93,7 @@ describe("retiming a derived window by its edges", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragHandle(win, "end", 0.98); // well past the original 4505ms end
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
@@ -107,7 +107,7 @@ describe("retiming a derived window by its edges", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragHandle(win, "start", 0.05);
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const first = readProject(takeDir).overrides[0];
 
@@ -129,7 +129,7 @@ describe("retime composes with a geometry override on the same window", () => {
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.2, y: 0.2 }, { x: 0.6, y: 0.5 });
     await dragHandle(win, "end", 0.98);
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(2);
     const kinds = readProject(takeDir).overrides.map((o: any) => o.kind).sort();
@@ -145,7 +145,7 @@ describe("retime composes with a geometry override on the same window", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragHandle(win, "end", 0.98);
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
 
     await win.click(".zoomblock");
@@ -176,7 +176,7 @@ describe("deleting a derived window", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.1, y: 0.1 }, { x: 0.4, y: 0.4 });
-    await win.click("#overridedone");
+    await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
 
     await win.click(".zoomblock");
