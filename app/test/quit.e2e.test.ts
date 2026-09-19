@@ -22,7 +22,7 @@ let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
 describe("quitting while recording", () => {
-  test("stops the recording, waits for the stop, then quits the helper", async () => {
+  test("repeated quits still wait for the recording to stop before quitting the helper", async () => {
     const log = join(mkdtempSync(join(tmpdir(), "stc-cmdlog-")), "cmds.txt");
     const { dir: recordings } = makeTakeFolder();
     app = await electron.launch({
@@ -42,6 +42,14 @@ describe("quitting while recording", () => {
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     await win.click("#record");
     await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
+
+    // Request quit again during the deliberately slow stop. It must not
+    // bypass the teardown the first request is still awaiting.
+    await app.evaluate(({ app: electronApp }) => {
+      electronApp.once("before-quit", () => {
+        setTimeout(() => electronApp.quit(), 10);
+      });
+    });
 
     // Playwright's close() quits the app the way Cmd-Q does: through app.quit()
     // and the before-quit listener.
@@ -171,6 +179,38 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
       await stubQuitDialog(1);
     }
   }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + 60_000);
+
+  test("repeated quit requests share one pending warning and Cancel allows a later quit", async () => {
+    const { win } = await launchWithHelper();
+    await captureDisplay(win);
+    const calls = await app!.evaluate(({ app: electronApp, dialog }) => {
+      const state = globalThis as any;
+      state.__pendingQuitCalls = 0;
+      dialog.showMessageBox = (() => {
+        state.__pendingQuitCalls++;
+        return new Promise((resolve) => { state.__answerQuit = resolve; });
+      }) as any;
+      electronApp.quit();
+      electronApp.quit();
+      return state.__pendingQuitCalls;
+    });
+    try {
+      expect(calls).toBe(1);
+      await app!.evaluate(async () => {
+        (globalThis as any).__answerQuit({ response: 2, checkboxChecked: false });
+        await new Promise((resolve) => setImmediate(resolve));
+      });
+      const next = await stubQuitDialog(2);
+      await app!.evaluate(({ app: electronApp }) => electronApp.quit());
+      await expect.poll(next.calls, { timeout: POLL_MS }).toBe(1);
+    } finally {
+      await app!.evaluate(async () => {
+        (globalThis as any).__answerQuit({ response: 2, checkboxChecked: false });
+        await new Promise((resolve) => setImmediate(resolve));
+      });
+      await stubQuitDialog(1);
+    }
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + 30_000);
 
   test("a reopened LIBRARY take does not count as unhandled — no dialog, a plain quit", async () => {
     // `unsavedTakeDirs` (thumbnail-window.ts) filters to `origin: "fresh"`

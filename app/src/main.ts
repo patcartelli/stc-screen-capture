@@ -484,6 +484,8 @@ app.on("window-all-closed", async () => {
 // Electron does not await an async listener here, so the first pass holds
 // the quit until the shutdown has actually finished, then re-issues it.
 let quitting = false;
+let quitTeardownComplete = false;
+let quitDialogOpen = false;
 
 /**
  * The teardown every quit eventually runs, whichever path decided to allow
@@ -534,11 +536,15 @@ function runQuitTeardown(): void {
     .catch(() => {})
     .then(() => (sup ? sup.shutdown() : Promise.resolve()))
     .catch(() => {})
-    .finally(() => app.quit());
+    .finally(() => { quitTeardownComplete = true; app.quit(); });
 }
 
 app.on("before-quit", (e) => {
-  if (quitting) return;
+  if (quitting) {
+    // Repeated Cmd-Q must not bypass a stop or deletion still being awaited.
+    if (!quitTeardownComplete) e.preventDefault();
+    return;
+  }
   e.preventDefault();
 
   // A take `panel:trash` has PROMISED to delete (Task 6) is not counted here,
@@ -593,6 +599,8 @@ app.on("before-quit", (e) => {
   // buttons[2] — so Escape does the same thing Return-on-nothing-pressed
   // does, rather than picking the FIRST button the way a dialog that only
   // sets `cancelId` would.
+  if (quitDialogOpen) return;
+  quitDialogOpen = true;
   void dialog.showMessageBox({
     type: "warning",
     buttons: ["Save All", "Quit Anyway", "Cancel"],
@@ -602,6 +610,7 @@ app.on("before-quit", (e) => {
     detail: "Save All writes them to your library, then quits. Quit Anyway leaves them where "
       + "they are — nothing is deleted, and they're offered back the next time you open the app.",
   }).then(async ({ response }) => {
+    if (quitting) return; // A system shutdown may have started while the dialog was open.
     if (response === 2) return; // Cancel: quit stays prevented, `quitting` stays false.
     if (response === 0) {
       // Save All must not trap the user (ruling 2): a promotion that fails
@@ -617,7 +626,9 @@ app.on("before-quit", (e) => {
     }
     quitting = true;
     runQuitTeardown();
-  });
+  }).catch((err) => {
+    console.error("[quit] could not show the unsaved-takes warning:", err);
+  }).finally(() => { quitDialogOpen = false; });
 });
 
 ipcMain.handle("recorder:getSettings", async (): Promise<Settings> =>
