@@ -14,8 +14,10 @@ afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 async function launch(recordingsDir: string) {
   // The bundle is built once in vitest.global-setup.ts. Building it here
   // raced every other suite doing the same on app/dist/ — see that file.
+  // STC-403: isolated from the developer's real settings, same as every
+  // other fixture — this used to load the real ~/Library/.../settings.json.
   app = await electron.launch({
-    args: [root], cwd: root,
+    args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
     env: { ...process.env, STC_RECORDINGS_DIR: recordingsDir, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), },
   });
   const win = await app.firstWindow();
