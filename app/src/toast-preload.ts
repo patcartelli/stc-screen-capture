@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld("toast", {
   // `edit`/`trash`). Main decides whether there is anything left to take
   // back (`PendingTrash.undo`).
   undo: (dir: string) => ipcRenderer.invoke("panel:undoTrash", dir),
+  // STC-412 final review (C1): the message mode's ✕. Fire-and-forget — the
+  // window is destroyed by main's own `hideToast`, so there is nothing to
+  // hand back, and a reply would arrive at a page that no longer exists.
+  // Names nothing: main closes whatever toast is currently up, which is by
+  // construction the one this page belongs to (there is only ever one).
+  dismiss: () => ipcRenderer.send("toast:dismiss"),
   // Fire-and-forget from main, not request/response: the window is about to
   // be destroyed regardless of what the page does with this, so there is
   // nothing to hand back. Same `on`/return-an-unsubscribe shape

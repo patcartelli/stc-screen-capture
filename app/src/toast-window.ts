@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { positionFor, type Corner, type Size } from "./thumbnail.js";
 import { PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import { UNDO_WINDOW_MS } from "./panel-actions.js";
+import { MESSAGE_TOAST_SIZE, UNDO_TOAST_SIZE, messageToastMs } from "./toast.js";
 
 /**
  * The toast that appears when Trash PROMISES a deletion (STC-392 Task 6),
@@ -41,10 +42,16 @@ import { UNDO_WINDOW_MS } from "./panel-actions.js";
  * `pending-trash.ts` tracks it independently of whether anything is on
  * screen for it, so `main.ts`'s periodic sweep still commits it on schedule
  * even though its own toast never got to finish its bar.
+ *
+ * ## The two modes are NOT the same size or the same length
+ *
+ * They were, and that was a bug rather than a simplification: the message
+ * mode carries multi-paragraph warnings and was clipping most of the longest
+ * one inside the undo toast's 240x68 box, on the undo toast's 4 s clock.
+ * `toast.ts` owns both numbers per mode now (and the reasoning behind each);
+ * `buildToastWindow` takes the size as a parameter so neither mode can
+ * silently inherit the other's.
  */
-
-/** The window's size — small enough to read as a notice, not a second panel. */
-export const TOAST_SIZE: Size = { width: 240, height: 68 };
 
 export interface ToastWindowOptions {
   corner: Corner;
@@ -59,27 +66,25 @@ export interface ShowUndoToastOptions extends ToastWindowOptions {
   dir: string;
 }
 
-/** How long a plain message toast stays up — no Undo, so no promise to keep. */
-export const MESSAGE_TOAST_MS = 4_000;
-
 let current: { win: BrowserWindow; timer: NodeJS.Timeout } | undefined;
 
 /**
  * Everything the undo and message toasts share: replacing whatever toast is
  * already up, positioning at the chosen corner, and the window's own
- * (identical, for both modes) construction. Callers append their own mode's
- * query params and own the timer that eventually takes the window down —
- * the one piece of behavior that genuinely differs between the two (an undo
- * toast tells the page first, so a click landing in the gap cannot start an
- * undo for a promise about to be committed; a message toast has no such
- * promise to protect).
+ * construction. Callers append their own mode's query params, hand in their
+ * own mode's `size` (`toast.ts`), and own the timer that eventually takes the
+ * window down — the one piece of behavior that genuinely differs between the
+ * two (an undo toast tells the page first, so a click landing in the gap
+ * cannot start an undo for a promise about to be committed; a message toast
+ * has no such promise to protect).
  */
-function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string>): BrowserWindow {
+function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string>,
+                          size: Size): BrowserWindow {
   hideToast();
   const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  const { x, y } = positionFor(opts.corner, workArea, TOAST_SIZE);
+  const { x, y } = positionFor(opts.corner, workArea, size);
   const win = new BrowserWindow({
-    x, y, width: TOAST_SIZE.width, height: TOAST_SIZE.height,
+    x, y, width: size.width, height: size.height,
     transparent: true, frame: false, hasShadow: false,
     resizable: false, movable: false, minimizable: false, maximizable: false,
     fullscreenable: false, skipTaskbar: true,
@@ -116,7 +121,8 @@ function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string
  * duration written twice.
  */
 export function showUndoToast(opts: ShowUndoToastOptions): void {
-  const win = buildToastWindow(opts, { mode: "undo", dir: opts.dir, ms: String(UNDO_WINDOW_MS) });
+  const win = buildToastWindow(opts, { mode: "undo", dir: opts.dir, ms: String(UNDO_WINDOW_MS) },
+                               UNDO_TOAST_SIZE);
   const timer = setTimeout(() => {
     // Tell the page first: it disables its own Undo button, so a click that
     // lands in the instant between this firing and the window actually going
@@ -128,13 +134,30 @@ export function showUndoToast(opts: ShowUndoToastOptions): void {
 }
 
 /**
- * A plain notice — no Undo, no promise, auto-dismisses after
- * MESSAGE_TOAST_MS. Replaces the main window's inline #alert banner
- * (STC-412) for warnings that reach the user off the reliable channel.
+ * A plain notice — no Undo, no promise. Replaces the main window's inline
+ * #alert banner (STC-412) for warnings that reach the user off the reliable
+ * channel.
+ *
+ * It auto-dismisses on a clock derived from the message's own LENGTH
+ * (`toast.ts`'s `messageToastMs`), not on a fixed 4 s: these are the
+ * multi-paragraph warnings `renderer.ts` writes, and a paragraph telling
+ * someone to grant a permission and reopen the app cannot be read in the time
+ * "Deleted" needs. Computed ONCE here and handed to both the real timer and
+ * the page's draining bar (`ms` on the query string), the same one-value rule
+ * the undo toast's own `UNDO_WINDOW_MS` follows — the bar is what tells the
+ * reader how long is left, so it may never name a different number than the
+ * timer that actually takes the window away.
+ *
+ * The page also gets a ✕ in this mode (`toast.html`), which reaches
+ * `hideToast` through `toast:dismiss` — a notice long enough to need reading
+ * is long enough to want out of the way early, and unlike the undo toast
+ * there is no promise that an early close would abandon.
  */
 export function showMessageToast(text: string, opts: ToastWindowOptions): void {
-  const win = buildToastWindow(opts, { mode: "message", text, ms: String(MESSAGE_TOAST_MS) });
-  const timer = setTimeout(hideToast, MESSAGE_TOAST_MS);
+  const ms = messageToastMs(text);
+  const win = buildToastWindow(opts, { mode: "message", text, ms: String(ms) },
+                               MESSAGE_TOAST_SIZE);
+  const timer = setTimeout(hideToast, ms);
   current = { win, timer };
 }
 

@@ -88,6 +88,10 @@ let pillContentWidthPx = MIN_PILL_WIDTH_PX;
 ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
   if (typeof px === "number" && Number.isFinite(px) && px > 0) pillContentWidthPx = px;
 });
+// The message toast's ✕ (STC-412 final review, C1). `hideToast` is
+// idempotent and always acts on the one toast that is up, so this needs no
+// argument and cannot close the wrong window.
+ipcMain.on("toast:dismiss", () => hideToast());
 ipcMain.on("toast:message", (_e, text: unknown) => {
   if (typeof text !== "string" || !text) return;
   showMessageToast(text, {

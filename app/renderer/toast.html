@@ -34,6 +34,56 @@
       gap: 10px;
     }
     #label { font-size: 12px; }
+    /*
+      ── message mode ──────────────────────────────────────────────────────
+      STC-412's final review, C1. This mode carries the main window's
+      WARNINGS since the inline `#alert` banner was removed, and those are
+      multi-paragraph instructions — not the one word ("Deleted") the undo
+      mode's single-line, vertically-centred flex row was built for. Three
+      things were wrong and all three are fixed here rather than by hoping
+      the strings stay short:
+
+      - `#label` had no `white-space` rule, so every `\n` in a warning
+        collapsed to a space and the paragraphs `renderer.ts` deliberately
+        writes did not exist on screen. `pre-wrap` is scoped to this mode so
+        the undo toast's own single-line label is untouched.
+      - `#card`'s `overflow: hidden` (kept — it is what clips the card's own
+        rounded corners) silently cut the rest off with nothing saying there
+        was more. `#row` scrolls in this mode instead, as a BACKSTOP: the
+        window is sized (`toast.ts`'s MESSAGE_TOAST_SIZE) so the longest real
+        message fits without scrolling, and `warnings.e2e.test.ts` measures
+        that in real Chromium rather than trusting the arithmetic.
+      - The text was centred against a right-aligned button that is hidden in
+        this mode, leaving prose vertically centred in a box it overflows.
+        `display: block` + real padding is what a paragraph wants.
+
+      `mode` arrives on the query string, which CSS cannot read —
+      `toast-renderer.ts` stamps it on <html> as `data-mode` in the same
+      synchronous run that fills the label, before `ready-to-show` ever lets
+      the window be seen.
+    */
+    html[data-mode="message"] #row {
+      display: block;
+      padding: 10px 30px 10px 12px;
+      overflow-y: auto;
+    }
+    html[data-mode="message"] #label { white-space: pre-wrap; }
+    /*
+      The way out before the clock runs down. Same ghost circle, same corner
+      and the same reasoning as `thumbnail.html`'s own `#dismiss` — this app
+      already has one gesture for "close this floating surface" and a second
+      spelling would be a second thing to learn. Undo mode never shows it:
+      that toast is holding a promise open, and an early close there would
+      have to decide what happens to the promise.
+    */
+    #close {
+      position: absolute; top: 6px; right: 6px; z-index: 1;
+      width: 18px; height: 18px; padding: 0; line-height: 1;
+      border: none; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12); color: #f2f2f2;
+      font-size: 13px; cursor: pointer;
+    }
+    #close:hover { background: rgba(255, 255, 255, 0.22); }
     button {
       font: inherit; font-size: 12px;
       padding: 4px 12px; border-radius: 999px;
@@ -79,6 +129,7 @@
 </head>
 <body>
   <div id="card">
+    <button id="close" type="button" title="Close" aria-label="Close" hidden>×</button>
     <div id="row">
       <span id="label">Deleted</span>
       <button id="undo" type="button">Undo</button>

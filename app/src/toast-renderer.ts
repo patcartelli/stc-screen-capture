@@ -17,6 +17,7 @@ declare global {
   interface Window {
     toast: {
       undo(dir: string): Promise<boolean>;
+      dismiss(): void;
       onExpire(cb: () => void): () => void;
     };
   }
@@ -31,10 +32,20 @@ const text = params.get("text") ?? "";
 const bar = document.getElementById("bar") as HTMLDivElement;
 const label = document.getElementById("label") as HTMLSpanElement;
 const undoBtn = document.getElementById("undo") as HTMLButtonElement;
+const closeBtn = document.getElementById("close") as HTMLButtonElement;
+
+// The stylesheet's hook for everything that differs between the two modes —
+// `pre-wrap`, the scrolling text block, the ✕ (toast.html's own comment).
+// CSS cannot read a query string, so the mode has to be stamped onto the
+// document; done here, synchronously, before the window is ever shown
+// (`toast-window.ts` holds it back until `ready-to-show`), so there is no
+// instant where a message is laid out with the undo toast's rules.
+document.documentElement.dataset.mode = mode;
 
 if (mode === "message") {
   label.textContent = text;
   undoBtn.hidden = true;
+  closeBtn.hidden = false;
 }
 
 /**
@@ -73,6 +84,16 @@ applyBarMotion();
 // setting flipped mid-toast is not purely theoretical — `countdown-renderer
 // .ts` re-decides every draw for the identical reason.
 reducedMotion.addEventListener("change", applyBarMotion);
+
+// Message mode only — the button is `hidden` otherwise, and main's handler
+// is a plain `hideToast()` with no promise to reason about either way.
+closeBtn.addEventListener("click", () => {
+  // Disabled first for the same reason the undo button is: the window is
+  // about to be destroyed and a second click in that gap has nothing left to
+  // ask for.
+  closeBtn.disabled = true;
+  window.toast.dismiss();
+});
 
 undoBtn.addEventListener("click", () => {
   // Disabled immediately, not after the round trip: a second click while the

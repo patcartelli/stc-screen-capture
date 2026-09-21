@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { toastPage, toastText } from "./_toast.js";
+import { MESSAGE_TOAST_MIN_MS } from "../src/toast.js";
 
 /**
  * A warning the helper sends on its reliable channel reaches the user, and a
@@ -87,6 +88,44 @@ describe("a start the helper refuses (STC-315)", () => {
     expect(alert).toMatch(/keystrokes/);
     expect(alert).toMatch(/mouse movement and clicks only/);
 
+    // ── and it is all actually ON SCREEN ─────────────────────────────────
+    //
+    // Every assertion above reads `textContent`, which is blind to CSS
+    // clipping — the whole message can be in the DOM and a fifth of it
+    // visible, which is exactly what was happening (STC-412 final review,
+    // C1): the message toast was reusing the undo toast's 240x68 box with
+    // `#card { overflow: hidden }` and no `white-space` rule on `#label`.
+    // This message is the longest string this app can put in front of anyone
+    // (572 characters, four paragraphs), so it is the one to measure, and it
+    // is measured in the REAL renderer rather than computed from a font
+    // metric nobody can check.
+    //
+    // Three claims, each failing on its own: the paragraphs survive as
+    // paragraphs (`pre-wrap` — without it every \n collapses to a space),
+    // the text is not taller than the box that holds it (the clipping), and
+    // the box is not wider than the window (which would clip it sideways
+    // instead). `overflowBy` is the RENDERED label height minus the box's,
+    // not `scrollHeight - clientHeight`: the latter is clamped at 0 once the
+    // content fits, so it can say "it fits" and never say by how much —
+    // the headroom is the number worth reporting when this eventually fails
+    // on some other font stack. Watched failing at the old 240x68: +370px,
+    // i.e. about 15% of the message on screen.
+    const page = (await toastPage(app!))!;
+    const fit = await page.evaluate(() => {
+      const row = document.getElementById("row")!;
+      const label = document.getElementById("label")!;
+      return {
+        whiteSpace: getComputedStyle(label).whiteSpace,
+        overflowBy: label.getBoundingClientRect().height - row.clientHeight,
+        widerBy: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        chars: (label.textContent ?? "").length,
+      };
+    });
+    expect(fit.chars).toBeGreaterThan(500);
+    expect(fit.whiteSpace).toBe("pre-wrap");
+    expect(fit.overflowBy, `label exceeds its box by ${fit.overflowBy}px`).toBeLessThanOrEqual(0);
+    expect(fit.widerBy).toBeLessThanOrEqual(0);
+
     // "Quit and reopen", not "press Record again". Input Monitoring commonly
     // needs the granted process restarted and that is UNOBSERVED for this app
     // (see the renderer's comment), so the instruction has to be the one that
@@ -143,7 +182,7 @@ describe("helper warnings during a take", () => {
     await expect.poll(() => toastText(app!), { timeout: 10_000 })
       .toMatch(/display capture stopped unexpectedly, so the recording was stopped/);
     // Captured once rather than re-read: the toast auto-dismisses on its own
-    // clock now (MESSAGE_TOAST_MS), so chaining further live reads against it
+    // clock now (`toast.ts`'s `messageToastMs`), so chaining further live reads against it
     // would race that timer instead of asserting against the text the poll
     // above already confirmed is showing.
     const finalAlert = await toastText(app!);
@@ -166,9 +205,43 @@ describe("helper warnings during a take", () => {
   test("the toast auto-dismisses on its own, with no click", async () => {
     await recordWithWarning("some-new-fault");
     await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
-    // MESSAGE_TOAST_MS is 4_000 (toast-window.ts) — poll well past it rather
-    // than asserting at a fixed instant, so this is not a race against the
-    // exact same clock it is testing.
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 8_000 }).toBe(false);
+    // The duration is derived from the message's own length now (`toast.ts`'s
+    // `messageToastMs`: a MESSAGE_TOAST_MIN_MS floor of 4 s plus 55 ms per
+    // character, capped at 20 s) rather than a flat 4 s — a paragraph telling
+    // someone to grant a permission and reopen the app cannot be read in the
+    // time "Deleted" needs. This message is `RECORDING_FAULTS`' fallback,
+    // "The recorder reported a problem: some-new-fault" — 47 characters, so
+    // ~6.6 s. The bound is generously past that rather than tight against it,
+    // for the same reason the comment it replaces gave: this must not become
+    // a race with the very clock it is checking. It is also comfortably
+    // under MESSAGE_TOAST_MAX_MS, so a message that somehow never expired
+    // would still fail here rather than pass by outliving the poll.
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 15_000 }).toBe(false);
+  }, 120_000);
+
+  // STC-412 final review (C1): the ✕ the message mode gained, because a
+  // length-derived clock is still a clock and a notice sitting over someone's
+  // screen — a live take's own pixels included — has to be clearable early.
+  test("the message toast's ✕ takes it away before its clock runs down", async () => {
+    await recordWithWarning("some-new-fault");
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
+    const page = (await toastPage(app!))!;
+    const shownAt = Date.now();
+    // A close destroys the window out from under the click, the same race
+    // `thumbnail.e2e.test.ts`'s `dismissAndTolerateClose` exists for — so the
+    // close event is awaited first and a rejection is only tolerated if the
+    // window really did go.
+    const closed = page.waitForEvent("close", { timeout: 10_000 });
+    const err = await page.click("#close").then(() => undefined, (e: unknown) => e);
+    if (err !== undefined) await closed.catch(() => { throw err; });
+    else await closed;
+    expect(await toastPage(app!)).toBeUndefined();
+    // The discriminator, and the reason this is not just "it went away": no
+    // message toast can expire on its own before MESSAGE_TOAST_MIN_MS, the
+    // floor under `messageToastMs` for a string of ANY length. Closing
+    // inside that window therefore cannot be the timer. Imported rather than
+    // restated — `toast.ts` is deliberately Electron-free so a test can read
+    // its numbers instead of keeping a second copy of them in step by hand.
+    expect(Date.now() - shownAt).toBeLessThan(MESSAGE_TOAST_MIN_MS);
   }, 120_000);
 });
