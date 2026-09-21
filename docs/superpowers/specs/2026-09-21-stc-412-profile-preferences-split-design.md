@@ -6,6 +6,15 @@ panel rewrite, PR #188 merged, more on an unmerged branch) shipped in the
 meantime — several of the ticket's original bullets are already satisfied and
 are recorded below as such rather than re-built.
 
+**Revision note (same day):** the Linear issue gained a "Scope decided
+(2026-09-21)" section partway through this design — live edits, presumably
+Patrick, landing while this doc was already in review. Two of its four
+points changed real decisions below (Profile becomes an actual relocated
+section; dismiss is a close affordance, not a fifth action button) and are
+folded in. Its third point (stale "Capture still"/"Capture with
+Self-Timer" labels) was re-checked against current code with a repo-wide
+grep and found not to apply — see "What's already done" below.
+
 ## What's already done (no work needed)
 
 - **STC-398's stills→"Shot" rename reached every surface the ticket asked to
@@ -72,22 +81,42 @@ are recorded below as such rather than re-built.
 
 ### 3. Main window HTML/CSS (`app/renderer/index.html`, `app/src/renderer.ts`)
 
-- `#profilesheet`'s heading and the `#profile` button's label/title change
-  from "Profile" to **"Preferences"**. No new sheet or window is built —
-  the audit that opened this ticket found Scope/Source/Camera/Mic already
-  correctly live in the main window's own rows, not in the sheet, so
-  "Profile" as a per-capture concept needs no relocation.
-- The `.stillrow` "Saving to" block loses its `#stillcleardest` ("Beside
-  the shot") button; `#stilldest`/`#stillchoosedest` remain, now always
-  showing a real, resolved path (falling back to the computed default when
-  `saveFolder` is null, same as today's blank-then-populated display).
-- The diagnostics `<table>` moves behind a toggle (`#showdiagnostics`
-  checkbox in Preferences, wired to the new setting); `renderer.ts`'s
-  existing per-field update calls (`pid`, `alive`, `camera-state`, …) are
-  untouched — only visibility changes.
+**Revised per the 2026-09-21 scope note**: the sheet becomes one panel with
+two labeled sections, not a rename alone.
+
+- The `#profile` button is relabeled **"Settings"** (my call — neither
+  "Profile" nor "Preferences" alone names a sheet holding both; flag if
+  wrong). It opens the same `#profilesheet` `<aside>`, now containing two
+  `<h2>`-headed sections in order: **Profile** first (immediate,
+  per-capture), then **Preferences** (global) — same stacked-section
+  pattern the sheet already uses for Shot/Countdown/Shot shortcuts, no
+  tabs.
+- **Profile section** (new content, relocated from the main window):
+  the Scope select, and whichever of `#display-label`/`#window-source`/
+  `#region-source` applies, plus the Camera checkbox and Mic select —
+  moved out of `#record-row` and the scope `.row` into the sheet. Their
+  element ids are unchanged (`#scope`, `#camera`, `#mic`, `#pickwindow`,
+  `#clearwindow`, `#pickregion`, `#clearregion`, …), so `renderer.ts`'s
+  existing `getElementById`-based wiring needs no change — only their
+  position in the DOM moves. `#record-row` shrinks to Record, the pill,
+  Shot, the Settings button, and `#state`.
+- **Preferences section** (as originally designed): Save folder (no
+  "Beside the shot" button — `#stilldest`/`#stillchoosedest` remain,
+  always showing a real resolved path), panel corner, skip-to-clipboard,
+  countdown, shortcuts + restore defaults, shutter sound, and the new
+  diagnostics toggle (`#showdiagnostics`, gates the `<table>` — off by
+  default, `renderer.ts`'s existing per-field updates untouched).
 - `#alert` and `alertUser()` are removed from the main window. Warnings
   currently reaching `alertUser` (`r.warning` from an IPC reply,
   `helper:warning` events) are re-routed through the new toast (below).
+
+**Test-suite consequence worth flagging**: Scope/Camera/Mic controls are
+currently interactable on the main window at all times; once they live
+inside `#profilesheet`, they're only visible/clickable while the sheet has
+its `.open` class. Every e2e test that drives them via `page.click(...)`
+(`scope-picker.e2e.test.ts`, camera-toggle tests, mic-selection tests,
+etc.) needs to open the sheet first. This is mechanical but touches
+several files — called out explicitly so it isn't missed sizing the plan.
 
 ### 4. Toast generalization (`app/src/toast-window.ts`)
 
@@ -105,28 +134,45 @@ are recorded below as such rather than re-built.
 
 ### 5. Explicit dismiss (`app/src/panel-actions.ts`, `main.ts`, panel UI)
 
-- `PanelAction` gains `"dismiss"`. `actionsFor` always includes it — the
-  one way out of the panel that isn't Trash, present for every
-  kind/origin combination.
-- `closesPanel("dismiss") === true`, `promotes("dismiss") === false` —
-  dismissing does nothing to the take itself.
+**Revised per the 2026-09-21 scope note**: dismiss is a close affordance
+(X / Esc / click-outside), not a fifth button in the Copy/Save/Edit/Trash
+row.
+
+- `PanelAction` gains `"dismiss"` for the main-process/IPC side (main.ts's
+  handler, `promotes`/`closesPanel` semantics) — but `actionsFor` (which
+  drives the four-button row `thumbnail-renderer.ts` draws) is
+  **unchanged**; dismiss is never one of its returned actions.
+  `closesPanel("dismiss") === true`, `promotes("dismiss") === false` — it
+  does nothing to the take itself, same as before.
 - `main.ts` gains `ipcMain.handle("panel:dismiss", (_e, dir) => { ... })`
-  on the same pattern as `panel:save`/`panel:edit`/`panel:trash`, calling
-  the **already-existing** `dismissThumbnail(dir)` primitive (currently an
+  on the `panel:save`/`panel:edit`/`panel:trash` pattern, calling the
+  **already-existing** `dismissThumbnail(dir)` primitive (today an
   internal detail used when save/edit/trash complete) with no promote or
   trash side effect. A dismissed fresh capture stays in temp storage,
   governed entirely by STC-393's existing 7-day purge and crash-recovery —
-  no new take-lifecycle state is introduced.
-- `thumbnail-renderer.ts` / `thumbnail.html` / `thumbnail-menu.ts` gain a
-  Dismiss control and keyboard path, reading from `actionsFor`/`closesPanel`
-  the same way the existing four actions already do — no new per-view copy
-  of the action table (this file's own stated purpose).
+  no new take-lifecycle state.
+- `thumbnail-renderer.ts`/`thumbnail.html` gain a small **X** button
+  (visually separate from the action row — same idea as `#profileclose`
+  in the main window's sheet) that calls `perform("dismiss")`. Escape and
+  a click on the window's own background (outside the card) call the same
+  path. `thumbnail-menu.ts`'s right-click menu is **not** changed — Trash
+  is already there and remains the menu's own way out; dismiss is a
+  window-chrome gesture, not a menu item.
+- Click-outside needs a decision at build time: this panel is a
+  borderless always-on-top `BrowserWindow`, not a DOM overlay, so "outside
+  the card" most likely means the window losing focus (`blur`) rather
+  than a literal click handler — matching how `countdown-window.ts`/
+  `overlay-session.ts` already reason about this class of window. Confirm
+  against `panel-focus.ts`'s focus model when implementing; if blur turns
+  out to fire spuriously (e.g. on a system dialog), Esc + the X remain the
+  fallback and click-outside can be dropped without losing the core ask.
 
 ## Explicitly out of scope
 
-- Building an actual separate "Profile" surface for per-capture settings —
-  the audit found this already satisfied by the main window's existing
-  rows.
+- Multi-profile create/switch/delete UI — the 2026-09-21 scope note is
+  explicit ("relocate only... profiles stay a single implicit set until a
+  later ticket"). "Profile" here means one section holding the existing
+  per-capture controls, not a profiles system.
 - STC-388's record-flow entry points, STC-413's library-as-folder-view, and
   STC-415's hotkey-modifier outcomes — related, not blocking, not touched
   here.
@@ -142,10 +188,15 @@ are recorded below as such rather than re-built.
   absolute path vs. garbage) and `showDiagnostics`.
 - `app/test/takes.test.ts` (or wherever `takesRoot` is pinned): the new
   parameter's precedence (`saveFolder` > `STC_RECORDINGS_DIR` > default).
-- `app/test/panel-actions.test.ts` (new or extended): `actionsFor` always
-  includes `dismiss`; `closesPanel`/`promotes` for it.
-- E2E: Preferences sheet shows the renamed heading and no "Beside the
-  shot" control; the diagnostics table is hidden by default and toggles;
-  dismissing a fresh capture's panel leaves its temp-storage directory
-  untouched and closes the panel; the toast appears for a forwarded
-  warning and auto-dismisses.
+- `app/test/panel-actions.test.ts` (new or extended): `closesPanel`/
+  `promotes` for `"dismiss"`; `actionsFor`'s four-action output is
+  UNCHANGED (a control asserting this is what would catch dismiss being
+  added there by mistake).
+- E2E: the sheet shows both Profile and Preferences sections; Scope/
+  Camera/Mic still drive `recorder:start`'s payload correctly from their
+  new location (every existing scope/camera/mic e2e test updated to open
+  the sheet first — see the flag in section 3); no "Beside the shot"
+  control; the diagnostics table is hidden by default and toggles;
+  dismissing a fresh capture's panel (via X, via Esc) leaves its
+  temp-storage directory untouched and closes the panel; the toast
+  appears for a forwarded warning and auto-dismisses.
