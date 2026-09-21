@@ -354,7 +354,7 @@
   <div id="stillstatus" hidden></div>
   <div id="alert"></div>
 
-  <table>
+  <table id="diagnostics" hidden>
     <tbody>
       <tr><td>helper pid</td><td id="pid">—</td></tr>
       <tr><td>helper</td><td id="alive">—</td></tr>
@@ -407,6 +407,10 @@
     </div>
 
     <h2>Preferences</h2>
+    <div class="stillrow">
+      <label title="Show helper pid, frame/drop counts and event counts on the main window">
+        <input type="checkbox" id="showdiagnostics"> Show diagnostics</label>
+    </div>
 
     <h2>Shot</h2>
     <!--

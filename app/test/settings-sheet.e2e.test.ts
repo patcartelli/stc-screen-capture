@@ -59,5 +59,8 @@ describe("the settings sheet", () => {
     expect(await win.isVisible("#camera")).toBe(true);
     expect(await win.isVisible("#mic")).toBe(true);
     expect(await win.locator("#stillcleardest").count()).toBe(0);
+    expect(await win.locator("#diagnostics").isHidden()).toBe(true);
+    await win.check("#showdiagnostics");
+    expect(await win.locator("#diagnostics").isVisible()).toBe(true);
   });
 });

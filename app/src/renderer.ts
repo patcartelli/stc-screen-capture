@@ -39,6 +39,8 @@ interface AppSettings {
   scope: ScopeSettingsView;
   /** STC-412: where recordings and stills are saved, replacing still.destination. */
   saveFolder: string | null;
+  /** STC-412: show diagnostics table. */
+  showDiagnostics: boolean;
 }
 interface Take {
   dir: string; name: string; durationMs: number;
@@ -864,6 +866,8 @@ function showDestination(dest: string | null): void {
 
 const thumbCornerSel = $("thumbcorner") as HTMLSelectElement;
 const thumbSkipBox = $("thumbskip") as HTMLInputElement;
+const showDiagnosticsBox = $("showdiagnostics") as HTMLInputElement;
+const diagnosticsTable = $("diagnostics") as HTMLTableElement;
 const countdownSel = $("countdownms") as HTMLSelectElement;
 
 // Built from the module that owns the clamp, never hand-listed in the markup
@@ -877,10 +881,12 @@ for (const { ms, label } of COUNTDOWN_OPTIONS) {
 }
 
 async function loadStillPreferences(): Promise<void> {
-  const { thumbnail, countdownMs, saveFolder } = await recorder.getSettings();
+  const { thumbnail, countdownMs, saveFolder, showDiagnostics } = await recorder.getSettings();
   showDestination(saveFolder);
   thumbCornerSel.value = thumbnail.corner;
   thumbSkipBox.checked = thumbnail.skip;
+  showDiagnosticsBox.checked = showDiagnostics;
+  diagnosticsTable.hidden = !showDiagnostics;
   // A stored value that is not one of the offered options — 0, or a number
   // someone typed into the file — leaves the select showing nothing rather
   // than silently misreporting itself as 3 seconds.
@@ -901,6 +907,10 @@ thumbCornerSel.addEventListener("change", () => {
   void patchThumbnail({ corner: thumbCornerSel.value as AppSettings["thumbnail"]["corner"] });
 });
 thumbSkipBox.addEventListener("change", () => void patchThumbnail({ skip: thumbSkipBox.checked }));
+showDiagnosticsBox.addEventListener("change", async () => {
+  diagnosticsTable.hidden = !showDiagnosticsBox.checked;
+  await recorder.setSettings({ showDiagnostics: showDiagnosticsBox.checked });
+});
 countdownSel.addEventListener("change", () => {
   // `countdownMs` is a top-level preference rather than a block, so it needs
   // no read-merge-write the way `thumbnail` does — `writeSettings` merges it
