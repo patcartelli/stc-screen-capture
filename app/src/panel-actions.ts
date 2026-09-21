@@ -38,7 +38,7 @@
  * recording once Q1 is answered; the Edit half stands.
  */
 
-export type PanelAction = "copy" | "save" | "edit" | "trash";
+export type PanelAction = "copy" | "save" | "edit" | "trash" | "dismiss";
 
 /** What the panel is showing. Decides which actions exist. */
 export type TakeKind = "shot" | "recording";
@@ -63,6 +63,11 @@ export interface PanelTake {
  *
  * Trash is always last and always present — it is the ✕, and a panel that
  * never closes on its own must always have a way out.
+ *
+ * "dismiss" (STC-412) is deliberately NEVER in this list — it is a close
+ * affordance (the panel's own X, Escape, click-outside), not a button in
+ * this row. `main.ts`'s `panel:dismiss` handler and `thumbnail-renderer.ts`
+ * reach it directly, never through this table.
  */
 export function actionsFor(take: PanelTake): readonly PanelAction[] {
   const out: PanelAction[] = [];
