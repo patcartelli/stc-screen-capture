@@ -292,9 +292,10 @@ describe("the share preferences (STC-242)", () => {
 });
 
 /**
- * STC-293: the still export preferences. One destination folder and one
- * filename template, shared by every exit out of the app — the ticket's Note
- * forbids the thumbnail growing its own.
+ * STC-293: the still export preferences. Format, quality, scale, metadata
+ * stripping, and filename template, shared by every exit out of the app —
+ * the ticket's Note forbids the thumbnail growing its own. Save folder moved
+ * to Settings.saveFolder (STC-412).
  */
 describe("the still export preferences (STC-293)", () => {
   test("defaults are PNG, native scale, metadata kept", () => {

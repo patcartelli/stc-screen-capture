@@ -231,9 +231,7 @@ export const DEFAULT_SETTINGS: Settings = {
  * Never throws, and never half-trusts.
  *
  * Each field is validated on its own terms — an unknown format becomes the
- * default rather than reaching ImageIO as a string it will refuse, and a
- * destination that is not an absolute path is treated as unset rather than
- * resolved against whatever the process's working directory happens to be.
+ * default rather than reaching ImageIO as a string it will refuse.
  * `flattenColor` is deliberately NOT persisted with a default: it is the
  * answer to a question the user was asked (STC-293's "having said so first"),
  * and a stored default would silently answer it for them next time.
@@ -291,7 +289,7 @@ function cleanDisplayId(v: unknown): number | null {
  * An absolute path is trusted; anything else (relative, missing, garbage)
  * is null — "not chosen" — never resolved against the process's cwd.
  */
-function cleanSaveFolder(v: unknown): string | null {
+export function cleanSaveFolder(v: unknown): string | null {
   return typeof v === "string" && v.startsWith("/") ? v : null;
 }
 
