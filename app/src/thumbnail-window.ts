@@ -59,10 +59,14 @@ import { type PanelTake } from "./panel-actions.js";
  * (`resizeTo`) or a panel leaving the stack (`leaveStack`) both just call
  * `restack()` again rather than needing their own patch-up logic — the
  * neighbours move because the layout is asked for again, not because
- * anything told them to. Panels keep the WORK AREA they were created on
- * (`this.workArea`, fixed at construction rather than re-read from wherever
- * the cursor happens to be later), so the stack never jumps to a different
- * display just because the pointer did.
+ * anything told them to. A panel's work area (`this.workArea`) is NOT fixed
+ * for its whole life either: `presentThumbnail` re-homes every existing
+ * panel onto a fresh capture's display before laying the stack out again
+ * (`rehome`, below) — watched on hardware and reversed from this ticket's
+ * first cut, which kept each panel on the display it opened on. In practice
+ * that meant checking two corners on two displays to find every waiting
+ * capture; one stack that follows wherever you are working is the easier
+ * workflow.
  */
 
 // Redact mode's size (STC-297) — `REDACT_SIZE` itself now lives in
@@ -178,9 +182,20 @@ let panels: ThumbnailSession[] = [];
  * the same eviction would destroy a take the user never decided on. A panel
  * destroyed here would be exactly that — the one thing this ticket exists to
  * make impossible.
+ *
+ * Every existing panel is RE-HOMED to the new capture's display first
+ * (STC-426 revision) — the stack follows wherever you are working, rather
+ * than staying wherever it first appeared. Watched on hardware and reversed
+ * from this ticket's first cut, which froze each panel's display at
+ * construction on the reasoning that a stack jumping around would be
+ * confusing; in practice the opposite was true — having to look at TWO
+ * corners of TWO displays to find every waiting capture was the confusing
+ * part, and one stack that comes to you is the easier workflow.
  */
 export function presentThumbnail(opts: PresentOptions): void {
-  panels.unshift(new ThumbnailSession(opts));
+  const session = new ThumbnailSession(opts);
+  for (const p of panels) p.rehome(session.workArea);
+  panels.unshift(session);
   restack();
 }
 
@@ -474,21 +489,26 @@ class ThumbnailSession {
    */
   private hiddenCountValue = 0;
   /**
-   * The corner and work area this panel was created on (STC-426), fixed for
-   * its whole life rather than re-read from wherever the pointer happens to
-   * be later — `positionFor`/`stackLayout` need both, and `layoutStack`
+   * The corner this panel was created with, and the work area it currently
+   * belongs to — `positionFor`/`stackLayout` need both, and `layoutStack`
    * (module scope) needs to read them back to group panels by display, so
    * they cannot be `private`.
+   *
+   * `workArea` is NOT fixed for the panel's whole life: `rehome` (below)
+   * moves it whenever a fresh capture lands on a different display, so the
+   * whole stack follows wherever you are working (STC-426 revision) rather
+   * than each panel staying frozen on the display it first appeared on.
    */
   readonly corner: Corner;
-  readonly workArea: Bounds;
+  private currentWorkArea: Bounds;
+  get workArea(): Bounds { return this.currentWorkArea; }
   private resolveClosed!: () => void;
   private readonly closed: Promise<void>;
 
   constructor(private readonly opts: PresentOptions) {
     this.closed = new Promise((res) => { this.resolveClosed = res; });
     this.corner = opts.corner;
-    this.workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    this.currentWorkArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     // At the corner: a new panel is always the newest, so index 0. `restack`
     // moves the ones behind it immediately afterwards.
     const { x, y } = positionFor(this.corner, this.workArea, PANEL_SIZE, CORNER_MARGIN);
@@ -804,6 +824,17 @@ class ThumbnailSession {
    * occupy a slot. `restack`'s module-scope `stacked()` is the only caller.
    */
   isStacked(): boolean { return !this.done && !this.opts.silent; }
+
+  /**
+   * Move this panel to a different display's work area (STC-426 revision) —
+   * called on every OLDER panel when a fresh capture lands somewhere else,
+   * so the whole stack relocates together. Only changes where `layoutStack`
+   * will next place it; the caller's own `restack()` afterwards is what
+   * actually moves the window.
+   */
+  rehome(workArea: Bounds): void {
+    this.currentWorkArea = workArea;
+  }
 
   /**
    * Which column this panel belongs in — its corner and the work area it was

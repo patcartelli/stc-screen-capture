@@ -207,6 +207,15 @@ let redacting = false;
  */
 let contentInView: { x: number; y: number; width: number; height: number } | undefined;
 let dragFrom: { x: number; y: number } | undefined;
+/**
+ * The source rectangle of `composite` the resting (non-redacting) view is
+ * cropped to, so the canvas fills its pane instead of a smaller picture
+ * letterboxed inside it (STC-426 revision). `undefined` while redacting,
+ * which keeps the ORIGINAL "shrink to fit, never crop" behaviour — every
+ * edge of the capture has to stay reachable while placing a box over it, so
+ * that mode is exempt from cropping.
+ */
+let cropRect: { x: number; y: number; width: number; height: number } | undefined;
 
 function setStatus(text: string): void { statusEl.textContent = text; }
 
@@ -257,18 +266,38 @@ async function draw(): Promise<void> {
   composite = out;
 
   const box = redacting ? REDACT_BOX : CARD_BOX;
-  const fit = Math.min(1, box.width / out.width, box.height / out.height);
-  canvas.width = Math.max(1, Math.round(out.width * fit));
-  canvas.height = Math.max(1, Math.round(out.height * fit));
-  // The scale the canvas ACTUALLY ended up at, not the one asked for: the
-  // rounding above is a fraction of a pixel, and a mapping derived from the
-  // request rather than the result is the kind of nearly-right that survives
-  // every test and lands a box a pixel off.
-  const scale = canvas.width / out.width;
-  const c = plan.layout.content;
-  contentInView = {
-    x: c.x * scale, y: c.y * scale, width: c.width * scale, height: c.height * scale,
-  };
+  if (redacting) {
+    const fit = Math.min(1, box.width / out.width, box.height / out.height);
+    canvas.width = Math.max(1, Math.round(out.width * fit));
+    canvas.height = Math.max(1, Math.round(out.height * fit));
+    // The scale the canvas ACTUALLY ended up at, not the one asked for: the
+    // rounding above is a fraction of a pixel, and a mapping derived from the
+    // request rather than the result is the kind of nearly-right that
+    // survives every test and lands a box a pixel off.
+    const scale = canvas.width / out.width;
+    const c = plan.layout.content;
+    contentInView = {
+      x: c.x * scale, y: c.y * scale, width: c.width * scale, height: c.height * scale,
+    };
+    cropRect = undefined;
+  } else {
+    // Fill the pane rather than shrinking to fit inside it (STC-426
+    // revision): the canvas is exactly `box`, and the composite is CROPPED
+    // to that aspect ratio rather than letterboxed — a resting card is the
+    // picture, not a smaller picture surrounded by the card's own
+    // background. `contentInView` is left unset because nothing reads it
+    // outside `redacting` (the drag handlers all gate on that flag first).
+    canvas.width = box.width;
+    canvas.height = box.height;
+    const coverScale = Math.max(box.width / out.width, box.height / out.height);
+    const cropWidth = box.width / coverScale;
+    const cropHeight = box.height / coverScale;
+    cropRect = {
+      x: (out.width - cropWidth) / 2, y: (out.height - cropHeight) / 2,
+      width: cropWidth, height: cropHeight,
+    };
+    contentInView = undefined;
+  }
   paintView();
 }
 
@@ -285,7 +314,12 @@ function paintView(marquee?: { x: number; y: number; width: number; height: numb
   const view = canvas.getContext("2d", { alpha: true });
   if (!view) return;
   view.clearRect(0, 0, canvas.width, canvas.height);
-  view.drawImage(composite, 0, 0, canvas.width, canvas.height);
+  if (cropRect) {
+    view.drawImage(composite, cropRect.x, cropRect.y, cropRect.width, cropRect.height,
+                    0, 0, canvas.width, canvas.height);
+  } else {
+    view.drawImage(composite, 0, 0, canvas.width, canvas.height);
+  }
   if (!marquee) return;
   view.save();
   view.strokeStyle = "#ffffff";

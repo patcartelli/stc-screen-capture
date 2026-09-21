@@ -49,7 +49,6 @@
        layout does not jump between the two takecard kinds. */
     #takecard { flex: 1; display: flex; flex-direction: column;
                 align-items: center; justify-content: center; text-align: center; }
-    #takekind { font-size: 13px; font-weight: 600; }
     #takemeta { opacity: 0.7; margin-top: 2px; }
     #controls { padding: 8px 10px 10px; }
     .row { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
@@ -63,6 +62,47 @@
     button:disabled:hover { background: rgba(255, 255, 255, 0.12); }
     button[hidden] { display: none; }
     #trash { margin-left: auto; padding: 4px 9px; }
+    /*
+      Controls show on hover (STC-426 revision) — the card at rest is just
+      the picture; the actions fade in once the pointer is actually over it.
+      Applied to each button/row individually rather than to `#controls` as a
+      whole, because CSS opacity COMPOUNDS down the tree: a child's own
+      `opacity: 1` cannot undo a parent already at 0, so `#overflow` (the
+      waiting-captures badge) and `#status` (action feedback) are left out of
+      this rule on purpose — they are status, not controls, and their whole
+      point is to be seen without first having to hover. Always visible while
+      REDACTING regardless of hover: the pointer is on the canvas mid-drag,
+      not necessarily continuously read as "hovering the card" if it strays,
+      and Undo/Done must not disappear out from under an in-progress edit.
+
+      Deliberately OPACITY ONLY — no `pointer-events: none` at rest. A first
+      version added it, on the reasoning that an invisible button should not
+      be clickable either, and it broke nearly every existing e2e test in
+      this file and `redaction.e2e.test.ts`: Playwright's own actionability
+      check excludes a `pointer-events: none` element from hit-testing
+      BEFORE it ever gets to hover it, so `panel.click("#save")` retried for
+      30 s finding `#controls` "intercepting" and never reached the button at
+      all — the same chicken-and-egg every `:hover`-gated interactive target
+      has for automated input, one layer past `still-overlay.e2e.test.ts`'s
+      own real-vs-synthetic-input lesson. A sighted person will not click
+      somewhere they cannot see a button, so leaving pointer-events at its
+      default costs nothing real and keeps every existing click-driven test
+      working unmodified.
+    */
+    #stylerow, #redactrow, #actions button[data-action] {
+      opacity: 0; transition: opacity 120ms ease-out;
+    }
+    #card:hover #stylerow, #card:hover #redactrow, #card:hover #actions button[data-action],
+    #card.redacting #stylerow, #card.redacting #redactrow, #card.redacting #actions button[data-action] {
+      opacity: 1;
+    }
+    /* A disabled button (an action in flight, STC-392 review M6) stays
+       dimmed even while hovering or redacting — :disabled here outweighs the
+       rule above on specificity alone, not on source order. */
+    #card:hover #actions button[data-action]:disabled,
+    #card.redacting #actions button[data-action]:disabled {
+      opacity: 0.4;
+    }
     /*
       The overflow badge (Task 5b / STC-392 D7) — how many captures the
       MAX_STACKED cap is hiding behind this one, reachable through the SAME
@@ -89,7 +129,6 @@
          using the same vocabulary the library already has for a take with no
          thumbnail (`library-items.ts`'s `source: "none"`). -->
     <div id="takecard" hidden>
-      <div id="takekind">Recording</div>
       <div id="takemeta"></div>
     </div>
     <div id="controls">
