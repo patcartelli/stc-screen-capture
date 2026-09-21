@@ -53,7 +53,7 @@ import { openEditor } from "./editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
-import { showUndoToast, hideUndoToast } from "./toast-window.js";
+import { showUndoToast, hideToast } from "./toast-window.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -526,7 +526,7 @@ function runQuitTeardown(): void {
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
   cancelCountdown();
-  hideUndoToast();
+  hideToast();
   // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
   // is still armed for as long as this chain's own `await`s give the event
   // loop a turn, and reading non-destructively would let it ALSO pick up
@@ -1798,7 +1798,7 @@ ipcMain.handle("panel:undoTrash", async (_e, dir: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) return false;
   if (!pendingTrash.undo(dir)) return false;
-  hideUndoToast();
+  hideToast();
   try {
     const shot = JSON.parse(await readFile(join(dir, "shot.json"), "utf8"));
     const { thumbnail } = readSettings(app.getPath("userData"));
