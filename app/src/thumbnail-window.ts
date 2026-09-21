@@ -114,14 +114,19 @@ export interface PresentOptions {
   /**
    * What the panel is showing — `panel-actions.ts`'s own type, not a second
    * spelling of it. Decides which of the four actions the card draws
-   * (`actionsFor`) and what Save and Trash MEAN: `origin: "library"` is a
-   * shot RE-OPENED (STC-294), already on disk, so there is nothing to
-   * promote and ignoring it must do nothing at all — unlike a `"fresh"`
-   * capture, where the panel is the only place the take exists. Required,
-   * not optional, because every caller has an answer — a capture `main.ts`
-   * just made is always `{ kind: "shot", origin: "fresh" }`, `still:reopen`
-   * is always `origin: "library"` — and a call site that forgot to say which
-   * would rather be a type error than default to the wrong one.
+   * (`actionsFor`) and what Save and Trash MEAN. Required, not optional,
+   * because every caller has an answer, and a call site that forgot to say
+   * which would rather be a type error than default to the wrong one.
+   *
+   * Every LIVE caller into `presentThumbnail` today is `{ kind: "shot",
+   * origin: "fresh" }` — a capture `main.ts` just made, a crash-recovered
+   * take (STC-393), or an undone Trash re-presenting the very panel it
+   * closed. `origin: "library"` is still a real, tested `PanelTake` (a shot
+   * ALREADY on disk, with nothing to promote, where ignoring it must do
+   * nothing at all) but is no longer reachable through THIS window:
+   * `still:reopen` used to build one here, and now opens the still editor
+   * directly instead (STC-300 revision) — see `main.ts`'s own doc on that
+   * handler for why.
    */
   take: PanelTake;
 }

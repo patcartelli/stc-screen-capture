@@ -1225,25 +1225,6 @@ ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuf
   return true;
 });
 
-/**
- * Re-open a stored shot into the post-capture panel (STC-294).
- *
- * The payoff of keeping the decoration in JSON: the panel is handed the STORED
- * document, so the mode, the canvas and STC-297's redaction regions all come
- * back exactly as they were left, and the shot can be re-exported without
- * re-capturing. It is the same panel a fresh capture gets — not a second still
- * UI, which is what STC-293's Note and STC-300's gate both forbid.
- *
- * `take: { kind: "shot", origin: "library" }` is the one difference and it
- * still matters post-STC-392: `actionsFor` (`panel-actions.ts`) gives a
- * re-opened shot only Copy and Trash — no Save, because it is already on
- * disk and there is nothing to promote, where a fresh capture also gets
- * Save. Neither panel closes itself any more; both wait for a person to
- * choose one of the actions they actually have.
- * `app/test/library.e2e.test.ts`'s "re-opening a shot from the library
- * offers only Copy and Trash, and never exports on its own" is what actually
- * invokes this handler.
- */
 /** The stored document for one shot, so the library can render its decoration. */
 ipcMain.handle("library:shot", async (_e, dir: string) => {
   if (!insideTakesRoot(process.env, dir)) {
