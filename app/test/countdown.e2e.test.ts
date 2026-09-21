@@ -293,7 +293,7 @@ describe("a countdown that loses its own window does not wedge the app", () => {
 describe("the countdown duration is choosable (STC-391, from hardware)", () => {
   test("the profile sheet offers the options, and the pick is what Record waits", async () => {
     const { win, startLog } = await launch();
-    await win.click("#profile");
+    await win.click("#settings");
     await win.waitForSelector("#countdownms");
 
     // Built from COUNTDOWN_OPTIONS, not hand-listed in the markup.
@@ -326,7 +326,7 @@ describe("the countdown duration is choosable (STC-391, from hardware)", () => {
       await stubQuitDialog(app);
       const w = await app.firstWindow();
       await w.waitForSelector("#record");
-      await w.click("#profile");
+      await w.click("#settings");
       await w.waitForSelector("#countdownms");
       return w;
     };

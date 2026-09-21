@@ -44,11 +44,16 @@ async function launch(userData?: string): Promise<Launched> {
            STC_FAKE_START_LOG: startLog, STC_OVERLAY_SYNTHETIC_INPUT: "1" },
   });
   const win = await app.firstWindow();
-  await win.waitForSelector("#scope");
+  // `attached`, not the default `visible`: #scope lives inside the Settings
+  // sheet now (STC-412), which is off-screen until opened a line below.
+  await win.waitForSelector("#scope", { state: "attached" });
   // STC-391: Record counts down now. This file is not about the countdown,
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
+  // STC-412: Scope and its source buttons live inside the Settings sheet now.
+  // Open it once here, as a user does, so these tests reach them the same way.
+  await win.click("#settings");
   return { win, userData: ud, startLog };
 }
 

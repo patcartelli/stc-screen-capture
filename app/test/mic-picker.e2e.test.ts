@@ -50,6 +50,9 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
+  // STC-412: the Mic picker lives inside the Settings sheet now. Open it once
+  // here, as a user does, so these tests drive it the way it is reached.
+  await win.click("#settings");
   return win;
 }
 

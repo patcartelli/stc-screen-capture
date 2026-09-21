@@ -48,6 +48,11 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
+  // STC-412: Camera lives inside the Settings sheet now, which sits off-screen
+  // at translateX(100%) until opened — Playwright reads it as visible but
+  // cannot scroll a fixed element into view, so every click here would fail
+  // with "element is outside of the viewport". Open it once, as a user does.
+  await win.click("#settings");
   return win;
 }
 

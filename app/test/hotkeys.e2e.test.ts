@@ -58,7 +58,7 @@ async function launch(o: { userData?: string; recordings?: string; stillLog?: st
   const win = await app.firstWindow();
   // The shortcuts editor moved behind the profile sheet (STC-374) — open it
   // once per launch so every selector below can still reach it directly.
-  await win.click("#profile");
+  await win.click("#settings");
   await win.waitForSelector("#shortcuts .shortcut");
   return { win, recordings, userData, stillLog };
 }
