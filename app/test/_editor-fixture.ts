@@ -10,7 +10,14 @@ const root = join(__dirname, "..", "..");
 export async function launchApp(dir: string, env: Record<string, string> = {}):
     Promise<{ app: ElectronApplication; win: Page }> {
   const app = await electron.launch({
-    args: [root], cwd: root,
+    // Electron honours --user-data-dir (camera-toggle.e2e.test.ts's own
+    // pattern) — without it, this app's real settings.json (a real developer's
+    // stored `still.destination`, among other preferences) leaks into every
+    // run. STC-417: that is exactly how frame-png.e2e.test.ts's frame grabs
+    // silently landed on the real Desktop instead of the fixture's take
+    // directory — destinationDir() correctly prefers a stored destination
+    // over a take's own directory, so nothing was wrong with the product.
+    args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: dir,
       // Isolated the same way the library root is (STC-393): without this,
