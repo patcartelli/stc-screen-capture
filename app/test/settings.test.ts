@@ -25,7 +25,7 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS });
+                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false });
     expect(DEFAULT_SETTINGS.camera).toBe(false);
   });
 
@@ -64,7 +64,7 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS });
+                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false });
   });
 
   test("an unwritable directory does not throw — the preference is not worth a crash", () => {
@@ -118,7 +118,7 @@ describe("the display preference (STC-247)", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS });
+                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false });
   });
 });
 
@@ -297,32 +297,12 @@ describe("the share preferences (STC-242)", () => {
  * forbids the thumbnail growing its own.
  */
 describe("the still export preferences (STC-293)", () => {
-  test("defaults are PNG, native scale, metadata kept, and no chosen folder", () => {
+  test("defaults are PNG, native scale, metadata kept", () => {
     const s = readSettings(dir()).still;
     expect(s.format).toBe("png");
     expect(s.scale).toBe("native");
     expect(s.stripMetadata).toBe(false);
-    // Null, not a hardcoded ~/Desktop: an unconfigured still belongs beside
-    // the shot.json it was rendered from.
-    expect(s.destination).toBeNull();
     expect(s.template).toContain("{date}");
-  });
-
-  test("the destination folder is sticky", () => {
-    const d = dir();
-    writeSettings(d, { still: { ...readSettings(d).still, destination: "/Users/me/Shots" } });
-    expect(readSettings(d).still.destination).toBe("/Users/me/Shots");
-  });
-
-  test("changing the format does NOT drop the destination folder", () => {
-    // The bug a shallow spread would introduce: a preference the user set
-    // months ago resetting because an unrelated one was touched.
-    const d = dir();
-    writeSettings(d, { still: { ...readSettings(d).still, destination: "/Users/me/Shots" } });
-    writeSettings(d, { still: { format: "jpeg" } as never });
-    const s = readSettings(d).still;
-    expect(s.format).toBe("jpeg");
-    expect(s.destination).toBe("/Users/me/Shots");
   });
 
   test("a still preference survives an unrelated camera change", () => {
@@ -330,13 +310,6 @@ describe("the still export preferences (STC-293)", () => {
     writeSettings(d, { still: { ...readSettings(d).still, format: "heic" } });
     writeSettings(d, { camera: true });
     expect(readSettings(d).still.format).toBe("heic");
-  });
-
-  test("a relative destination is treated as unset, never resolved against the cwd", () => {
-    const d = dir();
-    writeFileSync(join(d, "settings.json"),
-                  JSON.stringify({ still: { destination: "Shots" } }));
-    expect(readSettings(d).still.destination).toBeNull();
   });
 
   test("an unknown format or scale falls back rather than reaching the encoder", () => {
@@ -359,6 +332,69 @@ describe("the still export preferences (STC-293)", () => {
     const d = dir();
     writeFileSync(join(d, "settings.json"), JSON.stringify({ still: "png please" }));
     expect(readSettings(d).still).toEqual(DEFAULT_SETTINGS.still);
+  });
+});
+
+/**
+ * STC-412: one save location for both recordings and stills, replacing
+ * StillSettings.destination and the "beside the shot" concept.
+ */
+describe("the save folder (STC-412)", () => {
+  test("defaults to null — 'not chosen', which takesRoot() resolves the same way it always has", () => {
+    expect(readSettings(dir()).saveFolder).toBeNull();
+    expect(DEFAULT_SETTINGS.saveFolder).toBeNull();
+  });
+
+  test("round-trips an absolute path", () => {
+    const d = dir();
+    writeSettings(d, { saveFolder: "/Users/me/Captures" });
+    expect(readSettings(d).saveFolder).toBe("/Users/me/Captures");
+  });
+
+  test("a relative path is treated as unset, never resolved against the cwd", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ saveFolder: "Captures" }));
+    expect(readSettings(d).saveFolder).toBeNull();
+  });
+
+  test("clearing it back to null is a real, storable choice", () => {
+    const d = dir();
+    writeSettings(d, { saveFolder: "/Users/me/Captures" });
+    writeSettings(d, { saveFolder: null });
+    expect(readSettings(d).saveFolder).toBeNull();
+  });
+
+  test("a partial update leaves it alone", () => {
+    const d = dir();
+    writeSettings(d, { saveFolder: "/Users/me/Captures" });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).saveFolder).toBe("/Users/me/Captures");
+  });
+});
+
+describe("the diagnostics toggle (STC-412)", () => {
+  test("defaults to off — developer instrumentation, not a normal control", () => {
+    expect(readSettings(dir()).showDiagnostics).toBe(false);
+    expect(DEFAULT_SETTINGS.showDiagnostics).toBe(false);
+  });
+
+  test("round-trips, and being on survives a restart", () => {
+    const d = dir();
+    writeSettings(d, { showDiagnostics: true });
+    expect(readSettings(d).showDiagnostics).toBe(true);
+  });
+
+  test("a non-boolean is not a preference, and falls back to OFF not to silence", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ showDiagnostics: "yes" }));
+    expect(readSettings(d).showDiagnostics).toBe(false);
+  });
+
+  test("a partial update leaves it alone", () => {
+    const d = dir();
+    writeSettings(d, { showDiagnostics: true });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).showDiagnostics).toBe(true);
   });
 });
 
