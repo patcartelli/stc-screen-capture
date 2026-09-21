@@ -18,10 +18,10 @@ import {
 const fresh = (kind: PanelTake["kind"]): PanelTake => ({ kind, origin: "fresh" });
 
 describe("which actions a take has", () => {
-  test("a fresh shot has copy, save and trash — and no edit", () => {
-    // There is no still editor (STC-300 is not built); a shot's editing is
-    // Redact, which lives in the panel and does not close it.
-    expect(actionsFor(fresh("shot"))).toEqual(["copy", "save", "trash"]);
+  test("a fresh shot has copy, save, edit and trash", () => {
+    // Edit opens a still editor now (STC-300) — Redact moved out of the
+    // panel and into it, so a shot gets Edit the same as a recording does.
+    expect(actionsFor(fresh("shot"))).toEqual(["copy", "save", "edit", "trash"]);
   });
 
   test("a fresh recording has save, edit and trash — and no copy", () => {
@@ -35,7 +35,7 @@ describe("which actions a take has", () => {
   test("a take re-opened from the library cannot be saved again", () => {
     // STC-294's re-open: it is already in the library, and a second Save would
     // be the app inventing work nobody asked for.
-    expect(actionsFor({ kind: "shot", origin: "library" })).toEqual(["copy", "trash"]);
+    expect(actionsFor({ kind: "shot", origin: "library" })).toEqual(["copy", "edit", "trash"]);
     expect(actionsFor({ kind: "recording", origin: "library" })).toEqual(["edit", "trash"]);
   });
 

@@ -213,38 +213,39 @@ describe("the panel waits (STC-392)", () => {
     expect(await hasWindow(electronApp, "thumbnail.html")).toBe(true);
   }, 40_000);
 
-  test("the Style picker and Redact are disabled while Copy is in flight (STC-392 review, M6)", async () => {
-    // `setActionsEnabled` used to cover `#actions button` only. A mode change
-    // re-runs `draw()`, which REASSIGNS `composite`, and `run("copy")` reads
-    // `composite` after two `await`s (`awaitComposite`, then `getImageData`)
-    // — a Style pick or a Redact toggle landing in that window exports a
-    // picture the status line's claimed mode does not match. Disabling is
-    // synchronous, the very first thing `perform()` does before its own
-    // first `await` — so the click and the read happen in ONE evaluate, the
-    // same tick. The first version clicked through Playwright and read
-    // `disabled` in a second round trip, and on a loaded CI runner the copy
-    // (a fake helper answers an export instantly) had already COMPLETED and
-    // re-enabled everything in between (run 35451943868, STC-427): a "while
-    // in flight" observation made after the flight landed. Same family as
-    // the ⌘⌫ test below — a claim about a window in time has to be measured
-    // from inside that window.
+  test("Edit and Save are disabled while Copy is in flight (STC-392 review, M6)", async () => {
+    // `setActionsEnabled` covers every VISIBLE `#actions button[data-action]`
+    // while any one of the four is deciding an outcome — Style and Redact
+    // used to be the two exceptions needing their own case (M6), since
+    // neither carries `data-action`; both moved to the still editor (STC-300)
+    // and this panel has nothing left outside that one selector to worry
+    // about. Disabling is synchronous, the very first thing `perform()` does
+    // before its own first `await` — so the click and the read happen in ONE
+    // evaluate, the same tick. The first version of THIS test (checking Style
+    // and Redact) clicked through Playwright and read `disabled` in a second
+    // round trip, and on a loaded CI runner the copy (a fake helper answers
+    // an export instantly) had already COMPLETED and re-enabled everything in
+    // between (run 35451943868, STC-427): a "while in flight" observation
+    // made after the flight landed. Same family as the ⌘⌫ test below — a
+    // claim about a window in time has to be measured from inside that
+    // window.
     const { app: electronApp } = await launch();
     const panel = panelWindow(electronApp);
     const duringCopy = await panel.evaluate(() => {
       (document.getElementById("copy") as HTMLButtonElement).click();
       return {
-        mode: (document.getElementById("mode") as HTMLSelectElement).disabled,
-        redact: (document.getElementById("redact") as HTMLButtonElement).disabled,
+        edit: (document.getElementById("edit") as HTMLButtonElement).disabled,
+        save: (document.getElementById("save") as HTMLButtonElement).disabled,
       };
     });
-    expect(duringCopy).toEqual({ mode: true, redact: true });
+    expect(duringCopy).toEqual({ edit: true, save: true });
 
     await panel.waitForFunction(() => document.getElementById("status")!.textContent === "Copied");
     // Re-enabled once the action settles — Copy does not close the panel, so
     // there is a "back to normal" state to check, unlike Save/Edit/Trash.
-    expect(await panel.evaluate(() => (document.getElementById("mode") as HTMLSelectElement).disabled))
+    expect(await panel.evaluate(() => (document.getElementById("edit") as HTMLButtonElement).disabled))
       .toBe(false);
-    expect(await panel.evaluate(() => (document.getElementById("redact") as HTMLButtonElement).disabled))
+    expect(await panel.evaluate(() => (document.getElementById("save") as HTMLButtonElement).disabled))
       .toBe(false);
   }, 40_000);
 
@@ -632,5 +633,38 @@ describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
     // Declared timeout: 60s overhead + `launch`'s poll (15s) + visible-count
     // poll (15s) + the manual overlay-wait loop's own bound (15s) = 105s
     // summed (the 300ms sleep is negligible); declared above that.
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 3 * POLL_MS + 60_000);
+
+  test("a silent (skip-the-panel) capture never occupies a slot in the cap (STC-426)", async () => {
+    // Three real panels fill the cap exactly — nothing hidden, nothing to
+    // spare.
+    const { win } = await launch({ captures: MAX_STACKED });
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.filter((x) => x.visible).length),
+                       { timeout: POLL_MS }).toBe(MAX_STACKED);
+    const before = await thumbnailPanels(app!);
+    expect(before.every((p) => p.visible)).toBe(true);
+
+    // A fourth capture, silent: it composites and exports itself in the
+    // background and is never shown. It must not be able to count toward
+    // `MAX_STACKED` and push a REAL, visible preview into hiding for a
+    // screenshot nobody will ever see (`thumbnail-window.ts`'s `isStacked`).
+    await win.evaluate(async () => {
+      await (window as any).recorder.setSettings({ thumbnail: { skip: true } });
+    });
+    const r = await win.evaluate(() => (window as any).recorder.captureStill("display"));
+    expect(r.ok).toBe(true);
+
+    // Wait for the silent panel's own window to be gone — it is a real
+    // (hidden) `BrowserWindow` while it composites — rather than for any
+    // visible change, since the correct behaviour here is exactly NO
+    // visible change to the other three.
+    await expect.poll(() => thumbnailPanels(app!).then((p) => p.length),
+                       { timeout: POLL_MS }).toBe(MAX_STACKED);
+    const after = await thumbnailPanels(app!);
+    expect(after.map((p) => p.url).sort()).toEqual(before.map((p) => p.url).sort());
+    expect(after.every((p) => p.visible)).toBe(true);
+    // Declared timeout: 60s overhead + `launch`'s poll (15s) + visible-count
+    // poll (15s) + the silent-panel-gone poll (15s) = 105s summed; declared
+    // above that.
   }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 3 * POLL_MS + 60_000);
 });

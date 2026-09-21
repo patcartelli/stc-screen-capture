@@ -1,8 +1,8 @@
 import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
-  positionFor, stackPosition, visibleCount, PANEL_SIZE, REDACT_SIZE,
-  type Corner, type Size,
+  positionFor, stackLayout, visibleCount, PANEL_SIZE,
+  type Corner, type Size, type Bounds,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
@@ -42,13 +42,35 @@ import { type PanelTake } from "./panel-actions.js";
  * a visible panel does. It composites and exports itself the moment `draw()`
  * finishes (`?silent=1`, `thumbnail-renderer.ts`) and reports only `"done"`
  * when it is. One fewer message crossing the process boundary for a window
- * nobody ever sees.
+ * nobody ever sees. It is also excluded from `MAX_STACKED`'s count entirely
+ * (STC-426's `isStacked`) — a screenshot that will never paint cannot spend
+ * any of the cap's screen-space budget, so it must not be able to push a
+ * REAL panel into hiding either.
+ *
+ * ## Every visible panel gets its own FULL-HEIGHT slot (STC-426)
+ *
+ * `restack` used to place every panel at a fixed offset from the one before
+ * it (`stackPosition`), which overlapped all but the newest down to a thin
+ * sliver. It now hands `thumbnail.ts`'s `stackLayout` every visible panel's
+ * REAL current size and lays the whole column out fresh, wrapping into a
+ * second column on a display too short for `MAX_STACKED` full-size cards.
+ * Every panel is `PANEL_SIZE` today — Redact used to grow one in place
+ * (`REDACT_SIZE`) and no longer does, moved to its own window by STC-300 —
+ * but `stackLayout` stays a function of each panel's OWN size rather than one
+ * shared constant, since nothing here needs to know that is currently true.
+ * Because it is recomputed from scratch on every call, a panel leaving the
+ * stack (`leaveStack`) just calls `restack()` again rather than needing its
+ * own patch-up logic — the neighbours move because the layout is asked for
+ * again, not because anything told them to. A panel's work area
+ * (`this.workArea`) is NOT fixed for its whole life either: `presentThumbnail`
+ * re-homes every existing panel onto a fresh capture's display before laying
+ * the stack out again (`rehome`, below) — watched on hardware and reversed
+ * from this ticket's first cut, which kept each panel on the display it
+ * opened on. In practice that meant checking two corners on two displays to
+ * find every waiting capture; one stack that follows wherever you are
+ * working is the easier workflow.
  */
 
-// Redact mode's size (STC-297) — `REDACT_SIZE` itself now lives in
-// `thumbnail.ts`, imported above, so `thumbnail-renderer.ts` can derive its
-// own canvas box from the SAME number rather than an independently-tuned one
-// (STC-392 review, M5).
 const CORNER_MARGIN = 20;
 
 /**
@@ -92,22 +114,25 @@ export interface PresentOptions {
   /**
    * What the panel is showing — `panel-actions.ts`'s own type, not a second
    * spelling of it. Decides which of the four actions the card draws
-   * (`actionsFor`) and what Save and Trash MEAN: `origin: "library"` is a
-   * shot RE-OPENED (STC-294), already on disk, so there is nothing to
-   * promote and ignoring it must do nothing at all — unlike a `"fresh"`
-   * capture, where the panel is the only place the take exists. Required,
-   * not optional, because every caller has an answer — a capture `main.ts`
-   * just made is always `{ kind: "shot", origin: "fresh" }`, `still:reopen`
-   * is always `origin: "library"` — and a call site that forgot to say which
-   * would rather be a type error than default to the wrong one.
+   * (`actionsFor`) and what Save and Trash MEAN. Required, not optional,
+   * because every caller has an answer, and a call site that forgot to say
+   * which would rather be a type error than default to the wrong one.
+   *
+   * Every LIVE caller into `presentThumbnail` today is `{ kind: "shot",
+   * origin: "fresh" }` — a capture `main.ts` just made, a crash-recovered
+   * take (STC-393), or an undone Trash re-presenting the very panel it
+   * closed. `origin: "library"` is still a real, tested `PanelTake` (a shot
+   * ALREADY on disk, with nothing to promote, where ignoring it must do
+   * nothing at all) but is no longer reachable through THIS window:
+   * `still:reopen` used to build one here, and now opens the still editor
+   * directly instead (STC-300 revision) — see `main.ts`'s own doc on that
+   * handler for why.
    */
   take: PanelTake;
 }
 
 type ThumbEvent =
   | { kind: "painted" }
-  /** Redact mode opening or closing (STC-297), which the panel is resized for. */
-  | { kind: "redact"; on: boolean }
   /**
    * A discard has committed — the swipe passed its threshold, or the
    * right-click Delete — and the renderer is about to ask main to trash the
@@ -158,47 +183,72 @@ let panels: ThumbnailSession[] = [];
  * the same eviction would destroy a take the user never decided on. A panel
  * destroyed here would be exactly that — the one thing this ticket exists to
  * make impossible.
+ *
+ * Every existing panel is RE-HOMED to the new capture's display first
+ * (STC-426 revision) — the stack follows wherever you are working, rather
+ * than staying wherever it first appeared. Watched on hardware and reversed
+ * from this ticket's first cut, which froze each panel's display at
+ * construction on the reasoning that a stack jumping around would be
+ * confusing; in practice the opposite was true — having to look at TWO
+ * corners of TWO displays to find every waiting capture was the confusing
+ * part, and one stack that comes to you is the easier workflow.
  */
 export function presentThumbnail(opts: PresentOptions): void {
-  panels.unshift(new ThumbnailSession(opts));
+  const session = new ThumbnailSession(opts);
+  for (const p of panels) p.rehome(session.workArea);
+  panels.unshift(session);
   restack();
 }
 
 /**
- * Put every panel where its position in the stack says it belongs, and show
- * or hide it accordingly.
+ * Every panel that counts toward `MAX_STACKED` at all (STC-426) — `panels`
+ * minus whatever is `silent` or already torn down. A `silent` capture never
+ * paints and never occupies screen space, so it must not be able to consume
+ * one of the cap's slots and push a REAL panel into hiding.
+ */
+function stacked(): ThumbnailSession[] {
+  return panels.filter((p) => p.isStacked());
+}
+
+/**
+ * Decide which panels are visible and lay out every one of THOSE at its own
+ * full size, newest nearest the corner (STC-426's `stackLayout`).
  *
- * Called whenever the list changes — a new capture, or one leaving the stack
- * from anywhere in it — because every panel's place (and whether it is
- * visible at all) is a function of the whole stack, not of where it happened
- * to start.
+ * Called whenever the list changes — a new capture, one leaving the stack
+ * from anywhere in it, or one resizing for Redact — because every visible
+ * panel's place is a function of the whole visible set, not of where it
+ * happened to start. Panels PAST the cap are left wherever they last were:
+ * they are invisible, and `showAllOverflow` lays out the full set fresh the
+ * moment any of them becomes visible again, so there is nothing for a
+ * pre-emptive position to buy.
  *
- * Positions EVERY panel, hidden ones included: a panel hidden by the cap
- * today may be un-hidden by a later restack (something ahead of it closes,
- * or the badge is clicked), and it needs to already be where it belongs when
- * that happens rather than catching up a beat late.
+ * Grouped by `stackKey` (corner + the work area a panel was created on)
+ * before laying out, so previews on two different displays — or, in
+ * principle, showing at two different corners — get their own independent
+ * columns rather than being laid out as one list at one corner.
  */
 function restack(): void {
+  const real = stacked();
   // `visibleCount`, not a bare `i >= MAX_STACKED` comparison written twice —
   // this IS the production use of that helper (`thumbnail.ts` review, I6):
   // the number of panels this loop is about to leave shown is exactly what
   // `visibleCount` is defined to answer, so naming it here is the same
   // quantity, not a restatement of it.
-  const visible = visibleCount(panels.length);
-  panels.forEach((p, i) => {
-    p.moveToStackIndex(i);
+  const visible = visibleCount(real.length);
+  real.forEach((p, i) => {
     // Past the cap: alive, hidden, reachable through the badge — never
     // settled, never destroyed. `thumbnail.ts`'s `MAX_STACKED` doc is the
     // rest of this reasoning.
     if (i >= visible) p.hideForOverflow(); else p.reshowFromOverflow();
   });
-  // The newest panel carries the badge: it is the one on top and the one
-  // with focus, so it is where a count of what is waiting belongs. Every
-  // other panel's count is cleared — a panel that used to be newest and is
-  // not any more must not go on showing a stale number.
+  layoutStack(real.slice(0, visible));
+  // The newest STACKED panel carries the badge — not `panels[0]`, which can
+  // be a `silent` capture that will never show a badge or anything else
+  // (STC-426): a burst that ends in a skipped screenshot must not leave the
+  // one panel a person can actually see without a badge to click.
   //
   // Counted from the panels THEMSELVES (`overflowHiddenCount`, below), not
-  // recomputed from `thumbnail.ts`'s `hiddenCount(panels.length)` formula.
+  // recomputed from `thumbnail.ts`'s `hiddenCount(real.length)` formula.
   // That formula is only true while the invariant this very loop just
   // enforced (index `< visible` ⇒ shown, `>=` ⇒ hidden) still holds —
   // `showAllOverflow` deliberately breaks it for a moment, and asking the
@@ -206,7 +256,31 @@ function restack(): void {
   // is not currently true. Reading the panels' own flags back is correct
   // regardless of which function last touched them, which is what "one
   // source" has to mean here (STC-392 review, I1).
-  panels.forEach((p, i) => p.setHiddenCount(i === 0 ? overflowHiddenCount() : 0));
+  const hidden = overflowHiddenCount();
+  panels.forEach((p) => p.setHiddenCount(p === real[0] ? hidden : 0));
+}
+
+/**
+ * Lay out `subset` — some prefix of `stacked()`, or all of it — at each
+ * panel's own current size, grouped by which display and corner it belongs
+ * to (STC-426).
+ *
+ * A group of one is not a special case: `stackLayout` already answers
+ * `positionFor` for a single size, so a display with only one visible
+ * preview gets exactly the position a lone panel always had.
+ */
+function layoutStack(subset: ThumbnailSession[]): void {
+  const groups = new Map<string, ThumbnailSession[]>();
+  for (const p of subset) {
+    const group = groups.get(p.stackKey()) ?? [];
+    group.push(p);
+    groups.set(p.stackKey(), group);
+  }
+  for (const group of groups.values()) {
+    const first = group[0]!;
+    const bounds = stackLayout(group.map((p) => p.size()), first.corner, first.workArea, CORNER_MARGIN);
+    group.forEach((p, i) => p.moveTo(bounds[i]!));
+  }
 }
 
 /**
@@ -216,7 +290,7 @@ function restack(): void {
  * stand in for this everywhere it might be asked.
  */
 function overflowHiddenCount(): number {
-  return panels.filter((p) => p.isOverflowHidden).length;
+  return stacked().filter((p) => p.isOverflowHidden).length;
 }
 
 /**
@@ -224,19 +298,22 @@ function overflowHiddenCount(): number {
  * "clicking expands a list of waiting takes with the same actions" (Task 5b
  * / STC-392 D7).
  *
- * Not a second list UI: these ARE the waiting takes, already positioned by
- * `restack` (every panel is repositioned whether visible or not, including
- * hidden ones — see `restack`'s own doc), so showing them again is the whole
+ * Not a second list UI: these ARE the waiting takes. `layoutStack` gives
+ * every one of them — the whole stacked set, not just what was visible a
+ * moment ago — a fresh full-height slot, so showing them again is the whole
  * of "expanding the stack". `MAX_STACKED` itself is unchanged — the next
  * `restack` (a new capture, or any panel closing) re-applies the cap and
  * re-hides whatever is still past it.
  */
 function showAllOverflow(): void {
-  for (const p of panels) p.reshowFromOverflow();
+  const real = stacked();
+  for (const p of real) p.reshowFromOverflow();
+  layoutStack(real);
   // Read back from the panels, exactly like `restack` does — this is 0
   // because the loop just above cleared every panel's flag, not because 0
   // was asserted independently of that fact (STC-392 review, I1).
-  panels[0]?.setHiddenCount(overflowHiddenCount());
+  const hidden = overflowHiddenCount();
+  panels.forEach((p) => p.setHiddenCount(p === real[0] ? hidden : 0));
 }
 
 /**
@@ -285,8 +362,8 @@ export function afterCapture(): void {
   for (const p of panels) p.reshow();
   // STC-392 focus rule 3: "when panels come back, the most recent one gets
   // focus." `panels[0]` IS the most recent — `presentThumbnail` always
-  // `unshift`s the newest onto the front, the same ordering `stackPosition`
-  // reads for its index (asserted in `thumbnail.test.ts`'s stacking block,
+  // `unshift`s the newest onto the front, the same ordering `stackLayout`
+  // reads for its position (asserted in `thumbnail.test.ts`'s layout block,
   // for POSITION — that block does not and cannot drive this file, since it
   // imports no Electron). Focus rules 1 and 3 have NO test of their own: OS
   // key-focus is not observable from a pure test, and this sandbox's own
@@ -412,18 +489,30 @@ class ThumbnailSession {
    * of `onEvent` below re-sends this once it is safe to.
    */
   private hiddenCountValue = 0;
-  /** Where in the stack this panel currently sits; 0 is the newest. */
-  private stackIndex = 0;
-  private readonly corner: Corner;
+  /**
+   * The corner this panel was created with, and the work area it currently
+   * belongs to — `positionFor`/`stackLayout` need both, and `layoutStack`
+   * (module scope) needs to read them back to group panels by display, so
+   * they cannot be `private`.
+   *
+   * `workArea` is NOT fixed for the panel's whole life: `rehome` (below)
+   * moves it whenever a fresh capture lands on a different display, so the
+   * whole stack follows wherever you are working (STC-426 revision) rather
+   * than each panel staying frozen on the display it first appeared on.
+   */
+  readonly corner: Corner;
+  private currentWorkArea: Bounds;
+  get workArea(): Bounds { return this.currentWorkArea; }
   private resolveClosed!: () => void;
   private readonly closed: Promise<void>;
 
   constructor(private readonly opts: PresentOptions) {
     this.closed = new Promise((res) => { this.resolveClosed = res; });
     this.corner = opts.corner;
+    this.currentWorkArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     // At the corner: a new panel is always the newest, so index 0. `restack`
     // moves the ones behind it immediately afterwards.
-    const { x, y } = positionFor(this.corner, this.workArea(), PANEL_SIZE, CORNER_MARGIN);
+    const { x, y } = positionFor(this.corner, this.workArea, PANEL_SIZE, CORNER_MARGIN);
     this.win = new BrowserWindow({
       x, y, width: PANEL_SIZE.width, height: PANEL_SIZE.height,
       transparent: true, frame: false, hasShadow: false,
@@ -471,10 +560,6 @@ class ThumbnailSession {
 
   waitUntilClosed(): Promise<void> { return this.closed; }
 
-  private workArea(): { x: number; y: number; width: number; height: number } {
-    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  }
-
   private onEvent(ev: ThumbEvent): void {
     if (this.done) return;
     if (ev.kind === "painted") {
@@ -492,8 +577,6 @@ class ThumbnailSession {
         this.win.show();
         this.focusNow();
       }
-    } else if (ev.kind === "redact") {
-      this.resizeTo(ev.on ? REDACT_SIZE : PANEL_SIZE);
     } else if (ev.kind === "discarding") {
       // No-op today — see the `ThumbEvent` doc on this case. Kept as its own
       // branch, not folded into the default no-match, so the next thing that
@@ -504,20 +587,6 @@ class ThumbnailSession {
     } else if (ev.kind === "done") {
       this.destroy();
     }
-  }
-
-  /**
-   * Grow or shrink in place, staying in ITS corner. Recomputed rather than
-   * kept as an offset: a panel in the bottom-right that grew by moving its
-   * origin would walk off the bottom of the display.
-   */
-  private resizeTo(size: Size): void {
-    if (this.done || this.win.isDestroyed()) return;
-    // Through `stackPosition`, not `positionFor`: a panel expanded from the
-    // middle of a stack must grow where it IS, not jump to the corner.
-    const { x, y } = stackPosition(this.stackIndex, this.corner, this.workArea(),
-                                   size, CORNER_MARGIN);
-    this.win.setBounds({ x, y, width: size.width, height: size.height });
   }
 
   /**
@@ -736,14 +805,45 @@ class ThumbnailSession {
     restack();
   }
 
-  /** Move to the place `index` in the stack says, keeping its current size. */
-  moveToStackIndex(index: number): void {
-    if (this.done || this.win.isDestroyed()) return;
-    this.stackIndex = index;
+  /**
+   * Whether this panel counts toward `MAX_STACKED` and `stackLayout` at all
+   * (STC-426) — alive, and not a `silent` capture that will never paint or
+   * occupy a slot. `restack`'s module-scope `stacked()` is the only caller.
+   */
+  isStacked(): boolean { return !this.done && !this.opts.silent; }
+
+  /**
+   * Move this panel to a different display's work area (STC-426 revision) —
+   * called on every OLDER panel when a fresh capture lands somewhere else,
+   * so the whole stack relocates together. Only changes where `layoutStack`
+   * will next place it; the caller's own `restack()` afterwards is what
+   * actually moves the window.
+   */
+  rehome(workArea: Bounds): void {
+    this.currentWorkArea = workArea;
+  }
+
+  /**
+   * Which column this panel belongs in — its corner and the work area it was
+   * created on. Two panels sharing a key are laid out together by
+   * `layoutStack`; two that don't (different displays, or a corner preference
+   * changed between captures) get independent columns rather than one being
+   * measured against the other's screen.
+   */
+  stackKey(): string {
+    return `${this.corner}:${this.workArea.x}:${this.workArea.y}`;
+  }
+
+  /** This panel's current window size — what `stackLayout` lays a column out from. */
+  size(): Size {
     const { width, height } = this.win.getBounds();
-    const { x, y } = stackPosition(index, this.corner, this.workArea(),
-                                   { width, height }, CORNER_MARGIN);
-    this.win.setBounds({ x, y, width, height });
+    return { width, height };
+  }
+
+  /** Move to wherever `layoutStack` decided this panel belongs. */
+  moveTo(bounds: Bounds): void {
+    if (this.done || this.win.isDestroyed()) return;
+    this.win.setBounds(bounds);
   }
 }
 

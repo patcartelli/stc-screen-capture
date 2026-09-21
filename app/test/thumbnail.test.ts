@@ -4,7 +4,7 @@ import {
   parseCorner,
   discardDirection, isHorizontal, swipeOffset, isDiscardSwipe, SWIPE_DISCARD_PX,
   classifyDrag, DRAG_START_PX,
-  stackPosition, STACK_STEP_PX, MAX_STACKED, PANEL_SIZE,
+  stackLayout, STACK_GAP_PX, MAX_STACKED, PANEL_SIZE,
   hiddenCount, visibleCount,
   CORNERS,
 } from "../src/thumbnail.js";
@@ -44,7 +44,7 @@ describe("the panel state machine (STC-392: it waits)", () => {
                         "DEFAULT_THUMBNAIL_TIMEOUT_MS", "MIN_THUMBNAIL_TIMEOUT_MS"]) {
       expect(Object.keys(mod)).not.toContain(gone);
     }
-    for (const present of ["show", "dismiss", "positionFor", "stackPosition",
+    for (const present of ["show", "dismiss", "positionFor", "stackLayout",
                            "hiddenCount", "visibleCount"]) {
       expect(Object.keys(mod)).toContain(present);
     }
@@ -261,62 +261,74 @@ describe("one gesture, two outcomes (STC-296 drag-out)", () => {
 });
 
 
-describe("stacking (STC-296 follow-up)", () => {
-  const workArea = { x: 0, y: 0, width: 1440, height: 900 };
+describe("vertical preview layout (STC-426)", () => {
+  const workArea = { x: -1440, y: 100, width: 1440, height: 900 };
   const size = { width: 220, height: 150 };
+  // A generic "much bigger than PANEL_SIZE" fixture. This used to be the
+  // real `REDACT_SIZE` — Redact moved to its own window (STC-300) and the
+  // panel is fixed at `PANEL_SIZE` for its whole life now, but `stackLayout`
+  // stays a function of every panel's own size rather than one shared
+  // constant, and that mixed-size capability is worth proving with SOME
+  // bigger size regardless of whether production currently produces one.
+  const BIG_SIZE = { width: 520, height: 420 };
 
-  test("the newest panel sits exactly where a lone panel would", () => {
-    // Not a separate calculation: the single-panel case cannot drift from the
-    // stacked one because index 0 IS `positionFor`.
-    for (const corner of CORNERS) {
-      expect(stackPosition(0, corner, workArea, size))
-        .toEqual(positionFor(corner, workArea, size));
-    }
-  });
+  for (const corner of CORNERS) {
+    test(`${corner}: newest stays at the corner and a full stack is fully visible`, () => {
+      const bounds = stackLayout(Array.from({ length: MAX_STACKED }, () => size), corner, workArea);
+      // Not a separate calculation: the single-panel case cannot drift from
+      // the stacked one because the first entry IS `positionFor`.
+      expect(bounds[0]).toEqual({ ...size, ...positionFor(corner, workArea, size) });
+      for (const [i, b] of bounds.entries()) {
+        // Anchored to its corner: never drifts sideways within one column.
+        expect(b.x).toBe(bounds[0]!.x);
+        expect(b.y).toBeGreaterThanOrEqual(workArea.y + 20);
+        expect(b.y + b.height).toBeLessThanOrEqual(workArea.y + workArea.height - 20);
+        // The gap is uniform, so the stack reads as a deck rather than a jumble.
+        if (i) expect(Math.abs(b.y - bounds[i - 1]!.y)).toBe(size.height + STACK_GAP_PX);
+      }
+    });
 
-  test("older panels move further INTO the screen, never off its edge", () => {
-    const topLeft = stackPosition(1, "top-left", workArea, size);
-    const bottomLeft = stackPosition(1, "bottom-left", workArea, size);
-    // Down from a top corner, up from a bottom one.
-    expect(topLeft.y).toBeGreaterThan(stackPosition(0, "top-left", workArea, size).y);
-    expect(bottomLeft.y).toBeLessThan(stackPosition(0, "bottom-left", workArea, size).y);
-  });
+    test(`${corner}: a full stack with one panel much bigger than the rest does not overlap`, () => {
+      // The mixed-size case a fixed-offset stack could never have handled
+      // correctly. The old test measured only the collapsed thumbnail's size
+      // and would have stayed green while a stack of the real cards ran off
+      // the screen or piled on top of itself.
+      const sizes = [PANEL_SIZE, BIG_SIZE, PANEL_SIZE];
+      const bounds = stackLayout(sizes, corner, workArea, 20);
+      for (const [i, b] of bounds.entries()) {
+        expect(b.y).toBeGreaterThanOrEqual(workArea.y);
+        expect(b.y + b.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+        for (const other of bounds.slice(i + 1)) {
+          expect(b.x + b.width <= other.x || other.x + other.width <= b.x ||
+            b.y + b.height <= other.y || other.y + other.height <= b.y).toBe(true);
+        }
+      }
+    });
 
-  test("the step is uniform, so the stack reads as a deck", () => {
-    const ys = [0, 1, 2, 3].map((i) => stackPosition(i, "bottom-right", workArea, size).y);
-    const gaps = ys.slice(1).map((y, i) => Math.abs(y - ys[i]!));
-    expect(gaps).toEqual([STACK_STEP_PX, STACK_STEP_PX, STACK_STEP_PX]);
-  });
+    test(`${corner}: mixed sizes wrap into a second column on a short display, without overlap`, () => {
+      const area = { ...workArea, height: 640 };
+      const sizes = [size, { width: 300, height: 260 }, BIG_SIZE, size, size];
+      const bounds = stackLayout(sizes, corner, area);
+      for (const [i, b] of bounds.entries()) {
+        expect(b.x).toBeGreaterThanOrEqual(area.x);
+        expect(b.x + b.width).toBeLessThanOrEqual(area.x + area.width);
+        expect(b.y).toBeGreaterThanOrEqual(area.y + 20);
+        expect(b.y + b.height).toBeLessThanOrEqual(area.y + area.height - 20);
+        for (const other of bounds.slice(i + 1)) {
+          expect(b.x + b.width <= other.x || other.x + other.width <= b.x ||
+            b.y + b.height <= other.y || other.y + other.height <= b.y).toBe(true);
+        }
+      }
+    });
+  }
 
-  test("stacking never moves a panel sideways", () => {
-    // The stack is anchored to its corner; drifting horizontally would take it
-    // away from the edge it belongs to.
-    for (const corner of CORNERS) {
-      const xs = [0, 1, 2, 3].map((i) => stackPosition(i, corner, workArea, size).x);
-      expect(new Set(xs).size).toBe(1);
-    }
-  });
-
-  test("a full stack of the ONE panel size still fits the work area", () => {
-    // Re-anchored for STC-392 (D3): the card is one size now, and it is taller
-    // than the old collapsed thumbnail because its actions are always visible.
-    // The old test measured the collapsed size and would have stayed green
-    // while five of the real card ran off the screen.
-    //
-    // All four CORNERS, not just bottom-right (restored after STC-392 review
-    // finding 7): a top corner pushes the stack DOWN rather than up, and the
-    // `workArea.y` floor is exactly the case only a top corner can fail —
-    // bottom-right alone would leave it unasserted.
-    const workArea = { x: 0, y: 0, width: 1440, height: 900 };
-    for (const corner of CORNERS) {
-      const oldest = stackPosition(MAX_STACKED - 1, corner, workArea, PANEL_SIZE);
-      expect(oldest.y).toBeGreaterThanOrEqual(workArea.y);
-      expect(oldest.y + PANEL_SIZE.height).toBeLessThanOrEqual(workArea.y + workArea.height);
-    }
-    // Composition, not magnitude: the clearance must come from the stack's own
-    // arithmetic, not from slack in a display that happens to be tall.
-    const consumed = PANEL_SIZE.height + (MAX_STACKED - 1) * STACK_STEP_PX + 2 * 20;
-    expect(consumed).toBeLessThanOrEqual(workArea.height);
+  test("removing the middle preview closes its gap", () => {
+    // Deliberately stateless: laying out fewer sizes is not "delete an
+    // offset", it is the same function asked a smaller question.
+    const before = stackLayout([size, size, size], "bottom-right", workArea);
+    const after = stackLayout([size, size], "bottom-right", workArea);
+    expect(after[1]).toEqual(before[1]);
+    expect(after[1]!.y).toBeGreaterThan(before[2]!.y);
   });
 
   test("the cap matches the ticket's own words, restated for Task 5b (STC-392 D7)", () => {
