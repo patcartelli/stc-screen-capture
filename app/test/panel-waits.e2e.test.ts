@@ -9,6 +9,7 @@ import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow } from "./_windows.js";
+import { keptFileRequests } from "./_still-log.js";
 
 /**
  * The contract STC-392 reverses, end to end.
@@ -106,7 +107,7 @@ interface PanelLaunch {
   app: ElectronApplication;
   temp: string;
   recordings: string;
-  destDir: string;
+  stillLog: string;
 }
 
 interface LaunchOpts {
@@ -133,14 +134,19 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
   const { captures = 1, extraEnv = {} } = opts;
   const { dir: recordings } = makeTakeFolder();
   const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
-  // A folder nothing is ever configured to write to — STC-412 unified
+  // `saveFolder: null` leaves `STC_RECORDINGS_DIR` (`recordings`) as the
+  // resolved root, matching every assertion in this file — STC-412 unified
   // `saveFolder` to govern BOTH stills and recordings (`panel:save`'s
-  // promote included), so seeding it here would divert the promoted take
+  // promote included), so seeding one here would divert the promoted take
   // away from `recordings`, which is what "Save promotes" below asserts
-  // against. `saveFolder: null` leaves `STC_RECORDINGS_DIR` (`recordings`)
-  // as the resolved root, matching every other assertion in this file;
-  // `destDir` stays a place proving nothing writes where nothing was chosen.
-  const destDir = mkdtempSync(join(tmpdir(), "stc-thumb-dest-"));
+  // against.
+  //
+  // A `destDir` used to be created here as "a place proving nothing writes
+  // where nothing was chosen", and it proved no such thing (STC-412 final
+  // review, I3): with one unified `saveFolder` that is null, nothing the app
+  // can do resolves to a folder like that, so the read passed whatever
+  // happened. The helper's request log is where an export really shows up.
+  const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   writeFileSync(join(userData, "settings.json"),
                 JSON.stringify({ saveFolder: null }));
@@ -151,7 +157,8 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
     env: {
       ...process.env,
       STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp,
-      STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1", ...extraEnv,
+      STC_HELPER_BIN: FAKE_HELPER, STC_FAKE_STILL_LOG: stillLog,
+      STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
   forwardProcessOutput(app);
@@ -172,7 +179,7 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
     await expect.poll(() => windowCount(app!, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(captures);
   }
-  return { win, app, temp, recordings, destDir };
+  return { win, app, temp, recordings, stillLog };
 }
 
 /** The panel window for the take `launch` just captured (single-panel callers only). */
@@ -182,7 +189,7 @@ function panelWindow(app: ElectronApplication): Page {
 
 describe("the panel waits (STC-392)", () => {
   test("left alone, the panel is still there and the take is still in temp", async () => {
-    const { app: electronApp, temp, recordings, destDir } = await launch();
+    const { app: electronApp, temp, recordings, stillLog } = await launch();
 
     // The panel is up (`launch` already waited for it).
     expect(await windowCount(electronApp, "thumbnail.html")).toBe(1);
@@ -191,8 +198,17 @@ describe("the panel waits (STC-392)", () => {
 
     // Still up — this is the assertion the whole ticket is about.
     expect(await windowCount(electronApp, "thumbnail.html")).toBe(1);
-    // And nothing was written anywhere, because nothing was decided.
-    expect(readdirSync(destDir)).toEqual([]);
+    // And nothing was KEPT anywhere, because nothing was decided — an
+    // untouched panel must not write the shot out on a clock of its own,
+    // which is the behaviour STC-392 removed and this file exists for. Read
+    // off the helper's own request log (STC-412 final review, I3); the
+    // destination-folder read this replaces named a directory nothing in the
+    // app could resolve to any more.
+    //
+    // Not "no export at all": the panel writes its drag-out file to the
+    // clipboard cache as it paints (`_still-log.ts`), which is not a decision
+    // anyone made about this take and not a file anyone keeps.
+    expect(keptFileRequests(stillLog)).toEqual([]);
     // The take is exactly where STC-393 put it.
     expect(readdirSync(temp).length).toBe(1);
     // `makeTakeFolder()` seeds `recordings` with its own fixture take so the

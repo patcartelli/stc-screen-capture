@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { hasWindow } from "./_windows.js";
+import { keptFileRequests } from "./_still-log.js";
 
 /**
  * The library grid, end to end (STC-294).
@@ -27,22 +28,25 @@ const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
-interface Launched { win: Page; recordings: string; destDir: string; errors: string[] }
+interface Launched { win: Page; recordings: string; stillLog: string; errors: string[] }
 
 /** `seed` populates the recordings root before Electron ever sees it. */
 async function launch(seed: (recordings: string) => void): Promise<Launched> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-libe2e-"));
   seed(recordings);
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-  // A folder nothing is ever configured to write to. STC-412 unified
-  // `saveFolder` to govern BOTH stills and recordings, including which root
-  // the library SCANS (`takesRoot`) — so an active `saveFolder` here would
-  // point the whole library grid at `destDir` instead of `recordings`,
-  // where `seed()` just wrote the fixture. `saveFolder: null` leaves
-  // `STC_RECORDINGS_DIR` (`recordings`) as the resolved root; `destDir`
-  // stays a place proving nothing writes where nothing was chosen (used by
-  // the "never exports on its own" test below).
-  const destDir = mkdtempSync(join(tmpdir(), "stc-dest-"));
+  // `saveFolder: null` leaves `STC_RECORDINGS_DIR` (`recordings`) as the
+  // resolved root, which is where `seed()` just wrote the fixture. STC-412
+  // unified `saveFolder` to govern BOTH stills and recordings, including
+  // which root the library SCANS (`takesRoot`), so an active one here would
+  // point the whole grid somewhere the fixture is not.
+  //
+  // The "never exports on its own" test below used to prove its own name by
+  // reading back an otherwise-unused `destDir`; under one unified
+  // `saveFolder` nothing in the app could resolve to that folder by any
+  // path, so the read passed unconditionally (STC-412 final review, I3). The
+  // helper's own request log is what an export would actually reach.
+  const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
   // Seeded on DISK: `recorder:setSettings` deliberately strips `saveFolder`
   // (STC-293 review, #92 — `saveFolder` replaced `still.destination` at
   // STC-412, and the strip moved with it: it is a plain top-level field,
@@ -55,7 +59,7 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
     cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
-      STC_NO_SHUTTER: "1",
+      STC_FAKE_STILL_LOG: stillLog, STC_NO_SHUTTER: "1",
     },
   });
   const win = await app.firstWindow();
@@ -67,7 +71,7 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
   win.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   win.on("pageerror", (e) => errors.push(String(e)));
   await win.waitForSelector("#capturestill");
-  return { win, recordings, destDir, errors };
+  return { win, recordings, stillLog, errors };
 }
 
 /** The floating panel, once it is up — same idiom as `thumbnail.e2e.test.ts`. */
@@ -315,7 +319,7 @@ describe("duplicate", () => {
    * anything just by being SHOWN.
    */
   test("re-opening a shot from the library offers only Copy and Trash, and never exports on its own (STC-294/STC-392)", async () => {
-    const { win, recordings, destDir } = await launch((dir) => {
+    const { win, recordings, stillLog } = await launch((dir) => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
     const original = join(recordings, "2026-09-08_12-00-00");
@@ -338,7 +342,17 @@ describe("duplicate", () => {
     // and the original untouched, just by having been shown.
     await new Promise((r) => setTimeout(r, 1_000));
     expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
-    expect(readdirSync(destDir)).toEqual([]);
+    // "Never exports on its own" — its own title — read off the helper's
+    // request log (STC-412 final review, I3). The folder read this replaces
+    // named a fixture directory that, once `saveFolder` became the single
+    // setting governing every write, nothing in the app could resolve to, so
+    // it was empty whether or not the panel exported anything.
+    //
+    // `keptFileRequests`, not every export: a re-opened panel DOES write its
+    // drag-out file to the clipboard cache as it paints, exactly like a fresh
+    // one, and the claim here is about a copy being KEPT — a second encoded
+    // shot appearing somewhere the user keeps files just from opening one.
+    expect(keptFileRequests(stillLog)).toEqual([]);
     expect(readdirSync(recordings)).toEqual(["2026-09-08_12-00-00"]);
     expect(readFileSync(join(original, "shot.json"), "utf8")).toBe(before);
   }, 60_000);
