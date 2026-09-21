@@ -1,5 +1,5 @@
-import type { Redaction, Shot } from "@transform/shot";
-import { layoutStill } from "@transform/still-decorate";
+import { parseShot, type Redaction, type Shot } from "@transform/shot";
+import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { normaliseRegion, undoLast } from "@transform/still-redact";
 
@@ -62,9 +62,28 @@ function regionCountText(): string {
   return regions.length === 0 ? "No boxes." : `${regions.length} ${regions.length === 1 ? "box" : "boxes"}.`;
 }
 
+/**
+ * The shot as the editor currently describes it: the stored mode, with
+ * whatever `regions` now holds. `layoutStill` positions a shot's redaction
+ * RECTS from `shot.decoration.redactions` — reading the loaded `shot`
+ * directly (as `draw` did in an earlier version of this file) meant a freshly
+ * drawn box was sampled for a fill colour and persisted to disk, but never
+ * actually reached `layoutStill`, so nothing was ever drawn. One function,
+ * the same shape `thumbnail-renderer.ts`'s old `currentShot()` used, because
+ * the preview and the write must not be able to disagree about what the
+ * document is.
+ */
+function decoratedShot(): Shot {
+  return parseShot({
+    ...shot,
+    decoration: decorationForMode(shot!.decoration.mode, { ...shot!.decoration, redactions: regions }),
+  });
+}
+
 async function draw(): Promise<void> {
   if (!shot || !frame) return;
-  const layout = layoutStill(shot);
+  const decorated = decoratedShot();
+  const layout = layoutStill(decorated);
 
   const out = document.createElement("canvas");
   out.width = layout.canvas.width;
@@ -74,7 +93,7 @@ async function draw(): Promise<void> {
   // Sampled from the FRAME, not the composite — the frame is what a region
   // is normalised against, and reading the composite would mean reading
   // pixels an earlier fill had already replaced.
-  const redactionFills = sampleRedactionFills(frame, shot.frame, regions);
+  const redactionFills = sampleRedactionFills(frame, shot.frame, decorated.decoration.redactions);
   renderStill(ctx as never, { frame, redactionFills }, layout);
   composite = out;
 

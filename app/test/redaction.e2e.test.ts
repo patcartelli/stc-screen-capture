@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
+import { REDACTION_FILL_ON_LIGHT, REDACTION_FILL_ON_DARK } from "../../transform/src/still-redact.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow } from "./_windows.js";
@@ -146,6 +147,30 @@ async function redactingEditor(win: Page): Promise<{ editor: Page; dir: string }
   return { editor, dir };
 }
 
+const HEX_FILLS = [REDACTION_FILL_ON_LIGHT, REDACTION_FILL_ON_DARK].map((hex) => ({
+  r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16),
+}));
+
+/**
+ * The pixel at a fraction of the stage canvas's OWN bitmap — its intrinsic
+ * `width`/`height`, not its on-screen CSS box, so this needs no DPI or layout
+ * conversion the way a real pointer coordinate does.
+ */
+async function canvasPixel(editor: Page, fx: number, fy: number): Promise<{ r: number; g: number; b: number }> {
+  return editor.evaluate(({ fx, fy }) => {
+    const canvas = document.getElementById("stagecanvas") as HTMLCanvasElement;
+    const ctx = canvas.getContext("2d")!;
+    const data = ctx.getImageData(
+      Math.floor(fx * canvas.width), Math.floor(fy * canvas.height), 1, 1).data;
+    return { r: data[0]!, g: data[1]!, b: data[2]! };
+  }, { fx, fy });
+}
+
+/** Whether a sampled pixel is (near enough) one of the two solid redaction fills — the VISUAL half of "a drag becomes a region", which reading `shot.json` alone cannot see. */
+function isRedactionFill(px: { r: number; g: number; b: number }): boolean {
+  return HEX_FILLS.some((f) => Math.abs(px.r - f.r) <= 4 && Math.abs(px.g - f.g) <= 4 && Math.abs(px.b - f.b) <= 4);
+}
+
 /**
  * Drag a box across the middle of the stage, as a person would.
  *
@@ -172,6 +197,10 @@ describe("redaction", () => {
     const { win } = await launch();
     const { editor, dir } = await redactingEditor(win);
     expect(storedRegions(dir)).toHaveLength(0);
+    // Before the drag: whatever the capture actually looks like there, which
+    // is not a redaction fill (the fixture is a real screenshot, not a
+    // pre-filled solid block).
+    expect(isRedactionFill(await canvasPixel(editor, 0.5, 0.475))).toBe(false);
 
     await dragBox(editor, [0.3, 0.35], [0.7, 0.6]);
 
@@ -187,6 +216,14 @@ describe("redaction", () => {
     expect(region!.height).toBeGreaterThan(0);
     expect(region!.x + region!.width).toBeLessThanOrEqual(1);
     expect(region!.y + region!.height).toBeLessThanOrEqual(1);
+    // The VISUAL half — `shot.json` gaining a region is not the same claim as
+    // a fill actually being drawn. `layoutStill` positions a shot's
+    // redaction rects from `shot.decoration.redactions`, so this is exactly
+    // the check that would have caught the box the editor stored but never
+    // drew: reading only the stored regions could not tell "drawn" from
+    // "recorded and silently dropped on the way to the canvas" apart.
+    await expect.poll(async () => isRedactionFill(await canvasPixel(editor, 0.5, 0.475)),
+                       { timeout: 15_000 }).toBe(true);
   }, 60_000);
 
   test("a second box adds rather than replaces, and Undo takes back the last one", async () => {

@@ -1252,17 +1252,30 @@ ipcMain.handle("library:shot", async (_e, dir: string) => {
   return parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
 });
 
+/**
+ * Re-opening a shot from the library goes straight to the still editor now
+ * (STC-300 revision) — the same door a recording's "Open" already used
+ * (`editor.ts`, STC-373). It used to re-present the post-capture panel with
+ * `origin: "library"`; once Edit became reachable from there too, sending a
+ * deliberate re-open through the panel first was an extra click to the thing
+ * someone reopening old work most likely wants (redact, or just look), while
+ * Copy/Delete/Reveal for a kept take are already on the library grid's own
+ * tile menu (`library-items.ts`) and lose nothing by this change.
+ *
+ * Crash recovery's OWN re-presentation of an orphaned still (`recoverUnsavedTakes`,
+ * STC-393) is unrelated and still goes through `presentThumbnail` — that is a
+ * prompt about a take nobody decided on yet, not a deliberate re-open of one
+ * already kept, and the panel's Save/Copy/Trash are exactly what it needs.
+ */
 ipcMain.handle("still:reopen", async (_e, dir: string) => {
   if (!insideTakesRoot(process.env, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
-  const shot = parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
-  const { thumbnail } = readSettings(app.getPath("userData"));
-  presentThumbnail({
-    dir, shot, corner: thumbnail.corner,
-    take: { kind: "shot", origin: "library" },
-    dist: here, rendererDir: join(here, "..", "renderer"),
-  });
+  // Read only to fail loudly on a shot this build cannot load, the same
+  // courtesy the old panel-based path gave — `openStillEditor` itself reads
+  // the document again once its own window exists.
+  parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
+  openStillEditor({ dir, dist: here, rendererDir: join(here, "..", "renderer") });
   return { ok: true };
 });
 
@@ -1343,12 +1356,22 @@ async function trashWithConfirmation(
   }
 }
 
+/**
+ * `detail`/`cancelled` are passed through now, not discarded (found while
+ * removing the panel's own re-open door, STC-300 revision): a real
+ * `trashWithConfirmation` failure used to be surfaced ONLY via the panel's
+ * "confirm" path (`origin: "library"`), and that door closing left this one —
+ * the grid's own Delete, which has ALWAYS called the same function — silently
+ * doing nothing on a real failure. `renderer.ts`'s `act()` is what now tells
+ * a genuine failure (alert) apart from a Cancel (say nothing), the same
+ * distinction `trashWithConfirmation`'s own doc already draws.
+ */
 ipcMain.handle("take:delete", async (_e, dir: string) => {
   if (!insideTakesRoot(process.env, dir)) {
     throw new Error("refusing to delete a path outside the recordings folder");
   }
   const r = await trashWithConfirmation(dir);
-  return { deleted: r.ok };
+  return { deleted: r.ok, cancelled: r.cancelled, detail: r.detail };
 });
 
 ipcMain.handle("preview:open", async (e, dir: string) => {
