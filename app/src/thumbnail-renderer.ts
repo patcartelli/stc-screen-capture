@@ -47,7 +47,7 @@ declare global {
   interface Window {
     thumb: {
       getFrame(dir: string, name: string): Promise<ArrayBuffer>;
-      getSettings(): Promise<{ still: ExportOptions & { destination: string | null } }>;
+      getSettings(): Promise<{ still: ExportOptions; saveFolder: string | null }>;
       exportStill(req: Record<string, unknown>): Promise<{
         ok: boolean; file?: string; bytes?: number; clipboard?: string[];
         code?: string; detail?: string;

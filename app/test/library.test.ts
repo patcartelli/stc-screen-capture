@@ -70,13 +70,13 @@ function makeStill(name: string, over: StillOver = {}): string {
 
 describe("listLibrary — one index, both kinds", () => {
   test("an empty root is not an error", async () => {
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(items).toEqual([]);
     expect(invalid).toEqual([]);
   });
 
   test("a missing root is not an error either", async () => {
-    const { items, invalid } = await listLibrary({ STC_RECORDINGS_DIR: join(root, "nope") });
+    const { items, invalid } = await listLibrary({ STC_RECORDINGS_DIR: join(root, "nope") }, null);
     expect(items).toEqual([]);
     expect(invalid).toEqual([]);
   });
@@ -84,7 +84,7 @@ describe("listLibrary — one index, both kinds", () => {
   test("a stills-only library lists stills and reports nothing broken", async () => {
     makeStill("2026-09-08_10-00-00");
     makeStill("2026-09-08_10-00-01");
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(invalid, JSON.stringify(invalid)).toEqual([]);
     expect(items.map((i) => i.kind)).toEqual(["still", "still"]);
     expect(items.map((i) => i.badge)).toEqual(["Still", "Still"]);
@@ -99,7 +99,7 @@ describe("listLibrary — one index, both kinds", () => {
     makeRecording("2026-09-08_10-00-00");
     makeStill("2026-09-08_10-00-01");
 
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(invalid, JSON.stringify(invalid)).toEqual([]);
     expect(items.map((i) => `${i.id}:${i.kind}`)).toEqual([
       "2026-09-08_10-00-03:still",
@@ -119,12 +119,12 @@ describe("listLibrary — one index, both kinds", () => {
    */
   test("a still is no longer reported as a broken recording", async () => {
     makeStill("2026-09-08_10-00-00");
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(invalid).toEqual([]);
     expect(items).toHaveLength(1);
     // And the recordings-only view simply does not see it — rather than seeing
     // it as damage.
-    const takes = await listTakes(env());
+    const takes = await listTakes(env(), null);
     expect(takes.takes).toEqual([]);
     expect(takes.invalid).toEqual([]);
   });
@@ -150,7 +150,7 @@ describe("listLibrary — one index, both kinds", () => {
     // CONTENT does not matter to this scanner (it only stats the file), so a
     // fixture stand-in is enough; what matters is anchors.json's absence.
     writeFileSync(join(dir, "display.mp4"), Buffer.alloc(4096));
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(items).toEqual([]);
     expect(invalid).toHaveLength(1);
     expect(invalid[0]?.reason).toBe("no anchors.json — not a recording");
@@ -159,7 +159,7 @@ describe("listLibrary — one index, both kinds", () => {
   test("a directory that is neither kind is still reported, with a reason", async () => {
     mkdirSync(join(root, "2026-09-08_10-00-00"), { recursive: true });
     writeFileSync(join(root, "2026-09-08_10-00-00", "notes.txt"), "hello");
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(items).toEqual([]);
     expect(invalid).toHaveLength(1);
     expect(invalid[0]!.reason).toMatch(/anchors/i);
@@ -172,7 +172,7 @@ describe("listLibrary — a still that cannot be rendered says so", () => {
     // the still. A tile for a document that cannot be loaded would fail the
     // moment it was opened, so it is reported instead.
     makeStill("2026-09-08_10-00-00", { shot: { version: 1, kind: "display-crop" } });
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(items).toEqual([]);
     expect(invalid).toHaveLength(1);
     expect(invalid[0]!.reason).toMatch(/shot\.json is unreadable/);
@@ -192,13 +192,13 @@ describe("listLibrary — a still that cannot be rendered says so", () => {
       somethingNew: true,
     }));
     makeStill("2026-09-08_10-00-00", { shot });
-    const { invalid } = await listLibrary(env());
+    const { invalid } = await listLibrary(env(), null);
     expect(invalid[0]!.reason).toMatch(/field this version does not know/);
   });
 
   test("a missing frame is invalid, named by the file the document asked for", async () => {
     makeStill("2026-09-08_10-00-00", { frame: false });
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(items).toEqual([]);
     expect(invalid[0]!.reason).toMatch(/frame\.png is missing/);
   });
@@ -218,7 +218,7 @@ describe("the presentation each kind owns", () => {
         redactions: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.05 }],
       },
     } });
-    const [item] = (await listLibrary(env())).items;
+    const [item] = (await listLibrary(env(), null)).items;
     expect(item!.summary).toContain("720×480");
     expect(item!.summary).toContain("Window + shadow");
     expect(item!.summary).toContain("1 redaction");
@@ -229,14 +229,14 @@ describe("the presentation each kind owns", () => {
 
   test("no redactions are not mentioned at all", async () => {
     makeStill("2026-09-08_10-00-00");
-    const [item] = (await listLibrary(env())).items;
+    const [item] = (await listLibrary(env(), null)).items;
     expect(item!.summary).not.toMatch(/redaction/);
   });
 
   test("a still offers open and duplicate; a recording offers preview and neither", async () => {
     makeStill("2026-09-08_10-00-01");
     makeRecording("2026-09-08_10-00-00");
-    const [still, recording] = (await listLibrary(env())).items;
+    const [still, recording] = (await listLibrary(env(), null)).items;
 
     // The actions are what a view renders and dispatches on. That a still can
     // be duplicated and a recording cannot is expressed HERE, as a list, which
@@ -253,7 +253,7 @@ describe("the presentation each kind owns", () => {
   test("every kind offers rename and delete — the shared UI has something to bind to", async () => {
     makeStill("2026-09-08_10-00-01");
     makeRecording("2026-09-08_10-00-00");
-    for (const item of (await listLibrary(env())).items) {
+    for (const item of (await listLibrary(env(), null)).items) {
       const ids = item.actions.map((a) => a.id);
       expect(ids, item.kind).toContain("rename");
       expect(ids, item.kind).toContain("delete");
@@ -263,14 +263,14 @@ describe("the presentation each kind owns", () => {
   test("a cached thumbnail is named; an uncached one asks to be rendered", async () => {
     makeStill("2026-09-08_10-00-01", { thumb: true });
     makeStill("2026-09-08_10-00-00");
-    const [cached, fresh] = (await listLibrary(env())).items;
+    const [cached, fresh] = (await listLibrary(env(), null)).items;
     expect(cached!.thumbnail).toEqual({ source: "file", file: THUMBNAIL_FILE });
     expect(fresh!.thumbnail).toEqual({ source: "render" });
   });
 
   test("a recording has no thumbnail in this slice, and says so structurally", async () => {
     makeRecording("2026-09-08_10-00-00");
-    const [item] = (await listLibrary(env())).items;
+    const [item] = (await listLibrary(env(), null)).items;
     // Not `{source:"render"}` with the renderer quietly failing: a poster frame
     // for every recording is a decode per tile, deferred deliberately.
     expect(item!.thumbnail).toEqual({ source: "none" });
@@ -281,7 +281,7 @@ describe("the presentation each kind owns", () => {
     const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
     anchors.camera = { present: false };
     writeFileSync(join(dir, "anchors.json"), JSON.stringify(anchors));
-    const [item] = (await listLibrary(env())).items;
+    const [item] = (await listLibrary(env(), null)).items;
     expect(item!.notes.join(" ")).toMatch(/recorded no frames/);
   });
 });
@@ -289,8 +289,8 @@ describe("the presentation each kind owns", () => {
 describe("labelling is one mechanism over both kinds", () => {
   test("a label set on a still comes back on its item", async () => {
     const dir = makeStill("2026-09-08_10-00-00");
-    await setTakeLabel(env(), dir, "The pricing page");
-    const [item] = (await listLibrary(env())).items;
+    await setTakeLabel(env(), null, dir, "The pricing page");
+    const [item] = (await listLibrary(env(), null)).items;
     expect(item!.label).toBe("The pricing page");
     // The id stays the directory name: a label is a display name and never the
     // identity, or renaming would scramble the sort and break open paths.
@@ -300,7 +300,7 @@ describe("labelling is one mechanism over both kinds", () => {
   test("a corrupt take.json costs the label, never the still", async () => {
     const dir = makeStill("2026-09-08_10-00-00");
     writeFileSync(join(dir, "take.json"), "{not json");
-    const { items, invalid } = await listLibrary(env());
+    const { items, invalid } = await listLibrary(env(), null);
     expect(invalid).toEqual([]);
     expect(items).toHaveLength(1);
     expect(items[0]!.label).toBeUndefined();

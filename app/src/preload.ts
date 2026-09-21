@@ -32,7 +32,6 @@ contextBridge.exposeInMainWorld("recorder", {
   // frame grab goes through `still:export` like everything else now.
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   chooseStillDestination: () => ipcRenderer.invoke("still:chooseDestination"),
-  clearStillDestination: () => ipcRenderer.invoke("still:clearDestination"),
   // The library (STC-294): one index over both kinds. The renderer asks for a
   // filtered list and is handed items it renders without knowing what kinds
   // exist — the filtering happens on this side of the bridge for exactly that

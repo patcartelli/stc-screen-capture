@@ -139,12 +139,12 @@ export const CLIPBOARD_SUBDIR = "stc-clipboard";
  * and because it must be the SAME answer for every caller — a thumbnail that
  * resolved its own default is the second implementation the Note forbids.
  */
-export function destinationDir(settings: Pick<StillSettings, "destination">,
+export function destinationDir(saveFolder: string | null,
                                target: ExportTarget,
                                fallbackDir: string | undefined,
                                cacheRoot: string): string {
   if (!target.file) return join(cacheRoot, CLIPBOARD_SUBDIR);
-  if (settings.destination) return settings.destination;
+  if (saveFolder) return saveFolder;
   if (fallbackDir) return fallbackDir;
   return join(cacheRoot, CLIPBOARD_SUBDIR);
 }
@@ -273,6 +273,7 @@ export function plannedFileName(options: ExportOptions,
  */
 export async function exportStill(send: SendExport, req: ExportRequest,
                                   settings: StillSettings,
+                                  saveFolder: string | null,
                                   cacheRoot: string): Promise<ExportResult> {
   if (!req.target.file && !req.target.clipboard) {
     throw new Error("an export needs somewhere to go: a file, the clipboard, or both");
@@ -284,7 +285,7 @@ export async function exportStill(send: SendExport, req: ExportRequest,
     throw new Error("explicitFile needs target.file");
   }
   const at = req.at ?? new Date();
-  const dir = destinationDir(settings, req.target, req.fallbackDir, cacheRoot);
+  const dir = destinationDir(saveFolder, req.target, req.fallbackDir, cacheRoot);
   // Listed ONCE and used for both the counter and the collision check: two
   // reads could disagree, and a filename whose counter came from a different
   // listing than its uniqueness check is exactly the kind of nearly-right that

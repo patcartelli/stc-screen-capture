@@ -32,12 +32,22 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function launch(extraEnv: Record<string, string> = {}):
   Promise<{ win: Page; destDir: string; recordings: string }> {
   const { dir: recordings } = makeTakeFolder();
+  // A folder nothing is ever configured to write to. STC-412 unified
+  // `saveFolder` to govern BOTH stills and recordings — `panel:save`'s
+  // promote included — so seeding `destDir` here as the ACTIVE saveFolder
+  // would divert a promoted take away from `recordings`, which is what
+  // "the stored regions reach the promoted take" and the Style test below
+  // assert against. `saveFolder: null` leaves `STC_RECORDINGS_DIR`
+  // (`recordings`) as the resolved root, matching those assertions;
+  // `destDir` is unused, kept only for interface-shape parity with the
+  // other fixtures in this file's family.
   const destDir = mkdtempSync(join(tmpdir(), "stc-redact-dest-"));
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   // Seeded on disk, never through `recorder:setSettings` — that channel
-  // deliberately strips `still.destination` (STC-293 review, #92).
+  // deliberately strips `saveFolder` (STC-293 review, #92 — `saveFolder`
+  // replaced `still.destination` at STC-412).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir },
+    saveFolder: null,
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],

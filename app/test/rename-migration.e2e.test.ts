@@ -13,8 +13,13 @@ import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "../src/product.js";
  * present after the rename" — and the one part of this change that can
  * actually destroy something a user cares about. `productName` moves
  * `app.getPath("userData")`, so a real configuration (camera, mic, four
- * custom hotkeys, still and share destinations) is left in a folder the
- * renamed app no longer reads.
+ * custom hotkeys, the save folder and share destination) is left in a folder
+ * the renamed app no longer reads. The seeded fixture below still writes the
+ * pre-STC-412 `still.destination` shape deliberately — it stands in for a
+ * REAL legacy settings.json written before that field moved to the top-level
+ * `saveFolder`, and the migration copies the file wholesale regardless of its
+ * shape, so this needs no functional change: `readSettings` simply ignores
+ * the now-unknown key on the far side, same as it ignores any other one.
  *
  * Driven through the REAL app rather than by calling the migration directly,
  * because the property under test is an ORDERING one: the migration has to

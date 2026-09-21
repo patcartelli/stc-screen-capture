@@ -132,9 +132,10 @@ async function moveDir(from: string, to: string): Promise<void> {
  * in the same second, applied here to the (rarer) case of two takes with the
  * same second-resolution stamp both surviving to promotion.
  */
-export async function promoteTake(env: NodeJS.ProcessEnv, dir: string): Promise<string> {
+export async function promoteTake(env: NodeJS.ProcessEnv, saveFolder: string | null,
+                                  dir: string): Promise<string> {
   if (!insideTempTakesRoot(env, dir)) return dir;
-  const root = takesRoot(env);
+  const root = takesRoot(env, saveFolder);
   await mkdir(root, { recursive: true });
   const existing = existsSync(root) ? await readdir(root) : [];
   const dest = join(root, uniqueTakeName(basename(dir), existing));

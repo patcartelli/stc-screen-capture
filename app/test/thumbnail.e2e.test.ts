@@ -53,16 +53,23 @@ interface Launched {
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
   const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
+  // A folder nothing is ever configured to write to. STC-412 unified
+  // `saveFolder` to govern BOTH stills and recordings — `panel:save`'s
+  // promote included — so an ACTIVE `saveFolder` here would divert a
+  // promoted take away from `recordings`, which is what "Save promotes"
+  // and the skip-preference test below assert against (`ownTakes(recordings)
+  // .length === 1`, `readdirSync(destDir).length === 0`). `saveFolder: null`
+  // leaves `STC_RECORDINGS_DIR` (`recordings`) as the resolved root.
   const destDir = mkdtempSync(join(tmpdir(), "stc-thumb-dest-"));
   const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   // Seeded on DISK, before launch — never through `recorder:setSettings`.
-  // That channel deliberately strips `still.destination` (STC-293 review,
-  // #92): a renderer may not choose where main writes, precisely the thing an
-  // E2E test setting up its own fixture would otherwise look like. A real
-  // destination (not "beside the shot") makes a settled export easy to find.
+  // That channel deliberately strips `saveFolder` (STC-293 review, #92 —
+  // `saveFolder` replaced `still.destination` at STC-412): a renderer may not
+  // choose where main writes, precisely the thing an E2E test setting up its
+  // own fixture would otherwise look like.
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir },
+    saveFolder: null,
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],

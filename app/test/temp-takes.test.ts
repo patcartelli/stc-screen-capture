@@ -109,7 +109,7 @@ describe("promoteTake — the decision point", () => {
 
   test("moves the whole directory into the library, keeping its own name", async () => {
     const dir = makeTempTake("2026-09-16_10-00-00");
-    const dest = await promoteTake(env, dir);
+    const dest = await promoteTake(env, null, dir);
     expect(dest).toBe(join(libRoot, "2026-09-16_10-00-00"));
     expect(existsSync(dir)).toBe(false);
     expect(existsSync(join(dest, "shot.json"))).toBe(true);
@@ -118,21 +118,21 @@ describe("promoteTake — the decision point", () => {
   test("creates the library root if this is the first promotion ever", async () => {
     rmSync(libRoot, { recursive: true, force: true });
     const dir = makeTempTake("2026-09-16_10-00-00");
-    const dest = await promoteTake(env, dir);
+    const dest = await promoteTake(env, null, dir);
     expect(existsSync(dest)).toBe(true);
   });
 
   test("a name collision in the library gets the same -2 suffix newTakeDir would give it", async () => {
     mkdirSync(join(libRoot, "2026-09-16_10-00-00"), { recursive: true });
     const dir = makeTempTake("2026-09-16_10-00-00");
-    const dest = await promoteTake(env, dir);
+    const dest = await promoteTake(env, null, dir);
     expect(dest).toBe(join(libRoot, "2026-09-16_10-00-00-2"));
   });
 
   test("a dir already outside the temp root is returned unchanged — idempotent for a caller that already promoted it", async () => {
     const already = join(libRoot, "2026-09-16_10-00-00");
     mkdirSync(already, { recursive: true });
-    expect(await promoteTake(env, already)).toBe(already);
+    expect(await promoteTake(env, null, already)).toBe(already);
     expect(existsSync(already)).toBe(true);
   });
 
@@ -140,9 +140,20 @@ describe("promoteTake — the decision point", () => {
     // Exactly the shape `supervisor.test.ts` exercises: a session directory
     // that is real but nowhere near the temp root promoteTake is watching.
     const bare = mkdtempSync(join(tmpdir(), "stc-bare-"));
-    expect(await promoteTake({}, bare)).toBe(bare);
+    expect(await promoteTake({}, null, bare)).toBe(bare);
     expect(existsSync(bare)).toBe(true);
     rmSync(bare, { recursive: true, force: true });
+  });
+
+  test("a chosen saveFolder (STC-412) wins over STC_RECORDINGS_DIR as the promotion target", async () => {
+    const chosen = join(tempRoot, "..", "chosen");
+    const dir = makeTempTake("2026-09-16_10-00-00");
+    const dest = await promoteTake(env, chosen, dir);
+    expect(dest).toBe(join(chosen, "2026-09-16_10-00-00"));
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(join(dest, "shot.json"))).toBe(true);
+    // ...and NOT the env-derived library root.
+    expect(existsSync(join(libRoot, "2026-09-16_10-00-00"))).toBe(false);
   });
 });
 

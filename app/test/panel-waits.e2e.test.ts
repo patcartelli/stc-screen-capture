@@ -133,10 +133,17 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
   const { captures = 1, extraEnv = {} } = opts;
   const { dir: recordings } = makeTakeFolder();
   const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
+  // A folder nothing is ever configured to write to — STC-412 unified
+  // `saveFolder` to govern BOTH stills and recordings (`panel:save`'s
+  // promote included), so seeding it here would divert the promoted take
+  // away from `recordings`, which is what "Save promotes" below asserts
+  // against. `saveFolder: null` leaves `STC_RECORDINGS_DIR` (`recordings`)
+  // as the resolved root, matching every other assertion in this file;
+  // `destDir` stays a place proving nothing writes where nothing was chosen.
   const destDir = mkdtempSync(join(tmpdir(), "stc-thumb-dest-"));
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   writeFileSync(join(userData, "settings.json"),
-                JSON.stringify({ still: { destination: destDir } }));
+                JSON.stringify({ saveFolder: null }));
 
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],

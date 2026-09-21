@@ -19,6 +19,21 @@ export interface SupervisorOptions extends SpawnOptions {
   /** restarts tolerated inside `restartWindowMs` before giving up */
   maxRestarts?: number;
   restartWindowMs?: number;
+  /**
+   * Where a promoted take should land (STC-412's `Settings.saveFolder`), read
+   * fresh at the moment of every promotion rather than captured once at
+   * construction — this supervisor is a long-lived singleton and the setting
+   * can change (a folder chosen mid-session) while it is still running. A
+   * function rather than a synced field for the same reason `still-io.ts`
+   * takes `SendExport` as a function: this module is deliberately
+   * Electron-free (no `app.getPath`), so it cannot read `settings.json`
+   * itself, and the alternative — main.ts keeping a mirrored field in step —
+   * is exactly the "one value, two copies" drift this codebase keeps paying
+   * for. Omitted entirely, `promoteTake` falls through to its own
+   * `STC_RECORDINGS_DIR`/`~/Desktop/stc` default, unchanged from before this
+   * option existed.
+   */
+  getSaveFolder?: () => string | null;
 }
 
 type Handler = (payload: any) => void;
@@ -121,7 +136,7 @@ export class HelperSupervisor {
   private async promote(dir: string | undefined): Promise<string | undefined> {
     if (!dir) return dir;
     try {
-      return await promoteTake(process.env, dir);
+      return await promoteTake(process.env, this.opts.getSaveFolder?.() ?? null, dir);
     } catch (e: any) {
       this.emit("recording-promote-failed", { dir, error: String(e?.message ?? e) });
       return dir;

@@ -109,8 +109,8 @@ interface Scan {
  * take that quietly vanishes from the list is indistinguishable from one that
  * was deleted.
  */
-async function scanRoot(env: NodeJS.ProcessEnv): Promise<Scan> {
-  const root = takesRoot(env);
+async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Promise<Scan> {
+  const root = takesRoot(env, saveFolder);
   let entries: string[];
   try {
     entries = await readdir(root);
@@ -241,9 +241,9 @@ async function readStill(dir: string, name: string, names: string[],
  * a demo session that produced a recording and three stills reads back in the
  * order it happened, which is the whole argument for one index.
  */
-export async function listLibrary(env: NodeJS.ProcessEnv,
+export async function listLibrary(env: NodeJS.ProcessEnv, saveFolder: string | null,
                                   filter: string = DEFAULT_LIBRARY_FILTER): Promise<LibraryList> {
-  const { takes, stills, invalid } = await scanRoot(env);
+  const { takes, stills, invalid } = await scanRoot(env, saveFolder);
   const all = [...takes.map(recordingItem), ...stills.map(stillItem)];
   all.sort((a, b) => b.id.localeCompare(a.id));
   const chosen = LIBRARY_FILTERS.some((f) => f.id === filter) ? filter : DEFAULT_LIBRARY_FILTER;
@@ -259,7 +259,7 @@ export async function listLibrary(env: NodeJS.ProcessEnv,
  * answers to "what is a take", which is exactly what the ticket's one-index
  * constraint forbids.
  */
-export async function listTakes(env: NodeJS.ProcessEnv): Promise<TakeList> {
-  const { takes, invalid } = await scanRoot(env);
+export async function listTakes(env: NodeJS.ProcessEnv, saveFolder: string | null): Promise<TakeList> {
+  const { takes, invalid } = await scanRoot(env, saveFolder);
   return { takes, invalid };
 }

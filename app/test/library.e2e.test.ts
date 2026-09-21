@@ -34,11 +34,21 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-libe2e-"));
   seed(recordings);
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+  // A folder nothing is ever configured to write to. STC-412 unified
+  // `saveFolder` to govern BOTH stills and recordings, including which root
+  // the library SCANS (`takesRoot`) — so an active `saveFolder` here would
+  // point the whole library grid at `destDir` instead of `recordings`,
+  // where `seed()` just wrote the fixture. `saveFolder: null` leaves
+  // `STC_RECORDINGS_DIR` (`recordings`) as the resolved root; `destDir`
+  // stays a place proving nothing writes where nothing was chosen (used by
+  // the "never exports on its own" test below).
   const destDir = mkdtempSync(join(tmpdir(), "stc-dest-"));
-  // Seeded on DISK: `recorder:setSettings` deliberately strips
-  // `still.destination` (STC-293 review, #92).
+  // Seeded on DISK: `recorder:setSettings` deliberately strips `saveFolder`
+  // (STC-293 review, #92 — `saveFolder` replaced `still.destination` at
+  // STC-412, and the strip moved with it: it is a plain top-level field,
+  // stripped the same generic way `share.destination` already was).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir },
+    saveFolder: null,
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],

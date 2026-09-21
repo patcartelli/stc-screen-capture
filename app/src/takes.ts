@@ -19,23 +19,24 @@ import { join, resolve, sep, basename } from "node:path";
  * separator-terminated prefix closes the sibling. The root ITSELF is refused:
  * every caller wants a take inside it, never the folder holding them all.
  */
-export function insideTakesRoot(env: NodeJS.ProcessEnv, dir: string): boolean {
+export function insideTakesRoot(env: NodeJS.ProcessEnv, saveFolder: string | null, dir: string): boolean {
   if (typeof dir !== "string" || dir.length === 0) return false;
-  const root = resolve(takesRoot(env));
+  const root = resolve(takesRoot(env, saveFolder));
   const target = resolve(dir);
   return target !== root && (target + sep).startsWith(root + sep);
 }
 
 /**
- * Where recordings live.
- *
- * Deliberately NOT os.tmpdir(): on macOS that is /var/folders/.../T, which the
- * system purges on boot and sweeps for files untouched for ~3 days. A take is
- * the thing the user made — it is a deliverable, not scratch, and must not sit
- * somewhere it can silently disappear.
+ * Where recordings live. `saveFolder` (STC-412's settings field) wins when
+ * set; otherwise the same default this always computed —
+ * env.STC_RECORDINGS_DIR, or ~/Desktop/stc. Deliberately NOT os.tmpdir(): on
+ * macOS that is /var/folders/.../T, which the system purges on boot and
+ * sweeps for files untouched for ~3 days. A take is the thing the user
+ * made — it is a deliverable, not scratch, and must not sit somewhere it
+ * can silently disappear.
  */
-export function takesRoot(env: NodeJS.ProcessEnv): string {
-  return env.STC_RECORDINGS_DIR || join(homedir(), "Desktop", "stc");
+export function takesRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): string {
+  return saveFolder || env.STC_RECORDINGS_DIR || join(homedir(), "Desktop", "stc");
 }
 
 /**
@@ -66,9 +67,9 @@ export function uniqueTakeName(base: string, existing: string[]): string {
  * one-second collision: two takes started in the same second must not share a
  * directory, or the second would overwrite the first's display.mp4.
  */
-export function newTakeDir(env: NodeJS.ProcessEnv, at: Date = new Date(),
+export function newTakeDir(env: NodeJS.ProcessEnv, saveFolder: string | null, at: Date = new Date(),
                            existing: string[] = []): string {
-  const root = takesRoot(env);
+  const root = takesRoot(env, saveFolder);
   return join(root, uniqueTakeName(stamp(at), existing));
 }
 
@@ -82,8 +83,9 @@ export const MAX_LABEL_LENGTH = 120;
  * preview, and invalidate paths already handed out for exports — so the label
  * lives beside the recording instead.
  */
-export async function setTakeLabel(env: NodeJS.ProcessEnv, dir: string, label: string): Promise<void> {
-  const root = takesRoot(env);
+export async function setTakeLabel(env: NodeJS.ProcessEnv, saveFolder: string | null,
+                                   dir: string, label: string): Promise<void> {
+  const root = takesRoot(env, saveFolder);
   if (!dir.startsWith(root)) throw new Error("refusing to label a directory outside the recordings folder");
   const trimmed = label.trim();
   if (!trimmed) throw new Error("a label cannot be empty");
@@ -125,11 +127,11 @@ const duplicating = new Set<string>();
  * what it already is, a plain node module with no dependency on the library's
  * item contract; the caller already knows the name.
  */
-export async function duplicateTake(env: NodeJS.ProcessEnv, dir: string,
+export async function duplicateTake(env: NodeJS.ProcessEnv, saveFolder: string | null, dir: string,
                                     thumbnailFile: string): Promise<string> {
-  const root = takesRoot(env);
+  const root = takesRoot(env, saveFolder);
   const existing = existsSync(root) ? await readdir(root) : [];
-  const dest = newTakeDir(env, new Date(), [...existing, ...duplicating]);
+  const dest = newTakeDir(env, saveFolder, new Date(), [...existing, ...duplicating]);
   const name = basename(dest);
   duplicating.add(name);
   try {
