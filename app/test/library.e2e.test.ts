@@ -300,11 +300,11 @@ describe("duplicate", () => {
    * entirely — there is no Close button and Escape no longer settles — so a
    * re-opened shot's panel does not close itself the way this test used to
    * check. What is left to claim, and what actually matters: `actionsFor`
-   * gives a `"library"`-origin shot only Copy and Trash (no Save — there is
+   * gives a `"library"`-origin shot Copy, Edit and Trash (no Save — there is
    * nothing left to promote), and the panel does not export or duplicate
    * anything just by being SHOWN.
    */
-  test("re-opening a shot from the library offers only Copy and Trash, and never exports on its own (STC-294/STC-392)", async () => {
+  test("re-opening a shot from the library offers Copy, Edit and Trash, and never exports on its own (STC-294/STC-392)", async () => {
     const { win, recordings, destDir } = await launch((dir) => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
@@ -317,12 +317,13 @@ describe("duplicate", () => {
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
       .toContain("in");
 
-    // Copy and Trash only — no Save, because there is nothing to promote; no
-    // Edit, because a shot never gets one (`panel-actions.ts`'s own table).
+    // Copy, Edit and Trash — no Save, because there is nothing to promote.
+    // Edit opens a still editor now (STC-300), so a re-opened shot gets it
+    // the same as a fresh one does.
     expect(await panel.isVisible("#copy")).toBe(true);
+    expect(await panel.isVisible("#edit")).toBe(true);
     expect(await panel.isVisible("#trash")).toBe(true);
     expect(await panel.isHidden("#save")).toBe(true);
-    expect(await panel.isHidden("#edit")).toBe(true);
 
     // And it stays open, undecided — nothing exported, nothing duplicated,
     // and the original untouched, just by having been shown.
