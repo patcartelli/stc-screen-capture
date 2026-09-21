@@ -51,3 +51,11 @@ inspector (padding, background, shadow controls) could be honest: a normalised
 sourcing a background image. None of those are needed for a redact-only v1, since
 `still:writeShot` already only ever touches `redactions` (and, unused by this window,
 `mode`). If a future ticket grows this editor past Redact, start there.
+
+**Moving or resizing an EXISTING box is out of scope for v1, by decision rather than
+oversight** — asked and answered on the first hardware pass (2026-09-21): drag adds a
+new box, Undo removes the last one, and that is the whole vocabulary, matching the
+original panel's own redact mode exactly (which never supported repositioning one
+either). A mis-placed box today is fixed by Undo and redrawing it, not by dragging it
+into place. Revisit if this becomes a real annoyance, the same signal that gated the
+editor's own existence.
