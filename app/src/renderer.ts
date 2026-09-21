@@ -85,6 +85,8 @@ declare const recorder: {
   on(event: string, cb: (p: any) => void): () => void;
   /** STC-375: the pill's measured content width, fire-and-forget. */
   reportPillWidth(px: number): void;
+  /** STC-412: show a warning via the toast. */
+  showToast(text: string): void;
 };
 
 import { COUNTDOWN_OPTIONS } from "./countdown.js";
@@ -438,8 +440,7 @@ document.addEventListener("keydown", (e) => {
 let currentDir: string | undefined;
 
 function setState(text: string): void { $("state").textContent = text; }
-function alertUser(text: string): void { $("alert").textContent = text; $("alert").classList.add("show"); }
-function clearAlert(): void { $("alert").classList.remove("show"); }
+function alertUser(text: string): void { recorder.showToast(text); }
 function stillStatus(text?: string): void {
   const el = $("stillstatus");
   if (!text) { el.setAttribute("hidden", ""); el.textContent = ""; return; }
@@ -494,7 +495,6 @@ async function reportStill(r: StillResult): Promise<void> {
  */
 stillBtn.addEventListener("click", async () => {
   stillBtn.disabled = true;
-  clearAlert();
   stillStatus();
   try {
     await reportStill(await recorder.captureStill("region"));
@@ -587,7 +587,6 @@ const START_FAULTS: Record<string, string> = {
 
 recordBtn.addEventListener("click", async () => {
   recordBtn.disabled = true;
-  clearAlert();
   try {
     if (!recording) {
       const r = await recorder.start();

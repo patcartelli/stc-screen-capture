@@ -53,7 +53,7 @@ import { openEditor } from "./editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
-import { showUndoToast, hideToast } from "./toast-window.js";
+import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -87,6 +87,13 @@ let sup: HelperSupervisor | undefined;
 let pillContentWidthPx = MIN_PILL_WIDTH_PX;
 ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
   if (typeof px === "number" && Number.isFinite(px) && px > 0) pillContentWidthPx = px;
+});
+ipcMain.on("toast:message", (_e, text: unknown) => {
+  if (typeof text !== "string" || !text) return;
+  showMessageToast(text, {
+    corner: readSettings(app.getPath("userData")).thumbnail.corner,
+    dist: here, rendererDir: join(here, "..", "renderer"),
+  });
 });
 /**
  * The take each WINDOW may currently read, set only by preview:open.

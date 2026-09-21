@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld("recorder", {
   // pill's width can change several times a minute (a digit added to the
   // timer). `send` rather than `invoke` is what keeps that cheap.
   reportPillWidth: (px: number) => ipcRenderer.send("pill:contentWidth", px),
+  // STC-412: main-window warnings route through the toast.
+  showToast: (text: string) => ipcRenderer.send("toast:message", text),
   // Share (STC-242) moved to the editor window with the rest of the player —
   // see `editor-preload.ts`. This window has no take open to publish.
   on: (event: string, cb: (payload: any) => void) => {
