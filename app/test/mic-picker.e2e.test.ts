@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
+import { toastText } from "./_toast.js";
 
 /**
  * The mic picker, end to end through the real app (STC-233).
@@ -171,7 +172,7 @@ describe("the mic says what it is doing", () => {
     await win.click("#record");
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
       .toContain("failed");
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no longer available");
   }, 60_000);
 
@@ -197,7 +198,7 @@ describe("the mic says what it is doing", () => {
     expect(occursBefore(seq, "Fixture USB Mic", "no frames"), `states were ${JSON.stringify(seq)}`)
       .toBe(true);
 
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no sound");
   }, 60_000);
 });

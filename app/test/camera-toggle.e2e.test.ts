@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
+import { toastText } from "./_toast.js";
 
 /**
  * The camera toggle, end to end through the real app.
@@ -218,7 +219,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     await win.click("#record");
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
       .toContain("failed");
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("picture-in-picture");
   }, 60_000);
 
@@ -259,7 +260,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     expect(occursBefore(seq, "FaceTime HD Camera", "no frames"), `states were ${JSON.stringify(seq)}`)
       .toBe(true);
 
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("not sending any frames");
   }, 60_000);
 

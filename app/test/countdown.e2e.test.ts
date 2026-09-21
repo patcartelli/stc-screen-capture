@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withCountdown } from "./_countdown-fixture.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
+import { toastPage } from "./_toast.js";
 
 /**
  * The countdown, wired through the real app (STC-391).
@@ -169,7 +170,7 @@ describe("Record always counts down", () => {
     // The ticket's requirement 1 in full: "returns to idle". A cancellation is
     // not a failure, so no alert either.
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
     // Deliberately NOT a directory count: nothing on the recording path
     // creates a take directory before the helper does (`newTempTakeDir` only
     // names one), so a count would read the same whether the cancel took or
@@ -252,7 +253,7 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     // countdown again rather than be refused for a capture that has ended.
     await win.click("#record");
     await countdownPage();
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
   }, 120_000);
 
   test("destroying the panel mid-countdown still settles, and Record works after", async () => {
@@ -285,7 +286,7 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
     await win.click("#record");
     await countdownPage();
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
   }, 120_000);
 });
 

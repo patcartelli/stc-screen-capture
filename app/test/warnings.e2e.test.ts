@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { toastPage, toastText } from "./_toast.js";
 
 /**
  * A warning the helper sends on its reliable channel reaches the user, and a
@@ -60,8 +61,8 @@ describe("a start the helper refuses (STC-315)", () => {
       STC_FAKE_START_ERROR: "event-tap-unavailable",
     });
 
-    await expect.poll(() => win.locator("#alert").isVisible(), { timeout: 10_000 }).toBe(true);
-    const alert = (await win.textContent("#alert")) ?? "";
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
+    const alert = await toastText(app!);
     // What it cost FIRST. A message that opens with the fix reads as advice
     // about the next take and lets someone assume the one they just made is
     // fine — and there is no take, which is the entire point of the ticket.
@@ -123,8 +124,8 @@ describe("helper warnings during a take", () => {
 
   test("a code the UI has no words for is still shown, by name", async () => {
     const win = await recordWithWarning("some-new-fault");
-    await expect.poll(() => win.locator("#alert").isVisible(), { timeout: 10_000 }).toBe(true);
-    expect(await win.textContent("#alert")).toContain("some-new-fault");
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
+    expect(await toastText(app!)).toContain("some-new-fault");
   }, 120_000);
 
   test("a display stream that dies ends the take, and the UI says so (STC-306)", async () => {
@@ -136,19 +137,38 @@ describe("helper warnings during a take", () => {
     // button must not go on saying "Stop" for a take that has already ended.
     await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
-    await expect.poll(() => win.locator("#alert").isVisible(), { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
     // The LAST word is the end of the take, not the tap warning that preceded
     // it, and it says what happened rather than quoting a reason code.
-    await expect.poll(() => win.textContent("#alert"), { timeout: 10_000 })
+    await expect.poll(() => toastText(app!), { timeout: 10_000 })
       .toMatch(/display capture stopped unexpectedly, so the recording was stopped/);
-    expect(await win.textContent("#alert")).toMatch(/up to that point was saved/);
-    expect(await win.textContent("#alert")).not.toMatch(/press Stop/);
+    // Captured once rather than re-read: the toast auto-dismisses on its own
+    // clock now (MESSAGE_TOAST_MS), so chaining further live reads against it
+    // would race that timer instead of asserting against the text the poll
+    // above already confirmed is showing.
+    const finalAlert = await toastText(app!);
+    expect(finalAlert).toMatch(/up to that point was saved/);
+    expect(finalAlert).not.toMatch(/press Stop/);
   }, 120_000);
 
   test("an idle display reconfiguration is not an alert", async () => {
     const win = await recordWithWarning("display-reconfigured");
     // Give it the time the others needed to appear, then require it did not.
     await new Promise((r) => setTimeout(r, 1_000));
-    expect(await win.locator("#alert").isVisible()).toBe(false);
+    expect(await toastPage(app!)).toBeUndefined();
+  }, 120_000);
+
+  // STC-412 Task 7: none of the tests above prove a toast actually goes away
+  // ON ITS OWN — each either checks it appears with the right text, or never
+  // appears at all. `recordWithWarning` already drives a real warning through
+  // the same `STC_FAKE_WARNING` channel "a code the UI has no words for..."
+  // above uses; this reuses it rather than inventing a second injection path.
+  test("the toast auto-dismisses on its own, with no click", async () => {
+    await recordWithWarning("some-new-fault");
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
+    // MESSAGE_TOAST_MS is 4_000 (toast-window.ts) — poll well past it rather
+    // than asserting at a fixed instant, so this is not a race against the
+    // exact same clock it is testing.
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 8_000 }).toBe(false);
   }, 120_000);
 });
