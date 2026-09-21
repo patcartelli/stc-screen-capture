@@ -77,6 +77,8 @@ declare const recorder: {
     Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   chooseStillDestination(): Promise<{ saveFolder: string | null }>;
+  /** The resolved save location — never null, never a phrase (STC-412 I1). */
+  resolvedSaveFolder(): Promise<string>;
   start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   pickCaptureTarget(kind: "region" | "window"):
     Promise<{ ok: boolean; cancelled?: boolean; scope?: ScopeSettingsView }>;
@@ -705,6 +707,13 @@ recorder.on("helper:recording-lost", (i) => {
  * got no confirmation it worked, no notice when it did NOT, and a PiP that
  * appeared a beat late and read as a glitch. The gap is inherent; being unable
  * to tell a working camera from a broken one was not.
+ *
+ * `#camera-state` (and `#mic-state`) live OUTSIDE `#diagnostics` in
+ * `index.html` for exactly that reason — STC-412 Task 4 put the debug table
+ * behind a preference that is off by default, and these two rows were never
+ * debug output: they are the persistent half of the pair described at
+ * `helper:warning` below, and the only thing left on screen once the warning
+ * toast has taken itself away.
  */
 function setCamera(text: string): void { $("camera-state").textContent = text; }
 
@@ -822,6 +831,11 @@ recorder.on("helper:warning", (l) => {
     // remove. "no frames" is not the same as "failed to open", and the row
     // said the device name right up until this fired. Name the state, not
     // just the code.
+    //
+    // The two halves are now more different than they were, which is why the
+    // row has to be always-visible (STC-412 final review, I2): the alert is a
+    // toast that dismisses itself, so the row is the ONLY thing that still
+    // says "this take had no camera" a minute later.
     setCamera(code === "camera-no-frames" ? "no frames" : `failed — ${code}`);
     alertUser(l.detail ? `${camera}\n\n${l.detail}` : camera);
     return;
@@ -859,8 +873,21 @@ const fmtSize = (b: number) =>
 // it does not any more. Both are read through the same `recorder:getSettings`
 // / `recorder:setSettings` every other preference in this window uses.
 
-function showDestination(dest: string | null): void {
-  $("stilldest").textContent = dest ?? "beside the shot";
+/**
+ * The save location, as a real path — always, whether or not one was ever
+ * chosen (STC-412 final review, I1).
+ *
+ * This used to be `showDestination(dest ?? "beside the shot")`, reading
+ * `saveFolder` straight off the settings and rendering null as a phrase. Both
+ * halves were wrong once STC-412 unified the setting: "beside the shot"
+ * described `still.destination`'s per-shot fallback, which no longer exists,
+ * and a null `saveFolder` is not "nowhere chosen yet" — it resolves to a real
+ * directory this process is already writing takes into. So it is asked for
+ * rather than derived: main answers with `takesRoot`'s own output, the same
+ * function that decides where the files actually go.
+ */
+async function refreshDestination(): Promise<void> {
+  $("stilldest").textContent = await recorder.resolvedSaveFolder();
 }
 
 const thumbCornerSel = $("thumbcorner") as HTMLSelectElement;
@@ -880,8 +907,7 @@ for (const { ms, label } of COUNTDOWN_OPTIONS) {
 }
 
 async function loadStillPreferences(): Promise<void> {
-  const { thumbnail, countdownMs, saveFolder, showDiagnostics } = await recorder.getSettings();
-  showDestination(saveFolder);
+  const { thumbnail, countdownMs, showDiagnostics } = await recorder.getSettings();
   thumbCornerSel.value = thumbnail.corner;
   thumbSkipBox.checked = thumbnail.skip;
   showDiagnosticsBox.checked = showDiagnostics;
@@ -891,6 +917,11 @@ async function loadStillPreferences(): Promise<void> {
   // than silently misreporting itself as 3 seconds.
   countdownSel.value = COUNTDOWN_OPTIONS.some((o) => o.ms === countdownMs)
     ? String(countdownMs) : "";
+  // LAST, and deliberately: this one is a second IPC round trip rather than a
+  // field of the settings already in hand, and the whole function is called
+  // as `void … .catch(() => {})`. Put first, a failure here would leave every
+  // control below it unset for a reason that has nothing to do with them.
+  await refreshDestination();
 }
 
 /** Every control here changes ONE field; the rest of `thumbnail` is read fresh and kept. */
@@ -900,7 +931,12 @@ async function patchThumbnail(patch: Partial<AppSettings["thumbnail"]>): Promise
 }
 
 $("stillchoosedest").addEventListener("click", async () => {
-  showDestination((await recorder.chooseStillDestination()).saveFolder);
+  // The picker's own reply is deliberately not what is displayed: a cancel
+  // answers with the CURRENT `saveFolder`, which is null on an untouched
+  // install, and re-deriving a path from that here is the second computation
+  // of the default `refreshDestination` exists to avoid.
+  await recorder.chooseStillDestination();
+  await refreshDestination();
 });
 thumbCornerSel.addEventListener("change", () => {
   void patchThumbnail({ corner: thumbCornerSel.value as AppSettings["thumbnail"]["corner"] });

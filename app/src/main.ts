@@ -662,6 +662,25 @@ ipcMain.handle("recorder:getSettings", async (): Promise<Settings> =>
   readSettings(app.getPath("userData")));
 
 /**
+ * Where recordings and shots ACTUALLY land right now — the settings' own
+ * `saveFolder` when one has been chosen, and otherwise the resolved default
+ * (`STC_RECORDINGS_DIR`, or ~/Desktop/stc).
+ *
+ * A separate channel rather than a field on `recorder:getSettings`, because
+ * it is not a setting: it is `takesRoot`'s answer, and the whole point is
+ * that the renderer does not compute it. `recorder:getSettings` hands back a
+ * `saveFolder` of null for "not chosen yet", and the preferences row used to
+ * render that null as the words "beside the shot" — which described
+ * `still.destination`'s old per-shot fallback and has been wrong since
+ * STC-412 unified the two: an unset `saveFolder` is not "no location", it is
+ * a real folder the app is already writing to. Answering with `takesRoot`'s
+ * own output is what keeps the string on screen and the directory on disk
+ * from being two independent derivations of one default.
+ */
+ipcMain.handle("recorder:resolvedSaveFolder", async (): Promise<string> =>
+  takesRoot(process.env, readSettings(app.getPath("userData")).saveFolder));
+
+/**
  * The renderer's own preferences, minus the ones it may not name.
  *
  * `saveFolder` is main's alone (STC-412, replacing `still.destination`): it

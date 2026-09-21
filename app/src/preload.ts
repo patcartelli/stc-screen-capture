@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld("recorder", {
   // frame grab goes through `still:export` like everything else now.
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   chooseStillDestination: () => ipcRenderer.invoke("still:chooseDestination"),
+  // Where recordings and shots actually land, resolved (STC-412 final
+  // review, I1). Not derivable on this side: an unset `saveFolder` falls
+  // through to `STC_RECORDINGS_DIR`/~/Desktop/stc inside `takes.ts`, and the
+  // renderer has neither the env nor a home directory to name.
+  resolvedSaveFolder: () => ipcRenderer.invoke("recorder:resolvedSaveFolder"),
   // The library (STC-294): one index over both kinds. The renderer asks for a
   // filtered list and is handed items it renders without knowing what kinds
   // exist — the filtering happens on this side of the bridge for exactly that
