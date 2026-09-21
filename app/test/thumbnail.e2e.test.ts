@@ -4,18 +4,36 @@ import { mkdtempSync, existsSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount, hasWindow, windowUrls } from "./_windows.js";
+import { PANEL_SIZE, REDACT_SIZE } from "../src/thumbnail.js";
 
 /**
- * The post-capture floating thumbnail, end to end (STC-296).
+ * The post-capture floating thumbnail, end to end (STC-296, reworked by
+ * STC-392).
  *
- * The panel's own STATE — showing, expanded, expired — is decided by a pure
- * function and checked with no window at all in `thumbnail.test.ts`. What
- * this file exists for is the wiring that cannot see: that a capture really
- * puts a separate `BrowserWindow` on screen, that clicking it really expands
- * that window rather than just a DOM class, that ignoring it really writes a
- * file (the ticket's own acceptance criterion — "there is no path where a
- * capture is silently lost"), and that a showing panel really gets excluded
- * from the NEXT capture's request.
+ * The panel's own STATE — `idle` or `open` — is decided by a pure function
+ * and checked with no window at all in `thumbnail.test.ts`. What this file
+ * exists for is the wiring that cannot see: that a capture really puts a
+ * separate `BrowserWindow` on screen with the right buttons for its take,
+ * that clicking Save/Copy/Trash really calls through to the right handler
+ * and really destroys the window when the action is one that closes it, and
+ * that a showing panel really gets excluded from the NEXT capture's request.
+ * What ignoring the panel does is `panel-waits.e2e.test.ts`'s claim now —
+ * "there is no path where a capture is silently lost" is still the promise,
+ * kept by the panel staying put rather than by a timeout writing a file
+ * nobody asked for.
+ *
+ * Also here (STC-426): that the real WINDOW RECTANGLES of several stacked
+ * previews never overlap, and reflow correctly when one grows into Redact or
+ * closes — `thumbnail.test.ts`'s `stackLayout` tests prove the arithmetic
+ * with no window at all; this is the same claim about real `BrowserWindow`s.
+ *
+ * NOT covered here since STC-392: there is no collapsed/expanded window size
+ * any more (`thumbnail-window.ts`'s window is fixed at `PANEL_SIZE`) and no
+ * `#card` click to get from one to the other — every control this take has
+ * is on the card from the moment it paints, so there is nothing left to
+ * "expand" into.
  *
  * `export-still` is faked here the same way `capture-still` already is: the
  * bytes are never inspected, only that the file the app asked for exists and
@@ -33,15 +51,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 interface Launched {
   win: Page;
   recordings: string;
+  temp: string;
   destDir: string;
   stillLog: string;
 }
 
-/** A short timeout so the "ignore it" tests do not cost the suite minutes — the floor is 3 s. */
-const TEST_TIMEOUT_MS = 3000;
-
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
+  const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
   const destDir = mkdtempSync(join(tmpdir(), "stc-thumb-dest-"));
   const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
@@ -49,22 +66,22 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   // That channel deliberately strips `still.destination` (STC-293 review,
   // #92): a renderer may not choose where main writes, precisely the thing an
   // E2E test setting up its own fixture would otherwise look like. A real
-  // destination (not "beside the shot") makes a settled export easy to find,
-  // and a short timeout keeps the ignore-it path from costing minutes.
+  // destination (not "beside the shot") makes a settled export easy to find.
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir }, thumbnail: { timeoutMs: 3000 },
+    still: { destination: destDir },
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
+      ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp, STC_HELPER_BIN: FAKE_HELPER,
       STC_FAKE_STILL_LOG: stillLog, STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
-  return { win, recordings, destDir, stillLog };
+  return { win, recordings, temp, destDir, stillLog };
 }
 
 /** The floating panel, once it is up. Identified by its URL, like the overlay's own helper. */
@@ -82,9 +99,38 @@ async function thumbnailWindow(ms = 15_000): Promise<Page> {
 
 async function noThumbnailWindow(ms = 15_000): Promise<void> {
   await expect.poll(
-    () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+    () => windowCount(app!, "thumbnail.html"),
     { timeout: ms },
   ).toBe(0);
+}
+
+/**
+ * Every real thumbnail `BrowserWindow` currently VISIBLE, read from the main
+ * process (STC-426) — the layout claim is about the windows themselves, not
+ * about whatever Playwright's own window list happens to have attached a
+ * driveable Page to yet (STC-416).
+ */
+function visibleThumbnailBounds(): Promise<{ x: number; y: number; width: number; height: number }[]> {
+  return app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+    .filter((w) => w.webContents.getURL().includes("thumbnail.html") && w.isVisible())
+    .map((w) => w.getBounds()));
+}
+
+/**
+ * Waits until exactly `count` visible thumbnail windows exist and none of
+ * them overlap (STC-426). Defined once at module scope, like
+ * `thumbnailWindow`/`noThumbnailWindow` above, rather than per-test — a
+ * helper redefined inside a test body counts its own inner `expect.poll`
+ * bound once per call site in `timeout-budget.test.ts`'s static scan, and
+ * this one is meant to be called several times in the same test.
+ */
+async function nonOverlappingThumbnails(count: number, ms = 15_000): Promise<void> {
+  await expect.poll(async () => {
+    const all = await visibleThumbnailBounds();
+    return all.length === count && all.every((a, i) => all.slice(i + 1).every((b) =>
+      a.x + a.width <= b.x || b.x + b.width <= a.x ||
+      a.y + a.height <= b.y || b.y + b.height <= a.y));
+  }, { timeout: ms }).toBe(true);
 }
 
 const readRequests = (log: string): any[] =>
@@ -97,8 +143,13 @@ async function captureDisplay(win: Page): Promise<any> {
   return win.evaluate(() => (window as any).recorder.captureStill("display"));
 }
 
+/** Live take directories under `recordings`, excluding the fixture `makeTakeFolder` seeds. */
+function ownTakes(recordings: string): string[] {
+  return readdirSync(recordings).filter((n) => !n.startsWith(".") && n !== "2026-08-24_10-00-00");
+}
+
 describe("the post-capture floating thumbnail", () => {
-  test("a capture puts a separate, painted panel on screen", async () => {
+  test("a capture puts a separate, painted panel on screen showing its own actions", async () => {
     const { win } = await launch();
     const r = await captureDisplay(win);
     expect(r.ok).toBe(true);
@@ -106,29 +157,20 @@ describe("the post-capture floating thumbnail", () => {
     const panel = await thumbnailWindow();
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
       .toContain("in");
-    // Not the expanded panel yet — nobody has clicked it.
-    expect(await panel.evaluate(() => document.getElementById("card")!.className)).not.toContain("expanded");
+    // A fresh SHOT: copy, save and trash, and no edit — `panel-actions.ts`'s
+    // own table, drawn onto the DOM (`actionsFor`).
+    expect(await panel.isVisible("#copy")).toBe(true);
+    expect(await panel.isVisible("#save")).toBe(true);
+    expect(await panel.isVisible("#trash")).toBe(true);
+    expect(await panel.isHidden("#edit")).toBe(true);
   }, 60_000);
 
-  test("clicking it expands into the mode picker, redact, copy and save", async () => {
-    const { win } = await launch();
+  test("Save promotes the take into the library and closes the panel — it writes no destination-folder file", async () => {
+    const { win, recordings, destDir } = await launch();
     await captureDisplay(win);
     const panel = await thumbnailWindow();
-    await panel.click("#card");
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
-      .toContain("expanded");
-    // Redact was a disabled stub through STC-296 and is live as of STC-297.
-    expect(await panel.isDisabled("#redact")).toBe(false);
-    expect(await panel.isVisible("#mode")).toBe(true);
-  }, 60_000);
-
-  test("Save in the expanded panel writes the decorated file and closes the panel", async () => {
-    const { win, destDir } = await launch();
-    await captureDisplay(win);
-    const panel = await thumbnailWindow();
-    await panel.click("#card");
-    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
-      .toContain("expanded");
+      .toContain("in");
 
     // Not a status-text poll: a successful Save sends "done" moments after
     // setting its own confirmation text, and main destroys the window on
@@ -137,41 +179,37 @@ describe("the post-capture floating thumbnail", () => {
     // window closing IS the confirmation this path is being tested for.
     await panel.click("#save");
     await noThumbnailWindow(15_000);
-    expect(readdirSync(destDir).length).toBe(1);
+    // `panel:save` PROMOTES the take (STC-393's `promoteTake`) — it does not
+    // call `still:export`, so the configured destination folder stays empty.
+    // The library IS the destination now; a separate copy there is
+    // `still:export`'s job (Copy, Save As), not Save's.
+    expect(ownTakes(recordings).length).toBe(1);
+    expect(readdirSync(destDir).length).toBe(0);
   }, 60_000);
 
-  test("ignoring it still saves — nothing is lost by doing nothing", async () => {
-    const { win, destDir } = await launch();
-    await captureDisplay(win);
-    await thumbnailWindow();
-    // No click at all: the timeout is the only thing that can end this.
-    await noThumbnailWindow(TEST_TIMEOUT_MS + 10_000);
-    expect(readdirSync(destDir).length).toBe(1);
-  }, 60_000);
+  // "Ignoring it still saves" (the old contract) is now
+  // `panel-waits.e2e.test.ts`'s "left alone, the panel is still there and the
+  // take is still in temp" — a different claim about the same pixels, so it
+  // lives in its own file rather than being loosened here (STC-392).
 
-  test("Copy does not close the panel — Save and Close both do", async () => {
-    const { win } = await launch();
+  test("Copy does not close the panel — Save and Trash both do", async () => {
+    const { win, recordings } = await launch();
     await captureDisplay(win);
     const panel = await thumbnailWindow();
-    await panel.click("#card");
     await panel.click("#copy");
     await expect.poll(() => panel.textContent("#status"), { timeout: 15_000 }).toMatch(/^Copied/);
     // Still here — a quick share should not cost the chance to also Save.
-    expect(app!.windows().some((p) => p.url().includes("thumbnail.html"))).toBe(true);
+    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
+    // And Copy never promoted it (STC-392's D5) — the take the Trash below
+    // removes is still the one in temp, not a copy already in the library.
+    expect(ownTakes(recordings).length).toBe(0);
 
-    await panel.click("#close");
+    await panel.click("#trash");
     await noThumbnailWindow();
   }, 60_000);
 
   test("a second capture STACKS rather than replacing — both panels stay", async () => {
     const { win } = await launch();
-    // A long timeout, so no panel's own clock can settle anything inside this
-    // test: what is under test is what a second capture does to the first
-    // panel, and a settle firing meanwhile would make the count depend on how
-    // long assembling two windows happened to take.
-    await win.evaluate(async () => {
-      await (window as any).recorder.setSettings({ thumbnail: { timeoutMs: 60_000 } });
-    });
     await captureDisplay(win);
     const firstUrl = (await thumbnailWindow()).url();
 
@@ -182,62 +220,60 @@ describe("the post-capture floating thumbnail", () => {
     // REPLACED the first and this test required exactly one window. The
     // change is the feature, so the test states the new contract rather than
     // being relaxed to tolerate it.
-    await expect.poll(() => {
-      const urls = app!.windows().map((p) => p.url()).filter((u) => u.includes("thumbnail.html"));
+    await expect.poll(async () => {
+      const urls = (await windowUrls(app!)).filter((u) => u.includes("thumbnail.html"));
       return urls.length === 2 && urls.includes(firstUrl);
     }, { timeout: 15_000 }).toBe(true);
   }, 60_000);
 
-  test("previews do not overlap when expanded, redacted, or removed (STC-426)", async () => {
+  test("previews use their full height, gapped and non-overlapping, and reflow on redact or close (STC-426)", async () => {
     const { win } = await launch();
-    await win.evaluate(() => (window as any).recorder.setSettings({ thumbnail: { timeoutMs: 60_000 } }));
     for (let i = 0; i < 3; i++) await captureDisplay(win);
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length).toBe(3);
-    const bounds = () => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
-      .filter((w) => w.webContents.getURL().includes("thumbnail.html") && w.isVisible())
-      .map((w) => w.getBounds()));
-    const separated = async (count: number) => {
-      await expect.poll(async () => {
-        const all = await bounds();
-        return all.length === count && all.every((a, i) => all.slice(i + 1).every((b) =>
-          a.x + a.width <= b.x || b.x + b.width <= a.x ||
-          a.y + a.height <= b.y || b.y + b.height <= a.y));
-      }).toBe(true);
-    };
-    await separated(3);
-    const panel = await thumbnailWindow();
-    await panel.click("#card");
-    await expect.poll(async () => (await bounds()).some((b) => b.height === 260)).toBe(true);
-    await separated(3);
+    // Three captures with `MAX_STACKED` at 3: all three fit, each at its own
+    // full height rather than the old fixed-offset overlap.
+    await nonOverlappingThumbnails(3);
+
+    const panel = app!.windows().find((p) => p.url().includes("thumbnail.html"))!;
     await panel.click("#redact");
-    await expect.poll(async () => (await bounds()).some((b) => b.height === 420)).toBe(true);
-    await separated(3);
-    // Closing a real window removes its slot, even without a renderer event.
+    await expect.poll(async () => (await visibleThumbnailBounds()).some((b) => b.height === REDACT_SIZE.height),
+                       { timeout: 15_000 }).toBe(true);
+    // Growing one panel into REDACT_SIZE must push its neighbours to make
+    // room, not just grow over them.
+    await nonOverlappingThumbnails(3);
+
+    await panel.click("#redact");
+    await expect.poll(async () => (await visibleThumbnailBounds()).every((b) => b.height === PANEL_SIZE.height),
+                       { timeout: 15_000 }).toBe(true);
+    await nonOverlappingThumbnails(3);
+
+    // Closing a real window removes its slot, even without going through the
+    // renderer's own "done" event — `leaveStack`'s `"closed"` handler is what
+    // this exercises.
     await app!.evaluate(({ BrowserWindow }, url) => {
       BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === url)!.destroy();
     }, panel.url());
-    await separated(2);
+    await nonOverlappingThumbnails(2);
   }, 60_000);
 
-  test("every stacked capture still settles — nothing is lost by doing nothing", async () => {
+  test("every stacked capture still WAITS — nothing is lost by doing nothing (STC-392)", async () => {
     const { win, destDir } = await launch();
-    // The floor (3 s), so both panels settle on their OWN timers inside this
-    // test. That is the point: with stacking, nothing settles the first panel
-    // on the second's behalf any more, so "the outgoing shot is not lost"
-    // stopped being a property of replacement and became a property of each
-    // panel keeping its own clock. If per-session timers were ever replaced by
-    // one central drain, this is the test that would notice.
-    await win.evaluate(async () => {
-      await (window as any).recorder.setSettings({ thumbnail: { timeoutMs: 3_000 } });
-    });
+    // Re-anchored for STC-392: with the clock gone, "nothing is lost" is no
+    // longer a property of every panel settling on its own timer — it is a
+    // property of every panel still being there, undecided, with its shot
+    // still in temp storage. Two panels rather than `panel-waits.e2e.test.ts`'s
+    // one, because that is what stacking adds: nothing here settles the FIRST
+    // panel on the second's behalf, the same as before, just for a different
+    // reason (there is no settling at all).
     await captureDisplay(win);
     const r2 = await captureDisplay(win);
     expect(r2.ok).toBe(true);
 
-    // TWO files, one per capture — the ticket's "five captures in five seconds
-    // produce five recoverable shots", at the smallest size that can fail.
-    await expect.poll(() => readdirSync(destDir).length, { timeout: 20_000 }).toBe(2);
-    await noThumbnailWindow();
+    await expect.poll(() => {
+      return windowCount(app!, "thumbnail.html");
+    }, { timeout: 15_000 }).toBe(2);
+
+    // Nothing exported for either capture.
+    expect(readdirSync(destDir).length).toBe(0);
   }, 60_000);
 
   test("a showing panel is excluded from the next capture's request, when an id resolves", async () => {
@@ -263,8 +299,8 @@ describe("the post-capture floating thumbnail", () => {
     }
   }, 60_000);
 
-  test("the skip preference bypasses the panel entirely and copies rather than saves", async () => {
-    const { win, destDir, stillLog } = await launch();
+  test("the skip preference bypasses the panel entirely, copies, AND promotes", async () => {
+    const { win, recordings, temp, destDir, stillLog } = await launch();
     await win.evaluate(async () => {
       await (window as any).recorder.setSettings({ thumbnail: { skip: true } });
     });
@@ -282,8 +318,15 @@ describe("the post-capture floating thumbnail", () => {
     // the background — see thumbnail-window.ts's `silent` mode — so what is
     // checkable now is that it does not OUTLAST its own export.
     await noThumbnailWindow(15_000);
-    // The ticket's own words are "go straight to clipboard" — never the file
-    // destination, whatever the (otherwise inapplicable) settle-action says.
+    // The ticket's own words are "go straight to clipboard" — never the
+    // destination folder. `skip` has no panel, so it can never reach a Save
+    // button; the ONLY way a skip capture avoids the 7-day temp purge is if
+    // the silent path promotes it itself, through `panel:save`, after a
+    // successful copy (see `thumbnail-renderer.ts`'s silent branch). So it
+    // DOES land in the library, unlike a plain Copy from a shown panel, which
+    // deliberately still does not promote (`panel-waits.e2e.test.ts`).
+    await expect.poll(() => readdirSync(temp).length, { timeout: 15_000 }).toBe(0);
+    expect(ownTakes(recordings).length).toBe(1);
     expect(readdirSync(destDir).length).toBe(0);
     const exported = readRequests(stillLog).find((x) => x.rgba !== undefined);
     expect(exported?.clipboard).toBe(true);

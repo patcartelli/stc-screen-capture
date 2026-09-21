@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount, hasWindow } from "./_windows.js";
 
 /**
  * The selection overlay, end to end (STC-290).
@@ -32,11 +34,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 interface Launched {
   win: Page;
   recordings: string;
+  tempTakes: string;
   stillLog: string;
 }
 
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
+  const tempTakes = mkdtempSync(join(tmpdir(), "stc-temp-"));
   const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
   app = await electron.launch({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
@@ -44,12 +48,13 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
     // The overlay must not take input from the window server while this suite
     // is injecting its own: a real pointermove landing mid-gesture rewrites the
     // marquee, which is what made this file flaky on master. See overlay.ts.
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes, STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_STILL_LOG: stillLog, STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
-  return { win, recordings, stillLog };
+  return { win, recordings, tempTakes, stillLog };
 }
 
 /** The primary display's bounds, read from the main process rather than assumed. */
@@ -122,8 +127,7 @@ const readRequests = (log: string): any[] =>
 
 describe("the selection overlay", () => {
   test("a region drag becomes a capture-still request and a shot on disk", async () => {
-    const { win, recordings, stillLog } = await launch();
-    const before = readdirSync(recordings).length;
+    const { win, tempTakes, stillLog } = await launch();
 
     await win.click("#capturestill");
     const overlay = await overlayWindow();
@@ -142,15 +146,17 @@ describe("the selection overlay", () => {
       .toMatch(/^Shot area/);
 
     // The overlay is gone, not merely hidden behind the main window.
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 10_000 }).toBe(0);
 
     // Exactly one new directory, holding a shot the real loader accepts. The
-    // shot lands in temp storage first and only reaches the library once the
-    // floating panel settles (STC-393).
-    await expect.poll(() => readdirSync(recordings).length, { timeout: 15_000 }).toBe(before + 1);
-    const dirs = readdirSync(recordings);
-    const shotDir = join(recordings, dirs.find((d) => !d.startsWith("2026-08-24"))!);
+    // shot lands in TEMP storage (STC-393) and STAYS there — nothing promotes
+    // it to the library any more (STC-392: the panel never decides on its
+    // own), so this reads temp storage directly rather than polling the
+    // library for a promotion that will not happen.
+    await expect.poll(() => readdirSync(tempTakes).length, { timeout: 15_000 }).toBe(1);
+    const dirs = readdirSync(tempTakes);
+    const shotDir = join(tempTakes, dirs[0]!);
     expect(existsSync(join(shotDir, "frame.png"))).toBe(true);
     const shot = parseShot(JSON.parse(readFileSync(join(shotDir, "shot.json"), "utf8")));
     expect(shot.kind).toBe("display-crop");
@@ -179,7 +185,7 @@ describe("the selection overlay", () => {
     await awaitConfirmable(overlay);
     await send(overlay, { t: "key", key: "Escape" });
 
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 10_000 }).toBe(0);
     // Nothing captured, nothing written, and no status claimed.
     expect(readdirSync(recordings)).toEqual(before);
@@ -188,7 +194,7 @@ describe("the selection overlay", () => {
   }, 120_000);
 
   test("window mode hands over a window id, not a crop", async () => {
-    const { win, recordings, stillLog } = await launch();
+    const { win, tempTakes, stillLog } = await launch();
     await win.click("#capturestill");
     const overlay = await overlayWindow();
 
@@ -205,14 +211,14 @@ describe("the selection overlay", () => {
     expect(req.windowId).toBe(4711);
     expect(req.crop).toBeUndefined();
 
-    // Lands in temp storage first, promoted to the library once the panel
-    // settles (STC-393).
+    // Lands in TEMP storage (STC-393) and stays there — nothing promotes it
+    // to the library any more (STC-392).
     await expect.poll(
-      () => readdirSync(recordings).filter((d) => !d.startsWith("2026-08-24")).length,
+      () => readdirSync(tempTakes).length,
       { timeout: 15_000 },
     ).toBe(1);
-    const dirs = readdirSync(recordings).filter((d) => !d.startsWith("2026-08-24"));
-    const shot = parseShot(JSON.parse(readFileSync(join(recordings, dirs[0]!, "shot.json"), "utf8")));
+    const dirs = readdirSync(tempTakes);
+    const shot = parseShot(JSON.parse(readFileSync(join(tempTakes, dirs[0]!, "shot.json"), "utf8")));
     expect(shot.kind).toBe("window");
     expect(shot.window?.id).toBe(4711);
   }, 120_000);
@@ -239,7 +245,7 @@ describe("the selection overlay", () => {
     await sleep(300);
     expect(readRequests(stillLog)).toEqual([]);
     expect(readdirSync(recordings).length).toBe(before);
-    expect(app!.windows().some((p) => p.url().includes("overlay.html"))).toBe(true);
+    expect(await hasWindow(app!, "overlay.html")).toBe(true);
 
     // The overlay stays usable: a fully-visible window still captures normally.
     await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
@@ -274,7 +280,7 @@ describe("the selection overlay", () => {
     await win.click("#capturestill");
     const overlay = await overlayWindow();
     await send(overlay, { t: "key", key: "Escape" });
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 10_000 }).toBe(0);
   }, 120_000);
 });

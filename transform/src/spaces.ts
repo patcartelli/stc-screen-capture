@@ -66,7 +66,13 @@
  * **output pixels** — the exported canvas or the decorated still's canvas,
  * origin top-left. The capture is not necessarily drawn at the canvas origin:
  * a decorated still centres it inside padding, so a capture pixel becomes an
- * output pixel by adding the CONTENT rect's origin.
+ * output pixel by adding the CONTENT rect's origin. Nor is the WHOLE capture
+ * necessarily drawn: under an active zoom the compositor draws only
+ * `zoom.crop` of it, scaled to the whole canvas, so an output pixel computed
+ * as if the capture filled the canvas (`displayToOutput`) is one more step
+ * away from where the picture actually is — `throughCrop`, below. Anything
+ * drawn IN the picture (the cursor) takes that step; anything drawn ON the
+ * canvas (the PiP) does not. STC-421 was the cursor skipping it.
  *
  * **UV** — normalised 0..1 over a stated reference rect, origin at that
  * rect's top-left. The only space that survives a change of crop, padding or
@@ -243,6 +249,46 @@ export function lerpRect(a: Rect, b: Rect, t: number): Rect {
     width: a.width + (b.width - a.width) * t,
     height: a.height + (b.height - a.height) * t,
   };
+}
+
+/**
+ * A point in output pixels, computed as if the whole capture filled the
+ * canvas, re-placed for a canvas that shows only `crop` of it (STC-421).
+ *
+ * `crop` is UV over the capture — `zoom.crop` — and `ref` the canvas rect
+ * the capture would fill uncropped (`outputRect(project.output)`). The
+ * compositor draws exactly `crop` stretched over `ref`, so a point's UV over
+ * the CROP is its UV over the canvas: this is `pixelsToUv` against the crop's
+ * own pixel rect followed by `uvToPixels` against the canvas, and nothing
+ * else — no clamping. A point outside the crop lands outside the canvas,
+ * which is the truth (the pointer is off the visible picture) and is what
+ * the compositor's existing "visible" test is for.
+ *
+ * With `crop` the whole frame the arithmetic is the identity only to within
+ * floating point — `(p / w) * w` is not bit-exactly `p` in IEEE — so that
+ * case returns `p` untouched. Not an optimisation: it is what keeps "zoom
+ * off changes no pixels" true BY CONSTRUCTION, the same reason the
+ * compositor takes the five-argument `drawImage` for a whole-frame crop
+ * rather than trusting the nine-argument one to be equivalent.
+ */
+export function throughCrop(p: Point, crop: Rect, ref: Rect): Point {
+  if (isWholeFrame(crop)) return p;
+  return uvToPixels(pixelsToUv(p, uvRectToPixels(crop, ref)), ref);
+}
+
+/** A UV rect that is exactly the whole reference — the crop of a take with no zoom in effect. */
+export function isWholeFrame(r: Rect): boolean {
+  return r.x === 0 && r.y === 0 && r.width === 1 && r.height === 1;
+}
+
+/**
+ * The `throughCrop` of a DIFFERENCE of two points — a velocity, a size.
+ * Scales by the crop's magnification and does not translate, for the same
+ * reason `mapVector` exists beside `mapPoint`.
+ */
+export function throughCropVector(v: Point, crop: Rect): Point {
+  if (isWholeFrame(crop)) return v;
+  return { x: v.x / crop.width, y: v.y / crop.height };
 }
 
 /** A global point in display-local points: the same units, the display's origin. */

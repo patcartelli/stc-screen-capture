@@ -1,16 +1,33 @@
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
 
 const root = join(__dirname, "..", "..");
 
-/** Launch the app against a recordings root, and wait for the library to list something. */
+/**
+ * Launch the app against a recordings root, and wait for the library to list
+ * something.
+ *
+ * STC-403: this used to launch with no `--user-data-dir`, so the app loaded
+ * the DEVELOPER's real `~/Library/Application Support/Capture/settings.json`
+ * — on a machine with a still destination set, every editor E2E through this
+ * fixture wrote real PNGs to the real Desktop and then failed asserting on a
+ * file that landed somewhere else entirely. Isolated now, the same way every
+ * other fixture in this repo already is. `still.destination` is seeded to
+ * `null` explicitly rather than left to an empty settings file, so "beside
+ * the take" is the ASSERTED default these tests rely on, not an accident of
+ * what a fresh profile happens to produce.
+ */
 export async function launchApp(dir: string, env: Record<string, string> = {}):
     Promise<{ app: ElectronApplication; win: Page }> {
+  const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+  writeFileSync(join(userData, "settings.json"), JSON.stringify({
+    still: { destination: null },
+  }));
   const app = await electron.launch({
-    args: [root], cwd: root,
+    args: [root, `--user-data-dir=${userData}`], cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: dir,
       // Isolated the same way the library root is (STC-393): without this,
@@ -192,4 +209,25 @@ export async function dragOnStage(
   await win.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2);
   await win.mouse.move(b.x, b.y);
   await win.mouse.up();
+}
+
+/**
+ * Press Done in the override editor and wait until the editor has actually
+ * LEFT edit mode (STC-427).
+ *
+ * `closeOverrideEditor` (editor.ts) awaits the project write and only THEN
+ * runs `resetEditingState` + `updateManualDraftBlock`, which hide
+ * `#overridebar` and strip `zoomblock selected` off the static `#manualdraft`
+ * in one synchronous run. Every test that polled `project.json` for the
+ * committed override and then clicked `.zoomblock` again was polling a SIDE
+ * EFFECT that lands before the UI follows it: on a loaded CI runner the
+ * next click's locator snapshot caught `#manualdraft` still carrying the
+ * class, mid-hide, and waited 30 s for it to become visible (runs
+ * 35451943868 and 35452722657, two files, the same
+ * `locator resolved to <div id="manualdraft" class="zoomblock selected">`).
+ * `#overridebar` hidden is the signal the next click actually depends on.
+ */
+export async function pressOverrideDone(page: Page, timeout = 10_000): Promise<void> {
+  await page.click("#overridedone");
+  await page.waitForSelector("#overridebar", { state: "hidden", timeout });
 }

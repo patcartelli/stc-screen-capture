@@ -81,7 +81,7 @@ export const MIN_PILL_WIDTH_PX = 96;
 /**
  * A measured content width is trusted only as far as it is a finite,
  * positive number — the same "clamp a fed-in number, never trust it blind"
- * rule `clampTimeoutMs` follows in `thumbnail.ts`. A failed measurement (a
+ * rule `clampCountdownMs` follows in `countdown.ts`. A failed measurement (a
  * NaN from an empty string, a negative from a stale layout) must not
  * produce a window with zero or negative width; it floors at
  * `MIN_PILL_WIDTH_PX` instead of propagating the garbage into `setSize`.

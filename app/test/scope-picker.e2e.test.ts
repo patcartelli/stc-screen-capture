@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { windowCount } from "./_windows.js";
 
 /**
  * The main window's capture scope (STC-370's region/window capability, wired
@@ -120,7 +121,7 @@ describe("the scope picker", () => {
     await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
     await send(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
 
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 15_000 }).toBe(0);
     await expect.poll(() => win.textContent("#window-source-label"), { timeout: 10_000 })
       .toBe("Finder — Downloads");
@@ -152,7 +153,7 @@ describe("the scope picker", () => {
     await awaitConfirmable(overlay);
     await send(overlay, { t: "key", key: "Enter" });
 
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 15_000 }).toBe(0);
     await expect.poll(() => win.textContent("#region-source-label"), { timeout: 10_000 })
       .toBe("200 × 100");
@@ -173,7 +174,7 @@ describe("the scope picker", () => {
     const overlay = await overlayWindow();
     await send(overlay, { t: "key", key: "Escape" });
 
-    await expect.poll(() => app!.windows().filter((p) => p.url().includes("overlay.html")).length,
+    await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 15_000 }).toBe(0);
     expect(await win.textContent("#window-source-label")).toBe("No window chosen");
     expect(await win.isDisabled("#record")).toBe(true);

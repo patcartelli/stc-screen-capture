@@ -72,8 +72,10 @@ async function launchWithTake() {
   // same path; on its first CI run Electron went software, Chrome went GPU, and
   // it failed with exactly those two hashes. Software is the pin because it is
   // the backend both environments can always provide.
+  // STC-403: isolated from the developer's real settings too, same as every
+  // other fixture — this used to load the real ~/Library/.../settings.json.
   app = await electron.launch({
-    args: [root, ...SOFTWARE_RENDER_ARGS], cwd: root,
+    args: [root, ...SOFTWARE_RENDER_ARGS, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: dir,
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),

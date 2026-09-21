@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, existsSync, readdirSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
+import { windowCount } from "./_windows.js";
 
 /**
  * Crash recovery, end to end (STC-393 requirement 3).
@@ -106,7 +107,7 @@ describe("crash recovery (STC-393)", () => {
     const { calls } = await launch(s, 0);   // 0 = "Review"
     await expect.poll(() => calls(), { timeout: 15_000 }).toBe(1);
     await expect.poll(
-      () => app!.windows().filter((p) => p.url().includes("thumbnail.html")).length,
+      () => windowCount(app!, "thumbnail.html"),
       { timeout: 15_000 },
     ).toBe(1);
     // Still sitting in temp — the panel is open, not yet settled.

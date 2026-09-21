@@ -17,7 +17,7 @@
   },
   "include": ["transform/src/**/*.ts", "harness/**/*.ts", "app/src/renderer.ts", "app/src/overlay.ts",
               "app/src/thumbnail-renderer.ts", "app/src/editor.ts",
-              "app/src/countdown-renderer.ts"],
+              "app/src/countdown-renderer.ts", "app/src/toast-renderer.ts"],
   // vite's own config is node — it belongs to the node pass.
   "exclude": ["harness/vite.config.ts"]
 }
