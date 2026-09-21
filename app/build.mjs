@@ -29,4 +29,8 @@ await build({ ...common, entryPoints: ["app/src/countdown-renderer.ts"], outfile
 // the same reason every other floating surface above is separate.
 await build({ ...common, entryPoints: ["app/src/toast-preload.ts"], outfile: "app/dist/toast-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/toast-renderer.ts"], outfile: "app/dist/toast-renderer.js", format: "iife", platform: "browser" });
+// The still editor (STC-300) — its own window, its own narrowest bridge, the
+// same reason every other floating surface above is separate.
+await build({ ...common, entryPoints: ["app/src/still-editor-preload.ts"], outfile: "app/dist/still-editor-preload.cjs", format: "cjs" });
+await build({ ...common, entryPoints: ["app/src/still-editor-renderer.ts"], outfile: "app/dist/still-editor-renderer.js", format: "iife", platform: "browser" });
 console.log("app built -> app/dist/");

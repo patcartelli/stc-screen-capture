@@ -213,38 +213,39 @@ describe("the panel waits (STC-392)", () => {
     expect(await hasWindow(electronApp, "thumbnail.html")).toBe(true);
   }, 40_000);
 
-  test("the Style picker and Redact are disabled while Copy is in flight (STC-392 review, M6)", async () => {
-    // `setActionsEnabled` used to cover `#actions button` only. A mode change
-    // re-runs `draw()`, which REASSIGNS `composite`, and `run("copy")` reads
-    // `composite` after two `await`s (`awaitComposite`, then `getImageData`)
-    // — a Style pick or a Redact toggle landing in that window exports a
-    // picture the status line's claimed mode does not match. Disabling is
-    // synchronous, the very first thing `perform()` does before its own
-    // first `await` — so the click and the read happen in ONE evaluate, the
-    // same tick. The first version clicked through Playwright and read
-    // `disabled` in a second round trip, and on a loaded CI runner the copy
-    // (a fake helper answers an export instantly) had already COMPLETED and
-    // re-enabled everything in between (run 35451943868, STC-427): a "while
-    // in flight" observation made after the flight landed. Same family as
-    // the ⌘⌫ test below — a claim about a window in time has to be measured
-    // from inside that window.
+  test("Edit and Save are disabled while Copy is in flight (STC-392 review, M6)", async () => {
+    // `setActionsEnabled` covers every VISIBLE `#actions button[data-action]`
+    // while any one of the four is deciding an outcome — Style and Redact
+    // used to be the two exceptions needing their own case (M6), since
+    // neither carries `data-action`; both moved to the still editor (STC-300)
+    // and this panel has nothing left outside that one selector to worry
+    // about. Disabling is synchronous, the very first thing `perform()` does
+    // before its own first `await` — so the click and the read happen in ONE
+    // evaluate, the same tick. The first version of THIS test (checking Style
+    // and Redact) clicked through Playwright and read `disabled` in a second
+    // round trip, and on a loaded CI runner the copy (a fake helper answers
+    // an export instantly) had already COMPLETED and re-enabled everything in
+    // between (run 35451943868, STC-427): a "while in flight" observation
+    // made after the flight landed. Same family as the ⌘⌫ test below — a
+    // claim about a window in time has to be measured from inside that
+    // window.
     const { app: electronApp } = await launch();
     const panel = panelWindow(electronApp);
     const duringCopy = await panel.evaluate(() => {
       (document.getElementById("copy") as HTMLButtonElement).click();
       return {
-        mode: (document.getElementById("mode") as HTMLSelectElement).disabled,
-        redact: (document.getElementById("redact") as HTMLButtonElement).disabled,
+        edit: (document.getElementById("edit") as HTMLButtonElement).disabled,
+        save: (document.getElementById("save") as HTMLButtonElement).disabled,
       };
     });
-    expect(duringCopy).toEqual({ mode: true, redact: true });
+    expect(duringCopy).toEqual({ edit: true, save: true });
 
     await panel.waitForFunction(() => document.getElementById("status")!.textContent === "Copied");
     // Re-enabled once the action settles — Copy does not close the panel, so
     // there is a "back to normal" state to check, unlike Save/Edit/Trash.
-    expect(await panel.evaluate(() => (document.getElementById("mode") as HTMLSelectElement).disabled))
+    expect(await panel.evaluate(() => (document.getElementById("edit") as HTMLButtonElement).disabled))
       .toBe(false);
-    expect(await panel.evaluate(() => (document.getElementById("redact") as HTMLButtonElement).disabled))
+    expect(await panel.evaluate(() => (document.getElementById("save") as HTMLButtonElement).disabled))
       .toBe(false);
   }, 40_000);
 

@@ -18,10 +18,13 @@ import { actionsFor, type PanelAction, type PanelTake } from "./panel-actions.js
  * second table. Two copies of the action list is the defect that let Save As
  * exist in the menu and not on the card before this ticket; this file no
  * longer has an opinion of its own about which of the four a take gets.
- * `save-as`, `redact` and `reveal` stay as extra rows below a separator —
- * they are panel FACILITIES (a save that asks first, a mode of the canvas, a
- * way to find a file already on disk), not one of the take's own actions, so
- * `actionsFor` has nothing to say about them.
+ * `save-as` and `reveal` stay as extra rows below a separator — they are
+ * panel FACILITIES (a save that asks first, a way to find a file already on
+ * disk), not one of the take's own actions, so `actionsFor` has nothing to
+ * say about them. Redact used to be a third one, a mode of this panel's own
+ * canvas; STC-300 moved it into a still editor reached through `edit`, which
+ * is already in the actions loop above, so there is nothing left for this
+ * menu to add for it.
  *
  * ## Delete moves to the Trash, and does NOT confirm
  *
@@ -38,7 +41,7 @@ import { actionsFor, type PanelAction, type PanelTake } from "./panel-actions.js
  * disagreed about where it went would be the defect, not the second gesture.
  */
 
-export type ThumbMenuId = PanelAction | "save-as" | "redact" | "reveal" | "separator";
+export type ThumbMenuId = PanelAction | "save-as" | "reveal" | "separator";
 
 export interface ThumbMenuItem {
   id: ThumbMenuId;
@@ -51,18 +54,12 @@ export interface ThumbMenuContext {
   /** What the panel is showing — decides which of the four actions appear at all. */
   take: PanelTake;
   /**
-   * Redact mode is open right now. The item is a TOGGLE rather than a
-   * checkbox: "Redact" while already redacting reads as "start again", which
-   * is not what choosing it does.
-   */
-  redacting?: boolean;
-  /**
    * A composite or export is already in flight. Copy and Save (and Save As)
    * are refused while one is, so they are shown unavailable rather than
    * offered and then declined — the same courtesy `trayTemplate` extends to a
    * capture that would be refused as `overlay-open`. Edit does not touch the
    * exporter (it promotes, then hands off to a different window), so it stays
-   * enabled; neither does Reveal, Redact or Trash.
+   * enabled; neither does Reveal or Trash.
    */
   busy?: boolean;
 }
@@ -79,9 +76,9 @@ function touchesExporter(action: PanelAction): boolean {
 
 /**
  * The menu for one take, in the order a macOS menu puts them: the take's own
- * actions in `actionsFor`'s order (produce, then promote, then the
- * destructive one held back for its own separator), with the panel's other
- * facilities — Save As, Redact, Reveal — between them and the end.
+ * actions in `actionsFor`'s order (produce, then promote, then edit, then
+ * the destructive one held back for its own separator), with the panel's
+ * other facilities — Save As, Reveal — between them and the end.
  */
 export function buildThumbMenu(ctx: ThumbMenuContext): ThumbMenuItem[] {
   const busy = ctx.busy === true;
@@ -100,7 +97,6 @@ export function buildThumbMenu(ctx: ThumbMenuContext): ThumbMenuItem[] {
   // way, and Copy/Save vs Save As differ in exactly that.
   items.push({ id: "save-as", label: "Save As…", enabled: !busy });
   items.push({ id: "separator", type: "separator" });
-  items.push({ id: "redact", label: ctx.redacting ? "Done Redacting" : "Redact…", enabled: true });
   items.push({ id: "reveal", label: "Reveal in Finder", enabled: true });
   items.push({ id: "separator", type: "separator" });
   items.push({ id: "trash", label: ACTION_LABEL.trash, enabled: true });

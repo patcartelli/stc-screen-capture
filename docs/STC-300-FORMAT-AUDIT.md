@@ -317,3 +317,18 @@ needed *before* the inspector can be honest is:
 
 Everything else on the inspector list is already in the document and already
 consumed by the renderer.
+
+---
+
+## The gate fired (2026-09-21)
+
+"Wanting to nudge a redaction rectangle" — real hardware feedback on STC-426's
+runbook found the compact post-capture panel too small to place a redaction box
+precisely. The "own window" answer above is what got built: `still-editor-window.ts`
+opens a real, resizable window on Edit, and Redact moved out of the panel entirely
+(the panel's decoration is read-only now). v1 is Redact ONLY — none of the four
+prerequisite items this section lists were needed, because `still:writeShot` already
+only ever touches `redactions`, and there is still no control anywhere for padding,
+background, crop or the decoration mode. Those stay exactly the prerequisites this
+document already named, for whichever ticket grows the editor past Redact next.
+`docs/STC-300-RUNBOOK.md` has what a Mac needs to check.

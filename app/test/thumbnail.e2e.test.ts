@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow, windowUrls } from "./_windows.js";
-import { PANEL_SIZE, REDACT_SIZE } from "../src/thumbnail.js";
 
 /**
  * The post-capture floating thumbnail, end to end (STC-296, reworked by
@@ -25,9 +24,13 @@ import { PANEL_SIZE, REDACT_SIZE } from "../src/thumbnail.js";
  * nobody asked for.
  *
  * Also here (STC-426): that the real WINDOW RECTANGLES of several stacked
- * previews never overlap, and reflow correctly when one grows into Redact or
+ * previews never overlap, and close their gap correctly when one of them
  * closes — `thumbnail.test.ts`'s `stackLayout` tests prove the arithmetic
  * with no window at all; this is the same claim about real `BrowserWindow`s.
+ * The mixed-size reflow that arithmetic also proves (a bigger panel pushing
+ * its neighbours) has no live trigger in this app any more since Redact
+ * moved into its own window (STC-300) — every panel is `PANEL_SIZE` for its
+ * whole life now, so there is nothing here to grow one into.
  *
  * NOT covered here since STC-392: there is no collapsed/expanded window size
  * any more (`thumbnail-window.ts`'s window is fixed at `PANEL_SIZE`) and no
@@ -157,12 +160,13 @@ describe("the post-capture floating thumbnail", () => {
     const panel = await thumbnailWindow();
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
       .toContain("in");
-    // A fresh SHOT: copy, save and trash, and no edit — `panel-actions.ts`'s
-    // own table, drawn onto the DOM (`actionsFor`).
+    // A fresh SHOT: copy, save, edit and trash — `panel-actions.ts`'s own
+    // table, drawn onto the DOM (`actionsFor`). Edit opens a still editor now
+    // (STC-300), so a shot gets it the same as a recording does.
     expect(await panel.isVisible("#copy")).toBe(true);
     expect(await panel.isVisible("#save")).toBe(true);
+    expect(await panel.isVisible("#edit")).toBe(true);
     expect(await panel.isVisible("#trash")).toBe(true);
-    expect(await panel.isHidden("#edit")).toBe(true);
   }, 60_000);
 
   test("Save promotes the take into the library and closes the panel — it writes no destination-folder file", async () => {
@@ -226,7 +230,7 @@ describe("the post-capture floating thumbnail", () => {
     }, { timeout: 15_000 }).toBe(true);
   }, 60_000);
 
-  test("previews use their full height, gapped and non-overlapping, and reflow on redact or close (STC-426)", async () => {
+  test("previews use their full height, gapped and non-overlapping, and close their gap (STC-426)", async () => {
     const { win } = await launch();
     for (let i = 0; i < 3; i++) await captureDisplay(win);
     // Three captures with `MAX_STACKED` at 3: all three fit, each at its own
@@ -234,18 +238,6 @@ describe("the post-capture floating thumbnail", () => {
     await nonOverlappingThumbnails(3);
 
     const panel = app!.windows().find((p) => p.url().includes("thumbnail.html"))!;
-    await panel.click("#redact");
-    await expect.poll(async () => (await visibleThumbnailBounds()).some((b) => b.height === REDACT_SIZE.height),
-                       { timeout: 15_000 }).toBe(true);
-    // Growing one panel into REDACT_SIZE must push its neighbours to make
-    // room, not just grow over them.
-    await nonOverlappingThumbnails(3);
-
-    await panel.click("#redact");
-    await expect.poll(async () => (await visibleThumbnailBounds()).every((b) => b.height === PANEL_SIZE.height),
-                       { timeout: 15_000 }).toBe(true);
-    await nonOverlappingThumbnails(3);
-
     // Closing a real window removes its slot, even without going through the
     // renderer's own "done" event — `leaveStack`'s `"closed"` handler is what
     // this exercises.

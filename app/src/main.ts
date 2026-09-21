@@ -50,6 +50,7 @@ import {
 import { promotes, trashStyle } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
 import { openEditor } from "./editor-window.js";
+import { openStillEditor } from "./still-editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
@@ -1570,11 +1571,11 @@ ipcMain.handle("thumbnail:menu", async (e, ctx: ThumbMenuContext) => {
     const answer = (id: ThumbMenuId | null) => { if (!answered) { answered = true; resolve(id); } };
     const menu = Menu.buildFromTemplate(buildThumbMenu({
       // A malformed or absent `take` defaults to a fresh shot — the widest
-      // set of the four actions minus Edit — rather than throwing and losing
-      // the whole menu over one bad field on a channel only this app's own
-      // renderer ever calls.
+      // set of the four actions — rather than throwing and losing the whole
+      // menu over one bad field on a channel only this app's own renderer
+      // ever calls.
       take: ctx?.take ?? { kind: "shot", origin: "fresh" },
-      redacting: ctx?.redacting === true, busy: ctx?.busy === true,
+      busy: ctx?.busy === true,
     }).map((item) => item.type === "separator"
       ? { type: "separator" as const }
       : { label: item.label, enabled: item.enabled !== false, click: () => answer(item.id) }));
@@ -1698,11 +1699,16 @@ ipcMain.handle("panel:save", async (_e, dir: string) => {
 });
 
 /**
- * Edit promotes first, and not as a convenience: `editor:open` refuses any
+ * Edit promotes first, and not as a convenience: both editors refuse any
  * path outside the recordings root, so a take in temp storage cannot be
- * opened at all. The editor's own Save is about the EXPORT — the ticket's
- * "you may only be trimming" — not about whether the take is kept, which is
- * what this promote settles.
+ * opened at all. Which editor opens depends on what this panel is showing —
+ * `takeFor(dir)?.kind`, the same source `panel:trash` already reads `origin`
+ * from (STC-392 review, I7), never re-derived from the path a second way. A
+ * recording opens `editor.ts` (preview, trim, export, share); its own Save is
+ * about the EXPORT — the ticket's "you may only be trimming" — not about
+ * whether the take is kept, which is what this promote settles. A shot opens
+ * `still-editor-window.ts` (STC-300), whose only job today is the redaction
+ * tool that used to live in this panel.
  */
 ipcMain.handle("panel:edit", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
@@ -1712,9 +1718,14 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
     // Same reasoning as `panel:save` above: `promotes("edit")` is asked, not
     // hardcoded — this handler has no opinion of its own about whether Edit
     // promotes.
+    const kind = takeFor(dir)?.kind ?? "shot";
     const opened = promotes("edit") ? await promoteTake(process.env, dir) : dir;
-    openEditor({ dir: opened, name: basename(opened),
-                 dist: here, rendererDir: join(here, "..", "renderer") });
+    if (kind === "shot") {
+      openStillEditor({ dir: opened, dist: here, rendererDir: join(here, "..", "renderer") });
+    } else {
+      openEditor({ dir: opened, name: basename(opened),
+                   dist: here, rendererDir: join(here, "..", "renderer") });
+    }
     dismissThumbnail(dir);
     return { ok: true };
   } catch (e: any) {

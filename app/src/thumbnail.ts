@@ -229,15 +229,15 @@ export function dismiss(): ThumbnailState { return { kind: "idle" }; }
  * panel its own full-height slot, `STACK_GAP_PX` apart, still newest nearest
  * the corner and older ones pushed further in. A short display cannot always
  * fit `MAX_STACKED` panels in one column — three `PANEL_SIZE` cards already
- * come close on a 900pt-tall work area, and a `REDACT_SIZE` card mid-stack
- * makes it worse — so a panel that would run past the work area's bottom (or
- * top, from a top corner) starts a new column further into the screen
- * instead of running off the edge. It is recomputed from scratch on every
- * call from each PANEL'S OWN CURRENT SIZE, which is what makes "expanding
- * into Redact reflows its neighbours" and "closing the middle preview closes
- * the gap" the same mechanism rather than two features: there is no stored
- * offset to update, only a fresh layout of whatever list of sizes is handed
- * in.
+ * come close on a 900pt-tall work area — so a panel that would run past the
+ * work area's bottom (or top, from a top corner) starts a new column further
+ * into the screen instead of running off the edge. It is recomputed from
+ * scratch on every call from each PANEL'S OWN CURRENT SIZE — a function of
+ * every panel's size rather than one shared constant, on purpose: Redact used
+ * to grow one panel into a bigger size in place, and while STC-300 moved that
+ * elsewhere, "closing the middle preview closes the gap" needs no less than
+ * this to be true — there is no stored offset to update, only a fresh layout
+ * of whatever list of sizes is handed in.
  */
 
 /** Space between neighbouring previews in the vertical stack, in points (STC-426). */
@@ -308,15 +308,15 @@ export function hiddenCount(total: number): number {
  * separate calculation, the same guarantee the old `stackPosition(0, ...)`
  * made. Each later panel is placed `STACK_GAP_PX` past the bottom (or top,
  * from a top corner) of the one before it in the SAME column, using that
- * panel's own size — a `REDACT_SIZE` card ahead of it pushes everything
- * behind it down (or up) by the difference, and shrinking it pulls them back.
+ * panel's own size — a bigger card ahead of it pushes everything behind it
+ * down (or up) by the difference, and shrinking it pulls them back.
  *
  * When the next panel would run past the work area's far edge, a new column
  * starts `STACK_GAP_PX` beyond the widest panel seen in the column so far,
  * back at the corner's own margin — the short-display case `docs/
  * STC-426-RUNBOOK.md` calls out, and the reason this takes every panel's
- * SIZE rather than one shared size: a column of `PANEL_SIZE` cards fits many
- * more per column than one holding a `REDACT_SIZE` card does.
+ * SIZE rather than one shared size: a column fits more cards at `PANEL_SIZE`
+ * than it would of anything bigger.
  *
  * Deliberately stateless: called fresh on every stack change with whatever
  * sizes are visible right now, so there is no stored offset that removing or
@@ -492,22 +492,12 @@ export interface Bounds { x: number; y: number; width: number; height: number }
  */
 export const PANEL_SIZE: Size = { width: 260, height: 210 };
 
-/**
- * Redact mode's WINDOW size (STC-297). Bigger than the panel needs to be for
- * its own controls, and deliberately: at the panel's normal size one preview
- * pixel of a 4K capture is ~14 real ones, so placing a box over an email
- * address would be guesswork. This is the size at which a line of text is a
- * targetable thing. It is still the same panel in the same corner — the
- * still EDITOR is STC-300, and this stops well short of one.
- *
- * Lives here, not in `thumbnail-window.ts` (which resizes the real window to
- * it) or `thumbnail-renderer.ts` (which derives its own canvas box from it,
- * `REDACT_BOX = REDACT_SIZE - CARD_CHROME`, the same allowance `CARD_BOX` is
- * derived from `PANEL_SIZE` with) — one number, read by both, rather than a
- * window size in one file and an independently-tuned "canvas box" in the
- * other that a comment merely CLAIMED was derived from it.
- */
-export const REDACT_SIZE: Size = { width: 520, height: 420 };
+// Redact used to grow this same panel in place at a bigger WINDOW size
+// (`REDACT_SIZE`, STC-297) — "it is still the same panel in the same corner,
+// the still EDITOR is STC-300 and this stops well short of one." STC-300
+// disagreed once its own gate fired and moved Redact into a real editor
+// window instead (`still-editor-window.ts`); the panel is fixed at
+// `PANEL_SIZE` for its whole life now.
 
 /**
  * Where the panel sits within a display's WORK AREA (not its full bounds) —

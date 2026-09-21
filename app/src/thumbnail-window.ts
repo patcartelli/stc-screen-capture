@@ -1,7 +1,7 @@
 import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
-  positionFor, stackLayout, visibleCount, PANEL_SIZE, REDACT_SIZE,
+  positionFor, stackLayout, visibleCount, PANEL_SIZE,
   type Corner, type Size, type Bounds,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
@@ -51,28 +51,26 @@ import { type PanelTake } from "./panel-actions.js";
  *
  * `restack` used to place every panel at a fixed offset from the one before
  * it (`stackPosition`), which overlapped all but the newest down to a thin
- * sliver. It now hands `thumbnail.ts`'s `stackLayout` the REAL current size
- * of every visible panel — `PANEL_SIZE` normally, `REDACT_SIZE` for whichever
- * one is mid-redaction — and lays the whole column out fresh, wrapping into a
+ * sliver. It now hands `thumbnail.ts`'s `stackLayout` every visible panel's
+ * REAL current size and lays the whole column out fresh, wrapping into a
  * second column on a display too short for `MAX_STACKED` full-size cards.
- * Because it is recomputed from scratch on every call, resizing one panel
- * (`resizeTo`) or a panel leaving the stack (`leaveStack`) both just call
- * `restack()` again rather than needing their own patch-up logic — the
- * neighbours move because the layout is asked for again, not because
- * anything told them to. A panel's work area (`this.workArea`) is NOT fixed
- * for its whole life either: `presentThumbnail` re-homes every existing
- * panel onto a fresh capture's display before laying the stack out again
- * (`rehome`, below) — watched on hardware and reversed from this ticket's
- * first cut, which kept each panel on the display it opened on. In practice
- * that meant checking two corners on two displays to find every waiting
- * capture; one stack that follows wherever you are working is the easier
- * workflow.
+ * Every panel is `PANEL_SIZE` today — Redact used to grow one in place
+ * (`REDACT_SIZE`) and no longer does, moved to its own window by STC-300 —
+ * but `stackLayout` stays a function of each panel's OWN size rather than one
+ * shared constant, since nothing here needs to know that is currently true.
+ * Because it is recomputed from scratch on every call, a panel leaving the
+ * stack (`leaveStack`) just calls `restack()` again rather than needing its
+ * own patch-up logic — the neighbours move because the layout is asked for
+ * again, not because anything told them to. A panel's work area
+ * (`this.workArea`) is NOT fixed for its whole life either: `presentThumbnail`
+ * re-homes every existing panel onto a fresh capture's display before laying
+ * the stack out again (`rehome`, below) — watched on hardware and reversed
+ * from this ticket's first cut, which kept each panel on the display it
+ * opened on. In practice that meant checking two corners on two displays to
+ * find every waiting capture; one stack that follows wherever you are
+ * working is the easier workflow.
  */
 
-// Redact mode's size (STC-297) — `REDACT_SIZE` itself now lives in
-// `thumbnail.ts`, imported above, so `thumbnail-renderer.ts` can derive its
-// own canvas box from the SAME number rather than an independently-tuned one
-// (STC-392 review, M5).
 const CORNER_MARGIN = 20;
 
 /**
@@ -130,8 +128,6 @@ export interface PresentOptions {
 
 type ThumbEvent =
   | { kind: "painted" }
-  /** Redact mode opening or closing (STC-297), which the panel is resized for. */
-  | { kind: "redact"; on: boolean }
   /**
    * A discard has committed — the swipe passed its threshold, or the
    * right-click Delete — and the renderer is about to ask main to trash the
@@ -576,8 +572,6 @@ class ThumbnailSession {
         this.win.show();
         this.focusNow();
       }
-    } else if (ev.kind === "redact") {
-      this.resizeTo(ev.on ? REDACT_SIZE : PANEL_SIZE);
     } else if (ev.kind === "discarding") {
       // No-op today — see the `ThumbEvent` doc on this case. Kept as its own
       // branch, not folded into the default no-match, so the next thing that
@@ -588,18 +582,6 @@ class ThumbnailSession {
     } else if (ev.kind === "done") {
       this.destroy();
     }
-  }
-
-  /**
-   * Grow or shrink for Redact (STC-297), then let `restack` lay the whole
-   * column out again (STC-426) — a panel growing into `REDACT_SIZE` has to
-   * push its neighbours down (or up, from a top corner), not just resize
-   * itself and leave them wherever they were.
-   */
-  private resizeTo(size: Size): void {
-    if (this.done || this.win.isDestroyed()) return;
-    this.win.setSize(size.width, size.height);
-    restack();
   }
 
   /**

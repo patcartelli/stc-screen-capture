@@ -4,7 +4,7 @@ import {
   parseCorner,
   discardDirection, isHorizontal, swipeOffset, isDiscardSwipe, SWIPE_DISCARD_PX,
   classifyDrag, DRAG_START_PX,
-  stackLayout, STACK_GAP_PX, MAX_STACKED, PANEL_SIZE, REDACT_SIZE,
+  stackLayout, STACK_GAP_PX, MAX_STACKED, PANEL_SIZE,
   hiddenCount, visibleCount,
   CORNERS,
 } from "../src/thumbnail.js";
@@ -264,6 +264,13 @@ describe("one gesture, two outcomes (STC-296 drag-out)", () => {
 describe("vertical preview layout (STC-426)", () => {
   const workArea = { x: -1440, y: 100, width: 1440, height: 900 };
   const size = { width: 220, height: 150 };
+  // A generic "much bigger than PANEL_SIZE" fixture. This used to be the
+  // real `REDACT_SIZE` — Redact moved to its own window (STC-300) and the
+  // panel is fixed at `PANEL_SIZE` for its whole life now, but `stackLayout`
+  // stays a function of every panel's own size rather than one shared
+  // constant, and that mixed-size capability is worth proving with SOME
+  // bigger size regardless of whether production currently produces one.
+  const BIG_SIZE = { width: 520, height: 420 };
 
   for (const corner of CORNERS) {
     test(`${corner}: newest stays at the corner and a full stack is fully visible`, () => {
@@ -281,13 +288,12 @@ describe("vertical preview layout (STC-426)", () => {
       }
     });
 
-    test(`${corner}: a full stack of the REAL sizes, with one redacting, does not overlap`, () => {
-      // Re-anchored for STC-392 (D3): the card is one size now (`PANEL_SIZE`),
-      // and `REDACT_SIZE` is bigger still — the mixed-size case a fixed-offset
-      // stack could never have handled correctly. The old test measured only
-      // the collapsed thumbnail's size and would have stayed green while a
-      // stack of the real cards ran off the screen or piled on top of itself.
-      const sizes = [PANEL_SIZE, REDACT_SIZE, PANEL_SIZE];
+    test(`${corner}: a full stack with one panel much bigger than the rest does not overlap`, () => {
+      // The mixed-size case a fixed-offset stack could never have handled
+      // correctly. The old test measured only the collapsed thumbnail's size
+      // and would have stayed green while a stack of the real cards ran off
+      // the screen or piled on top of itself.
+      const sizes = [PANEL_SIZE, BIG_SIZE, PANEL_SIZE];
       const bounds = stackLayout(sizes, corner, workArea, 20);
       for (const [i, b] of bounds.entries()) {
         expect(b.y).toBeGreaterThanOrEqual(workArea.y);
@@ -301,7 +307,7 @@ describe("vertical preview layout (STC-426)", () => {
 
     test(`${corner}: mixed sizes wrap into a second column on a short display, without overlap`, () => {
       const area = { ...workArea, height: 640 };
-      const sizes = [size, { width: 300, height: 260 }, REDACT_SIZE, size, size];
+      const sizes = [size, { width: 300, height: 260 }, BIG_SIZE, size, size];
       const bounds = stackLayout(sizes, corner, area);
       for (const [i, b] of bounds.entries()) {
         expect(b.x).toBeGreaterThanOrEqual(area.x);
