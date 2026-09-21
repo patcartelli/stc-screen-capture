@@ -10,7 +10,7 @@ interface MicInfo {
 }
 interface StillSettingsView {
   format: string; quality: number; scale: string;
-  stripMetadata: boolean; template: string; destination: string | null;
+  stripMetadata: boolean; template: string;
 }
 interface ThumbnailSettingsView {
   corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -37,6 +37,8 @@ interface AppSettings {
   thumbnail: ThumbnailSettingsView;
   /** STC-370/STC-374: what a recording captures. */
   scope: ScopeSettingsView;
+  /** STC-412: where recordings and stills are saved, replacing still.destination. */
+  saveFolder: string | null;
 }
 interface Take {
   dir: string; name: string; durationMs: number;
@@ -72,8 +74,7 @@ declare const recorder: {
   setShortcut(action: ShotAction, accelerator: string | null):
     Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
-  chooseStillDestination(): Promise<{ destination: string | null }>;
-  clearStillDestination(): Promise<{ destination: string | null }>;
+  chooseStillDestination(): Promise<{ saveFolder: string | null }>;
   start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   pickCaptureTarget(kind: "region" | "window"):
     Promise<{ ok: boolean; cancelled?: boolean; scope?: ScopeSettingsView }>;
@@ -419,7 +420,7 @@ function lockSettings(locked: boolean): void {
 // handling below: that handler runs in the CAPTURE phase and calls
 // `stopImmediatePropagation` whenever a shortcut is being listened for, so
 // this bubble-phase listener never sees the keystroke in that case.
-const profileBtn = $("profile") as HTMLButtonElement;
+const profileBtn = $("settings") as HTMLButtonElement;
 const profileSheet = $("profilesheet");
 const profileCloseBtn = $("profileclose") as HTMLButtonElement;
 
@@ -876,8 +877,8 @@ for (const { ms, label } of COUNTDOWN_OPTIONS) {
 }
 
 async function loadStillPreferences(): Promise<void> {
-  const { still, thumbnail, countdownMs } = await recorder.getSettings();
-  showDestination(still.destination);
+  const { thumbnail, countdownMs, saveFolder } = await recorder.getSettings();
+  showDestination(saveFolder);
   thumbCornerSel.value = thumbnail.corner;
   thumbSkipBox.checked = thumbnail.skip;
   // A stored value that is not one of the offered options — 0, or a number
@@ -894,10 +895,7 @@ async function patchThumbnail(patch: Partial<AppSettings["thumbnail"]>): Promise
 }
 
 $("stillchoosedest").addEventListener("click", async () => {
-  showDestination((await recorder.chooseStillDestination()).destination);
-});
-$("stillcleardest").addEventListener("click", async () => {
-  showDestination((await recorder.clearStillDestination()).destination);
+  showDestination((await recorder.chooseStillDestination()).saveFolder);
 });
 thumbCornerSel.addEventListener("change", () => {
   void patchThumbnail({ corner: thumbCornerSel.value as AppSettings["thumbnail"]["corner"] });

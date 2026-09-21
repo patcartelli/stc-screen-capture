@@ -348,28 +348,8 @@
       <span id="pill-stop" aria-hidden="true"></span>
     </button>
     <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
-    <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
-    <label id="mic-label">Mic <select id="mic"><option value="">Off</option></select></label>
-    <button id="profile" title="Shot preferences and shortcuts">Profile</button>
+    <button id="settings" title="Profile, preferences and shortcuts">Settings</button>
     <span id="state">starting…</span>
-  </div>
-  <div class="row">
-    <label>Scope <select id="scope">
-      <option value="display">Screen</option>
-      <option value="window">Window</option>
-      <option value="region">Area</option>
-    </select></label>
-    <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
-    <span id="window-source" class="row" hidden>
-      <span id="window-source-label" class="sourcelabel">No window chosen</span>
-      <button id="pickwindow">Choose window…</button>
-      <button id="clearwindow" title="Forget the chosen window">Clear</button>
-    </span>
-    <span id="region-source" class="row" hidden>
-      <span id="region-source-label" class="sourcelabel">No area chosen</span>
-      <button id="pickregion">Choose area…</button>
-      <button id="clearregion" title="Forget the chosen area">Clear</button>
-    </span>
   </div>
   <div id="stillstatus" hidden></div>
   <div id="alert"></div>
@@ -398,9 +378,35 @@
   -->
   <aside id="profilesheet">
     <div class="row" id="profilesheet-head">
-      <h1>Profile</h1>
+      <h1>Settings</h1>
       <button id="profileclose" aria-label="Close">×</button>
     </div>
+
+    <h2>Profile</h2>
+    <div class="row">
+      <label>Scope <select id="scope">
+        <option value="display">Screen</option>
+        <option value="window">Window</option>
+        <option value="region">Area</option>
+      </select></label>
+      <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
+      <span id="window-source" class="row" hidden>
+        <span id="window-source-label" class="sourcelabel">No window chosen</span>
+        <button id="pickwindow">Choose window…</button>
+        <button id="clearwindow" title="Forget the chosen window">Clear</button>
+      </span>
+      <span id="region-source" class="row" hidden>
+        <span id="region-source-label" class="sourcelabel">No area chosen</span>
+        <button id="pickregion">Choose area…</button>
+        <button id="clearregion" title="Forget the chosen area">Clear</button>
+      </span>
+    </div>
+    <div class="row">
+      <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
+      <label id="mic-label">Mic <select id="mic"><option value="">Off</option></select></label>
+    </div>
+
+    <h2>Preferences</h2>
 
     <h2>Shot</h2>
     <!--
@@ -418,7 +424,6 @@
       <span>Saving to</span>
       <span id="stilldest">beside the shot</span>
       <button id="stillchoosedest">Change…</button>
-      <button id="stillcleardest">Beside the shot</button>
     </div>
     <div class="stillrow">
       <label>Panel corner <select id="thumbcorner">
