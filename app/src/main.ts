@@ -1752,6 +1752,22 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
 });
 
 /**
+ * Close the panel without deciding anything (STC-412) — the take is
+ * untouched: still in temp storage if it was fresh, still in the library if
+ * it was re-opened. Governed entirely by STC-393's existing purge and
+ * crash-recovery, the same as ignoring the panel always was before
+ * STC-392 removed the timeout that used to do this automatically.
+ */
+ipcMain.handle("panel:dismiss", async (_e, dir: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
+    return { ok: false, detail: "not a take this app wrote" };
+  }
+  dismissThumbnail(dir);
+  return { ok: true };
+});
+
+/**
  * Throw a take away (STC-296's right-click Delete, and now the ✕ button, the
  * ⌘⌫ key and the swipe).
  *

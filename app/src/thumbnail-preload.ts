@@ -39,6 +39,11 @@ contextBridge.exposeInMainWorld("thumb", {
   save: (dir: string) => ipcRenderer.invoke("panel:save", dir),
   edit: (dir: string) => ipcRenderer.invoke("panel:edit", dir),
   trash: (dir: string) => ipcRenderer.invoke("panel:trash", dir),
+  // Close without deciding (STC-412) — the X and Escape both funnel here
+  // through `perform("dismiss")`; the take is untouched either way. See
+  // `thumbnail-renderer.ts`'s own note on why click-outside (blur) is NOT
+  // one of the paths that reaches this.
+  dismiss: (dir: string) => ipcRenderer.invoke("panel:dismiss", dir),
   // Drag-out (STC-296 follow-up). Two steps on purpose: the FILE is written
   // ahead of time (it takes long enough that a drag cannot wait for it), and
   // `startDrag` is the instant hand-over once the gesture commits.

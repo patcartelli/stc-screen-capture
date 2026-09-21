@@ -115,6 +115,29 @@ async function captureDisplay(win: Page): Promise<any> {
   return win.evaluate(() => (window as any).recorder.captureStill("display"));
 }
 
+/**
+ * Drive an action that CLOSES the panel synchronously — dismiss's X click or
+ * its Escape key (STC-412) — and tolerate the "Target page, context or
+ * browser has been closed" rejection Playwright reports when the action's
+ * own target vanishes mid-dispatch.
+ *
+ * The same trap `_editor-fixture.ts`'s `closeEditorWindow` already exists for
+ * (STC-386, CLAUDE.md): `perform("dismiss")` closes the window over a
+ * synchronous IPC round trip, so the action LANDED and the window closing IS
+ * the confirmation — a bare `.catch(() => {})` would just as happily swallow
+ * a real failure, so "close" is awaited FIRST and a rejection not followed by
+ * an actual close is rethrown rather than eaten.
+ */
+async function dismissAndTolerateClose(panel: Page, act: () => Promise<void>): Promise<void> {
+  const closed = panel.waitForEvent("close", { timeout: 15_000 });
+  const err = await act().then(() => undefined, (e: unknown) => e);
+  if (err !== undefined) {
+    await closed.catch(() => { throw err; });
+    return;
+  }
+  await closed;
+}
+
 /** Live take directories under `recordings`, excluding the fixture `makeTakeFolder` seeds. */
 function ownTakes(recordings: string): string[] {
   return readdirSync(recordings).filter((n) => !n.startsWith(".") && n !== "2026-08-24_10-00-00");
@@ -280,5 +303,47 @@ describe("the post-capture floating thumbnail", () => {
     // the "straight to clipboard" wording promises not to write.
     expect(exported?.file).toBeDefined();
     expect(exported?.file).not.toContain(destDir);
+  }, 60_000);
+
+  // ---- dismiss (STC-412) ----------------------------------------------------
+
+  test("dismiss (the X) closes the panel and leaves the take exactly where it was", async () => {
+    const { win, temp } = await launch();
+    const r = await captureDisplay(win);
+    expect(r.ok).toBe(true);
+    const panel = await thumbnailWindow();
+    const before = readdirSync(temp, { recursive: true }).sort();
+
+    await dismissAndTolerateClose(panel, () => panel.click("#dismiss"));
+
+    await noThumbnailWindow();
+    expect(readdirSync(temp, { recursive: true }).sort()).toEqual(before);
+  }, 60_000);
+
+  test("Escape dismisses the panel outside redact mode", async () => {
+    const { win, temp } = await launch();
+    const r = await captureDisplay(win);
+    expect(r.ok).toBe(true);
+    const panel = await thumbnailWindow();
+    const before = readdirSync(temp, { recursive: true }).sort();
+
+    // Escape respects `SETTLE_KEYS_MS` like every other keyboard path
+    // (thumbnail-renderer.ts's own comment above its keydown listener) — a
+    // press dispatched before the panel's own `keysLiveAt` clock is reached
+    // is silently ignored, which would otherwise make this test time out in
+    // `noThumbnailWindow` for a reason that has nothing to do with dismiss.
+    // Same hazard `panel-waits.e2e.test.ts`'s ⌘⌫ test already found (STC-427)
+    // and reads the renderer's own published clock for, not a fixed sleep.
+    await expect.poll(() => panel.evaluate(() => {
+      const card = document.getElementById("card")!;
+      const liveAt = Number((card as HTMLElement).dataset.keysLiveAt);
+      return card.className.includes("in")
+        && Number.isFinite(liveAt) && performance.now() >= liveAt;
+    }), { timeout: 15_000 }).toBe(true);
+
+    await dismissAndTolerateClose(panel, () => panel.keyboard.press("Escape"));
+
+    await noThumbnailWindow();
+    expect(readdirSync(temp, { recursive: true }).sort()).toEqual(before);
   }, 60_000);
 });
