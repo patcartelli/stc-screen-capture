@@ -109,8 +109,14 @@ export const MAX_LABEL_LENGTH = 120;
  */
 export async function setTakeLabel(env: NodeJS.ProcessEnv, saveFolder: string | null,
                                    dir: string, label: string): Promise<void> {
-  const root = takesRoot(env, saveFolder);
-  if (!dir.startsWith(root)) throw new Error("refusing to label a directory outside the recordings folder");
+  // `insideTakesRoot`, NOT `dir.startsWith(root)` (I4). This file's own
+  // header documents at length why the prefix test is "not that test":
+  // `<root>-other` and `<root>/../../tmp/evil` both pass it. `main.ts`'s
+  // `take:rename` doc already claimed both of its paths validated
+  // containment, and only the rename half actually did.
+  if (!insideTakesRoot(env, saveFolder, dir)) {
+    throw new Error("refusing to label a directory outside the recordings folder");
+  }
   const trimmed = label.trim();
   if (!trimmed) throw new Error("a label cannot be empty");
   if (trimmed.length > MAX_LABEL_LENGTH) {
@@ -151,6 +157,14 @@ export async function renameCapture(env: NodeJS.ProcessEnv, saveFolder: string |
   }
   if (trimmed.includes("..")) {
     throw new Error('a name cannot contain ".."');
+  }
+  // A LEADING DOT hides the file from the scan (rule 2 skips dotfiles), and
+  // that is not merely cosmetic: with the file invisible, its bundle reads
+  // as orphaned and the sweep trashes it. Observed, not reasoned about. So
+  // ".secret.mp4" is refused here rather than being allowed to make a
+  // capture disappear and take its source materials with it.
+  if (trimmed.startsWith(".")) {
+    throw new Error("a name cannot start with a dot — it would hide the capture");
   }
 
   const root = takesRoot(env, saveFolder);

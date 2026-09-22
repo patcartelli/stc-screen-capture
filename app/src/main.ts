@@ -1354,7 +1354,13 @@ ipcMain.handle("recorder:takes", async () =>
  * `renameCapture`/`setTakeLabel` each validate their own path is inside the
  * recordings folder — this handler does not repeat that check, the same way
  * `take:delete` trusts each target's own validation rather than a second
- * copy here.
+ * copy here. **Both really do now**: this comment was true of `renameCapture`
+ * and not of `setTakeLabel`, which used `dir.startsWith(root)` — the check
+ * `takes.ts`'s own header spends a paragraph explaining is "not that test"
+ * (`<root>-other` and `<root>/../../tmp/evil` both pass it). Fixed there
+ * rather than by adding a second check here (I4); a claim in a comment that
+ * the code does not keep is worse than no claim, because it is what the next
+ * reader trusts instead of looking.
  */
 ipcMain.handle("take:rename", async (_e, file: string | undefined, dir: string | undefined, name: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));

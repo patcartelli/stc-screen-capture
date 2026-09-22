@@ -393,6 +393,21 @@ describe("the filename is the label (STC-413 Task 13)", () => {
   });
 
   /**
+   * STC-413 M1: a LEADING DOT was allowed, and it is not cosmetic.
+   *
+   * Rule 2 of the scan skips dotfiles, so ".secret.mp4" vanishes from the
+   * library — and with its file invisible, the bundle behind it reads as
+   * orphaned and the sweep trashes it. Observed. A rename is a rename, not
+   * a way to delete something by accident.
+   */
+  test("a rename refuses a leading dot — it would hide the capture", async () => {
+    await expect(renameCapture({} as NodeJS.ProcessEnv, root,
+      join(root, "login-bug.mp4"), ".secret")).rejects.toThrow(/dot/i);
+    expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);
+    expect(existsSync(join(root, ".secret.mp4"))).toBe(false);
+  });
+
+  /**
    * The live bug this task closes: Task 8's `looseFileItem` already offers
    * "rename" on an item with NO bundle at all (a genuinely foreign file —
    * see `library-items.ts`'s case 1), and the old renderer handler did

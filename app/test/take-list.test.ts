@@ -302,6 +302,21 @@ describe("take labels", () => {
     expect(takes[0]!.label).toBe("Bug repro");
     await expect(setTakeLabel(env(), null, "/etc", "nope")).rejects.toThrow(/outside/i);
   });
+
+  /**
+   * STC-413 I4: `setTakeLabel` guarded with `dir.startsWith(root)`, which
+   * `takes.ts`'s own header documents at length as "not that test". The
+   * assertion above passes against it — `/etc` shares no prefix with the
+   * root — so the two shapes that DO share one are what discriminate.
+   */
+  test("a sibling folder sharing the root's prefix is refused, not merely a different one", async () => {
+    await expect(setTakeLabel(env(), null, `${root}-other`, "nope")).rejects.toThrow(/outside/i);
+  });
+
+  test("a traversal back out through the root is refused", async () => {
+    await expect(setTakeLabel(env(), null, join(root, "..", "..", "tmp", "evil"), "nope"))
+      .rejects.toThrow(/outside/i);
+  });
 });
 
 /**
