@@ -1539,9 +1539,16 @@ a reviewer does not read it as an omission.
 
 - [ ] **Step 5: Verify end to end against a real export**
 
-```bash
-node scripts/export-one.mjs fixtures/basic 2
-```
+**NOT via `scripts/export-one.mjs`.** An earlier draft of this step said to use
+it, which contradicted this same task's own note four paragraphs up: that
+driver calls `window.exportSession` directly, has no bundle to identify, and is
+*deliberately* untagged. Running it and expecting an id tests nothing — it
+correctly produces an untagged file, which reads as a failure of the feature.
+
+Verify through the REAL path instead: open a take in the editor and export it,
+so `editor.ts` → `take:captureId` → `ensureCaptureId` → `exportSession` all
+actually run. A throwaway driver that exercises those hops is fine; state in
+your report which path you used.
 
 Then read the id back out of the produced file:
 
