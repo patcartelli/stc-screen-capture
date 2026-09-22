@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { tagPng, readPngCaptureId, PNG_TEXT_KEYWORD } from "../src/media-tag.js";
+import { tagPng, readPngCaptureId, PNG_TEXT_KEYWORD, tagMp4, readMp4CaptureId } from "../src/media-tag.js";
 import { mintCaptureId } from "../src/capture-id.js";
 
 const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -98,5 +98,55 @@ describe("png capture-id tag", () => {
   test("a non-png is refused rather than corrupted", () => {
     const notPng = new Uint8Array([0, 0, 0, 8, 102, 116, 121, 112]);
     expect(tagPng(notPng, mintCaptureId())).toEqual(notPng);
+  });
+});
+
+/** A structurally valid minimal MP4: an ftyp box and an mdat box. */
+function skeletonMp4(): Uint8Array {
+  const box = (type: string, data: number[]): number[] => {
+    const size = 8 + data.length;
+    return [(size >>> 24) & 255, (size >>> 16) & 255, (size >>> 8) & 255, size & 255,
+            ...[...type].map((c) => c.charCodeAt(0)), ...data];
+  };
+  return new Uint8Array([
+    ...box("ftyp", [...["isom"].flatMap((s) => [...s].map((c) => c.charCodeAt(0))), 0, 0, 0, 0]),
+    ...box("mdat", [9, 9, 9, 9, 9, 9, 9, 9]),
+  ]);
+}
+
+describe("mp4 capture-id tag", () => {
+  test("round trips", () => {
+    const id = mintCaptureId();
+    expect(readMp4CaptureId(tagMp4(skeletonMp4(), id))).toBe(id);
+  });
+
+  test("an untagged mp4 has no id", () => {
+    expect(readMp4CaptureId(skeletonMp4())).toBeUndefined();
+  });
+
+  test("the original bytes are preserved exactly — nothing before the tag moves", () => {
+    const original = skeletonMp4();
+    const out = tagMp4(original, mintCaptureId());
+    expect(out.subarray(0, original.length)).toEqual(original);
+    expect(out.length).toBeGreaterThan(original.length);
+  });
+
+  test("tagging twice replaces rather than accumulating", () => {
+    const a = mintCaptureId(), b = mintCaptureId();
+    const out = tagMp4(tagMp4(skeletonMp4(), a), b);
+    expect(readMp4CaptureId(out)).toBe(b);
+    expect(out.length).toBe(tagMp4(skeletonMp4(), b).length);
+  });
+
+  test("garbage degrades to no id rather than throwing", () => {
+    for (const bad of [
+      new Uint8Array(0),
+      new Uint8Array([1, 2, 3]),
+      new Uint8Array([0, 0, 0, 200, 102, 116, 121, 112]),  // size past the end
+      new Uint8Array([0, 0, 0, 0, 102, 116, 121, 112]),    // size 0 == to EOF
+    ]) {
+      expect(() => readMp4CaptureId(bad)).not.toThrow();
+      expect(readMp4CaptureId(bad)).toBeUndefined();
+    }
   });
 });

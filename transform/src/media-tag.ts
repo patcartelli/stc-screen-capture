@@ -152,3 +152,75 @@ export function tagPng(bytes: Uint8Array, id: string): Uint8Array {
   if (!inserted) return bytes;   // no IDAT and no IEND: not a file we understand
   return new Uint8Array(out);
 }
+
+/**
+ * Our private-data UUID. Constant and arbitrary: it only has to not collide
+ * with another vendor's uuid box in the same file.
+ */
+export const MP4_UUID = new Uint8Array([
+  0xa1, 0xc4, 0xb2, 0xe0, 0x7f, 0x3d, 0x4b, 0x58,
+  0x9e, 0x21, 0x5c, 0x6d, 0x8f, 0x0a, 0x3b, 0x77,
+]);
+
+/**
+ * Walk top-level boxes. Yields `[type, start, totalLength]`.
+ *
+ * Refuses rather than guesses on the two sizes that cannot be walked past:
+ * `size == 0` ("to end of file", so there is no next box) and `size == 1`
+ * (64-bit largesize, which we never write and do not need to read).
+ */
+function* mp4Boxes(b: Uint8Array): Generator<[string, number, number]> {
+  let at = 0;
+  while (at + 8 <= b.length) {
+    const size = readBe32(b, at);
+    if (size < 8 || at + size > b.length) return;
+    yield [ascii(b, at + 4, 4), at, size];
+    at += size;
+  }
+}
+
+const isOurUuid = (b: Uint8Array, at: number): boolean =>
+  MP4_UUID.every((v, i) => b[at + i] === v);
+
+/** The id, or undefined for an untagged, foreign, truncated or corrupt file. */
+export function readMp4CaptureId(bytes: Uint8Array): string | undefined {
+  for (const [type, start, size] of mp4Boxes(bytes)) {
+    if (type !== "uuid" || size < 8 + 16) continue;
+    if (!isOurUuid(bytes, start + 8)) continue;
+    const value = ascii(bytes, start + 24, size - 24);
+    if (isCaptureId(value)) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Append the id as a trailing top-level `uuid` box, dropping any of ours
+ * already present so re-tagging replaces rather than accumulates.
+ *
+ * Appending is what makes this safe: `stco`/`co64` chunk offsets point into
+ * `mdat`, and nothing before the new box moves — so there are no offset
+ * fixups and no in-place patching, on a buffer we already hold whole.
+ */
+export function tagMp4(bytes: Uint8Array, id: string): Uint8Array {
+  if (!isCaptureId(id)) return bytes;
+
+  const keep: Array<[number, number]> = [];
+  let sawAny = false;
+  for (const [type, start, size] of mp4Boxes(bytes)) {
+    sawAny = true;
+    if (type === "uuid" && size >= 24 && isOurUuid(bytes, start + 8)) continue;
+    keep.push([start, size]);
+  }
+  if (!sawAny) return bytes;   // not a box structure we understand
+
+  const body = [...id].map((c) => c.charCodeAt(0));
+  const size = 8 + MP4_UUID.length + body.length;
+  const box = [...be32(size), ...[..."uuid"].map((c) => c.charCodeAt(0)),
+               ...MP4_UUID, ...body];
+
+  const out = new Uint8Array(keep.reduce((n, [, s]) => n + s, 0) + box.length);
+  let at = 0;
+  for (const [start, s] of keep) { out.set(bytes.subarray(start, start + s), at); at += s; }
+  out.set(box, at);
+  return out;
+}
