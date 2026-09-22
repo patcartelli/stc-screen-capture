@@ -307,6 +307,17 @@ describe("png capture-id tag", () => {
     expect(readPngCaptureId(out)).toBeUndefined();
   });
 
+  test("our own keyword wins over Description, whatever the byte order", () => {
+    // A file can legitimately carry both. Resolving by chunk order would
+    // return whichever sat earlier, which is not a rule anyone can reason about.
+    const ours = mintCaptureId(), theirs = mintCaptureId();
+    const bothWaysRound = [
+      tagPng(tagPngWithKeyword(skeletonPng(), "Description", theirs), ours),
+      tagPngWithKeyword(tagPng(skeletonPng(), ours), "Description", theirs),
+    ];
+    for (const out of bothWaysRound) expect(readPngCaptureId(out)).toBe(ours);
+  });
+
   test("the tag goes before IDAT, where a tEXt chunk is legal", () => {
     const out = tagPng(skeletonPng(), mintCaptureId());
     const s = Buffer.from(out).toString("latin1");
@@ -365,7 +376,14 @@ Expected: FAIL — cannot resolve `../src/media-tag.js`.
  */
 import { isCaptureId } from "./capture-id.js";
 
+/** What `tagPng` writes. */
 export const PNG_TEXT_KEYWORD = "stc-capture-id";
+
+/**
+ * What ImageIO writes for `kCGImagePropertyPNGDescription`, which is how the
+ * Swift still encoder tags a capture. Read, never written, by this module.
+ */
+export const IMAGEIO_TEXT_KEYWORD = "Description";
 
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -421,19 +439,37 @@ function textChunk(keyword: string, value: string): number[] {
   return [...be32(data.length), ...typed, ...be32(crc32(typed))];
 }
 
-/** The id, or undefined for an untagged, foreign, truncated or corrupt file. */
-export function readPngCaptureId(bytes: Uint8Array): string | undefined {
-  if (!isPng(bytes)) return undefined;
+/** The value of the first tEXt chunk under `keyword` that is a valid id. */
+function idUnderKeyword(bytes: Uint8Array, keyword: string): string | undefined {
   for (const [type, start, total] of pngChunks(bytes)) {
     if (type !== "tEXt") continue;
     const data = bytes.subarray(start + 8, start + total - 4);
     const nul = data.indexOf(0);
     if (nul < 0) continue;
-    if (ascii(data, 0, nul) !== PNG_TEXT_KEYWORD) continue;
+    if (ascii(data, 0, nul) !== keyword) continue;
     const value = ascii(data, nul + 1, data.length - nul - 1);
     if (isCaptureId(value)) return value;
   }
   return undefined;
+}
+
+/**
+ * The id, or undefined for an untagged, foreign, truncated or corrupt file.
+ *
+ * Two keywords are accepted because there are two writers: `tagPng` here, and
+ * ImageIO in the Swift still encoder. **Our own keyword wins**, and that
+ * precedence is deliberate rather than incidental — a file could carry both
+ * (ImageIO tagged it at export, something re-tagged it later), and resolving
+ * by chunk ORDER would return whichever happened to sit earlier in the file.
+ * A rule that depends on byte order is a rule nobody can reason about.
+ *
+ * Both candidates are gated by `isCaptureId`, so a human-written description
+ * cannot be read as identity.
+ */
+export function readPngCaptureId(bytes: Uint8Array): string | undefined {
+  if (!isPng(bytes)) return undefined;
+  return idUnderKeyword(bytes, PNG_TEXT_KEYWORD)
+      ?? idUnderKeyword(bytes, IMAGEIO_TEXT_KEYWORD);
 }
 
 /**
