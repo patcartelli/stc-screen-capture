@@ -1508,13 +1508,25 @@ The app's only caller is `app/src/editor.ts:1237`, and **that is a renderer** �
 it cannot call `ensureCaptureId`, which uses `node:fs` and would fail the
 browser typecheck pass. So the id crosses the bridge:
 
-1. `app/src/main.ts` — add a handler, `take:captureId`, that resolves the take
-   directory for the calling `webContents` (the existing
-   `Map<webContents.id, string>` that replaced the old single `openTake`) and
-   returns `await ensureCaptureId(thatDir)`. Refuse if no take is open, the
-   way the other `preview:*` handlers already do.
-2. `app/src/editor-preload.ts` — expose it on the existing narrow bridge, in
-   keeping with that file's rule of exposing only what the editor needs.
+1. `app/src/main.ts` — add a handler, `take:captureId`. The take directory for
+   the calling window comes from the existing `getOpenTake(e)` helper
+   (`main.ts:118`, over the `openTakes` map at `:114`), and the refusal idiom
+   is already used verbatim by the `preview:*` handlers:
+
+   ```ts
+   const openTake = getOpenTake(e);
+   if (!openTake) throw new Error("no take is open");
+   return await ensureCaptureId(openTake);
+   ```
+
+2. `app/src/editor-preload.ts` — add one line to the bridge. Note it exposes
+   **`window.editor`**, not the main window's `recorder`, and its header states
+   the rule: only the channels this window needs. Follow the existing style:
+
+   ```ts
+   captureId: () => ipcRenderer.invoke("take:captureId"),
+   ```
+
 3. `app/src/editor.ts` — fetch it just before `exportSession` and pass it as
    `captureId` in the options object at line 1237.
 
