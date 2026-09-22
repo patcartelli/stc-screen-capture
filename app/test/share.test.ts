@@ -245,13 +245,25 @@ describe("the embed snippet", () => {
 describe("the export filename lives in exactly one place", () => {
   const root = join(__dirname, "..", "..");
   const editor = readFileSync(join(root, "app", "src", "editor.ts"), "utf8");
-  /** The shape of the old inline literal: `export-${…}.mp4` or `.json`. */
-  const INLINE = /`export-\$\{[^`]*\}\.(mp4|json)`/g;
+  /**
+   * The shape of an inline copy — `${…}.mp4` with or WITHOUT the old
+   * `export-` prefix, or `export-${…}.json`.
+   *
+   * The optional prefix is the whole point of this widening. STC-413 dropped
+   * `export-` from the media name (its LOCATION says "finished" now), and
+   * the guard stayed anchored to the prefix — so it could still catch a copy
+   * of the OLD rule and not one of the rule it is actually keeping, which is
+   * a guard that has quietly stopped guarding. The manifest keeps its
+   * prefix, so its half stays exact rather than being loosened for symmetry.
+   */
+  const INLINE = /`(?:export-)?\$\{[^`]*\}\.mp4`|`export-\$\{[^`]*\}\.json`/g;
 
   test("the pattern can fire", () => {
-    const planted = "const name = `export-${takeName}.mp4`;";
-    expect(planted.match(INLINE)).toHaveLength(1);
+    // The old shape...
+    expect("const name = `export-${takeName}.mp4`;".match(INLINE)).toHaveLength(1);
     expect("`export-${n}.json`".match(INLINE)).toHaveLength(1);
+    // ...and the CURRENT one, which the prefix-anchored version could not see.
+    expect("const name = `${takeName}.mp4`;".match(INLINE)).toHaveLength(1);
   });
 
   test("and does not fire on the editor as it stands", () => {

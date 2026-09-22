@@ -87,7 +87,14 @@ export function exportManifestName(takeName: string): string {
 
 /** Where the published file lands, and under what name. */
 export interface PublishTarget {
-  /** Absolute path of the exported MP4 inside the take directory. */
+  /**
+   * Absolute path of the exported MP4. Since STC-413 that is a plain file at
+   * the TOP LEVEL of the capture folder, resolved by the bundle's embedded
+   * id — not "inside the take directory", which this said until the folder
+   * stopped being a store. (A pre-STC-413 take's export really is still
+   * inside its own directory; `main.ts` finds that one too. Either way the
+   * path is handed in, never derived here.)
+   */
   from: string;
   /** Absolute path it is copied to. */
   to: string;

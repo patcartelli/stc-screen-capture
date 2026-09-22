@@ -210,12 +210,17 @@ export async function purgeStaleTempTakes(env: NodeJS.ProcessEnv,
  *
  * Its contents are the epoch ms it was written, so age is measured from the
  * SIGHTING rather than from the bundle's own (possibly much older) creation
- * date. Named with a leading dot as defensive convention, matching what
- * `library.ts`'s scan already does one level up for `raw/`'s own children —
- * but that convention does NOT hide this file from anything by itself: the
- * scan's dotfile skip (rule 2) only applies to `raw/`'s direct children
- * (sibling bundle directories); this marker sits one level deeper, inside a
- * bundle, where nothing else ever looks at it.
+ * date.
+ *
+ * The leading dot is convention only — it keeps the marker out of the way in
+ * Finder and says "bookkeeping, not yours". It is NOT what keeps the scan
+ * from seeing it, and an earlier version of this comment leaned on the
+ * scan's dotfile skip (rule 2) as if it did. That skip applies to entries
+ * the scan actually enumerates: top-level files and the direct children of
+ * `raw/`. This marker sits one level deeper again, INSIDE a bundle, which
+ * the scan reads only through `readdir` for `dirSize` and the
+ * `shot.json`/`anchors.json` checks — it was never a candidate for listing
+ * whatever it was called.
  */
 export const ORPHAN_MARKER_FILE = ".orphaned-at";
 
