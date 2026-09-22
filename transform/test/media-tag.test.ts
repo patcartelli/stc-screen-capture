@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { tagPng, readPngCaptureId, PNG_TEXT_KEYWORD, tagMp4, readMp4CaptureId } from "../src/media-tag.js";
-import { mintCaptureId } from "../src/capture-id.js";
+import { mintCaptureId, CAPTURE_ID_LENGTH } from "../src/capture-id.js";
 
 const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -101,15 +101,18 @@ describe("png capture-id tag", () => {
   });
 });
 
+// Hoisted to module scope: the extended-size tests below build their own
+// box layouts and need these too.
+const chars = (s: string) => [...s].map((c) => c.charCodeAt(0));
+const be32 = (n: number) =>
+  [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+const box = (type: string, data: number[]) =>
+  [...be32(8 + data.length), ...chars(type), ...data];
+
 /** A structurally valid minimal MP4: an ftyp box and an mdat box. */
 function skeletonMp4(): Uint8Array {
-  const box = (type: string, data: number[]): number[] => {
-    const size = 8 + data.length;
-    return [(size >>> 24) & 255, (size >>> 16) & 255, (size >>> 8) & 255, size & 255,
-            ...[...type].map((c) => c.charCodeAt(0)), ...data];
-  };
   return new Uint8Array([
-    ...box("ftyp", [...["isom"].flatMap((s) => [...s].map((c) => c.charCodeAt(0))), 0, 0, 0, 0]),
+    ...box("ftyp", [...chars("isom"), 0, 0, 0, 0]),
     ...box("mdat", [9, 9, 9, 9, 9, 9, 9, 9]),
   ]);
 }
@@ -143,10 +146,61 @@ describe("mp4 capture-id tag", () => {
       new Uint8Array(0),
       new Uint8Array([1, 2, 3]),
       new Uint8Array([0, 0, 0, 200, 102, 116, 121, 112]),  // size past the end
-      new Uint8Array([0, 0, 0, 0, 102, 116, 121, 112]),    // size 0 == to EOF
     ]) {
       expect(() => readMp4CaptureId(bad)).not.toThrow();
       expect(readMp4CaptureId(bad)).toBeUndefined();
     }
+  });
+
+  // ── the extended sizes, which real files actually use ──────────────────
+
+  /** A box whose size is carried in a 64-bit largesize, as AVAssetWriter writes mdat. */
+  function largesizeBox(type: string, payload: number[]): number[] {
+    const total = 16 + payload.length;
+    return [0, 0, 0, 1, ...[...type].map((c) => c.charCodeAt(0)),
+            0, 0, 0, 0, ...be32(total), ...payload];
+  }
+
+  test("A LARGESIZE BOX IS WALKED, NOT TRUNCATED", () => {
+    // The regression that reduced a real 83,894-byte capture to 82 bytes.
+    const id = mintCaptureId();
+    const original = new Uint8Array([
+      ...box("ftyp", chars("isom")),
+      ...largesizeBox("mdat", [7, 7, 7, 7, 7, 7, 7, 7]),
+      ...box("moov", [1, 2, 3, 4]),
+    ]);
+    const out = tagMp4(original, id);
+    expect(out.subarray(0, original.length)).toEqual(original);   // nothing lost
+    expect(out.length).toBeGreaterThan(original.length);
+    expect(readMp4CaptureId(out)).toBe(id);                       // readable past mdat
+  });
+
+  test("THE REAL FIXTURE SURVIVES TAGGING", async () => {
+    // The check that would have caught this immediately. fixtures/basic/
+    // display.mp4 is this project's own AVAssetWriter output and its mdat
+    // uses a largesize.
+    const { readFile } = await import("node:fs/promises");
+    const original = new Uint8Array(await readFile("fixtures/basic/display.mp4"));
+    const id = mintCaptureId();
+    const out = tagMp4(original, id);
+    expect(out.subarray(0, original.length)).toEqual(original);
+    expect(out.length).toBe(original.length + 4 + 4 + 16 + CAPTURE_ID_LENGTH);
+    expect(readMp4CaptureId(out)).toBe(id);
+  });
+
+  test("a file we cannot fully walk is REFUSED, never truncated", () => {
+    const truncated = new Uint8Array([
+      ...box("ftyp", chars("isom")),
+      0, 0, 0, 200, ...chars("mdat"), 1, 2, 3,     // claims 200 bytes, has 3
+    ]);
+    expect(tagMp4(truncated, mintCaptureId())).toEqual(truncated);
+  });
+
+  test("a trailing to-EOF box is refused — our tag would land inside it", () => {
+    const toEof = new Uint8Array([
+      ...box("ftyp", chars("isom")),
+      0, 0, 0, 0, ...chars("mdat"), 9, 9, 9, 9,
+    ]);
+    expect(tagMp4(toEof, mintCaptureId())).toEqual(toEof);
   });
 });

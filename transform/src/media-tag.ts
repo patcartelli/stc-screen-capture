@@ -165,16 +165,37 @@ export const MP4_UUID = new Uint8Array([
 /**
  * Walk top-level boxes. Yields `[type, start, totalLength]`.
  *
- * Refuses rather than guesses on the two sizes that cannot be walked past:
- * `size == 0` ("to end of file", so there is no next box) and `size == 1`
- * (64-bit largesize, which we never write and do not need to read).
+ * **Both extended sizes are HANDLED, not refused, and that is load-bearing.**
+ * A `size == 1` box carries a 64-bit largesize after its type, and this
+ * project's own `AVAssetWriter` output uses exactly that for `mdat` —
+ * `fixtures/basic/display.mp4` is written that way. A walker that refuses it
+ * is not being conservative: it reports an 83 KB file as two boxes long and
+ * stops before the video data.
+ *
+ * `size == 0` means "to the end of the file", so such a box is necessarily
+ * the last one; it is yielded with its true extent and the walk then ends.
  */
 function* mp4Boxes(b: Uint8Array): Generator<[string, number, number]> {
   let at = 0;
   while (at + 8 <= b.length) {
-    const size = readBe32(b, at);
+    const declared = readBe32(b, at);
+    const type = ascii(b, at + 4, 4);
+    let size: number;
+    if (declared === 1) {
+      if (at + 16 > b.length) return;
+      // The high word of a largesize would mean a box past 4 GiB. Nothing
+      // this app produces comes close, and carrying it through a JS number
+      // would lose precision — so such a file is refused rather than
+      // mis-walked.
+      if (readBe32(b, at + 8) !== 0) return;
+      size = readBe32(b, at + 12);
+    } else if (declared === 0) {
+      size = b.length - at;            // to end of file: the last box
+    } else {
+      size = declared;
+    }
     if (size < 8 || at + size > b.length) return;
-    yield [ascii(b, at + 4, 4), at, size];
+    yield [type, at, size];
     at += size;
   }
 }
@@ -205,13 +226,28 @@ export function tagMp4(bytes: Uint8Array, id: string): Uint8Array {
   if (!isCaptureId(id)) return bytes;
 
   const keep: Array<[number, number]> = [];
-  let sawAny = false;
+  let end = 0;
+  let lastIsToEof = false;
   for (const [type, start, size] of mp4Boxes(bytes)) {
-    sawAny = true;
+    end = start + size;
+    lastIsToEof = readBe32(bytes, start) === 0;
     if (type === "uuid" && size >= 24 && isOurUuid(bytes, start + 8)) continue;
     keep.push([start, size]);
   }
-  if (!sawAny) return bytes;   // not a box structure we understand
+
+  // REFUSE rather than truncate, and this is the single most important line
+  // in the module. A walk that did not consume the whole buffer means a box
+  // we could not parse; keeping only what came before it silently DESTROYS
+  // the file. An earlier version did exactly that, turning a real 83,894-byte
+  // capture into 82 bytes while every in-module test still passed — because a
+  // truncated prefix is still a prefix.
+  if (end !== bytes.length || keep.length === 0) return bytes;
+
+  // A final `size == 0` box claims every byte to EOF, so anything appended
+  // after it is read as part of THAT box rather than as our tag. Refuse; the
+  // alternative is rewriting its size field, which is a bigger promise than
+  // tagging should make.
+  if (lastIsToEof) return bytes;
 
   const body = [...id].map((c) => c.charCodeAt(0));
   const size = 8 + MP4_UUID.length + body.length;
