@@ -57,13 +57,18 @@ boundary STC-294 built is what lets storage change underneath without touching
 | `transform/src/capture-id.ts` | Mint and validate the id. Nothing else. |
 | `transform/src/media-tag.ts` | Embed/extract the id in MP4 and PNG bytes. |
 | `transform/src/media-probe.ts` | Duration + dimensions from header bytes. |
+| `schema/capture-1.schema.json` | A bundle's identity document. |
+| `transform/src/capture-doc.ts` | Parse/serialize it. Pure. |
+| `app/src/capture-identity.ts` | `ensureCaptureId` — the IO half, race-guarded. |
+| `transform/test/capture-doc.test.ts` | Task 5. |
+| `app/test/capture-identity.test.ts` | Task 5. |
 | `transform/test/capture-id.test.ts` | Task 1. |
 | `transform/test/media-tag.test.ts` | Tasks 2-3. |
 | `transform/test/media-probe.test.ts` | Task 4. |
-| `transform/test/export-tag.test.ts` | Task 6. |
-| `app/test/library-scan.test.ts` | Tasks 7 and 13 (the scan, and its 500-file measurement). |
-| `app/test/orphan-sweep.test.ts` | Task 11. |
-| `app/test/library-folder.e2e.test.ts` | Tasks 10 and 12 — end-to-end behaviour, and the only home for this plan's e2e helpers. |
+| `transform/test/export-tag.test.ts` | Task 7. |
+| `app/test/library-scan.test.ts` | Tasks 8 and 14 (the scan, and its 500-file measurement). |
+| `app/test/orphan-sweep.test.ts` | Task 12. |
+| `app/test/library-folder.e2e.test.ts` | Tasks 11 and 13 — end-to-end behaviour, and the only home for this plan's e2e helpers. |
 
 **Modified:**
 
@@ -218,7 +223,21 @@ git commit -m "STC-413: capture id — one owner for the shape and its validatio
 - Consumes: `isCaptureId` from Task 1.
 - Produces: `tagPng(bytes: Uint8Array, id: string): Uint8Array`,
   `readPngCaptureId(bytes: Uint8Array): string | undefined`,
-  `PNG_TEXT_KEYWORD: "stc-capture-id"`.
+  `PNG_TEXT_KEYWORD: "stc-capture-id"`,
+  `IMAGEIO_TEXT_KEYWORD: "Description"`.
+
+**Two keywords, one reader — ruled at pre-flight, and not an oversight.** The
+production writer for stills is ImageIO (Task 6), because it covers PNG, JPEG
+and HEIC in one place where `tagPng` covers only PNG — and ImageIO writes a
+`tEXt` chunk keyed `Description`, not ours. So `readPngCaptureId` accepts
+**either** keyword, with every candidate gated by `isCaptureId`: a
+30-character `cap_`-prefixed Crockford string is not something a human writes
+into a description field by accident.
+
+`tagPng` therefore has no production caller yet, and that is deliberate rather
+than dead code — it is what makes `readPngCaptureId` verifiable on a checkout
+with no Swift toolchain, which is this repo's chronic verification gap. Say so
+in the module header so a reviewer does not flag it.
 
 **Format note for the implementer:** a PNG is an 8-byte signature followed by
 chunks of `[length:4][type:4][data:length][crc:4]`, all big-endian. The CRC
@@ -250,6 +269,22 @@ function skeletonPng(): Uint8Array {
                          ...chunk("IDAT", [1, 2, 3]), ...chunk("IEND", [])]);
 }
 
+/**
+ * Insert a tEXt chunk under an ARBITRARY keyword, so the test can stand in for
+ * ImageIO's writer without a Mac. Test-local on purpose: the module exports no
+ * keyword-parameterised writer, because production has exactly two writers and
+ * neither needs one.
+ */
+function tagPngWithKeyword(bytes: Uint8Array, keyword: string, value: string): Uint8Array {
+  const data = [...keyword].map((c) => c.charCodeAt(0))
+    .concat(0, [...value].map((c) => c.charCodeAt(0)));
+  const len = data.length;
+  const text = [(len >>> 24) & 255, (len >>> 16) & 255, (len >>> 8) & 255, len & 255,
+                ...[..."tEXt"].map((c) => c.charCodeAt(0)), ...data, 0, 0, 0, 0];
+  // After the 8-byte signature and the 25-byte IHDR chunk, before IDAT.
+  return new Uint8Array([...bytes.subarray(0, 33), ...text, ...bytes.subarray(33)]);
+}
+
 describe("png capture-id tag", () => {
   test("round trips", () => {
     const id = mintCaptureId();
@@ -258,6 +293,18 @@ describe("png capture-id tag", () => {
 
   test("an untagged png has no id", () => {
     expect(readPngCaptureId(skeletonPng())).toBeUndefined();
+  });
+
+  test("ImageIO's Description keyword is read too — that is how stills are tagged", () => {
+    const id = mintCaptureId();
+    // Exactly the chunk CGImageDestination writes for kCGImagePropertyPNGDescription.
+    const out = tagPngWithKeyword(skeletonPng(), "Description", id);
+    expect(readPngCaptureId(out)).toBe(id);
+  });
+
+  test("a human-written Description is not mistaken for an id", () => {
+    const out = tagPngWithKeyword(skeletonPng(), "Description", "screenshot of the login bug");
+    expect(readPngCaptureId(out)).toBeUndefined();
   });
 
   test("the tag goes before IDAT, where a tEXt chunk is legal", () => {
@@ -833,7 +880,252 @@ git commit -m "STC-413: probe duration and dimensions from header bytes only"
 
 ---
 
-### Task 5: The Swift PNG writer carries the id
+### Task 5: Mint the id and persist it in the bundle
+
+**Why this task exists:** Tasks 6 and 7 both consume a `captureId`, and Task 8's
+scan matches a finished file's embedded id against its bundle. Nothing
+otherwise writes one. The spec's flow line says "id minted into
+`anchors.json`/`shot.json`", which would mean bumping two schemas and a Swift
+writer; this is the cheaper shape, ruled on at pre-flight.
+
+**The id is minted LAZILY, at export time.** A bundle with no finished file
+needs no identity — nothing points back at it — so nothing on the capture or
+promote path changes. `ensureCaptureId` is called by the two export paths and
+by nothing else.
+
+**Files:**
+- Create: `schema/capture-1.schema.json`
+- Create: `transform/src/capture-doc.ts`
+- Create: `transform/test/capture-doc.test.ts`
+- Create: `app/src/capture-identity.ts`
+- Create: `app/test/capture-identity.test.ts`
+
+**Interfaces:**
+- Consumes: `mintCaptureId`, `isCaptureId` (Task 1).
+- Produces: `CAPTURE_DOC_FILE: "capture.json"`,
+  `parseCaptureDoc(doc: unknown): CaptureDoc` (refuses, never defaults),
+  `captureDocForWrite(id: string): CaptureDoc`,
+  `interface CaptureDoc { version: 1; id: string }`, and
+  `ensureCaptureId(bundleDir: string): Promise<string>`.
+
+**The load-bearing property is IDEMPOTENCE.** A second export of the same take
+must return the SAME id — otherwise re-exporting silently orphans the file
+exported before it, which is the exact failure this design exists to prevent.
+
+- [ ] **Step 1: Write the failing tests**
+
+`transform/test/capture-doc.test.ts` — schema and loader checked against each
+other, the pattern `changes.test.ts` and `recording-1` already set:
+
+```ts
+import { describe, test, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import AjvImport from "ajv";
+import { parseCaptureDoc, captureDocForWrite } from "../src/capture-doc.js";
+import { mintCaptureId } from "../src/capture-id.js";
+
+const Ajv = (AjvImport as any).default ?? AjvImport;
+const root = join(__dirname, "..", "..");
+const schema = JSON.parse(readFileSync(join(root, "schema/capture-1.schema.json"), "utf8"));
+const validate = new Ajv({ allErrors: true, strict: true }).compile(schema);
+
+describe("capture-1 schema and loader agree", () => {
+  test("a written document validates and round trips", () => {
+    const id = mintCaptureId();
+    const doc = captureDocForWrite(id);
+    expect(validate(doc)).toBe(true);
+    expect(parseCaptureDoc(doc).id).toBe(id);
+  });
+
+  test("the loader REFUSES rather than defaulting", () => {
+    for (const bad of [
+      {}, null, "nope", { version: 1 }, { id: mintCaptureId() },
+      { version: 2, id: mintCaptureId() },
+      { version: 1, id: "not-an-id" },
+      { version: 1, id: mintCaptureId(), extra: true },   // noExtra, like parseShot
+    ]) {
+      expect(() => parseCaptureDoc(bad)).toThrow();
+    }
+  });
+});
+```
+
+`app/test/capture-identity.test.ts` — the IO half:
+
+```ts
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ensureCaptureId } from "../src/capture-identity.js";
+import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
+import { isCaptureId } from "@transform/capture-id.js";
+
+let dir: string;
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "stc-id-")); });
+afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+describe("ensureCaptureId", () => {
+  test("mints an id and writes it into the bundle", async () => {
+    const id = await ensureCaptureId(dir);
+    expect(isCaptureId(id)).toBe(true);
+    const doc = JSON.parse(await readFile(join(dir, CAPTURE_DOC_FILE), "utf8"));
+    expect(doc.id).toBe(id);
+  });
+
+  test("IS IDEMPOTENT — a second export reuses the first id", async () => {
+    // If this fails, re-exporting a take orphans the file exported before it.
+    expect(await ensureCaptureId(dir)).toBe(await ensureCaptureId(dir));
+  });
+
+  test("a corrupt document is replaced rather than thrown on", async () => {
+    await writeFile(join(dir, CAPTURE_DOC_FILE), "{ not json");
+    const id = await ensureCaptureId(dir);
+    expect(isCaptureId(id)).toBe(true);
+    expect(await ensureCaptureId(dir)).toBe(id);   // and is stable afterwards
+  });
+
+  test("concurrent calls on one bundle agree", async () => {
+    // Two exports racing is reachable: STC-296's stacking is the first thing
+    // in this app that can export twice at once.
+    const ids = await Promise.all([ensureCaptureId(dir), ensureCaptureId(dir)]);
+    expect(ids[0]).toBe(ids[1]);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `npx vitest run transform/test/capture-doc.test.ts app/test/capture-identity.test.ts`
+Expected: FAIL — neither module resolves.
+
+- [ ] **Step 3: Write the schema**
+
+`schema/capture-1.schema.json`:
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "capture-1",
+  "description": "A bundle's stable identity (STC-413). Written lazily at export time; absent from a bundle that has never been exported.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+  }
+}
+```
+
+- [ ] **Step 4: Write the pure document module**
+
+`transform/src/capture-doc.ts` — refuses rather than defaults, the stance
+`parseShot` takes, because a bundle whose identity cannot be read must be
+treated as unidentified rather than quietly handed a fresh id that orphans the
+file it already has.
+
+```ts
+import { isCaptureId } from "./capture-id.js";
+
+export const CAPTURE_DOC_FILE = "capture.json";
+
+export interface CaptureDoc { version: 1; id: string }
+
+export class CaptureDocError extends Error {}
+
+export function captureDocForWrite(id: string): CaptureDoc {
+  if (!isCaptureId(id)) throw new CaptureDocError(`not a capture id: ${String(id)}`);
+  return { version: 1, id };
+}
+
+export function parseCaptureDoc(doc: unknown): CaptureDoc {
+  if (!doc || typeof doc !== "object") throw new CaptureDocError("capture.json is not an object");
+  const d = doc as Record<string, unknown>;
+  for (const k of Object.keys(d)) {
+    if (k !== "version" && k !== "id") throw new CaptureDocError(`unexpected field: ${k}`);
+  }
+  if (d.version !== 1) throw new CaptureDocError(`unsupported version: ${String(d.version)}`);
+  if (!isCaptureId(d.id)) throw new CaptureDocError("id is not a capture id");
+  return { version: 1, id: d.id };
+}
+```
+
+- [ ] **Step 5: Write the IO half**
+
+`app/src/capture-identity.ts`. In-process claiming guards the concurrent case
+the same way `takes.ts`'s `duplicating` set and `still-io.ts`'s name claim
+already do — STC-296's stacking made two simultaneous exports reachable.
+
+```ts
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  CAPTURE_DOC_FILE, captureDocForWrite, parseCaptureDoc,
+} from "@transform/capture-doc.js";
+import { mintCaptureId } from "@transform/capture-id.js";
+
+/**
+ * Ids handed out for a bundle but not yet on disk (STC-413).
+ *
+ * The read and the write are two moments, and two exports of one take racing
+ * in the gap would both see no document and mint DIFFERENT ids — the second
+ * overwriting the first, orphaning the file the first had already embedded.
+ * Same race, and the same in-process fix, as `still-io.ts`'s export names.
+ */
+const claimed = new Map<string, Promise<string>>();
+
+/** This bundle's id, minting and persisting one the first time it is asked for. */
+export function ensureCaptureId(bundleDir: string): Promise<string> {
+  const existing = claimed.get(bundleDir);
+  if (existing) return existing;
+
+  const work = (async () => {
+    const path = join(bundleDir, CAPTURE_DOC_FILE);
+    try {
+      return parseCaptureDoc(JSON.parse(await readFile(path, "utf8"))).id;
+    } catch {
+      // Absent or unreadable. A corrupt document is replaced rather than
+      // fatal: refusing to export because a bookkeeping file got mangled
+      // would cost the user their take for nothing.
+    }
+    const id = mintCaptureId();
+    await writeFile(path, JSON.stringify(captureDocForWrite(id), null, 2));
+    return id;
+  })().finally(() => { claimed.delete(bundleDir); });
+
+  claimed.set(bundleDir, work);
+  return work;
+}
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `npx vitest run transform/test/capture-doc.test.ts app/test/capture-identity.test.ts`
+Expected: PASS, 6 tests.
+
+- [ ] **Step 7: Mutation check — prove idempotence is really tested**
+
+Make `ensureCaptureId` always mint (delete the read-and-parse branch). Re-run.
+Expected: the idempotence, corrupt-stability and concurrency tests FAIL. Revert.
+
+This is the mutation that matters: an always-minting `ensureCaptureId` passes
+every other test in this plan while orphaning a file on every re-export.
+
+- [ ] **Step 8: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add schema/capture-1.schema.json transform/src/capture-doc.ts \
+        transform/test/capture-doc.test.ts app/src/capture-identity.ts \
+        app/test/capture-identity.test.ts
+git commit -m "STC-413: a bundle's identity, minted lazily at export time"
+```
+
+---
+
+### Task 6: The Swift PNG writer carries the id
 
 **Files:**
 - Modify: `helper/src/StillEncodeDecisions.swift:321-333`
@@ -841,7 +1133,9 @@ git commit -m "STC-413: probe duration and dimensions from header bytes only"
 - Test: `helper/test/still-encode/main.swift`
 
 **Interfaces:**
-- Consumes: the id format from Task 1 (as a plain string over IPC).
+- Consumes: the id format from Task 1 (as a plain string over IPC). The VALUE
+  comes from `ensureCaptureId` (Task 5), called on the shot's bundle by the
+  main-process still-export path before the request is built.
 - Produces: `StillExportRequest.captureId: String?`; `stillImageProperties`
   emits a PNG dictionary when it is set.
 
@@ -874,7 +1168,7 @@ Expected: FAIL — `StillExportRequest` has no `captureId`.
 
 **If this checkout has no `swiftc`:** this task cannot be run here. Do NOT skip
 it silently — that is the pattern CLAUDE.md warns reads as covered and rots.
-Commit it and record in the PR that Task 5 is unverified pending CI's macOS
+Commit it and record in the PR that Task 6 is unverified pending CI's macOS
 runner, which is the first real compile.
 
 - [ ] **Step 3: Implement**
@@ -923,14 +1217,16 @@ git commit -m "STC-413: the still encoder carries a capture id, independent of s
 
 ---
 
-### Task 6: The exporter tags the MP4 it writes
+### Task 7: The exporter tags the MP4 it writes
 
 **Files:**
 - Modify: `transform/src/export.ts:339-340`
 - Test: `transform/test/export-tag.test.ts` (create)
 
 **Interfaces:**
-- Consumes: `tagMp4`, `readMp4CaptureId` (Task 3).
+- Consumes: `tagMp4`, `readMp4CaptureId` (Task 3); `ensureCaptureId` (Task 5),
+  called on the take's bundle by the caller that invokes `exportSession` —
+  `exportSession` itself stays pure of node and receives the id as a string.
 - Produces: `exportSession` accepts `captureId?: string` on its options and
   emits a tagged buffer.
 
@@ -1023,14 +1319,14 @@ git commit -m "STC-413: tag the exported MP4 with its capture id"
 # PHASE 2 — The folder layout
 
 Phase 2 moves files. Every task here is reversible and none deletes user data
-except Task 11, which is gated on both orphan status and age.
+except Task 12, which is gated on both orphan status and age.
 
 ---
 
-### Task 7: The scan reads the folder
+### Task 8: The scan reads the folder
 
 **Order matters: the scan learns to read `raw/` BEFORE anything writes there.**
-Done the other way round, Task 8 would put new takes in a folder the library
+Done the other way round, Task 9 would put new takes in a folder the library
 cannot see and the suite would be red across two tasks. This task moves no
 files, so it is backward-compatible on its own and the suite stays green.
 
@@ -1040,7 +1336,9 @@ files, so it is backward-compatible on its own and the suite stays green.
 
 **Interfaces:**
 - Consumes: `probePng`/`probeMp4` (Task 4), `readPngCaptureId`/`readMp4CaptureId`
-  (Tasks 2-3).
+  (Tasks 2-3), and `CAPTURE_DOC_FILE`/`parseCaptureDoc` (Task 5) — a bundle's
+  own id is read from its `capture.json`, and a bundle without one has never
+  been exported and therefore cannot match any finished file.
 - Produces: `listLibrary` and `listTakes` keep their existing signatures and
   return the existing `LibraryList`/`TakeList`. `library-items.ts` is untouched.
 
@@ -1048,13 +1346,21 @@ files, so it is backward-compatible on its own and the suite stays green.
 1. Read the folder. A file with a media extension (`.mp4`, `.png`, `.heic`,
    `.jpg`, `.jpeg`) is a **finished capture**. Read its header, probe facts,
    extract its id.
+
+   **`.jpg`/`.jpeg`/`.heic` have no probe, and that is ruled, not forgotten.**
+   Only `probePng` and `probeMp4` exist — JPEG and HEIC header parsing is real
+   work for little return here. Such a file lists with **no dimensions**,
+   exactly like any other file the probe cannot read. This costs almost
+   nothing in practice: a JPEG or HEIC still that the app itself produced is
+   matched to its bundle by its id, and its dimensions come from that bundle's
+   `shot.json`. Only a FOREIGN JPEG shows reduced metadata.
 2. `raw/` and any dotfile are skipped by rule 1.
 3. Read `raw/` if it exists. A directory with `anchors.json` or `shot.json` is a
    **bundle**. A bundle whose id appears in step 1 is that capture's source; one
    whose id does not is an **unfinished capture**.
 4. A top-level directory with `anchors.json`/`shot.json` is a **legacy bundle**
    — treated exactly like a `raw/` one. This is the whole migration, and it is
-   also what keeps this task green before Task 8 moves anything.
+   also what keeps this task green before Task 9 moves anything.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1172,7 +1478,7 @@ not to edit the seam test.
 
 Run: `npx vitest run app/test`
 Expected: PASS. This task is purely additive; a failure here means the scan
-stopped understanding the CURRENT layout, which Task 8 would then bury.
+stopped understanding the CURRENT layout, which Task 9 would then bury.
 
 - [ ] **Step 6: Typecheck and commit**
 
@@ -1184,7 +1490,7 @@ git commit -m "STC-413: the library scan reads media files and bundles in either
 
 ---
 
-### Task 8: New captures land in `raw/`
+### Task 9: New captures land in `raw/`
 
 **Files:**
 - Modify: `app/src/takes.ts`
@@ -1193,7 +1499,7 @@ git commit -m "STC-413: the library scan reads media files and bundles in either
 - Restate: the e2e fixtures that assert a take's on-disk path
 
 **Interfaces:**
-- Consumes: the scan's both-positions support (Task 7).
+- Consumes: the scan's both-positions support (Task 8).
 - Produces: `RAW_SUBDIR: "raw"`, `rawRoot(env, saveFolder): string`.
   `newTakeDir` now returns a path inside `rawRoot`. `takesRoot` is UNCHANGED —
   it still names the user's folder, which is now the finished-capture root.
@@ -1303,14 +1609,14 @@ git commit -m "STC-413: source bundles land in raw/"
 
 ---
 
-### Task 9: Exports land at top level
+### Task 10: Exports land at top level
 
 **Files:**
 - Modify: `app/src/main.ts` (export destination), `app/src/share.ts`
 - Test: `app/test/share.test.ts`
 
 **Interfaces:**
-- Consumes: `takesRoot`, `rawRoot` (Task 8).
+- Consumes: `takesRoot`, `rawRoot` (Task 9).
 - Produces: `exportMediaName(takeName)` returns `<takeName>.mp4` — the
   `export-` prefix is dropped, because location now says "finished".
 
@@ -1360,16 +1666,16 @@ git commit -m "STC-413: exports land at the top level of the folder"
 
 ---
 
-### Task 10: Delete removes both objects
+### Task 11: Delete removes both objects
 
 **Files:**
 - Modify: `app/src/main.ts` (`take:delete`)
 - Test: `app/test/library-folder.e2e.test.ts` (create)
 
 **Interfaces:**
-- Consumes: the scan (Task 7), `rawRoot` (Task 8).
+- Consumes: the scan (Task 8), `rawRoot` (Task 9).
 - Produces: `take:delete` trashes the finished file AND its bundle.
-- Also produces the e2e helpers Tasks 10 and 12 both use, defined at the top of
+- Also produces the e2e helpers Tasks 11 and 13 both use, defined at the top of
   `library-folder.e2e.test.ts` and nowhere else: `refreshLibrary(page)`,
   `itemCount(page)`, `deleteFirstItem(page)`, `openFirstItem(page)`,
   `renameFirstItem(page, name)`, `editorIsOpen(page)`.
@@ -1430,14 +1736,14 @@ git commit -m "STC-413: delete removes a capture's file and its bundle"
 
 ---
 
-### Task 11: Sweep orphaned bundles
+### Task 12: Sweep orphaned bundles
 
 **Files:**
 - Modify: `app/src/temp-takes.ts`
 - Test: `app/test/orphan-sweep.test.ts` (create)
 
 **Interfaces:**
-- Consumes: the scan's id set (Task 7).
+- Consumes: the scan's id set (Task 8).
 - Produces: `sweepOrphanedBundles(env, saveFolder, now): Promise<string[]>`,
   `ORPHAN_MARKER_FILE: ".orphaned-at"`, reusing `TEMP_TAKE_MAX_AGE_MS`.
 
@@ -1523,7 +1829,7 @@ git commit -m "STC-413: sweep bundles that are orphaned AND aged, never aged alo
 
 ---
 
-### Task 12: The filename is the label
+### Task 13: The filename is the label
 
 **Files:**
 - Modify: `app/src/takes.ts` (retire `setTakeLabel`), `app/src/main.ts`,
@@ -1531,7 +1837,7 @@ git commit -m "STC-413: sweep bundles that are orphaned AND aged, never aged alo
 - Test: `app/test/library-folder.e2e.test.ts`
 
 **Interfaces:**
-- Consumes: the scan (Task 7).
+- Consumes: the scan (Task 8).
 - Produces: `renameCapture(env, saveFolder, from, to): Promise<string>`.
   `setTakeLabel` and `take.json` reading are removed for finished captures;
   bundles keep `readLabel` for the unfinished case.
@@ -1587,7 +1893,7 @@ git commit -m "STC-413: the filename is the label; take.json retired"
 
 ---
 
-### Task 13: Measure the 500-file scan
+### Task 14: Measure the 500-file scan
 
 **Files:**
 - Test: `app/test/library-scan.test.ts`
@@ -1637,7 +1943,7 @@ git commit -m "STC-413: measure the 500-file scan rather than assume it"
 - [ ] `npm test` — full suite. Compare failures against a **rebuilt** master
       baseline (`node app/build.mjs` between checkout and run, or the comparison
       tests the unstashed app against stashed tests and means nothing).
-- [ ] `npm run test:capture` on a Mac — Task 5's Swift half
+- [ ] `npm run test:capture` on a Mac — Task 6's Swift half
 - [ ] `npm run gate:identity` — the transform changed; the fingerprint must hold
 - [ ] Open a tagged export in **QuickTime**. A file that parses is not a file a
       player accepts.
