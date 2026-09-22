@@ -424,8 +424,12 @@ describe("the scan on a capture whose moov alone exceeds the read window", () =>
  * Measured on: pcartelli's Mac (Darwin 27.0.0 / macOS 27.0, arm64),
  * 2026-09-22, this worktree, full `npx vitest run --project unit` — 500
  * tagged 300-byte fixture MP4s, real filesystem (mkdtemp under the OS
- * tmpdir): 283-329 ms over three runs, worst observed anywhere 501 ms. 2000
- * ms is ~4x that worst case, and CI's runner is slower again.
+ * tmpdir). SIX in-suite samples: 227, 261, 283, 288, 329 and **748**, plus
+ * 405 and 501 on the reviewer's machine. The 748 is the number that set the
+ * bound: one run in six landed 2.6x the median, so a threshold picked off
+ * the median plus a comfortable-looking multiple is how this flakes again.
+ * 4000 ms is ~5x the worst observed anywhere, and CI's runner is slower
+ * still. It costs nothing in discriminating power — see below.
  *
  * ## Kept in CI rather than moved to `*.slow.test.ts`
  *
@@ -442,12 +446,14 @@ describe("the scan on a capture whose moov alone exceeds the read window", () =>
  * ## What it actually catches — the old comment overclaimed
  *
  * "Catches a scan that became quadratic" is true only of a SEVERE one. The
- * reviewer measured both shapes: a nested `stat` per file reached 2,895 ms
- * (caught, by a wide margin — and the regression scales with the machine the
- * same way the baseline does, so the ~70x ratio, not the absolute, is what
- * clears 2000 ms in-suite too); an extra `readdir` per file reached only
- * ~172 ms, which this would NOT catch and never could without a tight budget
- * that flakes. A mild regression is for the printed number and a human.
+ * reviewer measured both shapes ALONE, against that 41 ms isolated baseline:
+ * a nested `stat` per file reached 2,895 ms — a ~70x ratio, and it is the
+ * RATIO rather than the absolute that transfers, since a regression scales
+ * with the machine exactly as the baseline does, putting it around 17 s
+ * in-suite here and leaving 4000 ms a wide margin. An extra `readdir` per
+ * file reached only ~172 ms (~4x), which this would NOT catch and never
+ * could without a tight budget that flakes. A mild regression is for the
+ * printed number and a human.
  *
  * What this DOES NOT cover at all: the fixture's files are a few hundred
  * bytes, so each bounded read is really reading a whole tiny file in one
@@ -456,7 +462,7 @@ describe("the scan on a capture whose moov alone exceeds the read window", () =>
  * parse, id extract), not IO throughput. The IO half needs a real folder of
  * real exports on a Mac; see `docs/STC-413-RUNBOOK.md`.
  */
-const SCAN_BACKSTOP_MS = 2000;
+const SCAN_BACKSTOP_MS = 4000;
 
 test("500 files scan without going quadratic", async () => {
   for (let i = 0; i < 500; i++) {
