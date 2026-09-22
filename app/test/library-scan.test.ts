@@ -263,8 +263,14 @@ describe("the scan reads the folder", () => {
  * slice would start 64,261 bytes into `mdat`'s own payload and this would
  * fail. Tagged with an id via `tagMp4` (a copy, not the committed fixture
  * itself) to prove both facts AND id survive the real box layout.
+ *
+ * **What this does NOT cover** — and the distinction is worth stating, since
+ * this block's old title ("a real, larger-than-the-window capture") reads as
+ * if it did: the FILE is larger than the window, `moov` itself is 1,275
+ * bytes. That is the multi-hop walk PAST `mdat`. The separate case of `moov`
+ * itself exceeding the window is C2, below.
  */
-describe("the scan on a real, larger-than-the-window capture", () => {
+describe("the scan walks past a large mdat to reach moov", () => {
   test("dimensions, duration and a tagged id all survive a real AVAssetWriter layout", async () => {
     const real = new Uint8Array(await readFile("fixtures/basic/display.mp4"));
     expect(real.length).toBeGreaterThan(65536);           // the premise of this test
@@ -277,6 +283,71 @@ describe("the scan on a real, larger-than-the-window capture", () => {
     // width/height/duration land in the summary string — this scan has no
     // other place that surfaces them for a file with no bundle.
     expect(items[0]!.summary).toMatch(/\d+×\d+/);
+  });
+});
+
+/**
+ * STC-413 C2: `moov` ITSELF bigger than the read window.
+ *
+ * Not a hypothetical shape. `moov` grows with the SAMPLE COUNT — `stts`,
+ * `stsz`, `stco` and `ctts` are one entry per sample — measured on this
+ * repo's own fixtures at 14.2 B/sample (`fixtures/basic/display.mp4`) and
+ * 11.2 B/sample (`fixtures/pip/camera.mp4`). So `moov` passes
+ * `MP4_TAIL_PROBE_BYTES`'s 64 KB somewhere around 4,600-5,800 samples, which
+ * at 60 fps is **80 to 95 seconds**. An ordinary take.
+ *
+ * `locateMoovBytes` used to re-cap that second, targeted read at the same
+ * 64 KB, so it handed `mp4BoxesIn` a PREFIX of `moov` — which correctly
+ * refuses a box declaring more bytes than it was given, yielding neither
+ * facts nor an id. Downstream: two tiles for one capture, a re-export
+ * refused with "it belongs to a different capture" about the user's own
+ * file, and `share:publish` reporting an exported take as never exported.
+ *
+ * The padding is a `free` box inside `moov`, which is structurally valid and
+ * which `probeMp4`'s own child walk skips — the point is `moov`'s declared
+ * SIZE, not what fills it.
+ */
+describe("the scan on a capture whose moov alone exceeds the read window", () => {
+  /** `mp4Bytes`, with `moov` grown past `padTo` bytes by a `free` child. */
+  function bigMoovMp4(padTo: number): Uint8Array {
+    const mvhd = box("mvhd", [0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(600), ...be32(3000)]);
+    const tkhd = box("tkhd", [
+      0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(1), ...be32(0), ...be32(0),
+      ...new Array(8).fill(0), 0, 0, 0, 0, 0, 0, 0, 0,
+      ...new Array(36).fill(0),
+      ...be32(1920 * 65536), ...be32(1080 * 65536),
+    ]);
+    const moovBody = [...mvhd, ...box("trak", tkhd),
+                      ...box("free", new Array(padTo).fill(0))];
+    return new Uint8Array([...box("ftyp", chars("isom")), ...box("mdat", [1, 2, 3, 4]),
+      ...box("moov", moovBody)]);
+  }
+
+  test("a moov of 96 KB still yields its facts AND its embedded id", async () => {
+    const id = mintCaptureId();
+    const bytes = tagMp4(bigMoovMp4(96 * 1024), id);
+    // The premise, asserted rather than assumed: without this the test could
+    // silently become another under-the-window case and pass for free.
+    const moovAt = Buffer.from(bytes).indexOf(Buffer.from("moov", "latin1")) - 4;
+    const moovSize = Buffer.from(bytes).readUInt32BE(moovAt);
+    expect(moovSize, "moov's own declared size").toBeGreaterThan(65536);
+
+    await writeFile(join(root, "long-take.mp4"), bytes);
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.summary, "facts read out of an oversized moov").toMatch(/1920×1080/);
+
+    // The id is the half with the visible consequences: without it the bundle
+    // below matches nothing and the capture lists TWICE.
+    const bundle = join(root, "raw", "2026-09-22_10-00-00");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "display.mp4"), "x");
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+
+    const matched = await listLibrary(env, root);
+    expect(matched.items, "one capture, not one tile per half").toHaveLength(1);
+    expect(matched.items[0]!.file).toBe(join(root, "long-take.mp4"));
   });
 });
 

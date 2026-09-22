@@ -193,6 +193,14 @@ function peekBoxHeader(buf: Uint8Array, at: number): { type: string; size: numbe
  * `mdat`, `moov`, optionally a trailing `uuid` tag — four. The cap is what
  * stops a malformed file from being walked forever instead of degrading.
  */
+/**
+ * How much past `moov`'s own declared end the targeted read reaches, so any
+ * trailing box lands in the same buffer. The only one this app writes is
+ * `tagMp4`'s 54-byte `uuid`; 4 KB is room for a `free`/`skip` or a second
+ * vendor box beside it without being a second unbounded read.
+ */
+const MOOV_TAIL_SLACK_BYTES = 4096;
+
 async function locateMoovBytes(file: string, fileSize: number): Promise<Uint8Array | undefined> {
   let bufStart = 0;
   let buf = await readRange(file, 0, Math.min(MP4_TAIL_PROBE_BYTES, fileSize));
@@ -209,9 +217,28 @@ async function locateMoovBytes(file: string, fileSize: number): Promise<Uint8Arr
     if (!box) return undefined;
     if (box.type === "moov") {
       if (localAt + box.size <= buf.length) return buf.subarray(localAt);
-      // moov itself runs past what this hop holds — one more targeted read,
-      // bounded the same as every other read here, landing on its own start.
-      return await readRange(file, absAt, Math.min(fileSize - absAt, MP4_TAIL_PROBE_BYTES));
+      // `moov` runs past what this hop holds — one more targeted read,
+      // landing on its own start and sized by ITS OWN declared size.
+      //
+      // This used to re-cap at MP4_TAIL_PROBE_BYTES, and that was wrong in a
+      // way ordinary takes hit. `moov` grows with the SAMPLE COUNT (stts,
+      // stsz, stco, ctts are one entry per sample), measured on this repo's
+      // own fixtures at 14.2 B/sample for display.mp4 and 11.2 B/sample for
+      // camera.mp4 — so it passes 64 KB somewhere around 4,600-5,800
+      // samples, which at 60 fps is 80-95 SECONDS. Past that the second read
+      // returned a prefix, `mp4BoxesIn` correctly refused a box declaring
+      // more bytes than it was given, and the file yielded neither facts nor
+      // an id. Downstream that is two tiles for one capture, a re-export
+      // refused with "it belongs to a different capture" about the user's
+      // own file, and share reporting a published take as never exported.
+      //
+      // MOOV_TAIL_SLACK_BYTES covers what sits AFTER `moov` — `tagMp4`
+      // appends its `uuid` box there (54 bytes), and `readMp4CaptureId`
+      // walks on past `moov` to find it within this same buffer. Clamped to
+      // what the file actually holds, so a truncated file is read as far as
+      // it is intact rather than refused outright.
+      return await readRange(file, absAt,
+                             Math.min(fileSize - absAt, box.size + MOOV_TAIL_SLACK_BYTES));
     }
     absAt += box.size;
   }
