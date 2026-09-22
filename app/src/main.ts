@@ -33,7 +33,7 @@ import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
-  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes,
+  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
 } from "./temp-takes.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
@@ -453,7 +453,17 @@ app.whenReady().then(async () => {
   await mkdir(tempTakesRoot(process.env), { recursive: true }).catch((e) => {
     console.error("[temp-takes] could not create the temp root:", e);
   });
-  setInterval(() => { void purgeStaleTempTakes(process.env).catch(() => {}); }, TEMP_PURGE_INTERVAL_MS);
+  setInterval(() => {
+    void purgeStaleTempTakes(process.env).catch(() => {});
+    // Same timer, a different root (STC-413): `raw/` bundles are not temp
+    // takes and age from a different clock (a marker written on first
+    // sighting orphaned, not the bundle's own creation), but the cadence
+    // this app already sweeps on is exactly right for both.
+    const { saveFolder } = readSettings(app.getPath("userData"));
+    void sweepOrphanedBundles(process.env, saveFolder).catch((e) => {
+      console.error("[orphan-sweep] failed:", e);
+    });
+  }, TEMP_PURGE_INTERVAL_MS);
   // Keeps every promise `panel:trash` makes (STC-392 Task 6): whatever
   // `pendingTrash.due()` hands back has had its whole undo window elapse, so
   // it is committed to the real Trash here rather than on any UI timer.
