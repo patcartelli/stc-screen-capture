@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { readdir, stat, mkdir, rename, cp, rm, readFile, writeFile } from "node:fs/promises";
+import { readdir, stat, lstat, mkdir, rename, cp, rm, readFile, writeFile } from "node:fs/promises";
 import { join, resolve, sep, basename } from "node:path";
 import { rawRoot, stamp, uniqueTakeName } from "./takes.js";
 import { scanFinishedFilesAt } from "./library.js";
@@ -208,33 +208,54 @@ export async function purgeStaleTempTakes(env: NodeJS.ProcessEnv,
 /**
  * The dotfile marking a bundle first seen orphaned (STC-413).
  *
- * A DOTFILE, not incidentally: it lives inside a `raw/` bundle directory,
- * which `library.ts`'s scan walks, and rule 2 of that scan skips dotfiles —
- * so the marker can never be read back as capture content or thrown into the
- * id match itself. Its contents are the epoch ms it was written, so age is
- * measured from the SIGHTING rather than from the bundle's own (possibly
- * much older) creation date.
+ * Its contents are the epoch ms it was written, so age is measured from the
+ * SIGHTING rather than from the bundle's own (possibly much older) creation
+ * date. Named with a leading dot as defensive convention, matching what
+ * `library.ts`'s scan already does one level up for `raw/`'s own children —
+ * but that convention does NOT hide this file from anything by itself: the
+ * scan's dotfile skip (rule 2) only applies to `raw/`'s direct children
+ * (sibling bundle directories); this marker sits one level deeper, inside a
+ * bundle, where nothing else ever looks at it.
  */
 export const ORPHAN_MARKER_FILE = ".orphaned-at";
 
 /**
- * Reclaim `raw/` bundles whose finished file is gone (STC-413).
+ * Find `raw/` bundles whose finished file is gone (STC-413), and return
+ * their directories. **Never deletes anything here.**
  *
- * A bundle is removed only when it is BOTH orphaned and aged — two
- * independent conditions, and dropping either one is the exact bug this
- * function exists not to have (see the mutation check in
- * `orphan-sweep.test.ts`):
+ * This module is deliberately Electron-free, and the object being reported
+ * is a `raw/` bundle — the SAME kind of object Task 11 already removes, via
+ * `shell.trashItem`, under the rule "never `rm`, so a mistaken click is one
+ * Finder restore away." `rawRoot` sits inside the user's own chosen folder,
+ * visible and reachable — unlike `purgeStaleTempTakes`'s root, which lives
+ * inside `~/Library/Application Support`, invisible and already abandoned,
+ * where a bare `rm` is the right call. So this function only DECIDES; the
+ * caller (`main.ts`, the same 12-hour timer that already runs
+ * `purgeStaleTempTakes`) is what actually trashes each returned directory —
+ * the identical `pendingTrash.due()` -> `shell.trashItem` split one call
+ * site over.
+ *
+ * A bundle is reported as due only when it is BOTH orphaned and aged — two
+ * independent conditions, and dropping either is the exact bug this function
+ * exists not to have (see the mutation check in `orphan-sweep.test.ts`):
  *
  *  - AGE ALONE is wrong. `purgeStaleTempTakes` derives age from the
  *    directory's own NAME, which is right for a transient temp take and
  *    wrong here — a bundle behind a capture made eight days ago would be
- *    swept while its finished file still sits at top level, silently making
- *    it uneditable. So age here is measured from a MARKER written the first
- *    time the bundle was seen orphaned, never from its creation date.
+ *    reported while its finished file still sits at top level, silently
+ *    making it uneditable. So age here is measured from a MARKER written
+ *    the first time the bundle was seen orphaned, never from its creation
+ *    date. **The marker's own content must not be misreadable as ancient**:
+ *    `Number("")` is `0`, which is finite, so a zero-byte or
+ *    whitespace-only marker (exactly the shape a crash leaves mid
+ *    `writeFile` — it truncates before it writes, and the likeliest cause
+ *    of a truncated write is a full disk, the very condition this sweep
+ *    exists to relieve) must read as a FRESH sighting, never as epoch 0.
  *  - ORPHAN STATUS ALONE is wrong too: a read must not delete data, and a
  *    file temporarily moved out of the folder would read as deleted on one
- *    pass and reappear the next. So a first sighting only marks; removal
- *    needs the mark to already be old, and a file coming back clears it.
+ *    pass and reappear the next. So a first sighting only marks; being
+ *    reported as due needs the mark to already be old, and a file coming
+ *    back clears it.
  *
  * "No matched file" is not, by itself, "orphaned" — see this module's own
  * task brief. After Task 8's scan, a bundle with no matched file is one of
@@ -246,12 +267,12 @@ export const ORPHAN_MARKER_FILE = ".orphaned-at";
  * has none. So orphanhood is proven for the whole pass at once, by reusing
  * `scanFinishedFilesAt` (Task 8's own file scan — a second id-matching pass
  * here would be the two-owners defect this codebase keeps paying for): if
- * any top-level file's id could not be read, no bundle's orphan status can be
- * proven this pass, and NOTHING is swept. The cost is accepted and stated
- * rather than hidden: a folder containing even one untagged file never
- * reclaims disk from `raw/` until that file is read, moved out, or deleted.
- * That is the right way to be wrong — keeping a bundle that might still be
- * someone's source material beats deleting one that was.
+ * any top-level file's id could not be read, no bundle's orphan status can
+ * be proven this pass, and NOTHING is reported. The cost is accepted and
+ * stated rather than hidden: a folder containing even one untagged file
+ * never reclaims disk from `raw/` until that file is read, moved out, or
+ * deleted. That is the right way to be wrong — keeping a bundle that might
+ * still be someone's source material beats deleting one that was.
  *
  * A bundle with no readable `capture.json` (never exported, or one that
  * cannot be parsed) has nothing to match against a finished file at all and
@@ -275,13 +296,18 @@ export async function sweepOrphanedBundles(env: NodeJS.ProcessEnv, saveFolder: s
   const idsPresent = new Set(
     finished.map((f) => f.id).filter((id): id is string => id !== undefined));
 
-  const removed: string[] = [];
+  const due: string[] = [];
   for (const name of names) {
-    if (name.startsWith(".")) continue;                  // never a bundle (rule 2)
+    if (name.startsWith(".")) continue;                  // never a bundle
     const dir = join(root, name);
     let st;
-    try { st = await stat(dir); } catch { continue; }     // vanished mid-scan
-    if (!st.isDirectory()) continue;
+    // lstat, never stat: `stat` follows a symlink, so a symlinked entry
+    // under `raw/` would have this function read/write through it into
+    // wherever the link points — outside this function's declared root.
+    // `insideTakesRoot`-style path checks would NOT catch this either,
+    // since `resolve()` does not follow symlinks.
+    try { st = await lstat(dir); } catch { continue; }    // vanished mid-scan
+    if (!st.isDirectory()) continue;                      // not a real directory (a symlink included)
 
     let bundleId: string | undefined;
     try {
@@ -293,15 +319,20 @@ export async function sweepOrphanedBundles(env: NodeJS.ProcessEnv, saveFolder: s
     const markerPath = join(dir, ORPHAN_MARKER_FILE);
     if (idsPresent.has(bundleId)) {
       // The file is here — or came back. Clear any stale mark so a
-      // temporary move costs nothing.
+      // temporary move costs nothing. This is our own bookkeeping dotfile,
+      // never the bundle itself, so a plain `rm` is the right tool here.
       await rm(markerPath, { force: true }).catch(() => {});
       continue;
     }
 
+    // A marker that cannot be read as a positive number is a FRESH sighting,
+    // never an ancient one — see the header's note on why `Number("")` (0)
+    // must not be trusted.
     let markedAt: number | undefined;
     try {
-      const raw = Number(await readFile(markerPath, "utf8"));
-      markedAt = Number.isFinite(raw) ? raw : undefined;
+      const text = (await readFile(markerPath, "utf8")).trim();
+      const n = Number(text);
+      markedAt = text !== "" && Number.isFinite(n) && n > 0 ? n : undefined;
     } catch { /* not yet marked — this is the first sighting */ }
 
     if (markedAt === undefined) {
@@ -309,11 +340,10 @@ export async function sweepOrphanedBundles(env: NodeJS.ProcessEnv, saveFolder: s
       continue;
     }
     if (now - markedAt >= TEMP_TAKE_MAX_AGE_MS) {
-      await rm(dir, { recursive: true, force: true }).catch(() => {});
-      removed.push(name);
+      due.push(dir);
     }
   }
-  return removed;
+  return due;
 }
 
 export interface TempTakeInfo {

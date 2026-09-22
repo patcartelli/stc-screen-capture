@@ -458,9 +458,20 @@ app.whenReady().then(async () => {
     // Same timer, a different root (STC-413): `raw/` bundles are not temp
     // takes and age from a different clock (a marker written on first
     // sighting orphaned, not the bundle's own creation), but the cadence
-    // this app already sweeps on is exactly right for both.
+    // this app already sweeps on is exactly right for both. `temp-takes.ts`
+    // stays Electron-free, so `sweepOrphanedBundles` only DECIDES which
+    // bundles are due; trashing one is done HERE, through `shell.trashItem`
+    // — the same split `pendingTrash.due()` -> `shell.trashItem` uses a few
+    // lines down — so a mistaken sweep is one Finder restore away, never
+    // an `rm` nobody can undo.
     const { saveFolder } = readSettings(app.getPath("userData"));
-    void sweepOrphanedBundles(process.env, saveFolder).catch((e) => {
+    void sweepOrphanedBundles(process.env, saveFolder).then((due) => {
+      for (const dir of due) {
+        shell.trashItem(dir).catch((e) => {
+          console.error("[orphan-sweep] could not trash an orphaned bundle:", dir, e);
+        });
+      }
+    }).catch((e) => {
       console.error("[orphan-sweep] failed:", e);
     });
   }, TEMP_PURGE_INTERVAL_MS);

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,13 +64,19 @@ describe("orphaned bundles are swept, aged from when they were orphaned", () => 
     expect(existsSync(bundle)).toBe(true);
   });
 
-  test("an orphan older than the threshold is removed", async () => {
+  // Round-1 fix (Important 1): `sweepOrphanedBundles` never removes a
+  // bundle itself — it is Electron-free and the object it is reporting is
+  // the SAME kind Task 11 already removes via `shell.trashItem`. It only
+  // returns the directory as DUE; `main.ts` is what actually trashes it.
+  test("an orphan older than the threshold is returned as due, not deleted directly", async () => {
     await rm(join(root, "login-bug.mp4"));
     const t0 = Date.now();
     await sweepOrphanedBundles(env, root, t0);
-    const removed = await sweepOrphanedBundles(env, root, t0 + TEMP_TAKE_MAX_AGE_MS + 1);
-    expect(removed).toHaveLength(1);
-    expect(existsSync(bundle)).toBe(false);
+    const due = await sweepOrphanedBundles(env, root, t0 + TEMP_TAKE_MAX_AGE_MS + 1);
+    expect(due).toEqual([bundle]);
+    // The sweep only decides. If it had deleted the directory itself, this
+    // would fail — trashing is main.ts's job, through shell.trashItem.
+    expect(existsSync(bundle)).toBe(true);
   });
 
   test("a file that comes back clears the mark — a temporary move costs nothing", async () => {
@@ -87,7 +93,7 @@ describe("orphaned bundles are swept, aged from when they were orphaned", () => 
     expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);
   });
 
-  test("an UNREADABLE-id file present means nothing is swept at all", async () => {
+  test("an UNREADABLE-id file present means nothing is reported as due", async () => {
     // A JPEG still carries no id we can read, so we cannot prove any bundle is
     // orphaned while one is sitting there. Deleting the source behind a
     // perfectly good still is much worse than never reclaiming the disk.
@@ -96,9 +102,57 @@ describe("orphaned bundles are swept, aged from when they were orphaned", () => 
 
     const t0 = Date.now();
     await sweepOrphanedBundles(env, root, t0);
-    const removed = await sweepOrphanedBundles(env, root, t0 + TEMP_TAKE_MAX_AGE_MS + 1);
+    const due = await sweepOrphanedBundles(env, root, t0 + TEMP_TAKE_MAX_AGE_MS + 1);
 
-    expect(removed).toEqual([]);                            // nothing swept
+    expect(due).toEqual([]);                                // nothing reported
     expect(existsSync(bundle)).toBe(true);                  // the bundle survives
+  });
+
+  // Round-1 fix (Critical): `Number("")` is `0`, and `0` is finite — so a
+  // zero-byte or whitespace-only marker (exactly what a crash mid
+  // `writeFile` leaves, since `writeFile` truncates before it writes, and a
+  // full disk — the very condition this sweep exists to relieve — is the
+  // likeliest cause of a truncated write) must never be read as epoch 0.
+  // None of the six tests above construct a corrupt marker, so this is its
+  // own regression test.
+  test("a zero-byte or whitespace-only marker is a fresh sighting, never ancient", async () => {
+    await rm(join(root, "login-bug.mp4"));
+    // Simulate the crash directly, rather than via the sweep's own writer,
+    // so this test does not depend on the writer having the same bug.
+    await writeFile(join(bundle, ORPHAN_MARKER_FILE), "   ");
+
+    const future = Date.now() + TEMP_TAKE_MAX_AGE_MS * 10;
+    const due = await sweepOrphanedBundles(env, root, future);
+
+    // The buggy version reads "" as epoch 0, so `future - 0` clears the age
+    // gate immediately and the bundle comes back as due on the very next
+    // sweep — this assertion is what catches that.
+    expect(due).toEqual([]);
+    // Treated as a FRESH sighting: the marker is rewritten with `future`,
+    // not left as the unreadable value, and not deleted either.
+    expect(await readFile(join(bundle, ORPHAN_MARKER_FILE), "utf8")).toBe(String(future));
+  });
+
+  // Round-1 fix (Important 2): `stat` follows a symlink; `lstat` does not.
+  // A symlinked entry under `raw/` must be skipped outright, never
+  // followed — reading/writing through it would touch a directory OUTSIDE
+  // this function's declared root.
+  test("a symlinked entry under raw/ is skipped, never followed", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "stc-orphan-outside-"));
+    try {
+      // Set up `outside` to look exactly like a genuinely orphaned bundle —
+      // a capture.json whose id matches nothing at top level — so the OLD
+      // (stat-following) code would have proceeded straight through to
+      // writing a marker into it.
+      await writeFile(join(outside, "capture.json"),
+        JSON.stringify({ version: 1, id: mintCaptureId() }));
+      await symlink(outside, join(root, "raw", "not-a-real-bundle"));
+
+      await sweepOrphanedBundles(env, root, Date.now());
+
+      expect(existsSync(join(outside, ORPHAN_MARKER_FILE))).toBe(false);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 });
