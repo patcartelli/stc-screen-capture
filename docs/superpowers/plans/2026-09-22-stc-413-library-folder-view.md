@@ -1166,6 +1166,8 @@ git commit -m "STC-413: a bundle's identity, minted lazily at export time"
 **Files:**
 - Modify: `helper/src/StillEncodeDecisions.swift:321-333`
 - Modify: `helper/src/StillEncode.swift` (request parsing)
+- Modify: `app/src/still-io.ts` (forward `captureId` into the helper request)
+- Modify: `app/src/main.ts` (`still:export` — supply the value via `ensureCaptureId`)
 - Test: `helper/test/still-encode/main.swift`
 
 **Interfaces:**
@@ -1238,12 +1240,44 @@ func stillImageProperties(_ r: StillExportRequest) -> [CFString: Any] {
 Then parse `captureId` in `StillEncode.swift`'s request decoding beside the
 existing fields, refusing a malformed one rather than passing it through.
 
-- [ ] **Step 4: Run it to verify it passes**
+- [ ] **Step 4: Wire the app side — otherwise nothing ever sets the field**
+
+The Swift half above only READS `captureId` off the request. Without this step
+it is a field nothing populates, and every still ships untagged while all the
+Swift tests pass.
+
+`app/src/still-io.ts` builds the helper request at roughly line 326. Add
+`captureId` to `ExportStillRequest`, and forward it beside `capturedAt`:
+
+```ts
+      ...(meta.capturedAt ? { capturedAt: meta.capturedAt } : {}),
+      // STC-413: identity, NOT gated on stripMetadata — it is opaque, carries
+      // no timestamp and no path, and suppressing it would make a
+      // privacy-stripped export permanently uneditable.
+      ...(req.captureId ? { captureId: req.captureId } : {}),
+```
+
+The VALUE comes from the caller, not from here — `still-io.ts` is the funnel
+and does not know about bundles. In `app/src/main.ts`'s `still:export` handler,
+call `ensureCaptureId(<the shot's bundle directory>)` and put the result on the
+request. That handler already resolves the shot's directory for
+`destinationDir`'s `fallbackDir`, so the path is in hand.
+
+**Check every call site.** `exportStill` is the one funnel every still takes out
+of the app — panel Save, Copy, Save As…, the right-click menu and the settle
+path all reach it. Grep for callers and confirm each supplies a `captureId`, or
+state in your report which deliberately do not and why. A Copy-to-clipboard
+export writes to a cache directory and is never a library file, so it is a
+legitimate no-id case.
+
+- [ ] **Step 5: Run it to verify it passes**
 
 Run: `helper/build.sh && helper/test/still-encode/run.sh`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+Then `npm run typecheck` — all three passes — since the app side changed.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add helper/src/StillEncodeDecisions.swift helper/src/StillEncode.swift \
@@ -1257,6 +1291,9 @@ git commit -m "STC-413: the still encoder carries a capture id, independent of s
 
 **Files:**
 - Modify: `transform/src/export.ts:339-340`
+- Modify: `app/src/main.ts` (a `take:captureId` handler)
+- Modify: `app/src/editor-preload.ts` (expose it on the narrow bridge)
+- Modify: `app/src/editor.ts:1237` (pass it to `exportSession`)
 - Test: `transform/test/export-tag.test.ts` (create)
 
 **Interfaces:**
@@ -1321,7 +1358,33 @@ with:
 Add `captureId?: string` to the options interface and
 `import { tagMp4 } from "./media-tag.js";` at the top.
 
-- [ ] **Step 4: Verify end to end against a real export**
+- [ ] **Step 4: Wire the app side — and note it has to cross IPC**
+
+Step 3 makes `exportSession` READ `opts.captureId`. Nothing sets it yet, so
+without this step every export ships untagged while the unit tests pass.
+
+The app's only caller is `app/src/editor.ts:1237`, and **that is a renderer** —
+it cannot call `ensureCaptureId`, which uses `node:fs` and would fail the
+browser typecheck pass. So the id crosses the bridge:
+
+1. `app/src/main.ts` — add a handler, `take:captureId`, that resolves the take
+   directory for the calling `webContents` (the existing
+   `Map<webContents.id, string>` that replaced the old single `openTake`) and
+   returns `await ensureCaptureId(thatDir)`. Refuse if no take is open, the
+   way the other `preview:*` handlers already do.
+2. `app/src/editor-preload.ts` — expose it on the existing narrow bridge, in
+   keeping with that file's rule of exposing only what the editor needs.
+3. `app/src/editor.ts` — fetch it just before `exportSession` and pass it as
+   `captureId` in the options object at line 1237.
+
+**The gate and harness drivers deliberately pass nothing.**
+`scripts/export-gate.mjs`, `scripts/export-one.mjs` and
+`scripts/measure-export.mjs` all call `window.exportSession` directly and have
+no bundle to identify. An untagged export from a harness is correct — those
+files are not library captures. Do not "fix" them, and say so in your report so
+a reviewer does not read it as an omission.
+
+- [ ] **Step 5: Verify end to end against a real export**
 
 ```bash
 node scripts/export-one.mjs fixtures/basic 2
@@ -1342,11 +1405,12 @@ that parses is not the same claim as a file QuickTime accepts, and this repo
 already records that a trailing-box mistake is the kind of thing only a player
 reveals.
 
-- [ ] **Step 5: Typecheck and commit**
+- [ ] **Step 6: Typecheck and commit**
 
 ```bash
 npm run typecheck
-git add transform/src/export.ts transform/test/export-tag.test.ts
+git add transform/src/export.ts transform/test/export-tag.test.ts \
+        app/src/main.ts app/src/editor-preload.ts app/src/editor.ts
 git commit -m "STC-413: tag the exported MP4 with its capture id"
 ```
 
