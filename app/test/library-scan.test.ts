@@ -279,3 +279,44 @@ describe("the scan on a real, larger-than-the-window capture", () => {
     expect(items[0]!.summary).toMatch(/\d+×\d+/);
   });
 });
+
+/**
+ * A GROSS-REGRESSION BACKSTOP, deliberately not a tight budget.
+ *
+ * This runs in the normal suite, and a tight timing assertion there reddens
+ * PRs at random under load — which this repo has already paid for once
+ * (`ring-overflow.slow.test.ts` was taken out of CI for exactly that, on the
+ * rule that "a test that reddens PRs at random is worse than one that does
+ * not run"). So the number below is the measured figure with a LARGE multiple
+ * on top: it catches a scan that became quadratic, and deliberately does NOT
+ * catch a 2x slowdown. The printed value is the real signal; a human reading
+ * it is the instrument.
+ *
+ * Measured on: pcartelli's Mac (Darwin 27.0.0 / macOS 27.0, arm64), 2026-09-22,
+ * this worktree, `npx vitest run app/test/library-scan.test.ts -t "500 files"`
+ * — 500 tagged 300-byte fixture MP4s, real filesystem (mkdtemp under the OS
+ * tmpdir): consistently 41-42 ms total, ~0.08 ms/file over three runs. 10x
+ * that is ~420 ms; set to 450 ms for a little extra headroom.
+ *
+ * What this DOES NOT cover: the fixture's files are a few hundred bytes, so
+ * each "64 KB tail read" is really reading a whole tiny file in one shot.
+ * Against 500 real 4K exports the same scan does ~32 MB of scattered IO on
+ * top of this — this pins per-file OVERHEAD (`readdir`, open, header parse,
+ * id extract), not IO throughput. The IO half needs a real folder of real
+ * exports on a Mac; see `docs/STC-413-RUNBOOK.md`.
+ */
+const SCAN_BACKSTOP_MS = 450;
+
+test("500 files scan without going quadratic", async () => {
+  for (let i = 0; i < 500; i++) {
+    await writeFile(join(root, `take-${String(i).padStart(3, "0")}.mp4`),
+                    tagMp4(mp4Bytes(), mintCaptureId()));
+  }
+  const t0 = performance.now();
+  const { items } = await listLibrary(env, root);
+  const ms = performance.now() - t0;
+  process.stderr.write(`500-file scan: ${Math.round(ms)} ms ` +
+                       `(${(ms / 500).toFixed(2)} ms/file)\n`);
+  expect(items).toHaveLength(500);
+  expect(ms).toBeLessThan(SCAN_BACKSTOP_MS);
+}, 120_000);
