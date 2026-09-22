@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { writeFile, readdir, mkdir, copyFile, stat } from "node:fs/promises";
-import { join, resolve, sep, basename } from "node:path";
+import { writeFile, readdir, mkdir, copyFile, stat, rename } from "node:fs/promises";
+import { join, resolve, sep, basename, extname } from "node:path";
 
 /**
  * Is `dir` a real directory INSIDE the recordings root?
@@ -97,6 +97,15 @@ export const MAX_LABEL_LENGTH = 120;
  * sort key. Renaming it would scramble chronological order, break any open
  * preview, and invalidate paths already handed out for exports — so the label
  * lives beside the recording instead.
+ *
+ * STC-413 narrows what this is FOR rather than deleting it: a finished
+ * capture (one with a top-level file) is renamed for real now, through
+ * `renameCapture` below — the file IS the name. This stays the fallback for
+ * the one shape that still needs a sidecar label: a bundle with no finished
+ * file yet (never exported) has no user-facing filename to rename at all.
+ * `library.test.ts` calls this directly and pins that shape, which is why it
+ * is kept rather than "retired outright" the way the task's own shorthand
+ * first suggested.
  */
 export async function setTakeLabel(env: NodeJS.ProcessEnv, saveFolder: string | null,
                                    dir: string, label: string): Promise<void> {
@@ -108,6 +117,58 @@ export async function setTakeLabel(env: NodeJS.ProcessEnv, saveFolder: string | 
     throw new Error(`label is too long (max ${MAX_LABEL_LENGTH} characters)`);
   }
   await writeFile(join(dir, "take.json"), JSON.stringify({ version: 1, label: trimmed }, null, 2));
+}
+
+/**
+ * Rename a finished capture's FILE (STC-413) — "the filename IS the
+ * capture's name" is the ticket's own headline, so this is a real filesystem
+ * rename, never a sidecar write. Complements `setTakeLabel` above, which is
+ * what a caller falls back to when there is no file to rename at all.
+ *
+ * `to` is a bare NAME someone typed, never a path: no separator (`/` or
+ * `\`) — one would let the destination land anywhere, including inside
+ * `raw/` — and no `..` (traversal). The ORIGINAL extension is always kept,
+ * taken from `from` rather than from anything typed: a rename to
+ * "login-bug" must not produce an extensionless file the scan's own
+ * `MEDIA_EXTENSIONS` check then silently ignores forever. A collision
+ * resolves through the SAME `uniqueTakeName` a fresh take's own directory
+ * uses — one naming rule, not two — checked only against files sharing the
+ * same extension, since a "vacation.png" already at top level does not
+ * collide with a video someone is naming "vacation".
+ */
+export async function renameCapture(env: NodeJS.ProcessEnv, saveFolder: string | null,
+                                    from: string, to: string): Promise<string> {
+  if (!insideTakesRoot(env, saveFolder, from)) {
+    throw new Error("refusing to rename a path outside the recordings folder");
+  }
+  const trimmed = to.trim();
+  if (!trimmed) throw new Error("a name cannot be empty");
+  if (trimmed.length > MAX_LABEL_LENGTH) {
+    throw new Error(`name is too long (max ${MAX_LABEL_LENGTH} characters)`);
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error("a name cannot contain a path separator");
+  }
+  if (trimmed.includes("..")) {
+    throw new Error('a name cannot contain ".."');
+  }
+
+  const root = takesRoot(env, saveFolder);
+  const ext = extname(from);
+  const currentStem = basename(from, ext);
+  if (trimmed === currentStem) return from;   // no-op: typed what is already there
+
+  const existing = existsSync(root) ? await readdir(root) : [];
+  // Only entries sharing THIS extension can actually collide on disk — an
+  // image named "vacation" does not block a video of the same name.
+  const sameExtStems = existing
+    .filter((n) => extname(n).toLowerCase() === ext.toLowerCase())
+    .map((n) => basename(n, extname(n)));
+  const stem = uniqueTakeName(trimmed, sameExtStems);
+  const dest = join(root, `${stem}${ext}`);
+
+  await rename(from, dest);
+  return dest;
 }
 
 /**

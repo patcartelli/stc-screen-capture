@@ -30,7 +30,7 @@ import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
 import { readFile, writeFile, stat, open, copyFile, rm, mkdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
-import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
+import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, renameCapture } from "./takes.js";
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
   purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
@@ -1340,9 +1340,32 @@ ipcMain.handle("still:duplicate", async (_e, dir: string) => {
 ipcMain.handle("recorder:takes", async () =>
   listTakes(process.env, readSettings(app.getPath("userData")).saveFolder));
 
-ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
-  await setTakeLabel(process.env, readSettings(app.getPath("userData")).saveFolder, dir, label);
-  return true;
+/**
+ * Rename a capture (STC-413) — the file IS the name now. `file` wins when
+ * present, which is the whole ticket: renaming here does the same thing as
+ * renaming in Finder. A bundle with no file yet (never exported) has no
+ * user-facing filename to rename, so it falls back to the old take.json
+ * label — the one case `setTakeLabel` is still for. Neither present refuses
+ * loudly rather than silently doing nothing: `renderer.ts`'s old handler
+ * used to `if (!dir) return;` before ever reaching here, which dropped a
+ * rename on the floor for any item Task 8's `looseFileItem` offered Rename
+ * to but had no `dir` for.
+ *
+ * `renameCapture`/`setTakeLabel` each validate their own path is inside the
+ * recordings folder — this handler does not repeat that check, the same way
+ * `take:delete` trusts each target's own validation rather than a second
+ * copy here.
+ */
+ipcMain.handle("take:rename", async (_e, file: string | undefined, dir: string | undefined, name: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof file === "string" && file.length > 0) {
+    return await renameCapture(process.env, saveFolder, file, name);
+  }
+  if (typeof dir === "string" && dir.length > 0) {
+    await setTakeLabel(process.env, saveFolder, dir, name);
+    return dir;
+  }
+  throw new Error("nothing to rename");
 });
 
 /**

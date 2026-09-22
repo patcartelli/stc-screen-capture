@@ -64,7 +64,10 @@ declare const recorder: {
   getShot(dir: string): Promise<Shot>;
   reopenStill(dir: string): Promise<{ ok: boolean }>;
   duplicateStill(dir: string): Promise<{ ok: boolean; dir: string }>;
-  labelTake(dir: string, label: string): Promise<boolean>;
+  // STC-413: the file IS the name now. `file` wins when present (a real
+  // rename on disk, through `takes.ts`'s `renameCapture`); `dir` alone falls
+  // back to the old take.json label, for a bundle with no finished file yet.
+  renameCapture(file: string | undefined, dir: string | undefined, name: string): Promise<string>;
   deleteTake(file: string | undefined, dir: string | undefined):
     Promise<{ deleted: boolean; cancelled?: boolean; detail?: string }>;
   // The take player is its own window now (STC-373) — this opens it. Every
@@ -1097,14 +1100,18 @@ const libraryCallbacks: LibraryCallbacks = {
     } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async rename(item, label) {
-    // Renaming a FILE (Task 13) is not built yet — for now the adapter only
-    // ever offers "rename" on an item with a bundle (`take.json` needs a
-    // directory to live beside), so this is a structural guard, not a
-    // feature gap this task is meant to close.
-    const dir = item.dir;
-    if (!dir) return;
-    try { await recorder.labelTake(dir, label); await refreshTakes(); }
-    catch (e: any) { alertUser(String(e?.message ?? e)); }
+    // STC-413: rename does not need a bundle any more, so both `file` and
+    // `dir` are handed through unresolved and main decides — `file` wins
+    // (a real rename on disk) when there is one, `dir` alone falls back to
+    // the old take.json label, and neither refuses loudly rather than doing
+    // nothing silently, which is what this replaced (Task 8's
+    // `looseFileItem` offers "rename" on an item with no bundle at all, and
+    // the old handler here dropped that click on the floor).
+    try {
+      if (!item.file && !item.dir) throw new Error("nothing to rename");
+      await recorder.renameCapture(item.file, item.dir, label);
+      await refreshTakes();
+    } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async setFilter(id) { libraryFilter = id; await refreshTakes(); },
   async paintThumbnail(item, img) {

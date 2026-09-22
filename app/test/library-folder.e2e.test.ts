@@ -3,7 +3,7 @@ import { type ElectronApplication, type Page } from "playwright";
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync,
 } from "node:fs";
-import { rm, readFile, writeFile } from "node:fs/promises";
+import { rm, readFile, writeFile, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchApp } from "./_editor-fixture.js";
@@ -12,6 +12,7 @@ import { toastPage, toastText } from "./_toast.js";
 import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
 import { captureDocForWrite, CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
+import { renameCapture } from "../src/takes.js";
 
 /**
  * The library's two-object delete (STC-413 Task 11): a capture is now a
@@ -187,9 +188,17 @@ describe("a partial trash failure does not strand the other half (STC-413 review
    * it and letting the BUNDLE succeed is what makes the refresh DOM-visible:
    * `recordingItem`'s badge/summary/actions never depend on whether `file`
    * is set, but once the bundle is gone the survivor is re-scanned as an
-   * unmatched loose file, and `looseFileItem` WITHHOLDS "open"/"rename" for
-   * one with no bundle (`library-items.ts`) — a drop from 4 action buttons
-   * to 2 that a stale, un-refreshed render could not produce.
+   * unmatched loose file, and `looseFileItem` WITHHOLDS "open" for one with
+   * no bundle (`library-items.ts`) — a drop from 4 action buttons to 3 that
+   * a stale, un-refreshed render could not produce.
+   *
+   * Updated for Task 13: the survivor's action count used to drop to 2
+   * (`looseFileItem` withheld "rename" too, for want of a bundle to write
+   * `take.json` beside). Rename no longer needs one — it renames the FILE
+   * directly now — so the honest post-refresh count is 3 (rename, reveal,
+   * delete), and asserting the stale 2 here would be exactly the "test
+   * pinning the old contract" CLAUDE.md already warns against re-flattening
+   * rather than restating.
    */
   test("the survivor is trashed, the grid refreshes, and a retry finishes rather than throwing", async () => {
     if (!app) throw new Error("no app launched");
@@ -224,8 +233,10 @@ describe("a partial trash failure does not strand the other half (STC-413 review
     expect(alert).toContain("were removed");
     expect(alert).toContain("the file could not be");
 
-    // (b) the grid refreshed.
-    await expect.poll(() => actionCount(), { timeout: 20_000 }).toBe(2);
+    // (b) the grid refreshed — 3 now (Task 13: rename no longer needs a
+    // bundle, so it survives alongside reveal/delete rather than dropping
+    // out with "open").
+    await expect.poll(() => actionCount(), { timeout: 20_000 }).toBe(3);
     expect(await itemCount(page)).toBe(1);
 
     // (c) a retry finishes rather than throwing — the refreshed tile now
@@ -263,5 +274,93 @@ describe("a partial trash failure does not strand the other half (STC-413 review
     );
     expect(result.deleted).toBe(true);    // did not throw, did not report a failure
     expect(existsSync(dir)).toBe(false);  // the half that WAS still there is gone too
+  }, 60_000);
+});
+
+/**
+ * Task 13 — the filename IS the label. Renaming a matched capture through
+ * the grid renames the top-level FILE on disk (`takes.ts`'s new
+ * `renameCapture`), never `take.json`; a file renamed by hand in Finder is
+ * still found afterward, because matching is by the embedded capture id, not
+ * by name. `seedFixture`'s own file is already named "login-bug.mp4" (Task
+ * 11's own fixture, reused rather than duplicated), so these tests rename
+ * IT rather than reproducing the brief's literal "2026-09-22_14-30-01.mp4"
+ * starting name — renaming "login-bug.mp4" TO "login-bug" would be a no-op
+ * and prove nothing; renaming it to something else, or renaming it away and
+ * expecting the bundle to still be found, are the same claims with a
+ * discriminating fixture. See the report's Decisions section.
+ */
+describe("the filename is the label (STC-413 Task 13)", () => {
+  test("renaming a capture renames the file on disk", async () => {
+    await expect.poll(() => itemCount(page), { timeout: 20_000 }).toBe(1);
+
+    await renameFirstItem(page, "renamed-clip");
+
+    expect(existsSync(join(root, "renamed-clip.mp4"))).toBe(true);
+    expect(existsSync(join(root, "login-bug.mp4"))).toBe(false);
+  }, 60_000);
+
+  test("a file renamed in Finder still opens its bundle", async () => {
+    await expect.poll(() => itemCount(page), { timeout: 20_000 }).toBe(1);
+
+    // A plain filesystem rename — no IPC, no app involvement — is exactly
+    // what a Finder rename looks like from here.
+    await rename(join(root, "login-bug.mp4"), join(root, "totally-different.mp4"));
+    await refreshLibrary(page);
+    expect(await itemCount(page)).toBe(1);   // still one capture, not a new orphan plus a stray
+
+    await openFirstItem(page);
+
+    // Found by the embedded id, not by name: `openItem` opens on `item.dir`,
+    // which the scan only ever sets by matching the file's tag against
+    // capture.json — nothing here ever compared a filename. Polled, not a
+    // bare read: the editor's `BrowserWindow` is created and navigated
+    // asynchronously, and its url only commits ~80-150ms later (STC-416) —
+    // a synchronous read right after the click is a real race, not a flake.
+    await expect.poll(() => editorIsOpen(page), { timeout: 15_000 }).toBe(true);
+  }, 60_000);
+
+  /**
+   * A direct call, no app needed — `renameCapture` is exported for this. The
+   * validation lives in `takes.ts`, not behind the IPC boundary, so this is
+   * the same kind of unit-level check `insideTakesRoot`'s own tests use in
+   * `takes.test.ts`; it lives here because `takes.test.ts` is not part of
+   * this task's own file list and the brief's own example test sits beside
+   * the UI tests it complements.
+   */
+  test("a rename refuses to escape the folder", async () => {
+    await expect(renameCapture({} as NodeJS.ProcessEnv, root,
+      join(root, "login-bug.mp4"), "../../evil")).rejects.toThrow();
+    // The file must be untouched — a refused rename is not a partial one.
+    expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);
+  });
+
+  test("a rename refuses a bare path separator too, not only \"..\"", async () => {
+    await expect(renameCapture({} as NodeJS.ProcessEnv, root,
+      join(root, "login-bug.mp4"), "sub/dir")).rejects.toThrow();
+  });
+
+  /**
+   * The live bug this task closes: Task 8's `looseFileItem` already offers
+   * "rename" on an item with NO bundle at all (a genuinely foreign file —
+   * see `library-items.ts`'s case 1), and the old renderer handler did
+   * `const dir = item.dir; if (!dir) return;` before ever calling the
+   * bridge — a click that visibly does nothing. This drives that exact
+   * button, on that exact kind of item, and checks the file actually moved.
+   */
+  test("renaming a bundle-less item actually renames the file — the silent no-op is closed", async () => {
+    await expect.poll(() => itemCount(page), { timeout: 20_000 }).toBe(1);
+    // A genuinely foreign file: the bytes (and the id they carry) survive,
+    // but its bundle is gone, so the scan can match nothing — `dir` absent.
+    await writeFile(join(root, "holiday.mp4"), await readFile(join(root, "login-bug.mp4")));
+    await rm(join(root, "login-bug.mp4"));
+    await rm(join(root, "raw", BUNDLE), { recursive: true });
+    await refreshLibrary(page);
+    expect(await itemCount(page)).toBe(1);
+
+    await renameFirstItem(page, "vacation-clip");
+
+    expect(existsSync(join(root, "vacation-clip.mp4"))).toBe(true);
+    expect(existsSync(join(root, "holiday.mp4"))).toBe(false);
   }, 60_000);
 });

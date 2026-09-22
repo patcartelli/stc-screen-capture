@@ -447,10 +447,18 @@ export interface FinishedFileInfo {
  * round 1, Important 3: `thumbnail.source` is unconditionally `"none"`
  * below, and `renderer.ts`'s `openItem` dispatches "open" on exactly that
  * field to decide which editor to open — a broken STILL bundle would
- * therefore route to the RECORDING editor if "open" were offered here. Only
- * `rename`/`reveal`/`delete` need nothing more than the directory itself
- * (`rename` writes `take.json` beside it; it needs no raw materials to be
- * valid), so those are what a degraded bundle gets.
+ * therefore route to the RECORDING editor if "open" were offered here.
+ * `reveal`/`delete` need nothing more than whichever of `file`/`dir` this
+ * item has, so those are what a degraded bundle gets regardless.
+ *
+ * `rename` is UNCONDITIONAL now (STC-413 Task 13), and that is a real change
+ * from this rule's original shape: it used to require `dir` too, because
+ * renaming wrote `take.json` beside the bundle and a genuinely bundle-less
+ * file (case 1 above) had nowhere to write one. Now that a rename operates
+ * on the FILE directly (`takes.ts`'s `renameCapture`) when there is one, a
+ * bundle is no longer what rename needs — every shape `FinishedFileInfo` can
+ * take carries at least a `file` or a `dir`, so rename is always offered and
+ * `renderer.ts`'s handler is what decides which of the two it acts on.
  */
 export function looseFileItem(f: FinishedFileInfo): LibraryItem {
   const kind: LibraryKind = f.isVideo ? "recording" : "still";
@@ -473,9 +481,11 @@ export function looseFileItem(f: FinishedFileInfo): LibraryItem {
     // `renderThumbnail` could read (that needs `shot.json` and `frame.file`,
     // exactly what "did not parse" means).
     thumbnail: { source: "none" },
-    actions: f.dir
-      ? [{ id: "rename", label: "Rename" }, { id: "reveal", label: "Show" }, { id: "delete", label: "Delete" }]
-      : [{ id: "reveal", label: "Show" }, { id: "delete", label: "Delete" }],
+    actions: [
+      { id: "rename", label: "Rename" },
+      { id: "reveal", label: "Show" },
+      { id: "delete", label: "Delete" },
+    ],
   };
 }
 

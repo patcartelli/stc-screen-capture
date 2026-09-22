@@ -491,7 +491,19 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
 
     const result = await readBundleInfo(dir, name, names);
     if (result.kind !== "invalid") {
-      if (match) { result.info.file = match.file; matchedFiles.add(match.file); }
+      if (match) {
+        result.info.file = match.file;
+        matchedFiles.add(match.file);
+        // STC-413 Task 13: take.json is retired for a FINISHED capture — the
+        // file's own name is the identity now, and a rename writes to the
+        // file, never to this sidecar. `readRecording`/`readStill` still read
+        // it unconditionally (a label is decoration; the read is cheap and
+        // shared with the unfinished path below), so a stale label from
+        // before this take was ever matched is discarded here rather than
+        // left to leak through a matched item that can no longer be renamed
+        // the old way.
+        result.info.label = undefined;
+      }
       // readRecording/readStill compute recordedAt/capturedAt from a
       // sidecar's mtime — unchanged, per the brief ("keep them... correct").
       // The bundle's own stamped NAME is preferred here, at the call site,
