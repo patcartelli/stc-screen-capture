@@ -1299,10 +1299,14 @@ git commit -m "STC-413: a bundle's identity, minted lazily at export time"
 ### Task 6: The Swift PNG writer carries the id
 
 **Files:**
-- Modify: `helper/src/StillEncodeDecisions.swift:321-333`
-- Modify: `helper/src/StillEncode.swift` (request parsing)
+- Modify: `helper/src/StillEncodeDecisions.swift` — the struct at :78, its
+  parse at :245, and `stillImageProperties` at :321. **All three are in this
+  one file**, which is the pure half the harness compiles; `StillEncode.swift`
+  needs no change at all.
 - Modify: `app/src/still-io.ts` (forward `captureId` into the helper request)
 - Modify: `app/src/main.ts` (`still:export` — supply the value via `ensureCaptureId`)
+- Test: `helper/test/still-encode/main.swift`, driven by the EXISTING
+  `helper/test/still-encode-decisions.test.ts` via `runSwiftHarness`.
 - Test: `helper/test/still-encode/main.swift`
 
 **Interfaces:**
@@ -1335,14 +1339,13 @@ expectNotContains(stillPropertyKeys(untagged), "\(kCGImagePropertyPNGDictionary)
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `helper/build.sh && helper/test/still-encode/run.sh`
+Run: `npx vitest run helper/test/still-encode-decisions.test.ts` (it compiles the harness itself via `runSwiftHarness` — there is no run.sh)
 (or the existing harness runner for that directory)
 Expected: FAIL — `StillExportRequest` has no `captureId`.
 
-**If this checkout has no `swiftc`:** this task cannot be run here. Do NOT skip
-it silently — that is the pattern CLAUDE.md warns reads as covered and rots.
-Commit it and record in the PR that Task 6 is unverified pending CI's macOS
-runner, which is the first real compile.
+**This machine HAS `swiftc`** (`~/.swiftly/bin/swiftc`) and `helper/build/stc-helper`
+is already built, so this task is fully verifiable here — the caveat an earlier
+draft carried about deferring to CI does not apply. Run the harness for real.
 
 - [ ] **Step 3: Implement**
 
@@ -1407,7 +1410,7 @@ legitimate no-id case.
 
 - [ ] **Step 5: Run it to verify it passes**
 
-Run: `helper/build.sh && helper/test/still-encode/run.sh`
+Run: `npx vitest run helper/test/still-encode-decisions.test.ts` (it compiles the harness itself via `runSwiftHarness` — there is no run.sh)
 Expected: PASS.
 
 Then `npm run typecheck` — all three passes — since the app side changed.
