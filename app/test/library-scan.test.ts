@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listLibrary } from "../src/library.js";
+import { listLibrary, listTakes } from "../src/library.js";
 import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
 
@@ -135,8 +135,35 @@ describe("the scan reads the folder", () => {
       await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
       await writeFile(join(root, name), tagMp4(mp4Bytes(), id));
     }
+    // A LOOSE file too, and it is what makes this test discriminate at all.
+    // Two matched pairs cannot: a matched item's `id` IS its bundle's stamp
+    // and its `createdAt` is `stampToMs` of that same stamp, so id-descending
+    // and createdAt-descending are mathematically identical for them. Only an
+    // UNMATCHED item's id (the file's stem) can diverge from its createdAt.
+    // "mmm" sorts above both stamps under the old id comparator, and belongs
+    // in the middle by time.
+    const loose = join(root, "mmm.mp4");
+    await writeFile(loose, mp4Bytes());                        // no id, no bundle
+    // Built from LOCAL components, not a UTC ISO string — matching
+    // `stampToMs`'s own convention (which mirrors `takes.ts`'s `stamp()`,
+    // itself built from `getHours()`/`getMinutes()` etc., not `getUTCHours()`).
+    // A UTC string here would drift against the bundles' LOCAL-parsed 09:00/
+    // 17:00 stamps by the runner's own offset: verified directly on this
+    // machine (America/New_York, UTC-4 in September) that
+    // `new Date("2026-09-22T12:00:00Z")` is 08:00 LOCAL — before the "09:00"
+    // stamp, not between it and "17:00" as intended, which failed this exact
+    // test the first time it was run. `new Date(y, m, d, h, mi, s)` is
+    // timezone-proof by construction: it IS local time, on every machine.
+    const noon = new Date(2026, 8, 22, 12, 0, 0);
+    await utimes(loose, noon, noon);
+
     const { items } = await listLibrary(env, root);
-    expect(items.map((i) => i.file?.endsWith("zzz.mp4"))).toEqual([true, false]);
+    // By capture time: zzz (17:00), mmm (12:00), aaa (09:00).
+    // The OLD id comparator would give: mmm, zzz, aaa — "mmm" outranks both
+    // "2026-…" stems. Anything filename-driven gives: zzz, mmm, aaa reversed
+    // or scrambled. Only createdAt-descending produces this exact list.
+    expect(items.map((i) => i.file?.split("/").pop())).toEqual(
+      ["zzz.mp4", "mmm.mp4", "aaa.mp4"]);
   });
 
   test("a matched bundle that fails to parse is listed AND reported", async () => {
@@ -158,6 +185,31 @@ describe("the scan reads the folder", () => {
     expect(items).toHaveLength(1);                       // the file still plays
     expect(invalid).toHaveLength(1);                     // and the corruption is visible
     expect(invalid[0]!.dir).toBe(bundle);
+  });
+
+  test("an exported bundle whose file cannot be linked is shown, not called broken", async () => {
+    // `capture.json` is minted AT EXPORT, so its presence PROVES this bundle
+    // was exported — even though nothing here carries its id back (a JPEG or
+    // HEIC still, which ImageIO tags only in the PNG dictionary; or a file
+    // moved out of the folder entirely). Three properties at once, because
+    // this sits one `else if` away from regressing into either `invalid`
+    // (which would call an exported capture broken) or `takes` (which would
+    // break the "only fully-read bundles" invariant).
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"),
+                    JSON.stringify({ version: 1, id: mintCaptureId() }));
+    // No display.mp4, and no top-level file carrying that id.
+
+    const { items, invalid } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);                       // visible
+    expect(items[0]!.file).toBeUndefined();              // with no file to open
+    expect(items[0]!.actions.map((a) => a.id)).not.toContain("open");
+    expect(invalid).toHaveLength(0);                     // NOT broken — it was exported
+
+    const { takes } = await listTakes(env, root);
+    expect(takes).toHaveLength(0);                       // and not playable either
   });
 });
 
