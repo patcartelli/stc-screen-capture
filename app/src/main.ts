@@ -1331,21 +1331,38 @@ ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
  * `panel-actions.ts`) can call the SAME dialog rather than a second copy
  * asking the same question with a second string — two modals for one
  * question is exactly the "one value, two copies" defect this codebase keeps
- * finding. Both callers already validate the directory against their own
- * root before reaching this; it does not re-check.
+ * finding. Both callers already validate every path against their own root
+ * before reaching this; it does not re-check.
+ *
+ * `paths` carries more than one entry for STC-413's two-object delete: a
+ * matched library item is a finished FILE at the top level and its source
+ * BUNDLE in `raw/`, and both have to go together or a delete silently
+ * orphans one half. ONE dialog covers both — the user pressed Delete once,
+ * so asking twice would be its own defect, not extra safety. Each trash is
+ * BOUNDED the same way a quit-time commit already is (`TRASH_COMMIT_AT_QUIT_MS`,
+ * STC-427's own constant — `shell.trashItem` has hung a CI runner for 30s
+ * before, and there is no reason a library delete's bound should be a
+ * different number). There is no rollback if a later path fails after an
+ * earlier one already moved — `shell.trashItem` has no inverse, the same
+ * fact `pending-trash.ts`'s module doc already states — so a partial
+ * failure is reported honestly rather than pretended away; the caller's own
+ * refresh shows whatever the true state ended up being.
  */
 async function trashWithConfirmation(
-  dir: string,
+  paths: string[],
 ): Promise<{ ok: boolean; detail?: string; cancelled?: boolean }> {
   if (!win) return { ok: false, detail: "no window" };
+  if (paths.length === 0) return { ok: false, detail: "nothing to delete" };
   try {
     const { response } = await dialog.showMessageBox(win, {
       type: "warning",
       buttons: ["Move to Trash", "Cancel"],
       defaultId: 1,
       cancelId: 1,
-      message: "Move this take to the Trash?",
-      detail: dir,
+      message: paths.length > 1
+        ? "Move this take's file and its source materials to the Trash?"
+        : "Move this take to the Trash?",
+      detail: paths.join("\n"),
     });
     // Cancelling is a decision, not a fault (STC-392 review, I5) — the same
     // rule `runExport`'s Save As cancel already follows
@@ -1355,12 +1372,14 @@ async function trashWithConfirmation(
     if (response !== 0) return { ok: false, cancelled: true };
 
     // A window with this take open no longer has anywhere valid to write.
-    for (const [sid, d] of openTakes) if (d === dir) openTakes.delete(sid);
-    await shell.trashItem(dir);
-    // No-op unless a panel is showing this take (the `panel:trash` "confirm"
-    // path — a re-opened library shot); `take:delete`'s own caller (the
-    // library grid) never has one open for the take it is deleting.
-    dismissThumbnail(dir);
+    for (const [sid, d] of openTakes) if (paths.includes(d)) openTakes.delete(sid);
+    for (const p of paths) {
+      await withTimeout(shell.trashItem(p), TRASH_COMMIT_AT_QUIT_MS, `moving to the Trash (${p})`);
+    }
+    // No-op unless a panel is showing one of these (the `panel:trash`
+    // "confirm" path — a re-opened library shot); `take:delete`'s own caller
+    // (the library grid) never has one open for the take it is deleting.
+    for (const p of paths) dismissThumbnail(p);
     return { ok: true };
   } catch (e: any) {
     // STC-392 review, I2: `dialog.showMessageBox` and `shell.trashItem` were
@@ -1383,13 +1402,27 @@ async function trashWithConfirmation(
  * doing nothing on a real failure. `renderer.ts`'s `act()` is what now tells
  * a genuine failure (alert) apart from a Cancel (say nothing), the same
  * distinction `trashWithConfirmation`'s own doc already draws.
+ *
+ * STC-413: a capture is now up to two objects — the finished FILE at the top
+ * level and its source BUNDLE in `raw/` — and `LibraryItem` already knows
+ * which of the two this item has (Task 8's scan resolved that by embedded
+ * id). So this does NOT re-resolve a bundle from `file` or vice versa; it
+ * trusts whatever `renderer.ts` hands it (the item's own `file`/`dir`) and
+ * only validates each path it is actually given. Either may be absent (a
+ * foreign file has no bundle; an unexported bundle has no file) but not
+ * both — nothing to delete refuses outright rather than silently doing
+ * nothing.
  */
-ipcMain.handle("take:delete", async (_e, dir: string) => {
+ipcMain.handle("take:delete", async (_e, file?: string, dir?: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
-  if (!insideTakesRoot(process.env, saveFolder, dir)) {
-    throw new Error("refusing to delete a path outside the recordings folder");
+  const paths = [file, dir].filter((p): p is string => typeof p === "string" && p.length > 0);
+  if (paths.length === 0) throw new Error("nothing to delete");
+  for (const p of paths) {
+    if (!insideTakesRoot(process.env, saveFolder, p)) {
+      throw new Error("refusing to delete a path outside the recordings folder");
+    }
   }
-  const r = await trashWithConfirmation(dir);
+  const r = await trashWithConfirmation(paths);
   return { deleted: r.ok, cancelled: r.cancelled, detail: r.detail };
 });
 
@@ -1903,7 +1936,7 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
   // renderer) but must still answer something rather than throw.
   const origin = takeFor(dir)?.origin
     ?? (insideTempTakesRoot(process.env, dir) ? "fresh" : "library");
-  if (trashStyle(origin) === "confirm") return trashWithConfirmation(dir);
+  if (trashStyle(origin) === "confirm") return trashWithConfirmation([dir]);
 
   if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
   pendingTrash.promise(dir);

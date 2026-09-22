@@ -65,7 +65,8 @@ declare const recorder: {
   reopenStill(dir: string): Promise<{ ok: boolean }>;
   duplicateStill(dir: string): Promise<{ ok: boolean; dir: string }>;
   labelTake(dir: string, label: string): Promise<boolean>;
-  deleteTake(dir: string): Promise<{ deleted: boolean; cancelled?: boolean; detail?: string }>;
+  deleteTake(file: string | undefined, dir: string | undefined):
+    Promise<{ deleted: boolean; cancelled?: boolean; detail?: string }>;
   // The take player is its own window now (STC-373) — this opens it. Every
   // channel the old in-page player used (`openPreview`, `writeExport`,
   // `publish`, and the rest) moved to `editor-preload.ts`, the only bridge
@@ -1065,14 +1066,17 @@ const libraryCallbacks: LibraryCallbacks = {
         await recorder.reveal(target);
       }
       else if (id === "delete") {
-        // Same fallback as reveal: a file-only item is deletable too.
-        const target = item.dir ?? item.file;
-        if (!target) throw new Error("nothing to delete");
+        // STC-413: BOTH halves go, not one or the other — a matched item is
+        // a finished file at the top level and its source bundle in `raw/`,
+        // and main trashes whichever of the two it is actually given rather
+        // than this view picking one the way the old `dir ?? file` fallback
+        // did (which silently left the other half behind).
+        if (!item.file && !item.dir) throw new Error("nothing to delete");
         // A take the editor has open is handled main-side (STC-373): deleting
         // it clears main's own per-window `openTake` entry for that path, so
         // an open editor window's writes correctly start refusing rather than
         // landing in a directory `take:delete` just trashed.
-        const r = await recorder.deleteTake(target);
+        const r = await recorder.deleteTake(item.file, item.dir);
         if (r.deleted) { await refreshTakes(); }
         // A Cancel is a decision, not a fault (`trashWithConfirmation`'s own
         // rule) — say nothing. A REAL failure used to reach nobody: this
