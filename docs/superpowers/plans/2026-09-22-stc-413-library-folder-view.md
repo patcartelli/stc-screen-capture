@@ -2346,9 +2346,58 @@ sweep is a tidiness feature; keeping a bundle that could still be someone's
 source material beats deleting one that was. It also self-heals if JPEG id
 support is ever added.
 
-- Produces additionally: `ORPHAN_MARKER_FILE` must be a DOTFILE — it lives
-  inside a `raw/` bundle directory that Task 8's scan walks, and rule 2 of that
-  scan skips dotfiles. That is load-bearing, not cosmetic.
+- Produces additionally: `ORPHAN_MARKER_FILE` is a DOTFILE. **An earlier draft
+  of this plan claimed that was load-bearing because the scan's rule 2 skips
+  it. That was wrong** — rule 2 skips dotfiles among `raw/`'s CHILDREN (sibling
+  bundle directories); the marker sits one level deeper, inside a bundle, where
+  nothing looks at it. Verified: renaming it to a non-dotfile leaves all 38
+  scan/sweep tests passing. Keep the dot as defensive convention, matching what
+  the scan does one level up — but do not believe the mechanism, and do not
+  write a comment asserting it.
+
+**THE MARKER MUST NOT BE PARSEABLE AS ANCIENT.** `Number("")` is `0`, and `0`
+is finite — so a zero-byte or whitespace-only marker reads as **epoch 0**,
+clears the age gate on the very next sweep, and the bundle is deleted. That
+defeats rule 2 entirely, and it is reachable rather than theoretical:
+`writeFile` truncates then writes, so a crash or force-quit in that window
+leaves a zero-byte file (this repo has STC-393 and STC-394 because force-quits
+happen), and the likeliest cause of a truncated write is a **full disk** —
+exactly the condition a disk-reclaiming sweep exists to serve.
+
+Treat an unparseable marker as a FRESH SIGHTING, never an ancient one:
+
+```ts
+  const text = (await readFile(markerPath, "utf8")).trim();
+  const n = Number(text);
+  markedAt = text !== "" && Number.isFinite(n) && n > 0 ? n : undefined;
+```
+
+Give it its own test — none of the six can see this.
+
+**REMOVE VIA THE TRASH, NOT `rm`.** The commit immediately before this one
+(Task 11) removes the SAME object — a `raw/` bundle — with `shell.trashItem`,
+under a comment stating the rule: *"never `rm`, so a mistaken click is one
+Finder restore away."* Two owners answering "how is a bundle removed"
+differently, with the unattended timer-driven one being the unrecoverable one,
+is not a defensible split.
+
+`purgeStaleTempTakes`'s `rm` is not the right precedent: that root is inside
+`~/Library/Application Support`, invisible and explicitly abandoned. `rawRoot`
+is inside the user's own chosen folder, which `takes.ts` describes as *"visible
+rather than dotted, deliberately, because 'nothing is locked inside the app'
+means someone has to be able to find it."*
+
+`temp-takes.ts` is Electron-free and must stay that way, so follow the existing
+pattern: the sweep RETURNS the directories it has decided to remove, and
+`main.ts` trashes them — exactly as `pendingTrash.due()` → `shell.trashItem`
+already does.
+
+**Use `lstat`, not `stat`.** `stat` follows symlinks, so a symlinked bundle
+makes the sweep write its marker OUTSIDE `rawRoot`. The destructive half is
+contained today (Node's `fs.rm` unlinks the link rather than recursing), but a
+write outside the declared blast radius is not something to leave undocumented.
+Skip anything that is not a real directory. Note `insideTakesRoot` would NOT
+catch this — `resolve()` does not follow symlinks.
 - Produces: `sweepOrphanedBundles(env, saveFolder, now): Promise<string[]>`,
   `ORPHAN_MARKER_FILE: ".orphaned-at"`, reusing `TEMP_TAKE_MAX_AGE_MS`.
 
