@@ -804,8 +804,16 @@ git commit -m "STC-413: embed a capture id in a trailing MP4 uuid box"
 - **Also produces a small change in `transform/src/media-tag.ts`:** its private
   `mp4Boxes(b)` is split into an exported `mp4BoxesIn(b, from, to)` with
   `mp4Boxes(b)` delegating as `mp4BoxesIn(b, 0, b.length)`. `readBe32` is
-  exported too. Behaviour of the existing walker must not change — Task 3's 18
-  tests all still pass, unmodified, and that is the check.
+  exported too. Behaviour of the existing walker must not otherwise change —
+  Task 3's 18 tests all still pass, unmodified, and that is the check.
+
+  **One tightening while you are in there**, carried over from Task 3's review
+  as a deferred note: a `size == 1` box whose largesize reads 8–15 is
+  malformed — the value is smaller than the 16-byte header it is part of — and
+  the current `size < 8` guard lets it through, advancing into the middle of
+  that same header. It cannot hang (the advance is still monotonic) but it is
+  looser than the format allows. Refuse a largesize below 16. Add one test:
+  such a box yields nothing and `tagMp4` returns its input unchanged.
 - Produces: `probePng(bytes: Uint8Array): MediaFacts | undefined`,
   `probeMp4(bytes: Uint8Array): MediaFacts | undefined`,
   `interface MediaFacts { width: number; height: number; durationMs?: number }`,
