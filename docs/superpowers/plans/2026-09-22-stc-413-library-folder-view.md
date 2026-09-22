@@ -83,10 +83,14 @@ boundary STC-294 built is what lets storage change underneath without touching
 | `app/src/share.ts` | `planPublish` reads the top-level export. |
 | `app/src/main.ts` | Delete removes both objects; take-dir handlers resolve `raw/`. |
 
-**Deliberately untouched:** `app/src/library-items.ts`, `app/src/library-view.ts`.
-If a task seems to need a change there, stop — that is the seam leaking, and
-`app/test/library-seam.test.ts` will fail. Widen `LibraryItem` deliberately
-instead, as rule 1 of that file's header instructs.
+**`app/src/library-items.ts` is WIDENED, once, in Task 8** — `LibraryItem`
+gains `file?`, makes `dir` optional, and stops calling `id` the sort key. That
+is the sanctioned move under rule 1 of that file's own header. What stays
+forbidden is a view *branching on kind*; `app/test/library-seam.test.ts` must
+keep passing untouched, and if it fails the seam is leaking.
+
+**`app/src/library-view.ts` is deliberately untouched.** If a task seems to
+need a change there, stop and widen the adapter instead.
 
 ---
 
@@ -1440,7 +1444,53 @@ files, so it is backward-compatible on its own and the suite stays green.
   own id is read from its `capture.json`, and a bundle without one has never
   been exported and therefore cannot match any finished file.
 - Produces: `listLibrary` and `listTakes` keep their existing signatures and
-  return the existing `LibraryList`/`TakeList`. `library-items.ts` is untouched.
+  return `LibraryList`/`TakeList`.
+
+**`library-items.ts` DOES change, and an earlier draft of this plan was wrong
+to say otherwise.** A finished capture is a FILE; `LibraryItem.dir` is a
+DIRECTORY and has about twelve consumers in `renderer.ts` that pass it to
+`getShot`, `getFrame`, `reveal`, `duplicate` and the rest. An item now has to
+be able to name both, or one of them, or neither-but-one. Widening the
+interface is the sanctioned move — `library-items.ts`'s own rule 1 says so in
+as many words: *"When a kind needs something the interface cannot express, the
+instruction is to WIDEN `LibraryItem` deliberately, never to special-case it at
+the call site."* Widening is allowed; a view branching on `kind` is not, and
+`library-seam.test.ts` must still pass untouched.
+
+Three changes to `LibraryItem`, and no more:
+
+```ts
+  /**
+   * Stable identity and the EXPORT NAME — the bundle's timestamped name when
+   * there is a bundle, else the finished file's stem.
+   *
+   * No longer the sort key. It was, while every item was a directory whose
+   * name was a timestamp; a user who renames `2026-09-22_14-30.mp4` to
+   * `login-bug.mp4` in Finder destroys that ordering, and renaming in Finder
+   * is the whole point of STC-413.
+   */
+  id: string;
+  /** The finished capture on disk. Absent for a bundle never exported. */
+  file?: string;
+  /** Its source bundle in `raw/`. Absent for a foreign file with none. */
+  dir?: string;
+```
+
+And the sort in `listLibrary` moves off `id`:
+
+```ts
+  // createdAt, not id: a renamed file's name says nothing about when it was
+  // captured. Taken from the bundle's stamped name where there is one — which
+  // survives any rename — and from the file's mtime where there is not.
+  all.sort((a, b) => b.createdAt - a.createdAt);
+```
+
+**Making `dir` optional is a compile-time change at every consumer**, which is
+the point: `npm run typecheck` will name each of the ~12 sites in `renderer.ts`,
+and each must be handled rather than non-null-asserted. An action that needs a
+bundle (edit, duplicate, re-open a shot) must not be offered for an item
+without one — which is the same rule that already gives a foreign file no edit
+action, so `actions` is where it is enforced, not at the call site.
 
 **Scan rules, in order:**
 1. Read the folder. A file with a media extension (`.mp4`, `.png`, `.heic`,
@@ -1551,6 +1601,44 @@ describe("the scan reads the folder", () => {
     const { items, invalid } = await listLibrary(env, root);
     expect(items).toHaveLength(0);
     expect(invalid).toHaveLength(0);
+  });
+
+  test("a finished file names both itself and its bundle", async () => {
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(root, "login-bug.mp4"), tagMp4(mp4Bytes(), id));
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);                       // one capture, not two
+    expect(items[0]!.file).toBe(join(root, "login-bug.mp4"));
+    expect(items[0]!.dir).toBe(bundle);
+    expect(items[0]!.id).toBe("2026-09-22_14-30-01");    // the export name, not the filename
+  });
+
+  test("a foreign file has no bundle to name", async () => {
+    await writeFile(join(root, "holiday.mp4"), mp4Bytes());
+    const { items } = await listLibrary(env, root);
+    expect(items[0]!.file).toBe(join(root, "holiday.mp4"));
+    expect(items[0]!.dir).toBeUndefined();
+  });
+
+  test("sorts by capture time, NOT by filename", async () => {
+    // The load-bearing case for STC-413: renaming in Finder must not reorder
+    // the library. "aaa" sorts first by name and is the OLDER capture.
+    for (const [name, stamp] of [["zzz.mp4", "2026-09-22_09-00-00"],
+                                 ["aaa.mp4", "2026-09-22_17-00-00"]] as const) {
+      const id = mintCaptureId();
+      const bundle = join(root, "raw", stamp);
+      await mkdir(bundle, { recursive: true });
+      await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+      await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+      await writeFile(join(root, name), tagMp4(mp4Bytes(), id));
+    }
+    const { items } = await listLibrary(env, root);
+    expect(items.map((i) => i.file?.endsWith("aaa.mp4"))).toEqual([true, false]);
   });
 });
 ```
