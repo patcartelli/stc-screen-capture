@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld("editor", {
     ipcRenderer.invoke("preview:chunk", name, offset, length),
   writeProject: (bytes: ArrayBuffer) => ipcRenderer.invoke("preview:writeProject", bytes),
   writeExport: (name: string, bytes: ArrayBuffer) => ipcRenderer.invoke("export:write", name, bytes),
+  // STC-413: the open take's stable identity, so the export path can tag the
+  // MP4 it writes without reaching node:fs itself.
+  captureId: () => ipcRenderer.invoke("take:captureId"),
   // The frame-grab (STC-298/293) goes through the same one way out of the app
   // every still does.
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),

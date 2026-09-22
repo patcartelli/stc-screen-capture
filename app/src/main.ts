@@ -1463,6 +1463,20 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
 });
 
 /**
+ * STC-413: the editor's export path (`app/src/editor.ts:1237`) is a
+ * renderer, and `ensureCaptureId` reaches `node:fs` — a browser-typechecked
+ * module cannot import it directly, so the id crosses the bridge instead.
+ * The take directory comes from the SAME `openTakes` map every other
+ * `preview:*` handler reads, so this only ever answers for a window that has
+ * actually opened a take.
+ */
+ipcMain.handle("take:captureId", async (e) => {
+  const openTake = getOpenTake(e);
+  if (!openTake) throw new Error("no take is open");
+  return await ensureCaptureId(openTake);
+});
+
+/**
  * The one way a still leaves the app (STC-293).
  *
  * Every caller reaches disk and pasteboard through here: the preview's frame
