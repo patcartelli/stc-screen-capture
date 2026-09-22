@@ -980,8 +980,14 @@ const THUMB_MAX_EDGE = 480;
  * true if it is literally the same code.
  */
 async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promise<void> {
-  const shot = await recorder.getShot(item.dir);
-  const bytes = await recorder.getFrame(item.dir, shot.frame.file);
+  // A "render" thumbnail only ever exists for a still WITH a bundle —
+  // `library-items.ts`'s `stillItem` is the only place that sets
+  // `thumbnail.source === "render"`, and it only runs for bundle-backed
+  // stills. Structural, not a possibility this function has to weigh.
+  const dir = item.dir;
+  if (!dir) throw new Error("a rendered thumbnail needs a bundle directory");
+  const shot = await recorder.getShot(dir);
+  const bytes = await recorder.getFrame(dir, shot.frame.file);
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   try {
     // The stored decoration, filled in from the mode's presets exactly as the
@@ -1014,7 +1020,7 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
     img.src = URL.createObjectURL(blob);
     // Cached AFTER it is on screen: a failed write costs the cache, never the
     // picture the user is already looking at.
-    try { await recorder.writeThumbnail(item.dir, await blob.arrayBuffer()); }
+    try { await recorder.writeThumbnail(dir, await blob.arrayBuffer()); }
     catch { /* an uncached tile simply renders again next time */ }
   } finally {
     // ~30 MB at 4K, and 500 of them is the tab-killer this repo already
@@ -1026,7 +1032,11 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
 /** Show a cached thumbnail, decoding it in the main process's stead. */
 async function showCachedThumbnail(item: LibraryItem, img: HTMLImageElement,
                                    file: string): Promise<void> {
-  const bytes = await recorder.getFrame(item.dir, file);
+  // A cached "file" thumbnail lives INSIDE the take directory (rule 5,
+  // library-items.ts), so this too only ever runs for a bundle-backed still.
+  const dir = item.dir;
+  if (!dir) throw new Error("a cached thumbnail lives inside a bundle directory");
+  const bytes = await recorder.getFrame(dir, file);
   img.src = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
 }
 
@@ -1037,14 +1047,32 @@ const libraryCallbacks: LibraryCallbacks = {
       // criterion. Which actions an item offers was decided by the adapter, so
       // an id that cannot apply to this item never reaches here.
       if (id === "open") await openItem(item);
-      else if (id === "duplicate") { await recorder.duplicateStill(item.dir); await refreshTakes(); }
-      else if (id === "reveal") await recorder.reveal(item.dir);
+      else if (id === "duplicate") {
+        // Bundle-only, same reason "open" is: the adapter never offers this
+        // id for an item with no `dir` (rule: an action needing a bundle
+        // must not be offered without one).
+        const dir = item.dir;
+        if (!dir) throw new Error("duplicate needs a bundle directory");
+        await recorder.duplicateStill(dir); await refreshTakes();
+      }
+      else if (id === "reveal") {
+        // Reveal has no bundle-only requirement — a plain finished file is
+        // just as revealable as a directory, so this falls back to `file`
+        // rather than refusing. `dir` still wins when both exist, unchanged
+        // from before this item could ever lack one.
+        const target = item.dir ?? item.file;
+        if (!target) throw new Error("nothing to reveal");
+        await recorder.reveal(target);
+      }
       else if (id === "delete") {
+        // Same fallback as reveal: a file-only item is deletable too.
+        const target = item.dir ?? item.file;
+        if (!target) throw new Error("nothing to delete");
         // A take the editor has open is handled main-side (STC-373): deleting
         // it clears main's own per-window `openTake` entry for that path, so
         // an open editor window's writes correctly start refusing rather than
         // landing in a directory `take:delete` just trashed.
-        const r = await recorder.deleteTake(item.dir);
+        const r = await recorder.deleteTake(target);
         if (r.deleted) { await refreshTakes(); }
         // A Cancel is a decision, not a fault (`trashWithConfirmation`'s own
         // rule) — say nothing. A REAL failure used to reach nobody: this
@@ -1056,7 +1084,13 @@ const libraryCallbacks: LibraryCallbacks = {
     } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async rename(item, label) {
-    try { await recorder.labelTake(item.dir, label); await refreshTakes(); }
+    // Renaming a FILE (Task 13) is not built yet — for now the adapter only
+    // ever offers "rename" on an item with a bundle (`take.json` needs a
+    // directory to live beside), so this is a structural guard, not a
+    // feature gap this task is meant to close.
+    const dir = item.dir;
+    if (!dir) return;
+    try { await recorder.labelTake(dir, label); await refreshTakes(); }
     catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async setFilter(id) { libraryFilter = id; await refreshTakes(); },
@@ -1085,16 +1119,21 @@ const libraryCallbacks: LibraryCallbacks = {
  * is a rule about the interface, which is where it is allowed to live.
  */
 async function openItem(item: LibraryItem): Promise<void> {
+  // "open" is never offered by the adapter for an item with no bundle — both
+  // branches below need the raw materials (or shot.json) that only a
+  // directory carries, so this is a structural guard, not a UI decision.
+  const dir = item.dir;
+  if (!dir) return;
   if (item.thumbnail.source === "none") {
     // The take player is the editor's own window now (STC-373).
     try {
-      await recorder.openEditor(item.dir, item.id);
+      await recorder.openEditor(dir, item.id);
     } catch (e: any) {
       alertUser(`Could not open "${item.label ?? item.id}".\n${e?.message ?? e}`);
     }
     return;
   }
-  await recorder.reopenStill(item.dir);
+  await recorder.reopenStill(dir);
 }
 
 async function refreshTakes(): Promise<void> {

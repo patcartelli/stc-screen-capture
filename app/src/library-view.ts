@@ -162,7 +162,10 @@ function titleFor(item: LibraryItem): HTMLElement {
   // Show the label when there is one, but keep the timestamp visible: it is
   // how the take is identified on disk and in every path the app hands out.
   title.textContent = item.label ? item.label : item.id;
-  title.title = item.dir;
+  // A tooltip fallback, not a decision (STC-413): the bundle path when there
+  // is one, else the finished file's. Widening `LibraryItem.dir` to optional
+  // is what forces this line to change at all.
+  title.title = item.dir ?? item.file ?? "";
   if (item.label) title.append(el("span", "stamp", ` ${item.id}`));
   return title;
 }
