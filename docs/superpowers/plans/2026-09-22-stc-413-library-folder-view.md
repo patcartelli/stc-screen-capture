@@ -2207,6 +2207,34 @@ git commit -m "STC-413: exports land at the top level of the folder"
 - Produces: `take:delete` trashes the finished file AND its bundle, tolerating
   either being absent (a foreign file has no bundle; an unexported bundle has
   no file).
+
+**PARTIAL FAILURE MUST NOT STRAND THE OTHER HALF.** Two objects means two trash
+calls, and either can fail or hit its bound. Three rules, all of which exist
+because the naive version recreates the very bug this task closes — one object
+gone, the other left behind:
+
+1. **Attempt both paths independently.** A failure on the first must not skip
+   the second. Collect the outcomes; do not let an early `throw` out of the
+   loop decide the second path's fate.
+2. **A path that no longer exists is a SUCCESS, not a failure.** `ENOENT` means
+   it is already gone, which is what was wanted. Without this, a retry after a
+   partial failure throws on the half that already went and never reaches the
+   half that survived — the Delete button becomes permanently stuck on that
+   tile.
+3. **Refresh the library on any non-cancelled outcome, not only on full
+   success.** `renderer.ts` currently refreshes only `if (r.deleted)`, so a
+   partial failure leaves a stale tile carrying paths that are now half wrong.
+   A cancel (the user said no) legitimately changes nothing and should not
+   refresh; a failure did change something and must.
+
+Also widen the failure message: it names the path that failed but says nothing
+about the one that succeeded. "The file was removed; its source materials could
+not be" is the honest form, and it is what stops the user re-clicking a button
+that cannot help them.
+
+**Test it by construction**, not by reasoning: make one `shell.trashItem` call
+fail and assert the other object still went, that the grid refreshed, and that
+a RETRY completes rather than throwing.
 - Also produces the e2e helpers Tasks 11 and 13 both use, defined at the top of
   `library-folder.e2e.test.ts` and nowhere else: `refreshLibrary(page)`,
   `itemCount(page)`, `deleteFirstItem(page)`, `openFirstItem(page)`,
