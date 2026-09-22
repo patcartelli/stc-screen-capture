@@ -105,6 +105,26 @@ export async function itemCount(p: Page): Promise<number> {
 }
 
 /**
+ * The first tile's rendered PRIMARY title text (Task 13 fix round 1) — the
+ * reviewer's own point: a unit test on `LibraryItem.label` alone does not
+ * prove the screen updated, since `library-view.ts`'s `titleFor` reads
+ * `item.label ? item.label : item.id`, and only the rendered DOM shows
+ * which of the two actually won.
+ *
+ * `titleFor` sets `.libtitle`'s `textContent` to the label/id FIRST, then
+ * (when there is a label) appends a `.stamp` child span showing `item.id`
+ * too — so `.innerText()` on the whole element would always contain the
+ * bundle's stamp regardless of whether the label itself updated. Reading
+ * only the element's own first text node (before that child is appended)
+ * is what actually discriminates "the title still says the old stamp" from
+ * "the title says the new name, with the stamp as a secondary annotation".
+ */
+export async function tileTitle(p: Page): Promise<string> {
+  return p.locator(".libtile:first-child .libtitle").first()
+    .evaluate((el) => el.childNodes[0]?.textContent ?? "");
+}
+
+/**
  * Click Delete on the first tile, auto-confirming the native "Move to
  * Trash?" dialog — `manage.e2e.test.ts`'s own idiom (STC-294) for the same
  * dialog `trashWithConfirmation` puts up.
@@ -298,6 +318,38 @@ describe("the filename is the label (STC-413 Task 13)", () => {
 
     expect(existsSync(join(root, "renamed-clip.mp4"))).toBe(true);
     expect(existsSync(join(root, "login-bug.mp4"))).toBe(false);
+    // Fix round 1: on disk is not enough — the tile itself must say the new
+    // name, or the rename reads as a failure to whoever is looking at it.
+    await expect.poll(() => tileTitle(page), { timeout: 20_000 }).toBe("renamed-clip");
+  }, 60_000);
+
+  /**
+   * Fix round 1's own regression, driven through the REAL app rather than
+   * `library.ts` alone: a matched (bundle + file) capture — the normal
+   * outcome of any real recording, not the degraded loose-file shapes the
+   * rest of this describe block exercises — renamed through the grid, with
+   * the TILE checked before and after. `library.ts`'s scan clears the
+   * sidecar-sourced `label` on a match (right, so a stale `take.json`
+   * cannot leak through) but the FIRST fix discarded it outright, leaving
+   * `LibraryItem.label` unset — `library-view.ts`'s `titleFor` then falls
+   * back to `item.id`, which for a matched item is deliberately the
+   * BUNDLE's immune stamp, so the tile went on showing the OLD name
+   * forever: correct on disk, wrong (and unchanged) on screen. A unit
+   * assertion on `label` alone (`library-scan.test.ts`) cannot see that —
+   * only the rendered tile can.
+   */
+  test("the tile's title changes when a matched capture is renamed — not just the file", async () => {
+    await expect.poll(() => itemCount(page), { timeout: 20_000 }).toBe(1);
+    const before = await tileTitle(page);
+    expect(before).not.toBe("");
+    expect(before).not.toBe("renamed-again");   // control: not already this value
+
+    await renameFirstItem(page, "renamed-again");
+
+    expect(existsSync(join(root, "renamed-again.mp4"))).toBe(true);
+    const after = await tileTitle(page);
+    expect(after).toBe("renamed-again");
+    expect(after).not.toBe(before);
   }, 60_000);
 
   test("a file renamed in Finder still opens its bundle", async () => {

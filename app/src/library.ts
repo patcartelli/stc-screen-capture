@@ -494,15 +494,23 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
       if (match) {
         result.info.file = match.file;
         matchedFiles.add(match.file);
-        // STC-413 Task 13: take.json is retired for a FINISHED capture — the
-        // file's own name is the identity now, and a rename writes to the
-        // file, never to this sidecar. `readRecording`/`readStill` still read
-        // it unconditionally (a label is decoration; the read is cheap and
-        // shared with the unfinished path below), so a stale label from
-        // before this take was ever matched is discarded here rather than
-        // left to leak through a matched item that can no longer be renamed
-        // the old way.
-        result.info.label = undefined;
+        // STC-413 Task 13 (fix round 1): take.json is retired for a
+        // FINISHED capture — the file's own name is the identity now, and a
+        // rename writes to the file, never to this sidecar. `readRecording`/
+        // `readStill` still read it unconditionally (a label is decoration;
+        // the read is cheap and shared with the unfinished path below), so a
+        // stale label from before this take was ever matched must not leak
+        // through — but DISCARDING it outright (the first pass here) left
+        // `LibraryItem.label` empty for every matched item, and
+        // `library-view.ts`'s title falls back to `item.id`, which for a
+        // matched item is deliberately the BUNDLE's stamped name (immune to
+        // renames, so sort order survives one) — so the tile went on
+        // showing the OLD stamp forever, on screen, after a rename that had
+        // correctly renamed the FILE. The fix is to derive the label from
+        // the file instead of discarding it: it still comes from nowhere
+        // near take.json, so the stale-sidecar problem stays solved, and the
+        // title now says what the file is actually called.
+        result.info.label = basename(match.file, extname(match.file));
       }
       // readRecording/readStill compute recordedAt/capturedAt from a
       // sidecar's mtime — unchanged, per the brief ("keep them... correct").

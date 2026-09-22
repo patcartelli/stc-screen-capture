@@ -99,6 +99,13 @@ describe("the scan reads the folder", () => {
     await mkdir(bundle, { recursive: true });
     await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
     await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    // A real (non-empty) display.mp4 is what makes this a HEALTHY bundle —
+    // without one, `readRecording` fails and the item degrades to the
+    // matched-but-broken `looseFileItem` shape, which carries no `label` at
+    // all (a different code path than the one the label assertion below is
+    // actually about; found the hard way, chasing why that assertion kept
+    // reading `undefined` against a correct fix).
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));
     await writeFile(join(root, "login-bug.mp4"), tagMp4(mp4Bytes(), id));
 
     const { items } = await listLibrary(env, root);
@@ -106,6 +113,39 @@ describe("the scan reads the folder", () => {
     expect(items[0]!.file).toBe(join(root, "login-bug.mp4"));
     expect(items[0]!.dir).toBe(bundle);
     expect(items[0]!.id).toBe("2026-09-22_14-30-01");    // the export name, not the filename
+    // Task 13 fix round 1: a matched item's LABEL is the file's own stem —
+    // the tile's title falls back to `id` (the bundle's immune stamp) when
+    // `label` is unset, so a matched item with no label would render the
+    // OLD stamp forever after a rename that correctly renamed the file.
+    expect(items[0]!.label).toBe("login-bug");
+  });
+
+  /**
+   * Task 13 fix round 1: the reviewer's own repro. A matched item must show
+   * the FILE's current name, never a stale `take.json` label left over from
+   * before the take was ever matched (or from before this ticket existed at
+   * all) — `library.ts` clears the sidecar-sourced label on a match for
+   * exactly this reason, and DERIVES the display label from the file
+   * instead, rather than leaving it unset.
+   */
+  test("a matched item's label is the file's name, never a stale take.json label", async () => {
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));  // a HEALTHY bundle — see above
+    // A label from BEFORE this take was ever matched (or from before
+    // STC-413 existed) — `take.json` is the OLD mechanism and must not be
+    // consulted for a finished capture any more.
+    await writeFile(join(bundle, "take.json"),
+      JSON.stringify({ version: 1, label: "a stale label from long ago" }));
+    await writeFile(join(root, "renamed-clip.mp4"), tagMp4(mp4Bytes(), id));
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.label).toBe("renamed-clip");
+    expect(items[0]!.label).not.toContain("stale");
   });
 
   test("a foreign file has no bundle to name", async () => {
