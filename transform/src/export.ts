@@ -351,10 +351,24 @@ export async function exportSession(
       // chunk offset moves — stco/co64 point into mdat, which does not shift.
       const raw = new Uint8Array((muxer.target as ArrayBufferTarget).buffer);
       const tagged = opts.captureId ? tagMp4(raw, opts.captureId) : raw;
-      const buf = tagged.buffer.slice(tagged.byteOffset,
-                                      tagged.byteOffset + tagged.byteLength) as ArrayBuffer;
-      encodedBytes = buf.byteLength;
-      encoded = new Uint8Array(buf);
+      // `slice` COPIES, and both producers above already hand back a view
+      // that covers its whole backing buffer exactly — `raw` wraps the
+      // muxer's own target, and `tagMp4` returns a freshly allocated,
+      // exact-size array. So the old unconditional slice made a second whole
+      // copy of an encoded video for nothing (M4): hundreds of megabytes at
+      // 4K, allocated at the moment the export is otherwise finished.
+      //
+      // The guard is not belt and braces, it is the invariant `.buffer`
+      // rests on. `editor.ts` ships this onward as `encoded.buffer`, which
+      // ignores `byteOffset`/`byteLength` — so a PARTIAL view must still be
+      // copied out, or the file written would carry whatever sits either
+      // side of it. The fast path is taken whenever the view is whole; the
+      // copy stays for the day some producer returns one that is not.
+      encoded = tagged.byteOffset === 0 && tagged.byteLength === tagged.buffer.byteLength
+        ? tagged
+        : new Uint8Array(tagged.buffer.slice(
+            tagged.byteOffset, tagged.byteOffset + tagged.byteLength));
+      encodedBytes = encoded.byteLength;
     }
     if (encoder && encoder.state !== "closed") encoder.close();
     if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();
