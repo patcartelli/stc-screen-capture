@@ -2141,6 +2141,37 @@ level.
 Leave `exportManifestName` writing into the bundle — it is provenance about the
 source, not a deliverable, and the top level is media files only.
 
+**RE-EXPORT MUST OVERWRITE THE FILE THE USER NAMED, not create a second one.**
+This is the case the rest of the design makes reachable and no earlier task
+covers. `export:write` (`main.ts:1446`) currently writes to
+`join(openTake, name)`. Naively repointing it at the folder root means: you
+export, rename the result to `login-bug.mp4` in Finder, then re-export — and
+get a fresh `2026-09-22_14-30-01.mp4` beside it. **Two top-level files carrying
+the SAME embedded id**, so the scan shows two tiles for one capture and the
+orphan sweep can never tell which is current.
+
+So the destination is resolved by IDENTITY, not by name:
+
+1. Get this take's id (`ensureCaptureId` on the open bundle — already wired for
+   Task 7's `take:captureId`).
+2. Scan the folder's top level for a media file whose embedded id matches. If
+   one exists, **that path is the destination** — the user named it, and
+   re-exporting updates it in place. This is what makes "the filename is the
+   label" survive a re-export.
+3. Otherwise write `exportMediaName(takeName)`.
+
+**And keep the guard, widened.** The existing handler refuses to overwrite
+`TAKE_FILES` or `take.json`, because the leaf-name rule alone would let an
+export replace the recording it came from. At the top level the equivalent
+hazard is different and worse: refuse to overwrite any existing file whose
+embedded id is ABSENT or belongs to a DIFFERENT bundle. That is someone else's
+capture, or a file the user put there by hand, and silently replacing it would
+be data loss.
+
+Test all three: a first export lands at `<stamp>.mp4`; a re-export after a
+rename overwrites the renamed file and produces no second tile; and an export
+refuses to clobber an unrelated file that happens to occupy the name.
+
 **The published name must stay slug-derived.** STC-242's whole design rests on
 two takes publishing to ONE stable path so the site's page never needs editing;
 a user's filename must not leak into it. There is an existing test asserting
