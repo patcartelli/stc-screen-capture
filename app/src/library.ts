@@ -494,6 +494,15 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
       continue;
     }
 
+    // The bundle's own richer read failed. Reported REGARDLESS of a match
+    // (review round 1, Important 1): a corrupt bundle that also happens to
+    // have a live finished file is still corrupt, and suppressing the report
+    // used to drop it out of `listTakes` (which reads `invalid`, not
+    // `loose`) with no trace at all — exactly the "vanishes" failure this
+    // file's own header forbids. A matched finished file additionally gets a
+    // working tile (`loose`) alongside the report, so nobody is worse off
+    // than before: the playable file, AND the honest "this needs attention"
+    // line.
     if (match) {
       matchedFiles.add(match.file);
       loose.push({
@@ -508,7 +517,30 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
         isVideo: match.ext === ".mp4",
         note: "This capture's source files could not be read.",
       });
+      invalid.push({ dir, name, reason: result.reason });
+    } else if (bundleId) {
+      // `capture.json` is minted LAZILY, at export time (Task 5) — its mere
+      // presence PROVES this bundle was exported to something, even though
+      // nothing here can say what: a JPEG/HEIC export carries no readable id
+      // at all (ImageIO writes the id only into the PNG dictionary — Task 6),
+      // and a PNG/MP4 export's file may simply have been moved or deleted
+      // since. Either way this is NOT "never exported", so it must not be
+      // reported the same way a genuinely crash-truncated take is — that
+      // would be a lie about a capture that already did its job. Listed
+      // instead, degraded: no `file` to point at, so `looseFileItem` keeps
+      // its actions to what a bare directory can still do (Important 3).
+      loose.push({
+        id: name,
+        dir,
+        createdAt: stampToMs(name) ?? 0,
+        bytes: await dirSize(dir, names),
+        isVideo: !names.includes("shot.json"),
+        note: "This capture was exported, but its finished file could not be linked back to it.",
+      });
     } else {
+      // Never exported (no capture.json) AND the bundle's own read failed —
+      // genuinely broken, the crash-truncated-video shape this scanner has
+      // always reported.
       invalid.push({ dir, name, reason: result.reason });
     }
   }

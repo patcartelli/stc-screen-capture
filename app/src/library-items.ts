@@ -394,21 +394,32 @@ export function stillItem(s: StillInfo): LibraryItem {
 
 /**
  * A finished capture with no bundle-derived richness to draw on (STC-413) —
- * either because it genuinely has none (a foreign file dropped into the
- * folder, or one whose bundle was already swept) or because a bundle exists
- * and is even linked by id, but did not parse as a usable recording/still
- * (`dir` is set in that second case; `library.ts`'s scan is what tells the
- * two apart).
+ * one of three shapes, all missing what a healthy bundle would supply:
+ *
+ * 1. Genuinely no bundle at all — a foreign file dropped into the folder, or
+ *    one whose bundle was already swept. `dir` absent.
+ * 2. A bundle exists, is linked by id, but did not parse as a usable
+ *    recording/still. `dir` AND `file` both set.
+ * 3. A bundle exists and carries `capture.json` — proof it WAS exported,
+ *    minted lazily at export time (Task 5) — but nothing here can say to
+ *    WHICH file: a JPEG/HEIC export carries no readable id at all (ImageIO
+ *    writes it only into the PNG dictionary), or the linked file has moved
+ *    or been deleted since. `dir` set, `file` absent. Reviewed round 1: this
+ *    must not be reported as broken (`capture.json`'s presence means "never
+ *    exported" is already false) and must not be confused with case 1's
+ *    genuinely-untethered file.
  *
  * Deliberately NOT `TakeInfo`/`StillInfo` with more fields made optional.
  * Those two describe what a HEALTHY bundle knows about itself — camera,
  * event count, redactions, decoration mode — and widening them so every
  * field could be missing would let a real, working bundle quietly degrade
  * the same way a broken one does. This is a separate, honestly sparse shape:
- * what the FILE's own header and stat can say, nothing more.
+ * what the FILE's own header and stat (or, lacking a file, the bundle's own
+ * directory) can say, nothing more.
  */
 export interface FinishedFileInfo {
-  file: string;
+  /** Absent only for case 3 above — a bundle proven exported but unlinkable. */
+  file?: string;
   /** The export name — see `LibraryItem.id`'s own doc comment. */
   id: string;
   createdAt: number;
@@ -429,10 +440,17 @@ export interface FinishedFileInfo {
  * A loose file, as a library item.
  *
  * Rule 1's "widen the interface, never special-case the call site" is why
- * `actions` differs by whether `dir` is set rather than by a second type:
- * `open`/`rename`/`duplicate` all need the bundle's own raw materials or its
- * `take.json` beside them, so an item with no `dir` never offers them — the
- * view and the IPC call sites never have to ask.
+ * `actions` differs by whether `dir` is set rather than by a second type —
+ * but a `looseFileItem` with `dir` set is ALWAYS a bundle whose own read
+ * FAILED (`library.ts`'s scan never routes a healthy bundle through here,
+ * matched or not), so `open`/`duplicate` are withheld even then. Reviewed
+ * round 1, Important 3: `thumbnail.source` is unconditionally `"none"`
+ * below, and `renderer.ts`'s `openItem` dispatches "open" on exactly that
+ * field to decide which editor to open — a broken STILL bundle would
+ * therefore route to the RECORDING editor if "open" were offered here. Only
+ * `rename`/`reveal`/`delete` need nothing more than the directory itself
+ * (`rename` writes `take.json` beside it; it needs no raw materials to be
+ * valid), so those are what a degraded bundle gets.
  */
 export function looseFileItem(f: FinishedFileInfo): LibraryItem {
   const kind: LibraryKind = f.isVideo ? "recording" : "still";
@@ -450,18 +468,13 @@ export function looseFileItem(f: FinishedFileInfo): LibraryItem {
     bytes: f.bytes,
     summary: bits.join(" · "),
     notes: f.note ? [f.note] : [],
-    // Neither shape has a picture to show here: a foreign file was never
-    // decorated by this app, and a bundle too broken to parse has nothing
+    // Nothing here has a picture to show: a foreign file was never decorated
+    // by this app, and a bundle too broken to parse has nothing
     // `renderThumbnail` could read (that needs `shot.json` and `frame.file`,
     // exactly what "did not parse" means).
     thumbnail: { source: "none" },
     actions: f.dir
-      ? (kind === "still"
-          ? [{ id: "open", label: "Open" }, { id: "rename", label: "Rename" },
-             { id: "duplicate", label: "Duplicate" }, { id: "reveal", label: "Show" },
-             { id: "delete", label: "Delete" }]
-          : [{ id: "open", label: "Preview" }, { id: "rename", label: "Rename" },
-             { id: "reveal", label: "Show" }, { id: "delete", label: "Delete" }])
+      ? [{ id: "rename", label: "Rename" }, { id: "reveal", label: "Show" }, { id: "delete", label: "Delete" }]
       : [{ id: "reveal", label: "Show" }, { id: "delete", label: "Delete" }],
   };
 }

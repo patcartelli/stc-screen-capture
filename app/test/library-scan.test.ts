@@ -117,9 +117,17 @@ describe("the scan reads the folder", () => {
 
   test("sorts by capture time, NOT by filename", async () => {
     // The load-bearing case for STC-413: renaming in Finder must not reorder
-    // the library. "aaa" sorts first by name and is the OLDER capture.
-    for (const [name, stamp] of [["zzz.mp4", "2026-09-22_09-00-00"],
-                                 ["aaa.mp4", "2026-09-22_17-00-00"]] as const) {
+    // the library.
+    //
+    // The stamps are deliberately OPPOSED to the filenames: `zzz` is the
+    // NEWER capture and must sort first, even though its name sorts last.
+    // An earlier version of this fixture had them the other way round and was
+    // VACUOUS — it passed under the old id-based comparator AND under a
+    // filename-ascending one, because a matched pair's `id` is its BUNDLE's
+    // stamp rather than its filename, so every ordering agreed. If you change
+    // these stamps, re-check that the test can still fail.
+    for (const [name, stamp] of [["zzz.mp4", "2026-09-22_17-00-00"],
+                                 ["aaa.mp4", "2026-09-22_09-00-00"]] as const) {
       const id = mintCaptureId();
       const bundle = join(root, "raw", stamp);
       await mkdir(bundle, { recursive: true });
@@ -128,7 +136,28 @@ describe("the scan reads the folder", () => {
       await writeFile(join(root, name), tagMp4(mp4Bytes(), id));
     }
     const { items } = await listLibrary(env, root);
-    expect(items.map((i) => i.file?.endsWith("aaa.mp4"))).toEqual([true, false]);
+    expect(items.map((i) => i.file?.endsWith("zzz.mp4"))).toEqual([true, false]);
+  });
+
+  test("a matched bundle that fails to parse is listed AND reported", async () => {
+    // Both, not either. The file plays, so its tile belongs in the grid — but
+    // `library.ts`'s own header rule is that a broken take is REPORTED, never
+    // silently skipped, because "a take that quietly vanishes from the list is
+    // indistinguishable from one that was deleted". Suppressing the report
+    // also drops it out of `listTakes` entirely, which is the recordings-only
+    // view the editor uses.
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    // No display.mp4 — readRecording will fail.
+    await writeFile(join(root, "login-bug.mp4"), tagMp4(mp4Bytes(), id));
+
+    const { items, invalid } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);                       // the file still plays
+    expect(invalid).toHaveLength(1);                     // and the corruption is visible
+    expect(invalid[0]!.dir).toBe(bundle);
   });
 });
 
