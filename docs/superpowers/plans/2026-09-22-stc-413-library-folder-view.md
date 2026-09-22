@@ -1823,7 +1823,12 @@ describe("the scan reads the folder", () => {
     // in the middle by time.
     const loose = join(root, "mmm.mp4");
     await writeFile(loose, mp4Bytes());                        // no id, no bundle
-    const noon = new Date("2026-09-22T12:00:00Z");
+    // LOCAL components, not a "Z" instant. `stampToMs` parses a directory
+    // stamp as local time — correctly, since it is the inverse of `takes.ts`'s
+    // own `stamp()` — so a UTC noon is 08:00 in EDT, i.e. BEFORE the 09:00
+    // bundle, and the intended ordering silently depends on the machine's
+    // timezone. Building from local components is timezone-proof.
+    const noon = new Date(2026, 8, 22, 12, 0, 0);
     await utimes(loose, noon, noon);
 
     const { items } = await listLibrary(env, root);
