@@ -45,9 +45,15 @@ describe("png capture-id tag", () => {
     expect(readPngCaptureId(skeletonPng())).toBeUndefined();
   });
 
-  test("ImageIO's Description keyword is read too — that is how stills are tagged", () => {
+  test("a tEXt Description is read too", () => {
     const id = mintCaptureId();
-    // Exactly the chunk CGImageDestination writes for kCGImagePropertyPNGDescription.
+    // This test used to be titled "that is how stills are tagged". It is NOT:
+    // ImageIO turns kCGImagePropertyPNGDescription into XMP in an iTXt chunk,
+    // never a tEXt one, so for a while every still the app produced carried an
+    // id this reader could not see. See the XMP tests below, and the round
+    // trip against the real encoder in helper/test/still-encode.test.ts. The
+    // keyword is still read because a tEXt-writing encoder would plausibly
+    // use it, but it is not the app's own path.
     const out = tagPngWithKeyword(skeletonPng(), "Description", id);
     expect(readPngCaptureId(out)).toBe(id);
   });
@@ -98,6 +104,63 @@ describe("png capture-id tag", () => {
   test("a non-png is refused rather than corrupted", () => {
     const notPng = new Uint8Array([0, 0, 0, 8, 102, 116, 121, 112]);
     expect(tagPng(notPng, mintCaptureId())).toEqual(notPng);
+  });
+});
+
+/**
+ * STC-413 C1: the chunk ImageIO actually writes.
+ *
+ * `kCGImagePropertyPNGDescription` becomes XMP in an `iTXt` chunk keyed
+ * `XML:com.adobe.xmp`, not a `tEXt` chunk keyed `Description` — so for a
+ * while every still the app produced carried an id the only reader could not
+ * see, and the encoder's own tests could not tell, because they asserted on
+ * the properties dictionary rather than on the bytes.
+ *
+ * `helper/test/still-encode.test.ts` is the round trip against the REAL
+ * encoder and is the assertion that matters; these are the same claim made
+ * on a checkout with no Mac, plus the boundary cases no real file supplies.
+ */
+describe("png capture-id in XMP (iTXt), which is what ImageIO writes", () => {
+  /**
+   * The real chunk's body, verbatim in shape: the `XML:com.adobe.xmp`
+   * keyword, iTXt's four flag/language bytes, then the RDF the id sits in.
+   */
+  function xmpPng(body: string): Uint8Array {
+    const data = [...chars("XML:com.adobe.xmp"), 0, 0, 0, 0, 0, ...chars(body)];
+    const len = data.length;
+    const chunk = [...be32(len), ...chars("iTXt"), ...data, 0, 0, 0, 0];
+    return new Uint8Array([...skeletonPng().subarray(0, 33), ...chunk,
+                           ...skeletonPng().subarray(33)]);
+  }
+
+  const rdf = (v: string) =>
+    `<x:xmpmeta><rdf:RDF><rdf:Description><dc:description><rdf:Alt>` +
+    `<rdf:li xml:lang="x-default">${v}</rdf:li>` +
+    `</rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>`;
+
+  test("the id is read out of the XMP an ImageIO export carries", () => {
+    const id = mintCaptureId();
+    expect(readPngCaptureId(xmpPng(rdf(id)))).toBe(id);
+  });
+
+  test("a human-written description in XMP is not mistaken for an id", () => {
+    expect(readPngCaptureId(xmpPng(rdf("screenshot of the login bug")))).toBeUndefined();
+  });
+
+  test("a longer token starting cap_ is not read as its own 30-character prefix", () => {
+    // The scan's one real hazard: without the boundary check, any run of
+    // Crockford characters long enough would have its head read as an id.
+    const id = mintCaptureId();
+    expect(readPngCaptureId(xmpPng(rdf(id + "XYZ")))).toBeUndefined();
+  });
+
+  test("a tEXt tag still wins over XMP, whatever the byte order", () => {
+    const ours = mintCaptureId(), theirs = mintCaptureId();
+    expect(readPngCaptureId(tagPng(xmpPng(rdf(theirs)), ours))).toBe(ours);
+  });
+
+  test("an iTXt chunk with no id at all degrades to undefined", () => {
+    expect(readPngCaptureId(xmpPng(rdf("")))).toBeUndefined();
   });
 });
 
