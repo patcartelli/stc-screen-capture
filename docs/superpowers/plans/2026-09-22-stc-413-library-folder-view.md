@@ -2440,13 +2440,33 @@ git commit -m "STC-413: sweep bundles that are orphaned AND aged, never aged alo
   bundles keep `readLabel` for the unfinished case.
 
 **The rename IPC changes shape, and its one caller must move with it.**
-`app/src/renderer.ts:1059` calls `recorder.labelTake(item.dir, label)` — a
-directory and a label. Renaming a finished capture is now a FILE rename, so
+`app/src/renderer.ts`'s `rename` handler calls `recorder.labelTake(item.dir, label)`
+— a directory and a label. Renaming a finished capture is now a FILE rename, so
 that call site takes `item.file` and a new name. An item with no `file` (an
 unexported bundle) still labels the old way through `take.json`, because it has
 no user-facing filename yet — that is the one case `readLabel` is kept for, and
 it is why this task removes `setTakeLabel` for finished captures rather than
 outright.
+
+**There is a LIVE BUG here that this task must close.** After Task 8, that
+handler reads:
+
+```ts
+    const dir = item.dir;
+    if (!dir) return;                       // ← silently does nothing
+    try { await recorder.labelTake(dir, label); … }
+```
+
+but Task 8's `looseFileItem` OFFERS the `rename` action for items that have no
+bundle. So today a foreign file's tile shows Rename, the user types a name,
+and **nothing happens with no error** — an action offered and silently
+dropped, which is worse than one that refuses.
+
+That mismatch is the right way round to fix: rename does NOT need a bundle, so
+offering it was correct and the HANDLER was wrong. Route it through `file` when
+there is one, fall back to `take.json` when there is only a bundle, and refuse
+loudly when there is neither. Add a test that clicking Rename on a bundle-less
+item actually renames the file — the silent-return path must not survive.
 
 - [ ] **Step 1: Write the failing test**
 
