@@ -2530,7 +2530,23 @@ for it; this repo's rule is that a number is measured, not assumed.
 - [ ] **Step 1: Write the measurement**
 
 ```ts
-test("500 files scan inside a budget", async () => {
+/**
+ * A GROSS-REGRESSION BACKSTOP, deliberately not a tight budget.
+ *
+ * This runs in the normal suite, and a tight timing assertion there reddens
+ * PRs at random under load — which this repo has already paid for once
+ * (`ring-overflow.slow.test.ts` was taken out of CI for exactly that, on the
+ * rule that "a test that reddens PRs at random is worse than one that does
+ * not run"). So the number below is the measured figure with a LARGE multiple
+ * on top: it catches a scan that became quadratic, and deliberately does NOT
+ * catch a 2x slowdown. The printed value is the real signal; a human reading
+ * it is the instrument.
+ *
+ * Measured on: <machine, date> — replace with the real figure and headroom.
+ */
+const SCAN_BACKSTOP_MS = 0;   // ← set from Step 2, do not guess
+
+test("500 files scan without going quadratic", async () => {
   for (let i = 0; i < 500; i++) {
     await writeFile(join(root, `take-${String(i).padStart(3, "0")}.mp4`),
                     tagMp4(mp4Bytes(), mintCaptureId()));
@@ -2538,20 +2554,32 @@ test("500 files scan inside a budget", async () => {
   const t0 = performance.now();
   const { items } = await listLibrary(env, root);
   const ms = performance.now() - t0;
-  process.stderr.write(`500-file scan: ${Math.round(ms)} ms\n`);
+  process.stderr.write(`500-file scan: ${Math.round(ms)} ms ` +
+                       `(${(ms / 500).toFixed(2)} ms/file)\n`);
   expect(items).toHaveLength(500);
-  expect(ms).toBeLessThan(SCAN_BUDGET_MS);
+  expect(ms).toBeLessThan(SCAN_BACKSTOP_MS);
 }, 120_000);
 ```
 
-- [ ] **Step 2: Run it and read the printed number**
+- [ ] **Step 2: Run it, read the printed number, then set the backstop**
 
 Run: `npx vitest run app/test/library-scan.test.ts -t "500 files"`
 
-**Do not pick `SCAN_BUDGET_MS` first and fit to it.** Run it, read the real
-figure, then set the budget with headroom and a comment recording the machine it
-was measured on — the shape `STILL_END_TO_END_MS` uses. If the real number is
-bad, the fix is the probe, not the budget.
+**Do not pick the number first and fit to it.** Run it, read the real figure,
+then set `SCAN_BACKSTOP_MS` to roughly **10x** it and record the machine and
+date in the comment — the shape `STILL_END_TO_END_MS` uses. Ten times is not
+sloppiness: the thing worth failing on is an algorithmic regression, and
+anything tighter is a flake generator on a loaded runner.
+
+**If the per-file figure is bad, the fix is the probe, not the number.**
+
+**State the caveat in the test, because this measurement does NOT cover the
+thing most likely to hurt.** The fixture's files are a few hundred bytes, so
+each "64 KB tail read" is really reading a whole tiny file. Against 500 real
+4K exports the same scan does ~32 MB of scattered IO on top of this. So what
+this pins is **per-file OVERHEAD** — `readdir`, open, header parse, id extract
+— and not IO throughput. The IO half needs a real folder of real exports on a
+Mac; add it to the runbook rather than pretending this covers it.
 
 - [ ] **Step 3: Commit**
 
