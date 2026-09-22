@@ -1927,16 +1927,35 @@ Expected: PASS.
 
 - [ ] **Step 5: Restate the e2e fixtures that assert an on-disk path**
 
-This is the task that breaks them, so it is the task that fixes them. Find them:
+This is the task that breaks them, so it is the task that fixes them.
+
+**Measured blast radius: 33 files set `STC_RECORDINGS_DIR`, and 24 of those
+also reference a root-relative path.** Find them:
 
 ```bash
 grep -rln "STC_RECORDINGS_DIR" app/test
-grep -rn "join(root,.*_..-..-..\|takeDir\b" app/test | grep -v node_modules
+grep -rln "STC_RECORDINGS_DIR" app/test | xargs grep -ln "join(root\|readdir(root"
 ```
 
 A fixture that merely *sets* `STC_RECORDINGS_DIR` needs nothing — the root is
 unchanged and only the bundle moved below it. Only fixtures that assert a take
-landed at `<root>/<stamp>/` need the `raw/` segment added.
+landed at `<root>/<stamp>/`, or that COUNT entries in the root, need changing.
+
+**Note `promoteTake` promotes stills too** (`temp-takes.ts:135`, via
+`takesRoot`), so this is not a recordings-only change: a still's bundle moves
+to `raw/` while its exported image stays at the top level. Any fixture that
+counted "how many things are in the recordings root" now sees a different
+number for both kinds.
+
+**The counting assertions are the dangerous ones.** `nothing-lost.e2e.test.ts`,
+`thumbnail.e2e.test.ts` and `panel-waits.e2e.test.ts` all prove something by
+counting entries in the root. CLAUDE.md records this exact failure from
+STC-391: two "nothing was recorded" assertions went VACUOUS when takes stopped
+landing in the directory they counted — they would have passed for a take that
+really had gone ahead. For each counting assertion, ask whether it can still
+DISCRIMINATE now that bundles sit one level down. If it cannot, repoint it at
+`raw/` or delete it with a stated reason. Do not leave it passing for the wrong
+reason.
 
 **Restate them, never loosen them.** Changing `expect(existsSync(dir)).toBe(true)`
 into a `.toBeTruthy()` on something vaguer is how an assertion stops meaning
