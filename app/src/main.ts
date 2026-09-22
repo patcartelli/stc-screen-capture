@@ -50,6 +50,7 @@ import {
 import { promotes, trashStyle } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
 import { openEditor } from "./editor-window.js";
+import { openStillEditor } from "./still-editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
@@ -1256,25 +1257,6 @@ ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuf
   return true;
 });
 
-/**
- * Re-open a stored shot into the post-capture panel (STC-294).
- *
- * The payoff of keeping the decoration in JSON: the panel is handed the STORED
- * document, so the mode, the canvas and STC-297's redaction regions all come
- * back exactly as they were left, and the shot can be re-exported without
- * re-capturing. It is the same panel a fresh capture gets — not a second still
- * UI, which is what STC-293's Note and STC-300's gate both forbid.
- *
- * `take: { kind: "shot", origin: "library" }` is the one difference and it
- * still matters post-STC-392: `actionsFor` (`panel-actions.ts`) gives a
- * re-opened shot only Copy and Trash — no Save, because it is already on
- * disk and there is nothing to promote, where a fresh capture also gets
- * Save. Neither panel closes itself any more; both wait for a person to
- * choose one of the actions they actually have.
- * `app/test/library.e2e.test.ts`'s "re-opening a shot from the library
- * offers only Copy and Trash, and never exports on its own" is what actually
- * invokes this handler.
- */
 /** The stored document for one shot, so the library can render its decoration. */
 ipcMain.handle("library:shot", async (_e, dir: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
@@ -1284,17 +1266,31 @@ ipcMain.handle("library:shot", async (_e, dir: string) => {
   return parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
 });
 
+/**
+ * Re-opening a shot from the library goes straight to the still editor now
+ * (STC-300 revision) — the same door a recording's "Open" already used
+ * (`editor.ts`, STC-373). It used to re-present the post-capture panel with
+ * `origin: "library"`; once Edit became reachable from there too, sending a
+ * deliberate re-open through the panel first was an extra click to the thing
+ * someone reopening old work most likely wants (redact, or just look), while
+ * Copy/Delete/Reveal for a kept take are already on the library grid's own
+ * tile menu (`library-items.ts`) and lose nothing by this change.
+ *
+ * Crash recovery's OWN re-presentation of an orphaned still (`recoverUnsavedTakes`,
+ * STC-393) is unrelated and still goes through `presentThumbnail` — that is a
+ * prompt about a take nobody decided on yet, not a deliberate re-open of one
+ * already kept, and the panel's Save/Copy/Trash are exactly what it needs.
+ */
 ipcMain.handle("still:reopen", async (_e, dir: string) => {
-  const { thumbnail, saveFolder } = readSettings(app.getPath("userData"));
+  const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
-  const shot = parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
-  presentThumbnail({
-    dir, shot, corner: thumbnail.corner,
-    take: { kind: "shot", origin: "library" },
-    dist: here, rendererDir: join(here, "..", "renderer"),
-  });
+  // Read only to fail loudly on a shot this build cannot load, the same
+  // courtesy the old panel-based path gave — `openStillEditor` itself reads
+  // the document again once its own window exists.
+  parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
+  openStillEditor({ dir, dist: here, rendererDir: join(here, "..", "renderer") });
   return { ok: true };
 });
 
@@ -1377,13 +1373,23 @@ async function trashWithConfirmation(
   }
 }
 
+/**
+ * `detail`/`cancelled` are passed through now, not discarded (found while
+ * removing the panel's own re-open door, STC-300 revision): a real
+ * `trashWithConfirmation` failure used to be surfaced ONLY via the panel's
+ * "confirm" path (`origin: "library"`), and that door closing left this one —
+ * the grid's own Delete, which has ALWAYS called the same function — silently
+ * doing nothing on a real failure. `renderer.ts`'s `act()` is what now tells
+ * a genuine failure (alert) apart from a Cancel (say nothing), the same
+ * distinction `trashWithConfirmation`'s own doc already draws.
+ */
 ipcMain.handle("take:delete", async (_e, dir: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to delete a path outside the recordings folder");
   }
   const r = await trashWithConfirmation(dir);
-  return { deleted: r.ok };
+  return { deleted: r.ok, cancelled: r.cancelled, detail: r.detail };
 });
 
 ipcMain.handle("preview:open", async (e, dir: string) => {
@@ -1616,11 +1622,11 @@ ipcMain.handle("thumbnail:menu", async (e, ctx: ThumbMenuContext) => {
     const answer = (id: ThumbMenuId | null) => { if (!answered) { answered = true; resolve(id); } };
     const menu = Menu.buildFromTemplate(buildThumbMenu({
       // A malformed or absent `take` defaults to a fresh shot — the widest
-      // set of the four actions minus Edit — rather than throwing and losing
-      // the whole menu over one bad field on a channel only this app's own
-      // renderer ever calls.
+      // set of the four actions — rather than throwing and losing the whole
+      // menu over one bad field on a channel only this app's own renderer
+      // ever calls.
       take: ctx?.take ?? { kind: "shot", origin: "fresh" },
-      redacting: ctx?.redacting === true, busy: ctx?.busy === true,
+      busy: ctx?.busy === true,
     }).map((item) => item.type === "separator"
       ? { type: "separator" as const }
       : { label: item.label, enabled: item.enabled !== false, click: () => answer(item.id) }));
@@ -1749,11 +1755,16 @@ ipcMain.handle("panel:save", async (_e, dir: string) => {
 });
 
 /**
- * Edit promotes first, and not as a convenience: `editor:open` refuses any
+ * Edit promotes first, and not as a convenience: both editors refuse any
  * path outside the recordings root, so a take in temp storage cannot be
- * opened at all. The editor's own Save is about the EXPORT — the ticket's
- * "you may only be trimming" — not about whether the take is kept, which is
- * what this promote settles.
+ * opened at all. Which editor opens depends on what this panel is showing —
+ * `takeFor(dir)?.kind`, the same source `panel:trash` already reads `origin`
+ * from (STC-392 review, I7), never re-derived from the path a second way. A
+ * recording opens `editor.ts` (preview, trim, export, share); its own Save is
+ * about the EXPORT — the ticket's "you may only be trimming" — not about
+ * whether the take is kept, which is what this promote settles. A shot opens
+ * `still-editor-window.ts` (STC-300), whose only job today is the redaction
+ * tool that used to live in this panel.
  */
 ipcMain.handle("panel:edit", async (_e, dir: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
@@ -1764,9 +1775,14 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
     // Same reasoning as `panel:save` above: `promotes("edit")` is asked, not
     // hardcoded — this handler has no opinion of its own about whether Edit
     // promotes.
+    const kind = takeFor(dir)?.kind ?? "shot";
     const opened = promotes("edit") ? await promoteTake(process.env, saveFolder, dir) : dir;
-    openEditor({ dir: opened, name: basename(opened),
-                 dist: here, rendererDir: join(here, "..", "renderer") });
+    if (kind === "shot") {
+      openStillEditor({ dir: opened, dist: here, rendererDir: join(here, "..", "renderer") });
+    } else {
+      openEditor({ dir: opened, name: basename(opened),
+                   dist: here, rendererDir: join(here, "..", "renderer") });
+    }
     dismissThumbnail(dir);
     return { ok: true };
   } catch (e: any) {

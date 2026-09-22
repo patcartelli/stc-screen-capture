@@ -176,17 +176,22 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
   }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + 60_000);
 
   test("a reopened LIBRARY take does not count as unhandled — no dialog, a plain quit", async () => {
-    // `unsavedTakeDirs` (thumbnail-window.ts) filters to `origin: "fresh"`
-    // on purpose: a panel from `still:reopen` (STC-294) is already on disk
-    // with nothing to promote, so a panel being open is not by itself
-    // "something to lose". This is the one test in the file that opens a
-    // panel WITHOUT going through `captureDisplay` — a fresh capture can
-    // only ever be `origin: "fresh"`, so a reopen is the only door to the
-    // other case.
+    // `unsavedTakeDirs` (thumbnail-window.ts) filters `panels` to
+    // `origin: "fresh"` — a take already on disk with nothing to promote is
+    // not by itself "something to lose". This test used to be the one place
+    // in the file that opened a PANEL without going through `captureDisplay`,
+    // since a reopen was the only door to `origin: "library"`. STC-300's
+    // revision closed that door: `still:reopen` now opens the still editor
+    // directly, which never joins `panels` at all — so the property this
+    // test pins is now true by CONSTRUCTION rather than by a filter, and the
+    // thing to prove is that the editor being open is not read as "unhandled"
+    // either.
     const { win, recordings } = await launchWithHelper();
     const { takeDir } = makeStillFolder("2026-09-08_12-00-00", { into: recordings });
     await win.evaluate((dir) => (window as any).recorder.reopenStill(dir), takeDir);
-    await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(1);
+    await expect.poll(() => windowCount(app!, "still-editor.html"), { timeout: POLL_MS }).toBe(1);
+    // And no panel was ever created for it either.
+    expect(await panelCount()).toBe(0);
 
     // A file-based log, not `stubQuitDialog`'s `globalThis` counter: the
     // whole point of this test is that the app quits WITHOUT ever pausing
@@ -212,8 +217,8 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     app = undefined;
 
     expect(existsSync(dialogLog) ? readFileSync(dialogLog, "utf8") : "").toBe("");
-    // Untouched either way — Copy/Trash are this panel's only actions
-    // (`panel-actions.ts`), and neither was pressed.
+    // Untouched either way — the still editor's only actions are Undo and
+    // Done (STC-300), and neither writes anywhere near deleting the take.
     expect(existsSync(takeDir)).toBe(true);
   }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + POLL_MS + 60_000);
 

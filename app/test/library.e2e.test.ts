@@ -7,6 +7,7 @@ import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { hasWindow } from "./_windows.js";
 import { keptFileRequests } from "./_still-log.js";
+import { toastText } from "./_toast.js";
 
 /**
  * The library grid, end to end (STC-294).
@@ -74,13 +75,13 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
   return { win, recordings, stillLog, errors };
 }
 
-/** The floating panel, once it is up — same idiom as `thumbnail.e2e.test.ts`. */
-async function thumbnailWindow(ms = 15_000): Promise<Page> {
+/** The still editor window, once it is up — same idiom as `redaction.e2e.test.ts`. */
+async function stillEditorWindow(ms = 15_000): Promise<Page> {
   const start = Date.now();
   for (;;) {
-    for (const p of app!.windows()) if (p.url().includes("thumbnail.html")) return p;
+    for (const p of app!.windows()) if (p.url().includes("still-editor.html")) return p;
     if (Date.now() - start > ms) {
-      throw new Error(`no thumbnail window appeared within ${ms}ms; windows: `
+      throw new Error(`no still editor window appeared within ${ms}ms; windows: `
         + JSON.stringify(app!.windows().map((p) => p.url())));
     }
     await new Promise((r) => setTimeout(r, 50));
@@ -305,20 +306,16 @@ describe("duplicate", () => {
   }, 60_000);
 
   /**
-   * Re-opening a shot from the library (STC-294) goes through `still:reopen`
-   * with `take: { kind: "shot", origin: "library" }` (STC-392 review finding
-   * 3, restated for STC-392's action table) — and until this test, nothing
-   * anywhere actually invoked `still:reopen`. That gap is what this pins.
-   *
-   * STC-392 removed the panel's own "do nothing and close" affordance
-   * entirely — there is no Close button and Escape no longer settles — so a
-   * re-opened shot's panel does not close itself the way this test used to
-   * check. What is left to claim, and what actually matters: `actionsFor`
-   * gives a `"library"`-origin shot only Copy and Trash (no Save — there is
-   * nothing left to promote), and the panel does not export or duplicate
-   * anything just by being SHOWN.
+   * Re-opening a shot from the library now goes straight to the still editor
+   * (STC-300 revision) — `still:reopen` used to re-present the post-capture
+   * panel with `take: { kind: "shot", origin: "library" }`; once Edit became
+   * reachable from the panel too, that extra click was in the way of the
+   * thing someone reopening old work most likely wants. See `main.ts`'s
+   * `still:reopen` for the full reasoning, including why nothing is lost:
+   * Copy/Delete/Reveal for a kept take are already on the grid's own tile
+   * menu.
    */
-  test("re-opening a shot from the library offers only Copy and Trash, and never exports on its own (STC-294/STC-392)", async () => {
+  test("re-opening a shot from the library opens the still editor, and never exports on its own (STC-294/STC-300)", async () => {
     const { win, recordings, stillLog } = await launch((dir) => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
@@ -327,31 +324,24 @@ describe("duplicate", () => {
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
 
     await clickAction(win, 0, "open");
-    const panel = await thumbnailWindow();
-    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
-      .toContain("in");
+    const editor = await stillEditorWindow();
+    await editor.waitForSelector("#stagecanvas");
 
-    // Copy and Trash only — no Save, because there is nothing to promote; no
-    // Edit, because a shot never gets one (`panel-actions.ts`'s own table).
-    expect(await panel.isVisible("#copy")).toBe(true);
-    expect(await panel.isVisible("#trash")).toBe(true);
-    expect(await panel.isHidden("#save")).toBe(true);
-    expect(await panel.isHidden("#edit")).toBe(true);
-
-    // And it stays open, undecided — nothing exported, nothing duplicated,
-    // and the original untouched, just by having been shown.
+    // And nothing was exported, duplicated or promoted a second time, and
+    // the original untouched, just by having been opened.
     await new Promise((r) => setTimeout(r, 1_000));
-    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
+    expect(await hasWindow(app!, "still-editor.html")).toBe(true);
     // "Never exports on its own" — its own title — read off the helper's
     // request log (STC-412 final review, I3). The folder read this replaces
     // named a fixture directory that, once `saveFolder` became the single
     // setting governing every write, nothing in the app could resolve to, so
-    // it was empty whether or not the panel exported anything.
+    // it was empty whether or not the still editor exported anything.
     //
-    // `keptFileRequests`, not every export: a re-opened panel DOES write its
-    // drag-out file to the clipboard cache as it paints, exactly like a fresh
-    // one, and the claim here is about a copy being KEPT — a second encoded
-    // shot appearing somewhere the user keeps files just from opening one.
+    // `keptFileRequests`, not every export: opening the still editor DOES
+    // write a drag-out file to the clipboard cache as it paints, exactly like
+    // the old panel did, and the claim here is about a copy being KEPT — a
+    // second encoded shot appearing somewhere the user keeps files just from
+    // opening one.
     expect(keptFileRequests(stillLog)).toEqual([]);
     expect(readdirSync(recordings)).toEqual(["2026-09-08_12-00-00"]);
     expect(readFileSync(join(original, "shot.json"), "utf8")).toBe(before);
@@ -359,72 +349,49 @@ describe("duplicate", () => {
 });
 
 /**
- * The panel's OTHER Trash style — a re-opened library shot, `trashStyle`'s
- * "confirm" (STC-392 D1), reached via `trashWithConfirmation` (STC-392
- * review). Both tests here open a shot from the grid exactly like the test
- * above, then actually press Trash — which that one never does.
+ * `trashWithConfirmation` (`main.ts`), reached from the library grid's own
+ * Delete action.
+ *
+ * This used to be two tests reached by re-opening a shot into the
+ * post-capture panel and pressing its Trash button (`trashStyle`'s "confirm"
+ * style, STC-392 D1/review I2) — that door closed when `still:reopen` started
+ * opening the still editor directly (STC-300 revision; a `{ kind: "shot",
+ * origin: "library" }` panel is no longer constructed anywhere). The CANCEL
+ * half is fully redundant with `manage.e2e.test.ts`'s own "cancelling the
+ * confirmation keeps the take", reached the same way and dropped here rather
+ * than kept as a second copy. The FAILURE half — review I2's actual finding,
+ * that an uncaught `shell.trashItem` rejection used to escape as an unhandled
+ * promise rejection with no message and no restore — has no other test
+ * anywhere, since `trashWithConfirmation` itself carries the fix and both of
+ * its callers (this one and `panel:trash`'s confirm branch) share it. Ported
+ * onto the grid's own Delete button rather than left to depend on a door that
+ * no longer exists.
  */
-describe("the panel's confirm-style Trash (STC-392 review, I2/I5)", () => {
-  async function openReopenedPanel(win: Page): Promise<Page> {
+describe("a failed delete is reported, not swallowed (STC-392 review, I2)", () => {
+  test("the library grid's own Delete reports a failed trash rather than silently doing nothing", async () => {
+    const { win, recordings } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
-    await clickAction(win, 0, "open");
-    const panel = await thumbnailWindow();
-    await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
-      .toContain("in");
-    return panel;
-  }
-
-  test("cancelling reports nothing wrong, and the take is untouched (review I5)", async () => {
-    const { win, recordings } = await launch((dir) => {
-      makeStillFolder("2026-09-08_12-00-00", { into: dir });
-    });
-    const original = join(recordings, "2026-09-08_12-00-00");
-    const panel = await openReopenedPanel(win);
-
-    // A call counter, not just a stubbed response — an empty status line
-    // proves nothing on its own (it is also the panel's INITIAL state), so
-    // the assertion needs proof the round trip to main actually happened.
-    await app!.evaluate(({ dialog }) => {
-      (globalThis as any).__dialogCalls = 0;
-      dialog.showMessageBox = async () => {
-        (globalThis as any).__dialogCalls++;
-        return { response: 1, checkboxChecked: false }; // Cancel
-      };
-    });
-    await panel.click("#trash");
-    await expect.poll(() => app!.evaluate(() => (globalThis as any).__dialogCalls ?? 0),
-                       { timeout: 15_000 }).toBe(1);
-
-    // Cancelling is a decision, not a fault (I5) — the same rule
-    // `runExport`'s Save As cancel already follows. The OLD behaviour read
-    // "Could not delete: cancelled" on this line.
-    expect(await panel.evaluate(() => document.getElementById("status")!.textContent)).toBe("");
-    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
-    expect(existsSync(original)).toBe(true);
-  }, 60_000);
-
-  test("a failed trash reports the error and leaves the panel open (review I2)", async () => {
-    const { win, recordings } = await launch((dir) => {
-      makeStillFolder("2026-09-08_12-00-00", { into: dir });
-    });
-    const original = join(recordings, "2026-09-08_12-00-00");
-    const panel = await openReopenedPanel(win);
 
     await app!.evaluate(({ dialog, shell }) => {
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); // Move to Trash
       shell.trashItem = async () => { throw new Error("simulated Trash failure"); };
     });
-    await panel.click("#trash");
+    await clickAction(win, 0, "delete");
 
     // The OLD `trashWithConfirmation` left `dialog.showMessageBox` and
-    // `shell.trashItem` uncaught, so this rejection would have escaped as an
-    // unhandled promise rejection in the renderer's `perform()` — no status
-    // line, no restore, a panel that looks hidden-but-alive with no way
-    // back (review I2). A message actually reaching the status line, with
-    // the panel still open, is the proof the rejection was caught.
-    await expect.poll(() => panel.evaluate(() => document.getElementById("status")!.textContent),
-                       { timeout: 15_000 }).toContain("Could not delete");
-    expect(await hasWindow(app!, "thumbnail.html")).toBe(true);
+    // `shell.trashItem` uncaught there, so a real Trash failure escaped as an
+    // unhandled promise rejection rather than reaching whichever caller asked
+    // for it. A message actually reaching the toast (`renderer.ts`'s own
+    // `alertUser`, called from `act()`'s catch, now routed through
+    // `showMessageToast` — STC-412) is the proof the rejection was caught,
+    // the same property the panel-based version of this test pinned via the
+    // panel's own `#status` line.
+    await expect.poll(() => toastText(app!), { timeout: 15_000 })
+      .toContain("simulated Trash failure");
+    // Nothing was actually moved — the failure is real, not just reported.
     expect(existsSync(original)).toBe(true);
   }, 60_000);
 });

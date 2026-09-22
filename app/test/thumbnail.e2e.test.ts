@@ -25,6 +25,15 @@ import { readRequests, exportRequests, keptFileRequests } from "./_still-log.js"
  * kept by the panel staying put rather than by a timeout writing a file
  * nobody asked for.
  *
+ * Also here (STC-426): that the real WINDOW RECTANGLES of several stacked
+ * previews never overlap, and close their gap correctly when one of them
+ * closes — `thumbnail.test.ts`'s `stackLayout` tests prove the arithmetic
+ * with no window at all; this is the same claim about real `BrowserWindow`s.
+ * The mixed-size reflow that arithmetic also proves (a bigger panel pushing
+ * its neighbours) has no live trigger in this app any more since Redact
+ * moved into its own window (STC-300) — every panel is `PANEL_SIZE` for its
+ * whole life now, so there is nothing here to grow one into.
+ *
  * NOT covered here since STC-392: there is no collapsed/expanded window size
  * any more (`thumbnail-window.ts`'s window is fixed at `PANEL_SIZE`) and no
  * `#card` click to get from one to the other — every control this take has
@@ -114,6 +123,35 @@ async function noThumbnailWindow(ms = 15_000): Promise<void> {
   ).toBe(0);
 }
 
+/**
+ * Every real thumbnail `BrowserWindow` currently VISIBLE, read from the main
+ * process (STC-426) — the layout claim is about the windows themselves, not
+ * about whatever Playwright's own window list happens to have attached a
+ * driveable Page to yet (STC-416).
+ */
+function visibleThumbnailBounds(): Promise<{ x: number; y: number; width: number; height: number }[]> {
+  return app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+    .filter((w) => w.webContents.getURL().includes("thumbnail.html") && w.isVisible())
+    .map((w) => w.getBounds()));
+}
+
+/**
+ * Waits until exactly `count` visible thumbnail windows exist and none of
+ * them overlap (STC-426). Defined once at module scope, like
+ * `thumbnailWindow`/`noThumbnailWindow` above, rather than per-test — a
+ * helper redefined inside a test body counts its own inner `expect.poll`
+ * bound once per call site in `timeout-budget.test.ts`'s static scan, and
+ * this one is meant to be called several times in the same test.
+ */
+async function nonOverlappingThumbnails(count: number, ms = 15_000): Promise<void> {
+  await expect.poll(async () => {
+    const all = await visibleThumbnailBounds();
+    return all.length === count && all.every((a, i) => all.slice(i + 1).every((b) =>
+      a.x + a.width <= b.x || b.x + b.width <= a.x ||
+      a.y + a.height <= b.y || b.y + b.height <= a.y));
+  }, { timeout: ms }).toBe(true);
+}
+
 /** A whole-display capture, the same door a hotkey uses — no overlay to drive. */
 async function captureDisplay(win: Page): Promise<any> {
   return win.evaluate(() => (window as any).recorder.captureStill("display"));
@@ -156,12 +194,13 @@ describe("the post-capture floating thumbnail", () => {
     const panel = await thumbnailWindow();
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
       .toContain("in");
-    // A fresh SHOT: copy, save and trash, and no edit — `panel-actions.ts`'s
-    // own table, drawn onto the DOM (`actionsFor`).
+    // A fresh SHOT: copy, save, edit and trash — `panel-actions.ts`'s own
+    // table, drawn onto the DOM (`actionsFor`). Edit opens a still editor now
+    // (STC-300), so a shot gets it the same as a recording does.
     expect(await panel.isVisible("#copy")).toBe(true);
     expect(await panel.isVisible("#save")).toBe(true);
+    expect(await panel.isVisible("#edit")).toBe(true);
     expect(await panel.isVisible("#trash")).toBe(true);
-    expect(await panel.isHidden("#edit")).toBe(true);
   }, 60_000);
 
   test("Save promotes the take into the library and closes the panel — it keeps no second copy", async () => {
@@ -231,6 +270,23 @@ describe("the post-capture floating thumbnail", () => {
       const urls = (await windowUrls(app!)).filter((u) => u.includes("thumbnail.html"));
       return urls.length === 2 && urls.includes(firstUrl);
     }, { timeout: 15_000 }).toBe(true);
+  }, 60_000);
+
+  test("previews use their full height, gapped and non-overlapping, and close their gap (STC-426)", async () => {
+    const { win } = await launch();
+    for (let i = 0; i < 3; i++) await captureDisplay(win);
+    // Three captures with `MAX_STACKED` at 3: all three fit, each at its own
+    // full height rather than the old fixed-offset overlap.
+    await nonOverlappingThumbnails(3);
+
+    const panel = app!.windows().find((p) => p.url().includes("thumbnail.html"))!;
+    // Closing a real window removes its slot, even without going through the
+    // renderer's own "done" event — `leaveStack`'s `"closed"` handler is what
+    // this exercises.
+    await app!.evaluate(({ BrowserWindow }, url) => {
+      BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === url)!.destroy();
+    }, panel.url());
+    await nonOverlappingThumbnails(2);
   }, 60_000);
 
   test("every stacked capture still WAITS — nothing is lost by doing nothing (STC-392)", async () => {

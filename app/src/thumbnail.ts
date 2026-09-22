@@ -31,10 +31,11 @@
  * than no clock. See the doc on `ThumbnailState` for what replaced them.
  *
  * **4. Multiple captures STACK, newest at the corner — and a stack of one is
- * not a separate calculation from a lone panel.** `stackPosition(0, ...)` IS
+ * not a separate calculation from a lone panel.** `stackLayout(...)[0]` IS
  * `positionFor(...)`, so the single-panel case cannot drift from the stacked
- * one; it is the same formula asked for index zero. "Drains oldest-first on
- * timeout" (STC-296's original wording) no longer applies post-STC-392 — and
+ * one; it is the same formula asked for the first size in the list. "Drains
+ * oldest-first on timeout" (STC-296's original wording) no longer applies
+ * post-STC-392 — and
  * as of Task 5b (STC-392 D7), a stack over `MAX_STACKED` no longer evicts
  * anything either. The panels past the cap stay alive, only HIDDEN, and
  * `hiddenCount` is how many of them there are — see `thumbnail-window.ts`'s
@@ -104,11 +105,14 @@
  * as a bug rather than as the one pixel someone forgot.
  *
  * **10. Growing or shrinking in place stays anchored to the panel's OWN
- * corner, whatever size it grows to.** Expand and Redact resize through
- * `stackPosition`, never `positionFor` — a panel mid-stack that grew by
- * jumping to the bare corner would abandon the place in the stack it was
+ * corner, whatever size it grows to.** Redact resizes the window and then
+ * asks `thumbnail-window.ts`'s `restack` to lay the whole column out again
+ * from `stackLayout`, never `positionFor` alone — a panel mid-stack that grew
+ * by jumping to the bare corner would abandon the place in the stack it was
  * shown at, and one that grew by moving its origin would walk off the edge
- * it is anchored to.
+ * it is anchored to. Reflowing the WHOLE group rather than resizing in place
+ * is what STC-426 added: the neighbours below a growing panel have to move
+ * to make room for it, not just sit under wherever it now ends.
  */
 
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -209,16 +213,35 @@ export function dismiss(): ThumbnailState { return { kind: "idle" }; }
  * before it, so `panels` staying ordered newest-first is what makes "the
  * newest three are visible" and "the rest are one `hiddenCount` away from
  * being visible again" the same fact read two ways.
+ *
+ * A `silent` (skip-the-panel) capture is never part of this count at all
+ * (STC-426) — `thumbnail-window.ts`'s `isStacked` excludes it before either
+ * `visibleCount` or `stackLayout` ever sees the list. It never paints and
+ * never occupies a slot, so counting it toward the cap would mean a
+ * screenshot nobody will ever see could push a REAL one into hiding — the
+ * cap is a screen-space budget, and an invisible window spends none.
+ *
+ * ## Older previews use their FULL height, not a 26px sliver (STC-426)
+ *
+ * The original stack (`stackPosition`, now gone) overlapped every panel but
+ * the newest, showing only a thin strip of each one behind it — legible as
+ * "something is waiting", not as a picture. `stackLayout` gives every VISIBLE
+ * panel its own full-height slot, `STACK_GAP_PX` apart, still newest nearest
+ * the corner and older ones pushed further in. A short display cannot always
+ * fit `MAX_STACKED` panels in one column — three `PANEL_SIZE` cards already
+ * come close on a 900pt-tall work area — so a panel that would run past the
+ * work area's bottom (or top, from a top corner) starts a new column further
+ * into the screen instead of running off the edge. It is recomputed from
+ * scratch on every call from each PANEL'S OWN CURRENT SIZE — a function of
+ * every panel's size rather than one shared constant, on purpose: Redact used
+ * to grow one panel into a bigger size in place, and while STC-300 moved that
+ * elsewhere, "closing the middle preview closes the gap" needs no less than
+ * this to be true — there is no stored offset to update, only a fresh layout
+ * of whatever list of sizes is handed in.
  */
 
-/**
- * How far each older panel is pushed in, in points.
- *
- * Enough to leave a legible sliver of the one behind against the panel's own
- * `PANEL_SIZE`, and no more: the stack is a reminder that shots are waiting,
- * not a UI to read.
- */
-export const STACK_STEP_PX = 26;
+/** Space between neighbouring previews in the vertical stack, in points (STC-426). */
+export const STACK_GAP_PX = 12;
 
 /**
  * How many panels may be VISIBLE at once, newest on top.
@@ -235,6 +258,11 @@ export const STACK_STEP_PX = 26;
  * beyond rather than destroying it, and it stays reachable through the
  * `hiddenCount` badge on the front panel. A panel is only ever torn down by a
  * decided action (Save, Edit, Trash) or the app quitting — never by this cap.
+ *
+ * `total`, below, is the count of STACKED panels (STC-426) — a `silent`
+ * capture is never one of the panels this cap is budgeting screen space for,
+ * so `thumbnail-window.ts` passes it the length of the list with silent
+ * panels already filtered out, not `panels.length`.
  */
 export const MAX_STACKED = 3;
 
@@ -272,19 +300,55 @@ export function hiddenCount(total: number): number {
 }
 
 /**
- * Where the panel at `index` sits, 0 being the newest.
+ * Where every VISIBLE panel sits, newest (index 0) first, each at its own
+ * FULL size rather than the old fixed-offset overlap (STC-426).
  *
- * Built on `positionFor`, so a stack of one is in precisely the place a lone
- * panel was — the single-panel case cannot drift from the stacked one because
- * it is not a separate calculation.
+ * `bounds[0]` is exactly `positionFor(corner, workArea, sizes[0], margin)` —
+ * a stack of one cannot drift from the stacked case because it is not a
+ * separate calculation, the same guarantee the old `stackPosition(0, ...)`
+ * made. Each later panel is placed `STACK_GAP_PX` past the bottom (or top,
+ * from a top corner) of the one before it in the SAME column, using that
+ * panel's own size — a bigger card ahead of it pushes everything behind it
+ * down (or up) by the difference, and shrinking it pulls them back.
+ *
+ * When the next panel would run past the work area's far edge, a new column
+ * starts `STACK_GAP_PX` beyond the widest panel seen in the column so far,
+ * back at the corner's own margin — the short-display case `docs/
+ * STC-426-RUNBOOK.md` calls out, and the reason this takes every panel's
+ * SIZE rather than one shared size: a column fits more cards at `PANEL_SIZE`
+ * than it would of anything bigger.
+ *
+ * Deliberately stateless: called fresh on every stack change with whatever
+ * sizes are visible right now, so there is no stored offset that removing or
+ * resizing a panel could leave stale — `thumbnail-window.ts`'s `restack` is
+ * the only caller that needs to reason about what changed.
  */
-export function stackPosition(index: number, corner: Corner, workArea: Bounds,
-                              size: Size, margin = 20): { x: number; y: number } {
-  const base = positionFor(corner, workArea, size, margin);
-  // Older panels move DOWN from a top corner and UP from a bottom one: always
-  // further into the screen, never off the edge it is anchored to.
-  const inward = corner.startsWith("top") ? 1 : -1;
-  return { x: base.x, y: base.y + index * STACK_STEP_PX * inward };
+export function stackLayout(sizes: readonly Size[], corner: Corner, workArea: Bounds,
+                            margin = 20): Bounds[] {
+  let vertical = 0;
+  let horizontal = 0;
+  let columnWidth = 0;
+  const sign = corner.startsWith("top") ? 1 : -1;
+  const columnSign = corner.endsWith("left") ? 1 : -1;
+  return sizes.map((size) => {
+    // Only wrap once something is already in the column — the first panel in
+    // any column, however tall, must still get a slot rather than looping
+    // forever.
+    if (vertical > 0 && vertical + size.height > workArea.height - 2 * margin) {
+      horizontal += columnWidth + STACK_GAP_PX;
+      vertical = 0;
+      columnWidth = 0;
+    }
+    const base = positionFor(corner, workArea, size, margin);
+    const bounds: Bounds = {
+      ...size,
+      x: base.x + horizontal * columnSign,
+      y: base.y + vertical * sign,
+    };
+    vertical += size.height + STACK_GAP_PX;
+    columnWidth = Math.max(columnWidth, size.width);
+    return bounds;
+  });
 }
 
 // ── swipe to discard ────────────────────────────────────────────────────────
@@ -428,22 +492,12 @@ export interface Bounds { x: number; y: number; width: number; height: number }
  */
 export const PANEL_SIZE: Size = { width: 260, height: 210 };
 
-/**
- * Redact mode's WINDOW size (STC-297). Bigger than the panel needs to be for
- * its own controls, and deliberately: at the panel's normal size one preview
- * pixel of a 4K capture is ~14 real ones, so placing a box over an email
- * address would be guesswork. This is the size at which a line of text is a
- * targetable thing. It is still the same panel in the same corner — the
- * still EDITOR is STC-300, and this stops well short of one.
- *
- * Lives here, not in `thumbnail-window.ts` (which resizes the real window to
- * it) or `thumbnail-renderer.ts` (which derives its own canvas box from it,
- * `REDACT_BOX = REDACT_SIZE - CARD_CHROME`, the same allowance `CARD_BOX` is
- * derived from `PANEL_SIZE` with) — one number, read by both, rather than a
- * window size in one file and an independently-tuned "canvas box" in the
- * other that a comment merely CLAIMED was derived from it.
- */
-export const REDACT_SIZE: Size = { width: 520, height: 420 };
+// Redact used to grow this same panel in place at a bigger WINDOW size
+// (`REDACT_SIZE`, STC-297) — "it is still the same panel in the same corner,
+// the still EDITOR is STC-300 and this stops well short of one." STC-300
+// disagreed once its own gate fired and moved Redact into a real editor
+// window instead (`still-editor-window.ts`); the panel is fixed at
+// `PANEL_SIZE` for its whole life now.
 
 /**
  * Where the panel sits within a display's WORK AREA (not its full bounds) —

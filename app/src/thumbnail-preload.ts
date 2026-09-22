@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { PanelTake } from "./panel-actions.js";
-import type { DecorationMode } from "@transform/shot.js";
 
 /**
  * The floating thumbnail's bridge (STC-296) — deliberately narrower than the
@@ -16,19 +15,12 @@ import type { DecorationMode } from "@transform/shot.js";
 contextBridge.exposeInMainWorld("thumb", {
   getFrame: (dir: string, name: string) => ipcRenderer.invoke("still:frame", dir, name),
   getSettings: () => ipcRenderer.invoke("recorder:getSettings"),
-  // Redactions and the decoration mode — main re-reads the stored document
-  // and re-validates it, so this window can change a shot's redactions and
-  // its mode and nothing else about it (STC-297; widened for `mode` by
-  // STC-392 review, I2 — see the handler's own note for why that widening
-  // is still safe: `mode` is a closed enum `parseShot` already checks).
-  writeShot: (dir: string, redactions: unknown, mode?: DecorationMode) =>
-    ipcRenderer.invoke("still:writeShot", dir, redactions, mode),
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   reveal: () => ipcRenderer.invoke("still:reveal"),
   // The right-click menu (STC-296 follow-up). Main builds and pops it up and
   // answers with the chosen id, so this window never holds a `Menu` and the
   // template stays checkable in one place.
-  menu: (ctx: { take: PanelTake; redacting: boolean; busy: boolean }) =>
+  menu: (ctx: { take: PanelTake; busy: boolean }) =>
     ipcRenderer.invoke("thumbnail:menu", ctx),
   // A DIRECTORY, which main validates against the recordings root before it
   // touches anything — the renderer names a take, never a path to act on.

@@ -65,7 +65,7 @@ declare const recorder: {
   reopenStill(dir: string): Promise<{ ok: boolean }>;
   duplicateStill(dir: string): Promise<{ ok: boolean; dir: string }>;
   labelTake(dir: string, label: string): Promise<boolean>;
-  deleteTake(dir: string): Promise<{ deleted: boolean }>;
+  deleteTake(dir: string): Promise<{ deleted: boolean; cancelled?: boolean; detail?: string }>;
   // The take player is its own window now (STC-373) — this opens it. Every
   // channel the old in-page player used (`openPreview`, `writeExport`,
   // `publish`, and the rest) moved to `editor-preload.ts`, the only bridge
@@ -1045,7 +1045,13 @@ const libraryCallbacks: LibraryCallbacks = {
         // an open editor window's writes correctly start refusing rather than
         // landing in a directory `take:delete` just trashed.
         const r = await recorder.deleteTake(item.dir);
-        if (r.deleted) await refreshTakes();
+        if (r.deleted) { await refreshTakes(); }
+        // A Cancel is a decision, not a fault (`trashWithConfirmation`'s own
+        // rule) — say nothing. A REAL failure used to reach nobody: this
+        // action's own `detail` was discarded before STC-300's revision
+        // removed the only other door (the post-capture panel's "confirm"
+        // Trash) that ever surfaced one.
+        else if (!r.cancelled) alertUser(r.detail ?? "Could not delete this take.");
       }
     } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
@@ -1066,11 +1072,11 @@ const libraryCallbacks: LibraryCallbacks = {
 /**
  * Open whatever this item is.
  *
- * The one place the two kinds' destinations differ, and it is a MAIN-process
- * decision rather than a view's: a recording goes to the editor window
- * (STC-373), a still goes back into the post-capture panel with its
- * decoration intact. The view asked for "open" and does not know which
- * happened.
+ * Both kinds go to an editor window now — a recording to `editor.ts`
+ * (STC-373), a still to the still editor (STC-300 revision; `main.ts`'s
+ * `still:reopen` used to re-present the post-capture panel instead). Which
+ * window is still a MAIN-process decision, not a view's: the view asked for
+ * "open" and does not know which happened.
  *
  * Told apart by what the adapter said the item HAS — a still is the thing with
  * a thumbnail to render or cached — rather than by its kind. That reads as a

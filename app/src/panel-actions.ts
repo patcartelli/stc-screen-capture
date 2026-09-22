@@ -18,24 +18,31 @@
  * like four cases rather than two independent questions, and the next kind or
  * the next origin would double it again.
  *
- * ## The two absences are deliberate, and each has a reason on it
- *
- * **A shot has no Edit.** There is no still editor — `editor.ts` is a TAKE
- * editor (preview, trim, export, share) and `editor:open` refuses any path
- * outside the recordings root. A shot's editing is Redact, which lives in the
- * panel and does not close it, so it is not one of these actions at all.
+ * ## One absence is deliberate, and has a reason on it
  *
  * **A recording has no Copy.** Copy needs a format and a recording's format
  * picker is STC-395, explicitly out of scope here. The only video file in a
  * fresh take is `display.mp4`, which has `showsCursor` off by design — copying
  * it would hand someone a file that looks like their recording and is missing
  * the pointer. An action that looks like it worked is worse than an absent one.
- *
- * Both come back for free when their blocking ticket lands: one row each.
+ * It comes back for free when its blocking ticket lands: one row.
  *
  * NOTE (2026-09-17): the spec's "Copy → Trash on recordings" block overturns
  * the Copy half — see D6/Q1 in the plan. `actionsFor` gains `copy` for a
- * recording once Q1 is answered; the Edit half stands.
+ * recording once Q1 is answered.
+ *
+ * ## A shot's Edit opens a still editor now (STC-300)
+ *
+ * This used to be the OTHER deliberate absence — "a shot has no Edit... a
+ * shot's editing is Redact, which lives in the panel and does not close it."
+ * That stood until the panel's own compact size made Redact hard to use
+ * precisely, which is exactly the signal STC-300 was gated behind ("wanting
+ * to nudge a redaction rectangle"). Both kinds get `edit` now: `main.ts`'s
+ * `panel:edit` branches on `takeFor(dir)?.kind` — a recording opens
+ * `editor.ts` (preview, trim, export, share), a shot opens
+ * `still-editor-window.ts`, a dedicated (and much smaller) window whose only
+ * job today is the redaction tool this file's own module doc used to say
+ * "lives in the panel."
  */
 
 export type PanelAction = "copy" | "save" | "edit" | "trash" | "dismiss";
@@ -75,8 +82,9 @@ export function actionsFor(take: PanelTake): readonly PanelAction[] {
   if (take.kind === "shot") out.push("copy");
   // Nothing to promote for something already in the library.
   if (take.origin === "fresh") out.push("save");
-  // See the module doc: a shot has no Edit until a still editor exists.
-  if (take.kind === "recording") out.push("edit");
+  // Both kinds get Edit now (STC-300) — see the module doc for where each
+  // one opens.
+  out.push("edit");
   out.push("trash");
   return out;
 }
