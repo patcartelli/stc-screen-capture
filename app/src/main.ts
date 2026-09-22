@@ -55,6 +55,7 @@ import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
+import { ensureCaptureId } from "./capture-identity.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -1529,6 +1530,22 @@ ipcMain.handle("still:export", async (_e, req: {
   const fallbackDir = dir && insideCaptureRoot(process.env, settingsNow.saveFolder, dir)
     ? dir : undefined;
 
+  // STC-413: the bundle's stable identity, embedded so the finished file can
+  // point back to its source bundle after being renamed or moved. Only when
+  // there IS a bundle — `fallbackDir` is its (already-promoted, above) path.
+  // A caller with no take of its own gets no id: there is nothing in `raw/`
+  // for it to identify. Best-effort: a bundle that cannot be tagged (a
+  // deleted destination folder, a disk error) should still let the export
+  // through — identity is a nicety on top of the file, not a reason to lose
+  // the capture the user is trying to save.
+  let captureId: string | undefined;
+  if (fallbackDir) {
+    try { captureId = await ensureCaptureId(fallbackDir); }
+    catch (e) {
+      console.error("[still] could not mint a capture id for", fallbackDir, e);
+    }
+  }
+
   const still: CompositedStill = {
     bytes: req.bytes,
     width: req.width,
@@ -1559,7 +1576,8 @@ ipcMain.handle("still:export", async (_e, req: {
     const r = await exportStill((params) => sup!.exportStill(params),
                                 { still, target: req.target, options, info: req.info,
                                   ...(explicitFile ? { explicitFile } : {}),
-                                  ...(fallbackDir ? { fallbackDir } : {}) },
+                                  ...(fallbackDir ? { fallbackDir } : {}),
+                                  ...(captureId ? { captureId } : {}) },
                                 // `stored`, never the merged options: the
                                 // metadata strip is read from here and is
                                 // main's alone. `settingsNow.saveFolder`

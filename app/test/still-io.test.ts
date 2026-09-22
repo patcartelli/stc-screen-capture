@@ -203,6 +203,45 @@ describe("the export funnel (STC-293)", () => {
     expect(h.calls[0]!.capturedAt).toBe("2026-09-08T14:23:05.000Z");
   });
 
+  test("a capture id is forwarded to the helper (STC-413)", async () => {
+    const h = fakeHelper();
+    await exportStill(h.send, {
+      still: still(),
+      target: { file: true, clipboard: false },
+      options: DEFAULT_STILL_SETTINGS,
+      info: { mode: "window-only" },
+      fallbackDir: dir,
+      captureId: "cap_" + "A".repeat(26),
+    }, settings(), null, cache);
+    expect(h.calls[0]!.captureId).toBe("cap_" + "A".repeat(26));
+  });
+
+  test("no captureId on the request means none is sent — not every caller has a bundle", async () => {
+    const h = fakeHelper();
+    await exportStill(h.send, {
+      still: still(),
+      target: { file: true, clipboard: false },
+      options: DEFAULT_STILL_SETTINGS,
+      info: { mode: "window-only" },
+      fallbackDir: dir,
+    }, settings(), null, cache);
+    expect(h.calls[0]!.captureId).toBeUndefined();
+  });
+
+  test("a capture id survives a metadata strip — identity is not the privacy strip's business", async () => {
+    const h = fakeHelper();
+    await exportStill(h.send, {
+      still: still(),
+      target: { file: true, clipboard: false },
+      options: DEFAULT_STILL_SETTINGS,
+      info: { mode: "window-only" },
+      fallbackDir: dir,
+      captureId: "cap_" + "A".repeat(26),
+    }, settings({ stripMetadata: true }), null, cache);
+    expect(h.calls[0]!.capturedAt).toBeUndefined();
+    expect(h.calls[0]!.captureId).toBe("cap_" + "A".repeat(26));
+  });
+
   test("an export with nowhere to go is refused rather than quietly doing nothing", async () => {
     const h = fakeHelper();
     await expect(exportStill(h.send, {

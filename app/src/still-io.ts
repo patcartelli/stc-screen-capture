@@ -92,6 +92,14 @@ export interface ExportRequest {
    */
   explicitFile?: string;
   at?: Date;
+  /**
+   * The source bundle's stable identity (STC-413), from `ensureCaptureId`.
+   * Absent for an export with no bundle of its own — a Copy to the clipboard
+   * cache is never a library file, so there is nothing for it to point back
+   * at. Set by the caller, not resolved here: this module is the encoder
+   * funnel and does not know about bundles or the library root.
+   */
+  captureId?: string;
 }
 
 export interface ExportResult {
@@ -337,6 +345,10 @@ export async function exportStill(send: SendExport, req: ExportRequest,
       // is embedded either way — it is what makes the numbers mean colours,
       // not a fact about when the user was at their desk.
       ...(meta.capturedAt ? { capturedAt: meta.capturedAt } : {}),
+      // STC-413: identity, NOT gated on stripMetadata — it is opaque, carries
+      // no timestamp and no path, and suppressing it would make a
+      // privacy-stripped export permanently uneditable.
+      ...(req.captureId ? { captureId: req.captureId } : {}),
     });
     return {
       width: Number(reply.width ?? req.still.width),
