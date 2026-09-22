@@ -1995,9 +1995,19 @@ git commit -m "STC-413: delete removes a capture's file and its bundle"
 - Test: `app/test/orphan-sweep.test.ts` (create)
 
 **Interfaces:**
-- Consumes: the scan's id set (Task 8).
+- Consumes: the scan (Task 8). **Orphan detection is already done for you** —
+  Task 8 pairs a finished file with its bundle by embedded id, so an item with
+  `dir` set and `file` absent IS an orphaned bundle. Do NOT re-implement id
+  matching here: a second answer to "which bundle belongs to which file" is
+  precisely the two-owners defect this repo keeps paying for, and the two
+  answers would drift the first time either side changed.
 - Produces: `sweepOrphanedBundles(env, saveFolder, now): Promise<string[]>`,
   `ORPHAN_MARKER_FILE: ".orphaned-at"`, reusing `TEMP_TAKE_MAX_AGE_MS`.
+
+**The marker file must not make the bundle look like a capture.** It lives
+inside a `raw/` bundle directory, which Task 8's scan walks. A dotfile is
+skipped by the scan's own rule 2, which is why the name starts with a dot —
+that is load-bearing, not cosmetic.
 
 **The rule, and why it is two conditions:** a bundle is swept only when it is
 **orphaned AND aged**. Age alone is wrong — `purgeStaleTempTakes` derives age
@@ -2089,10 +2099,19 @@ git commit -m "STC-413: sweep bundles that are orphaned AND aged, never aged alo
 - Test: `app/test/library-folder.e2e.test.ts`
 
 **Interfaces:**
-- Consumes: the scan (Task 8).
+- Consumes: the scan (Task 8) — `LibraryItem.file` is what gets renamed.
 - Produces: `renameCapture(env, saveFolder, from, to): Promise<string>`.
   `setTakeLabel` and `take.json` reading are removed for finished captures;
   bundles keep `readLabel` for the unfinished case.
+
+**The rename IPC changes shape, and its one caller must move with it.**
+`app/src/renderer.ts:1059` calls `recorder.labelTake(item.dir, label)` — a
+directory and a label. Renaming a finished capture is now a FILE rename, so
+that call site takes `item.file` and a new name. An item with no `file` (an
+unexported bundle) still labels the old way through `take.json`, because it has
+no user-facing filename yet — that is the one case `readLabel` is kept for, and
+it is why this task removes `setTakeLabel` for finished captures rather than
+outright.
 
 - [ ] **Step 1: Write the failing test**
 
