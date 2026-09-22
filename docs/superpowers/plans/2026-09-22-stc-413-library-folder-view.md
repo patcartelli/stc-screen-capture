@@ -1528,9 +1528,11 @@ node scripts/export-one.mjs fixtures/basic 2
 Then read the id back out of the produced file:
 
 ```bash
-node --input-type=module -e "
+# npx tsx, not bare node: node cannot resolve a .ts import here, and Task 4
+# hit exactly that when this command was written with `node --input-type=module`.
+npx tsx -e "
 import { readFileSync } from 'node:fs';
-const { readMp4CaptureId } = await import('./transform/src/media-tag.ts');
+import { readMp4CaptureId } from './transform/src/media-tag.js';
 console.log(readMp4CaptureId(new Uint8Array(readFileSync(process.argv[1]))));
 " <path-to-the-export>
 ```
