@@ -2559,6 +2559,32 @@ regression: its partial-delete test pinned the survivor's action count dropping
 new number still DISCRIMINATES — the point of that assertion is that a real
 re-scan reclassified the item, and 3 ≠ 4 still proves it.
 
+**THE TILE MUST SHOW THE FILENAME, or this task's promise is true on disk and
+false on screen.** This is the part the plan never specified, and two
+individually-correct decisions collide in the gap:
+
+- the scan clears `label` on a matched item, so a stale `take.json` label
+  cannot leak through — right, and worth keeping;
+- `LibraryItem.id` for a matched item is the BUNDLE's stamped name, made
+  deliberately immune to renames so sort order survives one — also right.
+
+With `label` cleared and `id` immune, **nothing carries the renamed filename to
+`library-view.ts`'s title**, which reads `item.label ? item.label : item.id`.
+So renaming a normal, healthy, freshly-exported capture renames the file and
+changes nothing the user can see. They would reasonably conclude it failed.
+
+It is also a REGRESSION: before this task, a rename wrote `take.json`, which
+populated `label`, which appeared as the title.
+
+**Fix:** on a match, derive the label from the file rather than discarding it —
+`basename(match.file, extname(match.file))`. That keeps the stale-`take.json`
+problem solved (the label no longer comes from the sidecar at all) while making
+the title say what the file is actually called.
+
+Add the assertion that would have caught this: a matched item's `label` equals
+its file's stem. `library-scan.test.ts` currently makes no claim about `label`
+for a matched item at all, which is exactly why this got through.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
