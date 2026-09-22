@@ -1325,6 +1325,76 @@ ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
 });
 
 /**
+ * One thing `trashWithConfirmation` is asked to move, plus how it reads in a
+ * sentence when a PARTIAL failure has to name it (STC-413 review round 1).
+ * `panel:trash`'s single-target call has no partial-failure sentence to
+ * build, so its label is never actually read; it exists only so every call
+ * site has one shape.
+ */
+interface TrashTarget {
+  path: string;
+  label: string;
+  /** Whether `label` takes "were" rather than "was" in a partial-failure
+   *  sentence — "its source materials" is plural noun phrasing regardless of
+   *  how many targets this run happens to have, so this is a property of
+   *  the LABEL, not derivable from a target count. */
+  plural: boolean;
+}
+
+/**
+ * Attempt exactly one target, independent of any other (STC-413 review round
+ * 1, Important finding).
+ *
+ * A path that no longer exists is the outcome a delete WANTS, not a
+ * failure — `existsSync` first, rather than letting `shell.trashItem` answer
+ * for a gone path and hoping its rejection is recognisably an ENOENT (it
+ * is not: on macOS it is `The file "…" doesn't exist.`, an NSError message
+ * with no code this process can match portably). This is what lets a RETRY
+ * after a partial failure get past the half that already went instead of
+ * throwing on it before ever reaching the half still there — without it, a
+ * retry recreates exactly the bug this task closes, just with the roles of
+ * "gone" and "left behind" swapped.
+ */
+async function trashOne(path: string): Promise<{ ok: boolean; detail?: string }> {
+  if (!existsSync(path)) return { ok: true };
+  try {
+    await withTimeout(shell.trashItem(path), TRASH_COMMIT_AT_QUIT_MS, `moving to the Trash (${path})`);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, detail: String(e?.message ?? e) };
+  }
+}
+
+/**
+ * The honest form of a partial failure (the reviewer's own wording): name
+ * what moved AND what did not, rather than surfacing whichever path
+ * happened to carry an error and saying nothing about the other. Only
+ * reachable with more than one target and at least one success; a target
+ * list that failed OUTRIGHT (nothing succeeded) falls back to the plain
+ * error text, which is the single-target case's own existing behaviour.
+ */
+function describeTrashOutcome(
+  outcomes: Array<{ target: TrashTarget; ok: boolean; detail?: string }>,
+): string {
+  const failed = outcomes.filter((o) => !o.ok);
+  const succeeded = outcomes.filter((o) => o.ok);
+  if (succeeded.length === 0) {
+    return failed.map((f) => f.detail).filter(Boolean).join("; ")
+      || "Could not move this take to the Trash.";
+  }
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const namesOf = (list: typeof outcomes) => list.map((o) => o.target.label).join(" and ");
+  // More than one succeeded is plural regardless of either label's own
+  // grammar; exactly one defers to THAT target's own `plural` (STC-413
+  // review round 1 — "its source materials" is plural on its own, "the
+  // file" is not, and which one is on the SUCCEEDED side varies with which
+  // half actually failed).
+  const verb = succeeded.length === 1 ? (succeeded[0]!.target.plural ? "were" : "was") : "were";
+  return `${cap(namesOf(succeeded))} ${verb} removed; `
+       + `${namesOf(failed)} could not be.`;
+}
+
+/**
  * Ask first, then move to the Trash — never `rm`, so a mistaken click is one
  * Finder restore away. `take:delete`'s original body (STC-294), lifted out
  * here (STC-392 Task 6) so `panel:trash`'s "confirm" style (`trashStyle`,
@@ -1334,35 +1404,42 @@ ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
  * finding. Both callers already validate every path against their own root
  * before reaching this; it does not re-check.
  *
- * `paths` carries more than one entry for STC-413's two-object delete: a
+ * `targets` carries more than one entry for STC-413's two-object delete: a
  * matched library item is a finished FILE at the top level and its source
  * BUNDLE in `raw/`, and both have to go together or a delete silently
  * orphans one half. ONE dialog covers both — the user pressed Delete once,
- * so asking twice would be its own defect, not extra safety. Each trash is
- * BOUNDED the same way a quit-time commit already is (`TRASH_COMMIT_AT_QUIT_MS`,
- * STC-427's own constant — `shell.trashItem` has hung a CI runner for 30s
- * before, and there is no reason a library delete's bound should be a
- * different number). There is no rollback if a later path fails after an
- * earlier one already moved — `shell.trashItem` has no inverse, the same
- * fact `pending-trash.ts`'s module doc already states — so a partial
- * failure is reported honestly rather than pretended away; the caller's own
- * refresh shows whatever the true state ended up being.
+ * so asking twice would be its own defect, not extra safety.
+ *
+ * Each target is attempted INDEPENDENTLY via `Promise.all` over
+ * `trashOne` (STC-413 review round 1) — a sequential loop that threw out of
+ * its own iteration on the first failure used to decide the SECOND path's
+ * fate by never reaching it, which is exactly the bug this task exists to
+ * close, recreated inside its own error path. `trashOne` never rejects (it
+ * catches its own failure and reports it), so `Promise.all` here cannot
+ * short-circuit on one target's trouble. Each is BOUNDED the same way a
+ * quit-time commit already is (`TRASH_COMMIT_AT_QUIT_MS`, STC-427's own
+ * constant — `shell.trashItem` has hung a CI runner for 30s before, and
+ * there is no reason a library delete's bound should be a different
+ * number). There is no rollback if one target fails after another already
+ * moved — `shell.trashItem` has no inverse, the same fact
+ * `pending-trash.ts`'s module doc already states — so a partial failure is
+ * reported honestly (`describeTrashOutcome`) rather than pretended away.
  */
 async function trashWithConfirmation(
-  paths: string[],
+  targets: TrashTarget[],
 ): Promise<{ ok: boolean; detail?: string; cancelled?: boolean }> {
   if (!win) return { ok: false, detail: "no window" };
-  if (paths.length === 0) return { ok: false, detail: "nothing to delete" };
+  if (targets.length === 0) return { ok: false, detail: "nothing to delete" };
   try {
     const { response } = await dialog.showMessageBox(win, {
       type: "warning",
       buttons: ["Move to Trash", "Cancel"],
       defaultId: 1,
       cancelId: 1,
-      message: paths.length > 1
+      message: targets.length > 1
         ? "Move this take's file and its source materials to the Trash?"
         : "Move this take to the Trash?",
-      detail: paths.join("\n"),
+      detail: targets.map((t) => t.path).join("\n"),
     });
     // Cancelling is a decision, not a fault (STC-392 review, I5) — the same
     // rule `runExport`'s Save As cancel already follows
@@ -1371,16 +1448,26 @@ async function trashWithConfirmation(
     // rather than "Could not delete: cancelled".
     if (response !== 0) return { ok: false, cancelled: true };
 
-    // A window with this take open no longer has anywhere valid to write.
-    for (const [sid, d] of openTakes) if (paths.includes(d)) openTakes.delete(sid);
-    for (const p of paths) {
-      await withTimeout(shell.trashItem(p), TRASH_COMMIT_AT_QUIT_MS, `moving to the Trash (${p})`);
-    }
+    // A window with this take open no longer has anywhere valid to write —
+    // cleared for every target regardless of what its own trash attempt
+    // does, since writing into a path mid-deletion is wrong either way.
+    for (const [sid, d] of openTakes) if (targets.some((t) => t.path === d)) openTakes.delete(sid);
+
+    const outcomes = await Promise.all(targets.map(async (target) => {
+      const r = await trashOne(target.path);
+      return { target, ...r };
+    }));
+
     // No-op unless a panel is showing one of these (the `panel:trash`
     // "confirm" path — a re-opened library shot); `take:delete`'s own caller
     // (the library grid) never has one open for the take it is deleting.
-    for (const p of paths) dismissThumbnail(p);
-    return { ok: true };
+    // Only for what actually left — a target that failed may still be
+    // showing, and dismissing its panel would be one more thing to explain.
+    for (const o of outcomes) if (o.ok) dismissThumbnail(o.target.path);
+
+    const failed = outcomes.filter((o) => !o.ok);
+    if (failed.length === 0) return { ok: true };
+    return { ok: false, detail: describeTrashOutcome(outcomes) };
   } catch (e: any) {
     // STC-392 review, I2: `dialog.showMessageBox` and `shell.trashItem` were
     // previously UNCAUGHT here, so a rejection (a real Trash failure, say)
@@ -1388,7 +1475,9 @@ async function trashWithConfirmation(
     // — `setStatus` never ran and `discard()`'s restore-on-failure never
     // fired, leaving a panel that looked hidden-but-alive with no message and
     // no way back. Caught and reported the same way every other take-moving
-    // handler in this file already is (`panel:save`/`panel:edit`).
+    // handler in this file already is (`panel:save`/`panel:edit`). `trashOne`
+    // never throws, so anything landing here is `dialog.showMessageBox`
+    // itself failing, not a per-target trash failure.
     return { ok: false, detail: String(e?.message ?? e) };
   }
 }
@@ -1415,14 +1504,18 @@ async function trashWithConfirmation(
  */
 ipcMain.handle("take:delete", async (_e, file?: string, dir?: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
-  const paths = [file, dir].filter((p): p is string => typeof p === "string" && p.length > 0);
-  if (paths.length === 0) throw new Error("nothing to delete");
-  for (const p of paths) {
-    if (!insideTakesRoot(process.env, saveFolder, p)) {
+  const targets: TrashTarget[] = [];
+  if (typeof file === "string" && file.length > 0) targets.push({ path: file, label: "the file", plural: false });
+  if (typeof dir === "string" && dir.length > 0) {
+    targets.push({ path: dir, label: "its source materials", plural: true });
+  }
+  if (targets.length === 0) throw new Error("nothing to delete");
+  for (const t of targets) {
+    if (!insideTakesRoot(process.env, saveFolder, t.path)) {
       throw new Error("refusing to delete a path outside the recordings folder");
     }
   }
-  const r = await trashWithConfirmation(paths);
+  const r = await trashWithConfirmation(targets);
   return { deleted: r.ok, cancelled: r.cancelled, detail: r.detail };
 });
 
@@ -1936,7 +2029,9 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
   // renderer) but must still answer something rather than throw.
   const origin = takeFor(dir)?.origin
     ?? (insideTempTakesRoot(process.env, dir) ? "fresh" : "library");
-  if (trashStyle(origin) === "confirm") return trashWithConfirmation([dir]);
+  if (trashStyle(origin) === "confirm") {
+    return trashWithConfirmation([{ path: dir, label: "this take", plural: false }]);
+  }
 
   if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
   pendingTrash.promise(dir);

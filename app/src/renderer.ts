@@ -1077,13 +1077,22 @@ const libraryCallbacks: LibraryCallbacks = {
         // an open editor window's writes correctly start refusing rather than
         // landing in a directory `take:delete` just trashed.
         const r = await recorder.deleteTake(item.file, item.dir);
-        if (r.deleted) { await refreshTakes(); }
-        // A Cancel is a decision, not a fault (`trashWithConfirmation`'s own
-        // rule) — say nothing. A REAL failure used to reach nobody: this
-        // action's own `detail` was discarded before STC-300's revision
-        // removed the only other door (the post-capture panel's "confirm"
-        // Trash) that ever surfaced one.
-        else if (!r.cancelled) alertUser(r.detail ?? "Could not delete this take.");
+        // STC-413 review round 1: refresh on any NON-CANCELLED outcome, not
+        // only full success. A PARTIAL failure (one half trashed, the other
+        // not) still changed the filesystem — the old code's `if (r.deleted)`
+        // left this tile's `file`/`dir` stale after exactly that, so a retry
+        // re-sent the ALREADY-TRASHED half's path and (before main's own
+        // fix) threw before ever reaching the half still there. A Cancel is
+        // the one outcome that legitimately changes nothing
+        // (`trashWithConfirmation`'s own rule), so it alone skips this.
+        if (!r.cancelled) {
+          await refreshTakes();
+          // A REAL failure used to reach nobody: this action's own `detail`
+          // was discarded before STC-300's revision removed the only other
+          // door (the post-capture panel's "confirm" Trash) that ever
+          // surfaced one.
+          if (!r.deleted) alertUser(r.detail ?? "Could not delete this take.");
+        }
       }
     } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
