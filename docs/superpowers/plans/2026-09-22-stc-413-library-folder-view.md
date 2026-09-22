@@ -2290,12 +2290,37 @@ git commit -m "STC-413: delete removes a capture's file and its bundle"
 - Test: `app/test/orphan-sweep.test.ts` (create)
 
 **Interfaces:**
-- Consumes: the scan (Task 8). **Orphan detection is already done for you** —
-  Task 8 pairs a finished file with its bundle by embedded id, so an item with
-  `dir` set and `file` absent IS an orphaned bundle. Do NOT re-implement id
-  matching here: a second answer to "which bundle belongs to which file" is
-  precisely the two-owners defect this repo keeps paying for, and the two
-  answers would drift the first time either side changed.
+- Consumes: the scan (Task 8). Task 8 pairs a finished file with its bundle by
+  embedded id — do NOT re-implement id matching here; a second answer to "which
+  bundle belongs to which file" is precisely the two-owners defect this repo
+  keeps paying for, and the two answers would drift the first time either side
+  changed.
+
+**"No matched file" is NOT the same as "orphaned", and an earlier draft of this
+task said it was.** After Task 8, a bundle with a `capture.json` and no matched
+file is one of three different things:
+
+1. its finished file was deleted — a real orphan;
+2. its file is a **JPEG or HEIC**, whose id we deliberately do not read
+   (ImageIO writes the id only into the PNG dictionary, and the ruling was not
+   to build a JPEG/EXIF reader) — **not an orphan at all**;
+3. its file was moved out of the folder entirely.
+
+Sweeping on "no matched file" would delete the source bundle behind a perfectly
+good JPEG still. So **sweep only when orphanhood is PROVABLE**: every top-level
+media file yielded a readable id, and none of them matched this bundle. If ANY
+top-level file has no readable id, we cannot prove the bundle is orphaned —
+skip the sweep entirely that pass and log why.
+
+The cost is stated rather than hidden: a folder containing even one untagged
+file never reclaims disk from `raw/`. That is the right way to be wrong. The
+sweep is a tidiness feature; keeping a bundle that could still be someone's
+source material beats deleting one that was. It also self-heals if JPEG id
+support is ever added.
+
+- Produces additionally: `ORPHAN_MARKER_FILE` must be a DOTFILE — it lives
+  inside a `raw/` bundle directory that Task 8's scan walks, and rule 2 of that
+  scan skips dotfiles. That is load-bearing, not cosmetic.
 - Produces: `sweepOrphanedBundles(env, saveFolder, now): Promise<string[]>`,
   `ORPHAN_MARKER_FILE: ".orphaned-at"`, reusing `TEMP_TAKE_MAX_AGE_MS`.
 
@@ -2349,6 +2374,21 @@ describe("orphaned bundles are swept, aged from when they were orphaned", () => 
   test("a finished file is NEVER touched by the sweep", async () => {
     await sweepOrphanedBundles(env, root, Date.now() + TEMP_TAKE_MAX_AGE_MS * 10);
     expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);
+  });
+
+  test("an UNREADABLE-id file present means nothing is swept at all", async () => {
+    // A JPEG still carries no id we can read, so we cannot prove any bundle is
+    // orphaned while one is sitting there. Deleting the source behind a
+    // perfectly good still is much worse than never reclaiming the disk.
+    await rm(join(root, "login-bug.mp4"));                  // make the bundle look orphaned
+    await writeFile(join(root, "holiday.jpg"), new Uint8Array([0xff, 0xd8, 0xff]));
+
+    const t0 = Date.now();
+    await sweepOrphanedBundles(env, root, t0);
+    const removed = await sweepOrphanedBundles(env, root, t0 + TEMP_TAKE_MAX_AGE_MS + 1);
+
+    expect(removed).toEqual([]);                            // nothing swept
+    expect(existsSync(bundle)).toBe(true);                  // the bundle survives
   });
 });
 ```
