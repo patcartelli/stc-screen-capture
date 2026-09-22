@@ -40,6 +40,21 @@ export function takesRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): st
 }
 
 /**
+ * Source bundles live below the user's folder, not in it (STC-413).
+ *
+ * The folder itself is now a view of FINISHED captures — plain files someone
+ * can open in Finder. A bundle is machine material: raw, cursorless video and
+ * the sidecars that make an export possible. Visible rather than dotted,
+ * deliberately, because "nothing is locked inside the app" means someone has
+ * to be able to find it.
+ */
+export const RAW_SUBDIR = "raw";
+
+export function rawRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): string {
+  return join(takesRoot(env, saveFolder), RAW_SUBDIR);
+}
+
+/**
  * Exported so `temp-takes.ts` names its own directories the same way, rather
  * than re-deriving the format — the temp root and the library root are two
  * different roots but one naming rule.
@@ -69,7 +84,7 @@ export function uniqueTakeName(base: string, existing: string[]): string {
  */
 export function newTakeDir(env: NodeJS.ProcessEnv, saveFolder: string | null, at: Date = new Date(),
                            existing: string[] = []): string {
-  const root = takesRoot(env, saveFolder);
+  const root = rawRoot(env, saveFolder);
   return join(root, uniqueTakeName(stamp(at), existing));
 }
 
@@ -126,10 +141,18 @@ const duplicating = new Set<string>();
  * `thumbnailFile` is a parameter rather than an import so this module stays
  * what it already is, a plain node module with no dependency on the library's
  * item contract; the caller already knows the name.
+ *
+ * The collision check reads `rawRoot`, not `takesRoot` (STC-413) — that is
+ * where `newTakeDir` actually creates the destination now, and a listing one
+ * level too high would never see a name it had itself just claimed. Missing
+ * this turned the STC-345 regression test below back into the bug it exists
+ * to catch: two `duplicating`-protected concurrent calls release their claim
+ * on return, and a THIRD call landing in the same second with no filesystem
+ * record of the first two's names reused one of them.
  */
 export async function duplicateTake(env: NodeJS.ProcessEnv, saveFolder: string | null, dir: string,
                                     thumbnailFile: string): Promise<string> {
-  const root = takesRoot(env, saveFolder);
+  const root = rawRoot(env, saveFolder);
   const existing = existsSync(root) ? await readdir(root) : [];
   const dest = newTakeDir(env, saveFolder, new Date(), [...existing, ...duplicating]);
   const name = basename(dest);

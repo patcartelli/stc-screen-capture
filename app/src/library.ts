@@ -1,6 +1,6 @@
 import { readdir, stat, readFile, open as openFile } from "node:fs/promises";
 import { join, extname, basename } from "node:path";
-import { takesRoot } from "./takes.js";
+import { takesRoot, RAW_SUBDIR } from "./takes.js";
 import { parseShot, type Shot } from "@transform/shot.js";
 import { probePng, probeMp4, MP4_TAIL_PROBE_BYTES, type MediaFacts } from "@transform/media-probe.js";
 import { readPngCaptureId, readMp4CaptureId, readBe32 } from "@transform/media-tag.js";
@@ -62,11 +62,10 @@ export * from "./library-items.js";
  *
  * The scan therefore has three phases, in order: (1) every top-level media
  * FILE — read its header, probe what facts fit in a bounded window, and try
- * to read an embedded id; (2) every BUNDLE — under `raw/`, or, for a take
- * made before this ticket, sitting at the top level itself (`RAW_SUBDIR_NAME`
- * is not yet `takes.ts`'s own `RAW_SUBDIR`, because Task 9 is what teaches
- * new takes to land there — this task moves nothing, so both positions must
- * work); (3) MATCH the two by id. A matched pair is one library item, not
+ * to read an embedded id; (2) every BUNDLE — under `raw/` (`takes.ts`'s own
+ * `RAW_SUBDIR`, where new takes land as of STC-413), or, for a take made
+ * before that, sitting at the top level itself — both positions must work;
+ * (3) MATCH the two by id. A matched pair is one library item, not
  * two; an unmatched bundle is an "unfinished" capture (never exported, or its
  * export was later removed); an unmatched file is either foreign or one
  * whose bundle is already gone.
@@ -87,12 +86,9 @@ export * from "./library-items.js";
  */
 
 /**
- * Where `raw/` lives. Not yet `takes.ts`'s own `RAW_SUBDIR` — that constant
- * is minted in Task 9, which is also the task that starts WRITING there. This
- * task only has to READ both positions, so the name is local until Task 9
- * gives the two files one owner to agree with.
+ * Where `raw/` lives — `takes.ts`'s own `RAW_SUBDIR` (STC-413), the module
+ * that mints it and is the one that WRITES there. This file only reads it.
  */
-const RAW_SUBDIR_NAME = "raw";
 
 /**
  * What rule 1 of the scan recognises as a finished capture. `.jpg`/`.jpeg`/
@@ -446,10 +442,10 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
   for (const f of finished) if (f.id) byId.set(f.id, f);
   const matchedFiles = new Set<string>();
 
-  const rawDir = join(root, RAW_SUBDIR_NAME);
+  const rawDir = join(root, RAW_SUBDIR);
   let rawSubNames: string[] = [];
   try { rawSubNames = await readdir(rawDir); } catch { /* no raw/ yet */ }
-  const legacyNames = entries.filter((n) => n !== RAW_SUBDIR_NAME);
+  const legacyNames = entries.filter((n) => n !== RAW_SUBDIR);
 
   const bundles = [
     ...(await bundleCandidatesIn(rawDir, rawSubNames)),

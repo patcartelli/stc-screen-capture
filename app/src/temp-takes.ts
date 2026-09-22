@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { readdir, stat, mkdir, rename, cp, rm } from "node:fs/promises";
 import { join, resolve, sep, basename } from "node:path";
-import { takesRoot, stamp, uniqueTakeName } from "./takes.js";
+import { rawRoot, stamp, uniqueTakeName } from "./takes.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "./product.js";
 
 /**
@@ -120,7 +120,9 @@ async function moveDir(from: string, to: string): Promise<void> {
 }
 
 /**
- * The decision point: move a take out of temp storage and into the library.
+ * The decision point: move a take out of temp storage and into its source
+ * bundle's home, `raw/` (STC-413) — the library's finished-capture root is a
+ * view of exported files, and a promoted take has not been exported yet.
  *
  * Idempotent in the sense that matters — a `dir` already outside the temp
  * root is returned unchanged rather than treated as an error, because every
@@ -128,14 +130,14 @@ async function moveDir(from: string, to: string): Promise<void> {
  * against a take that a previous call already promoted.
  *
  * Reuses the take's own directory name unless it collides with something
- * already in the library — same rule `newTakeDir` uses when two takes start
- * in the same second, applied here to the (rarer) case of two takes with the
- * same second-resolution stamp both surviving to promotion.
+ * already in `raw/` — same rule `newTakeDir` uses when two takes start in the
+ * same second, applied here to the (rarer) case of two takes with the same
+ * second-resolution stamp both surviving to promotion.
  */
 export async function promoteTake(env: NodeJS.ProcessEnv, saveFolder: string | null,
                                   dir: string): Promise<string> {
   if (!insideTempTakesRoot(env, dir)) return dir;
-  const root = takesRoot(env, saveFolder);
+  const root = rawRoot(env, saveFolder);
   await mkdir(root, { recursive: true });
   const existing = existsSync(root) ? await readdir(root) : [];
   const dest = join(root, uniqueTakeName(basename(dir), existing));

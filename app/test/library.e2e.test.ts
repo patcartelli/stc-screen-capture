@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
+import { RAW_SUBDIR } from "../src/takes.js";
 import { hasWindow } from "./_windows.js";
 import { keptFileRequests } from "./_still-log.js";
 import { toastText } from "./_toast.js";
@@ -256,9 +257,14 @@ describe("duplicate", () => {
     await clickAction(win, 0, "duplicate");
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Still"]);
 
-    const dirs = readdirSync(recordings).sort();
-    expect(dirs).toHaveLength(2);
-    const copy = join(recordings, dirs.find((d) => d !== "2026-09-08_12-00-00")!);
+    // The original is a LEGACY top-level bundle (`makeStillFolder` writes it
+    // that way, still-supported per Task 8's migration rule) and stays put;
+    // `duplicateTake` builds its destination from `newTakeDir`, which lands a
+    // fresh bundle in `raw/` now (STC-413) rather than beside the original.
+    expect(readdirSync(recordings).sort()).toEqual(["2026-09-08_12-00-00", RAW_SUBDIR]);
+    const rawDirs = readdirSync(join(recordings, RAW_SUBDIR));
+    expect(rawDirs).toHaveLength(1);
+    const copy = join(recordings, RAW_SUBDIR, rawDirs[0]!);
     // The decoration came with it — that is the point of duplicating rather
     // than re-capturing.
     const shot = JSON.parse(readFileSync(join(copy, "shot.json"), "utf8"));
