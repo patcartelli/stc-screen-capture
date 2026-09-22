@@ -89,8 +89,19 @@ is the sanctioned move under rule 1 of that file's own header. What stays
 forbidden is a view *branching on kind*; `app/test/library-seam.test.ts` must
 keep passing untouched, and if it fails the seam is leaking.
 
-**`app/src/library-view.ts` is deliberately untouched.** If a task seems to
-need a change there, stop and widen the adapter instead.
+**`app/src/library-view.ts` takes EXACTLY ONE change and no more.** Line 165 is
+`title.title = item.dir`, which stops typechecking the moment `dir` is
+optional. It becomes a fallback — the bundle path if there is one, else the
+finished file's path:
+
+```ts
+  title.title = item.dir ?? item.file ?? "";
+```
+
+That is a tooltip, not a decision, and it does not mention `kind`, so the seam
+rule is intact and `library-seam.test.ts` must still pass untouched. Any OTHER
+change to this file means the seam is leaking — stop and widen the adapter
+instead.
 
 ---
 
