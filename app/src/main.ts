@@ -27,7 +27,7 @@ import {
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
-import { readFile, writeFile, stat, open, copyFile, rm, mkdir } from "node:fs/promises";
+import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, renameCapture } from "./takes.js";
@@ -35,7 +35,7 @@ import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
   purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
 } from "./temp-takes.js";
-import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt } from "./library.js";
+import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
@@ -55,7 +55,7 @@ import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
-import { ensureCaptureId } from "./capture-identity.js";
+import { ensureCaptureId, readBundleId } from "./capture-identity.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -2303,9 +2303,21 @@ ipcMain.handle("share:publish", async (e): Promise<{
   // STC-413: resolved by identity, never derived from the take name — a
   // renamed export must still be found. `planPublish` no longer re-derives
   // a path itself; it takes whatever this scan found (or null).
-  const id = await ensureCaptureId(openTake);
-  const files = await scanFinishedFilesAt(process.env, saveFolder);
-  const exportFile = files.find((f) => f.id === id)?.file ?? null;
+  //
+  // `readBundleId`, NOT `ensureCaptureId` (M5). Publishing is a read of what
+  // has already been exported, and this was the one path that could MINT and
+  // WRITE a `capture.json` into a bundle the user had only asked to publish
+  // — and then, in the very case where the write happened (no document, so
+  // nothing exported), go on to report "no export yet" anyway. A side effect
+  // on a path that then refuses is the worst of both.
+  const id = await readBundleId(openTake);
+  const files = id ? await scanFinishedFilesAt(process.env, saveFolder) : [];
+  // A take made before STC-413 keeps its export INSIDE its own directory,
+  // where the top-level scan cannot see it (I2). Without this fallback every
+  // pre-branch take reports as never exported.
+  const exportFile = (id ? files.find((f) => f.id === id)?.file : undefined)
+    ?? await legacyExportIn(openTake, takeName)
+    ?? null;
   const plan = planPublish({
     exportFile,
     destination: share.destination,
@@ -2332,6 +2344,27 @@ ipcMain.handle("share:publish", async (e): Promise<{
     }),
   };
 });
+
+/**
+ * A pre-STC-413 export still sitting inside its own take directory (I2).
+ *
+ * Shares `library.ts`'s `findBuriedExport` rather than re-deriving the name
+ * here — the scan and this handler must agree about which file a legacy
+ * take's tile points at, and two spellings of one rule is this codebase's
+ * most-repeated defect.
+ *
+ * Not guarded on the bundle being legacy: a `raw/` bundle written by this
+ * branch never contains an `export-*.mp4` at all, so the lookup simply finds
+ * nothing there, and a guard would be a second place to get the raw/legacy
+ * distinction right.
+ */
+async function legacyExportIn(dir: string, name: string): Promise<string | undefined> {
+  try {
+    return findBuriedExport(dir, name, await readdir(dir));
+  } catch {
+    return undefined;
+  }
+}
 
 /** What the export actually encoded, from its own manifest, or nothing. */
 async function exportedSize(dir: string, takeName: string):

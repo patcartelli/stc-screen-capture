@@ -4,7 +4,7 @@ import { takesRoot, RAW_SUBDIR } from "./takes.js";
 import { parseShot, type Shot } from "@transform/shot.js";
 import { probePng, probeMp4, MP4_TAIL_PROBE_BYTES, type MediaFacts } from "@transform/media-probe.js";
 import { readPngCaptureId, readMp4CaptureId, readBe32 } from "@transform/media-tag.js";
-import { CAPTURE_DOC_FILE, parseCaptureDoc } from "@transform/capture-doc.js";
+import { readBundleId } from "./capture-identity.js";
 import {
   recordingItem, stillItem, looseFileItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
   THUMBNAIL_FILE, SUPPORTED_ANCHORS_VERSIONS,
@@ -335,6 +335,41 @@ interface Scan {
 interface BundleCandidate {
   dir: string;
   names: string[];
+  /**
+   * True for a bundle sitting at the TOP LEVEL rather than under `raw/` —
+   * i.e. one made before STC-413 moved sources down a level. Its export may
+   * still be buried inside it (`findBuriedExport`), which is the one place
+   * the two positions genuinely behave differently.
+   */
+  legacy: boolean;
+}
+
+/**
+ * The pre-STC-413 export sitting INSIDE a legacy bundle, if there is one.
+ *
+ * The spec promises "a legacy bundle holding an `export-*.mp4` lists as
+ * finished, pointing at the buried file", and without this it did not:
+ * `scanFinishedFiles` reads only top-level entries, so a take exported
+ * before this branch had `file` unset — it listed as never-exported, and
+ * `share:publish`, which used to find it with a plain `existsSync` and now
+ * resolves by id among top-level files, reported **every** pre-STC-413 take
+ * as "This take has not been exported yet". Nothing was lost, but it is a
+ * user-visible migration regression against an explicit promise.
+ *
+ * Only ever consulted for a LEGACY bundle. A `raw/` bundle is written by
+ * this branch's own code, which puts its export at the top level; a file
+ * matching this shape inside one would be something else entirely.
+ *
+ * The exact `export-<bundle name>.mp4` is preferred because that is what the
+ * old `exportMediaName` produced, and a lexicographic fallback covers the
+ * spec's looser `export-*.mp4` wording without making the answer depend on
+ * `readdir` order, which is not sorted on every filesystem.
+ */
+export function findBuriedExport(dir: string, name: string, names: string[]): string | undefined {
+  const exact = `export-${name}.mp4`;
+  if (names.includes(exact)) return join(dir, exact);
+  const any = names.filter((n) => /^export-.+\.mp4$/i.test(n)).sort();
+  return any[0] ? join(dir, any[0]) : undefined;
 }
 
 /**
@@ -353,7 +388,8 @@ interface BundleCandidate {
  * one definition of "what counts as a directory worth reading here", used in
  * both positions, rather than two that could drift.
  */
-async function bundleCandidatesIn(container: string, subNames: string[]): Promise<BundleCandidate[]> {
+async function bundleCandidatesIn(container: string, subNames: string[],
+                                  legacy: boolean): Promise<BundleCandidate[]> {
   const out: BundleCandidate[] = [];
   for (const name of subNames) {
     if (name.startsWith(".")) continue;
@@ -363,7 +399,7 @@ async function bundleCandidatesIn(container: string, subNames: string[]): Promis
     if (!st.isDirectory()) continue;
     let names: string[];
     try { names = await readdir(dir); } catch { continue; }
-    out.push({ dir, names });
+    out.push({ dir, names, legacy });
   }
   return out;
 }
@@ -496,8 +532,8 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
   const legacyNames = entries.filter((n) => n !== RAW_SUBDIR);
 
   const bundles = [
-    ...(await bundleCandidatesIn(rawDir, rawSubNames)),
-    ...(await bundleCandidatesIn(root, legacyNames)),
+    ...(await bundleCandidatesIn(rawDir, rawSubNames, false)),
+    ...(await bundleCandidatesIn(root, legacyNames, true)),
   ];
 
   const takes: TakeInfo[] = [];
@@ -505,15 +541,15 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
   const loose: FinishedFileInfo[] = [];
   const invalid: InvalidItem[] = [];
 
-  for (const { dir, names } of bundles) {
+  for (const { dir, names, legacy } of bundles) {
     const name = basename(dir);
 
     // A bundle's own identity, read lazily — absent for one never exported,
-    // since `capture.json` is written only at export time.
-    let bundleId: string | undefined;
-    try {
-      bundleId = parseCaptureDoc(JSON.parse(await readFile(join(dir, CAPTURE_DOC_FILE), "utf8"))).id;
-    } catch { /* no capture.json, or an unreadable one: unidentified */ }
+    // since `capture.json` is written only at export time. Through
+    // `readBundleId`, which is the ONE reader (M2): this used to be its own
+    // inline copy, and the three copies did not agree about a corrupt
+    // document.
+    const bundleId = await readBundleId(dir);
     const match = bundleId ? byId.get(bundleId) : undefined;
 
     const result = await readBundleInfo(dir, name, names);
@@ -538,6 +574,16 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
         // near take.json, so the stale-sidecar problem stays solved, and the
         // title now says what the file is actually called.
         result.info.label = basename(match.file, extname(match.file));
+      } else if (legacy) {
+        // No top-level file carries this bundle's id — but a bundle made
+        // before STC-413 keeps its export INSIDE itself, which the top-level
+        // scan structurally cannot see. Point at it rather than reporting a
+        // take that was exported as never exported (the spec's own migration
+        // promise). No `label` is derived from it: the buried name is
+        // `export-<stamp>.mp4`, which says nothing the bundle's own stamp
+        // does not already say, and the rename UI writes to a top-level
+        // file, not into `raw/`.
+        result.info.file = findBuriedExport(dir, name, names);
       }
       // readRecording/readStill compute recordedAt/capturedAt from a
       // sidecar's mtime — unchanged, per the brief ("keep them... correct").
@@ -593,13 +639,20 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
       // would be a lie about a capture that already did its job. Listed
       // instead, degraded: no `file` to point at, so `looseFileItem` keeps
       // its actions to what a bare directory can still do (Important 3).
+      // A legacy bundle's export is buried inside it, so "could not be
+      // linked" is often simply "not at the top level" — point at it when it
+      // is there, and say the honest thing in each case.
+      const buried = legacy ? findBuriedExport(dir, name, names) : undefined;
       loose.push({
         id: name,
         dir,
+        file: buried,
         createdAt: stampToMs(name) ?? 0,
         bytes: await dirSize(dir, names),
-        isVideo: !names.includes("shot.json"),
-        note: "This capture was exported, but its finished file could not be linked back to it.",
+        isVideo: buried ? true : !names.includes("shot.json"),
+        note: buried
+          ? "This capture's source files could not be read."
+          : "This capture was exported, but its finished file could not be linked back to it.",
       });
     } else {
       // Never exported (no capture.json) AND the bundle's own read failed —

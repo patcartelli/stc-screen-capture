@@ -4,7 +4,7 @@ import { readdir, stat, lstat, mkdir, rename, cp, rm, readFile, writeFile } from
 import { join, resolve, sep, basename } from "node:path";
 import { rawRoot, stamp, uniqueTakeName } from "./takes.js";
 import { scanFinishedFilesAt } from "./library.js";
-import { CAPTURE_DOC_FILE, parseCaptureDoc } from "@transform/capture-doc.js";
+import { readBundleId } from "./capture-identity.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "./product.js";
 
 /**
@@ -309,11 +309,10 @@ export async function sweepOrphanedBundles(env: NodeJS.ProcessEnv, saveFolder: s
     try { st = await lstat(dir); } catch { continue; }    // vanished mid-scan
     if (!st.isDirectory()) continue;                      // not a real directory (a symlink included)
 
-    let bundleId: string | undefined;
-    try {
-      const doc = JSON.parse(await readFile(join(dir, CAPTURE_DOC_FILE), "utf8"));
-      bundleId = parseCaptureDoc(doc).id;
-    } catch { /* never exported, or an unreadable capture.json: not orphaned, just unfinished */ }
+    // Never exported, or an unreadable capture.json: not orphaned, just
+    // unfinished. Through `readBundleId`, the one reader (M2) — this was its
+    // own inline copy, and the three copies did not agree.
+    const bundleId = await readBundleId(dir);
     if (bundleId === undefined) continue;
 
     const markerPath = join(dir, ORPHAN_MARKER_FILE);

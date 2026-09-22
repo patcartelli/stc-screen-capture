@@ -78,6 +78,52 @@ describe("the scan reads the folder", () => {
     expect(items.length + invalid.length).toBe(1);
   });
 
+  /**
+   * STC-413 I2: the spec's own migration promise — "a legacy bundle holding
+   * an `export-*.mp4` lists as finished, pointing at the buried file."
+   *
+   * It did not. `scanFinishedFiles` reads only TOP-LEVEL entries, so a take
+   * exported before this branch had `file` unset: it listed as
+   * never-exported, could not be opened from its tile, and `share:publish`
+   * reported every pre-branch take as "This take has not been exported yet."
+   * The legacy test above could not catch it because it never puts an export
+   * in the legacy bundle.
+   */
+  test("a LEGACY bundle's buried export makes it finished, pointing at that file", async () => {
+    const dir = join(root, "2026-09-20_10-00-00");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "anchors.json"), JSON.stringify({
+      version: 5, capture: { width: 1920, height: 1080 }, stop: { t: 5_000_000_000 },
+    }));
+    await writeFile(join(dir, "display.mp4"), "x");
+    await writeFile(join(dir, "export-2026-09-20_10-00-00.mp4"), mp4Bytes());
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.file, "the buried export, not nothing")
+      .toBe(join(dir, "export-2026-09-20_10-00-00.mp4"));
+    // The consequence, not just the field: a tile with no `file` offers no
+    // way to open what was already exported.
+    expect(items[0]!.actions.map((a) => a.id)).toContain("open");
+  });
+
+  test("a raw/ bundle is NOT given a buried export — only a legacy one is", async () => {
+    // The control. Without it, a `findBuriedExport` applied to every bundle
+    // would pass the test above and quietly change what a modern bundle
+    // points at.
+    const dir = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "anchors.json"), JSON.stringify({
+      version: 5, capture: { width: 1920, height: 1080 }, stop: { t: 5_000_000_000 },
+    }));
+    await writeFile(join(dir, "display.mp4"), "x");
+    await writeFile(join(dir, "export-2026-09-22_14-30-01.mp4"), mp4Bytes());
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.file).toBeUndefined();
+  });
+
   test("one unreadable file does not hide the rest", async () => {
     await writeFile(join(root, "broken.mp4"), new Uint8Array([1, 2, 3]));
     await writeFile(join(root, "good.mp4"), tagMp4(mp4Bytes(), mintCaptureId()));
