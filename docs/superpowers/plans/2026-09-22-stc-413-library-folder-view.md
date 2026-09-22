@@ -1804,9 +1804,23 @@ git commit -m "STC-413: source bundles land in raw/"
 - Test: `app/test/share.test.ts`
 
 **Interfaces:**
-- Consumes: `takesRoot`, `rawRoot` (Task 9).
+- Consumes: `takesRoot`, `rawRoot` (Task 9); `LibraryItem.file` (Task 8).
 - Produces: `exportMediaName(takeName)` returns `<takeName>.mp4` — the
   `export-` prefix is dropped, because location now says "finished".
+  `PublishRequest` replaces `takeName` + `takeDir` + `exportExists` with a
+  single `exportFile: string | null`.
+
+**`planPublish` must stop DERIVING the export's path, and this is a real bug
+rather than tidying.** Today it builds `from` from `takeDir` +
+`exportMediaName(takeName)`. Moving that to `takesRoot` + the same derived name
+would still be wrong: the whole point of STC-413 is that a user renames
+`2026-09-22_14-30-01.mp4` to `login-bug.mp4` in Finder, and the derived name
+then names a file that does not exist. Publish would report "no export yet" for
+a take that plainly has one.
+
+So the caller — which holds the `LibraryItem` and therefore its real `file`
+path — passes the path in. `exportMediaName` keeps its job of naming an export
+**at the moment it is written**; it stops being a way to FIND one later.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1815,28 +1829,58 @@ test("an export is named for its take, with no prefix", () => {
   expect(exportMediaName("2026-09-22_14-30-01")).toBe("2026-09-22_14-30-01.mp4");
 });
 
-test("publish reads the export from the folder, not from the bundle", () => {
+test("publish copies the file it was handed", () => {
   const plan = planPublish({
-    takeName: "2026-09-22_14-30-01", takesRoot: "/tmp/f",
-    /* …existing required fields… */
+    exportFile: "/tmp/f/2026-09-22_14-30-01.mp4",
+    destination: "/site", slug: "network",
   });
+  expect(plan.kind).toBe("ready");
   expect(plan.from).toBe("/tmp/f/2026-09-22_14-30-01.mp4");
   expect(plan.from).not.toContain("/raw/");
+});
+
+test("A RENAMED export still publishes — the path is not re-derived", () => {
+  // The load-bearing case. Deriving `<root>/<takeName>.mp4` would miss this
+  // file entirely and report the take as unexported.
+  const plan = planPublish({
+    exportFile: "/tmp/f/login-bug.mp4",
+    destination: "/site", slug: "network",
+  });
+  expect(plan.kind).toBe("ready");
+  expect(plan.from).toBe("/tmp/f/login-bug.mp4");
+  // and it still publishes under the STABLE slug, not the user's filename
+  expect(plan.name).toBe("network.mp4");
+});
+
+test("no export yet is still refused", () => {
+  const plan = planPublish({ exportFile: null, destination: "/site", slug: "network" });
+  expect(plan.kind).not.toBe("ready");
 });
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run app/test/share.test.ts`
-Expected: FAIL — `from` still points inside the take directory.
+Expected: FAIL — `PublishRequest` has no `exportFile`.
 
 - [ ] **Step 3: Implement**
 
-Change `exportMediaName` to drop the prefix; change `planPublish` to build
-`from` from the folder root rather than the take directory; change the export
-write path in `main.ts` to the same. Leave `exportManifestName` writing into the
-bundle — it is provenance about the source, not a deliverable, and the top level
-is media files only.
+Change `exportMediaName` to drop the prefix. Replace `PublishRequest`'s
+`takeName`/`takeDir`/`exportExists` trio with `exportFile: string | null`, and
+have `planPublish` use it directly as `from` — a null is the "no export yet"
+refusal that `exportExists: false` used to express. Update `main.ts:2065`,
+which currently computes `exportExists` with
+`existsSync(join(openTake, exportMediaName(takeName)))`, to pass the item's real
+path instead. Change the export write path in `main.ts` to write at the top
+level.
+
+Leave `exportManifestName` writing into the bundle — it is provenance about the
+source, not a deliverable, and the top level is media files only.
+
+**The published name must stay slug-derived.** STC-242's whole design rests on
+two takes publishing to ONE stable path so the site's page never needs editing;
+a user's filename must not leak into it. There is an existing test asserting
+that — it must still pass.
 
 - [ ] **Step 4: Run it to verify it passes**
 
@@ -1861,8 +1905,13 @@ git commit -m "STC-413: exports land at the top level of the folder"
 - Test: `app/test/library-folder.e2e.test.ts` (create)
 
 **Interfaces:**
-- Consumes: the scan (Task 8), `rawRoot` (Task 9).
-- Produces: `take:delete` trashes the finished file AND its bundle.
+- Consumes: the scan (Task 8) — specifically `LibraryItem.file` and
+  `LibraryItem.dir`, which Task 8 widened the item to carry. Delete does NOT
+  re-resolve a bundle by id; both paths arrive on the item it was given.
+  `rawRoot` (Task 9) for the containment check.
+- Produces: `take:delete` trashes the finished file AND its bundle, tolerating
+  either being absent (a foreign file has no bundle; an unexported bundle has
+  no file).
 - Also produces the e2e helpers Tasks 11 and 13 both use, defined at the top of
   `library-folder.e2e.test.ts` and nowhere else: `refreshLibrary(page)`,
   `itemCount(page)`, `deleteFirstItem(page)`, `openFirstItem(page)`,
@@ -1881,20 +1930,35 @@ helper's header records the measured lag that makes a raw count lie (STC-416).
 - [ ] **Step 1: Write the failing test**
 
 ```ts
+// The fixture seeds ONE finished capture: `login-bug.mp4` at the top level
+// and its bundle at `raw/2026-09-22_14-30-01/`, linked by a capture id in
+// both. `BUNDLE` names that directory. Launch with STC_RECORDINGS_DIR,
+// STC_TEMP_TAKES_DIR and --user-data-dir all pointed at temp roots, per the
+// existing fixture idiom (STC-403 makes the last one mandatory).
+const BUNDLE = "2026-09-22_14-30-01";
+
 test("delete removes the finished file and its bundle together", async () => {
-  // …launch the app with STC_RECORDINGS_DIR and STC_TEMP_TAKES_DIR pointed at
-  // a temp root, per the existing fixture idiom, and with --user-data-dir set
-  // (STC-403: every launch site must isolate userData).
+  expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);   // control
+  expect(existsSync(join(root, "raw", BUNDLE))).toBe(true);
   await deleteFirstItem(page);
   expect(existsSync(join(root, "login-bug.mp4"))).toBe(false);
-  expect(existsSync(join(root, "raw", bundleName))).toBe(false);
+  expect(existsSync(join(root, "raw", BUNDLE))).toBe(false);
 }, 60_000);
 
 test("a bundle whose file was deleted in Finder lists as unfinished", async () => {
   await rm(join(root, "login-bug.mp4"));
   await refreshLibrary(page);
   expect(await itemCount(page)).toBe(1);   // the bundle, now orphaned
-});
+}, 60_000);
+
+test("deleting a foreign file with no bundle does not throw", async () => {
+  await writeFile(join(root, "holiday.mp4"), await readFile(join(root, "login-bug.mp4")));
+  await rm(join(root, "login-bug.mp4"));
+  await rm(join(root, "raw", BUNDLE), { recursive: true });
+  await refreshLibrary(page);
+  await deleteFirstItem(page);
+  expect(existsSync(join(root, "holiday.mp4"))).toBe(false);
+}, 60_000);
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
