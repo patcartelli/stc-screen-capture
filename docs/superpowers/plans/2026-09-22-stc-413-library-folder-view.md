@@ -2525,25 +2525,39 @@ no user-facing filename yet — that is the one case `readLabel` is kept for, an
 it is why this task removes `setTakeLabel` for finished captures rather than
 outright.
 
-**There is a LIVE BUG here that this task must close.** After Task 8, that
-handler reads:
+**A CORRECTION TO AN EARLIER DRAFT OF THIS PLAN.** It claimed there was a live
+bug here — that `looseFileItem` offered Rename on a bundle-less item while the
+handler silently dropped it. **That was wrong**, and checking the code rather
+than inferring from the rule is what settles it. At Task 8's first commit the
+action list is:
 
 ```ts
-    const dir = item.dir;
-    if (!dir) return;                       // ← silently does nothing
-    try { await recorder.labelTake(dir, label); … }
+    actions: f.dir
+      ? [ …open, rename, reveal, delete… ]
+      : [{ id: "reveal", label: "Show" }, { id: "delete", label: "Delete" }],
 ```
 
-but Task 8's `looseFileItem` OFFERS the `rename` action for items that have no
-bundle. So today a foreign file's tile shows Rename, the user types a name,
-and **nothing happens with no error** — an action offered and silently
-dropped, which is worse than one that refuses.
+The no-`dir` branch offers only Show and Delete. Rename was never offered, so
+the handler's `if (!dir) return;` was unreachable from the UI and nothing was
+silently dropped.
 
-That mismatch is the right way round to fix: rename does NOT need a bundle, so
-offering it was correct and the HANDLER was wrong. Route it through `file` when
-there is one, fall back to `take.json` when there is only a bundle, and refuse
-loudly when there is neither. Add a test that clicking Rename on a bundle-less
-item actually renames the file — the silent-return path must not survive.
+**What this task does is therefore an ADDITION, not a repair, and that is the
+better framing anyway.** A bundle-less item is still a FILE — a foreign file
+the user dropped in, or a capture whose bundle was swept — and renaming files
+is this ticket's whole premise. So `looseFileItem` now offers Rename
+unconditionally, and the handler learns to route it:
+
+- through `item.file` when there is one (the common case, and the ticket's
+  headline behaviour);
+- through `take.json` when there is only a bundle — an unexported bundle has no
+  user-facing filename yet, which is the one case `readLabel` is kept for;
+- refusing LOUDLY when there is neither.
+
+**This widening changes a Task-11 assertion**, which is expected rather than a
+regression: its partial-delete test pinned the survivor's action count dropping
+4→2, and a loose item now carries three actions, so it is 4→3. Check that the
+new number still DISCRIMINATES — the point of that assertion is that a real
+re-scan reclassified the item, and 3 ≠ 4 still proves it.
 
 - [ ] **Step 1: Write the failing test**
 
