@@ -1375,8 +1375,11 @@ func stillImageProperties(_ r: StillExportRequest) -> [CFString: Any] {
 }
 ```
 
-Then parse `captureId` in `StillEncode.swift`'s request decoding beside the
-existing fields, refusing a malformed one rather than passing it through.
+Then add `captureId` to the struct at `StillEncodeDecisions.swift:78` and parse
+it in the same file's request decoding at `:245`, beside `capturedAt`, refusing
+a malformed one rather than passing it through. (`StillEncode.swift` is NOT
+involved — the struct, its parse and the properties builder all live in
+`StillEncodeDecisions.swift`, which is also the file the harness compiles.)
 
 - [ ] **Step 4: Wire the app side — otherwise nothing ever sets the field**
 
