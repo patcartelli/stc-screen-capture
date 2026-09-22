@@ -203,4 +203,17 @@ describe("mp4 capture-id tag", () => {
     ]);
     expect(tagMp4(toEof, mintCaptureId())).toEqual(toEof);
   });
+
+  test("a largesize below 16 is malformed and yields nothing, not a mis-walk", () => {
+    // declared size 1 (largesize follows), type "mdat", largesize = 12 — smaller
+    // than the 16-byte header it is claimed to be part of.
+    const malformed = new Uint8Array([
+      ...box("ftyp", chars("isom")),
+      0, 0, 0, 1, ...chars("mdat"), ...be32(0), ...be32(12),
+    ]);
+    // The walk cannot get past the malformed box, so it never reaches the end
+    // of the buffer, and tagMp4 refuses rather than tagging a partial file.
+    expect(tagMp4(malformed, mintCaptureId())).toEqual(malformed);
+    expect(readMp4CaptureId(malformed)).toBeUndefined();
+  });
 });

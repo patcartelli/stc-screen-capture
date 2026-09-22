@@ -63,7 +63,12 @@ function crc32(bytes: Uint8Array): number {
 const be32 = (n: number): number[] =>
   [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
 
-const readBe32 = (b: Uint8Array, at: number): number =>
+/**
+ * Exported for `media-probe.ts` (STC-413 Task 4), which reads big-endian
+ * fields out of box bodies (`mvhd`/`tkhd`) after locating them with
+ * `mp4BoxesIn` below — the same primitive this module uses for box headers.
+ */
+export const readBe32 = (b: Uint8Array, at: number): number =>
   ((b[at]! << 24) | (b[at + 1]! << 16) | (b[at + 2]! << 8) | b[at + 3]!) >>> 0;
 
 /** Decode `len` bytes at `at` as Latin-1/ASCII — chunk types and tEXt keys. */
@@ -163,7 +168,7 @@ export const MP4_UUID = new Uint8Array([
 ]);
 
 /**
- * Walk top-level boxes. Yields `[type, start, totalLength]`.
+ * Walk boxes within `[from, to)`. Yields `[type, start, totalLength]`.
  *
  * **Both extended sizes are HANDLED, not refused, and that is load-bearing.**
  * A `size == 1` box carries a 64-bit largesize after its type, and this
@@ -174,30 +179,47 @@ export const MP4_UUID = new Uint8Array([
  *
  * `size == 0` means "to the end of the file", so such a box is necessarily
  * the last one; it is yielded with its true extent and the walk then ends.
+ *
+ * Exported (STC-413 Task 4) so `media-probe.ts` can walk `moov`'s CHILDREN —
+ * `[from, to)` bounded to a box's own payload — without a second copy of this
+ * function. Two walkers would be two places to get largesize right; there is
+ * one. `mp4Boxes(b)` below is the original top-level-only entry point,
+ * unchanged in behaviour, now a thin delegate.
  */
-function* mp4Boxes(b: Uint8Array): Generator<[string, number, number]> {
-  let at = 0;
-  while (at + 8 <= b.length) {
+export function* mp4BoxesIn(b: Uint8Array, from: number, to: number):
+    Generator<[string, number, number]> {
+  let at = from;
+  while (at + 8 <= to) {
     const declared = readBe32(b, at);
     const type = ascii(b, at + 4, 4);
     let size: number;
     if (declared === 1) {
-      if (at + 16 > b.length) return;
+      if (at + 16 > to) return;
       // The high word of a largesize would mean a box past 4 GiB. Nothing
       // this app produces comes close, and carrying it through a JS number
       // would lose precision — so such a file is refused rather than
       // mis-walked.
       if (readBe32(b, at + 8) !== 0) return;
       size = readBe32(b, at + 12);
+      // A largesize below 16 is smaller than the 16-byte header it is part
+      // of — malformed, not merely small. The old `size < 8` guard below let
+      // this through and advanced into the middle of that same header; it
+      // could not hang (the advance stays monotonic) but it was looser than
+      // the format allows.
+      if (size < 16) return;
     } else if (declared === 0) {
-      size = b.length - at;            // to end of file: the last box
+      size = to - at;                  // to end of the range: the last box
     } else {
       size = declared;
     }
-    if (size < 8 || at + size > b.length) return;
+    if (size < 8 || at + size > to) return;
     yield [type, at, size];
     at += size;
   }
+}
+
+function* mp4Boxes(b: Uint8Array): Generator<[string, number, number]> {
+  yield* mp4BoxesIn(b, 0, b.length);
 }
 
 const isOurUuid = (b: Uint8Array, at: number): boolean =>
