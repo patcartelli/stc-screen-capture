@@ -56,17 +56,28 @@ export function slugIsValid(slug: string): boolean {
 }
 
 /**
- * The names the export writes into the take directory.
+ * The name an export is written under the FIRST time (STC-413).
  *
- * Here rather than inline in `renderer.ts`, and that is not tidying. The
- * renderer built `export-${name}.mp4` as a template literal and the publish
- * path has to find that exact file afterwards — two copies of one filename
- * rule, in different processes, which is the "one value, two copies" defect
- * CLAUDE.md records fixing four times in a single session. `share.test.ts`
- * greps the renderer to keep it that way.
+ * No `export-` prefix any more — the prefix said "this is the rendered
+ * output, not the source", which was needed while both lived in the same
+ * take directory. They no longer do: the export lands at the top level of
+ * the folder now, where its LOCATION already says "finished", and its
+ * neighbours there are whatever the user named them in Finder. A stale
+ * `export-` would be the one file in the folder still describing itself as
+ * derived from an app-internal process.
+ *
+ * This is deliberately no longer a way to FIND an export — only to name one
+ * at the moment it is first written. A re-export resolves its destination by
+ * the bundle's embedded IDENTITY instead (`main.ts`'s `export:write`), so a
+ * file renamed in Finder keeps being found; `planPublish` takes the resolved
+ * path from its caller for the same reason. Here rather than inline in
+ * `editor.ts`, and that is not tidying — two copies of one filename rule, in
+ * different processes, is the "one value, two copies" defect CLAUDE.md
+ * records fixing four times in a single session. `share.test.ts` greps the
+ * editor to keep it that way.
  */
 export function exportMediaName(takeName: string): string {
-  return `export-${takeName}.mp4`;
+  return `${takeName}.mp4`;
 }
 
 /** The manifest beside it (STC-308) — which transform produced the video. */
@@ -94,16 +105,23 @@ export interface PublishTarget {
 export type PublishPlan =
   | ({ kind: "ready" } & PublishTarget)
   | { kind: "no-destination"; message: string }
-  | { kind: "no-export"; message: string; expected: string }
+  | { kind: "no-export"; message: string }
   | { kind: "bad-slug"; message: string };
 
 export interface PublishRequest {
-  /** The take's directory name, e.g. `2026-09-09_14-22-05`. */
-  takeName: string;
-  /** The take's absolute directory, where the export was written. */
-  takeDir: string;
-  /** Whether the exported MP4 is actually there. Main stats it; this decides. */
-  exportExists: boolean;
+  /**
+   * The exported media file's real, current path — or null when this bundle
+   * has none.
+   *
+   * NOT derived from a take name. The caller resolves it by the bundle's
+   * embedded identity (`main.ts` scans the folder's top level for a file
+   * carrying this bundle's id), because the whole point of STC-413 is that a
+   * user can rename `2026-09-22_14-30-01.mp4` to `login-bug.mp4` in Finder —
+   * a derived `<root>/<takeName>.mp4` would then name a file that does not
+   * exist, and publish would report "no export yet" for a take that plainly
+   * has one.
+   */
+  exportFile: string | null;
   /** The configured site folder, or null when the user has not chosen one. */
   destination: string | null;
   slug: string;
@@ -130,18 +148,16 @@ export function planPublish(req: PublishRequest): PublishPlan {
       message: "Choose the folder in the site repo that holds the video first.",
     };
   }
-  const expected = exportMediaName(req.takeName);
-  if (!req.exportExists) {
+  if (!req.exportFile) {
     return {
       kind: "no-export",
       message: "This take has not been exported yet — export it, then share.",
-      expected,
     };
   }
   const name = `${req.slug}.mp4`;
   return {
     kind: "ready",
-    from: joinPath(req.takeDir, expected),
+    from: req.exportFile,
     to: joinPath(req.destination, name),
     name,
   };

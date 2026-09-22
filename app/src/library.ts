@@ -376,6 +376,27 @@ async function scanFinishedFiles(root: string, entries: string[]): Promise<Finis
   return out;
 }
 
+/**
+ * Rule 1's scan, addressable on its own (STC-413) — every top-level finished
+ * file with whatever embedded id it carries, read once, with no `raw/`
+ * walking and no bundle reading.
+ *
+ * `main.ts` needs exactly this twice: resolving a re-export's destination by
+ * IDENTITY (a bundle's own id may already belong to a top-level file — that
+ * file, renamed or not, is where a re-export must land) and resolving
+ * `share:publish`'s source the same way. A second id-matching pass written
+ * inline in `main.ts` would be the "second scanner" this file's own header
+ * already forbids — one function, not two copies of the lookup `scanRoot`'s
+ * own rule 1 already performs.
+ */
+export async function scanFinishedFilesAt(env: NodeJS.ProcessEnv, saveFolder: string | null):
+    Promise<FinishedFile[]> {
+  const root = takesRoot(env, saveFolder);
+  let entries: string[];
+  try { entries = await readdir(root); } catch { return []; }
+  return scanFinishedFiles(root, entries);
+}
+
 type BundleResult =
   | { kind: "recording"; info: TakeInfo }
   | { kind: "still"; info: StillInfo }

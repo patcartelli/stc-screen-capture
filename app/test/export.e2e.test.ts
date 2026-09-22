@@ -3,15 +3,16 @@ import { type ElectronApplication, type Page } from "playwright";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { launchWithTakeInEditor, openExportDialog, inkiness } from "./_editor-fixture.js";
+import { exportMediaName, exportManifestName } from "../src/share.js";
 
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
 async function launchWithTake() {
-  const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+  const { app: a, editorWin, takeDir, dir } = await launchWithTakeInEditor();
   app = a;
   await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
-  return { win: editorWin, takeDir };
+  return { win: editorWin, takeDir, dir };
 }
 
 /**
@@ -35,14 +36,16 @@ async function settledStatus(win: Page): Promise<{ text: string; alert: string }
 
 describe("export from the app, through the editor's export dialog (STC-373)", () => {
   test("exports a playable file and a manifest, with progress", async () => {
-    const { win, takeDir } = await launchWithTake();
+    const { win, takeDir, dir } = await launchWithTake();
     await openExportDialog(win);
     await win.click("#export");
     const status = await settledStatus(win);
     expect(status.text, `export did not finish: ${status.alert}`).toMatch(/^Done —/);
 
-    const mp4 = join(takeDir, "export-2026-08-24_10-00-00.mp4");
-    const manifest = join(takeDir, "export-2026-08-24_10-00-00.json");
+    // STC-413: the media export lands at the TOP LEVEL of the folder now — a
+    // sibling of the bundle, not inside it. The manifest stays in the bundle.
+    const mp4 = join(dir, exportMediaName("2026-08-24_10-00-00"));
+    const manifest = join(takeDir, exportManifestName("2026-08-24_10-00-00"));
     expect(existsSync(mp4), "exported mp4 missing").toBe(true);
     expect(existsSync(manifest), "manifest missing").toBe(true);
     expect(statSync(mp4).size).toBeGreaterThan(100_000);

@@ -21,7 +21,7 @@ import { parseShot, shotForWrite } from "@transform/shot.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
-  DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, exportMediaName, planPublish,
+  DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
   publicSrc, type PublishPlan,
 } from "./share.js";
 import { join, dirname, basename } from "node:path";
@@ -35,7 +35,7 @@ import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
   purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes,
 } from "./temp-takes.js";
-import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
+import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
@@ -1443,6 +1443,21 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
   return true;
 });
 
+/**
+ * STC-413: a media export (.mp4/.png) is a DELIVERABLE and lands at the top
+ * level of the folder now, beside whatever the user has already renamed;
+ * `exportManifestName`'s .json stays provenance about the source and keeps
+ * writing into the bundle — the top level is media files only.
+ *
+ * The media destination is resolved by IDENTITY, never by name. Naively
+ * repointing the old `join(openTake, name)` at the folder root would still be
+ * wrong: export, rename the result to `login-bug.mp4` in Finder, re-export,
+ * and a name-derived destination writes a FRESH `<stamp>.mp4` beside it —
+ * two top-level files carrying the SAME embedded id, two tiles for one
+ * capture, and an orphan sweep that can never tell which is current. So a
+ * top-level file already carrying this bundle's id (if one exists) IS the
+ * destination; only a bundle with no finished file yet gets the derived name.
+ */
 ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
@@ -1457,7 +1472,29 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   if (TAKE_FILES.has(name) || name === "take.json") {
     throw new Error(`refusing to overwrite the take's own "${name}"`);
   }
-  const dest = join(openTake, name);
+
+  if (name.endsWith(".json")) {
+    const dest = join(openTake, name);
+    await writeFile(dest, Buffer.from(bytes));
+    return dest;
+  }
+
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  const root = takesRoot(process.env, saveFolder);
+  const id = await ensureCaptureId(openTake);
+  const files = await scanFinishedFilesAt(process.env, saveFolder);
+  const matched = files.find((f) => f.id === id)?.file;
+  const dest = matched ?? join(root, name);
+  // Widened overwrite guard (STC-413): at the top level, the hazard the
+  // leaf-name check above guards against is different and worse than inside
+  // a bundle. A file already sitting at the DERIVED name whose id is absent
+  // or belongs to some OTHER bundle is someone else's capture, or a file the
+  // user placed there by hand — silently replacing it would be data loss. A
+  // match found above is provably this bundle's own prior export (its id was
+  // read, not assumed), so it needs no second check.
+  if (!matched && files.some((f) => f.file === dest)) {
+    throw new Error(`refusing to overwrite "${name}" — it belongs to a different capture`);
+  }
   await writeFile(dest, Buffer.from(bytes));
   return dest;
 });
@@ -2089,12 +2126,16 @@ ipcMain.handle("share:publish", async (e): Promise<{
 }> => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
-  const { share } = readSettings(app.getPath("userData"));
+  const { share, saveFolder } = readSettings(app.getPath("userData"));
   const takeName = basename(openTake);
+  // STC-413: resolved by identity, never derived from the take name — a
+  // renamed export must still be found. `planPublish` no longer re-derives
+  // a path itself; it takes whatever this scan found (or null).
+  const id = await ensureCaptureId(openTake);
+  const files = await scanFinishedFilesAt(process.env, saveFolder);
+  const exportFile = files.find((f) => f.id === id)?.file ?? null;
   const plan = planPublish({
-    takeName,
-    takeDir: openTake,
-    exportExists: existsSync(join(openTake, exportMediaName(takeName))),
+    exportFile,
     destination: share.destination,
     slug: share.slug,
   });

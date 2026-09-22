@@ -15,23 +15,58 @@ import { DEFAULT_SHARE_SETTINGS } from "../src/settings.js";
  */
 
 const REQ = {
-  takeName: "2026-09-09_14-22-05",
-  takeDir: "/Users/x/Desktop/stc/2026-09-09_14-22-05",
-  exportExists: true,
+  exportFile: "/Users/x/Desktop/stc/2026-09-09_14-22-05.mp4",
   destination: "/Users/x/site/public/lab/videos",
   slug: "network",
 };
 
 describe("planPublish", () => {
+  test("an export is named for its take, with no prefix", () => {
+    expect(exportMediaName("2026-09-22_14-30-01")).toBe("2026-09-22_14-30-01.mp4");
+  });
+
+  test("publish copies the file it was handed", () => {
+    const plan = planPublish({
+      exportFile: "/tmp/f/2026-09-22_14-30-01.mp4",
+      destination: "/site", slug: "network",
+    });
+    expect(plan.kind).toBe("ready");
+    if (plan.kind !== "ready") throw new Error("unreachable");
+    expect(plan.from).toBe("/tmp/f/2026-09-22_14-30-01.mp4");
+    expect(plan.from).not.toContain("/raw/");
+  });
+
+  /**
+   * The load-bearing case. Deriving `<root>/<takeName>.mp4` would miss this
+   * file entirely and report the take as unexported — the whole reason
+   * `PublishRequest` takes a resolved path rather than a take name.
+   */
+  test("A RENAMED export still publishes — the path is not re-derived", () => {
+    const plan = planPublish({
+      exportFile: "/tmp/f/login-bug.mp4",
+      destination: "/site", slug: "network",
+    });
+    expect(plan.kind).toBe("ready");
+    if (plan.kind !== "ready") throw new Error("unreachable");
+    expect(plan.from).toBe("/tmp/f/login-bug.mp4");
+    // ...and it still publishes under the STABLE slug, not the user's filename.
+    expect(plan.name).toBe("network.mp4");
+  });
+
+  test("no export yet is still refused", () => {
+    const plan = planPublish({ exportFile: null, destination: "/site", slug: "network" });
+    expect(plan.kind).not.toBe("ready");
+  });
+
   test("names the destination file from the SLUG, never from the take", () => {
     const plan = planPublish(REQ);
     expect(plan.kind).toBe("ready");
     if (plan.kind !== "ready") throw new Error("unreachable");
     expect(plan.name).toBe("network.mp4");
     expect(plan.to).toBe("/Users/x/site/public/lab/videos/network.mp4");
-    // The SOURCE still carries the take's timestamp — that is what makes the
-    // export traceable to a recording. Only the published copy is stable.
-    expect(plan.from).toContain("export-2026-09-09_14-22-05.mp4");
+    // `from` is exactly the path this was handed — never re-derived from a
+    // take name, which is the fix this task exists to make.
+    expect(plan.from).toBe(REQ.exportFile);
   });
 
   /**
@@ -42,8 +77,7 @@ describe("planPublish", () => {
    */
   test("two takes of the same demo publish to one path", () => {
     const a = planPublish(REQ);
-    const b = planPublish({ ...REQ, takeName: "2026-10-01_09-00-00",
-                            takeDir: "/Users/x/Desktop/stc/2026-10-01_09-00-00" });
+    const b = planPublish({ ...REQ, exportFile: "/Users/x/Desktop/stc/2026-10-01_09-00-00.mp4" });
     expect(a.kind).toBe("ready");
     expect(b.kind).toBe("ready");
     if (a.kind !== "ready" || b.kind !== "ready") throw new Error("unreachable");
@@ -56,12 +90,9 @@ describe("planPublish", () => {
     expect(noDest.kind).toBe("no-destination");
     expect(noDest.kind !== "ready" && noDest.message).toMatch(/site repo/i);
 
-    const noExport = planPublish({ ...REQ, exportExists: false });
+    const noExport = planPublish({ ...REQ, exportFile: null });
     expect(noExport.kind).toBe("no-export");
-    // It names the file it looked for, so "export it, then share" is
-    // actionable rather than a shrug.
-    if (noExport.kind !== "no-export") throw new Error("unreachable");
-    expect(noExport.expected).toBe("export-2026-09-09_14-22-05.mp4");
+    expect(noExport.kind !== "ready" && noExport.message).toMatch(/export/i);
 
     const badSlug = planPublish({ ...REQ, slug: "My Demo" });
     expect(badSlug.kind).toBe("bad-slug");
@@ -238,11 +269,18 @@ describe("the export filename lives in exactly one place", () => {
     expect(editor).toContain("exportManifestName(takeName)");
   });
 
-  test("the two names agree on the stem, so they land beside each other", () => {
+  /**
+   * They no longer land beside each other (STC-413) — the media file moved
+   * to the top level of the folder and the manifest stayed in the bundle —
+   * so they no longer need to agree on a stem either. The media name lost
+   * its `export-` prefix because its LOCATION now says "finished"; the
+   * manifest keeps it, since it is still describing itself as derived from
+   * the app's own process, sitting where the rest of the bundle's
+   * provenance already does.
+   */
+  test("the media name has no prefix; the manifest still names itself as derived", () => {
     const take = "2026-09-09_14-22-05";
-    expect(exportMediaName(take)).toBe(`export-${take}.mp4`);
+    expect(exportMediaName(take)).toBe(`${take}.mp4`);
     expect(exportManifestName(take)).toBe(`export-${take}.json`);
-    expect(exportMediaName(take).replace(/\.mp4$/, ""))
-      .toBe(exportManifestName(take).replace(/\.json$/, ""));
   });
 });
