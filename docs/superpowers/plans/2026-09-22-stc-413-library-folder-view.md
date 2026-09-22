@@ -798,7 +798,14 @@ git commit -m "STC-413: embed a capture id in a trailing MP4 uuid box"
 - Test: `transform/test/media-probe.test.ts`
 
 **Interfaces:**
-- Consumes: nothing (deliberately — it must work on foreign files that carry no id).
+- Consumes: `mp4BoxesIn` and `readBe32` from `media-tag.ts` — see below. Nothing
+  about capture IDs, deliberately: this must work on a foreign file that carries
+  none.
+- **Also produces a small change in `transform/src/media-tag.ts`:** its private
+  `mp4Boxes(b)` is split into an exported `mp4BoxesIn(b, from, to)` with
+  `mp4Boxes(b)` delegating as `mp4BoxesIn(b, 0, b.length)`. `readBe32` is
+  exported too. Behaviour of the existing walker must not change — Task 3's 18
+  tests all still pass, unmodified, and that is the check.
 - Produces: `probePng(bytes: Uint8Array): MediaFacts | undefined`,
   `probeMp4(bytes: Uint8Array): MediaFacts | undefined`,
   `interface MediaFacts { width: number; height: number; durationMs?: number }`,
@@ -868,6 +875,20 @@ describe("media probe", () => {
     // A 4K take's moov is tens of KB; 64 KB is the declared window.
     expect(MP4_TAIL_PROBE_BYTES).toBeGreaterThanOrEqual(64 * 1024);
   });
+
+  test("THE REAL FIXTURE PROBES — its mdat uses a largesize", async () => {
+    // The check that matters. A walker refusing `size == 1` stops at mdat and
+    // never reaches moov, so this returns undefined for every capture this app
+    // has ever produced. fixtures/basic/display.mp4 is real AVAssetWriter
+    // output and reproduces that on the first try.
+    const { readFile } = await import("node:fs/promises");
+    const bytes = new Uint8Array(await readFile("fixtures/basic/display.mp4"));
+    const facts = probeMp4(bytes);
+    expect(facts).toBeDefined();
+    expect(facts!.width).toBeGreaterThan(0);
+    expect(facts!.height).toBeGreaterThan(0);
+    expect(facts!.durationMs).toBeGreaterThan(0);
+  });
 });
 ```
 
@@ -925,15 +946,26 @@ export function probePng(bytes: Uint8Array): MediaFacts | undefined {
   return width > 0 && height > 0 ? { width, height } : undefined;
 }
 
-/** Walk boxes within `[from, to)`, yielding `[type, payloadStart, payloadEnd]`. */
+/**
+ * Walk boxes within `[from, to)`, yielding `[type, payloadStart, payloadEnd]`.
+ *
+ * **Delegates to `media-tag.ts`'s walker rather than carrying a second one.**
+ * A first draft of this module had its own copy, and it had the exact bug
+ * that cost Task 3 a fix round: refusing a `size == 1` largesize instead of
+ * reading it. This project's own `AVAssetWriter` writes `mdat` that way, so a
+ * refusing walker stops at `mdat` and never reaches `moov` — and `probeMp4`
+ * would quietly return `undefined` for every real capture the app has ever
+ * made, which reads as "the probe is weak" rather than as a bug.
+ *
+ * Two walkers would be two places to get largesize right. There is one.
+ */
 function* boxes(b: Uint8Array, from: number, to: number):
     Generator<[string, number, number]> {
-  let at = from;
-  while (at + 8 <= to) {
-    const size = be32(b, at);
-    if (size < 8 || at + size > to) return;
-    yield [type4(b, at + 4), at + 8, at + size];
-    at += size;
+  for (const [type, start, size] of mp4BoxesIn(b, from, to)) {
+    // media-tag yields [type, boxStart, totalSize]; this module wants the
+    // PAYLOAD span, and a largesize box's payload begins 16 bytes in, not 8.
+    const header = readBe32(b, start) === 1 ? 16 : 8;
+    yield [type, start + header, start + size];
   }
 }
 
