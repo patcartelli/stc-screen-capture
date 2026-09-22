@@ -405,24 +405,58 @@ describe("the scan on a capture whose moov alone exceeds the read window", () =>
  * (`ring-overflow.slow.test.ts` was taken out of CI for exactly that, on the
  * rule that "a test that reddens PRs at random is worse than one that does
  * not run"). So the number below is the measured figure with a LARGE multiple
- * on top: it catches a scan that became quadratic, and deliberately does NOT
- * catch a 2x slowdown. The printed value is the real signal; a human reading
- * it is the instrument.
+ * on top. The printed value is the real signal; a human reading it is the
+ * instrument.
  *
- * Measured on: pcartelli's Mac (Darwin 27.0.0 / macOS 27.0, arm64), 2026-09-22,
- * this worktree, `npx vitest run app/test/library-scan.test.ts -t "500 files"`
- * — 500 tagged 300-byte fixture MP4s, real filesystem (mkdtemp under the OS
- * tmpdir): consistently 41-42 ms total, ~0.08 ms/file over three runs. 10x
- * that is ~420 ms; set to 450 ms for a little extra headroom.
+ * ## The first calibration was measured the wrong way, and it flaked
  *
- * What this DOES NOT cover: the fixture's files are a few hundred bytes, so
- * each "64 KB tail read" is really reading a whole tiny file in one shot.
- * Against 500 real 4K exports the same scan does ~32 MB of scattered IO on
- * top of this — this pins per-file OVERHEAD (`readdir`, open, header parse,
- * id extract), not IO throughput. The IO half needs a real folder of real
- * exports on a Mac; see `docs/STC-413-RUNBOOK.md`.
+ * It was 450 ms, derived from 41-42 ms measured running this test ALONE
+ * (`-t "500 files"`). That is not the world it lives in. Measured INSIDE the
+ * full `--project unit` run on the same machine: 283, 288, 329 ms here, and
+ * 405 ms and **501 ms (a failure)** on the reviewer's. A 7-13x load factor,
+ * which ate the entire 10x headroom the number was supposed to have.
+ *
+ * So the rule, restated because the methodology error is the finding: **a
+ * timing assertion that ships in the normal suite must be calibrated inside
+ * the normal suite.** An isolated measurement of a parallel suite's test is a
+ * measurement of a different thing.
+ *
+ * Measured on: pcartelli's Mac (Darwin 27.0.0 / macOS 27.0, arm64),
+ * 2026-09-22, this worktree, full `npx vitest run --project unit` — 500
+ * tagged 300-byte fixture MP4s, real filesystem (mkdtemp under the OS
+ * tmpdir): 283-329 ms over three runs, worst observed anywhere 501 ms. 2000
+ * ms is ~4x that worst case, and CI's runner is slower again.
+ *
+ * ## Kept in CI rather than moved to `*.slow.test.ts`
+ *
+ * `ring-overflow`'s precedent does not transfer, and it is worth saying why
+ * rather than citing it either way. That test's DURATION is a property of
+ * the machine — it escalates a stall until the kernel's own pipe buffer
+ * overflows, so how long it takes is not something the test controls, and on
+ * CI it simply timed out. This one always finishes in a third of a second;
+ * only its ASSERTION is load-sensitive, and a bigger number fixes that
+ * without removing the check. Since the per-file header read is exactly what
+ * STC-413 added to the scan, a guard that does not run on CI is the guard
+ * this branch most needs to have.
+ *
+ * ## What it actually catches — the old comment overclaimed
+ *
+ * "Catches a scan that became quadratic" is true only of a SEVERE one. The
+ * reviewer measured both shapes: a nested `stat` per file reached 2,895 ms
+ * (caught, by a wide margin — and the regression scales with the machine the
+ * same way the baseline does, so the ~70x ratio, not the absolute, is what
+ * clears 2000 ms in-suite too); an extra `readdir` per file reached only
+ * ~172 ms, which this would NOT catch and never could without a tight budget
+ * that flakes. A mild regression is for the printed number and a human.
+ *
+ * What this DOES NOT cover at all: the fixture's files are a few hundred
+ * bytes, so each bounded read is really reading a whole tiny file in one
+ * shot. Against 500 real 4K exports the same scan does ~32 MB of scattered
+ * IO on top of this — this pins per-file OVERHEAD (`readdir`, open, header
+ * parse, id extract), not IO throughput. The IO half needs a real folder of
+ * real exports on a Mac; see `docs/STC-413-RUNBOOK.md`.
  */
-const SCAN_BACKSTOP_MS = 450;
+const SCAN_BACKSTOP_MS = 2000;
 
 test("500 files scan without going quadratic", async () => {
   for (let i = 0; i < 500; i++) {
