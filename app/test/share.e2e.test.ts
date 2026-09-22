@@ -34,8 +34,8 @@ interface Launched { win: Page; editorWin: Page; recordings: string; takeDir: st
  *
  * `share:chooseDestination` opens a native folder dialog, which no automated
  * test can answer — the same reason `nothing-lost.e2e.test.ts` seeds
- * `still.destination`. What is under test is what happens with a destination
- * configured, not the dialog.
+ * `saveFolder` (STC-412's field, `still.destination`'s replacement). What is
+ * under test is what happens with a destination configured, not the dialog.
  */
 async function launch(opts: { withExport?: boolean; slug?: string } = {}): Promise<Launched> {
   const { dir: recordings, takeDir } = makeTakeFolder(TAKE);
@@ -142,8 +142,9 @@ describe("share to the site folder", () => {
    *
    * `recorder:setSettings` strips `share.destination` so the renderer cannot
    * make this process copy a file to a path of its choosing — the same rule
-   * `still.destination` already follows. STC-292's lesson is that testing this
-   * through the preferences UI would prove nothing: whichever guard is met
+   * `saveFolder` already follows (STC-412, `still.destination`'s successor).
+   * STC-292's lesson is that testing this through the preferences UI would
+   * prove nothing: whichever guard is met
    * first is the only one exercised, and a renderer-side check would satisfy
    * the assertion with main's own guard removed. `setSettings` is the main
    * window's own bridge method — it did not move to the editor.

@@ -1,14 +1,15 @@
 /**
- * The undo toast's whole view (STC-392 Task 6).
+ * The toast's whole view — undo mode (STC-392 Task 6) and plain message mode
+ * (STC-412 Task 5) alike.
  *
  * A separate compiled file rather than an inline `<script>` in `toast.html`,
  * the same reason every other renderer here is: the CSP header
  * (`script-src 'self'`) has no `'unsafe-inline'`, so an inline script would
  * not run at all.
  *
- * `dir` and `ms` (the undo window's length) arrive on the page's own URL
- * query string — `toast-window.ts` put them there loading this file, so there
- * is nothing to ask main for before the bar can start.
+ * `mode`, `dir`/`text` and `ms` (how long the toast stays up) arrive on the
+ * page's own URL query string — `toast-window.ts` put them there loading
+ * this file, so there is nothing to ask main for before the bar can start.
  */
 export {};
 
@@ -16,16 +17,36 @@ declare global {
   interface Window {
     toast: {
       undo(dir: string): Promise<boolean>;
+      dismiss(): void;
       onExpire(cb: () => void): () => void;
     };
   }
 }
 
 const params = new URLSearchParams(window.location.search);
+const mode = params.get("mode") ?? "undo";
 const dir = params.get("dir") ?? "";
 const ms = Number(params.get("ms") ?? "0");
+const text = params.get("text") ?? "";
 
 const bar = document.getElementById("bar") as HTMLDivElement;
+const label = document.getElementById("label") as HTMLSpanElement;
+const undoBtn = document.getElementById("undo") as HTMLButtonElement;
+const closeBtn = document.getElementById("close") as HTMLButtonElement;
+
+// The stylesheet's hook for everything that differs between the two modes —
+// `pre-wrap`, the scrolling text block, the ✕ (toast.html's own comment).
+// CSS cannot read a query string, so the mode has to be stamped onto the
+// document; done here, synchronously, before the window is ever shown
+// (`toast-window.ts` holds it back until `ready-to-show`), so there is no
+// instant where a message is laid out with the undo toast's rules.
+document.documentElement.dataset.mode = mode;
+
+if (mode === "message") {
+  label.textContent = text;
+  undoBtn.hidden = true;
+  closeBtn.hidden = false;
+}
 
 /**
  * The one place `ms` reaches the page — the bar's animation is driven from
@@ -64,7 +85,16 @@ applyBarMotion();
 // .ts` re-decides every draw for the identical reason.
 reducedMotion.addEventListener("change", applyBarMotion);
 
-const undoBtn = document.getElementById("undo") as HTMLButtonElement;
+// Message mode only — the button is `hidden` otherwise, and main's handler
+// is a plain `hideToast()` with no promise to reason about either way.
+closeBtn.addEventListener("click", () => {
+  // Disabled first for the same reason the undo button is: the window is
+  // about to be destroyed and a second click in that gap has nothing left to
+  // ask for.
+  closeBtn.disabled = true;
+  window.toast.dismiss();
+});
+
 undoBtn.addEventListener("click", () => {
   // Disabled immediately, not after the round trip: a second click while the
   // first is still in flight must not ask main to take back a promise it has

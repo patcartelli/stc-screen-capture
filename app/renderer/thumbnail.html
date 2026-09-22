@@ -38,6 +38,19 @@
       back to the corner, and flying off the edge — animate rather than jump.
     */
     #card.dragging { transition: none; }
+    /*
+      Close without deciding (STC-412) — a small ghost circle in the corner,
+      OUTSIDE `#actions`'s four buttons and visually distinct from `#trash`'s
+      inline "✕": this is never gated by `actionsFor` and is always present.
+    */
+    #dismiss {
+      position: absolute; top: 6px; right: 6px; z-index: 1;
+      width: 20px; height: 20px; padding: 0; line-height: 1;
+      border: none; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12); color: #f2f2f2;
+      font-size: 15px; cursor: pointer;
+    }
+    #dismiss:hover { background: rgba(255, 255, 255, 0.22); }
     #thumbwrap {
       flex: 1; display: flex; align-items: center; justify-content: center;
       padding: 10px 10px 0;
@@ -106,6 +119,7 @@
 </head>
 <body>
   <div id="card">
+    <button id="dismiss" title="Close without deciding" aria-label="Close">×</button>
     <div id="thumbwrap"><canvas id="thumbcanvas"></canvas></div>
     <!-- A recording has no picture in v1 (D2); this stands in for the canvas,
          using the same vocabulary the library already has for a take with no

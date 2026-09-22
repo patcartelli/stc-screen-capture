@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
+import { toastText } from "./_toast.js";
 
 /**
  * The mic picker, end to end through the real app (STC-233).
@@ -49,6 +50,9 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
+  // STC-412: the Mic picker lives inside the Settings sheet now. Open it once
+  // here, as a user does, so these tests drive it the way it is reached.
+  await win.click("#settings");
   return win;
 }
 
@@ -171,7 +175,7 @@ describe("the mic says what it is doing", () => {
     await win.click("#record");
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
       .toContain("failed");
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no longer available");
   }, 60_000);
 
@@ -197,7 +201,7 @@ describe("the mic says what it is doing", () => {
     expect(occursBefore(seq, "Fixture USB Mic", "no frames"), `states were ${JSON.stringify(seq)}`)
       .toBe(true);
 
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no sound");
   }, 60_000);
 });

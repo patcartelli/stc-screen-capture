@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { PRODUCT_NAME } from "../src/product.js";
+import { toastPage } from "./_toast.js";
 
 const root = join(__dirname, "..", "..");
 
@@ -58,10 +59,11 @@ describe("Electron shell", () => {
     // what it must never do is fail silently or hang the button.
     await expect.poll(async () =>
       (await win.textContent("#state")) === "recording" ||
-      (await win.locator("#alert").isVisible()), { timeout: 30_000 }).toBe(true);
+      ((await toastPage(app!)) !== undefined), { timeout: 30_000 }).toBe(true);
 
-    if (await win.locator("#alert").isVisible()) {
-      const msg = await win.textContent("#alert");
+    const toast = await toastPage(app!);
+    if (toast) {
+      const msg = await toast.textContent("#label");
       expect(msg).toMatch(/Screen Recording permission|Could not start/);
       expect(await win.locator("#record").isDisabled()).toBe(false);  // still usable
     } else {

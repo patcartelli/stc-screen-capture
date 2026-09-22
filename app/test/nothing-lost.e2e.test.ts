@@ -91,10 +91,11 @@ async function launch(): Promise<Launched> {
   const tempTakes = mkdtempSync(join(tmpdir(), "stc-nothinglost-temp-"));
   const destDir = mkdtempSync(join(tmpdir(), "stc-nothinglost-dest-"));
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-  // Seeded on DISK: `recorder:setSettings` strips `still.destination` by design
-  // (STC-293 review, #92).
+  // Seeded on DISK: `recorder:setSettings` strips `saveFolder` by design
+  // (STC-293 review, #92 — `saveFolder` replaced `still.destination` at
+  // STC-412).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir },
+    saveFolder: destDir,
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],

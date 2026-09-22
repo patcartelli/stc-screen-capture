@@ -12,10 +12,10 @@ const root = join(__dirname, "..", "..");
  *
  * STC-403: this used to launch with no `--user-data-dir`, so the app loaded
  * the DEVELOPER's real `~/Library/Application Support/Capture/settings.json`
- * — on a machine with a still destination set, every editor E2E through this
+ * — on a machine with a save folder set, every editor E2E through this
  * fixture wrote real PNGs to the real Desktop and then failed asserting on a
  * file that landed somewhere else entirely. Isolated now, the same way every
- * other fixture in this repo already is. `still.destination` is seeded to
+ * other fixture in this repo already is. `saveFolder` (STC-412) is seeded to
  * `null` explicitly rather than left to an empty settings file, so "beside
  * the take" is the ASSERTED default these tests rely on, not an accident of
  * what a fresh profile happens to produce.
@@ -24,7 +24,7 @@ export async function launchApp(dir: string, env: Record<string, string> = {}):
     Promise<{ app: ElectronApplication; win: Page }> {
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: null },
+    saveFolder: null,
   }));
   const app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`], cwd: root,

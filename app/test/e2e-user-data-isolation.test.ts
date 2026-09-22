@@ -8,10 +8,11 @@ import { join } from "node:path";
  *
  * `_editor-fixture.ts`'s `launchApp` used to omit `--user-data-dir`, so the
  * app under test loaded the DEVELOPER's real `settings.json` — on a machine
- * with a still destination set, every editor E2E wrote real PNGs to the real
+ * with a save folder set, every editor E2E wrote real PNGs to the real
  * Desktop and then failed asserting on a file that had landed somewhere else
  * entirely. It passed precisely where nobody was looking (a fresh CI profile
- * has no `still.destination`) and failed only on a real developer machine.
+ * has no `saveFolder`, STC-412's field — `still.destination` at the time this
+ * was written) and failed only on a real developer machine.
  *
  * Building this guard found the SAME defect in four more files nothing had
  * flagged yet (`manage.e2e.test.ts`, `missing-helper.e2e.test.ts`,

@@ -7,6 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow } from "./_windows.js";
+import { toastText } from "./_toast.js";
 
 /**
  * The selection overlay, end to end (STC-290).
@@ -267,7 +268,7 @@ describe("the selection overlay", () => {
     await awaitConfirmable(overlay);
     await send(overlay, { t: "key", key: "Enter" });
 
-    await expect.poll(() => win.textContent("#alert"), { timeout: 15_000 })
+    await expect.poll(() => toastText(app!), { timeout: 15_000 })
       .toContain("macOS 14");
     expect(await win.getAttribute("#stillstatus", "hidden")).not.toBeNull();
   }, 120_000);

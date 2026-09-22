@@ -54,7 +54,7 @@ import { openStillEditor } from "./still-editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
-import { showUndoToast, hideUndoToast } from "./toast-window.js";
+import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -88,6 +88,17 @@ let sup: HelperSupervisor | undefined;
 let pillContentWidthPx = MIN_PILL_WIDTH_PX;
 ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
   if (typeof px === "number" && Number.isFinite(px) && px > 0) pillContentWidthPx = px;
+});
+// The message toast's ✕ (STC-412 final review, C1). `hideToast` is
+// idempotent and always acts on the one toast that is up, so this needs no
+// argument and cannot close the wrong window.
+ipcMain.on("toast:dismiss", () => hideToast());
+ipcMain.on("toast:message", (_e, text: unknown) => {
+  if (typeof text !== "string" || !text) return;
+  showMessageToast(text, {
+    corner: readSettings(app.getPath("userData")).thumbnail.corner,
+    dist: here, rendererDir: join(here, "..", "renderer"),
+  });
 });
 /**
  * The take each WINDOW may currently read, set only by preview:open.
@@ -149,8 +160,8 @@ let lastStillFile: string | undefined;
  * take (the library grid, the editor, duplicate) keep using
  * `insideTakesRoot` unwidened: a temp take has no business reaching them.
  */
-function insideCaptureRoot(env: NodeJS.ProcessEnv, dir: string): boolean {
-  return insideTakesRoot(env, dir) || insideTempTakesRoot(env, dir);
+function insideCaptureRoot(env: NodeJS.ProcessEnv, saveFolder: string | null, dir: string): boolean {
+  return insideTakesRoot(env, saveFolder, dir) || insideTempTakesRoot(env, dir);
 }
 
 /**
@@ -240,7 +251,13 @@ function openLibrary(): void {
 }
 
 function startSupervisor(): void {
-  sup = HelperSupervisor.start(HELPER, { statsIntervalMs: 500 });
+  sup = HelperSupervisor.start(HELPER, {
+    statsIntervalMs: 500,
+    // Read fresh at the moment of every promotion (STC-412) — never cached —
+    // so a saveFolder chosen mid-session is honoured by the very next clean
+    // stop, with no synced field for the two to drift out of step over.
+    getSaveFolder: () => readSettings(app.getPath("userData")).saveFolder,
+  });
   sup.on("ready", (l) => send("helper:ready", l));
   sup.on("stats", (l) => send("helper:stats", l));
   sup.on("respawned", (i) => send("helper:respawned", i));
@@ -316,7 +333,7 @@ async function recoverUnsavedTakes(): Promise<void> {
   // recent first, and focuses it" (STC-392 focus rule 1 does the actual
   // focusing now; see thumbnail-window.ts).
   const ordered = [...orphaned].reverse();
-  const { thumbnail } = readSettings(app.getPath("userData"));
+  const { thumbnail, saveFolder } = readSettings(app.getPath("userData"));
   for (const t of ordered) {
     if (t.kind === "still") {
       try {
@@ -337,7 +354,7 @@ async function recoverUnsavedTakes(): Promise<void> {
       // (rather than let it expire silently in 7 days) and bring the library
       // where it now lives in front of the user.
       try {
-        await promoteTake(process.env, t.dir);
+        await promoteTake(process.env, saveFolder, t.dir);
         openLibrary();
       } catch (e) {
         console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
@@ -521,7 +538,7 @@ function runQuitTeardown(): void {
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
   cancelCountdown();
-  hideUndoToast();
+  hideToast();
   // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
   // is still armed for as long as this chain's own `await`s give the event
   // loop a turn, and reading non-destructively would let it ALSO pick up
@@ -630,8 +647,9 @@ app.on("before-quit", (e) => {
       // turned into a second dialog. The take that failed stays in temp
       // storage, which is the same backstop Quit Anyway already relies on —
       // STC-393's recovery prompt finds it on the next launch either way.
+      const { saveFolder } = readSettings(app.getPath("userData"));
       for (const dir of unsavedTakeDirs()) {
-        await promoteTake(process.env, dir).catch((err) => {
+        await promoteTake(process.env, saveFolder, dir).catch((err) => {
           console.error("[quit] could not save a take before quitting:", dir, err);
         });
       }
@@ -645,28 +663,40 @@ ipcMain.handle("recorder:getSettings", async (): Promise<Settings> =>
   readSettings(app.getPath("userData")));
 
 /**
+ * Where recordings and shots ACTUALLY land right now — the settings' own
+ * `saveFolder` when one has been chosen, and otherwise the resolved default
+ * (`STC_RECORDINGS_DIR`, or ~/Desktop/stc).
+ *
+ * A separate channel rather than a field on `recorder:getSettings`, because
+ * it is not a setting: it is `takesRoot`'s answer, and the whole point is
+ * that the renderer does not compute it. `recorder:getSettings` hands back a
+ * `saveFolder` of null for "not chosen yet", and the preferences row used to
+ * render that null as the words "beside the shot" — which described
+ * `still.destination`'s old per-shot fallback and has been wrong since
+ * STC-412 unified the two: an unset `saveFolder` is not "no location", it is
+ * a real folder the app is already writing to. Answering with `takesRoot`'s
+ * own output is what keeps the string on screen and the directory on disk
+ * from being two independent derivations of one default.
+ */
+ipcMain.handle("recorder:resolvedSaveFolder", async (): Promise<string> =>
+  takesRoot(process.env, readSettings(app.getPath("userData")).saveFolder));
+
+/**
  * The renderer's own preferences, minus the ones it may not name.
  *
- * `still.destination` is main's alone: it decides WHERE THIS PROCESS WRITES,
- * and `resolveExportOptions` documents in as many words that a renderer cannot
- * choose it. That guarantee was true of the export request and false here —
- * this generic handler passed the whole patch through, so the destination was
- * settable after all through a different door. A comment that promises more
- * than the code delivers is worse than no comment.
- *
- * The dedicated channel stays: `still:chooseDestination` sets it from a native
- * folder picker, which is a person choosing, not the renderer.
+ * `saveFolder` is main's alone (STC-412, replacing `still.destination`): it
+ * decides WHERE THIS PROCESS WRITES, and a renderer that could set it through
+ * this generic patch — handed the settings to populate its controls and
+ * sending them back — would be choosing it through a different door than the
+ * one the design intends. The dedicated channel stays: `still:chooseDestination`
+ * sets it from a native folder picker, which is a person choosing, not the
+ * renderer.
  */
 ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Promise<Settings> => {
-  const clean: Partial<Settings> = { ...(patch ?? {}) };
-  if (clean.still) {
-    // Destructured rather than deleted, so `destination` is named here and a
-    // reader can see exactly which key does not survive.
-    const { destination: _mainsAlone, ...rest } = clean.still;
-    // `writeSettings` merges `still` one level deep, so an absent destination
-    // keeps the stored one rather than clearing it.
-    clean.still = rest as Partial<Settings>["still"];
-  }
+  // Destructured rather than deleted, so `saveFolder` is named here and a
+  // reader can see exactly which key does not survive.
+  const { saveFolder: _mainsAlone, ...withoutSaveFolder } = { ...(patch ?? {}) };
+  const clean: Partial<Settings> = withoutSaveFolder as Partial<Settings>;
   if (clean.share) {
     // Same rule, same reason (STC-242): `share.destination` is a folder in the
     // user's own site repo, and a renderer that could name it could make this
@@ -1193,7 +1223,8 @@ ipcMain.handle("recorder:stop", async () => {
 // ---- the library: one index over two kinds (STC-294) ----------------------
 
 ipcMain.handle("library:list", async (_e, filter?: string) =>
-  listLibrary(process.env, typeof filter === "string" ? filter : undefined));
+  listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
+             typeof filter === "string" ? filter : undefined));
 
 /**
  * Cache a decorated thumbnail beside the document it was rendered from.
@@ -1214,7 +1245,8 @@ ipcMain.handle("library:list", async (_e, filter?: string) =>
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuffer) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
   const buf = Buffer.from(bytes);
@@ -1227,7 +1259,8 @@ ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuf
 
 /** The stored document for one shot, so the library can render its decoration. */
 ipcMain.handle("library:shot", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to read a path outside the recordings folder");
   }
   return parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
@@ -1249,7 +1282,8 @@ ipcMain.handle("library:shot", async (_e, dir: string) => {
  * already kept, and the panel's Save/Copy/Trash are exactly what it needs.
  */
 ipcMain.handle("still:reopen", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
   // Read only to fail loudly on a shot this build cannot load, the same
@@ -1270,20 +1304,22 @@ ipcMain.handle("still:reopen", async (_e, dir: string) => {
  * `duplicateTake`; this handler is only validation and the IPC boundary.
  */
 ipcMain.handle("still:duplicate", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to duplicate a path outside the recordings folder");
   }
   // Read it back through `parseShot` first: duplicating a document this build
   // cannot load would produce a second directory the library also refuses.
   parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
-  const dest = await duplicateTake(process.env, dir, THUMBNAIL_FILE);
+  const dest = await duplicateTake(process.env, saveFolder, dir, THUMBNAIL_FILE);
   return { ok: true, dir: dest };
 });
 
-ipcMain.handle("recorder:takes", async () => listTakes(process.env));
+ipcMain.handle("recorder:takes", async () =>
+  listTakes(process.env, readSettings(app.getPath("userData")).saveFolder));
 
 ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
-  await setTakeLabel(process.env, dir, label);
+  await setTakeLabel(process.env, readSettings(app.getPath("userData")).saveFolder, dir, label);
   return true;
 });
 
@@ -1348,7 +1384,8 @@ async function trashWithConfirmation(
  * distinction `trashWithConfirmation`'s own doc already draws.
  */
 ipcMain.handle("take:delete", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to delete a path outside the recordings folder");
   }
   const r = await trashWithConfirmation(dir);
@@ -1356,7 +1393,8 @@ ipcMain.handle("take:delete", async (_e, dir: string) => {
 });
 
 ipcMain.handle("preview:open", async (e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
   setOpenTake(e, dir);
@@ -1374,7 +1412,8 @@ ipcMain.handle("preview:close", async (e) => { clearOpenTake(e); });
  * not something the renderer reaches with its own `BrowserWindow`.
  */
 ipcMain.handle("editor:open", async (_e, dir: string, name: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
   openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer") });
@@ -1448,7 +1487,8 @@ ipcMain.handle("still:export", async (_e, req: {
   dir?: string;
 }) => {
   if (!sup) throw new Error("supervisor not running");
-  const stored = readSettings(app.getPath("userData")).still;
+  const settingsNow = readSettings(app.getPath("userData"));
+  const stored = settingsNow.still;
 
   // What the renderer may decide about this one export, and what only the
   // stored preference decides. In `still-io.ts` rather than inline here: a
@@ -1470,9 +1510,10 @@ ipcMain.handle("still:export", async (_e, req: {
   // that asks first, not a different outcome. `dir` is reassigned rather
   // than left as `req.dir` so the reply can hand the renderer its new
   // location.
-  let dir = req.dir && insideCaptureRoot(process.env, req.dir) ? req.dir : undefined;
+  let dir = req.dir && insideCaptureRoot(process.env, settingsNow.saveFolder, req.dir)
+    ? req.dir : undefined;
   if (dir && req.target.file) {
-    try { dir = await promoteTake(process.env, dir); }
+    try { dir = await promoteTake(process.env, settingsNow.saveFolder, dir); }
     catch (e) {
       console.error("[still] could not move the shot into the library:", dir, e);
     }
@@ -1485,7 +1526,8 @@ ipcMain.handle("still:export", async (_e, req: {
   // path is handed to the helper, which CREATES directories and writes an
   // image at it. A `..` segment or a sibling folder with the same prefix both
   // pass a prefix test.
-  const fallbackDir = dir && insideCaptureRoot(process.env, dir) ? dir : undefined;
+  const fallbackDir = dir && insideCaptureRoot(process.env, settingsNow.saveFolder, dir)
+    ? dir : undefined;
 
   const still: CompositedStill = {
     bytes: req.bytes,
@@ -1519,9 +1561,12 @@ ipcMain.handle("still:export", async (_e, req: {
                                   ...(explicitFile ? { explicitFile } : {}),
                                   ...(fallbackDir ? { fallbackDir } : {}) },
                                 // `stored`, never the merged options: the
-                                // destination folder and the strip are read
-                                // from here, and both are main's alone.
-                                stored, app.getPath("temp"));
+                                // metadata strip is read from here and is
+                                // main's alone. `settingsNow.saveFolder`
+                                // (STC-412) is main's alone the same way —
+                                // read fresh here rather than from anything
+                                // the renderer sent.
+                                stored, settingsNow.saveFolder, app.getPath("temp"));
     // Only a save is worth revealing. A copy's file lives in the cache and
     // exists so the pasteboard's URL points somewhere, not for the user.
     if (req.target.file && r.file) lastStillFile = r.file;
@@ -1537,7 +1582,9 @@ ipcMain.handle("still:export", async (_e, req: {
 });
 
 /**
- * The destination folder, chosen by the user.
+ * The save folder, chosen by the user (STC-412 — recordings and stills share
+ * one `saveFolder`, replacing `still.destination` and the "beside the shot"
+ * default).
  *
  * A folder picker rather than a save panel, deliberately: the ticket's default
  * path out of the app is "no interaction at all", so the place is chosen once
@@ -1546,17 +1593,17 @@ ipcMain.handle("still:export", async (_e, req: {
  */
 ipcMain.handle("still:chooseDestination", async () => {
   if (!win) throw new Error("no window");
-  const current = readSettings(app.getPath("userData")).still.destination;
+  const current = readSettings(app.getPath("userData")).saveFolder;
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: "Where should shots be saved?",
+    title: "Where should recordings and shots be saved?",
     properties: ["openDirectory", "createDirectory"],
     ...(current ? { defaultPath: current } : {}),
     buttonLabel: "Choose",
   });
-  if (canceled || !filePaths[0]) return { destination: current };
-  const destination = filePaths[0];
-  writeSettings(app.getPath("userData"), { still: { ...readSettings(app.getPath("userData")).still, destination } });
-  return { destination };
+  if (canceled || !filePaths[0]) return { saveFolder: current };
+  const saveFolder = filePaths[0];
+  writeSettings(app.getPath("userData"), { saveFolder });
+  return { saveFolder };
 });
 
 /**
@@ -1611,7 +1658,8 @@ ipcMain.handle("still:dragFile", async (_e, req: {
   info: { app?: string; title?: string; mode: string };
 }) => {
   if (!sup) throw new Error("supervisor not running");
-  const stored = readSettings(app.getPath("userData")).still;
+  const settingsNow = readSettings(app.getPath("userData"));
+  const stored = settingsNow.still;
   const options = resolveExportOptions(stored, req.options);
   const still: CompositedStill = {
     bytes: req.bytes, width: req.width, height: req.height,
@@ -1622,7 +1670,7 @@ ipcMain.handle("still:dragFile", async (_e, req: {
     const r = await exportStill((params) => sup!.exportStill(params), {
       still, target: { file: true, clipboard: false }, options, info: req.info,
       explicitFile: join(cache, plannedFileName(options, req.info, still)),
-    }, stored, app.getPath("temp"));
+    }, stored, settingsNow.saveFolder, app.getPath("temp"));
     // Deliberately NOT `lastStillFile`: see the note above.
     return { ok: true, file: r.file };
   } catch (e: any) {
@@ -1664,7 +1712,10 @@ ipcMain.on("still:startDrag", (e, file: string) => {
  * it — a prefix test passes a `..` segment.
  */
 ipcMain.handle("still:revealShot", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir) || !existsSync(dir)) return false;
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir) || !existsSync(dir)) {
+    return false;
+  }
   shell.showItemInFolder(dir);
   return true;
 });
@@ -1684,7 +1735,8 @@ ipcMain.handle("still:revealShot", async (_e, dir: string) => {
  * The renderer names a take; it never hands main a path to act on.
  */
 ipcMain.handle("panel:save", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
   try {
@@ -1694,7 +1746,7 @@ ipcMain.handle("panel:save", async (_e, dir: string) => {
     // copies of "save promotes" this repo has already paid for five ways
     // (CLAUDE.md) would be back, just split across a renderer file and this
     // one instead of two renderer files.
-    const promoted = promotes("save") ? await promoteTake(process.env, dir) : dir;
+    const promoted = promotes("save") ? await promoteTake(process.env, saveFolder, dir) : dir;
     dismissThumbnail(dir);
     return { ok: true, dir: promoted };
   } catch (e: any) {
@@ -1715,7 +1767,8 @@ ipcMain.handle("panel:save", async (_e, dir: string) => {
  * tool that used to live in this panel.
  */
 ipcMain.handle("panel:edit", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
   try {
@@ -1723,7 +1776,7 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
     // hardcoded — this handler has no opinion of its own about whether Edit
     // promotes.
     const kind = takeFor(dir)?.kind ?? "shot";
-    const opened = promotes("edit") ? await promoteTake(process.env, dir) : dir;
+    const opened = promotes("edit") ? await promoteTake(process.env, saveFolder, dir) : dir;
     if (kind === "shot") {
       openStillEditor({ dir: opened, dist: here, rendererDir: join(here, "..", "renderer") });
     } else {
@@ -1735,6 +1788,22 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
   } catch (e: any) {
     return { ok: false, detail: String(e?.message ?? e) };
   }
+});
+
+/**
+ * Close the panel without deciding anything (STC-412) — the take is
+ * untouched: still in temp storage if it was fresh, still in the library if
+ * it was re-opened. Governed entirely by STC-393's existing purge and
+ * crash-recovery, the same as ignoring the panel always was before
+ * STC-392 removed the timeout that used to do this automatically.
+ */
+ipcMain.handle("panel:dismiss", async (_e, dir: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
+    return { ok: false, detail: "not a take this app wrote" };
+  }
+  dismissThumbnail(dir);
+  return { ok: true };
 });
 
 /**
@@ -1754,7 +1823,8 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
  * do — see `pending-trash.ts`'s module doc for the whole reasoning.
  */
 ipcMain.handle("panel:trash", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
+  const { saveFolder, thumbnail } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
   // The panel's OWN `take.origin` (STC-392 review, I7) — not re-derived from
@@ -1770,7 +1840,7 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
   pendingTrash.promise(dir);
   dismissThumbnail(dir);
   showUndoToast({
-    dir, corner: readSettings(app.getPath("userData")).thumbnail.corner,
+    dir, corner: thumbnail.corner,
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
   return { ok: true };
@@ -1787,9 +1857,10 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
  * moved, so the take is still sitting in temp storage under `dir`.
  */
 ipcMain.handle("panel:undoTrash", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) return false;
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) return false;
   if (!pendingTrash.undo(dir)) return false;
-  hideUndoToast();
+  hideToast();
   try {
     const shot = JSON.parse(await readFile(join(dir, "shot.json"), "utf8"));
     const { thumbnail } = readSettings(app.getPath("userData"));
@@ -1815,13 +1886,6 @@ ipcMain.handle("still:reveal", async () => {
   return true;
 });
 
-/** Back to "beside the shot", without needing a folder picker to express it. */
-ipcMain.handle("still:clearDestination", async () => {
-  const still = readSettings(app.getPath("userData")).still;
-  writeSettings(app.getPath("userData"), { still: { ...still, destination: null } });
-  return { destination: null };
-});
-
 /**
  * The captured frame's bytes, for the still panel to decorate.
  *
@@ -1831,7 +1895,8 @@ ipcMain.handle("still:clearDestination", async () => {
  * place `still:capture` ever writes.
  */
 ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
-  if (!insideCaptureRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to read a path outside the recordings folder");
   }
   if (!/^[A-Za-z0-9._-]+\.png$/.test(name) || name.includes("..")) {
@@ -1873,7 +1938,8 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
  * is untouched here and is what the shot actually is.
  */
 ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown) => {
-  if (!insideCaptureRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
   const file = join(dir, "shot.json");
@@ -2057,7 +2123,8 @@ ipcMain.handle("share:reveal", async () => {
 ipcMain.handle("recorder:reveal", async (_e, dir: string) => {
   // Only ever reveal something inside the recordings folder: `dir` arrives from
   // the renderer, and the renderer should not be able to open arbitrary paths.
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to reveal a path outside the recordings folder");
   }
   shell.showItemInFolder(dir);

@@ -57,7 +57,7 @@ describe("listTakes — anchors version support (STC-262)", () => {
   // been listed as unsupported while the transform loaded it fine.
   test("a v2 take with a camera track is listed, not rejected as unsupported", async () => {
     makeTake("2026-08-27_10-00-00", { anchors: v2Anchors() });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(invalid, JSON.stringify(invalid)).toEqual([]);
     expect(takes.length).toBe(1);
     expect(takes[0]!.name).toBe("2026-08-27_10-00-00");
@@ -121,7 +121,7 @@ describe("listTakes — anchors version support (STC-262)", () => {
     makeTake("2026-08-27_12-00-00", {
       anchors: v2Anchors({ version: 3, scope: { kind: "region", region: { x: 0, y: 0, width: 640, height: 480 } } }),
     });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(invalid, JSON.stringify(invalid)).toEqual([]);
     expect(takes.length).toBe(1);
     expect(takes[0]!.name).toBe("2026-08-27_12-00-00");
@@ -133,7 +133,7 @@ describe("listTakes — anchors version support (STC-262)", () => {
     makeTake("2026-08-27_13-00-00", {
       anchors: v2Anchors({ version: 4, mic: { present: false } }),
     });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(invalid, JSON.stringify(invalid)).toEqual([]);
     expect(takes.length).toBe(1);
     expect(takes[0]!.name).toBe("2026-08-27_13-00-00");
@@ -151,7 +151,7 @@ describe("listTakes — anchors version support (STC-262)", () => {
     makeTake("2026-08-27_14-00-00", {
       anchors: v2Anchors({ version: 5, pauses: [{ startNs: 1_000_000_000, endNs: 2_000_000_000 }] }),
     });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(invalid, JSON.stringify(invalid)).toEqual([]);
     expect(takes.length).toBe(1);
     expect(takes[0]!.name).toBe("2026-08-27_14-00-00");
@@ -163,7 +163,7 @@ describe("listTakes — anchors version support (STC-262)", () => {
     // it is no longer a stand-in for "unknown future version" — the same
     // thing already happened to 3 (STC-370) and to 4 (STC-233).
     makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 6 }) });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(takes).toEqual([]);
     expect(invalid.length).toBe(1);
     expect(invalid[0]!.reason).toMatch(/version 6 is not supported/);
@@ -173,7 +173,7 @@ describe("listTakes — anchors version support (STC-262)", () => {
 describe("listTakes", () => {
   test("reads metadata from the sidecars", async () => {
     makeTake("2026-08-24_10-00-00");
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(invalid).toEqual([]);
     expect(takes.length).toBe(1);
     const t = takes[0]!;
@@ -189,14 +189,14 @@ describe("listTakes", () => {
     makeTake("2026-08-24_09-00-00");
     makeTake("2026-08-24_11-00-00");
     makeTake("2026-08-24_10-00-00");
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes.map((t) => t.name)).toEqual([
       "2026-08-24_11-00-00", "2026-08-24_10-00-00", "2026-08-24_09-00-00",
     ]);
   });
 
   test("a missing recordings folder is empty, not an error", async () => {
-    const { takes, invalid } = await listTakes({ STC_RECORDINGS_DIR: join(root, "nope") });
+    const { takes, invalid } = await listTakes({ STC_RECORDINGS_DIR: join(root, "nope") }, null);
     expect(takes).toEqual([]);
     expect(invalid).toEqual([]);
   });
@@ -204,7 +204,7 @@ describe("listTakes", () => {
   test("a stray file in the folder is ignored, not treated as a take", async () => {
     makeTake("2026-08-24_10-00-00");
     writeFileSync(join(root, ".DS_Store"), "junk");
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(takes.length).toBe(1);
     expect(invalid).toEqual([]);
   });
@@ -214,7 +214,7 @@ describe("listTakes — broken takes are reported, never fatal", () => {
   test("one unreadable take does not hide the good ones", async () => {
     makeTake("2026-08-24_10-00-00");
     makeTake("2026-08-24_11-00-00", { anchors: "{ not json" });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(takes.map((t) => t.name)).toEqual(["2026-08-24_10-00-00"]);
     expect(invalid.length).toBe(1);
     expect(invalid[0]!.name).toBe("2026-08-24_11-00-00");
@@ -223,7 +223,7 @@ describe("listTakes — broken takes are reported, never fatal", () => {
 
   test("a directory with no anchors.json is reported as not a recording", async () => {
     makeTake("2026-08-24_10-00-00", { anchors: null });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(takes).toEqual([]);
     expect(invalid[0]!.reason).toMatch(/anchors/i);
   });
@@ -231,14 +231,14 @@ describe("listTakes — broken takes are reported, never fatal", () => {
   test("a take whose video is missing is reported, not silently listed", async () => {
     // The interrupted-start case: sidecars written, capture never produced a file.
     makeTake("2026-08-24_10-00-00", { mp4: false });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(takes).toEqual([]);
     expect(invalid[0]!.reason).toMatch(/display\.mp4|video/i);
   });
 
   test("an unsupported schema version is reported rather than guessed at", async () => {
     makeTake("2026-08-24_10-00-00", { anchors: { version: 99, capture: {}, stop: {} } });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(takes).toEqual([]);
     expect(invalid[0]!.reason).toMatch(/version/i);
   });
@@ -247,7 +247,7 @@ describe("listTakes — broken takes are reported, never fatal", () => {
     // The video is the recording; events are an overlay. A take with a readable
     // video is still worth listing and playing.
     makeTake("2026-08-24_10-00-00", { events: null });
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(takes.length).toBe(1);
     expect(takes[0]!.events).toBe(0);
     expect(invalid).toEqual([]);
@@ -257,7 +257,7 @@ describe("listTakes — broken takes are reported, never fatal", () => {
 describe("take labels", () => {
   test("a take with no label reports none, and keeps its directory name", async () => {
     makeTake("2026-08-24_10-00-00");
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes[0]!.label).toBeUndefined();
     expect(takes[0]!.name).toBe("2026-08-24_10-00-00");
   });
@@ -265,7 +265,7 @@ describe("take labels", () => {
   test("a label is read from take.json without disturbing identity", async () => {
     const dir = makeTake("2026-08-24_10-00-00");
     writeFileSync(join(dir, "take.json"), JSON.stringify({ version: 1, label: "Onboarding demo" }));
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes[0]!.label).toBe("Onboarding demo");
     // The directory name is the take's identity and its sort key — a label
     // must never become the thing the app orders or addresses takes by.
@@ -276,14 +276,14 @@ describe("take labels", () => {
     const a = makeTake("2026-08-24_09-00-00");
     makeTake("2026-08-24_11-00-00");
     writeFileSync(join(a, "take.json"), JSON.stringify({ version: 1, label: "zzz last alphabetically" }));
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes.map((t) => t.name)).toEqual(["2026-08-24_11-00-00", "2026-08-24_09-00-00"]);
   });
 
   test("a corrupt take.json costs the label, not the take", async () => {
     const dir = makeTake("2026-08-24_10-00-00");
     writeFileSync(join(dir, "take.json"), "{ broken");
-    const { takes, invalid } = await listTakes(env());
+    const { takes, invalid } = await listTakes(env(), null);
     expect(takes.length).toBe(1);
     expect(takes[0]!.label).toBeUndefined();
     expect(invalid).toEqual([]);
@@ -291,16 +291,16 @@ describe("take labels", () => {
 
   test("an over-long or blank label is rejected at write time", async () => {
     const dir = makeTake("2026-08-24_10-00-00");
-    await expect(setTakeLabel(env(), dir, "   ")).rejects.toThrow(/empty/i);
-    await expect(setTakeLabel(env(), dir, "x".repeat(300))).rejects.toThrow(/long/i);
+    await expect(setTakeLabel(env(), null, dir, "   ")).rejects.toThrow(/empty/i);
+    await expect(setTakeLabel(env(), null, dir, "x".repeat(300))).rejects.toThrow(/long/i);
   });
 
   test("setTakeLabel round-trips, and refuses a directory outside the folder", async () => {
     const dir = makeTake("2026-08-24_10-00-00");
-    await setTakeLabel(env(), dir, "Bug repro");
-    const { takes } = await listTakes(env());
+    await setTakeLabel(env(), null, dir, "Bug repro");
+    const { takes } = await listTakes(env(), null);
     expect(takes[0]!.label).toBe("Bug repro");
-    await expect(setTakeLabel(env(), "/etc", "nope")).rejects.toThrow(/outside/i);
+    await expect(setTakeLabel(env(), null, "/etc", "nope")).rejects.toThrow(/outside/i);
   });
 });
 
@@ -330,7 +330,7 @@ describe("listTakes — what the camera actually did (STC-287)", () => {
 
   test("no camera block at all means no camera was asked for", async () => {
     makeTake("2026-01-01_00-00-00");
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes[0]!.camera).toBeUndefined();
   });
 
@@ -341,7 +341,7 @@ describe("listTakes — what the camera actually did (STC-287)", () => {
       present: true, device: "FaceTime HD Camera", width: 1280, height: 720,
       firstFramePtsNs: 1_880_000_000, lastFramePtsNs: 7_416_000_000, frameIntervalNs: 33_350_000,
     }) });
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes[0]!.camera).toEqual({
       present: true, device: "FaceTime HD Camera", pipStartsAfterMs: 1390,
     });
@@ -355,7 +355,7 @@ describe("listTakes — what the camera actually did (STC-287)", () => {
     makeTake("2026-01-01_00-00-02", { anchors: withCamera({
       present: true, device: "cam", firstFramePtsNs: 1_880_000_000,
     }) });
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes[0]!.camera!.pipStartsAfterMs).toBe(1390);   // not 1880
   });
 
@@ -364,7 +364,7 @@ describe("listTakes — what the camera actually did (STC-287)", () => {
   // with no camera at all. Observed for real with the laptop in clamshell.
   test("a camera that recorded nothing is reported, not treated as absent", async () => {
     makeTake("2026-01-01_00-00-03", { anchors: withCamera({ present: false }) });
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes[0]!.camera, "a present:false block must not be dropped").toBeDefined();
     expect(takes[0]!.camera!.present).toBe(false);
   });
@@ -373,7 +373,7 @@ describe("listTakes — what the camera actually did (STC-287)", () => {
     makeTake("2026-01-01_00-00-04", { anchors: withCamera({
       present: true, device: "cam", firstFramePtsNs: 1_000_000,
     }) });
-    const { takes } = await listTakes(env());
+    const { takes } = await listTakes(env(), null);
     expect(takes[0]!.camera!.pipStartsAfterMs).toBe(0);
   });
 });

@@ -145,9 +145,6 @@
     table { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     td { padding: 2px 14px 2px 0; }
     td:first-child { color: var(--text-dim); font-family: var(--font-sans); }
-    #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid var(--warn);
-             background: var(--warn-soft); display: none; white-space: pre-wrap; }
-    #alert.show { display: block; }
     h2 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); margin: 4px 0 0; color: var(--text-dim); }
     .take { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
             padding: 7px 0; border-top: 1px solid var(--border); }
@@ -211,10 +208,13 @@
        this branch's own removal of #player and everything under it wins the
        conflict rather than reintroducing a restyled copy of a section that
        no longer exists in this window. */
-    /* still capture preferences: the destination folder (STC-293) and the
-       post-capture floating thumbnail (STC-296). The DECORATED still itself
-       is composited and exported from the thumbnail's own window now — see
-       app/renderer/thumbnail.html — so nothing here draws a preview. */
+    /* The Preferences section's rows: the save location (STC-293's
+       destination folder, unified by STC-412 into the one `saveFolder` that
+       governs recordings, shots and the library root alike) and the
+       post-capture floating thumbnail's own preferences (STC-296). The
+       DECORATED still itself is composited and exported from the thumbnail's
+       own window now — see app/renderer/thumbnail.html — so nothing here
+       draws a preview. The class name is older than the section. */
     .stillrow { display: flex; align-items: center; gap: 8px; margin-top: 6px;
                 font-size: var(--type-body); flex-wrap: wrap; }
     .stillrow label { display: flex; align-items: center; gap: 4px; }
@@ -348,38 +348,42 @@
       <span id="pill-stop" aria-hidden="true"></span>
     </button>
     <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
-    <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
-    <label id="mic-label">Mic <select id="mic"><option value="">Off</option></select></label>
-    <button id="profile" title="Shot preferences and shortcuts">Profile</button>
+    <button id="settings" title="Profile, preferences and shortcuts">Settings</button>
     <span id="state">starting…</span>
   </div>
-  <div class="row">
-    <label>Scope <select id="scope">
-      <option value="display">Screen</option>
-      <option value="window">Window</option>
-      <option value="region">Area</option>
-    </select></label>
-    <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
-    <span id="window-source" class="row" hidden>
-      <span id="window-source-label" class="sourcelabel">No window chosen</span>
-      <button id="pickwindow">Choose window…</button>
-      <button id="clearwindow" title="Forget the chosen window">Clear</button>
-    </span>
-    <span id="region-source" class="row" hidden>
-      <span id="region-source-label" class="sourcelabel">No area chosen</span>
-      <button id="pickregion">Choose area…</button>
-      <button id="clearregion" title="Forget the chosen area">Clear</button>
-    </span>
-  </div>
   <div id="stillstatus" hidden></div>
-  <div id="alert"></div>
 
-  <table>
+  <!--
+    The camera and mic readouts are ALWAYS visible — deliberately outside
+    `#diagnostics`, which the Show diagnostics preference hides by default.
+
+    These two are not instrumentation (STC-412 final review, I2). They were
+    built as one half of a PAIR with the warning that accompanies them —
+    `renderer.ts`'s own words, still in that file: "the row is the
+    at-a-glance state, the alert is the thing that cannot be missed". The
+    case they exist for is STC-286's: a camera that OPENS, reports its name,
+    and then silently delivers nothing (clamshell, a covered lens, another
+    app holding the device), which until these existed looked exactly like a
+    camera that worked. Behind the diagnostics toggle, with the alert now a
+    toast that takes itself away, such a take would report itself for a few
+    seconds and then leave no trace anywhere — which is the whole failure
+    this reporting was added to remove.
+
+    Everything else that WAS in that table (pid, frames, dropped, events,
+    cursor shapes, elapsed) really is developer instrumentation and stays
+    behind the toggle, which is what Task 4 was for.
+  -->
+  <table id="devicestate">
+    <tbody>
+      <tr><td>camera</td><td id="camera-state">—</td></tr>
+      <tr><td>mic</td><td id="mic-state">—</td></tr>
+    </tbody>
+  </table>
+
+  <table id="diagnostics" hidden>
     <tbody>
       <tr><td>helper pid</td><td id="pid">—</td></tr>
       <tr><td>helper</td><td id="alive">—</td></tr>
-      <tr><td>camera</td><td id="camera-state">—</td></tr>
-      <tr><td>mic</td><td id="mic-state">—</td></tr>
       <tr><td>frames</td><td id="frames">—</td></tr>
       <tr><td>dropped</td><td id="dropped">—</td></tr>
       <tr><td>events</td><td id="events">—</td></tr>
@@ -398,28 +402,70 @@
   -->
   <aside id="profilesheet">
     <div class="row" id="profilesheet-head">
-      <h1>Profile</h1>
+      <h1>Settings</h1>
       <button id="profileclose" aria-label="Close">×</button>
     </div>
 
-    <h2>Shot</h2>
+    <h2>Profile</h2>
+    <div class="row">
+      <label>Scope <select id="scope">
+        <option value="display">Screen</option>
+        <option value="window">Window</option>
+        <option value="region">Area</option>
+      </select></label>
+      <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
+      <span id="window-source" class="row" hidden>
+        <span id="window-source-label" class="sourcelabel">No window chosen</span>
+        <button id="pickwindow">Choose window…</button>
+        <button id="clearwindow" title="Forget the chosen window">Clear</button>
+      </span>
+      <span id="region-source" class="row" hidden>
+        <span id="region-source-label" class="sourcelabel">No area chosen</span>
+        <button id="pickregion">Choose area…</button>
+        <button id="clearregion" title="Forget the chosen area">Clear</button>
+      </span>
+    </div>
+    <div class="row">
+      <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
+      <label id="mic-label">Mic <select id="mic"><option value="">Off</option></select></label>
+    </div>
+
+    <h2>Preferences</h2>
     <!--
-      The destination folder (STC-293) and the post-capture floating
-      thumbnail's preferences (STC-296). The decorated still itself — style,
-      redact, copy, save — is the thumbnail's own compact panel now
-      (app/renderer/thumbnail.html, "the whole still UI in v1"); nothing here
-      previews or exports a shot.
+      The save location first, because it is the one preference here that
+      decides where a user's own files END UP.
+
+      It used to sit under its own `<h2>Shot</h2>` heading, which was true
+      while it was `still.destination` and governed stills alone. STC-412
+      unified it: `saveFolder` is where RECORDINGS go, where shots go, AND
+      which root the library scans (`takes.ts`'s `takesRoot`) — so a "Shot"
+      heading over it named a third of what it does, and a section of its own
+      read as a peer of Preferences rather than part of it. The post-capture
+      panel's own preferences follow it here for the same reason: they are
+      preferences, and the heading that used to separate them was the stale
+      half of this row's own story.
+
+      `#stilldest` shows a REAL resolved path, never "beside the shot" —
+      there is no per-shot override left to describe, and an unset
+      `saveFolder` resolves to a real folder (`recorder:resolvedSaveFolder`,
+      which calls the same `takesRoot` main writes through rather than
+      re-deriving the default in the renderer).
+    -->
+    <div class="stillrow">
+      <span>Recordings and shots save to</span>
+      <span id="stilldest">…</span>
+      <button id="stillchoosedest">Change…</button>
+    </div>
+    <!--
+      The post-capture floating thumbnail's own preferences (STC-296). The
+      decorated still itself — style, redact, copy, save — is the thumbnail's
+      compact panel now (app/renderer/thumbnail.html, "the whole still UI in
+      v1"); nothing here previews or exports a shot.
 
       STC-392: the panel no longer closes itself, so there is no timeout or
       settle-action preference to offer here any more — it waits for you to
       choose an action.
     -->
-    <div class="stillrow">
-      <span>Saving to</span>
-      <span id="stilldest">beside the shot</span>
-      <button id="stillchoosedest">Change…</button>
-      <button id="stillcleardest">Beside the shot</button>
-    </div>
     <div class="stillrow">
       <label>Panel corner <select id="thumbcorner">
         <option value="bottom-right">Bottom right</option>
@@ -429,6 +475,10 @@
       </select></label>
       <label title="Skip the panel entirely and copy every shot straight to the clipboard">
         <input type="checkbox" id="thumbskip"> Skip it — straight to clipboard</label>
+    </div>
+    <div class="stillrow">
+      <label title="Show helper pid, frame/drop counts and event counts on the main window">
+        <input type="checkbox" id="showdiagnostics"> Show diagnostics</label>
     </div>
 
     <h2>Countdown</h2>

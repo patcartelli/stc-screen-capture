@@ -67,6 +67,9 @@ export interface ThumbMenuContext {
 /** What each of `panel-actions.ts`'s four actions is called on this menu. */
 const ACTION_LABEL: Record<PanelAction, string> = {
   copy: "Copy", save: "Save", edit: "Edit", trash: "Delete",
+  // dismiss (STC-412) is unreachable — it is a close affordance (X / Esc /
+  // click-outside), never returned by actionsFor, never looked up from this record.
+  dismiss: "",
 };
 
 /** Whether the exporter would refuse this action while `busy` — see `ThumbMenuContext.busy`. */

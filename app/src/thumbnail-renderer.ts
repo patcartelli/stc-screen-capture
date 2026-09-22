@@ -20,13 +20,16 @@ import {
  * happens to the take itself), the same split every other view in this app
  * keeps.
  *
- * ## One card, five actions, four keyboard paths (STC-392)
+ * ## One card, four take actions plus dismiss, five keyboard paths
+ * (STC-392, dismiss added by STC-412)
  *
  * There is no collapsed/expanded distinction any more: the window is fixed
  * at `PANEL_SIZE` (`thumbnail-window.ts`) and every control this take has is
  * on the card from the moment it paints. `perform()` is the one place an
  * action's rules are written — see its own doc — so a keyboard Save, a
- * clicked Save and a menu Save cannot drift apart.
+ * clicked Save and a menu Save cannot drift apart. Dismiss (the corner ✕,
+ * Escape) is the one action never offered as a row button — see
+ * `panel-actions.ts`'s own doc on why it is not in `actionsFor`'s table.
  *
  * ## Redact moved to a still editor; the Style picker is just gone (STC-300, STC-426 revision)
  *
@@ -53,7 +56,7 @@ declare global {
   interface Window {
     thumb: {
       getFrame(dir: string, name: string): Promise<ArrayBuffer>;
-      getSettings(): Promise<{ still: ExportOptions & { destination: string | null } }>;
+      getSettings(): Promise<{ still: ExportOptions; saveFolder: string | null }>;
       exportStill(req: Record<string, unknown>): Promise<{
         ok: boolean; file?: string; bytes?: number; clipboard?: string[];
         code?: string; detail?: string;
@@ -74,6 +77,8 @@ declare global {
          * fault (STC-392 review, I5). */
         cancelled?: boolean;
       }>;
+      /** Close without deciding (STC-412) — the take is untouched. */
+      dismiss(dir: string): Promise<{ ok: boolean; detail?: string }>;
       dragFile(req: Record<string, unknown>): Promise<{ ok: boolean; file?: string; detail?: string }>;
       startDrag(file: string): void;
       reveal(): Promise<boolean>;
@@ -396,6 +401,10 @@ async function run(action: PanelAction): Promise<boolean> {
     if (!r.ok) setStatus(`Could not open the editor: ${r.detail ?? "unknown error"}`);
     return r.ok;
   }
+  if (action === "dismiss") {
+    const r = await window.thumb.dismiss(dir);
+    return r.ok;
+  }
   // trash
   window.thumb.event({ kind: "discarding" });
   const r = await window.thumb.trash(dir);
@@ -420,6 +429,16 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button[
   btn.hidden = !available.has(action);
   btn.addEventListener("click", (e) => { e.stopPropagation(); void perform(action); });
 }
+
+/**
+ * The corner ✕ (STC-412) — deliberately NOT `data-action` and outside the
+ * loop above: `dismiss` is never in `actionsFor`'s output (`panel-actions.ts`'s
+ * own doc), so it is always present rather than shown/hidden per take.
+ */
+document.getElementById("dismiss")!.addEventListener("click", (e) => {
+  e.stopPropagation();
+  void perform("dismiss");
+});
 
 /**
  * The `+N` overflow badge (Task 5b / STC-392 D7) — hidden when nothing is
@@ -459,10 +478,10 @@ overflowBtn.addEventListener("click", (e) => {
  * Dispatched through `perform`, so a keyboard Save and a clicked Save are the
  * same code path and cannot disagree about whether the panel closes.
  *
- * Escape no longer closes the panel. It used to settle-and-close, which was
- * the timeout's manual equivalent; with no "close without deciding" in the
- * action table and Redact moved to the still editor (STC-300), Escape has no
- * job left here at all.
+ * Escape closes the panel again (STC-412), reversing STC-392's own removal
+ * of "close without deciding". There is no redact-mode priority check any
+ * more — Redact moved to the still editor (STC-300), so this panel has no
+ * competing use for Escape left to arbitrate.
  */
 const KEYS: ReadonlyArray<[PanelAction, (e: KeyboardEvent) => boolean]> = [
   ["copy",  (e) => e.metaKey && e.key.toLowerCase() === "c"],
@@ -493,6 +512,7 @@ let keysLiveAt = Number.POSITIVE_INFINITY;   // set to `performance.now() + SETT
 
 document.addEventListener("keydown", (e) => {
   if (performance.now() < keysLiveAt) return;
+  if (e.key === "Escape") { e.preventDefault(); void perform("dismiss"); return; }
   for (const [action, matches] of KEYS) {
     if (!matches(e) || !available.has(action)) continue;
     e.preventDefault();
@@ -500,6 +520,36 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 });
+
+/**
+ * Click-outside (STC-412) was tried here as `window.addEventListener("blur",
+ * ...)` and deliberately dropped, per the ticket's own permission to do so if
+ * it "doesn't work cleanly."
+ *
+ * The reason is a real, structural conflict with an existing feature rather
+ * than a taste call: STC-392's focus rule 1 calls `focusPanel` on EVERY
+ * panel's paint, unconditionally — including the second, third, … panel of a
+ * STACK (`thumbnail-window.ts`'s own doc: "captures stack, newest at the
+ * corner"). On real AppKit key-window semantics, a sibling panel taking key
+ * focus fires `blur` on whichever panel held it a moment before — so wiring
+ * blur to dismiss would very likely close the FIRST panel the instant a
+ * second capture stacks on top of it, silently undoing the "nothing is lost
+ * by doing nothing" property `panel-waits.e2e.test.ts` and the stacking tests
+ * in `thumbnail.e2e.test.ts` exist to guarantee. `busy` cannot guard against
+ * this — it is a property of the OLDER panel's own in-flight action, and
+ * nothing is in flight there when a sibling merely takes focus.
+ *
+ * This sandbox cannot settle it either way: a diagnostic drove a real second
+ * panel's `focusPanel` call and the first panel's `blur` listener never
+ * fired, which matches `panel-focus.test.ts`'s own documented limit ("the
+ * race... needs a real window server, which is the one thing this sandbox
+ * (and CI's headless runner) cannot answer") rather than proving the wiring
+ * safe. Given the downside — silently breaking a shipped, well-tested
+ * feature — against an unverifiable upside, X and Escape are the two
+ * dismiss paths that ship. A hardware pass may want to revisit this once
+ * someone can watch a real stacked capture (and a real Save-As dialog)
+ * against it directly.
+ */
 
 // ---- swipe to discard (STC-296 follow-up) ----------------------------------
 

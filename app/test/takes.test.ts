@@ -5,26 +5,34 @@ import { join } from "node:path";
 import { takesRoot, newTakeDir, insideTakesRoot, duplicateTake } from "../src/takes.js";
 
 describe("where recordings go", () => {
-  test("defaults to ~/Desktop/stc — durable and visible, not scratch", () => {
-    expect(takesRoot({})).toBe(join(homedir(), "Desktop", "stc"));
+  test("defaults to ~/Desktop/stc when nothing is chosen and no env override exists", () => {
+    expect(takesRoot({}, null)).toBe(join(homedir(), "Desktop", "stc"));
   });
 
   test("never defaults into a temp directory that the OS sweeps", () => {
+    const original = process.env.TMPDIR;
+    delete process.env.TMPDIR;
     // /var/folders/.../T is purged on boot and swept after ~3 days. A take is a
     // deliverable, not scratch, and must not live somewhere it can vanish.
-    expect(takesRoot({})).not.toMatch(/\/var\/folders|\/tmp|[/\\]T$/);
+    expect(takesRoot({}, null)).not.toMatch(/\/var\/folders|\/tmp|[/\\]T$/);
+    if (original !== undefined) process.env.TMPDIR = original;
   });
 
-  test("STC_RECORDINGS_DIR overrides it, so tests need not litter the Desktop", () => {
-    expect(takesRoot({ STC_RECORDINGS_DIR: "/somewhere/else" })).toBe("/somewhere/else");
+  test("a chosen saveFolder wins over everything else", () => {
+    expect(takesRoot({ STC_RECORDINGS_DIR: "/somewhere/else" }, "/chosen/folder"))
+      .toBe("/chosen/folder");
+  });
+
+  test("STC_RECORDINGS_DIR overrides the default when nothing is chosen — tests need not litter the Desktop", () => {
+    expect(takesRoot({ STC_RECORDINGS_DIR: "/somewhere/else" }, null)).toBe("/somewhere/else");
   });
 
   test("take directories are timestamped, sortable and collision-free", () => {
     const at = new Date("2026-08-24T15:11:32");
-    expect(newTakeDir({}, at)).toBe(join(homedir(), "Desktop", "stc", "2026-08-24_15-11-32"));
+    expect(newTakeDir({}, null, at)).toBe(join(homedir(), "Desktop", "stc", "2026-08-24_15-11-32"));
     // a second take in the same second must not reuse the directory
-    const a = newTakeDir({ STC_RECORDINGS_DIR: "/r" }, at);
-    const b = newTakeDir({ STC_RECORDINGS_DIR: "/r" }, at, ["2026-08-24_15-11-32"]);
+    const a = newTakeDir({ STC_RECORDINGS_DIR: "/r" }, null, at);
+    const b = newTakeDir({ STC_RECORDINGS_DIR: "/r" }, null, at, ["2026-08-24_15-11-32"]);
     expect(b).not.toBe(a);
     expect(b).toMatch(/2026-08-24_15-11-32-2$/);
   });
@@ -43,34 +51,40 @@ describe("insideTakesRoot (STC-293 review)", () => {
   const env = { STC_RECORDINGS_DIR: "/takes" } as NodeJS.ProcessEnv;
 
   test("a real take inside the root is accepted", () => {
-    expect(insideTakesRoot(env, "/takes/2026-09-08_10-00-00")).toBe(true);
-    expect(insideTakesRoot(env, "/takes/a/b")).toBe(true);
+    expect(insideTakesRoot(env, null, "/takes/2026-09-08_10-00-00")).toBe(true);
+    expect(insideTakesRoot(env, null, "/takes/a/b")).toBe(true);
   });
 
   test("a `..` segment cannot walk out, however deep", () => {
     // `"/takes/../../tmp/evil".startsWith("/takes")` is true, and join()
     // resolves it to /tmp/evil.
-    expect(insideTakesRoot(env, "/takes/../../tmp/evil")).toBe(false);
-    expect(insideTakesRoot(env, "/takes/a/../../../etc")).toBe(false);
+    expect(insideTakesRoot(env, null, "/takes/../../tmp/evil")).toBe(false);
+    expect(insideTakesRoot(env, null, "/takes/a/../../../etc")).toBe(false);
   });
 
   test("a sibling folder sharing the prefix is not inside it", () => {
     // The second hole, and the quieter one: no traversal, just a name.
-    expect(insideTakesRoot(env, "/takes-other")).toBe(false);
-    expect(insideTakesRoot(env, "/takes-other/shot")).toBe(false);
+    expect(insideTakesRoot(env, null, "/takes-other")).toBe(false);
+    expect(insideTakesRoot(env, null, "/takes-other/shot")).toBe(false);
   });
 
   test("the root itself is refused — every caller wants a take, not the folder", () => {
-    expect(insideTakesRoot(env, "/takes")).toBe(false);
-    expect(insideTakesRoot(env, "/takes/")).toBe(false);
+    expect(insideTakesRoot(env, null, "/takes")).toBe(false);
+    expect(insideTakesRoot(env, null, "/takes/")).toBe(false);
     // ...including when it is spelled indirectly.
-    expect(insideTakesRoot(env, "/takes/a/..")).toBe(false);
+    expect(insideTakesRoot(env, null, "/takes/a/..")).toBe(false);
   });
 
   test("a non-path is refused rather than throwing", () => {
-    expect(insideTakesRoot(env, "")).toBe(false);
-    expect(insideTakesRoot(env, undefined as never)).toBe(false);
-    expect(insideTakesRoot(env, 42 as never)).toBe(false);
+    expect(insideTakesRoot(env, null, "")).toBe(false);
+    expect(insideTakesRoot(env, null, undefined as never)).toBe(false);
+    expect(insideTakesRoot(env, null, 42 as never)).toBe(false);
+  });
+
+  test("a chosen saveFolder is honoured instead of the env override", () => {
+    expect(insideTakesRoot(env, "/chosen", "/chosen/2026-09-08_10-00-00")).toBe(true);
+    // The env's own root is no longer the root once a saveFolder is chosen.
+    expect(insideTakesRoot(env, "/chosen", "/takes/2026-09-08_10-00-00")).toBe(false);
   });
 });
 
@@ -106,7 +120,7 @@ describe("duplicateTake (STC-345)", () => {
   test("copies every file but the cached thumbnail", async () => {
     const src = makeSource("2026-09-10_10-00-00",
       { "shot.json": "{}", "frame.png": "pixels", "thumb.png": "cached" });
-    const dest = await duplicateTake(env, src, "thumb.png");
+    const dest = await duplicateTake(env, null, src, "thumb.png");
     expect(readdirSync(dest).sort()).toEqual(["frame.png", "shot.json"]);
   });
 
@@ -123,8 +137,8 @@ describe("duplicateTake (STC-345)", () => {
   test("two concurrent duplicates of the same take never collide on one destination", async () => {
     const src = makeSource("2026-09-10_10-00-00", { "shot.json": "{}", "frame.png": "pixels" });
     const [a, b] = await Promise.all([
-      duplicateTake(env, src, "thumb.png"),
-      duplicateTake(env, src, "thumb.png"),
+      duplicateTake(env, null, src, "thumb.png"),
+      duplicateTake(env, null, src, "thumb.png"),
     ]);
     expect(a).not.toBe(b);
     for (const dest of [a, b]) {
@@ -137,8 +151,8 @@ describe("duplicateTake (STC-345)", () => {
     const srcA = makeSource("2026-09-10_10-00-00", { "shot.json": "A", "frame.png": "A-pixels" });
     const srcB = makeSource("2026-09-10_10-00-01", { "shot.json": "B", "frame.png": "B-pixels" });
     const [destA, destB] = await Promise.all([
-      duplicateTake(env, srcA, "thumb.png"),
-      duplicateTake(env, srcB, "thumb.png"),
+      duplicateTake(env, null, srcA, "thumb.png"),
+      duplicateTake(env, null, srcB, "thumb.png"),
     ]);
     expect(destA).not.toBe(destB);
     const read = (dir: string, file: string) => readdirSync(dir).includes(file)
@@ -156,10 +170,10 @@ describe("duplicateTake (STC-345)", () => {
   test("the claim releases: a third call afterward does not skip a name forever", async () => {
     const src = makeSource("2026-09-10_10-00-00", { "shot.json": "{}" });
     const [a, b] = await Promise.all([
-      duplicateTake(env, src, "thumb.png"),
-      duplicateTake(env, src, "thumb.png"),
+      duplicateTake(env, null, src, "thumb.png"),
+      duplicateTake(env, null, src, "thumb.png"),
     ]);
-    const c = await duplicateTake(env, src, "thumb.png");
+    const c = await duplicateTake(env, null, src, "thumb.png");
     expect(new Set([a, b, c]).size).toBe(3);
   });
 });

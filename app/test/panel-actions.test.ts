@@ -69,6 +69,23 @@ describe("what an action does to the panel", () => {
     expect(promotes("save") && closesPanel("save")).toBe(true);
     expect(promotes("copy") || closesPanel("copy")).toBe(false);
   });
+
+  describe("dismiss (STC-412)", () => {
+    test("dismiss does not promote and does not appear in actionsFor", () => {
+      // actionsFor's four-action contract is UNCHANGED — dismiss is a close
+      // affordance (X / Esc / click-outside), never a fifth action-row button.
+      for (const kind of ["shot", "recording"] as const) {
+        for (const origin of ["fresh", "library"] as const) {
+          expect(actionsFor({ kind, origin })).not.toContain("dismiss");
+        }
+      }
+    });
+
+    test("dismiss closes the panel and does nothing to the take", () => {
+      expect(closesPanel("dismiss")).toBe(true);
+      expect(promotes("dismiss")).toBe(false);
+    });
+  });
 });
 
 describe("the reconcile (D1)", () => {

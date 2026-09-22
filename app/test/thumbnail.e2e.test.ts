@@ -1,11 +1,13 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow, windowUrls } from "./_windows.js";
+import { CLIPBOARD_SUBDIR } from "../src/still-io.js";
+import { readRequests, exportRequests, keptFileRequests } from "./_still-log.js";
 
 /**
  * The post-capture floating thumbnail, end to end (STC-296, reworked by
@@ -55,23 +57,37 @@ interface Launched {
   win: Page;
   recordings: string;
   temp: string;
-  destDir: string;
   stillLog: string;
 }
 
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
   const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
-  const destDir = mkdtempSync(join(tmpdir(), "stc-thumb-dest-"));
+  // `saveFolder: null` leaves `STC_RECORDINGS_DIR` (`recordings`) as the
+  // resolved root. STC-412 unified `saveFolder` to govern BOTH stills and
+  // recordings — `panel:save`'s promote included — so an ACTIVE one here
+  // would divert a promoted take away from `recordings`, which is what
+  // "Save promotes" below asserts against.
+  //
+  // A `destDir` — a folder nothing is ever configured to write to — used to
+  // live here too, and every "and it wrote nothing THERE" assertion was
+  // deleted with it (STC-412 final review, I3). Those assertions were real
+  // when `still.destination` and the recordings root were independent
+  // settings: pointing the first somewhere and checking the second's traffic
+  // never arrived discriminated a genuine misdirection bug. Under one
+  // unified `saveFolder` that is null here, NOTHING in the app can resolve
+  // to such a folder by any path, so the reads passed unconditionally — a
+  // dead assertion reading as coverage. What each of them was reaching for
+  // is checked against `stillLog` instead, which a real export DOES reach.
   const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   // Seeded on DISK, before launch — never through `recorder:setSettings`.
-  // That channel deliberately strips `still.destination` (STC-293 review,
-  // #92): a renderer may not choose where main writes, precisely the thing an
-  // E2E test setting up its own fixture would otherwise look like. A real
-  // destination (not "beside the shot") makes a settled export easy to find.
+  // That channel deliberately strips `saveFolder` (STC-293 review, #92 —
+  // `saveFolder` replaced `still.destination` at STC-412): a renderer may not
+  // choose where main writes, precisely the thing an E2E test setting up its
+  // own fixture would otherwise look like.
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir },
+    saveFolder: null,
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],
@@ -84,7 +100,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
-  return { win, recordings, temp, destDir, stillLog };
+  return { win, recordings, temp, stillLog };
 }
 
 /** The floating panel, once it is up. Identified by its URL, like the overlay's own helper. */
@@ -136,14 +152,32 @@ async function nonOverlappingThumbnails(count: number, ms = 15_000): Promise<voi
   }, { timeout: ms }).toBe(true);
 }
 
-const readRequests = (log: string): any[] =>
-  existsSync(log)
-    ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
-    : [];
-
 /** A whole-display capture, the same door a hotkey uses — no overlay to drive. */
 async function captureDisplay(win: Page): Promise<any> {
   return win.evaluate(() => (window as any).recorder.captureStill("display"));
+}
+
+/**
+ * Drive an action that CLOSES the panel synchronously — dismiss's X click or
+ * its Escape key (STC-412) — and tolerate the "Target page, context or
+ * browser has been closed" rejection Playwright reports when the action's
+ * own target vanishes mid-dispatch.
+ *
+ * The same trap `_editor-fixture.ts`'s `closeEditorWindow` already exists for
+ * (STC-386, CLAUDE.md): `perform("dismiss")` closes the window over a
+ * synchronous IPC round trip, so the action LANDED and the window closing IS
+ * the confirmation — a bare `.catch(() => {})` would just as happily swallow
+ * a real failure, so "close" is awaited FIRST and a rejection not followed by
+ * an actual close is rethrown rather than eaten.
+ */
+async function dismissAndTolerateClose(panel: Page, act: () => Promise<void>): Promise<void> {
+  const closed = panel.waitForEvent("close", { timeout: 15_000 });
+  const err = await act().then(() => undefined, (e: unknown) => e);
+  if (err !== undefined) {
+    await closed.catch(() => { throw err; });
+    return;
+  }
+  await closed;
 }
 
 /** Live take directories under `recordings`, excluding the fixture `makeTakeFolder` seeds. */
@@ -169,8 +203,8 @@ describe("the post-capture floating thumbnail", () => {
     expect(await panel.isVisible("#trash")).toBe(true);
   }, 60_000);
 
-  test("Save promotes the take into the library and closes the panel — it writes no destination-folder file", async () => {
-    const { win, recordings, destDir } = await launch();
+  test("Save promotes the take into the library and closes the panel — it keeps no second copy", async () => {
+    const { win, recordings, stillLog } = await launch();
     await captureDisplay(win);
     const panel = await thumbnailWindow();
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
@@ -183,12 +217,20 @@ describe("the post-capture floating thumbnail", () => {
     // window closing IS the confirmation this path is being tested for.
     await panel.click("#save");
     await noThumbnailWindow(15_000);
-    // `panel:save` PROMOTES the take (STC-393's `promoteTake`) — it does not
-    // call `still:export`, so the configured destination folder stays empty.
-    // The library IS the destination now; a separate copy there is
-    // `still:export`'s job (Copy, Save As), not Save's.
+    // `panel:save` PROMOTES the take (STC-393's `promoteTake`) — it MOVES a
+    // directory. The library IS the destination now, and a separate encoded
+    // copy anywhere the user keeps files is `still:export`'s job (Copy, Save
+    // As), not Save's.
+    //
+    // Read off the helper's own request log rather than off a folder
+    // (STC-412 final review, I3), and `keptFileRequests` rather than every
+    // export: writing this as "no export at all" was tried first and FAILED
+    // against the real app, which is how it was learned that a panel writes
+    // its drag-out file into the clipboard cache the moment it paints. That
+    // one is not a copy anybody kept — see `_still-log.ts`. Wire a real save
+    // into this path and its file lands outside the cache, here.
     expect(ownTakes(recordings).length).toBe(1);
-    expect(readdirSync(destDir).length).toBe(0);
+    expect(keptFileRequests(stillLog)).toEqual([]);
   }, 60_000);
 
   // "Ignoring it still saves" (the old contract) is now
@@ -248,7 +290,7 @@ describe("the post-capture floating thumbnail", () => {
   }, 60_000);
 
   test("every stacked capture still WAITS — nothing is lost by doing nothing (STC-392)", async () => {
-    const { win, destDir } = await launch();
+    const { win, stillLog } = await launch();
     // Re-anchored for STC-392: with the clock gone, "nothing is lost" is no
     // longer a property of every panel settling on its own timer — it is a
     // property of every panel still being there, undecided, with its shot
@@ -264,8 +306,14 @@ describe("the post-capture floating thumbnail", () => {
       return windowCount(app!, "thumbnail.html");
     }, { timeout: 15_000 }).toBe(2);
 
-    // Nothing exported for either capture.
-    expect(readdirSync(destDir).length).toBe(0);
+    // Neither capture produced a file anybody kept — asserted against the
+    // helper's own request log (STC-412 final review, I3). The folder read
+    // this replaces named a directory the app could no longer resolve to
+    // under a unified `saveFolder`, so it was empty whatever the panels did.
+    // Note this is deliberately NOT "no export at all": both panels DO write
+    // their drag-out file into the clipboard cache on paint, which is the
+    // fact writing that stronger assertion first turned up.
+    expect(keptFileRequests(stillLog)).toEqual([]);
   }, 60_000);
 
   test("a showing panel is excluded from the next capture's request, when an id resolves", async () => {
@@ -292,7 +340,7 @@ describe("the post-capture floating thumbnail", () => {
   }, 60_000);
 
   test("the skip preference bypasses the panel entirely, copies, AND promotes", async () => {
-    const { win, recordings, temp, destDir, stillLog } = await launch();
+    const { win, recordings, temp, stillLog } = await launch();
     await win.evaluate(async () => {
       await (window as any).recorder.setSettings({ thumbnail: { skip: true } });
     });
@@ -319,15 +367,63 @@ describe("the post-capture floating thumbnail", () => {
     // deliberately still does not promote (`panel-waits.e2e.test.ts`).
     await expect.poll(() => readdirSync(temp).length, { timeout: 15_000 }).toBe(0);
     expect(ownTakes(recordings).length).toBe(1);
-    expect(readdirSync(destDir).length).toBe(0);
-    const exported = readRequests(stillLog).find((x) => x.rgba !== undefined);
+    const exported = exportRequests(stillLog)[0];
     expect(exported?.clipboard).toBe(true);
     // A copy still writes a file too — still-io.ts's `destinationDir`, so the
-    // pasteboard's file URL points at something real — but to the CACHE, never
-    // the chosen destination folder. `destDir` staying empty above is the
-    // proof; a cache-directory path here is expected, not a leak of the file
-    // the "straight to clipboard" wording promises not to write.
+    // pasteboard's file URL points at something real — but to the CACHE, and
+    // that is asserted POSITIVELY now (STC-412 final review, I3). It used to
+    // be `not.toContain(destDir)` against a fixture folder nothing could
+    // resolve to any more, which passed for a file written literally
+    // anywhere, the recordings root and the user's own save folder included.
+    // `CLIPBOARD_SUBDIR` is still-io.ts's own constant, so this names the
+    // branch it is claiming was taken (`destinationDir`'s `!target.file`
+    // fallback) rather than a place it was not.
     expect(exported?.file).toBeDefined();
-    expect(exported?.file).not.toContain(destDir);
+    expect(exported!.file).toContain(CLIPBOARD_SUBDIR);
+    // And NOT in the library: "straight to clipboard" promises the shot is
+    // not also encoded into the folder the user keeps their takes in.
+    expect(exported!.file).not.toContain(recordings);
+  }, 60_000);
+
+  // ---- dismiss (STC-412) ----------------------------------------------------
+
+  test("dismiss (the X) closes the panel and leaves the take exactly where it was", async () => {
+    const { win, temp } = await launch();
+    const r = await captureDisplay(win);
+    expect(r.ok).toBe(true);
+    const panel = await thumbnailWindow();
+    const before = readdirSync(temp, { recursive: true }).sort();
+
+    await dismissAndTolerateClose(panel, () => panel.click("#dismiss"));
+
+    await noThumbnailWindow();
+    expect(readdirSync(temp, { recursive: true }).sort()).toEqual(before);
+  }, 60_000);
+
+  test("Escape dismisses the panel outside redact mode", async () => {
+    const { win, temp } = await launch();
+    const r = await captureDisplay(win);
+    expect(r.ok).toBe(true);
+    const panel = await thumbnailWindow();
+    const before = readdirSync(temp, { recursive: true }).sort();
+
+    // Escape respects `SETTLE_KEYS_MS` like every other keyboard path
+    // (thumbnail-renderer.ts's own comment above its keydown listener) — a
+    // press dispatched before the panel's own `keysLiveAt` clock is reached
+    // is silently ignored, which would otherwise make this test time out in
+    // `noThumbnailWindow` for a reason that has nothing to do with dismiss.
+    // Same hazard `panel-waits.e2e.test.ts`'s ⌘⌫ test already found (STC-427)
+    // and reads the renderer's own published clock for, not a fixed sleep.
+    await expect.poll(() => panel.evaluate(() => {
+      const card = document.getElementById("card")!;
+      const liveAt = Number((card as HTMLElement).dataset.keysLiveAt);
+      return card.className.includes("in")
+        && Number.isFinite(liveAt) && performance.now() >= liveAt;
+    }), { timeout: 15_000 }).toBe(true);
+
+    await dismissAndTolerateClose(panel, () => panel.keyboard.press("Escape"));
+
+    await noThumbnailWindow();
+    expect(readdirSync(temp, { recursive: true }).sort()).toEqual(before);
   }, 60_000);
 });
