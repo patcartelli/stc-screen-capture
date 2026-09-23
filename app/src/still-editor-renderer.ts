@@ -1,5 +1,6 @@
 import { parseShot, type Redaction, type Shot } from "@transform/shot";
-import { decorationForMode, layoutStill } from "@transform/still-decorate";
+import { decorationForMode, layoutStill, pxPerPointOf } from "@transform/still-decorate";
+import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { normaliseRegion, undoLast } from "@transform/still-redact";
 
@@ -32,6 +33,8 @@ declare global {
       getShot(dir: string): Promise<Shot>;
       getFrame(dir: string, name: string): Promise<ArrayBuffer>;
       writeShot(dir: string, redactions: unknown): Promise<{ ok: boolean; redactions: number }>;
+      exportStill(req: Record<string, unknown>): Promise<any>;
+      getSettings(): Promise<{ still: ExportOptions; saveFolder: string | null }>;
     };
   }
 }
@@ -42,6 +45,7 @@ const canvas = $("stagecanvas") as HTMLCanvasElement;
 const hint = $("hint");
 const undoBtn = $("undo") as HTMLButtonElement;
 const doneBtn = $("done") as HTMLButtonElement;
+const saveBtn = $("save") as HTMLButtonElement;
 
 const dir = new URLSearchParams(location.search).get("dir") ?? "";
 
@@ -193,6 +197,74 @@ undoBtn.addEventListener("click", () => {
   void persistDecoration();
   setHint(regionCountText());
 });
+
+/**
+ * Write the finished image to the save folder (STC-446).
+ *
+ * This editor is the ONLY door to a still already in the library — a library
+ * Open comes straight here (`main.ts`'s `still:reopen`), and the tile itself
+ * offers no export. Until this button there was no route at all from a kept
+ * still to a deliverable: `raw/` is source material under STC-413, never the
+ * thing you send someone.
+ *
+ * The composite is the FULL-RESOLUTION one `draw()` already built, never the
+ * view canvas — that is fitted to the window and would write out whatever
+ * size the user happened to have dragged it to, which is STC-318's "a way of
+ * looking must not change what comes out" in a second window.
+ *
+ * `planRender`'s format fallback is the panel's, for the panel's reason: a
+ * stored JPEG under a mode that carries transparency falls back to PNG
+ * rather than flattening onto a guessed colour, because there is no colour
+ * picker here either. Everything downstream — destination, filename,
+ * capture id, promotion — is `still:export`, the same one funnel every other
+ * exit already uses.
+ */
+async function saveFinished(): Promise<void> {
+  if (!shot || !composite) return;
+  saveBtn.disabled = true;
+  const previous = hint.textContent;
+  setHint("Saving…");
+  try {
+    const settings = (await window.stillEditor.getSettings()).still;
+    const decorated = decoratedShot();
+    let options: ExportOptions = { ...settings };
+    const layout = layoutStill(decorated);
+    const pxPerPoint = pxPerPointOf(decorated);
+    let plan = planRender(options, { layout, pxPerPoint });
+    let fellBackToPng = false;
+    if (stillIsBlocked(plan)) {
+      options = { ...options, format: "png" };
+      plan = planRender(options, { layout, pxPerPoint });
+      fellBackToPng = true;
+    }
+
+    const ctx = composite.getContext("2d", { alpha: true });
+    if (!ctx) { setHint("Could not read the image."); return; }
+    const data = ctx.getImageData(0, 0, composite.width, composite.height).data;
+    const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+
+    const r = await window.stillEditor.exportStill({
+      bytes, width: composite.width, height: composite.height, alpha: plan.alpha,
+      colorSpace: shot.display.colorSpace ?? "",
+      target: { file: true, clipboard: false },
+      options,
+      info: { ...(shot.window?.app ? { app: shot.window.app } : {}),
+              ...(shot.window?.title ? { title: shot.window.title } : {}),
+              mode: decorated.decoration.mode },
+      dir,
+    });
+    if (r?.cancelled) { setHint(previous ?? ""); return; }
+    if (!r?.ok) { setHint(`Could not save: ${r?.detail ?? r?.code ?? "unknown error"}`); return; }
+    setHint(`Saved ${String(r.file ?? "").split("/").pop() ?? ""}`
+            + (fellBackToPng ? " (as PNG — this style needs transparency)" : ""));
+  } catch (e: any) {
+    setHint(`Could not save: ${String(e?.message ?? e)}`);
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+saveBtn.addEventListener("click", () => void saveFinished());
 
 doneBtn.addEventListener("click", () => window.close());
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.close(); });
