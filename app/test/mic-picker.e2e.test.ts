@@ -3,6 +3,7 @@ import { _electron as electron, type ElectronApplication } from "playwright";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { waitForStart } from "./_start-log.js";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
@@ -101,9 +102,7 @@ describe("the mic picker", () => {
     await expect.poll(() => win.inputValue("#mic")).toBe("fixture-mic-1");
 
     await win.click("#record");
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.micDeviceUid, `start payload was ${JSON.stringify(cmd)}`).toBe("fixture-mic-1");
     // While a take is running the setting must not look changeable: the
@@ -119,9 +118,7 @@ describe("the mic picker", () => {
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     await win.click("#record");
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.micDeviceUid).toBeUndefined();
   }, 180_000);
 
