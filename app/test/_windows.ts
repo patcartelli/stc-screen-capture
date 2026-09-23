@@ -1,4 +1,4 @@
-import type { ElectronApplication } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 
 /**
  * Counting windows from the MAIN process, for every e2e test that counts
@@ -62,4 +62,60 @@ export function windowUrls(app: ElectronApplication): Promise<string[]> {
 /** `windowCount(app, urlPart) > 0`, for a "still here" / "never appeared" read that is exact rather than 25 ms stale. */
 export async function hasWindow(app: ElectronApplication, urlPart: string): Promise<boolean> {
   return (await windowCount(app, urlPart)) > 0;
+}
+
+/**
+ * GETTING A PAGE, which is the half STC-416 left unsynchronised (STC-434).
+ *
+ * The header above says `app.windows()` is "right — and the only choice —
+ * when a test needs a `Page` to click on", and that is true. What it does not
+ * say, and what cost four red CI runs across STC-413's two PRs, is that
+ * ACQUIRING that page has to WAIT.
+ *
+ * Read the third row of the table again, as two different clocks:
+ *
+ *     counted by URL substring   `getAllWindows()` ~78-110 ms
+ *                                `app.windows()`    78-147 ms
+ *
+ * A test that polls `windowCount(app, "x.html")` to N and then reads
+ * `app.windows().find(...)` has waited on the FIRST clock and dereferenced
+ * the SECOND. The ranges overlap, so it passes almost always; the upper
+ * bound of one exceeds the lower bound of the other by ~70 ms, so on a
+ * loaded runner it does not. The failure is `undefined`, not a timeout:
+ *
+ *     TypeError: Cannot read properties of undefined (reading 'click')
+ *       → const panel = panelWindow(electronApp);
+ *         await panel.click("#save");
+ *
+ * `thumbnail.e2e.test.ts` already had this right — its own `thumbnailWindow`
+ * polls — and it is not among the files that flake. So this is the third
+ * copy of that wait, which is why it lives here instead of in a fourth.
+ *
+ * The bound fails with the URLs it DID see, because "no window matched" and
+ * "the window was there under another url" are different faults and a bare
+ * timeout cannot tell them apart.
+ */
+export async function pageMatching(
+  app: ElectronApplication,
+  match: (p: Page) => boolean,
+  what: string,
+  timeoutMs = 15_000,
+): Promise<Page> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const hit = app.windows().find(match);
+    if (hit) return hit;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `no attached page for ${what} within ${timeoutMs} ms. `
+        + `Playwright has: ${JSON.stringify(app.windows().map((p) => p.url()))}; `
+        + `the main process has: ${JSON.stringify(await windowUrls(app))}`);
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+/** `pageMatching` for the common case: the first page whose URL contains `urlPart`. */
+export function pageWithUrl(app: ElectronApplication, urlPart: string, timeoutMs?: number): Promise<Page> {
+  return pageMatching(app, (p) => p.url().includes(urlPart), `url containing "${urlPart}"`, timeoutMs);
 }

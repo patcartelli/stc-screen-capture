@@ -366,3 +366,82 @@ export function tagMp4(bytes: Uint8Array, id: string): Uint8Array {
   out.set(box, at);
   return out;
 }
+
+// ── HEIC ───────────────────────────────────────────────────────────────────
+
+/**
+ * Brands that mean "an HEIF-family still". `mif1`/`miaf` are the generic
+ * image-container brands and appear in the compatible list of every HEIC this
+ * app writes; the `he**`/`hev*` family are the HEVC-coded ones.
+ *
+ * This is a GUARD, not a dispatch — `library.ts` already picks the reader by
+ * extension. It exists so a file that is not an HEIF at all cannot reach the
+ * scan below on the strength of its filename.
+ */
+const HEIF_BRANDS = new Set([
+  "heic", "heix", "heim", "heis", "hevc", "hevx", "hevm", "hevs",
+  "mif1", "msf1", "miaf",
+]);
+
+function isHeif(b: Uint8Array): boolean {
+  for (const [type, start, size] of mp4Boxes(b)) {
+    // ISO-BMFF requires `ftyp` FIRST. Anything else leading means this is not
+    // a file we are willing to guess about.
+    if (type !== "ftyp") return false;
+    // major_brand, then minor_version (which spells no brand), then the
+    // compatible_brands list — walked as one run of 4-byte codes.
+    for (let at = start + 8; at + 4 <= start + size; at += 4) {
+      if (HEIF_BRANDS.has(ascii(b, at, 4))) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * The id out of a HEIC still.
+ *
+ * ## The measurement this is built on
+ *
+ * Taken on real hardware 2026-09-23, encoding one RGBA buffer through the
+ * REAL helper three times with the same id and scanning each output's bytes:
+ *
+ *     png   1,193 bytes   id present
+ *     heic  3,696 bytes   id present
+ *     jpeg  3,990 bytes   id ABSENT
+ *
+ * So `StillEncodeDecisions.swift` setting only `kCGImagePropertyPNGDictionary`
+ * does NOT mean the id is PNG-only: ImageIO normalises that description into
+ * XMP, and HEIF carries XMP as an item. JPEG genuinely carries nothing, and
+ * that stays a known limitation rather than a bug this module can close.
+ *
+ * On a 1,200x800 export (1,009,782 bytes) the XMP is `infe` item 9, type
+ * `mime`, content-type `application/rdf+xml`, located by `iloc` at
+ * offset 1,034 length 776 — with the id itself at byte 1,668. Well inside the
+ * front window `library.ts` already reads for a PNG.
+ *
+ * ## Why a scan and not an `iloc` parse
+ *
+ * The same reasoning `xmpCaptureId` records one format over, with one extra
+ * fact: **the XMP item's bytes live inside `mdat`** (`mdat` starts at 880
+ * above, the item at 1,034), so no cheap structural bound excludes the
+ * compressed HEVC payload. Excluding it exactly means resolving `iinf` →
+ * `infe` → `iloc` through every version and field-width variant those boxes
+ * allow — and the failure mode of getting that wrong on an unfamiliar
+ * encoder's file is the SAME silent miss the scan already has, for several
+ * times the code, inside a 500-file scan.
+ *
+ * What makes the scan safe is that it decides nothing: `captureIdIn` gates
+ * every candidate through `isCaptureId`, so the only strings this can return
+ * already match the exact `cap_` + 26-Crockford shape. For compressed bytes to
+ * spell one by accident they must hit 4 exact bytes and then 26 bytes each
+ * drawn from 32 of 256 values — about 2^-110 per position. A wrong id is not
+ * a risk worth writing a parser against; a missed one degrades to exactly
+ * today's behaviour.
+ *
+ * Bounded by whatever the caller hands in, never by this function.
+ */
+export function readHeicCaptureId(bytes: Uint8Array): string | undefined {
+  if (!isHeif(bytes)) return undefined;
+  return captureIdIn(bytes);
+}
