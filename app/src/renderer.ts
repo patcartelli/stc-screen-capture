@@ -64,8 +64,12 @@ declare const recorder: {
   getShot(dir: string): Promise<Shot>;
   reopenStill(dir: string): Promise<{ ok: boolean }>;
   duplicateStill(dir: string): Promise<{ ok: boolean; dir: string }>;
-  labelTake(dir: string, label: string): Promise<boolean>;
-  deleteTake(dir: string): Promise<{ deleted: boolean; cancelled?: boolean; detail?: string }>;
+  // STC-413: the file IS the name now. `file` wins when present (a real
+  // rename on disk, through `takes.ts`'s `renameCapture`); `dir` alone falls
+  // back to the old take.json label, for a bundle with no finished file yet.
+  renameCapture(file: string | undefined, dir: string | undefined, name: string): Promise<string>;
+  deleteTake(file: string | undefined, dir: string | undefined):
+    Promise<{ deleted: boolean; cancelled?: boolean; detail?: string }>;
   // The take player is its own window now (STC-373) — this opens it. Every
   // channel the old in-page player used (`openPreview`, `writeExport`,
   // `publish`, and the rest) moved to `editor-preload.ts`, the only bridge
@@ -980,8 +984,14 @@ const THUMB_MAX_EDGE = 480;
  * true if it is literally the same code.
  */
 async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promise<void> {
-  const shot = await recorder.getShot(item.dir);
-  const bytes = await recorder.getFrame(item.dir, shot.frame.file);
+  // A "render" thumbnail only ever exists for a still WITH a bundle —
+  // `library-items.ts`'s `stillItem` is the only place that sets
+  // `thumbnail.source === "render"`, and it only runs for bundle-backed
+  // stills. Structural, not a possibility this function has to weigh.
+  const dir = item.dir;
+  if (!dir) throw new Error("a rendered thumbnail needs a bundle directory");
+  const shot = await recorder.getShot(dir);
+  const bytes = await recorder.getFrame(dir, shot.frame.file);
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   try {
     // The stored decoration, filled in from the mode's presets exactly as the
@@ -1014,7 +1024,7 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
     img.src = URL.createObjectURL(blob);
     // Cached AFTER it is on screen: a failed write costs the cache, never the
     // picture the user is already looking at.
-    try { await recorder.writeThumbnail(item.dir, await blob.arrayBuffer()); }
+    try { await recorder.writeThumbnail(dir, await blob.arrayBuffer()); }
     catch { /* an uncached tile simply renders again next time */ }
   } finally {
     // ~30 MB at 4K, and 500 of them is the tab-killer this repo already
@@ -1026,7 +1036,11 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
 /** Show a cached thumbnail, decoding it in the main process's stead. */
 async function showCachedThumbnail(item: LibraryItem, img: HTMLImageElement,
                                    file: string): Promise<void> {
-  const bytes = await recorder.getFrame(item.dir, file);
+  // A cached "file" thumbnail lives INSIDE the take directory (rule 5,
+  // library-items.ts), so this too only ever runs for a bundle-backed still.
+  const dir = item.dir;
+  if (!dir) throw new Error("a cached thumbnail lives inside a bundle directory");
+  const bytes = await recorder.getFrame(dir, file);
   img.src = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
 }
 
@@ -1037,27 +1051,67 @@ const libraryCallbacks: LibraryCallbacks = {
       // criterion. Which actions an item offers was decided by the adapter, so
       // an id that cannot apply to this item never reaches here.
       if (id === "open") await openItem(item);
-      else if (id === "duplicate") { await recorder.duplicateStill(item.dir); await refreshTakes(); }
-      else if (id === "reveal") await recorder.reveal(item.dir);
+      else if (id === "duplicate") {
+        // Bundle-only, same reason "open" is: the adapter never offers this
+        // id for an item with no `dir` (rule: an action needing a bundle
+        // must not be offered without one).
+        const dir = item.dir;
+        if (!dir) throw new Error("duplicate needs a bundle directory");
+        await recorder.duplicateStill(dir); await refreshTakes();
+      }
+      else if (id === "reveal") {
+        // Reveal has no bundle-only requirement — a plain finished file is
+        // just as revealable as a directory, so this falls back to `file`
+        // rather than refusing. `dir` still wins when both exist, unchanged
+        // from before this item could ever lack one.
+        const target = item.dir ?? item.file;
+        if (!target) throw new Error("nothing to reveal");
+        await recorder.reveal(target);
+      }
       else if (id === "delete") {
+        // STC-413: BOTH halves go, not one or the other — a matched item is
+        // a finished file at the top level and its source bundle in `raw/`,
+        // and main trashes whichever of the two it is actually given rather
+        // than this view picking one the way the old `dir ?? file` fallback
+        // did (which silently left the other half behind).
+        if (!item.file && !item.dir) throw new Error("nothing to delete");
         // A take the editor has open is handled main-side (STC-373): deleting
         // it clears main's own per-window `openTake` entry for that path, so
         // an open editor window's writes correctly start refusing rather than
         // landing in a directory `take:delete` just trashed.
-        const r = await recorder.deleteTake(item.dir);
-        if (r.deleted) { await refreshTakes(); }
-        // A Cancel is a decision, not a fault (`trashWithConfirmation`'s own
-        // rule) — say nothing. A REAL failure used to reach nobody: this
-        // action's own `detail` was discarded before STC-300's revision
-        // removed the only other door (the post-capture panel's "confirm"
-        // Trash) that ever surfaced one.
-        else if (!r.cancelled) alertUser(r.detail ?? "Could not delete this take.");
+        const r = await recorder.deleteTake(item.file, item.dir);
+        // STC-413 review round 1: refresh on any NON-CANCELLED outcome, not
+        // only full success. A PARTIAL failure (one half trashed, the other
+        // not) still changed the filesystem — the old code's `if (r.deleted)`
+        // left this tile's `file`/`dir` stale after exactly that, so a retry
+        // re-sent the ALREADY-TRASHED half's path and (before main's own
+        // fix) threw before ever reaching the half still there. A Cancel is
+        // the one outcome that legitimately changes nothing
+        // (`trashWithConfirmation`'s own rule), so it alone skips this.
+        if (!r.cancelled) {
+          await refreshTakes();
+          // A REAL failure used to reach nobody: this action's own `detail`
+          // was discarded before STC-300's revision removed the only other
+          // door (the post-capture panel's "confirm" Trash) that ever
+          // surfaced one.
+          if (!r.deleted) alertUser(r.detail ?? "Could not delete this take.");
+        }
       }
     } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async rename(item, label) {
-    try { await recorder.labelTake(item.dir, label); await refreshTakes(); }
-    catch (e: any) { alertUser(String(e?.message ?? e)); }
+    // STC-413: rename does not need a bundle any more, so both `file` and
+    // `dir` are handed through unresolved and main decides — `file` wins
+    // (a real rename on disk) when there is one, `dir` alone falls back to
+    // the old take.json label, and neither refuses loudly rather than doing
+    // nothing silently, which is what this replaced (Task 8's
+    // `looseFileItem` offers "rename" on an item with no bundle at all, and
+    // the old handler here dropped that click on the floor).
+    try {
+      if (!item.file && !item.dir) throw new Error("nothing to rename");
+      await recorder.renameCapture(item.file, item.dir, label);
+      await refreshTakes();
+    } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async setFilter(id) { libraryFilter = id; await refreshTakes(); },
   async paintThumbnail(item, img) {
@@ -1085,16 +1139,21 @@ const libraryCallbacks: LibraryCallbacks = {
  * is a rule about the interface, which is where it is allowed to live.
  */
 async function openItem(item: LibraryItem): Promise<void> {
+  // "open" is never offered by the adapter for an item with no bundle — both
+  // branches below need the raw materials (or shot.json) that only a
+  // directory carries, so this is a structural guard, not a UI decision.
+  const dir = item.dir;
+  if (!dir) return;
   if (item.thumbnail.source === "none") {
     // The take player is the editor's own window now (STC-373).
     try {
-      await recorder.openEditor(item.dir, item.id);
+      await recorder.openEditor(dir, item.id);
     } catch (e: any) {
       alertUser(`Could not open "${item.label ?? item.id}".\n${e?.message ?? e}`);
     }
     return;
   }
-  await recorder.reopenStill(item.dir);
+  await recorder.reopenStill(dir);
 }
 
 async function refreshTakes(): Promise<void> {

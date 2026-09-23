@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { readdirSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import {
   CLIPBOARD_SUBDIR, destinationDir, exportStill, namesIn, plannedFileName,
@@ -81,15 +81,34 @@ afterEach(async () => {
 
 describe("where a still goes (STC-412)", () => {
   const copyOnly = { file: false, clipboard: true };
+  const save = { file: true, clipboard: false };
 
-  test("a save with no chosen saveFolder lands beside the shot", () => {
-    expect(destinationDir(null, { file: true, clipboard: false }, "/takes/shot-1", cache))
-      .toBe("/takes/shot-1");
+  /**
+   * STC-413 I3: the fresh-install case, which nothing exercised.
+   *
+   * `settings.ts` defaults `saveFolder` to null and every e2e fixture seeds
+   * one, so this branch had no coverage at all — and Task 9 moved bundles
+   * into `raw/<stamp>/`, which turned the old "fall back to the shot's own
+   * directory" into "write the PNG one level below where the library looks".
+   * Saved, and invisible.
+   */
+  test("a save with no chosen saveFolder lands at the TOP LEVEL, never inside raw/", () => {
+    const env = { STC_RECORDINGS_DIR: "/captures" } as NodeJS.ProcessEnv;
+    const dir = destinationDir(null, save, cache, env);
+    expect(dir).toBe("/captures");
+    expect(dir).not.toContain("/raw/");
   });
 
-  test("a chosen saveFolder wins over the shot's own directory", () => {
-    expect(destinationDir("/Users/me/Shots",
-                          { file: true, clipboard: false }, "/takes/shot-1", cache))
+  test("with no saveFolder and no override it is the default capture root", () => {
+    // Not the bundle, and not the clipboard cache either: `takesRoot`'s own
+    // last resort, which is where the library scan reads.
+    expect(destinationDir(null, save, cache, {} as NodeJS.ProcessEnv))
+      .toBe(join(homedir(), "Desktop", "stc"));
+  });
+
+  test("a chosen saveFolder wins over everything else", () => {
+    expect(destinationDir("/Users/me/Shots", save, cache,
+                          { STC_RECORDINGS_DIR: "/captures" } as NodeJS.ProcessEnv))
       .toBe("/Users/me/Shots");
   });
 
@@ -97,8 +116,7 @@ describe("where a still goes (STC-412)", () => {
     // It writes a file only so the pasteboard's URL points at something real.
     // Landing that in the shots folder would leave the user a file to tidy up
     // after every paste, which is not what they asked for.
-    expect(destinationDir("/Users/me/Shots", copyOnly, "/takes/shot-1", cache))
-      .toBe(join(cache, CLIPBOARD_SUBDIR));
+    expect(destinationDir("/Users/me/Shots", copyOnly, cache)).toBe(join(cache, CLIPBOARD_SUBDIR));
   });
 
   test("a directory that does not exist is empty, not an error", async () => {
@@ -116,7 +134,7 @@ describe("the export funnel (STC-293)", () => {
       info: { app: "Safari", mode: "window-only" },
       fallbackDir: dir,
       at: new Date(2026, 8, 8, 14, 23, 5),
-    }, settings(), null, cache);
+    }, settings(), dir, cache);
 
     expect(r.file).toBe(join(dir, "Safari 2026-09-08.png"));
     // Read back from disk, not from the call log: this proves the bytes made
@@ -133,7 +151,7 @@ describe("the export funnel (STC-293)", () => {
       options: DEFAULT_STILL_SETTINGS,
       info: { app: "Safari", mode: "window-only" },
       fallbackDir: dir,
-    }, settings(), null, cache);
+    }, settings(), dir, cache);
 
     expect(r.clipboard).toEqual(["png", "tiff", "fileURL"]);
     expect(r.file).toBeDefined();
@@ -152,8 +170,8 @@ describe("the export funnel (STC-293)", () => {
       info: { app: "Safari", mode: "window-only" },
       fallbackDir: dir,
     };
-    const first = await exportStill(h.send, req, settings(), null, cache);
-    const second = await exportStill(h.send, req, settings(), null, cache);
+    const first = await exportStill(h.send, req, settings(), dir, cache);
+    const second = await exportStill(h.send, req, settings(), dir, cache);
     expect(first.file).toBe(join(dir, "Shot.png"));
     expect(second.file).toBe(join(dir, "Shot-2.png"));
     expect(readdirSync(dir).sort()).toEqual(["Shot-2.png", "Shot.png"]);
@@ -167,7 +185,7 @@ describe("the export funnel (STC-293)", () => {
       options: { ...DEFAULT_STILL_SETTINGS, format: "heic", quality: 0.5, template: "Shot" },
       info: { mode: "window-only" },
       fallbackDir: dir,
-    }, settings(), null, cache);
+    }, settings(), dir, cache);
     expect(r.file!.endsWith(".heic")).toBe(true);
     expect(h.calls[0]!.format).toBe("heic");
     expect(h.calls[0]!.quality).toBe(0.5);
@@ -181,7 +199,7 @@ describe("the export funnel (STC-293)", () => {
       options: DEFAULT_STILL_SETTINGS,
       info: { mode: "window-only" },
       fallbackDir: dir,
-    }, settings({ stripMetadata: true }), null, cache);
+    }, settings({ stripMetadata: true }), dir, cache);
 
     expect(h.calls[0]!.capturedAt).toBeUndefined();
     // The profile is not covered by the strip — it is what makes the numbers
@@ -199,8 +217,47 @@ describe("the export funnel (STC-293)", () => {
       info: { mode: "window-only" },
       fallbackDir: dir,
       at: new Date("2026-09-08T14:23:05.000Z"),
-    }, settings({ stripMetadata: false }), null, cache);
+    }, settings({ stripMetadata: false }), dir, cache);
     expect(h.calls[0]!.capturedAt).toBe("2026-09-08T14:23:05.000Z");
+  });
+
+  test("a capture id is forwarded to the helper (STC-413)", async () => {
+    const h = fakeHelper();
+    await exportStill(h.send, {
+      still: still(),
+      target: { file: true, clipboard: false },
+      options: DEFAULT_STILL_SETTINGS,
+      info: { mode: "window-only" },
+      fallbackDir: dir,
+      captureId: "cap_" + "A".repeat(26),
+    }, settings(), dir, cache);
+    expect(h.calls[0]!.captureId).toBe("cap_" + "A".repeat(26));
+  });
+
+  test("no captureId on the request means none is sent — not every caller has a bundle", async () => {
+    const h = fakeHelper();
+    await exportStill(h.send, {
+      still: still(),
+      target: { file: true, clipboard: false },
+      options: DEFAULT_STILL_SETTINGS,
+      info: { mode: "window-only" },
+      fallbackDir: dir,
+    }, settings(), dir, cache);
+    expect(h.calls[0]!.captureId).toBeUndefined();
+  });
+
+  test("a capture id survives a metadata strip — identity is not the privacy strip's business", async () => {
+    const h = fakeHelper();
+    await exportStill(h.send, {
+      still: still(),
+      target: { file: true, clipboard: false },
+      options: DEFAULT_STILL_SETTINGS,
+      info: { mode: "window-only" },
+      fallbackDir: dir,
+      captureId: "cap_" + "A".repeat(26),
+    }, settings({ stripMetadata: true }), dir, cache);
+    expect(h.calls[0]!.capturedAt).toBeUndefined();
+    expect(h.calls[0]!.captureId).toBe("cap_" + "A".repeat(26));
   });
 
   test("an export with nowhere to go is refused rather than quietly doing nothing", async () => {
@@ -211,7 +268,7 @@ describe("the export funnel (STC-293)", () => {
       options: DEFAULT_STILL_SETTINGS,
       info: { mode: "window-only" },
       fallbackDir: dir,
-    }, settings(), null, cache)).rejects.toThrow(/somewhere to go/);
+    }, settings(), dir, cache)).rejects.toThrow(/somewhere to go/);
     expect(h.calls).toHaveLength(0);
   });
 
@@ -229,7 +286,7 @@ describe("the export funnel (STC-293)", () => {
       options: DEFAULT_STILL_SETTINGS,
       info: { mode: "window-only" },
       fallbackDir: dir,
-    }, settings(), null, cache)).rejects.toThrow(/encode-failed/);
+    }, settings(), dir, cache)).rejects.toThrow(/encode-failed/);
     expect(paths).toHaveLength(1);
     expect(existsSync(paths[0]!)).toBe(false);
   });
@@ -242,7 +299,7 @@ describe("the export funnel (STC-293)", () => {
       options: DEFAULT_STILL_SETTINGS,
       info: { mode: "selected-area" },
       fallbackDir: dir,
-    }, settings(), null, cache);
+    }, settings(), dir, cache);
     expect(h.calls[0]!.alpha).toBe(false);
   });
 });
@@ -276,7 +333,7 @@ describe("two exports at once (STC-296 stacking)", () => {
       info: { app: "Safari", mode: "window-only" },
       fallbackDir: dir,
       at,
-    }, settings(), null, cache);
+    }, settings(), dir, cache);
 
     const [a, b] = await Promise.all([one(), one()]);
     expect(a.file).not.toBe(b.file);
@@ -298,9 +355,9 @@ describe("two exports at once (STC-296 stacking)", () => {
       at,
     });
     const failing = async () => { throw new Error("encode-failed"); };
-    await expect(exportStill(failing, req(), settings(), null, cache)).rejects.toThrow(/encode-failed/);
+    await expect(exportStill(failing, req(), settings(), dir, cache)).rejects.toThrow(/encode-failed/);
 
-    const r = await exportStill(fakeHelper().send, req(), settings(), null, cache);
+    const r = await exportStill(fakeHelper().send, req(), settings(), dir, cache);
     // The PLAIN name, with no suffix: the failed attempt reserved nothing.
     expect(r.file).toBe(join(dir, "Safari 2026-09-08 at 14-23-05.png"));
   });
@@ -338,7 +395,7 @@ describe("Save As — an exact path main chose (STC-296 follow-up)", () => {
       options: { ...DEFAULT_STILL_SETTINGS },
       info: { mode: "window-only" },
       explicitFile: chosen,
-    }, settings(), null, cache);
+    }, settings(), dir, cache);
 
     expect(r.file).toBe(chosen);
     expect(new Uint8Array(await readFile(chosen))).toEqual(pixels());
@@ -352,7 +409,7 @@ describe("Save As — an exact path main chose (STC-296 follow-up)", () => {
       options: { ...DEFAULT_STILL_SETTINGS },
       info: { mode: "window-only" },
       explicitFile: join(dir, "nope.png"),
-    }, settings(), null, cache)).rejects.toThrow(/explicitFile needs target\.file/);
+    }, settings(), dir, cache)).rejects.toThrow(/explicitFile needs target\.file/);
   });
 
   test("saveAs alone changes nothing — the flag is main's cue, not a behaviour", async () => {
@@ -367,7 +424,7 @@ describe("Save As — an exact path main chose (STC-296 follow-up)", () => {
       info: { app: "Safari", mode: "window-only" },
       fallbackDir: dir,
       at: new Date(2026, 8, 8, 14, 23, 5),
-    }, settings(), null, cache);
+    }, settings(), dir, cache);
 
     expect(r.file).toBe(join(dir, "Safari 2026-09-08.png"));
   });
@@ -447,7 +504,7 @@ describe("what a caller may decide about an export (STC-293)", () => {
     expect((o as unknown as Record<string, unknown>).destination).toBeUndefined();
     // `destinationDir` trusts only the caller's OWN explicit `saveFolder`
     // argument — never anything reachable from `settings` or `requested`.
-    expect(destinationDir("/Users/me/Shots", { file: true, clipboard: false }, "/takes/shot-1", "/cache"))
+    expect(destinationDir("/Users/me/Shots", { file: true, clipboard: false }, "/cache", {}))
       .toBe("/Users/me/Shots");
   });
 

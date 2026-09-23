@@ -21,21 +21,21 @@ import { parseShot, shotForWrite } from "@transform/shot.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
-  DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, exportMediaName, planPublish,
+  DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
   publicSrc, type PublishPlan,
 } from "./share.js";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
-import { readFile, writeFile, stat, open, copyFile, rm, mkdir } from "node:fs/promises";
+import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
-import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
+import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, renameCapture } from "./takes.js";
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
-  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes,
+  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
 } from "./temp-takes.js";
-import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
+import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
@@ -55,6 +55,7 @@ import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
+import { ensureCaptureId, readBundleId } from "./capture-identity.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -452,7 +453,28 @@ app.whenReady().then(async () => {
   await mkdir(tempTakesRoot(process.env), { recursive: true }).catch((e) => {
     console.error("[temp-takes] could not create the temp root:", e);
   });
-  setInterval(() => { void purgeStaleTempTakes(process.env).catch(() => {}); }, TEMP_PURGE_INTERVAL_MS);
+  setInterval(() => {
+    void purgeStaleTempTakes(process.env).catch(() => {});
+    // Same timer, a different root (STC-413): `raw/` bundles are not temp
+    // takes and age from a different clock (a marker written on first
+    // sighting orphaned, not the bundle's own creation), but the cadence
+    // this app already sweeps on is exactly right for both. `temp-takes.ts`
+    // stays Electron-free, so `sweepOrphanedBundles` only DECIDES which
+    // bundles are due; trashing one is done HERE, through `shell.trashItem`
+    // — the same split `pendingTrash.due()` -> `shell.trashItem` uses a few
+    // lines down — so a mistaken sweep is one Finder restore away, never
+    // an `rm` nobody can undo.
+    const { saveFolder } = readSettings(app.getPath("userData"));
+    void sweepOrphanedBundles(process.env, saveFolder).then((due) => {
+      for (const dir of due) {
+        shell.trashItem(dir).catch((e) => {
+          console.error("[orphan-sweep] could not trash an orphaned bundle:", dir, e);
+        });
+      }
+    }).catch((e) => {
+      console.error("[orphan-sweep] failed:", e);
+    });
+  }, TEMP_PURGE_INTERVAL_MS);
   // Keeps every promise `panel:trash` makes (STC-392 Task 6): whatever
   // `pendingTrash.due()` hands back has had its whole undo window elapse, so
   // it is committed to the real Trash here rather than on any UI timer.
@@ -1318,10 +1340,109 @@ ipcMain.handle("still:duplicate", async (_e, dir: string) => {
 ipcMain.handle("recorder:takes", async () =>
   listTakes(process.env, readSettings(app.getPath("userData")).saveFolder));
 
-ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
-  await setTakeLabel(process.env, readSettings(app.getPath("userData")).saveFolder, dir, label);
-  return true;
+/**
+ * Rename a capture (STC-413) — the file IS the name now. `file` wins when
+ * present, which is the whole ticket: renaming here does the same thing as
+ * renaming in Finder. A bundle with no file yet (never exported) has no
+ * user-facing filename to rename, so it falls back to the old take.json
+ * label — the one case `setTakeLabel` is still for. Neither present refuses
+ * loudly rather than silently doing nothing: `renderer.ts`'s old handler
+ * used to `if (!dir) return;` before ever reaching here, which dropped a
+ * rename on the floor for any item Task 8's `looseFileItem` offered Rename
+ * to but had no `dir` for.
+ *
+ * `renameCapture`/`setTakeLabel` each validate their own path is inside the
+ * recordings folder — this handler does not repeat that check, the same way
+ * `take:delete` trusts each target's own validation rather than a second
+ * copy here. **Both really do now**: this comment was true of `renameCapture`
+ * and not of `setTakeLabel`, which used `dir.startsWith(root)` — the check
+ * `takes.ts`'s own header spends a paragraph explaining is "not that test"
+ * (`<root>-other` and `<root>/../../tmp/evil` both pass it). Fixed there
+ * rather than by adding a second check here (I4); a claim in a comment that
+ * the code does not keep is worse than no claim, because it is what the next
+ * reader trusts instead of looking.
+ */
+ipcMain.handle("take:rename", async (_e, file: string | undefined, dir: string | undefined, name: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof file === "string" && file.length > 0) {
+    return await renameCapture(process.env, saveFolder, file, name);
+  }
+  if (typeof dir === "string" && dir.length > 0) {
+    await setTakeLabel(process.env, saveFolder, dir, name);
+    return dir;
+  }
+  throw new Error("nothing to rename");
 });
+
+/**
+ * One thing `trashWithConfirmation` is asked to move, plus how it reads in a
+ * sentence when a PARTIAL failure has to name it (STC-413 review round 1).
+ * `panel:trash`'s single-target call has no partial-failure sentence to
+ * build, so its label is never actually read; it exists only so every call
+ * site has one shape.
+ */
+interface TrashTarget {
+  path: string;
+  label: string;
+  /** Whether `label` takes "were" rather than "was" in a partial-failure
+   *  sentence — "its source materials" is plural noun phrasing regardless of
+   *  how many targets this run happens to have, so this is a property of
+   *  the LABEL, not derivable from a target count. */
+  plural: boolean;
+}
+
+/**
+ * Attempt exactly one target, independent of any other (STC-413 review round
+ * 1, Important finding).
+ *
+ * A path that no longer exists is the outcome a delete WANTS, not a
+ * failure — `existsSync` first, rather than letting `shell.trashItem` answer
+ * for a gone path and hoping its rejection is recognisably an ENOENT (it
+ * is not: on macOS it is `The file "…" doesn't exist.`, an NSError message
+ * with no code this process can match portably). This is what lets a RETRY
+ * after a partial failure get past the half that already went instead of
+ * throwing on it before ever reaching the half still there — without it, a
+ * retry recreates exactly the bug this task closes, just with the roles of
+ * "gone" and "left behind" swapped.
+ */
+async function trashOne(path: string): Promise<{ ok: boolean; detail?: string }> {
+  if (!existsSync(path)) return { ok: true };
+  try {
+    await withTimeout(shell.trashItem(path), TRASH_COMMIT_AT_QUIT_MS, `moving to the Trash (${path})`);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, detail: String(e?.message ?? e) };
+  }
+}
+
+/**
+ * The honest form of a partial failure (the reviewer's own wording): name
+ * what moved AND what did not, rather than surfacing whichever path
+ * happened to carry an error and saying nothing about the other. Only
+ * reachable with more than one target and at least one success; a target
+ * list that failed OUTRIGHT (nothing succeeded) falls back to the plain
+ * error text, which is the single-target case's own existing behaviour.
+ */
+function describeTrashOutcome(
+  outcomes: Array<{ target: TrashTarget; ok: boolean; detail?: string }>,
+): string {
+  const failed = outcomes.filter((o) => !o.ok);
+  const succeeded = outcomes.filter((o) => o.ok);
+  if (succeeded.length === 0) {
+    return failed.map((f) => f.detail).filter(Boolean).join("; ")
+      || "Could not move this take to the Trash.";
+  }
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const namesOf = (list: typeof outcomes) => list.map((o) => o.target.label).join(" and ");
+  // More than one succeeded is plural regardless of either label's own
+  // grammar; exactly one defers to THAT target's own `plural` (STC-413
+  // review round 1 — "its source materials" is plural on its own, "the
+  // file" is not, and which one is on the SUCCEEDED side varies with which
+  // half actually failed).
+  const verb = succeeded.length === 1 ? (succeeded[0]!.target.plural ? "were" : "was") : "were";
+  return `${cap(namesOf(succeeded))} ${verb} removed; `
+       + `${namesOf(failed)} could not be.`;
+}
 
 /**
  * Ask first, then move to the Trash — never `rm`, so a mistaken click is one
@@ -1330,21 +1451,45 @@ ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
  * `panel-actions.ts`) can call the SAME dialog rather than a second copy
  * asking the same question with a second string — two modals for one
  * question is exactly the "one value, two copies" defect this codebase keeps
- * finding. Both callers already validate the directory against their own
- * root before reaching this; it does not re-check.
+ * finding. Both callers already validate every path against their own root
+ * before reaching this; it does not re-check.
+ *
+ * `targets` carries more than one entry for STC-413's two-object delete: a
+ * matched library item is a finished FILE at the top level and its source
+ * BUNDLE in `raw/`, and both have to go together or a delete silently
+ * orphans one half. ONE dialog covers both — the user pressed Delete once,
+ * so asking twice would be its own defect, not extra safety.
+ *
+ * Each target is attempted INDEPENDENTLY via `Promise.all` over
+ * `trashOne` (STC-413 review round 1) — a sequential loop that threw out of
+ * its own iteration on the first failure used to decide the SECOND path's
+ * fate by never reaching it, which is exactly the bug this task exists to
+ * close, recreated inside its own error path. `trashOne` never rejects (it
+ * catches its own failure and reports it), so `Promise.all` here cannot
+ * short-circuit on one target's trouble. Each is BOUNDED the same way a
+ * quit-time commit already is (`TRASH_COMMIT_AT_QUIT_MS`, STC-427's own
+ * constant — `shell.trashItem` has hung a CI runner for 30s before, and
+ * there is no reason a library delete's bound should be a different
+ * number). There is no rollback if one target fails after another already
+ * moved — `shell.trashItem` has no inverse, the same fact
+ * `pending-trash.ts`'s module doc already states — so a partial failure is
+ * reported honestly (`describeTrashOutcome`) rather than pretended away.
  */
 async function trashWithConfirmation(
-  dir: string,
+  targets: TrashTarget[],
 ): Promise<{ ok: boolean; detail?: string; cancelled?: boolean }> {
   if (!win) return { ok: false, detail: "no window" };
+  if (targets.length === 0) return { ok: false, detail: "nothing to delete" };
   try {
     const { response } = await dialog.showMessageBox(win, {
       type: "warning",
       buttons: ["Move to Trash", "Cancel"],
       defaultId: 1,
       cancelId: 1,
-      message: "Move this take to the Trash?",
-      detail: dir,
+      message: targets.length > 1
+        ? "Move this take's file and its source materials to the Trash?"
+        : "Move this take to the Trash?",
+      detail: targets.map((t) => t.path).join("\n"),
     });
     // Cancelling is a decision, not a fault (STC-392 review, I5) — the same
     // rule `runExport`'s Save As cancel already follows
@@ -1353,14 +1498,26 @@ async function trashWithConfirmation(
     // rather than "Could not delete: cancelled".
     if (response !== 0) return { ok: false, cancelled: true };
 
-    // A window with this take open no longer has anywhere valid to write.
-    for (const [sid, d] of openTakes) if (d === dir) openTakes.delete(sid);
-    await shell.trashItem(dir);
-    // No-op unless a panel is showing this take (the `panel:trash` "confirm"
-    // path — a re-opened library shot); `take:delete`'s own caller (the
-    // library grid) never has one open for the take it is deleting.
-    dismissThumbnail(dir);
-    return { ok: true };
+    // A window with this take open no longer has anywhere valid to write —
+    // cleared for every target regardless of what its own trash attempt
+    // does, since writing into a path mid-deletion is wrong either way.
+    for (const [sid, d] of openTakes) if (targets.some((t) => t.path === d)) openTakes.delete(sid);
+
+    const outcomes = await Promise.all(targets.map(async (target) => {
+      const r = await trashOne(target.path);
+      return { target, ...r };
+    }));
+
+    // No-op unless a panel is showing one of these (the `panel:trash`
+    // "confirm" path — a re-opened library shot); `take:delete`'s own caller
+    // (the library grid) never has one open for the take it is deleting.
+    // Only for what actually left — a target that failed may still be
+    // showing, and dismissing its panel would be one more thing to explain.
+    for (const o of outcomes) if (o.ok) dismissThumbnail(o.target.path);
+
+    const failed = outcomes.filter((o) => !o.ok);
+    if (failed.length === 0) return { ok: true };
+    return { ok: false, detail: describeTrashOutcome(outcomes) };
   } catch (e: any) {
     // STC-392 review, I2: `dialog.showMessageBox` and `shell.trashItem` were
     // previously UNCAUGHT here, so a rejection (a real Trash failure, say)
@@ -1368,7 +1525,9 @@ async function trashWithConfirmation(
     // — `setStatus` never ran and `discard()`'s restore-on-failure never
     // fired, leaving a panel that looked hidden-but-alive with no message and
     // no way back. Caught and reported the same way every other take-moving
-    // handler in this file already is (`panel:save`/`panel:edit`).
+    // handler in this file already is (`panel:save`/`panel:edit`). `trashOne`
+    // never throws, so anything landing here is `dialog.showMessageBox`
+    // itself failing, not a per-target trash failure.
     return { ok: false, detail: String(e?.message ?? e) };
   }
 }
@@ -1382,13 +1541,31 @@ async function trashWithConfirmation(
  * doing nothing on a real failure. `renderer.ts`'s `act()` is what now tells
  * a genuine failure (alert) apart from a Cancel (say nothing), the same
  * distinction `trashWithConfirmation`'s own doc already draws.
+ *
+ * STC-413: a capture is now up to two objects — the finished FILE at the top
+ * level and its source BUNDLE in `raw/` — and `LibraryItem` already knows
+ * which of the two this item has (Task 8's scan resolved that by embedded
+ * id). So this does NOT re-resolve a bundle from `file` or vice versa; it
+ * trusts whatever `renderer.ts` hands it (the item's own `file`/`dir`) and
+ * only validates each path it is actually given. Either may be absent (a
+ * foreign file has no bundle; an unexported bundle has no file) but not
+ * both — nothing to delete refuses outright rather than silently doing
+ * nothing.
  */
-ipcMain.handle("take:delete", async (_e, dir: string) => {
+ipcMain.handle("take:delete", async (_e, file?: string, dir?: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
-  if (!insideTakesRoot(process.env, saveFolder, dir)) {
-    throw new Error("refusing to delete a path outside the recordings folder");
+  const targets: TrashTarget[] = [];
+  if (typeof file === "string" && file.length > 0) targets.push({ path: file, label: "the file", plural: false });
+  if (typeof dir === "string" && dir.length > 0) {
+    targets.push({ path: dir, label: "its source materials", plural: true });
   }
-  const r = await trashWithConfirmation(dir);
+  if (targets.length === 0) throw new Error("nothing to delete");
+  for (const t of targets) {
+    if (!insideTakesRoot(process.env, saveFolder, t.path)) {
+      throw new Error("refusing to delete a path outside the recordings folder");
+    }
+  }
+  const r = await trashWithConfirmation(targets);
   return { deleted: r.ok, cancelled: r.cancelled, detail: r.detail };
 });
 
@@ -1442,6 +1619,21 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
   return true;
 });
 
+/**
+ * STC-413: a media export (.mp4/.png) is a DELIVERABLE and lands at the top
+ * level of the folder now, beside whatever the user has already renamed;
+ * `exportManifestName`'s .json stays provenance about the source and keeps
+ * writing into the bundle — the top level is media files only.
+ *
+ * The media destination is resolved by IDENTITY, never by name. Naively
+ * repointing the old `join(openTake, name)` at the folder root would still be
+ * wrong: export, rename the result to `login-bug.mp4` in Finder, re-export,
+ * and a name-derived destination writes a FRESH `<stamp>.mp4` beside it —
+ * two top-level files carrying the SAME embedded id, two tiles for one
+ * capture, and an orphan sweep that can never tell which is current. So a
+ * top-level file already carrying this bundle's id (if one exists) IS the
+ * destination; only a bundle with no finished file yet gets the derived name.
+ */
 ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
@@ -1456,9 +1648,45 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   if (TAKE_FILES.has(name) || name === "take.json") {
     throw new Error(`refusing to overwrite the take's own "${name}"`);
   }
-  const dest = join(openTake, name);
+
+  if (name.endsWith(".json")) {
+    const dest = join(openTake, name);
+    await writeFile(dest, Buffer.from(bytes));
+    return dest;
+  }
+
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  const root = takesRoot(process.env, saveFolder);
+  const id = await ensureCaptureId(openTake);
+  const files = await scanFinishedFilesAt(process.env, saveFolder);
+  const matched = files.find((f) => f.id === id)?.file;
+  const dest = matched ?? join(root, name);
+  // Widened overwrite guard (STC-413): at the top level, the hazard the
+  // leaf-name check above guards against is different and worse than inside
+  // a bundle. A file already sitting at the DERIVED name whose id is absent
+  // or belongs to some OTHER bundle is someone else's capture, or a file the
+  // user placed there by hand — silently replacing it would be data loss. A
+  // match found above is provably this bundle's own prior export (its id was
+  // read, not assumed), so it needs no second check.
+  if (!matched && files.some((f) => f.file === dest)) {
+    throw new Error(`refusing to overwrite "${name}" — it belongs to a different capture`);
+  }
   await writeFile(dest, Buffer.from(bytes));
   return dest;
+});
+
+/**
+ * STC-413: the editor's export path (`app/src/editor.ts:1237`) is a
+ * renderer, and `ensureCaptureId` reaches `node:fs` — a browser-typechecked
+ * module cannot import it directly, so the id crosses the bridge instead.
+ * The take directory comes from the SAME `openTakes` map every other
+ * `preview:*` handler reads, so this only ever answers for a window that has
+ * actually opened a take.
+ */
+ipcMain.handle("take:captureId", async (e) => {
+  const openTake = getOpenTake(e);
+  if (!openTake) throw new Error("no take is open");
+  return await ensureCaptureId(openTake);
 });
 
 /**
@@ -1529,6 +1757,22 @@ ipcMain.handle("still:export", async (_e, req: {
   const fallbackDir = dir && insideCaptureRoot(process.env, settingsNow.saveFolder, dir)
     ? dir : undefined;
 
+  // STC-413: the bundle's stable identity, embedded so the finished file can
+  // point back to its source bundle after being renamed or moved. Only when
+  // there IS a bundle — `fallbackDir` is its (already-promoted, above) path.
+  // A caller with no take of its own gets no id: there is nothing in `raw/`
+  // for it to identify. Best-effort: a bundle that cannot be tagged (a
+  // deleted destination folder, a disk error) should still let the export
+  // through — identity is a nicety on top of the file, not a reason to lose
+  // the capture the user is trying to save.
+  let captureId: string | undefined;
+  if (fallbackDir) {
+    try { captureId = await ensureCaptureId(fallbackDir); }
+    catch (e) {
+      console.error("[still] could not mint a capture id for", fallbackDir, e);
+    }
+  }
+
   const still: CompositedStill = {
     bytes: req.bytes,
     width: req.width,
@@ -1559,7 +1803,8 @@ ipcMain.handle("still:export", async (_e, req: {
     const r = await exportStill((params) => sup!.exportStill(params),
                                 { still, target: req.target, options, info: req.info,
                                   ...(explicitFile ? { explicitFile } : {}),
-                                  ...(fallbackDir ? { fallbackDir } : {}) },
+                                  ...(fallbackDir ? { fallbackDir } : {}),
+                                  ...(captureId ? { captureId } : {}) },
                                 // `stored`, never the merged options: the
                                 // metadata strip is read from here and is
                                 // main's alone. `settingsNow.saveFolder`
@@ -1834,7 +2079,9 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
   // renderer) but must still answer something rather than throw.
   const origin = takeFor(dir)?.origin
     ?? (insideTempTakesRoot(process.env, dir) ? "fresh" : "library");
-  if (trashStyle(origin) === "confirm") return trashWithConfirmation(dir);
+  if (trashStyle(origin) === "confirm") {
+    return trashWithConfirmation([{ path: dir, label: "this take", plural: false }]);
+  }
 
   if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
   pendingTrash.promise(dir);
@@ -2057,12 +2304,28 @@ ipcMain.handle("share:publish", async (e): Promise<{
 }> => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
-  const { share } = readSettings(app.getPath("userData"));
+  const { share, saveFolder } = readSettings(app.getPath("userData"));
   const takeName = basename(openTake);
+  // STC-413: resolved by identity, never derived from the take name — a
+  // renamed export must still be found. `planPublish` no longer re-derives
+  // a path itself; it takes whatever this scan found (or null).
+  //
+  // `readBundleId`, NOT `ensureCaptureId` (M5). Publishing is a read of what
+  // has already been exported, and this was the one path that could MINT and
+  // WRITE a `capture.json` into a bundle the user had only asked to publish
+  // — and then, in the very case where the write happened (no document, so
+  // nothing exported), go on to report "no export yet" anyway. A side effect
+  // on a path that then refuses is the worst of both.
+  const id = await readBundleId(openTake);
+  const files = id ? await scanFinishedFilesAt(process.env, saveFolder) : [];
+  // A take made before STC-413 keeps its export INSIDE its own directory,
+  // where the top-level scan cannot see it (I2). Without this fallback every
+  // pre-branch take reports as never exported.
+  const exportFile = (id ? files.find((f) => f.id === id)?.file : undefined)
+    ?? await legacyExportIn(openTake, takeName)
+    ?? null;
   const plan = planPublish({
-    takeName,
-    takeDir: openTake,
-    exportExists: existsSync(join(openTake, exportMediaName(takeName))),
+    exportFile,
     destination: share.destination,
     slug: share.slug,
   });
@@ -2087,6 +2350,27 @@ ipcMain.handle("share:publish", async (e): Promise<{
     }),
   };
 });
+
+/**
+ * A pre-STC-413 export still sitting inside its own take directory (I2).
+ *
+ * Shares `library.ts`'s `findBuriedExport` rather than re-deriving the name
+ * here — the scan and this handler must agree about which file a legacy
+ * take's tile points at, and two spellings of one rule is this codebase's
+ * most-repeated defect.
+ *
+ * Not guarded on the bundle being legacy: a `raw/` bundle written by this
+ * branch never contains an `export-*.mp4` at all, so the lookup simply finds
+ * nothing there, and a guard would be a second place to get the raw/legacy
+ * distinction right.
+ */
+async function legacyExportIn(dir: string, name: string): Promise<string | undefined> {
+  try {
+    return findBuriedExport(dir, name, await readdir(dir));
+  } catch {
+    return undefined;
+  }
+}
 
 /** What the export actually encoded, from its own manifest, or nothing. */
 async function exportedSize(dir: string, takeName: string):

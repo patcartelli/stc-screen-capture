@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
@@ -8,6 +8,7 @@ import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow, windowUrls } from "./_windows.js";
 import { CLIPBOARD_SUBDIR } from "../src/still-io.js";
 import { readRequests, exportRequests, keptFileRequests } from "./_still-log.js";
+import { RAW_SUBDIR } from "../src/takes.js";
 
 /**
  * The post-capture floating thumbnail, end to end (STC-296, reworked by
@@ -180,9 +181,18 @@ async function dismissAndTolerateClose(panel: Page, act: () => Promise<void>): P
   await closed;
 }
 
-/** Live take directories under `recordings`, excluding the fixture `makeTakeFolder` seeds. */
+/**
+ * Bundles actually promoted into `recordings` — `raw/` (STC-413), not the top
+ * level. A top-level count filtered for the `makeTakeFolder` seed would still
+ * read `1` after any promotion at all, since every promoted bundle nests
+ * under the ONE `raw/` entry there regardless of how many there are —
+ * exactly the vacuous-counting-assertion shape CLAUDE.md's STC-391 entry
+ * warns about. `raw/` need not exist yet (nothing promoted), so this
+ * tolerates that rather than throwing ENOENT.
+ */
 function ownTakes(recordings: string): string[] {
-  return readdirSync(recordings).filter((n) => !n.startsWith(".") && n !== "2026-08-24_10-00-00");
+  const raw = join(recordings, RAW_SUBDIR);
+  return existsSync(raw) ? readdirSync(raw) : [];
 }
 
 describe("the post-capture floating thumbnail", () => {

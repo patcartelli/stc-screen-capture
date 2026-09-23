@@ -7,6 +7,7 @@ import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { windowCount } from "./_windows.js";
+import { RAW_SUBDIR } from "../src/takes.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -110,9 +111,17 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     return windowCount(app!, "thumbnail.html");
   }
 
-  /** Take directory names actually kept in the library, excluding the fixture `makeTakeFolder` seeds. */
-  const libraryTakes = (recordings: string): string[] =>
-    readdirSync(recordings).filter((n) => n !== "2026-08-24_10-00-00");
+  /**
+   * Bundles actually promoted into the library — `raw/` (STC-413), not the
+   * top level. A top-level count would still read a lone `raw/` entry
+   * regardless of how many bundles promoted into it, which cannot
+   * discriminate "1 promoted" from "2 promoted"; `raw/` may not exist yet
+   * (nothing promoted), so this tolerates that rather than throwing ENOENT.
+   */
+  const libraryTakes = (recordings: string): string[] => {
+    const raw = join(recordings, RAW_SUBDIR);
+    return existsSync(raw) ? readdirSync(raw) : [];
+  };
 
   const tempTakes = (temp: string): string[] => (existsSync(temp) ? readdirSync(temp) : []);
 

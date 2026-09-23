@@ -8,6 +8,7 @@ import { exportWindow, availableFrames } from "./trim.js";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
 import { decodeAllAudio } from "./decode-audio.js";
+import { tagMp4 } from "./media-tag.js";
 
 /**
  * The export sink. ONE implementation, called by both the CLI gates and the
@@ -28,6 +29,15 @@ export interface ExportOptions {
   encode?: boolean;
   signal?: AbortSignal;
   onProgress?: (done: number, total: number) => void;
+  /**
+   * The bundle's stable identity (STC-413), embedded in the trailing bytes so
+   * a finished file can be traced back to its source after being renamed or
+   * moved. This module stays pure of node: the CALLER resolves the id (which
+   * needs `node:fs`, via `ensureCaptureId`) and hands it in as a plain
+   * string. Omitted entirely for a caller with no bundle to identify — the
+   * gate/harness drivers, which export straight from a fixture.
+   */
+  captureId?: string;
 }
 
 export interface ExportResult {
@@ -337,9 +347,28 @@ export async function exportSession(
       // the export at 100% with the file unwritten — the worst moment to hang.
       await withTimeout(encoder.flush(), 120_000, "encoder flush at end of export");
       muxer.finalize();
-      const buf = (muxer.target as ArrayBufferTarget).buffer;
-      encodedBytes = buf.byteLength;
-      encoded = new Uint8Array(buf);
+      // STC-413: identity goes in the bytes, appended AFTER finalize so no
+      // chunk offset moves — stco/co64 point into mdat, which does not shift.
+      const raw = new Uint8Array((muxer.target as ArrayBufferTarget).buffer);
+      const tagged = opts.captureId ? tagMp4(raw, opts.captureId) : raw;
+      // `slice` COPIES, and both producers above already hand back a view
+      // that covers its whole backing buffer exactly — `raw` wraps the
+      // muxer's own target, and `tagMp4` returns a freshly allocated,
+      // exact-size array. So the old unconditional slice made a second whole
+      // copy of an encoded video for nothing (M4): hundreds of megabytes at
+      // 4K, allocated at the moment the export is otherwise finished.
+      //
+      // The guard is not belt and braces, it is the invariant `.buffer`
+      // rests on. `editor.ts` ships this onward as `encoded.buffer`, which
+      // ignores `byteOffset`/`byteLength` — so a PARTIAL view must still be
+      // copied out, or the file written would carry whatever sits either
+      // side of it. The fast path is taken whenever the view is whole; the
+      // copy stays for the day some producer returns one that is not.
+      encoded = tagged.byteOffset === 0 && tagged.byteLength === tagged.buffer.byteLength
+        ? tagged
+        : new Uint8Array(tagged.buffer.slice(
+            tagged.byteOffset, tagged.byteOffset + tagged.byteLength));
+      encodedBytes = encoded.byteLength;
     }
     if (encoder && encoder.state !== "closed") encoder.close();
     if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();

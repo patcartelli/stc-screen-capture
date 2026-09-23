@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { windowCount } from "./_windows.js";
-import { stamp } from "../src/takes.js";
+import { stamp, RAW_SUBDIR } from "../src/takes.js";
 
 /**
  * A temp-take folder name that is recent, not a hardcoded calendar date.
@@ -140,7 +140,10 @@ describe("crash recovery (STC-393)", () => {
     makeTakeFolder(name, { into: s.tempTakes });
     const { win, calls } = await launch(s, 0);   // 0 = "Review"
     await expect.poll(() => calls(), { timeout: 15_000 }).toBe(1);
-    await expect.poll(() => readdirSync(s.recordings), { timeout: 15_000 })
+    // Promoted into `raw/` now (STC-413), not directly under the recordings
+    // root — a top-level listing would show `raw` itself, not the take's own
+    // stamped name.
+    await expect.poll(() => readdirSync(join(s.recordings, RAW_SUBDIR)), { timeout: 15_000 })
       .toEqual([name]);
     expect(existsSync(join(s.tempTakes, name))).toBe(false);
     // The main window came to the front rather than being left showing

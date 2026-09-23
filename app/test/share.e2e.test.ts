@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { exportManifestName, exportMediaName } from "../src/share.js";
 import { openEditorFromLibrary, inkiness } from "./_editor-fixture.js";
+import { mintCaptureId } from "@transform/capture-id.js";
+import { CAPTURE_DOC_FILE, captureDocForWrite } from "@transform/capture-doc.js";
+import { tagMp4 } from "@transform/media-tag.js";
 
 /**
  * STC-242 — share, end to end through the real handlers.
@@ -27,7 +30,26 @@ afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
 const TAKE = "2026-08-24_10-00-00";
 
-interface Launched { win: Page; editorWin: Page; recordings: string; takeDir: string; site: string }
+interface Launched {
+  win: Page; editorWin: Page; recordings: string; takeDir: string; site: string;
+  /** The bytes seeded as this take's export, when `withExport` — for asserting the copy is exact. */
+  exportedBytes?: Buffer;
+}
+
+/**
+ * A structurally valid, tiny MP4 `tagMp4` can actually tag (STC-413) — a
+ * plain string of bytes is not, and `tagMp4` REFUSES rather than corrupts
+ * anything it cannot parse, which would silently leave the seeded file
+ * carrying no id at all. `export-write-guard.e2e.test.ts` uses the identical
+ * shape.
+ */
+const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+const chars = (s: string) => [...s].map((c) => c.charCodeAt(0));
+const box = (type: string, data: number[]) => [...be32(8 + data.length), ...chars(type), ...data];
+function mp4Bytes(): Uint8Array {
+  return new Uint8Array([...box("ftyp", chars("isom")), ...box("mdat", [1, 2, 3, 4]),
+    ...box("moov", [])]);
+}
 
 /**
  * The site folder is seeded on DISK rather than chosen through the picker.
@@ -44,10 +66,18 @@ async function launch(opts: { withExport?: boolean; slug?: string } = {}): Promi
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
     share: { destination: site, slug: opts.slug ?? "network" },
   }));
+  let exportedBytes: Buffer | undefined;
   if (opts.withExport !== false) {
-    // Stand in for a real export: the publish path cares that the file is
-    // there and copies its bytes, not what is inside it.
-    writeFileSync(join(takeDir, exportMediaName(TAKE)), Buffer.from("fake-mp4-bytes"));
+    // Stand in for a real export. STC-413: `share:publish` resolves its
+    // source by the BUNDLE's own identity, so the fake export has to carry
+    // the SAME id the bundle's `capture.json` names — a stray id would leave
+    // the two unmatched and publish would (correctly) report no export.
+    // A real export lands at the TOP LEVEL of the folder now, a sibling of
+    // the bundle rather than something inside it.
+    const id = mintCaptureId();
+    writeFileSync(join(takeDir, CAPTURE_DOC_FILE), JSON.stringify(captureDocForWrite(id)));
+    exportedBytes = Buffer.from(tagMp4(mp4Bytes(), id));
+    writeFileSync(join(recordings, exportMediaName(TAKE)), exportedBytes);
     writeFileSync(join(takeDir, exportManifestName(TAKE)), JSON.stringify({
       version: 1, output: { fps: 60, width: 1920, height: 1080 },
     }));
@@ -63,14 +93,14 @@ async function launch(opts: { withExport?: boolean; slug?: string } = {}): Promi
   // what makes there be one.
   const editorWin = await openEditorFromLibrary(app, mainWin);
   await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
-  return { win: mainWin, editorWin, recordings, takeDir, site };
+  return { win: mainWin, editorWin, recordings, takeDir, site, exportedBytes };
 }
 
 const publish = (win: Page) => win.evaluate(() => (window as any).editor.publish());
 
 describe("share to the site folder", () => {
   test("copies the export under the SLUG's name, not the take's", async () => {
-    const { editorWin, site } = await launch();
+    const { editorWin, site, exportedBytes } = await launch();
     const r = await publish(editorWin);
     expect(r.ok, JSON.stringify(r)).toBe(true);
     expect(r.name).toBe("network.mp4");
@@ -78,7 +108,7 @@ describe("share to the site folder", () => {
     // can embed a fixed path across re-recordings.
     expect(r.name).not.toContain(TAKE);
     expect(existsSync(join(site, "network.mp4"))).toBe(true);
-    expect(readFileSync(join(site, "network.mp4"), "utf8")).toBe("fake-mp4-bytes");
+    expect(readFileSync(join(site, "network.mp4"))).toEqual(exportedBytes);
     // First publish into an empty folder replaced nothing, and says so.
     expect(r.replaced).toBe(false);
   }, 60_000);
@@ -91,13 +121,13 @@ describe("share to the site folder", () => {
    * should learn from the app rather than from `git status`.
    */
   test("re-publishing replaces, and says that it replaced", async () => {
-    const { editorWin, site } = await launch();
+    const { editorWin, site, exportedBytes } = await launch();
     expect((await publish(editorWin)).replaced).toBe(false);
     writeFileSync(join(site, "network.mp4"), Buffer.from("older-video"));
     const second = await publish(editorWin);
     expect(second.ok).toBe(true);
     expect(second.replaced).toBe(true);
-    expect(readFileSync(join(site, "network.mp4"), "utf8")).toBe("fake-mp4-bytes");
+    expect(readFileSync(join(site, "network.mp4"))).toEqual(exportedBytes);
   }, 60_000);
 
   test("refuses, with the reason, when the take has not been exported", async () => {

@@ -9,6 +9,7 @@ import { REDACTION_FILL_ON_LIGHT, REDACTION_FILL_ON_DARK } from "../../transform
 import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow } from "./_windows.js";
+import { RAW_SUBDIR } from "../src/takes.js";
 
 /**
  * Redaction, end to end (STC-297, moved into its own still editor by
@@ -293,8 +294,11 @@ describe("redaction", () => {
     expect(dir.startsWith(recordings)).toBe(true);
     expect(readdirSync(temp).length).toBe(0);
     expect(await hasWindow(app!, "thumbnail.html")).toBe(false);
-    const ownRecordings = readdirSync(recordings).filter((n) => n !== "2026-08-24_10-00-00");
-    expect(ownRecordings).toHaveLength(1);
+    // The promoted bundle lands in `raw/` now (STC-413) — filtering the seed
+    // fixture out of the TOP level would still read `1` regardless of how
+    // many bundles actually promoted, since they all nest under one `raw/`
+    // entry there. `raw/`'s own contents are what actually discriminates.
+    expect(readdirSync(join(recordings, RAW_SUBDIR))).toHaveLength(1);
 
     await dragBox(editor, [0.25, 0.3], [0.75, 0.65]);
     await expect.poll(() => storedRegions(dir).length, { timeout: 15_000 }).toBe(1);

@@ -10,6 +10,7 @@ import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow } from "./_windows.js";
 import { keptFileRequests } from "./_still-log.js";
+import { RAW_SUBDIR } from "../src/takes.js";
 
 /**
  * The contract STC-392 reverses, end to end.
@@ -280,8 +281,11 @@ describe("the panel waits (STC-392)", () => {
                        { timeout: POLL_MS }).toBe(0);
 
     expect(readdirSync(temp)).toEqual([]);
-    expect(readdirSync(recordings).filter((n) => !n.startsWith(".") && n !== "2026-08-24_10-00-00"))
-      .toHaveLength(1);
+    // A promoted bundle lands in `raw/` now (STC-413) — checking the top
+    // level here (filtered for the seed fixture) would still read `1` no
+    // matter how many bundles actually promoted, since they all nest under
+    // one `raw/` entry. `raw/`'s own contents are what actually discriminates.
+    expect(readdirSync(join(recordings, RAW_SUBDIR))).toHaveLength(1);
   }, 40_000);
 
   /**

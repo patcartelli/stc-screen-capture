@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { writeFile, readdir, mkdir, copyFile, stat } from "node:fs/promises";
-import { join, resolve, sep, basename } from "node:path";
+import { writeFile, readdir, mkdir, copyFile, stat, rename } from "node:fs/promises";
+import { join, resolve, sep, basename, extname } from "node:path";
 
 /**
  * Is `dir` a real directory INSIDE the recordings root?
@@ -40,6 +40,21 @@ export function takesRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): st
 }
 
 /**
+ * Source bundles live below the user's folder, not in it (STC-413).
+ *
+ * The folder itself is now a view of FINISHED captures — plain files someone
+ * can open in Finder. A bundle is machine material: raw, cursorless video and
+ * the sidecars that make an export possible. Visible rather than dotted,
+ * deliberately, because "nothing is locked inside the app" means someone has
+ * to be able to find it.
+ */
+export const RAW_SUBDIR = "raw";
+
+export function rawRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): string {
+  return join(takesRoot(env, saveFolder), RAW_SUBDIR);
+}
+
+/**
  * Exported so `temp-takes.ts` names its own directories the same way, rather
  * than re-deriving the format — the temp root and the library root are two
  * different roots but one naming rule.
@@ -69,7 +84,7 @@ export function uniqueTakeName(base: string, existing: string[]): string {
  */
 export function newTakeDir(env: NodeJS.ProcessEnv, saveFolder: string | null, at: Date = new Date(),
                            existing: string[] = []): string {
-  const root = takesRoot(env, saveFolder);
+  const root = rawRoot(env, saveFolder);
   return join(root, uniqueTakeName(stamp(at), existing));
 }
 
@@ -82,17 +97,92 @@ export const MAX_LABEL_LENGTH = 120;
  * sort key. Renaming it would scramble chronological order, break any open
  * preview, and invalidate paths already handed out for exports — so the label
  * lives beside the recording instead.
+ *
+ * STC-413 narrows what this is FOR rather than deleting it: a finished
+ * capture (one with a top-level file) is renamed for real now, through
+ * `renameCapture` below — the file IS the name. This stays the fallback for
+ * the one shape that still needs a sidecar label: a bundle with no finished
+ * file yet (never exported) has no user-facing filename to rename at all.
+ * `library.test.ts` calls this directly and pins that shape, which is why it
+ * is kept rather than "retired outright" the way the task's own shorthand
+ * first suggested.
  */
 export async function setTakeLabel(env: NodeJS.ProcessEnv, saveFolder: string | null,
                                    dir: string, label: string): Promise<void> {
-  const root = takesRoot(env, saveFolder);
-  if (!dir.startsWith(root)) throw new Error("refusing to label a directory outside the recordings folder");
+  // `insideTakesRoot`, NOT `dir.startsWith(root)` (I4). This file's own
+  // header documents at length why the prefix test is "not that test":
+  // `<root>-other` and `<root>/../../tmp/evil` both pass it. `main.ts`'s
+  // `take:rename` doc already claimed both of its paths validated
+  // containment, and only the rename half actually did.
+  if (!insideTakesRoot(env, saveFolder, dir)) {
+    throw new Error("refusing to label a directory outside the recordings folder");
+  }
   const trimmed = label.trim();
   if (!trimmed) throw new Error("a label cannot be empty");
   if (trimmed.length > MAX_LABEL_LENGTH) {
     throw new Error(`label is too long (max ${MAX_LABEL_LENGTH} characters)`);
   }
   await writeFile(join(dir, "take.json"), JSON.stringify({ version: 1, label: trimmed }, null, 2));
+}
+
+/**
+ * Rename a finished capture's FILE (STC-413) — "the filename IS the
+ * capture's name" is the ticket's own headline, so this is a real filesystem
+ * rename, never a sidecar write. Complements `setTakeLabel` above, which is
+ * what a caller falls back to when there is no file to rename at all.
+ *
+ * `to` is a bare NAME someone typed, never a path: no separator (`/` or
+ * `\`) — one would let the destination land anywhere, including inside
+ * `raw/` — and no `..` (traversal). The ORIGINAL extension is always kept,
+ * taken from `from` rather than from anything typed: a rename to
+ * "login-bug" must not produce an extensionless file the scan's own
+ * `MEDIA_EXTENSIONS` check then silently ignores forever. A collision
+ * resolves through the SAME `uniqueTakeName` a fresh take's own directory
+ * uses — one naming rule, not two — checked only against files sharing the
+ * same extension, since a "vacation.png" already at top level does not
+ * collide with a video someone is naming "vacation".
+ */
+export async function renameCapture(env: NodeJS.ProcessEnv, saveFolder: string | null,
+                                    from: string, to: string): Promise<string> {
+  if (!insideTakesRoot(env, saveFolder, from)) {
+    throw new Error("refusing to rename a path outside the recordings folder");
+  }
+  const trimmed = to.trim();
+  if (!trimmed) throw new Error("a name cannot be empty");
+  if (trimmed.length > MAX_LABEL_LENGTH) {
+    throw new Error(`name is too long (max ${MAX_LABEL_LENGTH} characters)`);
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error("a name cannot contain a path separator");
+  }
+  if (trimmed.includes("..")) {
+    throw new Error('a name cannot contain ".."');
+  }
+  // A LEADING DOT hides the file from the scan (rule 2 skips dotfiles), and
+  // that is not merely cosmetic: with the file invisible, its bundle reads
+  // as orphaned and the sweep trashes it. Observed, not reasoned about. So
+  // ".secret.mp4" is refused here rather than being allowed to make a
+  // capture disappear and take its source materials with it.
+  if (trimmed.startsWith(".")) {
+    throw new Error("a name cannot start with a dot — it would hide the capture");
+  }
+
+  const root = takesRoot(env, saveFolder);
+  const ext = extname(from);
+  const currentStem = basename(from, ext);
+  if (trimmed === currentStem) return from;   // no-op: typed what is already there
+
+  const existing = existsSync(root) ? await readdir(root) : [];
+  // Only entries sharing THIS extension can actually collide on disk — an
+  // image named "vacation" does not block a video of the same name.
+  const sameExtStems = existing
+    .filter((n) => extname(n).toLowerCase() === ext.toLowerCase())
+    .map((n) => basename(n, extname(n)));
+  const stem = uniqueTakeName(trimmed, sameExtStems);
+  const dest = join(root, `${stem}${ext}`);
+
+  await rename(from, dest);
+  return dest;
 }
 
 /**
@@ -126,10 +216,18 @@ const duplicating = new Set<string>();
  * `thumbnailFile` is a parameter rather than an import so this module stays
  * what it already is, a plain node module with no dependency on the library's
  * item contract; the caller already knows the name.
+ *
+ * The collision check reads `rawRoot`, not `takesRoot` (STC-413) — that is
+ * where `newTakeDir` actually creates the destination now, and a listing one
+ * level too high would never see a name it had itself just claimed. Missing
+ * this turned the STC-345 regression test below back into the bug it exists
+ * to catch: two `duplicating`-protected concurrent calls release their claim
+ * on return, and a THIRD call landing in the same second with no filesystem
+ * record of the first two's names reused one of them.
  */
 export async function duplicateTake(env: NodeJS.ProcessEnv, saveFolder: string | null, dir: string,
                                     thumbnailFile: string): Promise<string> {
-  const root = takesRoot(env, saveFolder);
+  const root = rawRoot(env, saveFolder);
   const existing = existsSync(root) ? await readdir(root) : [];
   const dest = newTakeDir(env, saveFolder, new Date(), [...existing, ...duplicating]);
   const name = basename(dest);

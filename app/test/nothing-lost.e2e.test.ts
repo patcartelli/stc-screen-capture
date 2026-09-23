@@ -112,10 +112,18 @@ async function launch(): Promise<Launched> {
   return { win, recordings, tempTakes, destDir };
 }
 
-/** Every take directory that holds a shot, with the document it carries. */
-function shotsIn(recordings: string): { name: string; dir: string }[] {
-  return readdirSync(recordings)
-    .map((name) => ({ name, dir: join(recordings, name) }))
+/**
+ * Every take directory that holds a shot, with the document it carries.
+ *
+ * Tolerates a missing `root` (STC-413's `raw/` need not exist at all until
+ * something is promoted into it) rather than throwing ENOENT — a promotion
+ * check that can crash on "nothing promoted yet" is not a check that
+ * discriminates anything.
+ */
+function shotsIn(root: string): { name: string; dir: string }[] {
+  if (!existsSync(root)) return [];
+  return readdirSync(root)
+    .map((name) => ({ name, dir: join(root, name) }))
     .filter((t) => existsSync(join(t.dir, "shot.json")));
 }
 
@@ -187,7 +195,7 @@ describe("gate 4: nothing is lost in a burst of captures", () => {
    * side and so is silent about here on purpose.
    */
   test(`ignoring all ${N} panels still exports none of them`, async () => {
-    const { win, recordings, tempTakes, destDir } = await launch();
+    const { win, tempTakes, destDir } = await launch();
     for (let i = 0; i < N; i++) {
       await win.evaluate(() => (window as any).recorder.captureStill("display"));
     }
@@ -200,8 +208,19 @@ describe("gate 4: nothing is lost in a burst of captures", () => {
     // Nothing exported, nothing promoted to the library, and nothing lost
     // either: every shot is still exactly where `capture-still` wrote it —
     // temp storage, never decided.
+    //
+    // `destDir` — the seeded `saveFolder` — is the app's real `takesRoot`,
+    // wins over `STC_RECORDINGS_DIR` (`takesRoot`'s own precedence), and is
+    // checked at its TOP LEVEL rather than at `destDir/raw`: a promoted
+    // bundle would create `raw/` itself, which a top-level `readdirSync`
+    // already sees, so this one check catches both an exported file AND a
+    // promoted bundle appearing anywhere under the real root. A prior version
+    // of this test also checked the `STC_RECORDINGS_DIR`-named directory
+    // directly, which `saveFolder` shadows here (STC-412) — that check was
+    // vacuous even before STC-413 (nothing is ever written there), and adding
+    // `raw/` to its path would not have fixed that, so it is removed rather
+    // than repointed at the wrong root.
     expect(readdirSync(destDir).length).toBe(0);
-    expect(shotsIn(recordings).length).toBe(0);
     expect(shotsIn(tempTakes).length).toBe(N);
   }, 180_000);
 });

@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { homedir, tmpdir } from "node:os";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { takesRoot, newTakeDir, insideTakesRoot, duplicateTake } from "../src/takes.js";
+import { takesRoot, newTakeDir, insideTakesRoot, duplicateTake, rawRoot, RAW_SUBDIR } from "../src/takes.js";
 
 describe("where recordings go", () => {
   test("defaults to ~/Desktop/stc when nothing is chosen and no env override exists", () => {
@@ -27,9 +27,10 @@ describe("where recordings go", () => {
     expect(takesRoot({ STC_RECORDINGS_DIR: "/somewhere/else" }, null)).toBe("/somewhere/else");
   });
 
-  test("take directories are timestamped, sortable and collision-free", () => {
+  test("take directories are timestamped, sortable and collision-free, and land in raw/ (STC-413)", () => {
     const at = new Date("2026-08-24T15:11:32");
-    expect(newTakeDir({}, null, at)).toBe(join(homedir(), "Desktop", "stc", "2026-08-24_15-11-32"));
+    expect(newTakeDir({}, null, at)).toBe(
+      join(homedir(), "Desktop", "stc", "raw", "2026-08-24_15-11-32"));
     // a second take in the same second must not reuse the directory
     const a = newTakeDir({ STC_RECORDINGS_DIR: "/r" }, null, at);
     const b = newTakeDir({ STC_RECORDINGS_DIR: "/r" }, null, at, ["2026-08-24_15-11-32"]);
@@ -175,5 +176,34 @@ describe("duplicateTake (STC-345)", () => {
     ]);
     const c = await duplicateTake(env, null, src, "thumb.png");
     expect(new Set([a, b, c]).size).toBe(3);
+  });
+});
+
+/**
+ * STC-413: source bundles move to `raw/`. `takesRoot` still names the user's
+ * folder — it is the finished-capture root now — and `rawRoot` is the one new
+ * subfolder beneath it that `newTakeDir` actually builds inside.
+ */
+describe("raw/ is where source bundles live", () => {
+  const env = {} as NodeJS.ProcessEnv;
+
+  test("takesRoot still names the user's folder", () => {
+    expect(takesRoot(env, "/tmp/f")).toBe("/tmp/f");
+  });
+
+  test("rawRoot is a subfolder of it", () => {
+    expect(rawRoot(env, "/tmp/f")).toBe(`/tmp/f/${RAW_SUBDIR}`);
+  });
+
+  test("a new take lands in raw/, not at top level", () => {
+    const dir = newTakeDir(env, "/tmp/f", new Date(2026, 8, 22, 14, 30, 1));
+    expect(dir).toBe(`/tmp/f/${RAW_SUBDIR}/2026-09-22_14-30-01`);
+  });
+
+  test("the traversal guard still holds one level deeper", () => {
+    expect(insideTakesRoot(env, "/tmp/f", `/tmp/f/${RAW_SUBDIR}/x`)).toBe(true);
+    expect(insideTakesRoot(env, "/tmp/f", "/tmp/f-other/x")).toBe(false);
+    expect(insideTakesRoot(env, "/tmp/f", "/tmp/f/../../etc")).toBe(false);
+    expect(insideTakesRoot(env, "/tmp/f", "/tmp/f")).toBe(false);
   });
 });
