@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
-import { tagPng, readPngCaptureId, PNG_TEXT_KEYWORD, tagMp4, readMp4CaptureId } from "../src/media-tag.js";
+import { tagPng, readPngCaptureId, PNG_TEXT_KEYWORD, tagMp4, readMp4CaptureId,
+         readHeicCaptureId } from "../src/media-tag.js";
 import { mintCaptureId, CAPTURE_ID_LENGTH } from "../src/capture-id.js";
 
 const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -278,5 +279,98 @@ describe("mp4 capture-id tag", () => {
     // of the buffer, and tagMp4 refuses rather than tagging a partial file.
     expect(tagMp4(malformed, mintCaptureId())).toEqual(malformed);
     expect(readMp4CaptureId(malformed)).toBeUndefined();
+  });
+});
+
+/**
+ * STC-413 follow-up: HEIC carries the id too, and nothing read it.
+ *
+ * Measured on real hardware 2026-09-23 — an ImageIO HEIC export carries the
+ * id and a JPEG does not — so a HEIC still listed as two tiles for the same
+ * reason a PNG one used to: the bytes were right and there was no reader.
+ * `helper/test/still-encode.test.ts` is the round trip against the REAL
+ * encoder and is the assertion that matters; these are the same claim made on
+ * a checkout with no Mac, plus the boundary cases no real file supplies.
+ *
+ * The layouts below mirror the real file's shape: `ftyp` with a `heic` major
+ * brand and `mif1`/`miaf` among the compatible ones, then the XMP living
+ * inside `mdat` — which is where ImageIO really puts it (`iloc` pointed at
+ * offset 1,034 of a 1,009,782-byte export, past `mdat`'s own start at 880).
+ */
+describe("heic capture-id, read out of the XMP ImageIO embeds", () => {
+  const ftyp = (major: string, ...compatible: string[]) =>
+    box("ftyp", [...chars(major), ...be32(0),
+                 ...compatible.flatMap((b) => chars(b))]);
+
+  /** `xmp` placed inside `mdat`, which is where a real HEIC keeps it. */
+  const heic = (xmp: string, brands: string[] = ["heic", "mif1", "miaf"]) =>
+    new Uint8Array([
+      ...ftyp(brands[0]!, ...brands.slice(1)),
+      ...box("meta", chars("hdlrpict")),
+      ...box("mdat", [...chars(xmp), 0x00, 0xff, 0xfe, 0x01]),
+    ]);
+
+  const rdf = (v: string) =>
+    `<x:xmpmeta><rdf:RDF><rdf:Description><dc:description><rdf:Alt>` +
+    `<rdf:li xml:lang="x-default">${v}</rdf:li>` +
+    `</rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>`;
+
+  test("the id is read out of an HEIC's XMP", () => {
+    const id = mintCaptureId();
+    expect(readHeicCaptureId(heic(rdf(id)))).toBe(id);
+  });
+
+  test("an untagged HEIC reads as no id, not as a wrong one", () => {
+    // The control. Without it, a reader that answered for everything — or a
+    // test accidentally reading a cached buffer — would pass the assertion
+    // above.
+    expect(readHeicCaptureId(heic(rdf("")))).toBeUndefined();
+  });
+
+  test("a human-written description is not mistaken for an id", () => {
+    expect(readHeicCaptureId(heic(rdf("screenshot of the login bug"))))
+      .toBeUndefined();
+  });
+
+  test("a longer token starting cap_ is not read as its 30-character prefix", () => {
+    const id = mintCaptureId();
+    expect(readHeicCaptureId(heic(rdf(id + "XYZ")))).toBeUndefined();
+  });
+
+  test("`mif1` alone among the compatible brands is enough", () => {
+    // The generic image-container brand. A HEIF need not declare `heic` as
+    // its major brand for this to be one.
+    const id = mintCaptureId();
+    expect(readHeicCaptureId(heic(rdf(id), ["mif1", "miaf"]))).toBe(id);
+  });
+
+  test("an MP4 carrying the same bytes is refused — no HEIF brand", () => {
+    // The guard that stops the scan running on anything merely NAMED .heic.
+    // The id is right there in the bytes and must still not be returned.
+    const id = mintCaptureId();
+    expect(readHeicCaptureId(heic(rdf(id), ["isom", "mp42"]))).toBeUndefined();
+  });
+
+  test("a file not starting with ftyp is refused", () => {
+    // ISO-BMFF requires ftyp first. Anything else is a file we will not guess
+    // about, even though a later box does declare a brand.
+    const id = mintCaptureId();
+    const led = new Uint8Array([
+      ...box("free", chars("xx")),
+      ...ftyp("heic", "mif1"),
+      ...box("mdat", chars(rdf(id))),
+    ]);
+    expect(readHeicCaptureId(led)).toBeUndefined();
+  });
+
+  test("a PNG is not read as an HEIC", () => {
+    expect(readHeicCaptureId(tagPng(skeletonPng(), mintCaptureId())))
+      .toBeUndefined();
+  });
+
+  test("a truncated HEIC degrades to undefined rather than throwing", () => {
+    const head = heic(rdf(mintCaptureId())).subarray(0, 20);
+    expect(() => readHeicCaptureId(head)).not.toThrow();
+    expect(readHeicCaptureId(head)).toBeUndefined();
   });
 });
