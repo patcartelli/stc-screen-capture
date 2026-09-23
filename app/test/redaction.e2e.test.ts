@@ -8,7 +8,7 @@ import { parseShot } from "../../transform/src/shot.js";
 import { REDACTION_FILL_ON_LIGHT, REDACTION_FILL_ON_DARK } from "../../transform/src/still-redact.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
-import { windowCount, hasWindow } from "./_windows.js";
+import { windowCount, hasWindow, clickThatCloses } from "./_windows.js";
 import { RAW_SUBDIR } from "../src/takes.js";
 import { keptFileRequests } from "./_still-log.js";
 
@@ -152,7 +152,7 @@ async function redactingEditor(win: Page): Promise<{ editor: Page; dir: string }
   const panel = await thumbnailWindow();
   await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className))
     .toContain("in");
-  await panel.click("#edit");
+  await clickThatCloses(panel, "#edit");
   const editor = await stillEditorWindow();
   await editor.waitForSelector("#stagecanvas");
   const dir = await editor.evaluate(() => new URLSearchParams(location.search).get("dir")!);
@@ -304,7 +304,7 @@ describe("redaction", () => {
     await dragBox(editor, [0.25, 0.3], [0.75, 0.65]);
     await expect.poll(() => storedRegions(dir).length, { timeout: 15_000 }).toBe(1);
 
-    await editor.click("#done");
+    await clickThatCloses(editor, "#done");
     await expect.poll(() => windowCount(app!, "still-editor.html"), { timeout: 15_000 }).toBe(0);
     // Still there after the window closes — Done just closes it, it does not
     // undo anything (there is nothing left to decide; the take was kept the

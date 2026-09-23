@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
-import { windowCount, hasWindow, windowUrls } from "./_windows.js";
+import { windowCount, hasWindow, windowUrls, pageWithUrl, actThatCloses, clickThatCloses } from "./_windows.js";
 import { CLIPBOARD_SUBDIR } from "../src/still-io.js";
 import { readRequests, exportRequests, keptFileRequests } from "./_still-log.js";
 import { RAW_SUBDIR } from "../src/takes.js";
@@ -159,29 +159,6 @@ async function captureDisplay(win: Page): Promise<any> {
 }
 
 /**
- * Drive an action that CLOSES the panel synchronously — dismiss's X click or
- * its Escape key (STC-412) — and tolerate the "Target page, context or
- * browser has been closed" rejection Playwright reports when the action's
- * own target vanishes mid-dispatch.
- *
- * The same trap `_editor-fixture.ts`'s `closeEditorWindow` already exists for
- * (STC-386, CLAUDE.md): `perform("dismiss")` closes the window over a
- * synchronous IPC round trip, so the action LANDED and the window closing IS
- * the confirmation — a bare `.catch(() => {})` would just as happily swallow
- * a real failure, so "close" is awaited FIRST and a rejection not followed by
- * an actual close is rethrown rather than eaten.
- */
-async function dismissAndTolerateClose(panel: Page, act: () => Promise<void>): Promise<void> {
-  const closed = panel.waitForEvent("close", { timeout: 15_000 });
-  const err = await act().then(() => undefined, (e: unknown) => e);
-  if (err !== undefined) {
-    await closed.catch(() => { throw err; });
-    return;
-  }
-  await closed;
-}
-
-/**
  * Bundles actually promoted into `recordings` — `raw/` (STC-413), not the top
  * level. A top-level count filtered for the `makeTakeFolder` seed would still
  * read `1` after any promotion at all, since every promoted bundle nests
@@ -225,7 +202,7 @@ describe("the post-capture floating thumbnail", () => {
     // "done" — polling the page for text it may already have closed under is
     // exactly the race that made `still-overlay.e2e.test.ts` flaky once. The
     // window closing IS the confirmation this path is being tested for.
-    await panel.click("#save");
+    await clickThatCloses(panel, "#save");
     await noThumbnailWindow(15_000);
     // RESTATED, not loosened (STC-446). This used to assert Save kept "no
     // second copy" — `panel:save` promotes a directory and wrote no file —
@@ -275,7 +252,7 @@ describe("the post-capture floating thumbnail", () => {
     // removes is still the one in temp, not a copy already in the library.
     expect(ownTakes(recordings).length).toBe(0);
 
-    await panel.click("#trash");
+    await clickThatCloses(panel, "#trash");
     await noThumbnailWindow();
   }, 60_000);
 
@@ -304,7 +281,7 @@ describe("the post-capture floating thumbnail", () => {
     // full height rather than the old fixed-offset overlap.
     await nonOverlappingThumbnails(3);
 
-    const panel = app!.windows().find((p) => p.url().includes("thumbnail.html"))!;
+    const panel = await pageWithUrl(app!, "thumbnail.html");
     // Closing a real window removes its slot, even without going through the
     // renderer's own "done" event — `leaveStack`'s `"closed"` handler is what
     // this exercises.
@@ -419,7 +396,7 @@ describe("the post-capture floating thumbnail", () => {
     const panel = await thumbnailWindow();
     const before = readdirSync(temp, { recursive: true }).sort();
 
-    await dismissAndTolerateClose(panel, () => panel.click("#dismiss"));
+    await actThatCloses(panel, () => panel.click("#dismiss"));
 
     await noThumbnailWindow();
     expect(readdirSync(temp, { recursive: true }).sort()).toEqual(before);
@@ -446,7 +423,7 @@ describe("the post-capture floating thumbnail", () => {
         && Number.isFinite(liveAt) && performance.now() >= liveAt;
     }), { timeout: 15_000 }).toBe(true);
 
-    await dismissAndTolerateClose(panel, () => panel.keyboard.press("Escape"));
+    await actThatCloses(panel, () => panel.keyboard.press("Escape"));
 
     await noThumbnailWindow();
     expect(readdirSync(temp, { recursive: true }).sort()).toEqual(before);
