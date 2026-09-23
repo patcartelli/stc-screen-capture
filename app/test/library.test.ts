@@ -87,7 +87,7 @@ describe("listLibrary — one index, both kinds", () => {
     const { items, invalid } = await listLibrary(env(), null);
     expect(invalid, JSON.stringify(invalid)).toEqual([]);
     expect(items.map((i) => i.kind)).toEqual(["still", "still"]);
-    expect(items.map((i) => i.badge)).toEqual(["Still", "Still"]);
+    expect(items.map((i) => i.badge)).toEqual(["Shot", "Shot"]);
   });
 
   test("a mixed library interleaves by time, not by kind", async () => {

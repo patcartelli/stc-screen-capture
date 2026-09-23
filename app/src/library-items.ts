@@ -197,7 +197,7 @@ export interface LibraryFilter { id: string; label: string }
 export const LIBRARY_FILTERS: readonly LibraryFilter[] = [
   { id: "all", label: "All" },
   { id: "recording", label: "Recordings" },
-  { id: "still", label: "Stills" },
+  { id: "still", label: "Shots" },
 ];
 
 export const DEFAULT_LIBRARY_FILTER = "all";
@@ -350,7 +350,7 @@ export function stillItem(s: StillInfo): LibraryItem {
   return {
     id: s.name,
     kind: "still",
-    badge: "Still",
+    badge: "Shot",
     dir: s.dir,
     createdAt: s.capturedAt,
     bytes: s.bytes,

@@ -159,7 +159,7 @@ describe("the library grid", () => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Shot"]);
     expect(await win.locator(".broken").count()).toBe(0);
   }, 60_000);
 
@@ -174,7 +174,7 @@ describe("the library grid", () => {
     // sort key for both, which is what makes one index over two formats
     // possible at all.
     await expect.poll(() => badges(win), { timeout: 15_000 })
-      .toEqual(["Still", "Recording", "Still", "Recording"]);
+      .toEqual(["Shot", "Recording", "Shot", "Recording"]);
     expect(await win.locator(".broken").count()).toBe(0);
   }, 60_000);
 
@@ -183,16 +183,16 @@ describe("the library grid", () => {
       makeTakeFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
     await win.locator('.libfilters .chip[data-filter="still"]').click();
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await win.locator('.libfilters .chip[data-filter="recording"]').click();
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Recording"]);
 
     await win.locator('.libfilters .chip[data-filter="all"]').click();
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
   }, 90_000);
 
   test("each kind offers its own actions, and both offer rename and delete", async () => {
@@ -200,7 +200,7 @@ describe("the library grid", () => {
       makeTakeFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
     // Duplicate is a still's, and it is the ADAPTER that says so — the view
     // rendered whatever list it was handed.
@@ -251,10 +251,10 @@ describe("duplicate", () => {
         into: dir, redactions: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.1 }],
       });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await clickAction(win, 0, "duplicate");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Shot"]);
 
     const dirs = readdirSync(recordings).sort();
     expect(dirs).toHaveLength(2);
@@ -287,7 +287,7 @@ describe("duplicate", () => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
     const original = join(recordings, "2026-09-08_12-00-00");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
     await expectThumbnail(original, errors);
     // A sentinel the real renderer would never produce: a 1x1 PNG.
     const SENTINEL = Buffer.from(
@@ -321,7 +321,7 @@ describe("duplicate", () => {
     });
     const original = join(recordings, "2026-09-08_12-00-00");
     const before = readFileSync(join(original, "shot.json"), "utf8");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await clickAction(win, 0, "open");
     const editor = await stillEditorWindow();
@@ -373,7 +373,7 @@ describe("a failed delete is reported, not swallowed (STC-392 review, I2)", () =
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
     const original = join(recordings, "2026-09-08_12-00-00");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await app!.evaluate(({ dialog, shell }) => {
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); // Move to Trash
