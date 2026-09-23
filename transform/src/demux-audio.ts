@@ -4,6 +4,48 @@ import * as MP4BoxNS from "mp4box";
 const MP4Box: any = (MP4BoxNS as any).default ?? MP4BoxNS;
 
 /**
+ * The AAC muxer's own `AudioSpecificConfig`, not mp4box's `track.audio.channel_count`,
+ * is the true channel count (STC-233, found running against a real file for the first
+ * time). `AudioSampleEntry.channelcount` — what mp4box reports as `channel_count` — is
+ * a legacy QuickTime-compatibility field, and AVAssetWriter's AAC muxer writes it as a
+ * hardcoded 2 regardless of the actual encoded channel count: measured on a real
+ * BuiltInMicrophoneDevice (genuinely mono, confirmed at capture — `MicCapture.swift`
+ * reads `channels=1` off both the device's active format AND the first delivered
+ * `CMSampleBuffer`) exported mic.m4a, mp4box read `channel_count: 2` while the true
+ * channel count is 1. The AudioSpecificConfig's `channelConfiguration` field agreed with
+ * the device: 1. Reading the config bytes we already extract for `description` is the
+ * fix, not a second box.
+ *
+ * ISO/IEC 14496-3 §1.6.2.1: 5 bits audioObjectType, 4 bits samplingFrequencyIndex
+ * (24 explicit bits follow if that index is 0xf), 4 bits channelConfiguration. The
+ * channelConfiguration -> channel count mapping is Table 1.19; only 1-7 are legal
+ * for an encoder (0 means "channels defined elsewhere, in a PCE" and is refused here
+ * rather than guessed, since nothing in this app ever asks AVAssetWriter for that).
+ */
+export function channelCountFromAudioSpecificConfig(description: Uint8Array): number | undefined {
+  if (description.length < 2) return undefined;
+  let bitPos = 0;
+  const readBits = (n: number): number => {
+    let v = 0;
+    for (let i = 0; i < n; i++) {
+      const byte = description[bitPos >> 3];
+      if (byte === undefined) return v << (n - i); // ran off the end; caller treats as invalid
+      const bit = (byte >> (7 - (bitPos & 7))) & 1;
+      v = (v << 1) | bit;
+      bitPos++;
+    }
+    return v;
+  };
+  readBits(5); // audioObjectType — not needed to find channelConfiguration
+  const samplingFreqIndex = readBits(4);
+  if (samplingFreqIndex === 0x0f) readBits(24); // explicit sampling frequency, rare
+  const channelConfig = readBits(4);
+  // Table 1.19: 1..6 map directly to that many channels, 7 maps to 8 (7.1).
+  const CHANNEL_CONFIG_TABLE: Record<number, number> = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 8 };
+  return CHANNEL_CONFIG_TABLE[channelConfig];
+}
+
+/**
  * The audio twin of demux.ts's `demuxTrack` (STC-233): mic.m4a's own sample
  * table, read the same way display.mp4/camera.mp4's is, so the audio track's
  * PTS grid is session-relative ns on the identical convention the video
@@ -108,7 +150,7 @@ export function demuxAudioTrack(buf: ArrayBuffer, what: string): Promise<Demuxed
           framesNs,
           codec: track.codec,
           sampleRate: track.audio?.sample_rate ?? 0,
-          numberOfChannels: track.audio?.channel_count ?? 0,
+          numberOfChannels: channelCountFromAudioSpecificConfig(description) ?? (track.audio?.channel_count ?? 0),
           description,
           chunks: collected.map((s, i) => ({
             timestampUs: Math.round(framesNs[i]! / 1000),
