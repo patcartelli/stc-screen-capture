@@ -16,6 +16,11 @@ import CoreVideo
 // Configured entirely by environment (see `_swift-harness.ts`: the runner
 // passes no CLI args, only env), one variable per knob so a test can flip
 // exactly the one it's asking about.
+//
+// STC-408 adds a third question to the same harness: does an ORDINARY,
+// uncrashed take that happens to sit idle across one or more fragment
+// boundaries (what STC-240's pause does to this writer) still finish and
+// demux cleanly? See `STC_FRAG_GAP_AFTER_FRAME`/`STC_FRAG_GAP_SEC` below.
 
 func diag(_ m: String) {
     FileHandle.standardError.write(("[fragmented-writer] " + m + "\n").data(using: .utf8)!)
@@ -41,6 +46,21 @@ let fragmentIntervalSec = Double(env["STC_FRAG_INTERVAL_SEC"] ?? "0") ?? 0
 // appended — no finishWriting, no flush, the same shape a SIGKILL leaves
 // behind. Absent means "finish normally".
 let crashAfter = env["STC_FRAG_CRASH_AFTER"].flatMap(Int.init)
+
+// STC-408: models what a PAUSE (STC-240) does to this exact writer — nothing
+// crashes, nothing stops, but a real span of session time goes by with NO
+// sample appended, because `PauseGate` drops paused frames outright rather
+// than holding or re-timing them (`PauseDecisions.swift`). `Capture.swift`
+// stamps every sample with its REAL session-relative pts
+// (`displayTimeNs - t0Ns`), never a frame-index counter, so the file this
+// produces is exactly what a real pause leaves behind: a normal PTS grid,
+// then one large jump where the paused span was, then the grid resumes.
+// Gap-after-frame rather than a real `sleep()`, because `movieFragmentInterval`
+// is driven by the PTS of samples actually appended, not a wall-clock timer —
+// so a jump in the numbers a real pause would produce is the whole test, and
+// costs nothing to run.
+let gapAfterFrame = env["STC_FRAG_GAP_AFTER_FRAME"].flatMap(Int.init)
+let gapSec = Double(env["STC_FRAG_GAP_SEC"] ?? "0") ?? 0
 
 let W = 320, H = 240
 
@@ -109,7 +129,9 @@ input.requestMediaDataWhenReady(on: queue) {
             done.signal()
             return
         }
-        let pts = CMTime(value: Int64(appended) * ptsStepNs, timescale: 1_000_000_000)
+        let gapNs: Int64 = (gapAfterFrame.map { appended >= $0 } ?? false)
+            ? Int64((gapSec * 1_000_000_000).rounded()) : 0
+        let pts = CMTime(value: Int64(appended) * ptsStepNs + gapNs, timescale: 1_000_000_000)
         if !adaptor.append(makeBuffer(appended), withPresentationTime: pts) {
             fail("append failed at frame \(appended): \(String(describing: writer.error))")
         }
