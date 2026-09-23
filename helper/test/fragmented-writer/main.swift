@@ -67,6 +67,12 @@ let gapSec = Double(env["STC_FRAG_GAP_SEC"] ?? "0") ?? 0
 // the harness appends as fast as the writer will take them, which is fine for
 // a grid with no gaps and is exactly what a gap run needs a control against.
 let realtime = env["STC_FRAG_REALTIME"] == "1"
+// DIAGNOSTIC knobs, each a deliberate departure from `setupWriter()`, used
+// only to find which setting the gap failure depends on:
+//   STC_FRAG_NO_EXPECTED_RATE=1  omits AVVideoExpectedSourceFrameRateKey;
+//   STC_FRAG_NOT_REALTIME=1      sets expectsMediaDataInRealTime = false.
+let omitExpectedRate = env["STC_FRAG_NO_EXPECTED_RATE"] == "1"
+let notRealtime = env["STC_FRAG_NOT_REALTIME"] == "1"
 
 let W = 320, H = 240
 
@@ -104,18 +110,20 @@ writer.movieTimeScale = 90_000
 if fragmentIntervalSec > 0 {
     writer.movieFragmentInterval = CMTime(seconds: fragmentIntervalSec, preferredTimescale: 1)
 }
+var compression: [String: Any] = [
+    AVVideoAverageBitRateKey: 8_000_000,
+    AVVideoMaxKeyFrameIntervalKey: 45,
+    AVVideoExpectedSourceFrameRateKey: fps,
+    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+    AVVideoAllowFrameReorderingKey: false,
+]
+if omitExpectedRate { compression.removeValue(forKey: AVVideoExpectedSourceFrameRateKey) }
 let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
     AVVideoCodecKey: AVVideoCodecType.h264,
     AVVideoWidthKey: W, AVVideoHeightKey: H,
-    AVVideoCompressionPropertiesKey: [
-        AVVideoAverageBitRateKey: 8_000_000,
-        AVVideoMaxKeyFrameIntervalKey: 45,
-        AVVideoExpectedSourceFrameRateKey: fps,
-        AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-        AVVideoAllowFrameReorderingKey: false,
-    ] as [String: Any],
+    AVVideoCompressionPropertiesKey: compression,
 ])
-input.expectsMediaDataInRealTime = true
+input.expectsMediaDataInRealTime = !notRealtime
 input.mediaTimeScale = 1_000_000_000
 let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: nil)
 guard writer.canAdd(input) else { fail("writer refused the video input") }

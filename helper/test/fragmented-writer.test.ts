@@ -43,7 +43,10 @@ function tmpOut(name: string): string {
 
 async function write(
   out: string,
-  opts: { fragmentSec?: number; crashAfter?: number; gapAfterFrame?: number; gapSec?: number; realtime?: boolean } = {},
+  opts: {
+    fragmentSec?: number; crashAfter?: number; gapAfterFrame?: number; gapSec?: number;
+    realtime?: boolean; noExpectedRate?: boolean; notRealtime?: boolean;
+  } = {},
 ) {
   await runSwiftHarness({
     label: "fragwriter",
@@ -57,6 +60,8 @@ async function write(
       ...(opts.gapAfterFrame ? { STC_FRAG_GAP_AFTER_FRAME: String(opts.gapAfterFrame) } : {}),
       ...(opts.gapSec ? { STC_FRAG_GAP_SEC: String(opts.gapSec) } : {}),
       ...(opts.realtime ? { STC_FRAG_REALTIME: "1" } : {}),
+      ...(opts.noExpectedRate ? { STC_FRAG_NO_EXPECTED_RATE: "1" } : {}),
+      ...(opts.notRealtime ? { STC_FRAG_NOT_REALTIME: "1" } : {}),
     },
     // Killing the process IS the test in the crash case — a non-zero/signal
     // exit there is expected, not a harness failure, so this function's own
@@ -142,56 +147,66 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
     await expect(demuxTrack(readAb(out), "crashed-unfragmented.mp4")).rejects.toThrow();
   }, 120_000);
 
-  // STC-408: an ordinary, UNCRASHED take can still sit idle across several
-  // fragment boundaries — that is what STC-240's pause does to this writer
-  // (PauseGate drops paused samples outright; nothing is appended for the
-  // pause's real duration, then real time picks back up). `finishWriting`
-  // runs normally, so the question is not "how much survives a kill" but
-  // "does a real gap finalize and demux cleanly, every frame present and the
-  // gap itself intact".
+  // STC-408: an ordinary, UNCRASHED take can still sit idle for seconds —
+  // that is what STC-240's pause does to this writer (PauseGate drops paused
+  // samples outright, so the next sample's PTS jumps by the pause's real
+  // duration). `finishWriting` runs normally; the question is whether a real
+  // gap finalizes and demuxes cleanly, every frame present, gap intact.
   //
-  // Run three ways, because the first CI run failed the fast/fragmented case
-  // at frame 132 (`-11800`/`-17771`, 12 frames after the gap) and one failing
-  // configuration cannot say WHICH ingredient did it. The other two each
-  // remove one: fragmentation (is it STC-394's property at all?) and the
-  // harness's faster-than-real-time feed (does `Capture.swift`'s real pacing
-  // avoid it?). Same assertions for all three; the matrix is the finding.
+  // What CI has shown so far (runs 35895221991, 35901093369): a 5 s gap fails
+  // an append 9-14 frames after it resumes (`-11800` / `-17771`) WITH or
+  // WITHOUT fragmentation and WITH real-time pacing — so it is not STC-394's
+  // property and not the harness's feed. This matrix finds the threshold and
+  // which encoder setting it depends on. CI's encoder is the paravirtualized
+  // one STC-259 measured behaving unlike hardware, and STC-240's grant test
+  // passed a 2 s pause on a real Mac, so only a Mac run of this file settles
+  // whether the product is affected (docs/STC-408-RUNBOOK.md §1).
   const GAP_AFTER_FRAME = 120;   // 2s in at 60fps
-  const GAP_SEC = 5;             // five whole 1s fragment intervals
 
-  async function checkGap(name: string, opts: { fragmentSec?: number; realtime?: boolean }) {
-    const out = tmpOut(name);
-    await write(out, { ...opts, gapAfterFrame: GAP_AFTER_FRAME, gapSec: GAP_SEC });
-    expect(statSync(out).size).toBeGreaterThan(0);
+  type GapCase = {
+    name: string; gapSec: number;
+    fragmentSec?: number; realtime?: boolean; noExpectedRate?: boolean; notRealtime?: boolean;
+  };
 
-    const { demuxTrack } = await import("../../transform/src/demux.js");
-    const video = await demuxTrack(readAb(out), name);
-
-    // Nothing crashed, so nothing may be missing.
-    expect(video.framesNs.length).toBe(FRAMES);
-    const ptsStepNs = Math.trunc(1_000_000_000 / FPS);
-    const gapNs = Math.round(GAP_SEC * 1_000_000_000);
-    for (let i = 0; i < video.framesNs.length; i++) {
-      expect(video.framesNs[i]).toBe(i * ptsStepNs + (i >= GAP_AFTER_FRAME ? gapNs : 0));
+  /** Runs one case and describes its outcome in words; never throws. */
+  async function gapOutcome(c: GapCase): Promise<string> {
+    const out = tmpOut(`${c.name}.mp4`);
+    try {
+      await write(out, { ...c, gapAfterFrame: GAP_AFTER_FRAME });
+    } catch (e) {
+      const m = /append failed at frame (\d+)/.exec(String((e as Error)?.message ?? e));
+      return m ? `append failed at frame ${m[1]}` : `harness failed: ${String(e).split("\n")[0]}`;
     }
-    // The gap must survive the round trip: a demuxer that collapsed it would
-    // misreport elapsed time to the "greatest PTS <= t" rule that holds the
-    // picture through a paused span.
-    const jump = video.framesNs[GAP_AFTER_FRAME]! - video.framesNs[GAP_AFTER_FRAME - 1]!;
-    expect(jump).toBeGreaterThan(gapNs);
-    expect(jump).toBeLessThan(gapNs + ptsStepNs * 2);
+    const { demuxTrack } = await import("../../transform/src/demux.js");
+    const video = await demuxTrack(readAb(out), c.name);
+    const ptsStepNs = Math.trunc(1_000_000_000 / FPS);
+    const gapNs = Math.round(c.gapSec * 1_000_000_000);
+    if (video.framesNs.length !== FRAMES) return `demuxed ${video.framesNs.length} of ${FRAMES} frames`;
+    for (let i = 0; i < FRAMES; i++) {
+      const want = i * ptsStepNs + (i >= GAP_AFTER_FRAME ? gapNs : 0);
+      if (video.framesNs[i] !== want) return `frame ${i} at ${video.framesNs[i]} ns, expected ${want}`;
+    }
+    return "ok";
   }
 
-  test("a multi-fragment-interval gap (a pause), fragmented, fed fast: every frame, gap intact", async () => {
-    await checkGap("paused-frag-fast.mp4", { fragmentSec: FRAGMENT_SEC });
-  }, 120_000);
+  const CASES: GapCase[] = [
+    { name: "nofrag-0.5s", gapSec: 0.5 },
+    { name: "nofrag-1s", gapSec: 1 },
+    { name: "nofrag-2s", gapSec: 2 },
+    { name: "nofrag-3s", gapSec: 3 },
+    { name: "nofrag-5s", gapSec: 5 },
+    { name: "frag-2s", gapSec: 2, fragmentSec: FRAGMENT_SEC },
+    { name: "frag-5s", gapSec: 5, fragmentSec: FRAGMENT_SEC },
+    { name: "frag-5s-realtime", gapSec: 5, fragmentSec: FRAGMENT_SEC, realtime: true },
+    { name: "nofrag-5s-no-expected-rate", gapSec: 5, noExpectedRate: true },
+    { name: "nofrag-5s-not-realtime-input", gapSec: 5, notRealtime: true },
+  ];
 
-  test("control: the same gap with NO fragmentation, fed fast", async () => {
-    await checkGap("paused-nofrag-fast.mp4", {});
-  }, 120_000);
-
-  test("control: the same gap, fragmented, paced in real time like Capture.swift", async () => {
-    // ~10s of wall clock: 5s of frames plus the 5s gap slept through.
-    await checkGap("paused-frag-realtime.mp4", { fragmentSec: FRAGMENT_SEC, realtime: true });
-  }, 120_000);
+  test("a pause-sized PTS gap, finished cleanly: every frame, gap intact — across gap sizes and encoder settings", async () => {
+    const rows: string[] = [];
+    for (const c of CASES) rows.push(`${c.name.padEnd(30)} ${await gapOutcome(c)}`);
+    const table = rows.join("\n");
+    process.stderr.write(`[fragmented-writer] gap matrix:\n${table}\n`);
+    expect(rows.every((r) => r.endsWith(" ok")), `gap matrix:\n${table}`).toBe(true);
+  }, 900_000);
 });
