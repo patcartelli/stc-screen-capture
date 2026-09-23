@@ -469,7 +469,11 @@ export function looseFileItem(f: FinishedFileInfo): LibraryItem {
   return {
     id: f.id,
     kind,
-    badge: kind === "recording" ? "Recording" : "Still",
+    // "Shot", not "Still" — STC-398 renamed the artefact and STC-407 cleaned
+    // up the residue. This line was written on a branch cut BEFORE that
+    // cleanup landed, so it merged without a textual conflict and quietly
+    // reintroduced the old word on a new code path.
+    badge: kind === "recording" ? "Recording" : "Shot",
     dir: f.dir,
     file: f.file,
     createdAt: f.createdAt,
