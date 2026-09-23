@@ -3,7 +3,7 @@ import { join, extname, basename } from "node:path";
 import { takesRoot, RAW_SUBDIR } from "./takes.js";
 import { parseShot, type Shot } from "@transform/shot.js";
 import { probePng, probeMp4, MP4_TAIL_PROBE_BYTES, type MediaFacts } from "@transform/media-probe.js";
-import { readPngCaptureId, readMp4CaptureId, readHeicCaptureId, readBe32 }
+import { readPngCaptureId, readMp4CaptureId, readMp4CaptureIdInTail, readHeicCaptureId, readBe32 }
   from "@transform/media-tag.js";
 import { readBundleId } from "./capture-identity.js";
 import {
@@ -246,15 +246,36 @@ async function locateMoovBytes(file: string, fileSize: number): Promise<Uint8Arr
   return undefined;
 }
 
+/**
+ * How much of the file's END is read looking for `tagMp4`'s `uuid` box
+ * (STC-445). The box is 54 bytes; 4 KB leaves room for a `free`/`skip` or
+ * another vendor's box sitting after it, and is one bounded read.
+ */
+const UUID_TAIL_PROBE_BYTES = 4096;
+
 async function probeAndIdMp4(file: string, fileSize: number):
     Promise<{ facts?: MediaFacts; id?: string }> {
   const moov = await locateMoovBytes(file, fileSize);
   if (!moov) return {};
-  // `moov` is followed immediately, within the same read, by any `uuid` tag
-  // `tagMp4` appended — `readMp4CaptureId`'s own top-level walk finds it by
-  // skipping over `moov` via its own declared size, exactly as it would on
-  // the whole file.
-  return { facts: probeMp4(moov), id: readMp4CaptureId(moov) };
+
+  // TWO reads, because the id and the facts are not in the same place
+  // (STC-445). `moov` carries the facts. The id is in a `uuid` box `tagMp4`
+  // appends at EOF — which for a RAW CAPTURE (`ftyp mdat moov uuid`) really
+  // does sit just past `moov`, and for an EXPORT (`ftyp moov mdat uuid`, what
+  // `mp4-muxer` writes) is the whole `mdat` away: measured at 37-154 MB on
+  // real exports, against a 4 KB slack window. Reading `moov` alone therefore
+  // found the id on every take made by the helper and on NO exported file,
+  // which is two tiles per capture and no Edit on the finished one.
+  //
+  // The `moov` window is still tried first: for a raw capture it already
+  // holds the tag, so that costs nothing and keeps working if the tail read
+  // is short (a file truncated mid-`uuid`).
+  const fromMoov = readMp4CaptureId(moov);
+  if (fromMoov) return { facts: probeMp4(moov), id: fromMoov };
+
+  const tailStart = Math.max(0, fileSize - UUID_TAIL_PROBE_BYTES);
+  const tail = await readRange(file, tailStart, Math.min(UUID_TAIL_PROBE_BYTES, fileSize));
+  return { facts: probeMp4(moov), id: readMp4CaptureIdInTail(tail) };
 }
 
 async function probeAndIdPng(file: string, fileSize: number):
