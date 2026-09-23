@@ -264,9 +264,9 @@ export const ORPHAN_MARKER_FILE = ".orphaned-at";
  *
  * "No matched file" is not, by itself, "orphaned" — see this module's own
  * task brief. After Task 8's scan, a bundle with no matched file is one of
- * three different things: its file was really deleted; its file is a
- * JPEG/HEIC, whose id is deliberately never read (`library.ts`); or its file
- * was moved out of the folder. Only the first is a real orphan, and nothing
+ * three different things: its file was really deleted; its file is a JPEG,
+ * which carries no id to read at all (`library.ts`); or its file was moved
+ * out of the folder. Only the first is a real orphan, and nothing
  * here can tell the three apart *for one bundle* — but if EVERY top-level
  * file yielded a readable id, then any bundle with no match among them truly
  * has none. So orphanhood is proven for the whole pass at once, by reusing

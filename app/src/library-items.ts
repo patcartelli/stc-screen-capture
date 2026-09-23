@@ -402,9 +402,10 @@ export function stillItem(s: StillInfo): LibraryItem {
  *    recording/still. `dir` AND `file` both set.
  * 3. A bundle exists and carries `capture.json` — proof it WAS exported,
  *    minted lazily at export time (Task 5) — but nothing here can say to
- *    WHICH file: a JPEG/HEIC export carries no readable id at all (ImageIO
- *    writes it only into the PNG dictionary), or the linked file has moved
- *    or been deleted since. `dir` set, `file` absent. Reviewed round 1: this
+ *    WHICH file: a JPEG export carries no readable id at all (measured
+ *    2026-09-23 — see `readHeicCaptureId`; PNG and HEIC both do), or the
+ *    linked file has moved or been deleted since. `dir` set, `file` absent.
+ *    Reviewed round 1: this
  *    must not be reported as broken (`capture.json`'s presence means "never
  *    exported" is already false) and must not be confused with case 1's
  *    genuinely-untethered file.

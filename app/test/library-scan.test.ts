@@ -31,6 +31,38 @@ function mp4Bytes(): Uint8Array {
     ...box("moov", [...mvhd, ...box("trak", tkhd)])]);
 }
 
+/**
+ * A structurally valid HEIC skeleton carrying `id` where a real one carries
+ * it: XMP, inside `mdat`. Shaped from a real ImageIO export dumped
+ * 2026-09-23 — `ftyp` with a `heic` major brand and `mif1`/`miaf` compatible,
+ * then the XMP item's bytes living past `mdat`'s start.
+ */
+function heicBytes(id?: string): Uint8Array {
+  const xmp = id
+    ? `<x:xmpmeta><rdf:RDF><rdf:Description><dc:description><rdf:Alt>`
+      + `<rdf:li xml:lang="x-default">${id}</rdf:li>`
+      + `</rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>`
+    : "<x:xmpmeta><rdf:RDF/></x:xmpmeta>";
+  return new Uint8Array([
+    ...box("ftyp", [...chars("heic"), ...be32(0), ...chars("mif1"), ...chars("miaf")]),
+    ...box("meta", chars("hdlrpict")),
+    ...box("mdat", [...chars(xmp), 0x00, 0xff, 0xfe, 0x01]),
+  ]);
+}
+
+/** The minimum `shot.json` that reads back as a healthy still bundle. */
+const shotJson = () => ({
+  version: 1,
+  kind: "display-crop",
+  capturedAtNs: "1000000000",
+  timebase: { numer: 125, denom: 3 },
+  display: { id: 1, pointWidth: 1920, pointHeight: 1080, pixelWidth: 3840,
+             pixelHeight: 2160, backingScale: 2, originX: 0, originY: 0 },
+  crop: { x: 100, y: 80, width: 640, height: 360 },
+  frame: { file: "frame.png", width: 1280, height: 720, alpha: false },
+  decoration: { mode: "selected-area", canvas: "natural", cursor: false, redactions: [] },
+});
+
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "stc-lib-")); });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -192,6 +224,53 @@ describe("the scan reads the folder", () => {
     expect(items).toHaveLength(1);
     expect(items[0]!.label).toBe("renamed-clip");
     expect(items[0]!.label).not.toContain("stale");
+  });
+
+  /**
+   * STC-413 follow-up: the scan must MATCH a HEIC, not merely list it.
+   *
+   * The reader existing does not prove `probeFinishedFile` dispatches to it —
+   * this ticket's own recurring defect is a test that cannot fail, and a pure
+   * `readHeicCaptureId` test passes just as well with the `.heic` arm deleted.
+   * What discriminates is the COUNT: unmatched, the file and its bundle list
+   * as two separate tiles, which is precisely the bug.
+   *
+   * The HEIC bytes are built here rather than taken from the real encoder
+   * because this file must run on a checkout with no Swift toolchain;
+   * `helper/test/still-encode.test.ts` is where the real encoder's output is
+   * round-tripped.
+   */
+  test("a HEIC at top level matches its bundle — one tile, not two", async () => {
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(bundle, "shot.json"), JSON.stringify(shotJson()));
+    await writeFile(join(bundle, "frame.png"), new Uint8Array(2048));
+    await writeFile(join(root, "error-state.heic"), heicBytes(id));
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.file).toBe(join(root, "error-state.heic"));
+    expect(items[0]!.dir).toBe(bundle);
+    expect(items[0]!.label).toBe("error-state");
+  });
+
+  test("an untagged HEIC is a foreign file, not somebody else's bundle", async () => {
+    // The control. Without it, a dispatch that returned a CONSTANT id would
+    // pass the test above and attach every stray .heic to the first bundle.
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "capture.json"),
+      JSON.stringify({ version: 1, id: mintCaptureId() }));
+    await writeFile(join(bundle, "shot.json"), JSON.stringify(shotJson()));
+    await writeFile(join(bundle, "frame.png"), new Uint8Array(2048));
+    await writeFile(join(root, "downloaded.heic"), heicBytes());   // no id
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(2);                 // the stray file AND the bundle
+    expect(items.find((i) => i.file?.endsWith("downloaded.heic"))?.dir)
+      .toBeUndefined();
   });
 
   test("a foreign file has no bundle to name", async () => {
