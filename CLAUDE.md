@@ -240,7 +240,9 @@ Full ticket-by-ticket history lives in `docs/TICKET-LOG.md` — what shipped,
 what was learned, and what's still open per ticket. Not loaded
 automatically; read it when you need to know why something is built the
 way it is, or to check whether a specific ticket's open items are still
-open.
+open. **When you finish a ticket, append your own row to its table** —
+that file is where the convention every row before it followed still
+lives; don't start a second table back here.
 
 ## Build & smoke
 
