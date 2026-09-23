@@ -10,6 +10,7 @@ events → deterministic transform → CFR MP4 with cursor overlay.
 | `PHASE-1.md` | current phase plan — read this first |
 | `docs/PHASE-0-FINDINGS.md` | spike results; all settled decisions sourced here |
 | `docs/HANDOFF-2026-08-31.md` | what moved on 2026-08-31, what was got wrong, and the one open question |
+| `docs/PRE-DEMO-CHECKLIST.md` | STC-406 — the standing pre-demo procedure: freeze Electron/deps for the week before, then confirm Screen Recording + Input Monitoring (not Accessibility) and run one real take, before anyone is watching |
 | `helper/src/` | Swift helper (increment 1, in progress) |
 | `helper/src/Protocol.swift` | JSON-line IPC + Clock |
 | `helper/src/Watchers.swift` | display/device watchers |
