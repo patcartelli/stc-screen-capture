@@ -15,9 +15,10 @@ import { type ElectronApplication, type Page } from "playwright";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { launchWithTakeInEditor, dragOnStage, pressOverrideDone } from "./_editor-fixture.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 const MS = 1_000_000;
 const WINDOW_ID = "1705000000";

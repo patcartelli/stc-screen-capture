@@ -4,10 +4,11 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 /** The newest real recording on this machine, if there is one. */
 

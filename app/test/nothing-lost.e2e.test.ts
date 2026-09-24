@@ -7,6 +7,7 @@ import { parseShot } from "../../transform/src/shot.js";
 import { SETTLE_READY_MS } from "../src/thumbnail.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount } from "./_windows.js";
+import { closeApp } from "./_app-teardown.js";
 
 /**
  * STC-301 gate 4 — nothing lost.
@@ -82,7 +83,7 @@ const N = 5;
 const TEARDOWN_MS = SETTLE_READY_MS + 20_000;
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; }, TEARDOWN_MS);
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, TEARDOWN_MS);
 
 interface Launched { win: Page; recordings: string; tempTakes: string; destDir: string }
 

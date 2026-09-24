@@ -7,12 +7,13 @@ import { exportManifestName } from "../src/share.js";
 import {
   launchApp, openEditorFromLibrary, openExportDialog, inkiness, closeEditorWindow,
 } from "./_editor-fixture.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /** The committed fixture's take name — `makeTakeFolder`'s own default. */
 const TAKE_NAME = "2026-08-24_10-00-00";
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 /**
  * The committed fixture with its DECLARED capture size rewritten to 1920x1080.

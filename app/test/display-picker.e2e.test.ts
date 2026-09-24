@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { waitForStart } from "./_start-log.js";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * The display picker (STC-247), end to end through the real app: the real IPC
@@ -19,7 +20,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 async function launch(opts: { userData: string; recordings: string; startLog?: string; displays?: string }) {
   app = await electron.launch({

@@ -14,11 +14,12 @@ import { SOFTWARE_RENDER_ARGS } from "../../scripts/render-backend.mjs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { RAW_SUBDIR } from "../src/takes.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 const root = join(__dirname, "..", "..");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 /** Bundle directories directly under `dir` carrying `display.mp4` + `anchors.json`. */
 function bundlesIn(dir: string): string[] {

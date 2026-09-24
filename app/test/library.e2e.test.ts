@@ -9,6 +9,7 @@ import { RAW_SUBDIR } from "../src/takes.js";
 import { hasWindow } from "./_windows.js";
 import { keptFileRequests } from "./_still-log.js";
 import { toastText } from "./_toast.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * The library grid, end to end (STC-294).
@@ -28,7 +29,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 interface Launched { win: Page; recordings: string; stillLog: string; errors: string[] }
 

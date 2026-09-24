@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { MAX_STACKED } from "../src/thumbnail.js";
-import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow, pageWithUrl, pageMatching, clickThatCloses, actThatCloses } from "./_windows.js";
 import { keptFileRequests, exportRequests } from "./_still-log.js";
 import { RAW_SUBDIR } from "../src/takes.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * The contract STC-392 reverses, end to end.
@@ -40,21 +40,11 @@ let app: ElectronApplication | undefined;
 // completes — and on run 35454190145 it did NOT complete: with a trash
 // pending at quit, `shell.trashItem` never answered, the chain never reached
 // its first mark, and this hook hit its bound (STC-427). The commit is
-// bounded in `main.ts` now, so this bound DERIVES from that one, the way
-// `nothing-lost.e2e.test.ts`'s derives from `SETTLE_READY_MS`: the chain's
-// worst case plus room to observe it.
-const TEARDOWN_MS = TRASH_COMMIT_AT_QUIT_MS + 20_000;
-afterEach(async () => {
-  const closing = app;
-  app = undefined;
-  if (!closing) return;
-  const t0 = Date.now();
-  await closing.close().catch(() => {});
-  // Anything over a few seconds is worth a line: CI has run this chain past
-  // the bound above with no record of how long it usually takes (STC-427).
-  const ms = Date.now() - t0;
-  if (ms > 3_000) process.stderr.write(`[panel-waits] app.close() took ${ms}ms\n`);
-}, TEARDOWN_MS);
+// bounded in `main.ts` now, so `APP_TEARDOWN_MS` DERIVES from that one, the
+// way `nothing-lost.e2e.test.ts`'s derives from `SETTLE_READY_MS`: the
+// chain's worst case plus room to observe it. It lives in `_app-teardown.ts`
+// now, shared by every E2E file rather than this one alone.
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 /**
  * Electron's own stderr and its exit, forwarded into this test's log with the

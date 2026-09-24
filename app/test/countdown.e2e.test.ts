@@ -7,6 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withCountdown } from "./_countdown-fixture.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { toastPage } from "./_toast.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * The countdown, wired through the real app (STC-391).
@@ -48,7 +49,7 @@ const LONGER_THAN_THE_TEST_MS = 30_000;
 const SHORT_MS = 900;
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

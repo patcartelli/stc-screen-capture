@@ -9,6 +9,7 @@ import { openEditorFromLibrary, inkiness } from "./_editor-fixture.js";
 import { mintCaptureId } from "@transform/capture-id.js";
 import { CAPTURE_DOC_FILE, captureDocForWrite } from "@transform/capture-doc.js";
 import { tagMp4 } from "@transform/media-tag.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * STC-242 — share, end to end through the real handlers.
@@ -26,7 +27,7 @@ import { tagMp4 } from "@transform/media-tag.js";
  */
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 const TAKE = "2026-08-24_10-00-00";
 

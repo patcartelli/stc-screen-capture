@@ -4,9 +4,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { launchWithTakeInEditor, openExportDialog, inkiness } from "./_editor-fixture.js";
 import { exportMediaName, exportManifestName } from "../src/share.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 async function launchWithTake() {
   const { app: a, editorWin, takeDir, dir } = await launchWithTakeInEditor();

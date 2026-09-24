@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { toastPage, toastText } from "./_toast.js";
 import { MESSAGE_TOAST_MIN_MS } from "../src/toast.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * A warning the helper sends on its reliable channel reaches the user, and a
@@ -26,7 +27,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 async function launchAndPressRecord(env: Record<string, string>) {
   // An EMPTY recordings root, deliberately: the refusal test reads this

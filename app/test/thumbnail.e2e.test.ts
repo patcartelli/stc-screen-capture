@@ -9,6 +9,7 @@ import { windowCount, hasWindow, windowUrls, pageWithUrl, actThatCloses, clickTh
 import { CLIPBOARD_SUBDIR } from "../src/still-io.js";
 import { readRequests, exportRequests, keptFileRequests } from "./_still-log.js";
 import { RAW_SUBDIR } from "../src/takes.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * The post-capture floating thumbnail, end to end (STC-296, reworked by
@@ -50,7 +51,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

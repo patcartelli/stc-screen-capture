@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { windowCount } from "./_windows.js";
 import { stamp, RAW_SUBDIR } from "../src/takes.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * A temp-take folder name that is recent, not a hardcoded calendar date.
@@ -50,7 +51,7 @@ const recentStamp = (offsetMs: number): string => stamp(new Date(Date.now() - of
 const root = join(__dirname, "..", "..");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 interface Seeded { recordings: string; tempTakes: string; userData: string }
 

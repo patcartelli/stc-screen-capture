@@ -6,6 +6,7 @@ import { launchWithTakeInEditor, inkiness } from "./_editor-fixture.js";
 import { exportMediaName } from "../src/share.js";
 import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * Source media is never mutated — enforced at the process boundary, not by
@@ -24,7 +25,7 @@ import { mintCaptureId } from "@transform/capture-id.js";
  * that happens to already occupy the derived name.
  */
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 /** A structurally valid, tiny MP4 `tagMp4` can actually tag (not just pad). */
 const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];

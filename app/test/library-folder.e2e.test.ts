@@ -13,6 +13,7 @@ import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
 import { captureDocForWrite, CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { renameCapture } from "../src/takes.js";
+import { closeApp, APP_TEARDOWN_MS } from "./_app-teardown.js";
 
 /**
  * The library's two-object delete (STC-413 Task 11): a capture is now a
@@ -67,7 +68,7 @@ beforeEach(async () => {
   app = launched.app;
   page = launched.win;
 });
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_TEARDOWN_MS);
 
 /** Poll until the tile set stops changing — the render is a single synchronous
  *  DOM replace once the IPC round trip resolves, so this converges in at most
