@@ -74,30 +74,42 @@ invariant. Its pause is a plain 2s sleep against the DEFAULT 2s
 exactly one fragment boundary, not several, so it has never been run against
 a pause that crosses more than one.
 
-**New: extended `helper/test/fragmented-writer/main.swift` and
-`fragmented-writer.test.ts` with the actual STC-408 question — an
-UNCRASHED take with a real multi-fragment-interval gap where nothing was
-appended (exactly what `PauseGate` does to this writer: paused samples are
-dropped outright, not held or re-timed, so the PTS the next real sample
-carries jumps by the real elapsed pause duration rather than continuing a
-frame-index grid).** The new test ("a real multi-fragment-interval gap (a
-pause), finished cleanly, demuxes every frame with the gap intact") writes
-300 frames with a 5-second gap inserted after frame 120 (spanning five whole
-1-second fragment intervals), finishes NORMALLY (no crash), and asserts:
-every one of the 300 frames survives (unlike the crash case, nothing should
-be lost), the PTS grid is exact on both sides of the gap, and the gap itself
-demuxes intact rather than being silently collapsed or rebased — which
-matters because the transform's frame-selection rule ("greatest PTS ≤ t";
-`CLAUDE.md`'s own "Settled decisions") is what actually holds the picture
-through a paused span, and a demuxer that collapsed the gap would feed it a
-lie. **This could not be run here** — `xcrun`/`swiftc` are both absent from
-this sandbox (confirmed: `spawnSync xcrun ENOENT`), the same wall every
-`*.grant.test.ts` and this whole harness family hits from Linux. The test is
-wired the same way the three pre-existing tests in that file are (same
-harness, same `runSwiftHarness` call, same failure point when driven with a
-throwaway no-`globalSetup` vitest config) — nothing about the new test's
-plumbing is unverified beyond the one thing no Linux box can verify: whether
-it PASSES against a real `swiftc`.
+**The gap test, and what CI's macOS runner found with it.**
+`helper/test/fragmented-writer/main.swift` and `fragmented-writer.test.ts`
+now model an UNCRASHED take with a gap where nothing was appended. This is
+exactly what `PauseGate` does to this writer: paused samples are dropped
+outright, not held or re-timed, so the next real sample's PTS jumps by the
+real elapsed pause. The test writes 300 frames with a gap after frame 120,
+finishes NORMALLY, and asserts that all 300 frames survive, the PTS grid is
+exact on both sides, and the gap demuxes intact rather than being collapsed
+or rebased. That last point matters because the transform's frame-selection
+rule ("greatest PTS ≤ t") is what holds the picture through a paused span.
+
+This sandbox has no `swiftc`, so CI's runner was the instrument. Three runs
+swept gap sizes and encoder settings (run 35902771313 has the full table):
+
+| gap | fragmented? | result on CI |
+|---|---|---|
+| 0.5 s, 1 s, 2 s | no | ok: every frame, gap intact |
+| 2 s | yes (1 s interval) | ok, identical to unfragmented |
+| 3 s, 5 s | no | append fails 5-14 frames after resume (`-11800` / `-17771`) |
+| 5 s | yes, and yes + real-time pacing | same failure |
+| 5 s | no `AVVideoExpectedSourceFrameRateKey`, or `expectsMediaDataInRealTime = false` | same failure |
+
+**STC-408's own answer is in the top two rows: fragmentation does not
+change what a gap does.** The 2 s fragmented gap crosses two fragment
+boundaries and comes through exactly like the unfragmented one. Those rows
+are what the test asserts.
+
+**The failure at 3 s and above is not a fragmentation property, and it is
+now STC-448.** It fails identically without `movieFragmentInterval`, and no
+setting tried moves the 2-3 s threshold. It has only been seen on CI's
+encoder, the paravirtualized one STC-259 measured behaving unlike real
+hardware. STC-240's grant test passed a 2 s pause on a real Mac, which is
+below the threshold and says nothing either way. Those rows are not
+asserted in this ticket's test. The harness keeps every knob used above
+(`STC_FRAG_GAP_SEC`, `STC_FRAG_REALTIME`, `STC_FRAG_NO_EXPECTED_RATE`,
+`STC_FRAG_NOT_REALTIME`), so STC-448 re-adds them as one line each.
 
 ## What only a Mac can settle
 
@@ -105,12 +117,14 @@ it PASSES against a real `swiftc`.
 
 Run `npx vitest run helper/test/fragmented-writer.test.ts` (needs `swiftc`,
 present on any Mac with Command Line Tools per `CLAUDE.md`'s Toolchain
-section). All four tests should pass, including the new one. If the new one
-fails, read which assertion: a PTS mismatch means the gap model above is
-wrong about how `AVAssetWriter` schedules fragments across an idle span; a
-frame-count mismatch below 300 means something IS being lost on an
-uncrashed gap, which would be the actual STC-408 finding this ticket exists
-to either confirm or rule out.
+section). All four tests pass on CI's runner. On real hardware, the gap test
+should print the same `ok` table to stderr.
+
+While you are there, run STC-448's rows too: add
+`{ name: "nofrag-5s", gapSec: 5 }` (and a 3 s row) to `CASES` and run the
+file once. **A 5 s gap that comes through intact on hardware means STC-448 is
+CI-only. A failure means it is real, and §3's 8-10 s pause will lose the
+rest of the take's video.** Report either result on STC-448, not here.
 
 ### §2 — real takes, end to end
 
@@ -136,11 +150,11 @@ pause spanning several fragment intervals rather than one:
 
 1. `helper/build/stc-helper` (or via `tools/test-host` for a granted
    identity), send `start`, wait a few seconds, send `pause`, wait **at
-   least 8-10 seconds** (several multiples of the 2s default fragment
-   interval — the harness test above uses 5s; go longer on real hardware
-   since real `AVAssetWriter` timing on a live stream may differ from the
-   synthetic harness's programmatic feed), send `resume`, wait a few more
-   seconds, `stop`.
+   least 8-10 seconds** (several multiples of the 2 s default fragment
+   interval), send `resume`, wait a few more seconds, `stop`. If STC-448
+   reproduced in §1, expect `display.mp4` to end a few frames after the
+   resume. That is STC-448's failure, not a fragmentation one; report it
+   there.
 2. Confirm `anchors.json` is v5 with exactly one `pauses` entry, and that
    `events.json` has no event inside `[startNs, endNs)` — already asserted
    by the existing grant test at the 2s scale; re-confirm it still holds at
