@@ -138,7 +138,7 @@ function applySpanTransform(): void {
   const translatePct = durationNs > 0 ? -(spanStart / span) * 100 : 0;
   const transform = `scaleX(${scale}) translateX(${translatePct}%)`;
   ($("timeline") as HTMLElement).style.transform = transform;
-  ($("clip-canvas-wrap") as HTMLElement).style.transform = transform;
+  ($("ruler-activity-wrap") as HTMLElement).style.transform = transform;
   ($("zoom-canvas-wrap") as HTMLElement).style.transform = transform;
   ($("ruler-content") as HTMLElement).style.transform = transform;
   // STC-331, found fixing this file: editor.html's own comment already
@@ -268,6 +268,11 @@ function zoomSpan(factor: number, anchorFraction: number): void {
 let panning = false;
 let panLastX = 0;
 $("ruler").addEventListener("pointerdown", (e) => {
+  // The activity toggle sits INSIDE #ruler (2026-09-24 declutter pass), and
+  // without this guard #ruler's own setPointerCapture below steals the
+  // button's pointer events on the very first pointerdown — a click that
+  // never reaches the button, watched failing before this was added.
+  if ((e.target as HTMLElement).closest("#ruleractivitytoggle")) return;
   panning = true;
   panLastX = (e as PointerEvent).clientX;
   ($("ruler") as HTMLElement).setPointerCapture((e as PointerEvent).pointerId);
@@ -391,17 +396,27 @@ function setTrim(startNs: number, endNs: number, persist: boolean): void {
 // ---- the Clip and Zoom lanes (STC-373) --------------------------------------
 
 const LANE_BUCKETS = 480;
-/** The Clip lane's bars are lit from the bottom in LED-style rows (STC-444
- *  slice 2, "LED/LCD screen" HTML variant comparison) rather than a solid
- *  fill — SEG the filled height of each row, GAP the dark space after it. */
+/** The Clip activity's bars are lit from the bottom in LED-style rows
+ *  (STC-444 slice 2, "LED/LCD screen" HTML variant comparison) rather than
+ *  a solid fill — SEG the filled height of each row, GAP the dark space
+ *  after it. */
 const LED_ROW_SEG_PX = 2;
 const LED_ROW_GAP_PX = 1;
 
-function drawClipLane(): void {
-  const canvas = $("clip-activity") as HTMLCanvasElement;
-  const wrap = $("clip-canvas-wrap") as HTMLElement;
+/**
+ * Clip activity, drawn onto the RULER now, not its own lane (2026-09-24
+ * declutter pass, real-hardware feedback: three stacked lanes read as
+ * cluttered, and activity is a judgment aid for where to trim, not a
+ * control — it does not need a lane's worth of space to earn its keep).
+ * `#ruler[data-activity]`'s CSS opacity is what actually shows or hides
+ * it; this always redraws the canvas regardless, the same way the Zoom
+ * lane's canvas is kept current whether or not anything is selected on it.
+ */
+function drawRulerActivity(): void {
+  const canvas = $("ruler-activity") as HTMLCanvasElement;
+  const wrap = $("ruler-activity-wrap") as HTMLElement;
   const w = Math.max(1, Math.round(wrap.getBoundingClientRect().width)) || LANE_BUCKETS;
-  const h = 30;
+  const h = 18;
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
@@ -413,7 +428,7 @@ function drawClipLane(): void {
   const bw = Math.max(1, barW - 1);
   const rowStride = LED_ROW_SEG_PX + LED_ROW_GAP_PX;
   for (let i = 0; i < activity.length; i++) {
-    const bh = Math.max(1, activity[i]! * (h - 4));
+    const bh = Math.max(1, activity[i]! * (h - 2));
     const x = i * barW;
     const top = h - bh;
     for (let y = h; y > top; y -= rowStride) {
@@ -422,6 +437,20 @@ function drawClipLane(): void {
     }
   }
 }
+
+/** #ruleractivitytoggle's own state — never persisted: a view preference
+ *  for THIS look, not an edit decision, so it resets to off (declutter by
+ *  default) each time the editor opens, the same way "Viewer's eye" does. */
+function toggleRulerActivity(): void {
+  const btn = $("ruleractivitytoggle") as HTMLButtonElement;
+  const ruler = $("ruler") as HTMLElement;
+  const on = btn.getAttribute("aria-pressed") !== "true";
+  btn.setAttribute("aria-pressed", String(on));
+  ruler.toggleAttribute("data-activity", on);
+}
+$("ruleractivitytoggle").addEventListener("click", toggleRulerActivity);
+
+
 
 /** A crisp square-cell checkerboard (STC-444 slice 2: "LCD crisp", finer of
  *  the two pitches compared) rather than a soft blur — `bg` is the gap
@@ -479,7 +508,7 @@ function drawZoomLane(): void {
   ctx.fill();
 }
 
-function redrawLanes(): void { drawClipLane(); drawZoomLane(); layoutOverrideBlocks(); }
+function redrawLanes(): void { drawRulerActivity(); drawZoomLane(); layoutOverrideBlocks(); }
 window.addEventListener("resize", redrawLanes);
 
 // ---- manual zoom override (STC-330/331) — the block lane's editing half ---
