@@ -93,7 +93,15 @@ contextBridge.exposeInMainWorld("recorder", {
                       // from) the pill. The renderer has no other way to know
                       // its own window shrank — `pill-window.ts` drives the
                       // resize from main, not from anything in this page.
-                      "pill:state"];
+                      "pill:state",
+                      // STC-433: `recorder:start` resolved a stale display
+                      // or mic on this window's behalf. `settings:changed`
+                      // says the stored value moved out from under the
+                      // picker (an automatic display, a mic turned off);
+                      // the `open*Picker` pair instead asks this window to
+                      // open the profile sheet and focus the control that
+                      // needs a new choice.
+                      "settings:changed", "settings:openDisplayPicker", "settings:openMicPicker"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);

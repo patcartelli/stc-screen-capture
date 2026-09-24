@@ -774,6 +774,46 @@ ipcMain.handle("recorder:status", async () => ({
   pid: sup?.pid,
 }));
 
+/**
+ * STC-433: what to do about a display or mic `recorder:start` finds is no
+ * longer connected. A native dialog rather than a toast (`alertUser`,
+ * renderer.ts) because this is a decision, not a notice — the same reason
+ * `recoverUnsavedTakes` above uses `dialog.showMessageBox` rather than a
+ * passive message for "these takes never made it to your library."
+ *
+ * The two kinds get DIFFERENT primary buttons on purpose, not just
+ * different words. A missing DISPLAY can fall back to "Use Automatic"
+ * because that mode already exists and is safe — it's the exact behaviour a
+ * never-picked display already gets (`settings.ts`'s `displayId: null`). A
+ * missing MIC has no equivalent to fall back to: the settled STC-233
+ * decision is that this app must never take a microphone without the user
+ * naming it, because an unprompted grab once wedged CoreAudio system-wide.
+ * So its primary button is "Turn Mic Off" — the exact state the user could
+ * already reach by picking Off themselves — never a silent pick of
+ * whichever mic happens to be plugged in.
+ */
+type DeviceFallback = "automatic" | "off" | "choose" | "cancel";
+
+async function resolveDeviceNotFound(kind: "display" | "mic"): Promise<DeviceFallback> {
+  if (!win || win.isDestroyed()) return "cancel";
+  const noun = kind === "display" ? "display" : "microphone";
+  const primaryLabel = kind === "display" ? "Use Automatic" : "Turn Mic Off";
+  const chooseLabel = `Choose a Different ${kind === "display" ? "Display" : "Microphone"}…`;
+  const { response } = await dialog.showMessageBox(win, {
+    type: "warning",
+    buttons: [primaryLabel, chooseLabel, "Cancel"],
+    defaultId: 0,
+    cancelId: 2,
+    message: `The selected ${noun} is no longer connected`,
+    detail: kind === "display"
+      ? "Record using whichever display is available, or choose a different one."
+      : "Record with no microphone, or choose a different one. Capture never picks a microphone automatically.",
+  });
+  if (response === 0) return kind === "display" ? "automatic" : "off";
+  if (response === 1) return "choose";
+  return "cancel";
+}
+
 ipcMain.handle("recorder:start", async () => {
   // STC-381: before anything else, even the `no-capture-target` refusal
   // below — a flash still on screen (Record pressed right after a pick)
@@ -791,8 +831,9 @@ ipcMain.handle("recorder:start", async () => {
   // Read from the stored preference, NOT passed up from the renderer. Main
   // already owns these settings, and a renderer-supplied value would be a
   // second source of truth for what turns on a physical camera and what the
-  // helper is told to point at.
-  const { camera, displayId, micDeviceUid, scope, countdownMs } =
+  // helper is told to point at. `let`, not `const`: STC-433's device-fallback
+  // check below may clear either one before `startParams` is built.
+  let { camera, displayId, micDeviceUid, scope, countdownMs } =
     readSettings(app.getPath("userData"));
   const startParams: Record<string, unknown> = { camera };
   // Only when a device is actually picked (STC-233) — an absent field is
@@ -816,6 +857,56 @@ ipcMain.handle("recorder:start", async () => {
     // same rule STC-247 already set for a stale displayId: a picker must not
     // have its choice silently swapped for another.
     return { ok: false, code: "no-capture-target" };
+  }
+  // STC-433: check the chosen display/mic against the helper's own current
+  // enumeration BEFORE the countdown, not after a doomed `start` — the same
+  // "don't count down to a refusal" reasoning STC-391 already applied to
+  // `no-capture-target` above. A stale display used to refuse `start`
+  // outright with a raw `display-not-found` string; a stale mic didn't
+  // refuse at all, it silently recorded with no audio and only said so
+  // afterwards (`mic-not-found` in renderer.ts's MIC_FAULTS). Both get an
+  // actual choice now. `sup.devices()` failing outright (helper not ready)
+  // is not this check's problem — falling through leaves `startParams`
+  // untouched and lets the existing catch below handle whatever happens.
+  const known = await sup.devices().catch(() => null);
+  if (known) {
+    const knownDisplays = Array.isArray((known as any).displays) ? (known as any).displays as { id: number }[] : [];
+    const knownMics = Array.isArray((known as any).mics) ? (known as any).mics as { uid: string }[] : [];
+    // A stalled CoreAudio enumeration means "unknown," never "gone" — forcing
+    // the mic off on a stall would be worse than today's behaviour, not
+    // better. The existing mic-not-found live warning stays the backstop for
+    // a mic that really is missing while enumeration itself can't say so.
+    const micEnumerationStalled = Boolean((known as any).stalled);
+
+    if (scope.kind === "display" && displayId != null && !knownDisplays.some((d) => d.id === displayId)) {
+      const choice = await resolveDeviceNotFound("display");
+      if (choice === "automatic") {
+        displayId = null;
+        delete startParams.displayId;
+        writeSettings(app.getPath("userData"), { displayId: null });
+        send("settings:changed", undefined);
+      } else if (choice === "choose") {
+        send("settings:openDisplayPicker", undefined);
+        return { ok: false, cancelled: true };
+      } else {
+        return { ok: false, cancelled: true };
+      }
+    }
+
+    if (!micEnumerationStalled && micDeviceUid != null && !knownMics.some((m) => m.uid === micDeviceUid)) {
+      const choice = await resolveDeviceNotFound("mic");
+      if (choice === "off") {
+        micDeviceUid = null;
+        delete startParams.micDeviceUid;
+        writeSettings(app.getPath("userData"), { micDeviceUid: null });
+        send("settings:changed", undefined);
+      } else if (choice === "choose") {
+        send("settings:openMicPicker", undefined);
+        return { ok: false, cancelled: true };
+      } else {
+        return { ok: false, cancelled: true };
+      }
+    }
   }
   // STC-391: Record ALWAYS counts down — the countdown is what makes Record
   // feel weightier than Capture. After the scope checks above and never

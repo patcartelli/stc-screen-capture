@@ -749,6 +749,28 @@ recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The 
 recorder.on("pill:state", (s: { collapsed: boolean }) => {
   document.body.classList.toggle("pill-collapsed", s.collapsed);
 });
+
+/**
+ * STC-433: `recorder:start` resolved a stale display or mic without this
+ * window's help (an automatic display, a mic turned off) — the picker's own
+ * `storedDisplayId`/`storedMicUid` are now stale too, and nothing else would
+ * refresh them until the next `helper:ready` or a real unplug.
+ */
+recorder.on("settings:changed", () => {
+  void (async () => {
+    const s = await recorder.getSettings();
+    storedDisplayId = s.displayId;
+    storedMicUid = s.micDeviceUid;
+    await refreshDisplays();
+    await refreshMics();
+  })();
+});
+// The choice was "pick a different one" rather than "use the fallback" —
+// open the profile sheet and hand focus straight to the control that needs
+// it, rather than leaving the user to find it themselves.
+recorder.on("settings:openDisplayPicker", () => { setProfileOpen(true); displaySel.focus(); });
+recorder.on("settings:openMicPicker", () => { setProfileOpen(true); micSel.focus(); });
+
 /**
  * Camera failures the user must actually see. Every one of these was already
  * being emitted and silently dropped: the handler below matched exactly one
