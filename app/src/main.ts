@@ -192,6 +192,23 @@ function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+/**
+ * STC-432: with no `trafficLightPosition`, macOS draws the inset lights
+ * roughly where `index.html`'s `body { padding: 20px }` also starts
+ * `#title-row` — the two were never coordinated and landed on top of each
+ * other. These numbers are the SAME ones `index.html`'s own
+ * `--traffic-light-offset` uses to push the heading clear (cluster width +
+ * a gap); a change to one is a change to both, and they're named here
+ * rather than left as bare numbers in the BrowserWindow options.
+ *
+ * `X_PX` matches the body's own left padding, so the cluster's left edge is
+ * flush with where every other row's content starts. `Y_PX` centres the
+ * 12px dot cluster inside `#title-row`'s own ~20px height (the 15px/1.3
+ * line-height of its `h1`), offset by that same 20px top padding.
+ */
+const TRAFFIC_LIGHT_X_PX = 20;
+const TRAFFIC_LIGHT_Y_PX = 24;
+
 function createWindow(): void {
   setDockVisible(true);
   win = new BrowserWindow({
@@ -201,6 +218,12 @@ function createWindow(): void {
     // native traffic lights as an inset overlay (no drawn title strip), which
     // is what lets Record collapse the window to a 26px pill at all.
     titleBarStyle: "hidden",
+    // STC-432: aligned to `#title-row` rather than left at the OS default —
+    // see the constants above. Only `collapsePill`/`restorePill`
+    // (pill-window.ts) ever change VISIBILITY of the lights afterward; the
+    // position set here is untouched by collapse/restore, which is exactly
+    // what "come back in the same position" requires.
+    trafficLightPosition: { x: TRAFFIC_LIGHT_X_PX, y: TRAFFIC_LIGHT_Y_PX },
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(join(here, "..", "renderer", "index.html"));
