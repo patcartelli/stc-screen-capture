@@ -2,62 +2,25 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
-  <title>stc editor</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <title>Capture</title>
+  <link rel="stylesheet" href="tokens.css">
   <style>
-    @font-face { font-family: "Geist"; font-weight: 300; src: url("fonts/Geist-Light.woff2") format("woff2"); font-display: swap; }
-    @font-face { font-family: "Geist"; font-weight: 400; src: url("fonts/Geist-Regular.woff2") format("woff2"); font-display: swap; }
-    @font-face { font-family: "Geist"; font-weight: 500; src: url("fonts/Geist-Medium.woff2") format("woff2"); font-display: swap; }
-    @font-face { font-family: "Geist"; font-weight: 600; src: url("fonts/Geist-SemiBold.woff2") format("woff2"); font-display: swap; }
-    @font-face { font-family: "JetBrains Mono"; font-weight: 400; src: url("fonts/JetBrainsMono-Regular.woff2") format("woff2"); font-display: swap; }
-    @font-face { font-family: "JetBrains Mono"; font-weight: 500; src: url("fonts/JetBrainsMono-Medium.woff2") format("woff2"); font-display: swap; }
-    @font-face { font-family: "Silkscreen"; font-weight: 400; src: url("fonts/Silkscreen-Regular.woff2") format("woff2"); font-display: swap; }
-
-    :root {
-      color-scheme: light dark;
-      --font-sans: "Geist", -apple-system, system-ui, sans-serif;
-      --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-      --font-pixel: "Silkscreen", "JetBrains Mono", ui-monospace, monospace;
-
-      /* Type ramp — sans (Geist). No view sets a font-size inline. */
-      --type-label: 10px; --type-label-weight: 500; --type-label-tracking: 0.10em;
-      --type-meta: 11px; --type-meta-weight: 400; --type-meta-tracking: 0.02em;
-      --type-body: 12px; --type-body-weight: 400; --type-body-lh: 1.4;
-      --type-body-strong: 12px; --type-body-strong-weight: 600; --type-body-strong-lh: 1.4;
-      --type-heading: 13px; --type-heading-weight: 600; --type-heading-lh: 1.3;
-      --type-read: 13px; --type-read-weight: 400; --type-read-lh: 1.5;
-      --type-title: 15px; --type-title-weight: 300; --type-title-tracking: -0.01em; --type-title-lh: 1.3;
-      --type-display: 20px; --type-display-weight: 300; --type-display-tracking: -0.02em; --type-display-lh: 1.1;
-
-      /* Type ramp — mono (JetBrains Mono) with tabular-nums */
-      --type-value-sm: 11px; --type-value-sm-weight: 400; --type-value-sm-lh: 1.4;
-      --type-value: 12px; --type-value-weight: 400; --type-value-lh: 1.4;
-
-      /* Type ramp — pixel (Silkscreen) at 8px grid multiples only */
-      --type-timer-pill: 16px; --type-timer-pill-lh: 1;
-      --type-timer: 32px; --type-timer-lh: 1;
-
-      font-family: var(--font-sans);
-      font-size: var(--type-body);
-      line-height: 1.5;
-
-      --bg: #fff; --surface: #f4f4f5; --text: #111; --muted: #666;
-      --line: rgba(128,128,128,.28); --accent: #3b6fe0; --warn: #b34;
-      --clip: #6a8fd8; --zoom: #d88a3b;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root { --bg: #17181a; --surface: #202226; --text: #eee; --muted: #999;
-               --line: rgba(255,255,255,.16); }
-    }
+    /* Fonts, type ramp and light/dark color tokens live in tokens.css now
+       (STC-443) — --clip/--zoom are this window's own semantic tokens, the
+       ONE thing the shared base has no opinion on, so they extend it here
+       rather than redefining anything tokens.css already declares. Constant
+       across light/dark, same as before this ticket. */
+    :root { --clip: #6a8fd8; --zoom: #d88a3b; }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
            display: flex; flex-direction: column; gap: 10px; }
     button { font: inherit; padding: 6px 14px; border-radius: 7px;
-             border: 1px solid var(--line); background: transparent; color: inherit;
+             border: 1px solid var(--border); background: transparent; color: inherit;
              cursor: pointer; }
     button[disabled] { opacity: .4; cursor: default; }
     select, input { font: inherit; color: inherit; background: var(--surface);
-                    border: 1px solid var(--line); border-radius: 5px; }
+                    border: 1px solid var(--border); border-radius: 5px; }
     .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
     #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid rgba(200,80,60,.5);
@@ -86,10 +49,10 @@
     /* ── the timeline: a ruler and two lanes over one shared [a, b] span ─── */
     .timelinewrap { display: flex; flex-direction: column; gap: 2px; }
     #ruler { position: relative; height: 18px; overflow: hidden; cursor: grab;
-             border-bottom: 1px solid var(--line); }
+             border-bottom: 1px solid var(--border); }
     #ruler:active { cursor: grabbing; }
     .laneviewport { position: relative; overflow: hidden; height: 30px;
-                    border-bottom: 1px solid var(--line); }
+                    border-bottom: 1px solid var(--border); }
     .laneviewport.zoom { height: 22px; }
     /* The FULL-DURATION content, transformed to show only the visible span
        (STC-373: "pan lives on the ruler, zoom anchors on the pointer"). Every
@@ -153,7 +116,7 @@
     .manualhandle.end { right: -4px; }
     .manualhandle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .timeline .bar { position: absolute; left: 0; right: 0; top: 12px; height: 4px;
-                     background: var(--line); border-radius: 2px; pointer-events: none; }
+                     background: var(--border); border-radius: 2px; pointer-events: none; }
     .timeline .kept { position: absolute; top: 0; height: 4px;
                       background: var(--clip); border-radius: 2px; }
     .timeline .ticks { position: absolute; left: 0; right: 0; top: 8px; height: 12px;
@@ -165,7 +128,7 @@
     .timeline .ticks[hidden] { display: none; }
     .timeline .cut { position: absolute; top: 10px; height: 8px; pointer-events: none;
                      background: repeating-linear-gradient(-45deg,
-                       var(--line) 0 2px, transparent 2px 5px); }
+                       var(--border) 0 2px, transparent 2px 5px); }
     .timeline .handle { position: absolute; top: 4px; width: 10px; height: 20px;
                         margin-left: -5px; padding: 0; border-radius: 2px; z-index: 3;
                         cursor: ew-resize; background: currentColor;
@@ -201,7 +164,7 @@
     #overridehint { opacity: .7; }
 
     /* ── the export dialog: legibility + the viewer's eye, one place ────── */
-    dialog#exportdialog { border: 1px solid var(--line); border-radius: 10px;
+    dialog#exportdialog { border: 1px solid var(--border); border-radius: 10px;
                           padding: 16px; background: var(--surface); color: inherit;
                           width: min(420px, 90vw); }
     dialog#exportdialog::backdrop { background: rgba(0,0,0,.35); }
