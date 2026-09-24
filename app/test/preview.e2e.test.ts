@@ -5,9 +5,10 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   launchWithTakeInEditor, openEditorFromLibrary, inkiness, closeEditorWindow,
 } from "./_editor-fixture.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 describe("preview player in the editor window (STC-373)", () => {
   // The regression this exists for: the app could not open a take with a

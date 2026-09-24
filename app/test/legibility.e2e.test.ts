@@ -6,10 +6,11 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import {
   launchApp, openEditorFromLibrary, openExportDialog, inkiness, closeEditorWindow,
 } from "./_editor-fixture.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 /**
  * The committed fixture with its declared DISPLAY geometry rewritten.

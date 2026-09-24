@@ -18,9 +18,10 @@ import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { launchWithTakeInEditor, dragOnStage, closeEditorWindow, pressOverrideDone } from "./_editor-fixture.js";
 import { windowCount } from "./_windows.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 const WINDOW_ID = "1705000000";
 

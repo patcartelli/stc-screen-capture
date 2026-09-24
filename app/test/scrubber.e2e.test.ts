@@ -17,9 +17,10 @@ import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { MIN_TRIM_FRAMES, formatTimecode } from "../src/scrubber.js";
 import { launchWithTakeInEditor, openExportDialog } from "./_editor-fixture.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 const LAST_FRAME = 299;
 
