@@ -150,6 +150,87 @@ function applySpanTransform(): void {
   // phase 1's read-only blocks ever did.
   ($("override-blocks") as HTMLElement).style.transform = transform;
   updateTicks();
+  renderRulerTicks();
+}
+
+// ---- the ruler's adaptive ticks + played line (STC-444 slice 2) ------------
+//
+// Separate from updateTicks()/#ticks above, which is STC-338's export-frame
+// grid drawn over the CLIP LANE — a different feature that predates this
+// ticket and is untouched by it. This is the ruler's own time scale.
+
+/** 1s → 5s → 10s → 30s → 1m → …, doubling/quintupling in the same "nice
+ *  round interval" spirit as the ticket's own documented ladder, extended
+ *  past 1m for takes longer than a minute (this repo already has 5-minute
+ *  and 60s example recordings). */
+const TICK_LADDER_S = [1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600];
+/** Never closer than this (scrubber.ts rule 9, applied to the ruler). */
+const MIN_TICK_SPACING_PX = 6;
+
+const MAX_RULER_LAYOUT_RETRIES = 5;
+let rulerLayoutRetriesLeft = MAX_RULER_LAYOUT_RETRIES;
+/**
+ * Rebuilds #ruler-ticks from the current [spanStart, spanEnd] and the
+ * ruler's own on-screen width — the coarsest interval off TICK_LADDER_S
+ * whose on-screen spacing is still >= MIN_TICK_SPACING_PX. Ticks are
+ * authored as a fraction of FULL DURATION (left: %), so the shared pan/zoom
+ * transform on #ruler-content carries them for free; only each tick's WIDTH
+ * needs a 1/scale correction to stay a constant on-screen px, since
+ * scaleX() stretches the X axis a %-based left/width already lives on.
+ *
+ * Same retry-on-zero-width shape as updateTicks() above (STC-378) — a
+ * freshly created editor window is not guaranteed a final layout size on
+ * the first read, and this reads a DIFFERENT element's box (#ruler, not
+ * #timeline), so it needs its own retry counter rather than borrowing that
+ * function's.
+ */
+function renderRulerTicks(): void {
+  const rulerEl = $("ruler") as HTMLElement;
+  const width = rulerEl.getBoundingClientRect().width;
+  if (width <= 0 && player && rulerLayoutRetriesLeft > 0) {
+    rulerLayoutRetriesLeft--;
+    requestAnimationFrame(renderRulerTicks);
+    return;
+  }
+  rulerLayoutRetriesLeft = MAX_RULER_LAYOUT_RETRIES;
+  const ticksEl = $("ruler-ticks") as HTMLElement;
+  ticksEl.innerHTML = "";
+  if (!player || width <= 0) return;
+  const durationNs = player.durationNs;
+  if (!(durationNs > 0)) return;
+  const span = Math.max(1, spanEnd - spanStart);
+  const scale = durationNs / span;
+  const visibleS = span / 1e9;
+  const pxPerSecond = width / Math.max(1e-9, visibleS);
+  let interval = TICK_LADDER_S[TICK_LADDER_S.length - 1]!;
+  for (const candidate of TICK_LADDER_S) {
+    if (candidate * pxPerSecond >= MIN_TICK_SPACING_PX) { interval = candidate; break; }
+  }
+  const durationS = durationNs / 1e9;
+  const tickWidthPx = Math.max(0.05, 1 / scale);
+  const frag = document.createDocumentFragment();
+  for (let t = 0; t <= durationS + 1e-6; t += interval) {
+    const div = document.createElement("div");
+    div.className = "ruler-tick";
+    div.style.left = `${Math.min(100, (t / durationS) * 100)}%`;
+    div.style.width = `${tickWidthPx}px`;
+    frag.appendChild(div);
+  }
+  ticksEl.appendChild(frag);
+  // The playhead mark is the same kind of fixed-width thing a tick is.
+  ($("ruler-playhead") as HTMLElement).style.width = `${tickWidthPx}px`;
+}
+
+/** The blue played bar and its bright boundary mark — updated every
+ *  onTime tick, unlike renderRulerTicks (span/resize-driven only), since
+ *  this is cheap (two style writes) and needs the current position. */
+function updateRulerPlayhead(tNs: number): void {
+  if (!player) return;
+  const durationNs = player.durationNs;
+  if (!(durationNs > 0)) return;
+  const pct = Math.max(0, Math.min(100, (tNs / durationNs) * 100));
+  ($("ruler-played") as HTMLElement).style.width = `${pct}%`;
+  ($("ruler-playhead") as HTMLElement).style.left = `${pct}%`;
 }
 
 /** Pan by a fraction of the CURRENT span (positive moves later in the take). */
@@ -220,13 +301,20 @@ function updateTrimUI(): void {
   kept.style.left = `${inPct}%`;
   kept.style.width = `${Math.max(0, outPct - inPct)}%`;
 
-  // Rule 4: what was cut is DIMMED, not fenced off.
+  // Rule 4: what was cut is DIMMED, not fenced off — across BOTH lanes now
+  // (STC-444 slice 2's "dimming across lanes"), not the Clip lane alone.
   const head = $("cut-head") as HTMLElement;
   head.style.left = "0%";
   head.style.width = `${Math.max(0, inPct)}%`;
   const tail = $("cut-tail") as HTMLElement;
   tail.style.left = `${outPct}%`;
   tail.style.width = `${Math.max(0, 100 - outPct)}%`;
+  const zHead = $("zoom-cut-head") as HTMLElement;
+  zHead.style.left = "0%";
+  zHead.style.width = `${Math.max(0, inPct)}%`;
+  const zTail = $("zoom-cut-tail") as HTMLElement;
+  zTail.style.left = `${outPct}%`;
+  zTail.style.width = `${Math.max(0, 100 - outPct)}%`;
   updateTicks();
 
   const w = exportWindow(openProject, player.durationNs);
@@ -277,7 +365,7 @@ function updateTicks(): void {
   ticks.style.setProperty("--tick-px", `${(width / lastFrame(player.durationNs)) * stride}px`);
 }
 
-window.addEventListener("resize", () => { if (player) updateTicks(); });
+window.addEventListener("resize", () => { if (player) { updateTicks(); renderRulerTicks(); } });
 
 async function persistProject(): Promise<void> {
   if (!openProject || !player) return;
@@ -299,6 +387,11 @@ function setTrim(startNs: number, endNs: number, persist: boolean): void {
 // ---- the Clip and Zoom lanes (STC-373) --------------------------------------
 
 const LANE_BUCKETS = 480;
+/** The Clip lane's bars are lit from the bottom in LED-style rows (STC-444
+ *  slice 2, "LED/LCD screen" HTML variant comparison) rather than a solid
+ *  fill — SEG the filled height of each row, GAP the dark space after it. */
+const LED_ROW_SEG_PX = 2;
+const LED_ROW_GAP_PX = 1;
 
 function drawClipLane(): void {
   const canvas = $("clip-activity") as HTMLCanvasElement;
@@ -313,10 +406,34 @@ function drawClipLane(): void {
   const barW = w / activity.length;
   const style = getComputedStyle(document.documentElement).getPropertyValue("--clip").trim() || "#6a8fd8";
   ctx.fillStyle = style || "#6a8fd8";
+  const bw = Math.max(1, barW - 1);
+  const rowStride = LED_ROW_SEG_PX + LED_ROW_GAP_PX;
   for (let i = 0; i < activity.length; i++) {
     const bh = Math.max(1, activity[i]! * (h - 4));
-    ctx.fillRect(i * barW, h - bh, Math.max(1, barW - 1), bh);
+    const x = i * barW;
+    const top = h - bh;
+    for (let y = h; y > top; y -= rowStride) {
+      const segH = Math.min(LED_ROW_SEG_PX, y - top);
+      ctx.fillRect(x, y - segH, bw, segH);
+    }
   }
+}
+
+/** A crisp square-cell checkerboard (STC-444 slice 2: "LCD crisp", finer of
+ *  the two pitches compared) rather than a soft blur — `bg` is the gap
+ *  color between lit cells, so it should be the lane's own background. */
+const DITHER_TILE_PX = 4;
+function ditherPattern(ctx: CanvasRenderingContext2D, color: string, bg: string): CanvasPattern {
+  const tile = document.createElement("canvas");
+  tile.width = DITHER_TILE_PX; tile.height = DITHER_TILE_PX;
+  const tctx = tile.getContext("2d")!;
+  tctx.fillStyle = bg;
+  tctx.fillRect(0, 0, DITHER_TILE_PX, DITHER_TILE_PX);
+  tctx.fillStyle = color;
+  const half = DITHER_TILE_PX / 2;
+  tctx.fillRect(0, 0, half, half);
+  tctx.fillRect(half, half, half, half);
+  return ctx.createPattern(tile, "repeat")!;
 }
 
 function drawZoomLane(): void {
@@ -333,12 +450,16 @@ function drawZoomLane(): void {
     player.durationNs,
     LANE_BUCKETS,
   );
-  const style = getComputedStyle(document.documentElement).getPropertyValue("--zoom").trim() || "#d88a3b";
   // STC-330: a FILLED area, not a stroked line — the same sampled curve now
   // reads as one trapezoid per derived window (ease-in ramp, flat top,
   // ease-out ramp), with #override-blocks laying the click targets over it.
   // Nothing about the sampling changed; only how it is drawn.
-  ctx.fillStyle = style || "#d88a3b";
+  // STC-444 slice 2: the fill itself is a dithered --zoom-fill checkerboard
+  // now, not solid --zoom (which still owns the override-selection accents
+  // — see editor.html's --zoom-fill comment for why those stayed separate).
+  const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#4f7fe0";
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0a0a0b";
+  ctx.fillStyle = ditherPattern(ctx, fillColor, bg);
   ctx.beginPath();
   ctx.moveTo(0, h);
   for (let i = 0; i < curve.length; i++) {
@@ -1027,6 +1148,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
     setPlayState(playing);
     $("shuttle").textContent = formatShuttle(player!.rate);
     if (!scrubbing) scrub.value = String(frame);
+    updateRulerPlayhead(tNs);
   };
   await player.seek(player.firstRenderableNs);
   resetSpan();
