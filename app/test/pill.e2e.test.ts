@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { startRecordFlow } from "./_record-flow.js";
 
 /**
  * The pill's real window collapse, wired through the real app (STC-375).
@@ -89,7 +90,7 @@ describe("the pill's collapse mechanism", () => {
     expect(await chrome()).toEqual({ resizable: true, alwaysOnTop: false });
     expect(await isPillCollapsed(win)).toBe(false);
 
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Stop");
     // Driven by the heartbeat (500ms in this app), not the click — the poll
     // is what proves that, not an assumption about timing.
@@ -120,7 +121,7 @@ describe("the pill's collapse mechanism", () => {
     await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: true, alwaysOnTop: false });
     await expect.poll(() => isPillCollapsed(win), { timeout: 5_000 }).toBe(false);
-  }, 160_000);
+  }, 210_000);
 
   test("a take the helper ends on its own also undoes the collapse", async () => {
     // STC-306: a display stream dying mid-take ends it unsolicited, through
@@ -137,11 +138,11 @@ describe("the pill's collapse mechanism", () => {
     const { win } = await launch({ STC_FAKE_STREAM_DEATH_MS: "900" });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
 
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: false, alwaysOnTop: true });
 
     // No further click: the stand-in ends the take on its own at ~300ms.
     await expect.poll(chrome, { timeout: 20_000 }).toEqual({ resizable: true, alwaysOnTop: false });
     await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
-  }, 120_000);
+  }, 180_000);
 });

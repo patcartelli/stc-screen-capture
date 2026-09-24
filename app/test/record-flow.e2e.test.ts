@@ -360,6 +360,29 @@ describe("expand", () => {
     expect(await overlay.evaluate(() => (window as any).__overlayState.rect)).toEqual(b);
   }, 120_000);
 
+  test("picking a window records THAT window — start sends its windowId and nothing else", async () => {
+    // The plain case, and until this test nothing covered it: every other
+    // windowId assertion in this file is `toBeUndefined()`, proving a window
+    // pick can be turned INTO a region or a full-display take. The positive
+    // half was `scope-picker.e2e.test.ts`'s "choosing a window … start sends
+    // its windowId", deleted with the sticky scope picker it drove — so the
+    // one path that actually records a window would otherwise have gone
+    // untested end to end.
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    // The stand-in's Finder window (id 4711, 100..500 x 100..400), the same
+    // point the expand test above picks.
+    await startRecordFlow(app!, win, { windowAt: { x: 200, y: 200 } });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect(cmd.windowId, `start payload was ${JSON.stringify(cmd)}`).toBe(4711);
+    // A window take names its window and nothing else: a displayId or a
+    // region alongside it would be two capture targets in one request.
+    expect("displayId" in cmd, `start payload was ${JSON.stringify(cmd)}`).toBe(false);
+    expect("region" in cmd, `start payload was ${JSON.stringify(cmd)}`).toBe(false);
+  }, 120_000);
+
   test("pressed while a WINDOW is picked settles as a full-display take, not a window one", async () => {
     // This combination was, until this test, proven only at the mechanism
     // level (a hand-built state passed straight to `confirm()` in

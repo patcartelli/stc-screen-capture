@@ -8,6 +8,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 import { toastText } from "./_toast.js";
+import { startRecordFlow } from "./_record-flow.js";
 
 /**
  * The mic picker, end to end through the real app (STC-233).
@@ -101,7 +102,7 @@ describe("the mic picker", () => {
     await win.selectOption("#mic", "fixture-mic-1");
     await expect.poll(() => win.inputValue("#mic")).toBe("fixture-mic-1");
 
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.micDeviceUid, `start payload was ${JSON.stringify(cmd)}`).toBe("fixture-mic-1");
@@ -117,7 +118,7 @@ describe("the mic picker", () => {
 
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.micDeviceUid).toBeUndefined();
   }, 180_000);
@@ -160,21 +161,21 @@ describe("the mic says what it is doing", () => {
     const win = await launch({ ...dirs(), mic: "Fixture USB Mic" });
     await waitForMicOption(win, "fixture-mic-1");
     await win.selectOption("#mic", "fixture-mic-1");
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
       .toContain("Fixture USB Mic");
-  }, 60_000);
+  }, 180_000);
 
   test("a mic that cannot be found says so instead of failing silently", async () => {
     const win = await launch({ ...dirs(), mic: "fail" });
     await waitForMicOption(win, "fixture-mic-1");
     await win.selectOption("#mic", "fixture-mic-1");
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
       .toContain("failed");
     await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no longer available");
-  }, 60_000);
+  }, 180_000);
 
   // STC-389: mirrors camera-toggle.e2e.test.ts's own fix exactly, one device
   // over — "Fixture USB Mic" and "no frames" are 80ms apart in the fake
@@ -187,7 +188,7 @@ describe("the mic says what it is doing", () => {
     await win.selectOption("#mic", "fixture-mic-1");
     await observeTextSequence(win, "mic-state");
 
-    await win.click("#record");
+    await startRecordFlow(app!, win);
 
     await expect.poll(
       async () => (await textSequence(win, "mic-state")).some((s) => s.includes("no frames")),
@@ -200,5 +201,5 @@ describe("the mic says what it is doing", () => {
 
     await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no sound");
-  }, 60_000);
+  }, 180_000);
 });
