@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import type { Readable } from "node:stream";
 import { REDACTION_FILL_ON_LIGHT } from "../../transform/src/still-redact.js";
+import { readPngCaptureId, readHeicCaptureId } from "../../transform/src/media-tag.js";
 
 /**
  * STC-293: `export-still` encoding for real, through ImageIO.
@@ -258,6 +259,152 @@ describe("export-still encodes through ImageIO (STC-293)", () => {
     expect(buf.subarray(4, 8).toString("latin1")).toBe("ftyp");
     expect(buf.subarray(8, 12).toString("latin1")).toMatch(/^(hei[cx]|mif1|msf1)$/);
     expect(r.alpha).toBe(true);
+  });
+});
+
+/**
+ * STC-413: the capture id has to survive the ENCODER, not merely reach it.
+ *
+ * The id is what points a finished file back at its source bundle, so a
+ * still that carries an unreadable one lists twice, cannot be renamed in
+ * Finder without breaking the link, and defeats the orphan sweep's
+ * "every file's id is readable" gate.
+ *
+ * This asserts the ROUND TRIP — encode, then read the real bytes back with
+ * the real reader — and that shape is the whole point. The pure Swift tests
+ * (`still-encode-decisions.test.ts`) assert the properties DICTIONARY
+ * carries the id, which is true and was true while every still the app
+ * produced was unreadable: ImageIO does not turn
+ * `kCGImagePropertyPNGDescription` into the `tEXt` chunk the reader
+ * originally walked, it routes it into XMP in an `iTXt` chunk. A test that
+ * stops at the dictionary is blind to exactly that.
+ */
+describe("a capture id survives the encoder (STC-413)", () => {
+  const ID = "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+  test("an exported PNG's id reads back through readPngCaptureId", async () => {
+    const h = spawnHelper();
+    const s = scratch();
+    const out = join(s.dir, "tagged.png");
+    const r = await h.request({
+      cmd: "export-still", rgba: s.path, width: s.width, height: s.height,
+      alpha: true, format: "png", file: out, captureId: ID,
+      capturedAt: "2026-09-22T10:00:00Z",
+    });
+    expect(r.ev, JSON.stringify(r)).toBe("exported-still");
+    expect(r.metadata).toBe("kept");
+    const buf = readFileSync(out);
+    // Read from the FILE, with the reader the library scan actually uses —
+    // not from the reply, and not from a chunk this test picked out itself.
+    expect(readPngCaptureId(new Uint8Array(buf)), "the id, read back out of the encoded PNG")
+      .toBe(ID);
+  });
+
+  test("an id survives a metadata strip", async () => {
+    const h = spawnHelper();
+    const s = scratch();
+    const out = join(s.dir, "stripped.png");
+    // A strip is expressed by omitting `capturedAt` — there is no separate
+    // flag. Identity is not metadata in the privacy sense that strip governs:
+    // it carries no timestamp and no path. Losing it to a strip would leave a
+    // shared screenshot permanently unable to find its own source bundle.
+    const r = await h.request({
+      cmd: "export-still", rgba: s.path, width: s.width, height: s.height,
+      alpha: true, format: "png", file: out, captureId: ID,
+    });
+    expect(r.metadata).toBe("stripped");
+    expect(readPngCaptureId(new Uint8Array(readFileSync(out)))).toBe(ID);
+  });
+
+  test("an untagged export reads back as no id, not as a wrong one", async () => {
+    const h = spawnHelper();
+    const s = scratch();
+    const out = join(s.dir, "plain.png");
+    await h.request({
+      cmd: "export-still", rgba: s.path, width: s.width, height: s.height,
+      alpha: true, format: "png", file: out,
+    });
+    // The control. Without it, a reader that answered `ID` for everything —
+    // or that the test was accidentally feeding a cached buffer — would pass
+    // the two assertions above.
+    expect(readPngCaptureId(new Uint8Array(readFileSync(out)))).toBeUndefined();
+  });
+
+  /**
+   * The same round trip for HEIC, and the measurement that put the reader
+   * there (2026-09-23).
+   *
+   * `StillEncodeDecisions.swift` sets the id ONLY under
+   * `kCGImagePropertyPNGDictionary`, which reads as "PNG-only" and is not:
+   * ImageIO normalises that description into XMP, and HEIF carries XMP as an
+   * item. So a HEIC export had its id all along while `library.ts` had no
+   * reader for it — every HEIC still listing as two tiles, for exactly the
+   * reason a PNG one used to before STC-413's C1.
+   *
+   * Same ENVIRONMENT skip as the alpha test above: CI's HEVC encoder is a
+   * paravirtualized passthrough. A machine that cannot encode HEIC does not
+   * verify this, and says so rather than going quietly green.
+   */
+  test("an exported HEIC's id reads back through readHeicCaptureId", async () => {
+    const h = spawnHelper();
+    const s = scratch();
+    const out = join(s.dir, "tagged.heic");
+    const r = await h.request({
+      cmd: "export-still", rgba: s.path, width: s.width, height: s.height,
+      alpha: true, format: "heic", quality: 0.9, file: out, captureId: ID,
+      capturedAt: "2026-09-22T10:00:00Z",
+    });
+    if (r.ev === "error") {
+      process.stderr.write(
+        `ENVIRONMENT: this machine did not encode HEIC (${r.code}: ${r.detail}). `
+        + "The HEIC id round trip is NOT verified by this run.\n");
+      expect(r.code).toBe("encode-failed");
+      return;
+    }
+    expect(r.ev, JSON.stringify(r)).toBe("exported-still");
+    // Read from the FILE, with the reader the library scan actually uses.
+    expect(readHeicCaptureId(new Uint8Array(readFileSync(out))),
+           "the id, read back out of the encoded HEIC").toBe(ID);
+  });
+
+  test("an untagged HEIC export reads back as no id", async () => {
+    const h = spawnHelper();
+    const s = scratch();
+    const out = join(s.dir, "plain.heic");
+    const r = await h.request({
+      cmd: "export-still", rgba: s.path, width: s.width, height: s.height,
+      alpha: true, format: "heic", quality: 0.9, file: out,
+    });
+    if (r.ev === "error") { expect(r.code).toBe("encode-failed"); return; }
+    expect(readHeicCaptureId(new Uint8Array(readFileSync(out)))).toBeUndefined();
+  });
+
+  /**
+   * JPEG is the one that genuinely carries nothing, and this pins it as a
+   * KNOWN limitation rather than leaving it to be rediscovered.
+   *
+   * Measured the same day: the identical request that tags a PNG and a HEIC
+   * produces a JPEG with no id anywhere in its bytes, because there is no
+   * JPEG destination property `kCGImagePropertyPNGDictionary` maps onto. If
+   * this test ever fails, JPEG has GAINED an id — at which point
+   * `library.ts`'s dispatch should grow a `.jpg`/`.jpeg` arm and the comments
+   * calling it unreadable are stale.
+   */
+  test("a JPEG export carries no id at all — the known limitation, pinned", async () => {
+    const h = spawnHelper();
+    const s = scratch();
+    const out = join(s.dir, "tagged.jpg");
+    const r = await h.request({
+      cmd: "export-still", rgba: s.path, width: s.width, height: s.height,
+      alpha: false, format: "jpeg", quality: 0.9, file: out, captureId: ID,
+      capturedAt: "2026-09-22T10:00:00Z",
+    });
+    expect(r.ev, JSON.stringify(r)).toBe("exported-still");
+    // Not "no reader finds it" — the id is not in the file at ALL, which is a
+    // stronger and more useful claim. A raw byte search, so this cannot pass
+    // merely because the reader dispatch is wrong.
+    expect(readFileSync(out).includes(Buffer.from(ID, "latin1")),
+           "the id anywhere in the JPEG's bytes").toBe(false);
   });
 });
 

@@ -1,0 +1,2729 @@
+# STC-413: Library as a View Over a Folder — Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Turn the library from a store the app owns into a view over the user's
+chosen folder — finished captures as plain files at top level, source bundles in
+`raw/`, and identity embedded in the media file so it survives any rename.
+
+**Architecture:** Three new pure modules in `transform/src/` (mint an id, embed
+and read it in MP4/PNG bytes, probe duration and dimensions from header bytes),
+then a rewritten scan in `app/src/library.ts` that merges top-level media files
+with `raw/` bundles into the **existing** `LibraryItem` contract. The adapter
+boundary STC-294 built is what lets storage change underneath without touching
+`library-items.ts` or `library-view.ts`.
+
+**Tech Stack:** TypeScript (vitest), Swift 5.8 / ImageIO for the PNG writer,
+`mp4-muxer` for the MP4 writer, Electron + Playwright for e2e.
+
+**Spec:** `docs/superpowers/specs/2026-09-22-stc-413-library-folder-view-design.md`
+
+---
+
+## Global Constraints
+
+- **Three typecheck passes, always.** Run `npm run typecheck`, never bare `tsc`
+  — that runs one of three. All three must be clean before any commit.
+- **`transform/src/` may not import node or DOM.** The browser pass follows even
+  a type-only import. The three new modules are pure `Uint8Array` in, plain data
+  out. No `node:fs`, no `Buffer`, no `document`.
+- **No new dependencies.** CRC-32 for the PNG chunk is ~15 lines and must be
+  written, not installed.
+- **Never read a whole media file.** Probes read header bytes only — PNG `IHDR`
+  is the first 24 bytes; MP4 walks top-level boxes. This is what keeps a
+  500-file scan affordable and it is a hard rule, not an optimisation.
+- **Degrade, never throw.** A corrupt tag, an unparseable container or a missing
+  bundle yields "reduced metadata" — the item still lists. No scan path may
+  throw on one bad file; CLAUDE.md's existing rule is that a take which quietly
+  vanishes is indistinguishable from one that was deleted.
+- **Capture id format:** `cap_` + 26 Crockford base32 chars (`0-9A-HJKMNP-TV-Z`
+  — no I, L, O, U). Exactly 30 characters. Uppercase only.
+- **Embedded payload key:** `stc-capture-id` (PNG `tEXt` keyword) and UUID
+  `A1C4B2E0-7F3D-4B58-9E21-5C6D8F0A3B77` (MP4 `uuid` box).
+- **`stripMetadata` does NOT suppress the id.** *Assumption, flagged in the
+  spec's Open Decisions.* The id is opaque — no timestamp, no path — so it leaks
+  nothing STC-293 protects, and suppressing it would make a privacy-stripped
+  export permanently uneditable. It is a separate field from `capturedAt`.
+- **Commit after every task.** Never batch.
+
+---
+
+## File Structure
+
+**Created:**
+
+| Path | Responsibility |
+|---|---|
+| `transform/src/capture-id.ts` | Mint and validate the id. Nothing else. |
+| `transform/src/media-tag.ts` | Embed/extract the id in MP4 and PNG bytes. |
+| `transform/src/media-probe.ts` | Duration + dimensions from header bytes. |
+| `schema/capture-1.schema.json` | A bundle's identity document. |
+| `transform/src/capture-doc.ts` | Parse/serialize it. Pure. |
+| `app/src/capture-identity.ts` | `ensureCaptureId` — the IO half, race-guarded. |
+| `transform/test/capture-doc.test.ts` | Task 5. |
+| `app/test/capture-identity.test.ts` | Task 5. |
+| `transform/test/capture-id.test.ts` | Task 1. |
+| `transform/test/media-tag.test.ts` | Tasks 2-3. |
+| `transform/test/media-probe.test.ts` | Task 4. |
+| `transform/test/export-tag.test.ts` | Task 7. |
+| `app/test/library-scan.test.ts` | Tasks 8 and 14 (the scan, and its 500-file measurement). |
+| `app/test/orphan-sweep.test.ts` | Task 12. |
+| `app/test/library-folder.e2e.test.ts` | Tasks 11 and 13 — end-to-end behaviour, and the only home for this plan's e2e helpers. |
+
+**Modified:**
+
+| Path | Change |
+|---|---|
+| `helper/src/StillEncodeDecisions.swift:321` | Add the id key to `stillImageProperties`. |
+| `helper/src/StillEncode.swift` | Carry `captureId` on the request. |
+| `transform/src/export.ts:339-340` | Tag the buffer after `finalize()`. |
+| `app/src/takes.ts` | `RAW_SUBDIR`; `newTakeDir` targets `raw/`; retire `setTakeLabel`. |
+| `app/src/temp-takes.ts` | `promoteTake` lands in `raw/`; orphan sweep. |
+| `app/src/library.ts` | The scan rewrite. |
+| `app/src/share.ts` | `planPublish` reads the top-level export. |
+| `app/src/main.ts` | Delete removes both objects; take-dir handlers resolve `raw/`. |
+
+**`app/src/library-items.ts` is WIDENED, once, in Task 8** — `LibraryItem`
+gains `file?`, makes `dir` optional, and stops calling `id` the sort key. That
+is the sanctioned move under rule 1 of that file's own header. What stays
+forbidden is a view *branching on kind*; `app/test/library-seam.test.ts` must
+keep passing untouched, and if it fails the seam is leaking.
+
+**`app/src/library-view.ts` takes EXACTLY ONE change and no more.** Line 165 is
+`title.title = item.dir`, which stops typechecking the moment `dir` is
+optional. It becomes a fallback — the bundle path if there is one, else the
+finished file's path:
+
+```ts
+  title.title = item.dir ?? item.file ?? "";
+```
+
+That is a tooltip, not a decision, and it does not mention `kind`, so the seam
+rule is intact and `library-seam.test.ts` must still pass untouched. Any OTHER
+change to this file means the seam is leaking — stop and widen the adapter
+instead.
+
+---
+
+# PHASE 1 — Identity and tagging
+
+Phase 1 changes **no file locations**. It adds ids to what the app writes and
+proves they can be read back. It is independently shippable: nothing
+user-visible changes, and Phase 2 depends on it for identity.
+
+---
+
+### Task 1: Capture id
+
+**Files:**
+- Create: `transform/src/capture-id.ts`
+- Test: `transform/test/capture-id.test.ts`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `CAPTURE_ID_LENGTH: 30`, `mintCaptureId(random?: () => number): string`,
+  `isCaptureId(v: unknown): v is string`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, test, expect } from "vitest";
+import { mintCaptureId, isCaptureId, CAPTURE_ID_LENGTH } from "../src/capture-id.js";
+
+describe("capture id", () => {
+  test("a minted id validates and is the declared length", () => {
+    const id = mintCaptureId();
+    expect(isCaptureId(id)).toBe(true);
+    expect(id).toHaveLength(CAPTURE_ID_LENGTH);
+    expect(id.startsWith("cap_")).toBe(true);
+  });
+
+  test("two mints differ", () => {
+    expect(mintCaptureId()).not.toBe(mintCaptureId());
+  });
+
+  test("the alphabet excludes the ambiguous Crockford letters", () => {
+    // 200 mints is enough to see any of I/L/O/U if they were reachable.
+    const body = Array.from({ length: 200 }, () => mintCaptureId().slice(4)).join("");
+    expect(body).not.toMatch(/[ILOU]/);
+    expect(body).toMatch(/^[0-9A-HJKMNP-TV-Z]+$/);
+  });
+
+  test("refuses everything that is not an id", () => {
+    for (const bad of [
+      "", "cap_", "nope", 42, null, undefined, {},
+      "cap_" + "A".repeat(25),            // too short
+      "cap_" + "A".repeat(27),            // too long
+      "CAP_" + "A".repeat(26),            // wrong prefix case
+      "cap_" + "a".repeat(26),            // lowercase body
+      "cap_" + "I".repeat(26),            // excluded letter
+    ]) {
+      expect(isCaptureId(bad as unknown)).toBe(false);
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npx vitest run transform/test/capture-id.test.ts`
+Expected: FAIL — cannot resolve `../src/capture-id.js`.
+
+- [ ] **Step 3: Write the implementation**
+
+```ts
+/**
+ * A capture's stable identity, embedded in the media file it produced
+ * (STC-413).
+ *
+ * Opaque on purpose: no timestamp, no path, no user data. It exists only to
+ * point a finished file back at its source bundle in `raw/`, so it must be
+ * safe to embed in a file the user may share — which is also why
+ * `stripMetadata` does not suppress it.
+ *
+ * Its own module so the shape and its validation have exactly ONE owner. This
+ * repo's most-repeated defect is one value with two copies.
+ */
+
+/** Crockford base32: no I, L, O or U, so a transcribed id cannot be ambiguous. */
+const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+const PREFIX = "cap_";
+const BODY_LENGTH = 26;
+
+export const CAPTURE_ID_LENGTH = PREFIX.length + BODY_LENGTH;
+
+const PATTERN = new RegExp(`^${PREFIX}[${ALPHABET}]{${BODY_LENGTH}}$`);
+
+/**
+ * `random` is injected rather than reached for, so a test can pin the output.
+ * Math.random is not cryptographic and does not need to be: this is a
+ * collision-avoidance token within one user's folder, not a secret.
+ */
+export function mintCaptureId(random: () => number = Math.random): string {
+  let body = "";
+  for (let i = 0; i < BODY_LENGTH; i++) {
+    body += ALPHABET[Math.floor(random() * ALPHABET.length)] ?? ALPHABET[0];
+  }
+  return PREFIX + body;
+}
+
+export function isCaptureId(v: unknown): v is string {
+  return typeof v === "string" && PATTERN.test(v);
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npx vitest run transform/test/capture-id.test.ts`
+Expected: PASS, 4 tests.
+
+- [ ] **Step 5: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add transform/src/capture-id.ts transform/test/capture-id.test.ts
+git commit -m "STC-413: capture id — one owner for the shape and its validation"
+```
+
+---
+
+### Task 2: Tag and read a PNG
+
+**Files:**
+- Create: `transform/src/media-tag.ts`
+- Test: `transform/test/media-tag.test.ts`
+
+**Interfaces:**
+- Consumes: `isCaptureId` from Task 1.
+- Produces: `tagPng(bytes: Uint8Array, id: string): Uint8Array`,
+  `readPngCaptureId(bytes: Uint8Array): string | undefined`,
+  `PNG_TEXT_KEYWORD: "stc-capture-id"`,
+  `IMAGEIO_TEXT_KEYWORD: "Description"`.
+
+**Two keywords, one reader — ruled at pre-flight, and not an oversight.** The
+production writer for stills is ImageIO (Task 6), because it covers PNG, JPEG
+and HEIC in one place where `tagPng` covers only PNG — and ImageIO writes a
+`tEXt` chunk keyed `Description`, not ours. So `readPngCaptureId` accepts
+**either** keyword, with every candidate gated by `isCaptureId`: a
+30-character `cap_`-prefixed Crockford string is not something a human writes
+into a description field by accident.
+
+`tagPng` therefore has no production caller yet, and that is deliberate rather
+than dead code — it is what makes `readPngCaptureId` verifiable on a checkout
+with no Swift toolchain, which is this repo's chronic verification gap. Say so
+in the module header so a reviewer does not flag it.
+
+**Format note for the implementer:** a PNG is an 8-byte signature followed by
+chunks of `[length:4][type:4][data:length][crc:4]`, all big-endian. The CRC
+covers **type + data**, not the length. A `tEXt` chunk's data is
+`keyword \0 value` in Latin-1. We insert before the first `IDAT`, which is where
+ancillary text chunks are legal.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, test, expect } from "vitest";
+import { tagPng, readPngCaptureId, PNG_TEXT_KEYWORD } from "../src/media-tag.js";
+import { mintCaptureId } from "../src/capture-id.js";
+
+const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/** A structurally valid 1x1 PNG skeleton: signature, IHDR, IDAT, IEND. */
+function skeletonPng(): Uint8Array {
+  const chunk = (type: string, data: number[]): number[] => {
+    const body = [...type].map((c) => c.charCodeAt(0)).concat(data);
+    const len = data.length;
+    // CRC is checked by readers, not by our own walker — zeros are fine here,
+    // and Task 2's implementation computes real ones for what it writes.
+    return [(len >>> 24) & 255, (len >>> 16) & 255, (len >>> 8) & 255, len & 255,
+            ...body, 0, 0, 0, 0];
+  };
+  const ihdr = [0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0];   // 1x1, RGBA
+  return new Uint8Array([...SIG, ...chunk("IHDR", ihdr),
+                         ...chunk("IDAT", [1, 2, 3]), ...chunk("IEND", [])]);
+}
+
+/**
+ * Insert a tEXt chunk under an ARBITRARY keyword, so the test can stand in for
+ * ImageIO's writer without a Mac. Test-local on purpose: the module exports no
+ * keyword-parameterised writer, because production has exactly two writers and
+ * neither needs one.
+ */
+function tagPngWithKeyword(bytes: Uint8Array, keyword: string, value: string): Uint8Array {
+  const data = [...keyword].map((c) => c.charCodeAt(0))
+    .concat(0, [...value].map((c) => c.charCodeAt(0)));
+  const len = data.length;
+  const text = [(len >>> 24) & 255, (len >>> 16) & 255, (len >>> 8) & 255, len & 255,
+                ...[..."tEXt"].map((c) => c.charCodeAt(0)), ...data, 0, 0, 0, 0];
+  // After the 8-byte signature and the 25-byte IHDR chunk, before IDAT.
+  return new Uint8Array([...bytes.subarray(0, 33), ...text, ...bytes.subarray(33)]);
+}
+
+describe("png capture-id tag", () => {
+  test("round trips", () => {
+    const id = mintCaptureId();
+    expect(readPngCaptureId(tagPng(skeletonPng(), id))).toBe(id);
+  });
+
+  test("an untagged png has no id", () => {
+    expect(readPngCaptureId(skeletonPng())).toBeUndefined();
+  });
+
+  test("ImageIO's Description keyword is read too — that is how stills are tagged", () => {
+    const id = mintCaptureId();
+    // Exactly the chunk CGImageDestination writes for kCGImagePropertyPNGDescription.
+    const out = tagPngWithKeyword(skeletonPng(), "Description", id);
+    expect(readPngCaptureId(out)).toBe(id);
+  });
+
+  test("a human-written Description is not mistaken for an id", () => {
+    const out = tagPngWithKeyword(skeletonPng(), "Description", "screenshot of the login bug");
+    expect(readPngCaptureId(out)).toBeUndefined();
+  });
+
+  test("our own keyword wins over Description, whatever the byte order", () => {
+    // A file can legitimately carry both. Resolving by chunk order would
+    // return whichever sat earlier, which is not a rule anyone can reason about.
+    const ours = mintCaptureId(), theirs = mintCaptureId();
+    const bothWaysRound = [
+      tagPng(tagPngWithKeyword(skeletonPng(), "Description", theirs), ours),
+      tagPngWithKeyword(tagPng(skeletonPng(), ours), "Description", theirs),
+    ];
+    for (const out of bothWaysRound) expect(readPngCaptureId(out)).toBe(ours);
+  });
+
+  test("the tag goes before IDAT, where a tEXt chunk is legal", () => {
+    const out = tagPng(skeletonPng(), mintCaptureId());
+    const s = Buffer.from(out).toString("latin1");
+    expect(s.indexOf(PNG_TEXT_KEYWORD)).toBeGreaterThan(-1);
+    expect(s.indexOf(PNG_TEXT_KEYWORD)).toBeLessThan(s.indexOf("IDAT"));
+  });
+
+  test("tagging twice replaces rather than accumulating", () => {
+    const a = mintCaptureId(), b = mintCaptureId();
+    const out = tagPng(tagPng(skeletonPng(), a), b);
+    expect(readPngCaptureId(out)).toBe(b);
+    const s = Buffer.from(out).toString("latin1");
+    expect(s.split(PNG_TEXT_KEYWORD).length - 1).toBe(1);
+  });
+
+  test("garbage degrades to no id rather than throwing", () => {
+    for (const bad of [
+      new Uint8Array(0),
+      new Uint8Array([1, 2, 3]),
+      new Uint8Array(SIG),                              // signature, no chunks
+      new Uint8Array([...SIG, 0xff, 0xff, 0xff, 0xff]), // length past the end
+    ]) {
+      expect(() => readPngCaptureId(bad)).not.toThrow();
+      expect(readPngCaptureId(bad)).toBeUndefined();
+    }
+  });
+
+  test("a non-png is refused rather than corrupted", () => {
+    const notPng = new Uint8Array([0, 0, 0, 8, 102, 116, 121, 112]);
+    expect(tagPng(notPng, mintCaptureId())).toEqual(notPng);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npx vitest run transform/test/media-tag.test.ts`
+Expected: FAIL — cannot resolve `../src/media-tag.js`.
+
+- [ ] **Step 3: Write the implementation**
+
+```ts
+/**
+ * A capture's id, carried INSIDE the media file it produced (STC-413).
+ *
+ * This is the frontmatter analogue. Obsidian's metadata survives a move
+ * because there is only one object; a sidecar is a second object and only
+ * survives if the user moves both halves. So the id lives in the bytes.
+ *
+ * Pure `Uint8Array` in, `Uint8Array` out — no node, no DOM — because the
+ * browser typecheck pass follows even a type-only import, and because this
+ * has to be testable on a checkout with no Swift toolchain and no Mac.
+ *
+ * Every read degrades to `undefined` rather than throwing. A file we cannot
+ * parse is a file with reduced metadata, never a crash in a 500-file scan.
+ */
+import { isCaptureId } from "./capture-id.js";
+
+/** What `tagPng` writes. */
+export const PNG_TEXT_KEYWORD = "stc-capture-id";
+
+/**
+ * What ImageIO writes for `kCGImagePropertyPNGDescription`, which is how the
+ * Swift still encoder tags a capture. Read, never written, by this module.
+ */
+export const IMAGEIO_TEXT_KEYWORD = "Description";
+
+const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+function isPng(b: Uint8Array): boolean {
+  return b.length >= 8 && PNG_SIG.every((v, i) => b[i] === v);
+}
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes: Uint8Array): number {
+  let c = 0xffffffff;
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff]! ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+const be32 = (n: number): number[] =>
+  [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+
+const readBe32 = (b: Uint8Array, at: number): number =>
+  ((b[at]! << 24) | (b[at + 1]! << 16) | (b[at + 2]! << 8) | b[at + 3]!) >>> 0;
+
+const ascii = (b: Uint8Array, at: number, len: number): string =>
+  String.fromCharCode(...b.subarray(at, at + len));
+
+/**
+ * Walk a PNG's chunks. Yields `[type, start, totalLength]` where `start` is
+ * the chunk's own first byte. Stops at the first length that would run past
+ * the buffer — a truncated file is read as far as it is intact.
+ */
+function* pngChunks(b: Uint8Array): Generator<[string, number, number]> {
+  let at = 8;
+  while (at + 8 <= b.length) {
+    const len = readBe32(b, at);
+    const total = 12 + len;
+    if (len > b.length || at + total > b.length) return;
+    yield [ascii(b, at + 4, 4), at, total];
+    at += total;
+  }
+}
+
+function textChunk(keyword: string, value: string): number[] {
+  const data = [...keyword].map((c) => c.charCodeAt(0))
+    .concat(0, [...value].map((c) => c.charCodeAt(0)));
+  const typed = new Uint8Array([...[..."tEXt"].map((c) => c.charCodeAt(0)), ...data]);
+  return [...be32(data.length), ...typed, ...be32(crc32(typed))];
+}
+
+/** The value of the first tEXt chunk under `keyword` that is a valid id. */
+function idUnderKeyword(bytes: Uint8Array, keyword: string): string | undefined {
+  for (const [type, start, total] of pngChunks(bytes)) {
+    if (type !== "tEXt") continue;
+    const data = bytes.subarray(start + 8, start + total - 4);
+    const nul = data.indexOf(0);
+    if (nul < 0) continue;
+    if (ascii(data, 0, nul) !== keyword) continue;
+    const value = ascii(data, nul + 1, data.length - nul - 1);
+    if (isCaptureId(value)) return value;
+  }
+  return undefined;
+}
+
+/**
+ * The id, or undefined for an untagged, foreign, truncated or corrupt file.
+ *
+ * Two keywords are accepted because there are two writers: `tagPng` here, and
+ * ImageIO in the Swift still encoder. **Our own keyword wins**, and that
+ * precedence is deliberate rather than incidental — a file could carry both
+ * (ImageIO tagged it at export, something re-tagged it later), and resolving
+ * by chunk ORDER would return whichever happened to sit earlier in the file.
+ * A rule that depends on byte order is a rule nobody can reason about.
+ *
+ * Both candidates are gated by `isCaptureId`, so a human-written description
+ * cannot be read as identity.
+ */
+export function readPngCaptureId(bytes: Uint8Array): string | undefined {
+  if (!isPng(bytes)) return undefined;
+  return idUnderKeyword(bytes, PNG_TEXT_KEYWORD)
+      ?? idUnderKeyword(bytes, IMAGEIO_TEXT_KEYWORD);
+}
+
+/**
+ * Insert the id before the first IDAT, removing any tag already there so
+ * re-tagging replaces rather than accumulates. A non-PNG is returned
+ * UNCHANGED — refusing is always better than writing something that corrupts
+ * a file we did not understand.
+ */
+export function tagPng(bytes: Uint8Array, id: string): Uint8Array {
+  if (!isPng(bytes) || !isCaptureId(id)) return bytes;
+
+  const out: number[] = [...PNG_SIG];
+  let inserted = false;
+  for (const [type, start, total] of pngChunks(bytes)) {
+    if (type === "tEXt") {
+      const data = bytes.subarray(start + 8, start + total - 4);
+      const nul = data.indexOf(0);
+      if (nul >= 0 && ascii(data, 0, nul) === PNG_TEXT_KEYWORD) continue;  // drop the old one
+    }
+    if (!inserted && (type === "IDAT" || type === "IEND")) {
+      out.push(...textChunk(PNG_TEXT_KEYWORD, id));
+      inserted = true;
+    }
+    out.push(...bytes.subarray(start, start + total));
+  }
+  if (!inserted) return bytes;   // no IDAT and no IEND: not a file we understand
+  return new Uint8Array(out);
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npx vitest run transform/test/media-tag.test.ts`
+Expected: PASS, 6 tests.
+
+- [ ] **Step 5: Mutation check — prove the round-trip test has teeth**
+
+Temporarily make `tagPng` return `bytes` unchanged as its first line. Re-run.
+Expected: the round-trip, ordering and replace tests FAIL; the "untagged", 
+"garbage" and "non-png" tests still pass. Revert the mutation.
+
+This matters because a tag writer that silently no-ops is the exact failure
+that would make every later task look correct while embedding nothing.
+
+- [ ] **Step 6: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add transform/src/media-tag.ts transform/test/media-tag.test.ts
+git commit -m "STC-413: embed a capture id in a PNG tEXt chunk"
+```
+
+---
+
+### Task 3: Tag and read an MP4
+
+**Files:**
+- Modify: `transform/src/media-tag.ts`
+- Modify: `transform/test/media-tag.test.ts`
+
+**Interfaces:**
+- Consumes: `isCaptureId` (Task 1), the helpers in `media-tag.ts` (Task 2).
+- Produces: `tagMp4(bytes: Uint8Array, id: string): Uint8Array`,
+  `readMp4CaptureId(bytes: Uint8Array): string | undefined`,
+  `MP4_UUID: Uint8Array` (16 bytes).
+
+**Format note:** ISO-BMFF is a flat sequence of boxes, each
+`[size:4][type:4][payload]`, big-endian, where `size` counts the header. A
+`uuid` box carries a 16-byte UUID then private data. **We append at the very
+end**, which is why no offset fixups are needed: `stco`/`co64` entries point
+into `mdat`, and appending moves nothing. Conforming readers skip unknown
+top-level boxes. `size == 1` means a 64-bit `largesize` follows the type;
+`size == 0` means "to end of file".
+
+- [ ] **Step 1: Write the failing test (append to the existing file)**
+
+```ts
+import { tagMp4, readMp4CaptureId } from "../src/media-tag.js";
+import { CAPTURE_ID_LENGTH } from "../src/capture-id.js";
+
+// Hoisted to module scope: the extended-size tests below build their own
+// box layouts and need these too.
+const chars = (s: string) => [...s].map((c) => c.charCodeAt(0));
+const be32 = (n: number) =>
+  [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+const box = (type: string, data: number[]) =>
+  [...be32(8 + data.length), ...chars(type), ...data];
+
+/** A structurally valid minimal MP4: an ftyp box and an mdat box. */
+function skeletonMp4(): Uint8Array {
+  return new Uint8Array([
+    ...box("ftyp", [...chars("isom"), 0, 0, 0, 0]),
+    ...box("mdat", [9, 9, 9, 9, 9, 9, 9, 9]),
+  ]);
+}
+
+describe("mp4 capture-id tag", () => {
+  test("round trips", () => {
+    const id = mintCaptureId();
+    expect(readMp4CaptureId(tagMp4(skeletonMp4(), id))).toBe(id);
+  });
+
+  test("an untagged mp4 has no id", () => {
+    expect(readMp4CaptureId(skeletonMp4())).toBeUndefined();
+  });
+
+  test("the original bytes are preserved exactly — nothing before the tag moves", () => {
+    const original = skeletonMp4();
+    const out = tagMp4(original, mintCaptureId());
+    expect(out.subarray(0, original.length)).toEqual(original);
+    expect(out.length).toBeGreaterThan(original.length);
+  });
+
+  test("tagging twice replaces rather than accumulating", () => {
+    const a = mintCaptureId(), b = mintCaptureId();
+    const out = tagMp4(tagMp4(skeletonMp4(), a), b);
+    expect(readMp4CaptureId(out)).toBe(b);
+    expect(out.length).toBe(tagMp4(skeletonMp4(), b).length);
+  });
+
+  test("garbage degrades to no id rather than throwing", () => {
+    for (const bad of [
+      new Uint8Array(0),
+      new Uint8Array([1, 2, 3]),
+      new Uint8Array([0, 0, 0, 200, 102, 116, 121, 112]),  // size past the end
+    ]) {
+      expect(() => readMp4CaptureId(bad)).not.toThrow();
+      expect(readMp4CaptureId(bad)).toBeUndefined();
+    }
+  });
+
+  // ── the extended sizes, which real files actually use ──────────────────
+
+  /** A box whose size is carried in a 64-bit largesize, as AVAssetWriter writes mdat. */
+  function largesizeBox(type: string, payload: number[]): number[] {
+    const total = 16 + payload.length;
+    return [0, 0, 0, 1, ...[...type].map((c) => c.charCodeAt(0)),
+            0, 0, 0, 0, ...be32(total), ...payload];
+  }
+
+  test("A LARGESIZE BOX IS WALKED, NOT TRUNCATED", () => {
+    // The regression that reduced a real 83,894-byte capture to 82 bytes.
+    const id = mintCaptureId();
+    const original = new Uint8Array([
+      ...box("ftyp", chars("isom")),
+      ...largesizeBox("mdat", [7, 7, 7, 7, 7, 7, 7, 7]),
+      ...box("moov", [1, 2, 3, 4]),
+    ]);
+    const out = tagMp4(original, id);
+    expect(out.subarray(0, original.length)).toEqual(original);   // nothing lost
+    expect(out.length).toBeGreaterThan(original.length);
+    expect(readMp4CaptureId(out)).toBe(id);                       // readable past mdat
+  });
+
+  test("THE REAL FIXTURE SURVIVES TAGGING", async () => {
+    // The check that would have caught this immediately. fixtures/basic/
+    // display.mp4 is this project's own AVAssetWriter output and its mdat
+    // uses a largesize.
+    const { readFile } = await import("node:fs/promises");
+    const original = new Uint8Array(await readFile("fixtures/basic/display.mp4"));
+    const id = mintCaptureId();
+    const out = tagMp4(original, id);
+    expect(out.subarray(0, original.length)).toEqual(original);
+    expect(out.length).toBe(original.length + 4 + 4 + 16 + CAPTURE_ID_LENGTH);
+    expect(readMp4CaptureId(out)).toBe(id);
+  });
+
+  test("a file we cannot fully walk is REFUSED, never truncated", () => {
+    const truncated = new Uint8Array([
+      ...box("ftyp", chars("isom")),
+      0, 0, 0, 200, ...chars("mdat"), 1, 2, 3,     // claims 200 bytes, has 3
+    ]);
+    expect(tagMp4(truncated, mintCaptureId())).toEqual(truncated);
+  });
+
+  test("a trailing to-EOF box is refused — our tag would land inside it", () => {
+    const toEof = new Uint8Array([
+      ...box("ftyp", chars("isom")),
+      0, 0, 0, 0, ...chars("mdat"), 9, 9, 9, 9,
+    ]);
+    expect(tagMp4(toEof, mintCaptureId())).toEqual(toEof);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npx vitest run transform/test/media-tag.test.ts`
+Expected: FAIL — `tagMp4` is not exported.
+
+- [ ] **Step 3: Write the implementation (append to `media-tag.ts`)**
+
+```ts
+/**
+ * Our private-data UUID. Constant and arbitrary: it only has to not collide
+ * with another vendor's uuid box in the same file.
+ */
+export const MP4_UUID = new Uint8Array([
+  0xa1, 0xc4, 0xb2, 0xe0, 0x7f, 0x3d, 0x4b, 0x58,
+  0x9e, 0x21, 0x5c, 0x6d, 0x8f, 0x0a, 0x3b, 0x77,
+]);
+
+/**
+ * Walk top-level boxes. Yields `[type, start, totalLength]`.
+ *
+ * **Both extended sizes are HANDLED, not refused, and that is load-bearing.**
+ * A `size == 1` box carries a 64-bit largesize after its type, and this
+ * project's own `AVAssetWriter` output uses exactly that for `mdat` —
+ * `fixtures/basic/display.mp4` is written that way. A walker that refuses it
+ * is not being conservative: it reports an 83 KB file as two boxes long and
+ * stops before the video data.
+ *
+ * `size == 0` means "to the end of the file", so such a box is necessarily
+ * the last one; it is yielded with its true extent and the walk then ends.
+ */
+function* mp4Boxes(b: Uint8Array): Generator<[string, number, number]> {
+  let at = 0;
+  while (at + 8 <= b.length) {
+    const declared = readBe32(b, at);
+    const type = ascii(b, at + 4, 4);
+    let size: number;
+    if (declared === 1) {
+      if (at + 16 > b.length) return;
+      // The high word of a largesize would mean a box past 4 GiB. Nothing
+      // this app produces comes close, and carrying it through a JS number
+      // would lose precision — so such a file is refused rather than
+      // mis-walked.
+      if (readBe32(b, at + 8) !== 0) return;
+      size = readBe32(b, at + 12);
+    } else if (declared === 0) {
+      size = b.length - at;            // to end of file: the last box
+    } else {
+      size = declared;
+    }
+    if (size < 8 || at + size > b.length) return;
+    yield [type, at, size];
+    at += size;
+  }
+}
+
+const isOurUuid = (b: Uint8Array, at: number): boolean =>
+  MP4_UUID.every((v, i) => b[at + i] === v);
+
+/** The id, or undefined for an untagged, foreign, truncated or corrupt file. */
+export function readMp4CaptureId(bytes: Uint8Array): string | undefined {
+  for (const [type, start, size] of mp4Boxes(bytes)) {
+    if (type !== "uuid" || size < 8 + 16) continue;
+    if (!isOurUuid(bytes, start + 8)) continue;
+    const value = ascii(bytes, start + 24, size - 24);
+    if (isCaptureId(value)) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Append the id as a trailing top-level `uuid` box, dropping any of ours
+ * already present so re-tagging replaces rather than accumulates.
+ *
+ * Appending is what makes this safe: `stco`/`co64` chunk offsets point into
+ * `mdat`, and nothing before the new box moves — so there are no offset
+ * fixups and no in-place patching, on a buffer we already hold whole.
+ */
+export function tagMp4(bytes: Uint8Array, id: string): Uint8Array {
+  if (!isCaptureId(id)) return bytes;
+
+  const keep: Array<[number, number]> = [];
+  let end = 0;
+  let lastIsToEof = false;
+  for (const [type, start, size] of mp4Boxes(bytes)) {
+    end = start + size;
+    lastIsToEof = readBe32(bytes, start) === 0;
+    if (type === "uuid" && size >= 24 && isOurUuid(bytes, start + 8)) continue;
+    keep.push([start, size]);
+  }
+
+  // REFUSE rather than truncate, and this is the single most important line
+  // in the module. A walk that did not consume the whole buffer means a box
+  // we could not parse; keeping only what came before it silently DESTROYS
+  // the file. An earlier version did exactly that, turning a real 83,894-byte
+  // capture into 82 bytes while every in-module test still passed — because a
+  // truncated prefix is still a prefix.
+  if (end !== bytes.length || keep.length === 0) return bytes;
+
+  // A final `size == 0` box claims every byte to EOF, so anything appended
+  // after it is read as part of THAT box rather than as our tag. Refuse; the
+  // alternative is rewriting its size field, which is a bigger promise than
+  // tagging should make.
+  if (lastIsToEof) return bytes;
+
+  const body = [...id].map((c) => c.charCodeAt(0));
+  const size = 8 + MP4_UUID.length + body.length;
+  const box = [...be32(size), ...[..."uuid"].map((c) => c.charCodeAt(0)),
+               ...MP4_UUID, ...body];
+
+  const out = new Uint8Array(keep.reduce((n, [, s]) => n + s, 0) + box.length);
+  let at = 0;
+  for (const [start, s] of keep) { out.set(bytes.subarray(start, start + s), at); at += s; }
+  out.set(box, at);
+  return out;
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npx vitest run transform/test/media-tag.test.ts`
+Expected: PASS, 11 tests (6 from Task 2 plus 5).
+
+- [ ] **Step 5: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add transform/src/media-tag.ts transform/test/media-tag.test.ts
+git commit -m "STC-413: embed a capture id in a trailing MP4 uuid box"
+```
+
+---
+
+### Task 4: Probe duration and dimensions from header bytes
+
+**Files:**
+- Create: `transform/src/media-probe.ts`
+- Test: `transform/test/media-probe.test.ts`
+
+**Interfaces:**
+- Consumes: `mp4BoxesIn` and `readBe32` from `media-tag.ts` — see below. Nothing
+  about capture IDs, deliberately: this must work on a foreign file that carries
+  none.
+- **Also produces a small change in `transform/src/media-tag.ts`:** its private
+  `mp4Boxes(b)` is split into an exported `mp4BoxesIn(b, from, to)` with
+  `mp4Boxes(b)` delegating as `mp4BoxesIn(b, 0, b.length)`. `readBe32` is
+  exported too. Behaviour of the existing walker must not otherwise change —
+  Task 3's 18 tests all still pass, unmodified, and that is the check.
+
+  **One tightening while you are in there**, carried over from Task 3's review
+  as a deferred note: a `size == 1` box whose largesize reads 8–15 is
+  malformed — the value is smaller than the 16-byte header it is part of — and
+  the current `size < 8` guard lets it through, advancing into the middle of
+  that same header. It cannot hang (the advance is still monotonic) but it is
+  looser than the format allows. Refuse a largesize below 16. Add one test:
+  such a box yields nothing and `tagMp4` returns its input unchanged.
+- Produces: `probePng(bytes: Uint8Array): MediaFacts | undefined`,
+  `probeMp4(bytes: Uint8Array): MediaFacts | undefined`,
+  `interface MediaFacts { width: number; height: number; durationMs?: number }`,
+  `MP4_TAIL_PROBE_BYTES: 65536`.
+
+**Format note:** PNG `IHDR` is always the first chunk: width is bytes 16-19,
+height 20-23, big-endian. For MP4, `moov` contains `mvhd` (timescale + duration)
+and `trak/tkhd` (width/height as 16.16 fixed point). `mvhd` v0 body:
+`version(1) flags(3) creation(4) modification(4) timescale(4) duration(4)`; v1
+widens creation/modification to 8 and duration to 8. `tkhd` v0 puts width at
+body offset 76 and height at 80; v1 at 88 and 92.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, test, expect } from "vitest";
+import { probePng, probeMp4, MP4_TAIL_PROBE_BYTES } from "../src/media-probe.js";
+
+const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+const chars = (s: string) => [...s].map((c) => c.charCodeAt(0));
+const box = (type: string, data: number[]) => [...be32(8 + data.length), ...chars(type), ...data];
+
+function png(w: number, h: number): Uint8Array {
+  const ihdr = [...be32(w), ...be32(h), 8, 6, 0, 0, 0];
+  return new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ...be32(ihdr.length), ...chars("IHDR"), ...ihdr, 0, 0, 0, 0]);
+}
+
+/** timescale 600, duration 3000 → 5000 ms; track 1920x1080. */
+function mp4(): Uint8Array {
+  const mvhd = box("mvhd", [0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(600), ...be32(3000)]);
+  const tkhd = box("tkhd", [
+    0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(1), ...be32(0), ...be32(0),
+    ...new Array(8).fill(0), 0, 0, 0, 0, 0, 0, 0, 0,
+    ...new Array(36).fill(0),
+    ...be32(1920 * 65536), ...be32(1080 * 65536),
+  ]);
+  return new Uint8Array([...box("ftyp", chars("isom")), ...box("mdat", [1, 2, 3, 4]),
+    ...box("moov", [...mvhd, ...box("trak", tkhd)])]);
+}
+
+describe("media probe", () => {
+  test("png dimensions come from IHDR", () => {
+    expect(probePng(png(1920, 1080))).toEqual({ width: 1920, height: 1080 });
+  });
+
+  test("mp4 duration and dimensions", () => {
+    expect(probeMp4(mp4())).toEqual({ width: 1920, height: 1080, durationMs: 5000 });
+  });
+
+  test("a foreign file we cannot parse probes to undefined, never a throw", () => {
+    for (const bad of [new Uint8Array(0), new Uint8Array([1, 2, 3]),
+                       new Uint8Array(chars("not a media file at all"))]) {
+      expect(() => probePng(bad)).not.toThrow();
+      expect(() => probeMp4(bad)).not.toThrow();
+      expect(probePng(bad)).toBeUndefined();
+      expect(probeMp4(bad)).toBeUndefined();
+    }
+  });
+
+  test("an mp4 with no moov yields undefined rather than zeroes", () => {
+    const noMoov = new Uint8Array([...box("ftyp", chars("isom")), ...box("mdat", [1, 2])]);
+    expect(probeMp4(noMoov)).toBeUndefined();
+  });
+
+  test("the tail probe window is big enough for a real moov", () => {
+    // A 4K take's moov is tens of KB; 64 KB is the declared window.
+    expect(MP4_TAIL_PROBE_BYTES).toBeGreaterThanOrEqual(64 * 1024);
+  });
+
+  test("THE REAL FIXTURE PROBES — its mdat uses a largesize", async () => {
+    // The check that matters. A walker refusing `size == 1` stops at mdat and
+    // never reaches moov, so this returns undefined for every capture this app
+    // has ever produced. fixtures/basic/display.mp4 is real AVAssetWriter
+    // output and reproduces that on the first try.
+    const { readFile } = await import("node:fs/promises");
+    const bytes = new Uint8Array(await readFile("fixtures/basic/display.mp4"));
+    const facts = probeMp4(bytes);
+    expect(facts).toBeDefined();
+    expect(facts!.width).toBeGreaterThan(0);
+    expect(facts!.height).toBeGreaterThan(0);
+    expect(facts!.durationMs).toBeGreaterThan(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npx vitest run transform/test/media-probe.test.ts`
+Expected: FAIL — cannot resolve `../src/media-probe.js`.
+
+- [ ] **Step 3: Write the implementation**
+
+```ts
+/**
+ * Duration and dimensions, from HEADER BYTES ONLY (STC-413).
+ *
+ * Never reads a whole file. That is the constraint that keeps a 500-file
+ * library scan affordable — STC-294's own acceptance criterion is 500 takes —
+ * and it is why this module takes bytes rather than a path: the caller decides
+ * how little to read, and `MP4_TAIL_PROBE_BYTES` tells it how much that is.
+ *
+ * Takes no capture id and knows nothing about one, deliberately: these facts
+ * must be available for a FOREIGN file dropped into the folder by hand, which
+ * carries no id at all.
+ */
+
+export interface MediaFacts {
+  width: number;
+  height: number;
+  /** Absent when the container declares no usable duration (any still). */
+  durationMs?: number;
+}
+
+/**
+ * How much of an MP4's tail to read before falling back to a front walk.
+ *
+ * `AVAssetWriter` and `mp4-muxer` both put `moov` at the END, so the tail is
+ * where it is for every file this app produces. A faststart file from another
+ * tool has it at the front, which the fallback covers.
+ */
+export const MP4_TAIL_PROBE_BYTES = 65536;
+
+const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+const be32 = (b: Uint8Array, at: number): number =>
+  at + 4 <= b.length
+    ? ((b[at]! << 24) | (b[at + 1]! << 16) | (b[at + 2]! << 8) | b[at + 3]!) >>> 0
+    : 0;
+
+const type4 = (b: Uint8Array, at: number): string =>
+  String.fromCharCode(...b.subarray(at, at + 4));
+
+export function probePng(bytes: Uint8Array): MediaFacts | undefined {
+  if (bytes.length < 24 || !PNG_SIG.every((v, i) => bytes[i] === v)) return undefined;
+  if (type4(bytes, 12) !== "IHDR") return undefined;
+  const width = be32(bytes, 16), height = be32(bytes, 20);
+  return width > 0 && height > 0 ? { width, height } : undefined;
+}
+
+/**
+ * Walk boxes within `[from, to)`, yielding `[type, payloadStart, payloadEnd]`.
+ *
+ * **Delegates to `media-tag.ts`'s walker rather than carrying a second one.**
+ * A first draft of this module had its own copy, and it had the exact bug
+ * that cost Task 3 a fix round: refusing a `size == 1` largesize instead of
+ * reading it. This project's own `AVAssetWriter` writes `mdat` that way, so a
+ * refusing walker stops at `mdat` and never reaches `moov` — and `probeMp4`
+ * would quietly return `undefined` for every real capture the app has ever
+ * made, which reads as "the probe is weak" rather than as a bug.
+ *
+ * Two walkers would be two places to get largesize right. There is one.
+ */
+function* boxes(b: Uint8Array, from: number, to: number):
+    Generator<[string, number, number]> {
+  for (const [type, start, size] of mp4BoxesIn(b, from, to)) {
+    // media-tag yields [type, boxStart, totalSize]; this module wants the
+    // PAYLOAD span, and a largesize box's payload begins 16 bytes in, not 8.
+    const header = readBe32(b, start) === 1 ? 16 : 8;
+    yield [type, start + header, start + size];
+  }
+}
+
+/** Depth-first search for the first box of `type`. */
+function find(b: Uint8Array, from: number, to: number, type: string,
+              depth = 0): [number, number] | undefined {
+  if (depth > 6) return undefined;             // containers here are shallow
+  for (const [t, s, e] of boxes(b, from, to)) {
+    if (t === type) return [s, e];
+    if (CONTAINERS.has(t)) {
+      const hit = find(b, s, e, type, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return undefined;
+}
+
+const CONTAINERS = new Set(["moov", "trak", "mdia", "minf", "stbl", "edts"]);
+
+export function probeMp4(bytes: Uint8Array): MediaFacts | undefined {
+  const moov = find(bytes, 0, bytes.length, "moov");
+  if (!moov) return undefined;
+  const [ms, me] = moov;
+
+  let durationMs: number | undefined;
+  const mvhd = find(bytes, ms, me, "mvhd");
+  if (mvhd) {
+    const [s] = mvhd;
+    const v = bytes[s];
+    const timescale = v === 1 ? be32(bytes, s + 20) : be32(bytes, s + 12);
+    // A v1 duration is 64-bit; the low word is ample for any real take.
+    const duration = v === 1 ? be32(bytes, s + 28) : be32(bytes, s + 16);
+    if (timescale > 0 && duration > 0) durationMs = Math.round((duration / timescale) * 1000);
+  }
+
+  const tkhd = find(bytes, ms, me, "tkhd");
+  if (!tkhd) return undefined;
+  const [s] = tkhd;
+  const at = bytes[s] === 1 ? s + 88 : s + 76;
+  const width = Math.round(be32(bytes, at) / 65536);
+  const height = Math.round(be32(bytes, at + 4) / 65536);
+  if (width <= 0 || height <= 0) return undefined;
+
+  return durationMs === undefined ? { width, height } : { width, height, durationMs };
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npx vitest run transform/test/media-probe.test.ts`
+Expected: PASS, 5 tests.
+
+- [ ] **Step 5: Verify against a REAL file, not only a synthetic one**
+
+```bash
+node --input-type=module -e "
+import { readFileSync } from 'node:fs';
+const { probeMp4 } = await import('./transform/src/media-probe.ts');
+console.log(probeMp4(new Uint8Array(readFileSync('fixtures/basic/display.mp4'))));
+"
+```
+
+Expected: real width/height/durationMs for the committed fixture, not
+`undefined`. If this prints `undefined` the box walk is wrong in a way the
+synthetic fixture did not catch — fix it before moving on. A synthetic fixture
+built by the same mind that wrote the parser can agree with a shared mistake.
+
+- [ ] **Step 6: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add transform/src/media-probe.ts transform/test/media-probe.test.ts
+git commit -m "STC-413: probe duration and dimensions from header bytes only"
+```
+
+---
+
+### Task 5: Mint the id and persist it in the bundle
+
+**Why this task exists:** Tasks 6 and 7 both consume a `captureId`, and Task 8's
+scan matches a finished file's embedded id against its bundle. Nothing
+otherwise writes one. The spec's flow line says "id minted into
+`anchors.json`/`shot.json`", which would mean bumping two schemas and a Swift
+writer; this is the cheaper shape, ruled on at pre-flight.
+
+**The id is minted LAZILY, at export time.** A bundle with no finished file
+needs no identity — nothing points back at it — so nothing on the capture or
+promote path changes. `ensureCaptureId` is called by the two export paths and
+by nothing else.
+
+**Files:**
+- Create: `schema/capture-1.schema.json`
+- Create: `transform/src/capture-doc.ts`
+- Create: `transform/test/capture-doc.test.ts`
+- Create: `app/src/capture-identity.ts`
+- Create: `app/test/capture-identity.test.ts`
+
+**Interfaces:**
+- Consumes: `mintCaptureId`, `isCaptureId` (Task 1).
+- Produces: `CAPTURE_DOC_FILE: "capture.json"`,
+  `parseCaptureDoc(doc: unknown): CaptureDoc` (refuses, never defaults),
+  `captureDocForWrite(id: string): CaptureDoc`,
+  `interface CaptureDoc { version: 1; id: string }`, and
+  `ensureCaptureId(bundleDir: string): Promise<string>`.
+
+**The load-bearing property is IDEMPOTENCE.** A second export of the same take
+must return the SAME id — otherwise re-exporting silently orphans the file
+exported before it, which is the exact failure this design exists to prevent.
+
+- [ ] **Step 1: Write the failing tests**
+
+`transform/test/capture-doc.test.ts` — schema and loader checked against each
+other, the pattern `changes.test.ts` and `recording-1` already set:
+
+```ts
+import { describe, test, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import AjvImport from "ajv";
+import { parseCaptureDoc, captureDocForWrite } from "../src/capture-doc.js";
+import { mintCaptureId } from "../src/capture-id.js";
+
+const Ajv = (AjvImport as any).default ?? AjvImport;
+const root = join(__dirname, "..", "..");
+const schema = JSON.parse(readFileSync(join(root, "schema/capture-1.schema.json"), "utf8"));
+const validate = new Ajv({ allErrors: true, strict: true }).compile(schema);
+
+describe("capture-1 schema and loader agree", () => {
+  test("a written document validates and round trips", () => {
+    const id = mintCaptureId();
+    const doc = captureDocForWrite(id);
+    expect(validate(doc)).toBe(true);
+    expect(parseCaptureDoc(doc).id).toBe(id);
+  });
+
+  test("the loader REFUSES rather than defaulting", () => {
+    for (const bad of [
+      {}, null, "nope", { version: 1 }, { id: mintCaptureId() },
+      { version: 2, id: mintCaptureId() },
+      { version: 1, id: "not-an-id" },
+      { version: 1, id: mintCaptureId(), extra: true },   // noExtra, like parseShot
+    ]) {
+      expect(() => parseCaptureDoc(bad)).toThrow();
+    }
+  });
+});
+```
+
+`app/test/capture-identity.test.ts` — the IO half:
+
+```ts
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ensureCaptureId } from "../src/capture-identity.js";
+import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
+import { isCaptureId } from "@transform/capture-id.js";
+
+let dir: string;
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "stc-id-")); });
+afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+describe("ensureCaptureId", () => {
+  test("mints an id and writes it into the bundle", async () => {
+    const id = await ensureCaptureId(dir);
+    expect(isCaptureId(id)).toBe(true);
+    const doc = JSON.parse(await readFile(join(dir, CAPTURE_DOC_FILE), "utf8"));
+    expect(doc.id).toBe(id);
+  });
+
+  test("IS IDEMPOTENT — a second export reuses the first id", async () => {
+    // If this fails, re-exporting a take orphans the file exported before it.
+    expect(await ensureCaptureId(dir)).toBe(await ensureCaptureId(dir));
+  });
+
+  test("a corrupt document is replaced rather than thrown on", async () => {
+    await writeFile(join(dir, CAPTURE_DOC_FILE), "{ not json");
+    const id = await ensureCaptureId(dir);
+    expect(isCaptureId(id)).toBe(true);
+    expect(await ensureCaptureId(dir)).toBe(id);   // and is stable afterwards
+  });
+
+  test("concurrent calls on one bundle agree", async () => {
+    // Two exports racing is reachable: STC-296's stacking is the first thing
+    // in this app that can export twice at once.
+    const ids = await Promise.all([ensureCaptureId(dir), ensureCaptureId(dir)]);
+    expect(ids[0]).toBe(ids[1]);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `npx vitest run transform/test/capture-doc.test.ts app/test/capture-identity.test.ts`
+Expected: FAIL — neither module resolves.
+
+- [ ] **Step 3: Write the schema**
+
+`schema/capture-1.schema.json`:
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "capture-1",
+  "description": "A bundle's stable identity (STC-413). Written lazily at export time; absent from a bundle that has never been exported.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+  }
+}
+```
+
+- [ ] **Step 4: Write the pure document module**
+
+`transform/src/capture-doc.ts` — refuses rather than defaults, the stance
+`parseShot` takes, because a bundle whose identity cannot be read must be
+treated as unidentified rather than quietly handed a fresh id that orphans the
+file it already has.
+
+```ts
+import { isCaptureId } from "./capture-id.js";
+
+export const CAPTURE_DOC_FILE = "capture.json";
+
+export interface CaptureDoc { version: 1; id: string }
+
+export class CaptureDocError extends Error {}
+
+export function captureDocForWrite(id: string): CaptureDoc {
+  if (!isCaptureId(id)) throw new CaptureDocError(`not a capture id: ${String(id)}`);
+  return { version: 1, id };
+}
+
+export function parseCaptureDoc(doc: unknown): CaptureDoc {
+  if (!doc || typeof doc !== "object") throw new CaptureDocError("capture.json is not an object");
+  const d = doc as Record<string, unknown>;
+  for (const k of Object.keys(d)) {
+    if (k !== "version" && k !== "id") throw new CaptureDocError(`unexpected field: ${k}`);
+  }
+  if (d.version !== 1) throw new CaptureDocError(`unsupported version: ${String(d.version)}`);
+  if (!isCaptureId(d.id)) throw new CaptureDocError("id is not a capture id");
+  return { version: 1, id: d.id };
+}
+```
+
+- [ ] **Step 5: Write the IO half**
+
+`app/src/capture-identity.ts`. In-process claiming guards the concurrent case
+the same way `takes.ts`'s `duplicating` set and `still-io.ts`'s name claim
+already do — STC-296's stacking made two simultaneous exports reachable.
+
+```ts
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  CAPTURE_DOC_FILE, captureDocForWrite, parseCaptureDoc,
+} from "@transform/capture-doc.js";
+import { mintCaptureId } from "@transform/capture-id.js";
+
+/**
+ * Ids handed out for a bundle but not yet on disk (STC-413).
+ *
+ * The read and the write are two moments, and two exports of one take racing
+ * in the gap would both see no document and mint DIFFERENT ids — the second
+ * overwriting the first, orphaning the file the first had already embedded.
+ * Same race, and the same in-process fix, as `still-io.ts`'s export names.
+ */
+const claimed = new Map<string, Promise<string>>();
+
+/** This bundle's id, minting and persisting one the first time it is asked for. */
+export function ensureCaptureId(bundleDir: string): Promise<string> {
+  const existing = claimed.get(bundleDir);
+  if (existing) return existing;
+
+  const work = (async () => {
+    const path = join(bundleDir, CAPTURE_DOC_FILE);
+    try {
+      return parseCaptureDoc(JSON.parse(await readFile(path, "utf8"))).id;
+    } catch {
+      // Absent or unreadable. A corrupt document is replaced rather than
+      // fatal: refusing to export because a bookkeeping file got mangled
+      // would cost the user their take for nothing.
+    }
+    const id = mintCaptureId();
+    await writeFile(path, JSON.stringify(captureDocForWrite(id), null, 2));
+    return id;
+  })().finally(() => { claimed.delete(bundleDir); });
+
+  claimed.set(bundleDir, work);
+  return work;
+}
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `npx vitest run transform/test/capture-doc.test.ts app/test/capture-identity.test.ts`
+Expected: PASS, 6 tests.
+
+- [ ] **Step 7: Mutation check — prove idempotence is really tested**
+
+Make `ensureCaptureId` always mint (delete the read-and-parse branch). Re-run.
+Expected: the idempotence, corrupt-stability and concurrency tests FAIL. Revert.
+
+This is the mutation that matters: an always-minting `ensureCaptureId` passes
+every other test in this plan while orphaning a file on every re-export.
+
+- [ ] **Step 8: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add schema/capture-1.schema.json transform/src/capture-doc.ts \
+        transform/test/capture-doc.test.ts app/src/capture-identity.ts \
+        app/test/capture-identity.test.ts
+git commit -m "STC-413: a bundle's identity, minted lazily at export time"
+```
+
+---
+
+### Task 6: The Swift PNG writer carries the id
+
+**Files:**
+- Modify: `helper/src/StillEncodeDecisions.swift` — the struct at :78, its
+  parse at :245, and `stillImageProperties` at :321. **All three are in this
+  one file**, which is the pure half the harness compiles; `StillEncode.swift`
+  needs no change at all.
+- Modify: `app/src/still-io.ts` (forward `captureId` into the helper request)
+- Modify: `app/src/main.ts` (`still:export` — supply the value via `ensureCaptureId`)
+- Test: `helper/test/still-encode/main.swift`, driven by the EXISTING
+  `helper/test/still-encode-decisions.test.ts` via `runSwiftHarness`.
+- Test: `helper/test/still-encode/main.swift`
+
+**Interfaces:**
+- Consumes: the id format from Task 1 (as a plain string over IPC). The VALUE
+  comes from `ensureCaptureId` (Task 5), called on the shot's bundle by the
+  main-process still-export path before the request is built.
+- Produces: `StillExportRequest.captureId: String?`; `stillImageProperties`
+  emits a PNG dictionary when it is set.
+
+- [ ] **Step 1: Write the failing test in the pure harness**
+
+Add to `helper/test/still-encode/main.swift`, following the existing
+`stillPropertyKeys` idiom:
+
+```swift
+// STC-413: the capture id rides in the PNG dictionary, and — the point of the
+// test — it is INDEPENDENT of capturedAt, so a metadata-stripped export stays
+// editable. Stripping the timestamp must not strip identity.
+let stripped = StillExportRequest(/* …existing fields…, */ capturedAt: nil,
+                                  captureId: "cap_" + String(repeating: "A", count: 26))
+expectContains(stillPropertyKeys(stripped), "\(kCGImagePropertyPNGDictionary)",
+               "a stripped export still carries its capture id")
+expectNotContains(stillPropertyKeys(stripped), "\(kCGImagePropertyExifDictionary)",
+                  "a stripped export carries no EXIF date")
+
+let untagged = StillExportRequest(/* …existing fields…, */ capturedAt: nil, captureId: nil)
+expectNotContains(stillPropertyKeys(untagged), "\(kCGImagePropertyPNGDictionary)",
+                  "no id means no PNG dictionary at all")
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run helper/test/still-encode-decisions.test.ts` (it compiles the harness itself via `runSwiftHarness` — there is no run.sh)
+(or the existing harness runner for that directory)
+Expected: FAIL — `StillExportRequest` has no `captureId`.
+
+**This machine HAS `swiftc`** (`~/.swiftly/bin/swiftc`) and `helper/build/stc-helper`
+is already built, so this task is fully verifiable here — the caveat an earlier
+draft carried about deferring to CI does not apply. Run the harness for real.
+
+- [ ] **Step 3: Implement**
+
+In `StillEncodeDecisions.swift`, add the field to `StillExportRequest` and
+extend the properties builder. Note the ORDER: the id block goes **before** the
+`guard let iso = r.capturedAt` early return, or a stripped export loses it.
+
+```swift
+func stillImageProperties(_ r: StillExportRequest) -> [CFString: Any] {
+    var props: [CFString: Any] = [:]
+    if r.format.isLossy {
+        props[kCGImageDestinationLossyCompressionQuality] = r.quality
+    }
+    // STC-413: identity is not metadata in the privacy sense — it is opaque,
+    // carries no timestamp and no path — so it survives a metadata strip.
+    // It must be set BEFORE the capturedAt guard returns.
+    if let id = r.captureId {
+        props[kCGImagePropertyPNGDictionary] = [kCGImagePropertyPNGDescription: id]
+    }
+    guard let iso = r.capturedAt, let stamp = exifDateString(fromISO: iso) else { return props }
+    props[kCGImagePropertyTIFFDictionary] = [kCGImagePropertyTIFFDateTime: stamp]
+    props[kCGImagePropertyExifDictionary] = [
+        kCGImagePropertyExifDateTimeOriginal: stamp,
+        kCGImagePropertyExifDateTimeDigitized: stamp,
+    ]
+    return props
+}
+```
+
+Then add `captureId` to the struct at `StillEncodeDecisions.swift:78` and parse
+it in the same file's request decoding at `:245`, beside `capturedAt`, refusing
+a malformed one rather than passing it through. (`StillEncode.swift` is NOT
+involved — the struct, its parse and the properties builder all live in
+`StillEncodeDecisions.swift`, which is also the file the harness compiles.)
+
+- [ ] **Step 4: Wire the app side — otherwise nothing ever sets the field**
+
+The Swift half above only READS `captureId` off the request. Without this step
+it is a field nothing populates, and every still ships untagged while all the
+Swift tests pass.
+
+`app/src/still-io.ts` builds the helper request at roughly line 326. Add
+`captureId` to `ExportStillRequest`, and forward it beside `capturedAt`:
+
+```ts
+      ...(meta.capturedAt ? { capturedAt: meta.capturedAt } : {}),
+      // STC-413: identity, NOT gated on stripMetadata — it is opaque, carries
+      // no timestamp and no path, and suppressing it would make a
+      // privacy-stripped export permanently uneditable.
+      ...(req.captureId ? { captureId: req.captureId } : {}),
+```
+
+The VALUE comes from the caller, not from here — `still-io.ts` is the funnel
+and does not know about bundles. In `app/src/main.ts`'s `still:export` handler,
+call `ensureCaptureId(<the shot's bundle directory>)` and put the result on the
+request. That handler already resolves the shot's directory for
+`destinationDir`'s `fallbackDir`, so the path is in hand.
+
+**Check every call site.** `exportStill` is the one funnel every still takes out
+of the app — panel Save, Copy, Save As…, the right-click menu and the settle
+path all reach it. Grep for callers and confirm each supplies a `captureId`, or
+state in your report which deliberately do not and why. A Copy-to-clipboard
+export writes to a cache directory and is never a library file, so it is a
+legitimate no-id case.
+
+- [ ] **Step 5: Run it to verify it passes**
+
+Run: `npx vitest run helper/test/still-encode-decisions.test.ts` (it compiles the harness itself via `runSwiftHarness` — there is no run.sh)
+Expected: PASS.
+
+Then `npm run typecheck` — all three passes — since the app side changed.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add helper/src/StillEncodeDecisions.swift helper/src/StillEncode.swift \
+        helper/test/still-encode/main.swift
+git commit -m "STC-413: the still encoder carries a capture id, independent of stripMetadata"
+```
+
+---
+
+### Task 7: The exporter tags the MP4 it writes
+
+**Files:**
+- Modify: `transform/src/export.ts:339-340`
+- Modify: `app/src/main.ts` (a `take:captureId` handler)
+- Modify: `app/src/editor-preload.ts` (expose it on the narrow bridge)
+- Modify: `app/src/editor.ts:1237` (pass it to `exportSession`)
+- Test: `transform/test/export-tag.test.ts` (create)
+
+**Interfaces:**
+- Consumes: `tagMp4`, `readMp4CaptureId` (Task 3); `ensureCaptureId` (Task 5),
+  called on the take's bundle by the caller that invokes `exportSession` —
+  `exportSession` itself stays pure of node and receives the id as a string.
+- Produces: `exportSession` accepts `captureId?: string` on its options and
+  emits a tagged buffer.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, test, expect } from "vitest";
+import { tagMp4, readMp4CaptureId } from "../src/media-tag.js";
+import { mintCaptureId } from "../src/capture-id.js";
+
+describe("export tagging", () => {
+  test("a tagged buffer still begins with the muxer's own bytes", () => {
+    // Stands in for the muxer's output: the contract is that tagging appends.
+    const muxed = new Uint8Array([0, 0, 0, 16, ...[..."ftyp"].map((c) => c.charCodeAt(0)),
+                                  ...new Array(8).fill(0)]);
+    const id = mintCaptureId();
+    const out = tagMp4(muxed, id);
+    expect(out.subarray(0, muxed.length)).toEqual(muxed);
+    expect(readMp4CaptureId(out)).toBe(id);
+  });
+
+  test("no id means the buffer is returned untouched", () => {
+    const muxed = new Uint8Array([0, 0, 0, 8, ...[..."ftyp"].map((c) => c.charCodeAt(0))]);
+    expect(tagMp4(muxed, "not-an-id")).toEqual(muxed);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run transform/test/export-tag.test.ts`
+Expected: PASS for the pure helpers — they exist from Task 3. This test pins the
+CONTRACT the wiring must honour; the wiring itself is verified in Step 4.
+
+- [ ] **Step 3: Wire it into `export.ts`**
+
+At line 339-340, replace:
+
+```ts
+      muxer.finalize();
+      const buf = (muxer.target as ArrayBufferTarget).buffer;
+```
+
+with:
+
+```ts
+      muxer.finalize();
+      // STC-413: identity goes in the bytes, appended AFTER finalize so no
+      // chunk offset moves — stco/co64 point into mdat, which does not shift.
+      const raw = new Uint8Array((muxer.target as ArrayBufferTarget).buffer);
+      const tagged = opts.captureId ? tagMp4(raw, opts.captureId) : raw;
+      const buf = tagged.buffer.slice(tagged.byteOffset,
+                                      tagged.byteOffset + tagged.byteLength) as ArrayBuffer;
+```
+
+Add `captureId?: string` to the options interface and
+`import { tagMp4 } from "./media-tag.js";` at the top.
+
+- [ ] **Step 4: Wire the app side — and note it has to cross IPC**
+
+Step 3 makes `exportSession` READ `opts.captureId`. Nothing sets it yet, so
+without this step every export ships untagged while the unit tests pass.
+
+The app's only caller is `app/src/editor.ts:1237`, and **that is a renderer** —
+it cannot call `ensureCaptureId`, which uses `node:fs` and would fail the
+browser typecheck pass. So the id crosses the bridge:
+
+1. `app/src/main.ts` — add a handler, `take:captureId`. The take directory for
+   the calling window comes from the existing `getOpenTake(e)` helper
+   (`main.ts:118`, over the `openTakes` map at `:114`), and the refusal idiom
+   is already used verbatim by the `preview:*` handlers:
+
+   ```ts
+   const openTake = getOpenTake(e);
+   if (!openTake) throw new Error("no take is open");
+   return await ensureCaptureId(openTake);
+   ```
+
+2. `app/src/editor-preload.ts` — add one line to the bridge. Note it exposes
+   **`window.editor`**, not the main window's `recorder`, and its header states
+   the rule: only the channels this window needs. Follow the existing style:
+
+   ```ts
+   captureId: () => ipcRenderer.invoke("take:captureId"),
+   ```
+
+3. `app/src/editor.ts` — fetch it just before `exportSession` and pass it as
+   `captureId` in the options object at line 1237.
+
+**The gate and harness drivers deliberately pass nothing.**
+`scripts/export-gate.mjs`, `scripts/export-one.mjs` and
+`scripts/measure-export.mjs` all call `window.exportSession` directly and have
+no bundle to identify. An untagged export from a harness is correct — those
+files are not library captures. Do not "fix" them, and say so in your report so
+a reviewer does not read it as an omission.
+
+- [ ] **Step 5: Verify end to end against a real export**
+
+**NOT via `scripts/export-one.mjs`.** An earlier draft of this step said to use
+it, which contradicted this same task's own note four paragraphs up: that
+driver calls `window.exportSession` directly, has no bundle to identify, and is
+*deliberately* untagged. Running it and expecting an id tests nothing — it
+correctly produces an untagged file, which reads as a failure of the feature.
+
+Verify through the REAL path instead: open a take in the editor and export it,
+so `editor.ts` → `take:captureId` → `ensureCaptureId` → `exportSession` all
+actually run. A throwaway driver that exercises those hops is fine; state in
+your report which path you used.
+
+Then read the id back out of the produced file:
+
+```bash
+# npx tsx, not bare node: node cannot resolve a .ts import here, and Task 4
+# hit exactly that when this command was written with `node --input-type=module`.
+npx tsx -e "
+import { readFileSync } from 'node:fs';
+import { readMp4CaptureId } from './transform/src/media-tag.js';
+console.log(readMp4CaptureId(new Uint8Array(readFileSync(process.argv[1]))));
+" <path-to-the-export>
+```
+
+Expected: the id, and the file still plays. **Open it and watch it** — a file
+that parses is not the same claim as a file QuickTime accepts, and this repo
+already records that a trailing-box mistake is the kind of thing only a player
+reveals.
+
+- [ ] **Step 6: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add transform/src/export.ts transform/test/export-tag.test.ts \
+        app/src/main.ts app/src/editor-preload.ts app/src/editor.ts
+git commit -m "STC-413: tag the exported MP4 with its capture id"
+```
+
+---
+
+# PHASE 2 — The folder layout
+
+Phase 2 moves files. Every task here is reversible and none deletes user data
+except Task 12, which is gated on both orphan status and age.
+
+---
+
+### Task 8: The scan reads the folder
+
+**Order matters: the scan learns to read `raw/` BEFORE anything writes there.**
+Done the other way round, Task 9 would put new takes in a folder the library
+cannot see and the suite would be red across two tasks. This task moves no
+files, so it is backward-compatible on its own and the suite stays green.
+
+**Files:**
+- Modify: `app/src/library.ts`
+- Test: `app/test/library-scan.test.ts` (create)
+
+**Interfaces:**
+- Consumes: `probePng`/`probeMp4` (Task 4), `readPngCaptureId`/`readMp4CaptureId`
+  (Tasks 2-3), and `CAPTURE_DOC_FILE`/`parseCaptureDoc` (Task 5) — a bundle's
+  own id is read from its `capture.json`, and a bundle without one has never
+  been exported and therefore cannot match any finished file.
+- Produces: `listLibrary` and `listTakes` keep their existing signatures and
+  return `LibraryList`/`TakeList`.
+
+**`library-items.ts` DOES change, and an earlier draft of this plan was wrong
+to say otherwise.** A finished capture is a FILE; `LibraryItem.dir` is a
+DIRECTORY and has about twelve consumers in `renderer.ts` that pass it to
+`getShot`, `getFrame`, `reveal`, `duplicate` and the rest. An item now has to
+be able to name both, or one of them, or neither-but-one. Widening the
+interface is the sanctioned move — `library-items.ts`'s own rule 1 says so in
+as many words: *"When a kind needs something the interface cannot express, the
+instruction is to WIDEN `LibraryItem` deliberately, never to special-case it at
+the call site."* Widening is allowed; a view branching on `kind` is not, and
+`library-seam.test.ts` must still pass untouched.
+
+Three changes to `LibraryItem`, and no more:
+
+```ts
+  /**
+   * Stable identity and the EXPORT NAME — the bundle's timestamped name when
+   * there is a bundle, else the finished file's stem.
+   *
+   * No longer the sort key. It was, while every item was a directory whose
+   * name was a timestamp; a user who renames `2026-09-22_14-30.mp4` to
+   * `login-bug.mp4` in Finder destroys that ordering, and renaming in Finder
+   * is the whole point of STC-413.
+   */
+  id: string;
+  /** The finished capture on disk. Absent for a bundle never exported. */
+  file?: string;
+  /** Its source bundle in `raw/`. Absent for a foreign file with none. */
+  dir?: string;
+```
+
+And the sort in `listLibrary` moves off `id`:
+
+```ts
+  // createdAt, not id: a renamed file's name says nothing about when it was
+  // captured. Taken from the bundle's stamped name where there is one — which
+  // survives any rename — and from the file's mtime where there is not.
+  all.sort((a, b) => b.createdAt - a.createdAt);
+```
+
+**Making `dir` optional is a compile-time change at every consumer**, which is
+the point: `npm run typecheck` will name each of the ~12 sites in `renderer.ts`,
+and each must be handled rather than non-null-asserted. An action that needs a
+bundle (edit, duplicate, re-open a shot) must not be offered for an item
+without one — which is the same rule that already gives a foreign file no edit
+action, so `actions` is where it is enforced, not at the call site.
+
+**Scan rules, in order:**
+1. Read the folder. A file with a media extension (`.mp4`, `.png`, `.heic`,
+   `.jpg`, `.jpeg`) is a **finished capture**. Read its header, probe facts,
+   extract its id.
+
+   **`.jpg`/`.jpeg`/`.heic` have no probe, and that is ruled, not forgotten.**
+   Only `probePng` and `probeMp4` exist — JPEG and HEIC header parsing is real
+   work for little return here. Such a file lists with **no dimensions**,
+   exactly like any other file the probe cannot read. This costs almost
+   nothing in practice: a JPEG or HEIC still that the app itself produced is
+   matched to its bundle by its id, and its dimensions come from that bundle's
+   `shot.json`. Only a FOREIGN JPEG shows reduced metadata.
+2. `raw/` and any dotfile are skipped by rule 1.
+3. Read `raw/` if it exists. A directory with `anchors.json` or `shot.json` is a
+   **bundle**. A bundle whose id appears in step 1 is that capture's source; one
+   whose id does not is an **unfinished capture**.
+4. A top-level directory with `anchors.json`/`shot.json` is a **legacy bundle**
+   — treated exactly like a `raw/` one. This is the whole migration, and it is
+   also what keeps this task green before Task 9 moves anything.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, mkdir, writeFile, rm, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { listLibrary, listTakes } from "../src/library.js";
+import { tagMp4 } from "@transform/media-tag.js";
+import { mintCaptureId } from "@transform/capture-id.js";
+
+const env = {} as NodeJS.ProcessEnv;
+let root: string;
+
+/**
+ * A structurally valid, tiny MP4 that probeMp4 can read: timescale 600,
+ * duration 3000 → 5000 ms, track 1920x1080. Written out in full rather than
+ * imported from media-probe.test.ts — a test fixture shared between two files
+ * is a coupling that makes one file's failure look like the other's.
+ */
+const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+const chars = (s: string) => [...s].map((c) => c.charCodeAt(0));
+const box = (type: string, data: number[]) => [...be32(8 + data.length), ...chars(type), ...data];
+
+function mp4Bytes(): Uint8Array {
+  const mvhd = box("mvhd", [0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(600), ...be32(3000)]);
+  const tkhd = box("tkhd", [
+    0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(1), ...be32(0), ...be32(0),
+    ...new Array(8).fill(0), 0, 0, 0, 0, 0, 0, 0, 0,
+    ...new Array(36).fill(0),
+    ...be32(1920 * 65536), ...be32(1080 * 65536),
+  ]);
+  return new Uint8Array([...box("ftyp", chars("isom")), ...box("mdat", [1, 2, 3, 4]),
+    ...box("moov", [...mvhd, ...box("trak", tkhd)])]);
+}
+
+beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "stc-lib-")); });
+afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+describe("the scan reads the folder", () => {
+  test("a finished file at top level lists, with facts from its header", async () => {
+    await writeFile(join(root, "login-bug.mp4"), tagMp4(mp4Bytes(), mintCaptureId()));
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.title).toContain("login-bug");
+  });
+
+  test("a foreign file lists too, with no edit action", async () => {
+    await writeFile(join(root, "holiday.mp4"), mp4Bytes());       // untagged
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.actions.map((a) => a.id)).not.toContain("edit");
+  });
+
+  test("raw/ is not itself listed as a capture", async () => {
+    await mkdir(join(root, "raw"), { recursive: true });
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(0);
+  });
+
+  test("a bundle in raw/ with no finished file lists as unfinished", async () => {
+    const dir = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "anchors.json"), JSON.stringify({ version: 5 }));
+    const { items, invalid } = await listLibrary(env, root);
+    expect(items.length + invalid.length).toBe(1);
+  });
+
+  test("a LEGACY top-level bundle still works — this is the whole migration", async () => {
+    const dir = join(root, "2026-09-20_10-00-00");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "shot.json"), JSON.stringify({ version: 1 }));
+    const { items, invalid } = await listLibrary(env, root);
+    expect(items.length + invalid.length).toBe(1);
+  });
+
+  test("one unreadable file does not hide the rest", async () => {
+    await writeFile(join(root, "broken.mp4"), new Uint8Array([1, 2, 3]));
+    await writeFile(join(root, "good.mp4"), tagMp4(mp4Bytes(), mintCaptureId()));
+    const { items } = await listLibrary(env, root);
+    expect(items.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("a non-media file is ignored entirely", async () => {
+    await writeFile(join(root, "notes.txt"), "hello");
+    await writeFile(join(root, ".DS_Store"), "x");
+    const { items, invalid } = await listLibrary(env, root);
+    expect(items).toHaveLength(0);
+    expect(invalid).toHaveLength(0);
+  });
+
+  test("a finished file names both itself and its bundle", async () => {
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(root, "login-bug.mp4"), tagMp4(mp4Bytes(), id));
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);                       // one capture, not two
+    expect(items[0]!.file).toBe(join(root, "login-bug.mp4"));
+    expect(items[0]!.dir).toBe(bundle);
+    expect(items[0]!.id).toBe("2026-09-22_14-30-01");    // the export name, not the filename
+  });
+
+  test("a foreign file has no bundle to name", async () => {
+    await writeFile(join(root, "holiday.mp4"), mp4Bytes());
+    const { items } = await listLibrary(env, root);
+    expect(items[0]!.file).toBe(join(root, "holiday.mp4"));
+    expect(items[0]!.dir).toBeUndefined();
+  });
+
+  test("sorts by capture time, NOT by filename", async () => {
+    // The load-bearing case for STC-413: renaming in Finder must not reorder
+    // the library.
+    //
+    // The stamps are deliberately OPPOSED to the filenames: `zzz` is the
+    // NEWER capture and must sort first, even though its name sorts last.
+    // An earlier version of this fixture had them the other way round and was
+    // VACUOUS — it passed under the old id-based comparator AND under a
+    // filename-ascending one, because a matched pair's `id` is its BUNDLE's
+    // stamp rather than its filename, so every ordering agreed. If you change
+    // these stamps, re-check that the test can still fail.
+    for (const [name, stamp] of [["zzz.mp4", "2026-09-22_17-00-00"],
+                                 ["aaa.mp4", "2026-09-22_09-00-00"]] as const) {
+      const id = mintCaptureId();
+      const bundle = join(root, "raw", stamp);
+      await mkdir(bundle, { recursive: true });
+      await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+      await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+      await writeFile(join(root, name), tagMp4(mp4Bytes(), id));
+    }
+    // A LOOSE file too, and it is what makes this test discriminate at all.
+    // Two matched pairs cannot: a matched item's `id` IS its bundle's stamp
+    // and its `createdAt` is `stampToMs` of that same stamp, so id-descending
+    // and createdAt-descending are mathematically identical for them. Only an
+    // UNMATCHED item's id (the file's stem) can diverge from its createdAt.
+    // "mmm" sorts above both stamps under the old id comparator, and belongs
+    // in the middle by time.
+    const loose = join(root, "mmm.mp4");
+    await writeFile(loose, mp4Bytes());                        // no id, no bundle
+    // LOCAL components, not a "Z" instant. `stampToMs` parses a directory
+    // stamp as local time — correctly, since it is the inverse of `takes.ts`'s
+    // own `stamp()` — so a UTC noon is 08:00 in EDT, i.e. BEFORE the 09:00
+    // bundle, and the intended ordering silently depends on the machine's
+    // timezone. Building from local components is timezone-proof.
+    const noon = new Date(2026, 8, 22, 12, 0, 0);
+    await utimes(loose, noon, noon);
+
+    const { items } = await listLibrary(env, root);
+    // By capture time: zzz (17:00), mmm (12:00), aaa (09:00).
+    // The OLD id comparator would give: mmm, zzz, aaa — "mmm" outranks both
+    // "2026-…" stems. Anything filename-driven gives: zzz, mmm, aaa reversed
+    // or scrambled. Only createdAt-descending produces this exact list.
+    expect(items.map((i) => i.file?.split("/").pop())).toEqual(
+      ["zzz.mp4", "mmm.mp4", "aaa.mp4"]);
+  });
+
+  test("a matched bundle that fails to parse is listed AND reported", async () => {
+    // Both, not either. The file plays, so its tile belongs in the grid — but
+    // `library.ts`'s own header rule is that a broken take is REPORTED, never
+    // silently skipped, because "a take that quietly vanishes from the list is
+    // indistinguishable from one that was deleted". Suppressing the report
+    // also drops it out of `listTakes` entirely, which is the recordings-only
+    // view the editor uses.
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    // No display.mp4 — readRecording will fail.
+    await writeFile(join(root, "login-bug.mp4"), tagMp4(mp4Bytes(), id));
+
+    const { items, invalid } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);                       // the file still plays
+    expect(invalid).toHaveLength(1);                     // and the corruption is visible
+    expect(invalid[0]!.dir).toBe(bundle);
+  });
+
+  test("an exported bundle whose file cannot be linked is shown, not called broken", async () => {
+    // `capture.json` is minted AT EXPORT, so its presence PROVES this bundle
+    // was exported — even though nothing here carries its id back (a JPEG or
+    // HEIC still, which ImageIO tags only in the PNG dictionary; or a file
+    // moved out of the folder entirely). Three properties at once, because
+    // this sits one `else if` away from regressing into either `invalid`
+    // (which would call an exported capture broken) or `takes` (which would
+    // break the "only fully-read bundles" invariant).
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"),
+                    JSON.stringify({ version: 1, id: mintCaptureId() }));
+    // No display.mp4, and no top-level file carrying that id.
+
+    const { items, invalid } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);                       // visible
+    expect(items[0]!.file).toBeUndefined();              // with no file to open
+    expect(items[0]!.actions.map((a) => a.id)).not.toContain("open");
+    expect(invalid).toHaveLength(0);                     // NOT broken — it was exported
+
+    const { takes } = await listTakes(env, root);
+    expect(takes).toHaveLength(0);                       // and not playable either
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run app/test/library-scan.test.ts`
+Expected: FAIL — the scan still only walks directories.
+
+- [ ] **Step 3: Implement the scan**
+
+Rewrite `scanRoot` to the four rules above. Read only `MP4_TAIL_PROBE_BYTES`
+from a file's tail plus its first 24 bytes — never the whole file. Keep
+`readRecording` and `readStill` for the bundle path; they are correct and only
+their call site moves.
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npx vitest run app/test/library-scan.test.ts app/test/library-seam.test.ts`
+Expected: PASS. **`library-seam.test.ts` must still pass untouched** — if it
+fails, the scan leaked `kind` into the view, and the fix is to widen the adapter,
+not to edit the seam test.
+
+- [ ] **Step 5: Confirm the suite is still green — nothing has moved yet**
+
+Run: `npx vitest run app/test`
+Expected: PASS. This task is purely additive; a failure here means the scan
+stopped understanding the CURRENT layout, which Task 9 would then bury.
+
+- [ ] **Step 6: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add app/src/library.ts app/test/library-scan.test.ts
+git commit -m "STC-413: the library scan reads media files and bundles in either position"
+```
+
+---
+
+### Task 9: New captures land in `raw/`
+
+**Files:**
+- Modify: `app/src/takes.ts`
+- Modify: `app/src/temp-takes.ts` (`promoteTake`)
+- Test: `app/test/takes.test.ts`
+- Restate: the e2e fixtures that assert a take's on-disk path
+
+**Interfaces:**
+- Consumes: the scan's both-positions support (Task 8).
+- Produces: `RAW_SUBDIR: "raw"`, `rawRoot(env, saveFolder): string`.
+  `newTakeDir` now returns a path inside `rawRoot`. `takesRoot` is UNCHANGED —
+  it still names the user's folder, which is now the finished-capture root.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, test, expect } from "vitest";
+import { newTakeDir, rawRoot, takesRoot, RAW_SUBDIR, insideTakesRoot } from "../src/takes.js";
+
+const env = {} as NodeJS.ProcessEnv;
+
+describe("raw/ is where source bundles live", () => {
+  test("takesRoot still names the user's folder", () => {
+    expect(takesRoot(env, "/tmp/f")).toBe("/tmp/f");
+  });
+
+  test("rawRoot is a subfolder of it", () => {
+    expect(rawRoot(env, "/tmp/f")).toBe(`/tmp/f/${RAW_SUBDIR}`);
+  });
+
+  test("a new take lands in raw/, not at top level", () => {
+    const dir = newTakeDir(env, "/tmp/f", new Date(2026, 8, 22, 14, 30, 1));
+    expect(dir).toBe(`/tmp/f/${RAW_SUBDIR}/2026-09-22_14-30-01`);
+  });
+
+  test("the traversal guard still holds one level deeper", () => {
+    expect(insideTakesRoot(env, "/tmp/f", `/tmp/f/${RAW_SUBDIR}/x`)).toBe(true);
+    expect(insideTakesRoot(env, "/tmp/f", "/tmp/f-other/x")).toBe(false);
+    expect(insideTakesRoot(env, "/tmp/f", "/tmp/f/../../etc")).toBe(false);
+    expect(insideTakesRoot(env, "/tmp/f", "/tmp/f")).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run app/test/takes.test.ts`
+Expected: FAIL — `rawRoot` and `RAW_SUBDIR` are not exported.
+
+- [ ] **Step 3: Implement**
+
+```ts
+/**
+ * Source bundles live below the user's folder, not in it (STC-413).
+ *
+ * The folder itself is now a view of FINISHED captures — plain files someone
+ * can open in Finder. A bundle is machine material: raw, cursorless video and
+ * the sidecars that make an export possible. Visible rather than dotted,
+ * deliberately, because "nothing is locked inside the app" means someone has
+ * to be able to find it.
+ */
+export const RAW_SUBDIR = "raw";
+
+export function rawRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): string {
+  return join(takesRoot(env, saveFolder), RAW_SUBDIR);
+}
+```
+
+Change `newTakeDir` to build on `rawRoot` instead of `takesRoot`, and
+`promoteTake` in `temp-takes.ts` to target `rawRoot`. Leave `takesRoot`,
+`insideTakesRoot` and `uniqueTakeName` alone.
+
+- [ ] **Step 4: Run the unit tests to verify they pass**
+
+Run: `npx vitest run app/test/takes.test.ts app/test/temp-takes.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Restate the e2e fixtures that assert an on-disk path**
+
+This is the task that breaks them, so it is the task that fixes them.
+
+**Measured blast radius: 33 files set `STC_RECORDINGS_DIR`, and 24 of those
+also reference a root-relative path.** Find them:
+
+```bash
+grep -rln "STC_RECORDINGS_DIR" app/test
+grep -rln "STC_RECORDINGS_DIR" app/test | xargs grep -ln "join(root\|readdir(root"
+```
+
+A fixture that merely *sets* `STC_RECORDINGS_DIR` needs nothing — the root is
+unchanged and only the bundle moved below it. Only fixtures that assert a take
+landed at `<root>/<stamp>/`, or that COUNT entries in the root, need changing.
+
+**Note `promoteTake` promotes stills too** (`temp-takes.ts:135`, via
+`takesRoot`), so this is not a recordings-only change: a still's bundle moves
+to `raw/` while its exported image stays at the top level. Any fixture that
+counted "how many things are in the recordings root" now sees a different
+number for both kinds.
+
+**The counting assertions are the dangerous ones.** `nothing-lost.e2e.test.ts`,
+`thumbnail.e2e.test.ts` and `panel-waits.e2e.test.ts` all prove something by
+counting entries in the root. CLAUDE.md records this exact failure from
+STC-391: two "nothing was recorded" assertions went VACUOUS when takes stopped
+landing in the directory they counted — they would have passed for a take that
+really had gone ahead. For each counting assertion, ask whether it can still
+DISCRIMINATE now that bundles sit one level down. If it cannot, repoint it at
+`raw/` or delete it with a stated reason. Do not leave it passing for the wrong
+reason.
+
+**Restate them, never loosen them.** Changing `expect(existsSync(dir)).toBe(true)`
+into a `.toBeTruthy()` on something vaguer is how an assertion stops meaning
+anything — CLAUDE.md's STC-296 lesson, and its STC-391 one about an assertion
+going vacuous when the thing it counted moved out from under it. If a fixture
+counted entries in the recordings root to prove "nothing was recorded", check
+whether that count can still discriminate now that bundles live one level down;
+if it cannot, the assertion must be repointed or deleted with a reason, not left
+passing for the wrong reason.
+
+- [ ] **Step 6: Run the whole app suite**
+
+Run: `npx vitest run app/test`
+Expected: PASS, with failures only from this sandbox's documented baseline (no
+`swiftc` → `shell`/`frame-png`; the macOS-only Trash path in `manage`). Compare
+against a **rebuilt** master baseline before believing any of them are new —
+`node app/build.mjs` between checkout and run, or the comparison tests the
+unstashed app against stashed tests and means nothing.
+
+- [ ] **Step 7: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add app/src/takes.ts app/src/temp-takes.ts app/test
+git commit -m "STC-413: source bundles land in raw/"
+```
+
+---
+
+### Task 10: Exports land at top level
+
+**Files:**
+- Modify: `app/src/main.ts` (export destination), `app/src/share.ts`
+- Test: `app/test/share.test.ts`
+
+**Interfaces:**
+- Consumes: `takesRoot`, `rawRoot` (Task 9); `LibraryItem.file` (Task 8).
+- Produces: `exportMediaName(takeName)` returns `<takeName>.mp4` — the
+  `export-` prefix is dropped, because location now says "finished".
+  `PublishRequest` replaces `takeName` + `takeDir` + `exportExists` with a
+  single `exportFile: string | null`.
+
+**`planPublish` must stop DERIVING the export's path, and this is a real bug
+rather than tidying.** Today it builds `from` from `takeDir` +
+`exportMediaName(takeName)`. Moving that to `takesRoot` + the same derived name
+would still be wrong: the whole point of STC-413 is that a user renames
+`2026-09-22_14-30-01.mp4` to `login-bug.mp4` in Finder, and the derived name
+then names a file that does not exist. Publish would report "no export yet" for
+a take that plainly has one.
+
+So the caller — which holds the `LibraryItem` and therefore its real `file`
+path — passes the path in. `exportMediaName` keeps its job of naming an export
+**at the moment it is written**; it stops being a way to FIND one later.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+test("an export is named for its take, with no prefix", () => {
+  expect(exportMediaName("2026-09-22_14-30-01")).toBe("2026-09-22_14-30-01.mp4");
+});
+
+test("publish copies the file it was handed", () => {
+  const plan = planPublish({
+    exportFile: "/tmp/f/2026-09-22_14-30-01.mp4",
+    destination: "/site", slug: "network",
+  });
+  expect(plan.kind).toBe("ready");
+  expect(plan.from).toBe("/tmp/f/2026-09-22_14-30-01.mp4");
+  expect(plan.from).not.toContain("/raw/");
+});
+
+test("A RENAMED export still publishes — the path is not re-derived", () => {
+  // The load-bearing case. Deriving `<root>/<takeName>.mp4` would miss this
+  // file entirely and report the take as unexported.
+  const plan = planPublish({
+    exportFile: "/tmp/f/login-bug.mp4",
+    destination: "/site", slug: "network",
+  });
+  expect(plan.kind).toBe("ready");
+  expect(plan.from).toBe("/tmp/f/login-bug.mp4");
+  // and it still publishes under the STABLE slug, not the user's filename
+  expect(plan.name).toBe("network.mp4");
+});
+
+test("no export yet is still refused", () => {
+  const plan = planPublish({ exportFile: null, destination: "/site", slug: "network" });
+  expect(plan.kind).not.toBe("ready");
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run app/test/share.test.ts`
+Expected: FAIL — `PublishRequest` has no `exportFile`.
+
+- [ ] **Step 3: Implement**
+
+Change `exportMediaName` to drop the prefix. Replace `PublishRequest`'s
+`takeName`/`takeDir`/`exportExists` trio with `exportFile: string | null`, and
+have `planPublish` use it directly as `from` — a null is the "no export yet"
+refusal that `exportExists: false` used to express. Update `main.ts:2065`,
+which currently computes `exportExists` with
+`existsSync(join(openTake, exportMediaName(takeName)))`, to pass the item's real
+path instead. Change the export write path in `main.ts` to write at the top
+level.
+
+Leave `exportManifestName` writing into the bundle — it is provenance about the
+source, not a deliverable, and the top level is media files only.
+
+**RE-EXPORT MUST OVERWRITE THE FILE THE USER NAMED, not create a second one.**
+This is the case the rest of the design makes reachable and no earlier task
+covers. `export:write` (`main.ts:1446`) currently writes to
+`join(openTake, name)`. Naively repointing it at the folder root means: you
+export, rename the result to `login-bug.mp4` in Finder, then re-export — and
+get a fresh `2026-09-22_14-30-01.mp4` beside it. **Two top-level files carrying
+the SAME embedded id**, so the scan shows two tiles for one capture and the
+orphan sweep can never tell which is current.
+
+So the destination is resolved by IDENTITY, not by name:
+
+1. Get this take's id (`ensureCaptureId` on the open bundle — already wired for
+   Task 7's `take:captureId`).
+2. Scan the folder's top level for a media file whose embedded id matches. If
+   one exists, **that path is the destination** — the user named it, and
+   re-exporting updates it in place. This is what makes "the filename is the
+   label" survive a re-export.
+3. Otherwise write `exportMediaName(takeName)`.
+
+**And keep the guard, widened.** The existing handler refuses to overwrite
+`TAKE_FILES` or `take.json`, because the leaf-name rule alone would let an
+export replace the recording it came from. At the top level the equivalent
+hazard is different and worse: refuse to overwrite any existing file whose
+embedded id is ABSENT or belongs to a DIFFERENT bundle. That is someone else's
+capture, or a file the user put there by hand, and silently replacing it would
+be data loss.
+
+Test all three: a first export lands at `<stamp>.mp4`; a re-export after a
+rename overwrites the renamed file and produces no second tile; and an export
+refuses to clobber an unrelated file that happens to occupy the name.
+
+**The published name must stay slug-derived.** STC-242's whole design rests on
+two takes publishing to ONE stable path so the site's page never needs editing;
+a user's filename must not leak into it. There is an existing test asserting
+that — it must still pass.
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npx vitest run app/test/share.test.ts`
+Expected: PASS. The grep test in that file keeps the filename rule single-owner;
+if it fails, a second copy of the name was reintroduced.
+
+- [ ] **Step 5: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add app/src/main.ts app/src/share.ts app/test/share.test.ts
+git commit -m "STC-413: exports land at the top level of the folder"
+```
+
+---
+
+### Task 11: Delete removes both objects
+
+**Files:**
+- Modify: `app/src/main.ts` (`take:delete`)
+- Test: `app/test/library-folder.e2e.test.ts` (create)
+
+**Interfaces:**
+- Consumes: the scan (Task 8) — specifically `LibraryItem.file` and
+  `LibraryItem.dir`, which Task 8 widened the item to carry. Delete does NOT
+  re-resolve a bundle by id; both paths arrive on the item it was given.
+  `rawRoot` (Task 9) for the containment check.
+- Produces: `take:delete` trashes the finished file AND its bundle, tolerating
+  either being absent (a foreign file has no bundle; an unexported bundle has
+  no file).
+
+**PARTIAL FAILURE MUST NOT STRAND THE OTHER HALF.** Two objects means two trash
+calls, and either can fail or hit its bound. Three rules, all of which exist
+because the naive version recreates the very bug this task closes — one object
+gone, the other left behind:
+
+1. **Attempt both paths independently.** A failure on the first must not skip
+   the second. Collect the outcomes; do not let an early `throw` out of the
+   loop decide the second path's fate.
+2. **A path that no longer exists is a SUCCESS, not a failure.** `ENOENT` means
+   it is already gone, which is what was wanted. Without this, a retry after a
+   partial failure throws on the half that already went and never reaches the
+   half that survived — the Delete button becomes permanently stuck on that
+   tile.
+3. **Refresh the library on any non-cancelled outcome, not only on full
+   success.** `renderer.ts` currently refreshes only `if (r.deleted)`, so a
+   partial failure leaves a stale tile carrying paths that are now half wrong.
+   A cancel (the user said no) legitimately changes nothing and should not
+   refresh; a failure did change something and must.
+
+Also widen the failure message: it names the path that failed but says nothing
+about the one that succeeded. "The file was removed; its source materials could
+not be" is the honest form, and it is what stops the user re-clicking a button
+that cannot help them.
+
+**Test it by construction**, not by reasoning: make one `shell.trashItem` call
+fail and assert the other object still went, that the grid refreshed, and that
+a RETRY completes rather than throwing.
+- Also produces the e2e helpers Tasks 11 and 13 both use, defined at the top of
+  `library-folder.e2e.test.ts` and nowhere else: `refreshLibrary(page)`,
+  `itemCount(page)`, `deleteFirstItem(page)`, `openFirstItem(page)`,
+  `renameFirstItem(page, name)`, `editorIsOpen(page)`.
+
+**Before writing them, read `app/test/take-library.e2e.test.ts` and
+`app/test/_editor-fixture.ts`** — the launch idiom, the `--user-data-dir`
+isolation STC-403 made mandatory at every launch site, and
+`closeEditorWindow`'s three-outcome close all already exist. Do not hand-roll a
+second copy of any of them; `app/test/e2e-user-data-isolation.test.ts` will fail
+the build if the launch omits `--user-data-dir`.
+
+**Count windows through `app/test/_windows.ts`, never `app.windows()`** — that
+helper's header records the measured lag that makes a raw count lie (STC-416).
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// The fixture seeds ONE finished capture: `login-bug.mp4` at the top level
+// and its bundle at `raw/2026-09-22_14-30-01/`, linked by a capture id in
+// both. `BUNDLE` names that directory. Launch with STC_RECORDINGS_DIR,
+// STC_TEMP_TAKES_DIR and --user-data-dir all pointed at temp roots, per the
+// existing fixture idiom (STC-403 makes the last one mandatory).
+const BUNDLE = "2026-09-22_14-30-01";
+
+test("delete removes the finished file and its bundle together", async () => {
+  expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);   // control
+  expect(existsSync(join(root, "raw", BUNDLE))).toBe(true);
+  await deleteFirstItem(page);
+  expect(existsSync(join(root, "login-bug.mp4"))).toBe(false);
+  expect(existsSync(join(root, "raw", BUNDLE))).toBe(false);
+}, 60_000);
+
+test("a bundle whose file was deleted in Finder lists as unfinished", async () => {
+  await rm(join(root, "login-bug.mp4"));
+  await refreshLibrary(page);
+  expect(await itemCount(page)).toBe(1);   // the bundle, now orphaned
+}, 60_000);
+
+test("deleting a foreign file with no bundle does not throw", async () => {
+  await writeFile(join(root, "holiday.mp4"), await readFile(join(root, "login-bug.mp4")));
+  await rm(join(root, "login-bug.mp4"));
+  await rm(join(root, "raw", BUNDLE), { recursive: true });
+  await refreshLibrary(page);
+  await deleteFirstItem(page);
+  expect(existsSync(join(root, "holiday.mp4"))).toBe(false);
+}, 60_000);
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run app/test/library-folder.e2e.test.ts`
+Expected: FAIL — the bundle survives the delete.
+
+- [ ] **Step 3: Implement**
+
+`take:delete` resolves the item's bundle by id and trashes both with
+`shell.trashItem`, bounded the way `pending-trash.ts` already bounds a trash at
+quit (STC-427 — an unbounded `trashItem` hung a CI runner for 30 s). Both go to
+the Trash, so both are recoverable.
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npx vitest run app/test/library-folder.e2e.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add app/src/main.ts app/test/library-folder.e2e.test.ts
+git commit -m "STC-413: delete removes a capture's file and its bundle"
+```
+
+---
+
+### Task 12: Sweep orphaned bundles
+
+**Files:**
+- Modify: `app/src/temp-takes.ts`
+- Test: `app/test/orphan-sweep.test.ts` (create)
+
+**Interfaces:**
+- Consumes: the scan (Task 8). Task 8 pairs a finished file with its bundle by
+  embedded id — do NOT re-implement id matching here; a second answer to "which
+  bundle belongs to which file" is precisely the two-owners defect this repo
+  keeps paying for, and the two answers would drift the first time either side
+  changed.
+
+**"No matched file" is NOT the same as "orphaned", and an earlier draft of this
+task said it was.** After Task 8, a bundle with a `capture.json` and no matched
+file is one of three different things:
+
+1. its finished file was deleted — a real orphan;
+2. its file is a **JPEG or HEIC**, whose id we deliberately do not read
+   (ImageIO writes the id only into the PNG dictionary, and the ruling was not
+   to build a JPEG/EXIF reader) — **not an orphan at all**;
+3. its file was moved out of the folder entirely.
+
+Sweeping on "no matched file" would delete the source bundle behind a perfectly
+good JPEG still. So **sweep only when orphanhood is PROVABLE**: every top-level
+media file yielded a readable id, and none of them matched this bundle. If ANY
+top-level file has no readable id, we cannot prove the bundle is orphaned —
+skip the sweep entirely that pass and log why.
+
+The cost is stated rather than hidden: a folder containing even one untagged
+file never reclaims disk from `raw/`. That is the right way to be wrong. The
+sweep is a tidiness feature; keeping a bundle that could still be someone's
+source material beats deleting one that was. It also self-heals if JPEG id
+support is ever added.
+
+- Produces additionally: `ORPHAN_MARKER_FILE` is a DOTFILE. **An earlier draft
+  of this plan claimed that was load-bearing because the scan's rule 2 skips
+  it. That was wrong** — rule 2 skips dotfiles among `raw/`'s CHILDREN (sibling
+  bundle directories); the marker sits one level deeper, inside a bundle, where
+  nothing looks at it. Verified: renaming it to a non-dotfile leaves all 38
+  scan/sweep tests passing. Keep the dot as defensive convention, matching what
+  the scan does one level up — but do not believe the mechanism, and do not
+  write a comment asserting it.
+
+**THE MARKER MUST NOT BE PARSEABLE AS ANCIENT.** `Number("")` is `0`, and `0`
+is finite — so a zero-byte or whitespace-only marker reads as **epoch 0**,
+clears the age gate on the very next sweep, and the bundle is deleted. That
+defeats rule 2 entirely, and it is reachable rather than theoretical:
+`writeFile` truncates then writes, so a crash or force-quit in that window
+leaves a zero-byte file (this repo has STC-393 and STC-394 because force-quits
+happen), and the likeliest cause of a truncated write is a **full disk** —
+exactly the condition a disk-reclaiming sweep exists to serve.
+
+Treat an unparseable marker as a FRESH SIGHTING, never an ancient one:
+
+```ts
+  const text = (await readFile(markerPath, "utf8")).trim();
+  const n = Number(text);
+  markedAt = text !== "" && Number.isFinite(n) && n > 0 ? n : undefined;
+```
+
+Give it its own test — none of the six can see this.
+
+**REMOVE VIA THE TRASH, NOT `rm`.** The commit immediately before this one
+(Task 11) removes the SAME object — a `raw/` bundle — with `shell.trashItem`,
+under a comment stating the rule: *"never `rm`, so a mistaken click is one
+Finder restore away."* Two owners answering "how is a bundle removed"
+differently, with the unattended timer-driven one being the unrecoverable one,
+is not a defensible split.
+
+`purgeStaleTempTakes`'s `rm` is not the right precedent: that root is inside
+`~/Library/Application Support`, invisible and explicitly abandoned. `rawRoot`
+is inside the user's own chosen folder, which `takes.ts` describes as *"visible
+rather than dotted, deliberately, because 'nothing is locked inside the app'
+means someone has to be able to find it."*
+
+`temp-takes.ts` is Electron-free and must stay that way, so follow the existing
+pattern: the sweep RETURNS the directories it has decided to remove, and
+`main.ts` trashes them — exactly as `pendingTrash.due()` → `shell.trashItem`
+already does.
+
+**Use `lstat`, not `stat`.** `stat` follows symlinks, so a symlinked bundle
+makes the sweep write its marker OUTSIDE `rawRoot`. The destructive half is
+contained today (Node's `fs.rm` unlinks the link rather than recursing), but a
+write outside the declared blast radius is not something to leave undocumented.
+Skip anything that is not a real directory. Note `insideTakesRoot` would NOT
+catch this — `resolve()` does not follow symlinks.
+- Produces: `sweepOrphanedBundles(env, saveFolder, now): Promise<string[]>`,
+  `ORPHAN_MARKER_FILE: ".orphaned-at"`, reusing `TEMP_TAKE_MAX_AGE_MS`.
+
+**The marker file must not make the bundle look like a capture.** It lives
+inside a `raw/` bundle directory, which Task 8's scan walks. A dotfile is
+skipped by the scan's own rule 2, which is why the name starts with a dot —
+that is load-bearing, not cosmetic.
+
+**The rule, and why it is two conditions:** a bundle is swept only when it is
+**orphaned AND aged**. Age alone is wrong — `purgeStaleTempTakes` derives age
+from the directory *name*, so a bundle behind a capture made eight days ago
+would be swept while its finished file still sat at top level, silently making
+it uneditable. Orphan status alone is wrong too — a read must not delete data,
+and a file temporarily moved out would read as deleted. So: mark when first seen
+orphaned, sweep when the mark is old, and clear the mark if the file comes back.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+describe("orphaned bundles are swept, aged from when they were orphaned", () => {
+  test("a bundle with a live finished file is never marked", async () => {
+    await sweepOrphanedBundles(env, root, Date.now());
+    expect(existsSync(join(bundle, ORPHAN_MARKER_FILE))).toBe(false);
+  });
+
+  test("first sweep marks an orphan but does not delete it", async () => {
+    await rm(join(root, "login-bug.mp4"));
+    expect(await sweepOrphanedBundles(env, root, Date.now())).toEqual([]);
+    expect(existsSync(join(bundle, ORPHAN_MARKER_FILE))).toBe(true);
+    expect(existsSync(bundle)).toBe(true);
+  });
+
+  test("an orphan older than the threshold is removed", async () => {
+    await rm(join(root, "login-bug.mp4"));
+    const t0 = Date.now();
+    await sweepOrphanedBundles(env, root, t0);
+    const removed = await sweepOrphanedBundles(env, root, t0 + TEMP_TAKE_MAX_AGE_MS + 1);
+    expect(removed).toHaveLength(1);
+    expect(existsSync(bundle)).toBe(false);
+  });
+
+  test("a file that comes back clears the mark — a temporary move costs nothing", async () => {
+    const bytes = await readFile(join(root, "login-bug.mp4"));
+    await rm(join(root, "login-bug.mp4"));
+    await sweepOrphanedBundles(env, root, Date.now());
+    await writeFile(join(root, "login-bug.mp4"), bytes);
+    await sweepOrphanedBundles(env, root, Date.now());
+    expect(existsSync(join(bundle, ORPHAN_MARKER_FILE))).toBe(false);
+  });
+
+  test("a finished file is NEVER touched by the sweep", async () => {
+    await sweepOrphanedBundles(env, root, Date.now() + TEMP_TAKE_MAX_AGE_MS * 10);
+    expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);
+  });
+
+  test("an UNREADABLE-id file present means nothing is swept at all", async () => {
+    // A JPEG still carries no id we can read, so we cannot prove any bundle is
+    // orphaned while one is sitting there. Deleting the source behind a
+    // perfectly good still is much worse than never reclaiming the disk.
+    await rm(join(root, "login-bug.mp4"));                  // make the bundle look orphaned
+    await writeFile(join(root, "holiday.jpg"), new Uint8Array([0xff, 0xd8, 0xff]));
+
+    const t0 = Date.now();
+    await sweepOrphanedBundles(env, root, t0);
+    const removed = await sweepOrphanedBundles(env, root, t0 + TEMP_TAKE_MAX_AGE_MS + 1);
+
+    expect(removed).toEqual([]);                            // nothing swept
+    expect(existsSync(bundle)).toBe(true);                  // the bundle survives
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run app/test/orphan-sweep.test.ts`
+Expected: FAIL — `sweepOrphanedBundles` does not exist.
+
+- [ ] **Step 3: Implement**
+
+Write the marker on first orphan sighting, delete it when the capture's id is
+seen again, and remove the bundle when `now - marker >= TEMP_TAKE_MAX_AGE_MS`.
+Call it from the same 12-hour timer that already runs `purgeStaleTempTakes`.
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npx vitest run app/test/orphan-sweep.test.ts`
+Expected: PASS, 5 tests.
+
+- [ ] **Step 5: Mutation check**
+
+Drop the orphan condition so the sweep runs on age alone. Expected: the "a
+finished file is NEVER touched" and "live finished file is never marked" tests
+FAIL. This is the exact bug the spec's self-review caught; the test must be able
+to catch it again. Revert.
+
+- [ ] **Step 6: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add app/src/temp-takes.ts app/test/orphan-sweep.test.ts
+git commit -m "STC-413: sweep bundles that are orphaned AND aged, never aged alone"
+```
+
+---
+
+### Task 13: The filename is the label
+
+**Files:**
+- Modify: `app/src/takes.ts` (retire `setTakeLabel`), `app/src/main.ts`,
+  `app/src/library.ts`
+- Test: `app/test/library-folder.e2e.test.ts`
+
+**Interfaces:**
+- Consumes: the scan (Task 8) — `LibraryItem.file` is what gets renamed.
+- Produces: `renameCapture(env, saveFolder, from, to): Promise<string>`.
+  `setTakeLabel` and `take.json` reading are removed for finished captures;
+  bundles keep `readLabel` for the unfinished case.
+
+**The rename IPC changes shape, and its one caller must move with it.**
+`app/src/renderer.ts`'s `rename` handler calls `recorder.labelTake(item.dir, label)`
+— a directory and a label. Renaming a finished capture is now a FILE rename, so
+that call site takes `item.file` and a new name. An item with no `file` (an
+unexported bundle) still labels the old way through `take.json`, because it has
+no user-facing filename yet — that is the one case `readLabel` is kept for, and
+it is why this task removes `setTakeLabel` for finished captures rather than
+outright.
+
+**A CORRECTION TO AN EARLIER DRAFT OF THIS PLAN.** It claimed there was a live
+bug here — that `looseFileItem` offered Rename on a bundle-less item while the
+handler silently dropped it. **That was wrong**, and checking the code rather
+than inferring from the rule is what settles it. At Task 8's first commit the
+action list is:
+
+```ts
+    actions: f.dir
+      ? [ …open, rename, reveal, delete… ]
+      : [{ id: "reveal", label: "Show" }, { id: "delete", label: "Delete" }],
+```
+
+The no-`dir` branch offers only Show and Delete. Rename was never offered, so
+the handler's `if (!dir) return;` was unreachable from the UI and nothing was
+silently dropped.
+
+**What this task does is therefore an ADDITION, not a repair, and that is the
+better framing anyway.** A bundle-less item is still a FILE — a foreign file
+the user dropped in, or a capture whose bundle was swept — and renaming files
+is this ticket's whole premise. So `looseFileItem` now offers Rename
+unconditionally, and the handler learns to route it:
+
+- through `item.file` when there is one (the common case, and the ticket's
+  headline behaviour);
+- through `take.json` when there is only a bundle — an unexported bundle has no
+  user-facing filename yet, which is the one case `readLabel` is kept for;
+- refusing LOUDLY when there is neither.
+
+**This widening changes a Task-11 assertion**, which is expected rather than a
+regression: its partial-delete test pinned the survivor's action count dropping
+4→2, and a loose item now carries three actions, so it is 4→3. Check that the
+new number still DISCRIMINATES — the point of that assertion is that a real
+re-scan reclassified the item, and 3 ≠ 4 still proves it.
+
+**THE TILE MUST SHOW THE FILENAME, or this task's promise is true on disk and
+false on screen.** This is the part the plan never specified, and two
+individually-correct decisions collide in the gap:
+
+- the scan clears `label` on a matched item, so a stale `take.json` label
+  cannot leak through — right, and worth keeping;
+- `LibraryItem.id` for a matched item is the BUNDLE's stamped name, made
+  deliberately immune to renames so sort order survives one — also right.
+
+With `label` cleared and `id` immune, **nothing carries the renamed filename to
+`library-view.ts`'s title**, which reads `item.label ? item.label : item.id`.
+So renaming a normal, healthy, freshly-exported capture renames the file and
+changes nothing the user can see. They would reasonably conclude it failed.
+
+It is also a REGRESSION: before this task, a rename wrote `take.json`, which
+populated `label`, which appeared as the title.
+
+**Fix:** on a match, derive the label from the file rather than discarding it —
+`basename(match.file, extname(match.file))`. That keeps the stale-`take.json`
+problem solved (the label no longer comes from the sidecar at all) while making
+the title say what the file is actually called.
+
+Add the assertion that would have caught this: a matched item's `label` equals
+its file's stem. `library-scan.test.ts` currently makes no claim about `label`
+for a matched item at all, which is exactly why this got through.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+test("renaming a capture renames the file on disk", async () => {
+  await renameFirstItem(page, "login-bug");
+  expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);
+  expect(existsSync(join(root, "2026-09-22_14-30-01.mp4"))).toBe(false);
+});
+
+test("a file renamed in Finder still opens its bundle", async () => {
+  await rename(join(root, "2026-09-22_14-30-01.mp4"), join(root, "totally-different.mp4"));
+  await refreshLibrary(page);
+  await openFirstItem(page);
+  expect(await editorIsOpen(page)).toBe(true);   // found by embedded id, not by name
+});
+
+test("a rename refuses to escape the folder", async () => {
+  await expect(renameCapture(env, root, join(root, "a.mp4"), "../../evil"))
+    .rejects.toThrow();
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run app/test/library-folder.e2e.test.ts`
+Expected: FAIL — rename still writes `take.json`.
+
+- [ ] **Step 3: Implement**
+
+`renameCapture` validates the new name (no separators, no `..`, non-empty,
+within `MAX_LABEL_LENGTH`), preserves the extension, resolves collisions with
+`uniqueTakeName`, and renames the file. Delete `setTakeLabel` and its call
+sites. Keep `readLabel` in the bundle path — an unfinished capture has no
+user-facing filename yet.
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npx vitest run app/test/library-folder.e2e.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Typecheck and commit**
+
+```bash
+npm run typecheck
+git add app/src/takes.ts app/src/main.ts app/src/library.ts \
+        app/test/library-folder.e2e.test.ts
+git commit -m "STC-413: the filename is the label; take.json retired"
+```
+
+---
+
+### Task 14: Measure the 500-file scan
+
+**Files:**
+- Test: `app/test/library-scan.test.ts`
+
+STC-294's acceptance criterion is 500 takes. The probe strategy is *designed*
+for it; this repo's rule is that a number is measured, not assumed.
+
+- [ ] **Step 1: Write the measurement**
+
+```ts
+/**
+ * A GROSS-REGRESSION BACKSTOP, deliberately not a tight budget.
+ *
+ * This runs in the normal suite, and a tight timing assertion there reddens
+ * PRs at random under load — which this repo has already paid for once
+ * (`ring-overflow.slow.test.ts` was taken out of CI for exactly that, on the
+ * rule that "a test that reddens PRs at random is worse than one that does
+ * not run"). So the number below is the measured figure with a LARGE multiple
+ * on top: it catches a scan that became quadratic, and deliberately does NOT
+ * catch a 2x slowdown. The printed value is the real signal; a human reading
+ * it is the instrument.
+ *
+ * Measured on: <machine, date> — replace with the real figure and headroom.
+ */
+const SCAN_BACKSTOP_MS = 0;   // ← set from Step 2, do not guess
+
+test("500 files scan without going quadratic", async () => {
+  for (let i = 0; i < 500; i++) {
+    await writeFile(join(root, `take-${String(i).padStart(3, "0")}.mp4`),
+                    tagMp4(mp4Bytes(), mintCaptureId()));
+  }
+  const t0 = performance.now();
+  const { items } = await listLibrary(env, root);
+  const ms = performance.now() - t0;
+  process.stderr.write(`500-file scan: ${Math.round(ms)} ms ` +
+                       `(${(ms / 500).toFixed(2)} ms/file)\n`);
+  expect(items).toHaveLength(500);
+  expect(ms).toBeLessThan(SCAN_BACKSTOP_MS);
+}, 120_000);
+```
+
+- [ ] **Step 2: Run it, read the printed number, then set the backstop**
+
+Run: `npx vitest run app/test/library-scan.test.ts -t "500 files"`
+
+**Do not pick the number first and fit to it.** Run it, read the real figure,
+then set `SCAN_BACKSTOP_MS` to roughly **10x** it and record the machine and
+date in the comment — the shape `STILL_END_TO_END_MS` uses. Ten times is not
+sloppiness: the thing worth failing on is an algorithmic regression, and
+anything tighter is a flake generator on a loaded runner.
+
+**If the per-file figure is bad, the fix is the probe, not the number.**
+
+**State the caveat in the test, because this measurement does NOT cover the
+thing most likely to hurt.** The fixture's files are a few hundred bytes, so
+each "64 KB tail read" is really reading a whole tiny file. Against 500 real
+4K exports the same scan does ~32 MB of scattered IO on top of this. So what
+this pins is **per-file OVERHEAD** — `readdir`, open, header parse, id extract
+— and not IO throughput. The IO half needs a real folder of real exports on a
+Mac; add it to the runbook rather than pretending this covers it.
+
+- [ ] **Step 3: Commit**
+
+```bash
+npm run typecheck
+git add app/test/library-scan.test.ts
+git commit -m "STC-413: measure the 500-file scan rather than assume it"
+```
+
+---
+
+## Final verification
+
+- [ ] `npm run typecheck` — all three passes clean
+- [ ] `npm test` — full suite. Compare failures against a **rebuilt** master
+      baseline (`node app/build.mjs` between checkout and run, or the comparison
+      tests the unstashed app against stashed tests and means nothing).
+- [ ] `npm run test:capture` on a Mac — Task 6's Swift half
+- [ ] `npm run gate:identity` — the transform changed; the fingerprint must hold
+- [ ] Open a tagged export in **QuickTime**. A file that parses is not a file a
+      player accepts.
+- [ ] Write `docs/STC-413-RUNBOOK.md` for what only a Mac can settle: whether
+      the folder reads as browsable in Finder, whether `raw/` is understood
+      without explanation, and whether a renamed file really reopens its bundle.
+
+## Push back to Linear
+
+The ticket's `Scope decided (2026-09-21)` says sidecar; this ships **embedded**.
+Update it, and record that `take.json` is retired, so the ticket does not
+describe something different from what shipped.

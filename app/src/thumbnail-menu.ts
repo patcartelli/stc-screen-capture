@@ -1,7 +1,10 @@
+import { actionsFor, type PanelAction, type PanelTake } from "./panel-actions.js";
+
 /**
- * The floating thumbnail's right-click menu (STC-296 follow-up) — pure, so
- * every label, every ordering and every enabled state is decided where
- * `app/test/thumbnail-menu.test.ts` can look at it.
+ * The floating thumbnail's right-click menu (STC-296 follow-up, rebuilt on
+ * `panel-actions.ts` by STC-392) — pure, so every label, every ordering and
+ * every enabled state is decided where `app/test/thumbnail-menu.test.ts` can
+ * look at it.
  *
  * Same reasoning as `tray-menu.ts`, and for the same reason: nothing in
  * Electron reads a `Menu` back once it has been popped up, so a template
@@ -9,37 +12,36 @@
  * be tested at all. What is left for a person is whether the menu appears
  * under the pointer and reads well — which no test could have claimed.
  *
+ * ## The menu asks `panel-actions.ts` the same question the buttons do
+ *
+ * `copy` / `save` / `edit` / `trash` are `actionsFor(ctx.take)` — not a
+ * second table. Two copies of the action list is the defect that let Save As
+ * exist in the menu and not on the card before this ticket; this file no
+ * longer has an opinion of its own about which of the four a take gets.
+ * `save-as` and `reveal` stay as extra rows below a separator — they are
+ * panel FACILITIES (a save that asks first, a way to find a file already on
+ * disk), not one of the take's own actions, so `actionsFor` has nothing to
+ * say about them. Redact used to be a third one, a mode of this panel's own
+ * canvas; STC-300 moved it into a still editor reached through `edit`, which
+ * is already in the actions loop above, so there is nothing left for this
+ * menu to add for it.
+ *
  * ## Delete moves to the Trash, and does NOT confirm
  *
  * `main.ts`'s take deletion puts a modal in front of `shell.trashItem`, and
  * that is right THERE: a recording is minutes of work and the library is a
- * place you browse, where a mis-click is plausible. A shot whose panel is
- * still on screen is two seconds old and the pointer is already on it. A
- * confirm on top of an action the Trash already makes reversible is friction
- * bought with nothing, so this deletes straight away — and to the Trash, never
- * `rm`, so "straight away" is still recoverable.
+ * place you browse. A shot whose panel is still on screen is two seconds old
+ * and the pointer is already on it. A confirm on top of an action the Trash
+ * already makes reversible is friction bought with nothing, so this deletes
+ * straight away — and to the Trash, never `rm`, so "straight away" is still
+ * recoverable.
  *
- * This is also the semantic the swipe-to-discard gesture must share. Two ways
- * to throw a shot away that disagree about where it goes would be the defect,
- * not the second gesture.
- *
- * ## Delete has to cancel the settle, not race it
- *
- * A panel that is still `showing` has a timer that will compositeand export
- * the shot (`thumbnail-window.ts`). Deleting the capture directory without
- * stopping that timer would export a shot the user has just thrown away — or
- * fail halfway through and report an error for a file they deliberately
- * removed. The menu says what was chosen; the caller is responsible for
- * clearing the timer BEFORE it trashes anything.
+ * This is also the semantic the swipe-to-discard gesture and the ⌘⌫ key share
+ * (`thumbnail-renderer.ts`'s `perform`). Two ways to throw a take away that
+ * disagreed about where it went would be the defect, not the second gesture.
  */
 
-export type ThumbMenuId =
-  | "copy"
-  | "save-as"
-  | "redact"
-  | "reveal"
-  | "delete"
-  | "separator";
+export type ThumbMenuId = PanelAction | "save-as" | "reveal" | "separator";
 
 export interface ThumbMenuItem {
   id: ThumbMenuId;
@@ -49,39 +51,57 @@ export interface ThumbMenuItem {
 }
 
 export interface ThumbMenuContext {
+  /** What the panel is showing — decides which of the four actions appear at all. */
+  take: PanelTake;
   /**
-   * Redact mode is open right now. The item is a TOGGLE rather than a
-   * checkbox: "Redact" while already redacting reads as "start again", which
-   * is not what choosing it does.
-   */
-  redacting?: boolean;
-  /**
-   * A composite or export is already in flight. Copy and Save As are refused
-   * while one is, so they are shown unavailable rather than offered and then
-   * declined — the same courtesy `trayTemplate` extends to a capture that
-   * would be refused as `overlay-open`.
+   * A composite or export is already in flight. Copy and Save (and Save As)
+   * are refused while one is, so they are shown unavailable rather than
+   * offered and then declined — the same courtesy `trayTemplate` extends to a
+   * capture that would be refused as `overlay-open`. Edit does not touch the
+   * exporter (it promotes, then hands off to a different window), so it stays
+   * enabled; neither does Reveal or Trash.
    */
   busy?: boolean;
 }
 
+/** What each of `panel-actions.ts`'s four actions is called on this menu. */
+const ACTION_LABEL: Record<PanelAction, string> = {
+  copy: "Copy", save: "Save", edit: "Edit", trash: "Delete",
+  // dismiss (STC-412) is unreachable — it is a close affordance (X / Esc /
+  // click-outside), never returned by actionsFor, never looked up from this record.
+  dismiss: "",
+};
+
+/** Whether the exporter would refuse this action while `busy` — see `ThumbMenuContext.busy`. */
+function touchesExporter(action: PanelAction): boolean {
+  return action === "copy" || action === "save";
+}
+
 /**
- * The five actions the ticket names, in the order a macOS menu puts them:
- * the two that produce something, then the one that changes what would be
- * produced, then the one that shows you where it is, then the destructive one
- * — last, and behind a separator, because it is the only item here that
- * cannot be undone by choosing again.
+ * The menu for one take, in the order a macOS menu puts them: the take's own
+ * actions in `actionsFor`'s order (produce, then promote, then edit, then
+ * the destructive one held back for its own separator), with the panel's
+ * other facilities — Save As, Reveal — between them and the end.
  */
-export function thumbnailMenuTemplate(ctx: ThumbMenuContext = {}): ThumbMenuItem[] {
+export function buildThumbMenu(ctx: ThumbMenuContext): ThumbMenuItem[] {
   const busy = ctx.busy === true;
-  return [
-    { id: "copy", label: "Copy", enabled: !busy },
-    // The ellipsis is not decoration: macOS spells "this opens a dialog" that
-    // way, and Copy vs Save As differ in exactly that.
-    { id: "save-as", label: "Save As…", enabled: !busy },
-    { id: "separator", type: "separator" },
-    { id: "redact", label: ctx.redacting ? "Done Redacting" : "Redact…", enabled: true },
-    { id: "reveal", label: "Reveal in Finder", enabled: true },
-    { id: "separator", type: "separator" },
-    { id: "delete", label: "Delete", enabled: true },
-  ];
+  const actions = actionsFor(ctx.take);
+  const items: ThumbMenuItem[] = [];
+  for (const action of actions) {
+    // Trash is placed LAST, behind its own separator, below — never here in
+    // the middle of the take's other actions.
+    if (action === "trash") continue;
+    items.push({
+      id: action, label: ACTION_LABEL[action],
+      enabled: touchesExporter(action) ? !busy : true,
+    });
+  }
+  // The ellipsis is not decoration: macOS spells "this opens a dialog" that
+  // way, and Copy/Save vs Save As differ in exactly that.
+  items.push({ id: "save-as", label: "Save As…", enabled: !busy });
+  items.push({ id: "separator", type: "separator" });
+  items.push({ id: "reveal", label: "Reveal in Finder", enabled: true });
+  items.push({ id: "separator", type: "separator" });
+  items.push({ id: "trash", label: ACTION_LABEL.trash, enabled: true });
+  return items;
 }

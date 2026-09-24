@@ -24,7 +24,8 @@ describe("the camera preference", () => {
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
-                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS });
+                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
+                 saveFolder: null, showDiagnostics: false });
     expect(DEFAULT_SETTINGS.camera).toBe(false);
   });
 
@@ -62,7 +63,8 @@ describe("the camera preference", () => {
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
-                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS });
+                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
+                 saveFolder: null, showDiagnostics: false });
   });
 
   test("an unwritable directory does not throw — the preference is not worth a crash", () => {
@@ -115,7 +117,8 @@ describe("the display preference (STC-247)", () => {
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
-                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS });
+                 thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
+                 saveFolder: null, showDiagnostics: false });
   });
 });
 
@@ -320,37 +323,18 @@ describe("the share preferences (STC-242)", () => {
 });
 
 /**
- * STC-293: the still export preferences. One destination folder and one
- * filename template, shared by every exit out of the app — the ticket's Note
- * forbids the thumbnail growing its own.
+ * STC-293: the still export preferences. Format, quality, scale, metadata
+ * stripping, and filename template, shared by every exit out of the app —
+ * the ticket's Note forbids the thumbnail growing its own. Save folder moved
+ * to Settings.saveFolder (STC-412).
  */
 describe("the still export preferences (STC-293)", () => {
-  test("defaults are PNG, native scale, metadata kept, and no chosen folder", () => {
+  test("defaults are PNG, native scale, metadata kept", () => {
     const s = readSettings(dir()).still;
     expect(s.format).toBe("png");
     expect(s.scale).toBe("native");
     expect(s.stripMetadata).toBe(false);
-    // Null, not a hardcoded ~/Desktop: an unconfigured still belongs beside
-    // the shot.json it was rendered from.
-    expect(s.destination).toBeNull();
     expect(s.template).toContain("{date}");
-  });
-
-  test("the destination folder is sticky", () => {
-    const d = dir();
-    writeSettings(d, { still: { ...readSettings(d).still, destination: "/Users/me/Shots" } });
-    expect(readSettings(d).still.destination).toBe("/Users/me/Shots");
-  });
-
-  test("changing the format does NOT drop the destination folder", () => {
-    // The bug a shallow spread would introduce: a preference the user set
-    // months ago resetting because an unrelated one was touched.
-    const d = dir();
-    writeSettings(d, { still: { ...readSettings(d).still, destination: "/Users/me/Shots" } });
-    writeSettings(d, { still: { format: "jpeg" } as never });
-    const s = readSettings(d).still;
-    expect(s.format).toBe("jpeg");
-    expect(s.destination).toBe("/Users/me/Shots");
   });
 
   test("a still preference survives an unrelated camera change", () => {
@@ -358,13 +342,6 @@ describe("the still export preferences (STC-293)", () => {
     writeSettings(d, { still: { ...readSettings(d).still, format: "heic" } });
     writeSettings(d, { camera: true });
     expect(readSettings(d).still.format).toBe("heic");
-  });
-
-  test("a relative destination is treated as unset, never resolved against the cwd", () => {
-    const d = dir();
-    writeFileSync(join(d, "settings.json"),
-                  JSON.stringify({ still: { destination: "Shots" } }));
-    expect(readSettings(d).still.destination).toBeNull();
   });
 
   test("an unknown format or scale falls back rather than reaching the encoder", () => {
@@ -391,23 +368,86 @@ describe("the still export preferences (STC-293)", () => {
 });
 
 /**
- * The post-capture floating thumbnail's preferences (STC-296): where it sits,
- * how long it waits, and what ignoring it does. `thumbnail.ts` owns the
- * validation rules (the timeout floor, the corner enum); this only checks that
- * `settings.ts` applies them the same way every other block here is applied —
- * falls back field by field, and a partial update leaves the rest alone.
+ * STC-412: one save location for both recordings and stills, replacing
+ * StillSettings.destination and the "beside the shot" concept.
+ */
+describe("the save folder (STC-412)", () => {
+  test("defaults to null — 'not chosen', which takesRoot() resolves the same way it always has", () => {
+    expect(readSettings(dir()).saveFolder).toBeNull();
+    expect(DEFAULT_SETTINGS.saveFolder).toBeNull();
+  });
+
+  test("round-trips an absolute path", () => {
+    const d = dir();
+    writeSettings(d, { saveFolder: "/Users/me/Captures" });
+    expect(readSettings(d).saveFolder).toBe("/Users/me/Captures");
+  });
+
+  test("a relative path is treated as unset, never resolved against the cwd", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ saveFolder: "Captures" }));
+    expect(readSettings(d).saveFolder).toBeNull();
+  });
+
+  test("clearing it back to null is a real, storable choice", () => {
+    const d = dir();
+    writeSettings(d, { saveFolder: "/Users/me/Captures" });
+    writeSettings(d, { saveFolder: null });
+    expect(readSettings(d).saveFolder).toBeNull();
+  });
+
+  test("a partial update leaves it alone", () => {
+    const d = dir();
+    writeSettings(d, { saveFolder: "/Users/me/Captures" });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).saveFolder).toBe("/Users/me/Captures");
+  });
+});
+
+describe("the diagnostics toggle (STC-412)", () => {
+  test("defaults to off — developer instrumentation, not a normal control", () => {
+    expect(readSettings(dir()).showDiagnostics).toBe(false);
+    expect(DEFAULT_SETTINGS.showDiagnostics).toBe(false);
+  });
+
+  test("round-trips, and being on survives a restart", () => {
+    const d = dir();
+    writeSettings(d, { showDiagnostics: true });
+    expect(readSettings(d).showDiagnostics).toBe(true);
+  });
+
+  test("a non-boolean is not a preference, and falls back to OFF not to silence", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ showDiagnostics: "yes" }));
+    expect(readSettings(d).showDiagnostics).toBe(false);
+  });
+
+  test("a partial update leaves it alone", () => {
+    const d = dir();
+    writeSettings(d, { showDiagnostics: true });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).showDiagnostics).toBe(true);
+  });
+});
+
+/**
+ * The post-capture floating thumbnail's preferences (STC-296, narrowed by
+ * STC-392): where it sits, and whether it shows at all. `thumbnail.ts` owns
+ * the validation rule (the corner enum); this only checks that `settings.ts`
+ * applies it the same way every other block here is applied — falls back
+ * field by field, and a partial update leaves the rest alone.
  */
 describe("the thumbnail preferences (STC-296)", () => {
-  test("defaults: bottom-right, 6 s, save, not skipped", () => {
+  test("defaults: bottom-right, not skipped", () => {
     const t = readSettings(dir()).thumbnail;
-    expect(t).toEqual({ corner: "bottom-right", timeoutMs: 6000, settleAction: "save", skip: false });
+    expect(t).toEqual({ corner: "bottom-right", skip: false });
   });
 
   test("round-trips a full change", () => {
     const d = dir();
-    writeSettings(d, { thumbnail: { corner: "top-left", timeoutMs: 4000, settleAction: "copy", skip: true } });
+    writeSettings(d, { thumbnail: { corner: "top-left", skip: true } });
     expect(readSettings(d).thumbnail)
-      .toEqual({ corner: "top-left", timeoutMs: 4000, settleAction: "copy", skip: true });
+      .toEqual({ corner: "top-left", skip: true });
   });
 
   test("changing one field does not drop the others", () => {
@@ -419,19 +459,12 @@ describe("the thumbnail preferences (STC-296)", () => {
     expect(t.skip).toBe(true);
   });
 
-  test("a timeout below the floor is raised to it, never stored as given", () => {
-    const d = dir();
-    writeFileSync(join(d, "settings.json"), JSON.stringify({ thumbnail: { timeoutMs: 500 } }));
-    expect(readSettings(d).thumbnail.timeoutMs).toBe(3000);
-  });
-
-  test("an unknown corner or settle action falls back rather than reaching the window", () => {
+  test("an unknown corner falls back rather than reaching the window", () => {
     const d = dir();
     writeFileSync(join(d, "settings.json"),
-                  JSON.stringify({ thumbnail: { corner: "middle", settleAction: "delete" } }));
+                  JSON.stringify({ thumbnail: { corner: "middle" } }));
     const t = readSettings(d).thumbnail;
     expect(t.corner).toBe("bottom-right");
-    expect(t.settleAction).toBe("save");
   });
 
   test("a non-boolean skip is not a preference, and falls back to off", () => {
@@ -452,6 +485,30 @@ describe("the thumbnail preferences (STC-296)", () => {
     writeSettings(d, { still: { ...readSettings(d).still, format: "heic" } });
     expect(readSettings(d).thumbnail.skip).toBe(true);
     expect(readSettings(d).still.format).toBe("heic");
+  });
+
+  test("the panel's clock is not a preference any more (STC-392)", () => {
+    // Both described a timeout that no longer exists. A stored `settleAction`
+    // after this ticket would be a preference with no code path, which is
+    // worse than no preference: it reads as configurable and changes nothing.
+    const s = readSettings(dir());
+    expect(s.thumbnail).not.toHaveProperty("timeoutMs");
+    expect(s.thumbnail).not.toHaveProperty("settleAction");
+    // The controls: what SURVIVES, so this cannot pass by the block being gone.
+    expect(s.thumbnail).toHaveProperty("corner");
+    expect(s.thumbnail).toHaveProperty("skip");
+  });
+
+  test("a settings file written before STC-392 loses the two dead keys", () => {
+    // Someone upgrading has both in their settings.json. `cleanThumbnail` must
+    // drop them rather than carrying them forward forever.
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({
+      thumbnail: { corner: "top-left", skip: false, timeoutMs: 9000, settleAction: "copy" },
+    }));
+    const s = readSettings(d);
+    expect(s.thumbnail.corner).toBe("top-left");
+    expect(s.thumbnail).not.toHaveProperty("timeoutMs");
   });
 });
 

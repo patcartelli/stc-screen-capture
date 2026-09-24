@@ -141,6 +141,39 @@ check("an unparseable capturedAt is dropped rather than written wrong",
 check("a PNG with a timestamp still gets no quality",
       keys(["capturedAt": "2026-09-08T14:23:05Z"]), [exif, tiff].sorted().joined(separator: ","))
 
+// ── the capture id (STC-413) ────────────────────────────────────────────────
+//
+// The id rides in the PNG dictionary, and — the point of these checks — it
+// is INDEPENDENT of capturedAt: a metadata-stripped export must still carry
+// it, or a privacy-stripped file becomes permanently unable to find its way
+// back to its source bundle.
+let pngDict = kCGImagePropertyPNGDictionary as String
+let capId = "cap_" + String(repeating: "A", count: 26)
+
+check("a stripped export still carries its capture id",
+      keys(["captureId": capId]).contains(pngDict), true)
+check("a stripped export carries no EXIF date",
+      keys(["captureId": capId]).contains(exif), false)
+check("no id means no PNG dictionary at all", keys([:]).contains(pngDict), false)
+check("a kept timestamp and an id both land, independently of each other",
+      keys(["format": "jpeg", "capturedAt": "2026-09-08T14:23:05Z", "captureId": capId]),
+      [exif, pngDict, quality, tiff].sorted().joined(separator: ","))
+
+// A malformed id is refused at parse time rather than embedded — this field
+// becomes a promise other code makes ("this string points at a real
+// bundle"), and honouring a caller's typo would break that promise for every
+// later reader.
+check("a well-formed capture id parses",
+      parse(with(["captureId": capId])), "ok:png:100x50:alpha=true:srgb:q=0.9")
+check("an empty captureId is an absent one, not a malformed one",
+      parse(with(["captureId": ""])), "ok:png:100x50:alpha=true:srgb:q=0.9")
+check("a malformed capture id is refused rather than passed through",
+      parse(with(["captureId": "not-an-id"])), "err:bad-capture-id")
+check("a capture id with the wrong body length is refused",
+      parse(with(["captureId": "cap_TOOSHORT"])), "err:bad-capture-id")
+check("a capture id using an excluded Crockford letter is refused",
+      parse(with(["captureId": "cap_" + String(repeating: "I", count: 26)])), "err:bad-capture-id")
+
 // ── the EXIF date format ────────────────────────────────────────────────────
 //
 // EXIF and TIFF both want `yyyy:MM:dd HH:mm:ss` with colons, in LOCAL time.

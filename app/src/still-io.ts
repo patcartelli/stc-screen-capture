@@ -7,6 +7,7 @@ import {
   type ExportOptions, type StillColorSpace,
 } from "@transform/still-export.js";
 import type { StillSettings } from "./settings.js";
+import { takesRoot } from "./takes.js";
 
 /**
  * The single funnel every still takes out of the app (STC-293).
@@ -73,8 +74,13 @@ export interface ExportRequest {
   /** Fills the filename template. */
   info: { app?: string; title?: string; mode: string };
   /**
-   * Where to save when the user has not chosen a destination folder — the
-   * shot's own directory. Absent for a caller that has no take of its own.
+   * The source bundle this export came from, when there is one.
+   *
+   * No longer a destination fallback (I3): a save goes to the top level of
+   * the capture folder, never into the bundle, which since STC-413 lives
+   * under `raw/` where the library's scan cannot see it. Kept because
+   * `main.ts` uses it to mint the capture id, and absent for a caller with
+   * no take of its own.
    */
   fallbackDir?: string;
   /**
@@ -92,6 +98,14 @@ export interface ExportRequest {
    */
   explicitFile?: string;
   at?: Date;
+  /**
+   * The source bundle's stable identity (STC-413), from `ensureCaptureId`.
+   * Absent for an export with no bundle of its own — a Copy to the clipboard
+   * cache is never a library file, so there is nothing for it to point back
+   * at. Set by the caller, not resolved here: this module is the encoder
+   * funnel and does not know about bundles or the library root.
+   */
+  captureId?: string;
 }
 
 export interface ExportResult {
@@ -125,9 +139,18 @@ export const CLIPBOARD_SUBDIR = "stc-clipboard";
 /**
  * Where the encoded file goes.
  *
- * A SAVE goes where the user said: the chosen destination folder, or — while
- * they have not chosen one — the shot's own directory, which is the one place
- * a still can never be orphaned from the `shot.json` it came from.
+ * A SAVE goes to the TOP LEVEL of the user's capture folder — `takesRoot`,
+ * which is the chosen save folder, or `STC_RECORDINGS_DIR`, or
+ * `~/Desktop/stc`, in that order and decided in exactly one place.
+ *
+ * **It used to fall back to the shot's own bundle directory when no save
+ * folder had been chosen, and STC-413 quietly made that wrong** (I3). That
+ * fallback was right while a bundle sat at the top level: "beside the
+ * `shot.json` it came from" was also "where the library looks". Task 9 moved
+ * bundles down into `raw/<stamp>/`, so on a fresh install — `saveFolder` is
+ * `null` by default, and every e2e fixture seeds one, so nothing exercised
+ * it — a Save wrote the PNG one level deeper than the top-level scan can
+ * see. Saved, and invisible.
  *
  * A COPY that is not also a save goes to the cache, always, whatever the
  * destination setting says. It only exists because the pasteboard's file URL
@@ -139,14 +162,12 @@ export const CLIPBOARD_SUBDIR = "stc-clipboard";
  * and because it must be the SAME answer for every caller — a thumbnail that
  * resolved its own default is the second implementation the Note forbids.
  */
-export function destinationDir(settings: Pick<StillSettings, "destination">,
+export function destinationDir(saveFolder: string | null,
                                target: ExportTarget,
-                               fallbackDir: string | undefined,
-                               cacheRoot: string): string {
+                               cacheRoot: string,
+                               env: NodeJS.ProcessEnv = process.env): string {
   if (!target.file) return join(cacheRoot, CLIPBOARD_SUBDIR);
-  if (settings.destination) return settings.destination;
-  if (fallbackDir) return fallbackDir;
-  return join(cacheRoot, CLIPBOARD_SUBDIR);
+  return takesRoot(env, saveFolder);
 }
 
 /**
@@ -273,6 +294,7 @@ export function plannedFileName(options: ExportOptions,
  */
 export async function exportStill(send: SendExport, req: ExportRequest,
                                   settings: StillSettings,
+                                  saveFolder: string | null,
                                   cacheRoot: string): Promise<ExportResult> {
   if (!req.target.file && !req.target.clipboard) {
     throw new Error("an export needs somewhere to go: a file, the clipboard, or both");
@@ -284,7 +306,7 @@ export async function exportStill(send: SendExport, req: ExportRequest,
     throw new Error("explicitFile needs target.file");
   }
   const at = req.at ?? new Date();
-  const dir = destinationDir(settings, req.target, req.fallbackDir, cacheRoot);
+  const dir = destinationDir(saveFolder, req.target, cacheRoot);
   // Listed ONCE and used for both the counter and the collision check: two
   // reads could disagree, and a filename whose counter came from a different
   // listing than its uniqueness check is exactly the kind of nearly-right that
@@ -336,6 +358,10 @@ export async function exportStill(send: SendExport, req: ExportRequest,
       // is embedded either way — it is what makes the numbers mean colours,
       // not a fact about when the user was at their desk.
       ...(meta.capturedAt ? { capturedAt: meta.capturedAt } : {}),
+      // STC-413: identity, NOT gated on stripMetadata — it is opaque, carries
+      // no timestamp and no path, and suppressing it would make a
+      // privacy-stripped export permanently uneditable.
+      ...(req.captureId ? { captureId: req.captureId } : {}),
     });
     return {
       width: Number(reply.width ?? req.still.width),

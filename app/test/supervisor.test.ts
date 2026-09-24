@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { HelperSupervisor } from "../src/supervisor.js";
 import { withTimeout } from "../../transform/src/timeout.js";
+import { RAW_SUBDIR } from "../src/takes.js";
 
 const root = join(__dirname, "..", "..");
 const BIN = join(root, "helper", "build", "stc-helper");
@@ -167,7 +168,7 @@ describe("HelperSupervisor — promotes a clean stop out of temp storage (STC-39
     rmSync(base, { recursive: true, force: true });
   }
 
-  test("stopRecording() moves the take from temp into the library", async () => {
+  test("stopRecording() moves the take from temp into raw/ (STC-413)", async () => {
     setEnv();
     try {
       const s = sup({}, FAKE_BIN);
@@ -181,7 +182,7 @@ describe("HelperSupervisor — promotes a clean stop out of temp storage (STC-39
       await s.startRecording(dir);
       await s.stopRecording();
       expect(existsSync(dir)).toBe(false);
-      expect(existsSync(join(libRoot, "2026-09-16_10-00-00"))).toBe(true);
+      expect(existsSync(join(libRoot, RAW_SUBDIR, "2026-09-16_10-00-00"))).toBe(true);
     } finally { restoreEnv(); }
   }, 20_000);
 
@@ -197,7 +198,7 @@ describe("HelperSupervisor — promotes a clean stop out of temp storage (STC-39
 
       const notified = new Promise<any>((res) => s.on("recording-ended", res));
       const info = await notified;
-      expect(info.dir).toBe(join(libRoot, "2026-09-16_11-00-00"));
+      expect(info.dir).toBe(join(libRoot, RAW_SUBDIR, "2026-09-16_11-00-00"));
       expect(existsSync(dir)).toBe(false);
       expect(existsSync(info.dir)).toBe(true);
     } finally { restoreEnv(); }

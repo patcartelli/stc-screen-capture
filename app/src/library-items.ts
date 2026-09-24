@@ -145,12 +145,23 @@ export type LibraryThumbnail =
  * thumbnail, delete — plus the presentation each kind owns.
  */
 export interface LibraryItem {
-  /** Identity AND sort key: the directory's timestamped name. Never the label. */
+  /**
+   * Stable identity and the EXPORT NAME — the bundle's timestamped name when
+   * there is a bundle, else the finished file's stem.
+   *
+   * No longer the sort key. It was, while every item was a directory whose
+   * name was a timestamp; a user who renames `2026-09-22_14-30.mp4` to
+   * `login-bug.mp4` in Finder destroys that ordering, and renaming in Finder
+   * is the whole point of STC-413.
+   */
   id: string;
   kind: LibraryKind;
   /** Shown on the tile. Data, not a branch. */
   badge: string;
-  dir: string;
+  /** Its source bundle in `raw/`. Absent for a foreign file with none. */
+  dir?: string;
+  /** The finished capture on disk. Absent for a bundle never exported. */
+  file?: string;
   createdAt: number;
   bytes: number;
   label?: string;
@@ -197,7 +208,7 @@ export interface LibraryFilter { id: string; label: string }
 export const LIBRARY_FILTERS: readonly LibraryFilter[] = [
   { id: "all", label: "All" },
   { id: "recording", label: "Recordings" },
-  { id: "still", label: "Stills" },
+  { id: "still", label: "Shots" },
 ];
 
 export const DEFAULT_LIBRARY_FILTER = "all";
@@ -248,6 +259,12 @@ export interface TakeInfo {
    * 1.26-1.39 s across five real takes.
    */
   camera?: { present: boolean; device?: string; pipStartsAfterMs: number };
+  /**
+   * The matching finished export at top level, when this bundle and a
+   * top-level file are linked by an embedded capture id (STC-413). Absent
+   * for a bundle never exported, or whose export was later removed.
+   */
+  file?: string;
 }
 
 export interface TakeList {
@@ -269,6 +286,8 @@ export interface StillInfo {
   label?: string;
   /** Whether a decorated thumbnail is already cached beside the document. */
   cached: boolean;
+  /** See `TakeInfo.file` — the same link, for a still's bundle (STC-413). */
+  file?: string;
 }
 
 const fmtBytes = (n: number): string => {
@@ -318,6 +337,7 @@ export function recordingItem(t: TakeInfo): LibraryItem {
     kind: "recording",
     badge: "Recording",
     dir: t.dir,
+    file: t.file,
     createdAt: t.recordedAt,
     bytes: t.bytes,
     label: t.label,
@@ -350,8 +370,9 @@ export function stillItem(s: StillInfo): LibraryItem {
   return {
     id: s.name,
     kind: "still",
-    badge: "Still",
+    badge: "Shot",
     dir: s.dir,
+    file: s.file,
     createdAt: s.capturedAt,
     bytes: s.bytes,
     label: s.label,
@@ -365,6 +386,108 @@ export function stillItem(s: StillInfo): LibraryItem {
       { id: "open", label: "Open" },
       { id: "rename", label: "Rename" },
       { id: "duplicate", label: "Duplicate" },
+      { id: "reveal", label: "Show" },
+      { id: "delete", label: "Delete" },
+    ],
+  };
+}
+
+/**
+ * A finished capture with no bundle-derived richness to draw on (STC-413) —
+ * one of three shapes, all missing what a healthy bundle would supply:
+ *
+ * 1. Genuinely no bundle at all — a foreign file dropped into the folder, or
+ *    one whose bundle was already swept. `dir` absent.
+ * 2. A bundle exists, is linked by id, but did not parse as a usable
+ *    recording/still. `dir` AND `file` both set.
+ * 3. A bundle exists and carries `capture.json` — proof it WAS exported,
+ *    minted lazily at export time (Task 5) — but nothing here can say to
+ *    WHICH file: a JPEG export carries no readable id at all (measured
+ *    2026-09-23 — see `readHeicCaptureId`; PNG and HEIC both do), or the
+ *    linked file has moved or been deleted since. `dir` set, `file` absent.
+ *    Reviewed round 1: this
+ *    must not be reported as broken (`capture.json`'s presence means "never
+ *    exported" is already false) and must not be confused with case 1's
+ *    genuinely-untethered file.
+ *
+ * Deliberately NOT `TakeInfo`/`StillInfo` with more fields made optional.
+ * Those two describe what a HEALTHY bundle knows about itself — camera,
+ * event count, redactions, decoration mode — and widening them so every
+ * field could be missing would let a real, working bundle quietly degrade
+ * the same way a broken one does. This is a separate, honestly sparse shape:
+ * what the FILE's own header and stat (or, lacking a file, the bundle's own
+ * directory) can say, nothing more.
+ */
+export interface FinishedFileInfo {
+  /** Absent only for case 3 above — a bundle proven exported but unlinkable. */
+  file?: string;
+  /** The export name — see `LibraryItem.id`'s own doc comment. */
+  id: string;
+  createdAt: number;
+  bytes: number;
+  /** From the file's own header, when the probe could read one. */
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  /** Extension-derived: `.mp4` is a recording, an image extension a still. */
+  isVideo: boolean;
+  /** Present exactly when a bundle exists for this item, however degraded. */
+  dir?: string;
+  /** A fact worth stating when the bundle exists but could not be read. */
+  note?: string;
+}
+
+/**
+ * A loose file, as a library item.
+ *
+ * Rule 1's "widen the interface, never special-case the call site" is why
+ * `actions` differs by whether `dir` is set rather than by a second type —
+ * but a `looseFileItem` with `dir` set is ALWAYS a bundle whose own read
+ * FAILED (`library.ts`'s scan never routes a healthy bundle through here,
+ * matched or not), so `open`/`duplicate` are withheld even then. Reviewed
+ * round 1, Important 3: `thumbnail.source` is unconditionally `"none"`
+ * below, and `renderer.ts`'s `openItem` dispatches "open" on exactly that
+ * field to decide which editor to open — a broken STILL bundle would
+ * therefore route to the RECORDING editor if "open" were offered here.
+ * `reveal`/`delete` need nothing more than whichever of `file`/`dir` this
+ * item has, so those are what a degraded bundle gets regardless.
+ *
+ * `rename` is UNCONDITIONAL now (STC-413 Task 13), and that is a real change
+ * from this rule's original shape: it used to require `dir` too, because
+ * renaming wrote `take.json` beside the bundle and a genuinely bundle-less
+ * file (case 1 above) had nowhere to write one. Now that a rename operates
+ * on the FILE directly (`takes.ts`'s `renameCapture`) when there is one, a
+ * bundle is no longer what rename needs — every shape `FinishedFileInfo` can
+ * take carries at least a `file` or a `dir`, so rename is always offered and
+ * `renderer.ts`'s handler is what decides which of the two it acts on.
+ */
+export function looseFileItem(f: FinishedFileInfo): LibraryItem {
+  const kind: LibraryKind = f.isVideo ? "recording" : "still";
+  const bits: string[] = [];
+  if (f.isVideo && f.durationMs !== undefined) bits.push(fmtDuration(f.durationMs));
+  if (f.width !== undefined && f.height !== undefined) bits.push(`${f.width}×${f.height}`);
+  bits.push(fmtBytes(f.bytes));
+  return {
+    id: f.id,
+    kind,
+    // "Shot", not "Still" — STC-398 renamed the artefact and STC-407 cleaned
+    // up the residue. This line was written on a branch cut BEFORE that
+    // cleanup landed, so it merged without a textual conflict and quietly
+    // reintroduced the old word on a new code path.
+    badge: kind === "recording" ? "Recording" : "Shot",
+    dir: f.dir,
+    file: f.file,
+    createdAt: f.createdAt,
+    bytes: f.bytes,
+    summary: bits.join(" · "),
+    notes: f.note ? [f.note] : [],
+    // Nothing here has a picture to show: a foreign file was never decorated
+    // by this app, and a bundle too broken to parse has nothing
+    // `renderThumbnail` could read (that needs `shot.json` and `frame.file`,
+    // exactly what "did not parse" means).
+    thumbnail: { source: "none" },
+    actions: [
+      { id: "rename", label: "Rename" },
       { id: "reveal", label: "Show" },
       { id: "delete", label: "Delete" },
     ],

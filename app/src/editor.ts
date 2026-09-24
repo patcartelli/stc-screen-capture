@@ -23,6 +23,7 @@ declare const editor: {
   readTakeChunk: (name: string, offset: number, length: number) => Promise<ArrayBuffer>;
   writeProject: (bytes: ArrayBuffer) => Promise<boolean>;
   writeExport: (name: string, bytes: ArrayBuffer) => Promise<string>;
+  captureId: () => Promise<string>;
   exportStill(req: {
     bytes: ArrayBuffer; width: number; height: number; alpha: boolean; colorSpace?: string;
     target: { file: boolean; clipboard: boolean };
@@ -1234,8 +1235,18 @@ async function runExport(): Promise<void> {
   const started = performance.now();
   const exporting: Project = structuredClone(openProject);
   try {
+    // STC-413: the bundle's stable identity, so the written MP4 can point
+    // back at its source after a Finder rename or move. Best-effort, same as
+    // main.ts's still-export path — a bundle that cannot be tagged (a
+    // deleted take directory, an IPC hiccup) should not cost the user the
+    // export itself.
+    let captureId: string | undefined;
+    try { captureId = await editor.captureId(); }
+    catch (e) { console.error("[export] could not resolve a capture id:", e); }
+
     const result = await exportSession(openSession, exporting, {
       hash: true,
+      captureId,
       signal: exportAbort.signal,
       onProgress: (done, total) => {
         progress.value = Math.round((done / total) * 1000);
@@ -1257,6 +1268,8 @@ async function runExport(): Promise<void> {
       frames: result.frames,
       preEncodeHash: result.hash,
       encodedBytes: result.encodedBytes,
+      micEncodedChunks: result.micEncodedChunks,
+      audioOutputChunks: result.audioOutputChunks,
       output: exporting.output,
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {

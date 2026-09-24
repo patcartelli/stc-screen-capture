@@ -3,9 +3,11 @@ import { _electron as electron, type ElectronApplication } from "playwright";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { waitForStart } from "./_start-log.js";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
+import { toastText } from "./_toast.js";
 
 /**
  * The mic picker, end to end through the real app (STC-233).
@@ -49,6 +51,9 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
+  // STC-412: the Mic picker lives inside the Settings sheet now. Open it once
+  // here, as a user does, so these tests drive it the way it is reached.
+  await win.click("#settings");
   return win;
 }
 
@@ -97,9 +102,7 @@ describe("the mic picker", () => {
     await expect.poll(() => win.inputValue("#mic")).toBe("fixture-mic-1");
 
     await win.click("#record");
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.micDeviceUid, `start payload was ${JSON.stringify(cmd)}`).toBe("fixture-mic-1");
     // While a take is running the setting must not look changeable: the
@@ -115,9 +118,7 @@ describe("the mic picker", () => {
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     await win.click("#record");
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.micDeviceUid).toBeUndefined();
   }, 180_000);
 
@@ -171,7 +172,7 @@ describe("the mic says what it is doing", () => {
     await win.click("#record");
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
       .toContain("failed");
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no longer available");
   }, 60_000);
 
@@ -197,7 +198,7 @@ describe("the mic says what it is doing", () => {
     expect(occursBefore(seq, "Fixture USB Mic", "no frames"), `states were ${JSON.stringify(seq)}`)
       .toBe(true);
 
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no sound");
   }, 60_000);
 });

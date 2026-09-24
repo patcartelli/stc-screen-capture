@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 import { parseShot } from "../../transform/src/shot.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount } from "./_windows.js";
 
 /**
  * Global shortcuts and menu-bar capture, end to end (STC-292).
@@ -52,10 +54,11 @@ async function launch(o: { userData?: string; recordings?: string; stillLog?: st
       STC_NO_SHUTTER: "1",
     },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   // The shortcuts editor moved behind the profile sheet (STC-374) — open it
   // once per launch so every selector below can still reach it directly.
-  await win.click("#profile");
+  await win.click("#settings");
   await win.waitForSelector("#shortcuts .shortcut");
   return { win, recordings, userData, stillLog };
 }
@@ -282,13 +285,23 @@ describe("a full-display capture", () => {
     // The action a hotkey reaches with nothing on screen: no selection, no
     // dimming, no window. It goes through the same main-process entry point
     // the hotkey and the menu bar call.
-    const { win, recordings, stillLog } = await launch();
-    const before = readdirSync(recordings).length;
+    const { win, stillLog } = await launch();
+    const windowsBefore = await windowCount(app!);
 
     const r = await win.evaluate(() => (window as any).recorder.captureStill("display"));
     expect(r.ok).toBe(true);
     expect(r.kind).toBe("display");
-    expect(app!.windows().filter((p) => p.url().includes("overlay.html")).length).toBe(0);
+    // Exactly ONE window appeared, and it is the post-capture panel (STC-296).
+    // The total is read from the main process (STC-416) the instant the reply
+    // lands, before anything new has had time to commit a url — which is why
+    // it is an exact total and not "no url contains overlay.html": a window
+    // still loading has an EMPTY url from either process, so the scoped form
+    // passed with a decoy overlay planted at the reply, and so did an
+    // allow-list of urls (the real panel was the one still loading). Watched
+    // both ways, 2026-09-19. Then the one newcomer is named once it commits.
+    expect(await windowCount(app!)).toBe(windowsBefore + 1);
+    await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: 10_000 }).toBe(1);
+    expect(await windowCount(app!)).toBe(windowsBefore + 1);
 
     const [req] = readRequests(stillLog);
     expect(req.kind).toBe("display-crop");
@@ -300,13 +313,12 @@ describe("a full-display capture", () => {
     expect(req.excludeWindowIds).toBeUndefined();
     expect(typeof req.displayId).toBe("number");
 
-    // The shot lands in temp storage first and only reaches the library once
-    // the floating panel settles (STC-393) — up to `DEFAULT_THUMBNAIL_TIMEOUT_MS`
-    // later, not synchronously with the capture request answering.
-    await expect.poll(() => readdirSync(recordings).length, { timeout: 15_000 }).toBe(before + 1);
-    const dirs = readdirSync(recordings);
-    const shotDir = join(recordings, dirs.find((d) => !d.startsWith("2026-08-24"))!);
-    const shot = parseShot(JSON.parse(readFileSync(join(shotDir, "shot.json"), "utf8")));
+    // The shot lands in TEMP storage (STC-393), synchronously with the
+    // capture request answering — `r.dir` names it directly. Before STC-392
+    // this polled the LIBRARY instead, because the floating panel promoted it
+    // there on its own timeout; nothing promotes it any more, so the take
+    // stays exactly where `capture-still` put it until a person decides.
+    const shot = parseShot(JSON.parse(readFileSync(join(r.dir, "shot.json"), "utf8")));
     expect(shot.kind).toBe("display-crop");
   }, 120_000);
 

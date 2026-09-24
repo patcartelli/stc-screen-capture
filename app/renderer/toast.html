@@ -1,0 +1,141 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+  <title>deleted</title>
+  <style>
+    /*
+      STC-392 Task 6. Transparent and borderless, the same arrangement
+      `thumbnail.html`/`countdown.html` use — everything that reads as "a
+      toast" is this card's own background and shadow.
+    */
+    :root { color-scheme: light dark; }
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background: transparent; overflow: hidden;
+      font: 12px/1.4 -apple-system, system-ui, sans-serif;
+      -webkit-user-select: none; user-select: none;
+    }
+    #card {
+      position: absolute; inset: 6px;
+      border-radius: 12px;
+      background: rgba(30, 30, 32, 0.86);
+      color: #f2f2f2;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      cursor: default;
+    }
+    #row {
+      flex: 1;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 12px;
+      gap: 10px;
+    }
+    #label { font-size: 12px; }
+    /*
+      ── message mode ──────────────────────────────────────────────────────
+      STC-412's final review, C1. This mode carries the main window's
+      WARNINGS since the inline `#alert` banner was removed, and those are
+      multi-paragraph instructions — not the one word ("Deleted") the undo
+      mode's single-line, vertically-centred flex row was built for. Three
+      things were wrong and all three are fixed here rather than by hoping
+      the strings stay short:
+
+      - `#label` had no `white-space` rule, so every `\n` in a warning
+        collapsed to a space and the paragraphs `renderer.ts` deliberately
+        writes did not exist on screen. `pre-wrap` is scoped to this mode so
+        the undo toast's own single-line label is untouched.
+      - `#card`'s `overflow: hidden` (kept — it is what clips the card's own
+        rounded corners) silently cut the rest off with nothing saying there
+        was more. `#row` scrolls in this mode instead, as a BACKSTOP: the
+        window is sized (`toast.ts`'s MESSAGE_TOAST_SIZE) so the longest real
+        message fits without scrolling, and `warnings.e2e.test.ts` measures
+        that in real Chromium rather than trusting the arithmetic.
+      - The text was centred against a right-aligned button that is hidden in
+        this mode, leaving prose vertically centred in a box it overflows.
+        `display: block` + real padding is what a paragraph wants.
+
+      `mode` arrives on the query string, which CSS cannot read —
+      `toast-renderer.ts` stamps it on <html> as `data-mode` in the same
+      synchronous run that fills the label, before `ready-to-show` ever lets
+      the window be seen.
+    */
+    html[data-mode="message"] #row {
+      display: block;
+      padding: 10px 30px 10px 12px;
+      overflow-y: auto;
+    }
+    html[data-mode="message"] #label { white-space: pre-wrap; }
+    /*
+      The way out before the clock runs down. Same ghost circle, same corner
+      and the same reasoning as `thumbnail.html`'s own `#dismiss` — this app
+      already has one gesture for "close this floating surface" and a second
+      spelling would be a second thing to learn. Undo mode never shows it:
+      that toast is holding a promise open, and an early close there would
+      have to decide what happens to the promise.
+    */
+    #close {
+      position: absolute; top: 6px; right: 6px; z-index: 1;
+      width: 18px; height: 18px; padding: 0; line-height: 1;
+      border: none; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12); color: #f2f2f2;
+      font-size: 13px; cursor: pointer;
+    }
+    #close:hover { background: rgba(255, 255, 255, 0.22); }
+    button {
+      font: inherit; font-size: 12px;
+      padding: 4px 12px; border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08); color: inherit;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #bar-track { height: 3px; background: rgba(255, 255, 255, 0.12); }
+    /*
+      No `animation-name` here on purpose. `toast-renderer.ts` sets BOTH
+      `animationName` and `animationDuration` together, from the `ms` query
+      param `toast-window.ts` put on this page's URL — never a literal here.
+      Naming the animation in this stylesheet would start it at the CSS
+      default duration (0s) for the instant before the script runs; setting
+      both from script in the same tick means the bar never starts at the
+      wrong length. That is what keeps this bar and the real timer that
+      destroys the window (in main) unable to name two different lengths for
+      the one window the user is watching.
+    */
+    #bar {
+      height: 100%; width: 100%; background: #7aa2ff;
+      transform-origin: left;
+      animation-timing-function: linear;
+      animation-fill-mode: forwards;
+    }
+    @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+    /*
+      No `@media (prefers-reduced-motion: reduce)` rule here (STC-392 review,
+      I1) — one USED to live here (`#bar { animation: none; transform:
+      scaleX(0); }`) and did nothing: `toast-renderer.ts` sets `animationName`
+      and `animationDuration` as INLINE styles, and an inline style outranks
+      every stylesheet rule short of `!important`, media query included — so
+      the bar kept animating under reduced motion regardless, and the
+      `linear` timing-function above would ALSO have been reset to CSS's
+      default `ease` had that shorthand ever actually applied, on top of not
+      applying. `toast-renderer.ts` decides motion instead, the same way
+      `countdown-renderer.ts` decides it for the countdown ring — a decision
+      an inline style can defeat has to be made where the inline style is set.
+    */
+  </style>
+</head>
+<body>
+  <div id="card">
+    <button id="close" type="button" title="Close" aria-label="Close" hidden>×</button>
+    <div id="row">
+      <span id="label">Deleted</span>
+      <button id="undo" type="button">Undo</button>
+    </div>
+    <div id="bar-track"><div id="bar"></div></div>
+  </div>
+  <script src="../dist/toast-renderer.js"></script>
+</body>
+</html>

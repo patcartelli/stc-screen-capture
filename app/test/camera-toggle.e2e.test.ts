@@ -4,9 +4,11 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
+import { waitForStart } from "./_start-log.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 import { startRecordFlow } from "./_record-flow.js";
+import { toastText } from "./_toast.js";
 
 /**
  * The camera toggle, end to end through the real app.
@@ -52,6 +54,11 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
+  // STC-412: Camera lives inside the Settings sheet now, which sits off-screen
+  // at translateX(100%) until opened — Playwright reads it as visible but
+  // cannot scroll a fixed element into view, so every click here would fail
+  // with "element is outside of the viewport". Open it once, as a user does.
+  await win.click("#settings");
   return win;
 }
 
@@ -86,9 +93,7 @@ describe("the camera toggle", () => {
     await expect.poll(() => win.isChecked("#camera")).toBe(true);
 
     await startRecordFlow(app!, win);
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
     // While a take is running the setting must not look changeable: the device
@@ -104,9 +109,7 @@ describe("the camera toggle", () => {
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     await startRecordFlow(app!, win);
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.camera).toBe(false);
   }, 180_000);
 
@@ -223,7 +226,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
       .toContain("failed");
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("picture-in-picture");
   }, 60_000);
 
@@ -264,7 +267,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     expect(occursBefore(seq, "FaceTime HD Camera", "no frames"), `states were ${JSON.stringify(seq)}`)
       .toBe(true);
 
-    await expect.poll(() => win.textContent("#alert"), { timeout: 20_000 })
+    await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("not sending any frames");
   }, 60_000);
 

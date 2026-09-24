@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
+import { RAW_SUBDIR } from "../src/takes.js";
+import { hasWindow } from "./_windows.js";
+import { keptFileRequests } from "./_still-log.js";
+import { toastText } from "./_toast.js";
 
 /**
  * The library grid, end to end (STC-294).
@@ -26,25 +30,38 @@ const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
-interface Launched { win: Page; recordings: string; errors: string[] }
+interface Launched { win: Page; recordings: string; stillLog: string; errors: string[] }
 
 /** `seed` populates the recordings root before Electron ever sees it. */
 async function launch(seed: (recordings: string) => void): Promise<Launched> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-libe2e-"));
   seed(recordings);
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-  // Seeded on DISK: `recorder:setSettings` deliberately strips
-  // `still.destination` (STC-293 review, #92).
+  // `saveFolder: null` leaves `STC_RECORDINGS_DIR` (`recordings`) as the
+  // resolved root, which is where `seed()` just wrote the fixture. STC-412
+  // unified `saveFolder` to govern BOTH stills and recordings, including
+  // which root the library SCANS (`takesRoot`), so an active one here would
+  // point the whole grid somewhere the fixture is not.
+  //
+  // The "never exports on its own" test below used to prove its own name by
+  // reading back an otherwise-unused `destDir`; under one unified
+  // `saveFolder` nothing in the app could resolve to that folder by any
+  // path, so the read passed unconditionally (STC-412 final review, I3). The
+  // helper's own request log is what an export would actually reach.
+  const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
+  // Seeded on DISK: `recorder:setSettings` deliberately strips `saveFolder`
+  // (STC-293 review, #92 — `saveFolder` replaced `still.destination` at
+  // STC-412, and the strip moved with it: it is a plain top-level field,
+  // stripped the same generic way `share.destination` already was).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: mkdtempSync(join(tmpdir(), "stc-dest-")) },
-    thumbnail: { timeoutMs: 60_000 },
+    saveFolder: null,
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
-      STC_NO_SHUTTER: "1",
+      STC_FAKE_STILL_LOG: stillLog, STC_NO_SHUTTER: "1",
     },
   });
   const win = await app.firstWindow();
@@ -56,7 +73,20 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
   win.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   win.on("pageerror", (e) => errors.push(String(e)));
   await win.waitForSelector("#capturestill");
-  return { win, recordings, errors };
+  return { win, recordings, stillLog, errors };
+}
+
+/** The still editor window, once it is up — same idiom as `redaction.e2e.test.ts`. */
+async function stillEditorWindow(ms = 15_000): Promise<Page> {
+  const start = Date.now();
+  for (;;) {
+    for (const p of app!.windows()) if (p.url().includes("still-editor.html")) return p;
+    if (Date.now() - start > ms) {
+      throw new Error(`no still editor window appeared within ${ms}ms; windows: `
+        + JSON.stringify(app!.windows().map((p) => p.url())));
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 /** Poll for a cached thumbnail, and report the renderer's own errors if it never arrives. */
@@ -130,7 +160,7 @@ describe("the library grid", () => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Shot"]);
     expect(await win.locator(".broken").count()).toBe(0);
   }, 60_000);
 
@@ -145,7 +175,7 @@ describe("the library grid", () => {
     // sort key for both, which is what makes one index over two formats
     // possible at all.
     await expect.poll(() => badges(win), { timeout: 15_000 })
-      .toEqual(["Still", "Recording", "Still", "Recording"]);
+      .toEqual(["Shot", "Recording", "Shot", "Recording"]);
     expect(await win.locator(".broken").count()).toBe(0);
   }, 60_000);
 
@@ -154,16 +184,16 @@ describe("the library grid", () => {
       makeTakeFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
     await win.locator('.libfilters .chip[data-filter="still"]').click();
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await win.locator('.libfilters .chip[data-filter="recording"]').click();
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Recording"]);
 
     await win.locator('.libfilters .chip[data-filter="all"]').click();
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
   }, 90_000);
 
   test("each kind offers its own actions, and both offer rename and delete", async () => {
@@ -171,7 +201,7 @@ describe("the library grid", () => {
       makeTakeFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
     // Duplicate is a still's, and it is the ADAPTER that says so — the view
     // rendered whatever list it was handed.
@@ -222,14 +252,19 @@ describe("duplicate", () => {
         into: dir, redactions: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.1 }],
       });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await clickAction(win, 0, "duplicate");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Shot"]);
 
-    const dirs = readdirSync(recordings).sort();
-    expect(dirs).toHaveLength(2);
-    const copy = join(recordings, dirs.find((d) => d !== "2026-09-08_12-00-00")!);
+    // The original is a LEGACY top-level bundle (`makeStillFolder` writes it
+    // that way, still-supported per Task 8's migration rule) and stays put;
+    // `duplicateTake` builds its destination from `newTakeDir`, which lands a
+    // fresh bundle in `raw/` now (STC-413) rather than beside the original.
+    expect(readdirSync(recordings).sort()).toEqual(["2026-09-08_12-00-00", RAW_SUBDIR]);
+    const rawDirs = readdirSync(join(recordings, RAW_SUBDIR));
+    expect(rawDirs).toHaveLength(1);
+    const copy = join(recordings, RAW_SUBDIR, rawDirs[0]!);
     // The decoration came with it — that is the point of duplicating rather
     // than re-capturing.
     const shot = JSON.parse(readFileSync(join(copy, "shot.json"), "utf8"));
@@ -258,7 +293,7 @@ describe("duplicate", () => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
     const original = join(recordings, "2026-09-08_12-00-00");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
     await expectThumbnail(original, errors);
     // A sentinel the real renderer would never produce: a 1x1 PNG.
     const SENTINEL = Buffer.from(
@@ -274,5 +309,95 @@ describe("duplicate", () => {
     if (existsSync(join(copy, THUMBNAIL_FILE))) {
       expect(readFileSync(join(copy, THUMBNAIL_FILE)).equals(SENTINEL)).toBe(false);
     }
+  }, 60_000);
+
+  /**
+   * Re-opening a shot from the library now goes straight to the still editor
+   * (STC-300 revision) — `still:reopen` used to re-present the post-capture
+   * panel with `take: { kind: "shot", origin: "library" }`; once Edit became
+   * reachable from the panel too, that extra click was in the way of the
+   * thing someone reopening old work most likely wants. See `main.ts`'s
+   * `still:reopen` for the full reasoning, including why nothing is lost:
+   * Copy/Delete/Reveal for a kept take are already on the grid's own tile
+   * menu.
+   */
+  test("re-opening a shot from the library opens the still editor, and never exports on its own (STC-294/STC-300)", async () => {
+    const { win, recordings, stillLog } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
+    const before = readFileSync(join(original, "shot.json"), "utf8");
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
+
+    await clickAction(win, 0, "open");
+    const editor = await stillEditorWindow();
+    await editor.waitForSelector("#stagecanvas");
+
+    // And nothing was exported, duplicated or promoted a second time, and
+    // the original untouched, just by having been opened.
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect(await hasWindow(app!, "still-editor.html")).toBe(true);
+    // "Never exports on its own" — its own title — read off the helper's
+    // request log (STC-412 final review, I3). The folder read this replaces
+    // named a fixture directory that, once `saveFolder` became the single
+    // setting governing every write, nothing in the app could resolve to, so
+    // it was empty whether or not the still editor exported anything.
+    //
+    // `keptFileRequests`, not every export: opening the still editor DOES
+    // write a drag-out file to the clipboard cache as it paints, exactly like
+    // the old panel did, and the claim here is about a copy being KEPT — a
+    // second encoded shot appearing somewhere the user keeps files just from
+    // opening one.
+    expect(keptFileRequests(stillLog)).toEqual([]);
+    expect(readdirSync(recordings)).toEqual(["2026-09-08_12-00-00"]);
+    expect(readFileSync(join(original, "shot.json"), "utf8")).toBe(before);
+  }, 60_000);
+});
+
+/**
+ * `trashWithConfirmation` (`main.ts`), reached from the library grid's own
+ * Delete action.
+ *
+ * This used to be two tests reached by re-opening a shot into the
+ * post-capture panel and pressing its Trash button (`trashStyle`'s "confirm"
+ * style, STC-392 D1/review I2) — that door closed when `still:reopen` started
+ * opening the still editor directly (STC-300 revision; a `{ kind: "shot",
+ * origin: "library" }` panel is no longer constructed anywhere). The CANCEL
+ * half is fully redundant with `manage.e2e.test.ts`'s own "cancelling the
+ * confirmation keeps the take", reached the same way and dropped here rather
+ * than kept as a second copy. The FAILURE half — review I2's actual finding,
+ * that an uncaught `shell.trashItem` rejection used to escape as an unhandled
+ * promise rejection with no message and no restore — has no other test
+ * anywhere, since `trashWithConfirmation` itself carries the fix and both of
+ * its callers (this one and `panel:trash`'s confirm branch) share it. Ported
+ * onto the grid's own Delete button rather than left to depend on a door that
+ * no longer exists.
+ */
+describe("a failed delete is reported, not swallowed (STC-392 review, I2)", () => {
+  test("the library grid's own Delete reports a failed trash rather than silently doing nothing", async () => {
+    const { win, recordings } = await launch((dir) => {
+      makeStillFolder("2026-09-08_12-00-00", { into: dir });
+    });
+    const original = join(recordings, "2026-09-08_12-00-00");
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
+
+    await app!.evaluate(({ dialog, shell }) => {
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); // Move to Trash
+      shell.trashItem = async () => { throw new Error("simulated Trash failure"); };
+    });
+    await clickAction(win, 0, "delete");
+
+    // The OLD `trashWithConfirmation` left `dialog.showMessageBox` and
+    // `shell.trashItem` uncaught there, so a real Trash failure escaped as an
+    // unhandled promise rejection rather than reaching whichever caller asked
+    // for it. A message actually reaching the toast (`renderer.ts`'s own
+    // `alertUser`, called from `act()`'s catch, now routed through
+    // `showMessageToast` — STC-412) is the proof the rejection was caught,
+    // the same property the panel-based version of this test pinned via the
+    // panel's own `#status` line.
+    await expect.poll(() => toastText(app!), { timeout: 15_000 })
+      .toContain("simulated Trash failure");
+    // Nothing was actually moved — the failure is real, not just reported.
+    expect(existsSync(original)).toBe(true);
   }, 60_000);
 });

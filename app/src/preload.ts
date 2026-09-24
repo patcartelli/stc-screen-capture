@@ -11,8 +11,17 @@ contextBridge.exposeInMainWorld("recorder", {
   getSettings: () => ipcRenderer.invoke("recorder:getSettings"),
   setSettings: (patch: Record<string, unknown>) => ipcRenderer.invoke("recorder:setSettings", patch),
   takes: () => ipcRenderer.invoke("recorder:takes"),
-  labelTake: (dir: string, label: string) => ipcRenderer.invoke("take:label", dir, label),
-  deleteTake: (dir: string) => ipcRenderer.invoke("take:delete", dir),
+  // STC-413: the file IS the name now. `file` wins when present (a real
+  // rename on disk); `dir` alone is the one remaining fallback, for a bundle
+  // with no finished file yet to rename. Both pass through unresolved, the
+  // same shape `deleteTake` below already uses for the same reason.
+  renameCapture: (file: string | undefined, dir: string | undefined, name: string) =>
+    ipcRenderer.invoke("take:rename", file, dir, name),
+  // STC-413: an item may carry a finished file, its bundle, or both
+  // (`LibraryItem.file`/`.dir`) — both are passed through and main resolves
+  // nothing on its own; either may be `undefined`.
+  deleteTake: (file: string | undefined, dir: string | undefined) =>
+    ipcRenderer.invoke("take:delete", file, dir),
   // The take player now lives in its own window (STC-373) — this opens it
   // rather than an in-page preview. `openPreview`/`closePreview`/`writeProject`
   // /`writeExport` and the rest of the old in-page player's channels moved to
@@ -32,7 +41,11 @@ contextBridge.exposeInMainWorld("recorder", {
   // frame grab goes through `still:export` like everything else now.
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   chooseStillDestination: () => ipcRenderer.invoke("still:chooseDestination"),
-  clearStillDestination: () => ipcRenderer.invoke("still:clearDestination"),
+  // Where recordings and shots actually land, resolved (STC-412 final
+  // review, I1). Not derivable on this side: an unset `saveFolder` falls
+  // through to `STC_RECORDINGS_DIR`/~/Desktop/stc inside `takes.ts`, and the
+  // renderer has neither the env nor a home directory to name.
+  resolvedSaveFolder: () => ipcRenderer.invoke("recorder:resolvedSaveFolder"),
   // The library (STC-294): one index over both kinds. The renderer asks for a
   // filtered list and is handed items it renders without knowing what kinds
   // exist — the filtering happens on this side of the bridge for exactly that
@@ -55,6 +68,8 @@ contextBridge.exposeInMainWorld("recorder", {
   // pill's width can change several times a minute (a digit added to the
   // timer). `send` rather than `invoke` is what keeps that cheap.
   reportPillWidth: (px: number) => ipcRenderer.send("pill:contentWidth", px),
+  // STC-412: main-window warnings route through the toast.
+  showToast: (text: string) => ipcRenderer.send("toast:message", text),
   // Share (STC-242) moved to the editor window with the rest of the player —
   // see `editor-preload.ts`. This window has no take open to publish.
   on: (event: string, cb: (payload: any) => void) => {

@@ -13,18 +13,32 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { SOFTWARE_RENDER_ARGS } from "../../scripts/render-backend.mjs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+import { RAW_SUBDIR } from "../src/takes.js";
 
 const root = join(__dirname, "..", "..");
 
 let app: ElectronApplication | undefined;
 afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
 
+/** Bundle directories directly under `dir` carrying `display.mp4` + `anchors.json`. */
+function bundlesIn(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).map((n) => join(dir, n))
+    .filter((p) => existsSync(join(p, "display.mp4")) && existsSync(join(p, "anchors.json")));
+}
+
+/**
+ * A real take from a real `~/Desktop/stc`, for a human who wants the heavier
+ * check (`STC_EXPORT_IDENTITY_TAKE=real`).
+ *
+ * Looks in `raw/` (STC-413's new home for source bundles) AND at the legacy
+ * top level, so this keeps finding a real take whether it was recorded
+ * before or after the folder-view migration — the same both-positions rule
+ * `library.ts`'s scan applies.
+ */
 function realTake(): string | undefined {
   const stc = join(homedir(), "Desktop", "stc");
-  if (!existsSync(stc)) return undefined;
-  return readdirSync(stc).map((n) => join(stc, n))
-    .filter((p) => existsSync(join(p, "display.mp4")) && existsSync(join(p, "anchors.json")))
-    .sort().pop();
+  return [...bundlesIn(join(stc, RAW_SUBDIR)), ...bundlesIn(stc)].sort().pop();
 }
 
 /**
@@ -72,8 +86,10 @@ async function launchWithTake() {
   // same path; on its first CI run Electron went software, Chrome went GPU, and
   // it failed with exactly those two hashes. Software is the pin because it is
   // the backend both environments can always provide.
+  // STC-403: isolated from the developer's real settings too, same as every
+  // other fixture — this used to load the real ~/Library/.../settings.json.
   app = await electron.launch({
-    args: [root, ...SOFTWARE_RENDER_ARGS], cwd: root,
+    args: [root, ...SOFTWARE_RENDER_ARGS, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: dir,
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),

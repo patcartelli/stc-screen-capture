@@ -1,11 +1,15 @@
-import { readdir, stat, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { takesRoot } from "./takes.js";
+import { readdir, stat, readFile, open as openFile } from "node:fs/promises";
+import { join, extname, basename } from "node:path";
+import { takesRoot, RAW_SUBDIR } from "./takes.js";
 import { parseShot, type Shot } from "@transform/shot.js";
+import { probePng, probeMp4, MP4_TAIL_PROBE_BYTES, type MediaFacts } from "@transform/media-probe.js";
+import { readPngCaptureId, readMp4CaptureId, readMp4CaptureIdInTail, readHeicCaptureId, readBe32 }
+  from "@transform/media-tag.js";
+import { readBundleId } from "./capture-identity.js";
 import {
-  recordingItem, stillItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
+  recordingItem, stillItem, looseFileItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
   THUMBNAIL_FILE, SUPPORTED_ANCHORS_VERSIONS,
-  type InvalidItem, type LibraryList, type StillInfo, type TakeInfo, type TakeList,
+  type FinishedFileInfo, type InvalidItem, type LibraryList, type StillInfo, type TakeInfo, type TakeList,
 } from "./library-items.js";
 
 // Re-exported so callers have one import for the library, not two.
@@ -47,7 +51,53 @@ export * from "./library-items.js";
  * first about what a still is. `takes.ts` keeps the root, the naming and the
  * label; it imports nothing from here. One direction only — CLAUDE.md already
  * records what a cycle costs in ESM (a hang and exit 13, not an error).
+ *
+ * ## The folder is a VIEW now, not a store (STC-413)
+ *
+ * A finished capture is a plain FILE at the top level, renameable in Finder;
+ * its raw source materials — the ones a recording's own bundle always had —
+ * live one level down in `raw/`, in a directory whose own name never changes.
+ * The two are linked by an opaque id embedded in both the file's own bytes
+ * (`media-tag.ts`) and the bundle's `capture.json` (`capture-doc.ts`), so a
+ * rename survives: nothing here EVER matches by filename.
+ *
+ * The scan therefore has three phases, in order: (1) every top-level media
+ * FILE — read its header, probe what facts fit in a bounded window, and try
+ * to read an embedded id; (2) every BUNDLE — under `raw/` (`takes.ts`'s own
+ * `RAW_SUBDIR`, where new takes land as of STC-413), or, for a take made
+ * before that, sitting at the top level itself — both positions must work;
+ * (3) MATCH the two by id. A matched pair is one library item, not
+ * two; an unmatched bundle is an "unfinished" capture (never exported, or its
+ * export was later removed); an unmatched file is either foreign or one
+ * whose bundle is already gone.
+ *
+ * **Never read a whole media file.** A 500-file library reading whole files
+ * is the difference between usable and not (Task 14 measures it). PNG facts
+ * need only `probePng`'s own 24-byte header; an id can sit a little further
+ * in (ImageIO's colour-profile chunk can precede it), so PNG reads a bounded
+ * front window instead. MP4 is the hard case: `AVAssetWriter`/`mp4-muxer`
+ * both write `ftyp`, one `mdat` that can be gigabytes, THEN `moov` — reading
+ * "the last N bytes" blind would start partway through raw pixel data, not a
+ * box header. `locateMoovBytes` walks box HEADERS ONLY (never a payload) to
+ * skip `mdat` by arithmetic and land a second, targeted read exactly on
+ * `moov`'s own first byte. `fixtures/basic/display.mp4` is the proof this
+ * needed doing at all: 83,894 bytes, `moov` starting at 82,619 — past
+ * `MP4_TAIL_PROBE_BYTES`'s 65,536-byte window, so a naive tail slice would
+ * have started 64,261 bytes into `mdat`'s own payload.
  */
+
+/**
+ * Where `raw/` lives — `takes.ts`'s own `RAW_SUBDIR` (STC-413), the module
+ * that mints it and is the one that WRITES there. This file only reads it.
+ */
+
+/**
+ * What rule 1 of the scan recognises as a finished capture. `.jpg`/`.jpeg`
+ * are in scope for LISTING (a file with one of these extensions is still a
+ * capture) even though nothing here can probe or id-match them; `.heic` is
+ * listed and id-matched but not probed — see `probeFinishedFile`.
+ */
+const MEDIA_EXTENSIONS = new Set([".mp4", ".png", ".heic", ".jpg", ".jpeg"]);
 
 /**
  * Undefined when no camera was asked for; otherwise what it did.
@@ -75,6 +125,233 @@ async function dirSize(dir: string, names: string[]): Promise<number> {
   return total;
 }
 
+/** Decode `len` bytes at `at` as Latin-1/ASCII — box types, same as `media-tag.ts`'s own. */
+const ascii = (b: Uint8Array, at: number, len: number): string =>
+  String.fromCharCode(...b.subarray(at, at + len));
+
+/**
+ * Read exactly `length` bytes starting at `position`, never the whole file.
+ * `readFile` has no range form, so this is the one place a file handle is
+ * opened directly rather than through `node:fs/promises`'s convenience API.
+ */
+async function readRange(file: string, position: number, length: number): Promise<Uint8Array> {
+  if (length <= 0) return new Uint8Array(0);
+  const fh = await openFile(file, "r");
+  try {
+    const buf = Buffer.alloc(length);
+    const { bytesRead } = await fh.read(buf, 0, length, position);
+    return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+  } finally {
+    await fh.close();
+  }
+}
+
+/**
+ * Peek one top-level MP4 box's HEADER at `at` within `buf`, without
+ * requiring its payload to be present.
+ *
+ * `mp4BoxesIn` (`media-tag.ts`) refuses exactly that — correct for walking a
+ * buffer that holds a box's whole span, wrong for what this needs: `mdat`
+ * can be gigabytes, and all this ever asks of it is where it ENDS, so the
+ * box after it (`moov`, for every writer this app uses) can be found and
+ * read on its own rather than the whole file being read to reach it. A
+ * second, purpose-built peek — not a second walker for the same job
+ * `mp4BoxesIn` already does; see `locateMoovBytes` for why one read is not
+ * enough.
+ */
+function peekBoxHeader(buf: Uint8Array, at: number): { type: string; size: number } | undefined {
+  if (at + 8 > buf.length) return undefined;
+  const declared = readBe32(buf, at);
+  const type = ascii(buf, at + 4, 4);
+  if (declared === 1) {
+    if (at + 16 > buf.length) return undefined;
+    if (readBe32(buf, at + 8) !== 0) return undefined;   // a box past 4 GiB: not this app's
+    const size = readBe32(buf, at + 12);
+    return size < 16 ? undefined : { type, size };
+  }
+  if (declared === 0) return undefined;                  // "to EOF": nothing to find past here
+  return declared < 8 ? undefined : { type, size: declared };
+}
+
+/**
+ * Where `moov` starts, reached by walking top-level box HEADERS only,
+ * reading more of the file only when a header runs past what has already
+ * been read — the whole file is never read.
+ *
+ * `AVAssetWriter`/`mp4-muxer` both write `ftyp`, then ONE `mdat` that can be
+ * gigabytes, THEN `moov`. This app's own fixture is the proof it matters,
+ * not a hypothetical: `fixtures/basic/display.mp4` is 83,894 bytes and its
+ * `moov` starts at byte 82,619 — past `MP4_TAIL_PROBE_BYTES`'s 65,536-byte
+ * window, so reading "the last 64 KB" blind would start 64,261 bytes into
+ * `mdat`'s own payload: raw pixel bytes, not a box header, and every fact
+ * and every embedded id this scan needs would silently come back undefined
+ * for the app's OWN real captures. Walking the headers instead means
+ * `mdat`'s multi-megabyte payload is skipped by ARITHMETIC — never read —
+ * and the second read this function makes lands exactly on `moov`'s first
+ * byte.
+ *
+ * Bounded to a handful of hops: a real top-level box list here is `ftyp`,
+ * `mdat`, `moov`, optionally a trailing `uuid` tag — four. The cap is what
+ * stops a malformed file from being walked forever instead of degrading.
+ */
+/**
+ * How much past `moov`'s own declared end the targeted read reaches, so any
+ * trailing box lands in the same buffer. The only one this app writes is
+ * `tagMp4`'s 54-byte `uuid`; 4 KB is room for a `free`/`skip` or a second
+ * vendor box beside it without being a second unbounded read.
+ */
+const MOOV_TAIL_SLACK_BYTES = 4096;
+
+async function locateMoovBytes(file: string, fileSize: number): Promise<Uint8Array | undefined> {
+  let bufStart = 0;
+  let buf = await readRange(file, 0, Math.min(MP4_TAIL_PROBE_BYTES, fileSize));
+  let absAt = 0;
+
+  for (let hop = 0; hop < 8 && absAt < fileSize; hop++) {
+    const localAt = absAt - bufStart;
+    if (localAt < 0 || localAt + 8 > buf.length) {
+      bufStart = absAt;
+      buf = await readRange(file, bufStart, Math.min(MP4_TAIL_PROBE_BYTES, fileSize - bufStart));
+      continue;
+    }
+    const box = peekBoxHeader(buf, localAt);
+    if (!box) return undefined;
+    if (box.type === "moov") {
+      if (localAt + box.size <= buf.length) return buf.subarray(localAt);
+      // `moov` runs past what this hop holds — one more targeted read,
+      // landing on its own start and sized by ITS OWN declared size.
+      //
+      // This used to re-cap at MP4_TAIL_PROBE_BYTES, and that was wrong in a
+      // way ordinary takes hit. `moov` grows with the SAMPLE COUNT (stts,
+      // stsz, stco, ctts are one entry per sample), measured on this repo's
+      // own fixtures at 14.2 B/sample for display.mp4 and 11.2 B/sample for
+      // camera.mp4 — so it passes 64 KB somewhere around 4,600-5,800
+      // samples, which at 60 fps is 80-95 SECONDS. Past that the second read
+      // returned a prefix, `mp4BoxesIn` correctly refused a box declaring
+      // more bytes than it was given, and the file yielded neither facts nor
+      // an id. Downstream that is two tiles for one capture, a re-export
+      // refused with "it belongs to a different capture" about the user's
+      // own file, and share reporting a published take as never exported.
+      //
+      // MOOV_TAIL_SLACK_BYTES covers what sits AFTER `moov` — `tagMp4`
+      // appends its `uuid` box there (54 bytes), and `readMp4CaptureId`
+      // walks on past `moov` to find it within this same buffer. Clamped to
+      // what the file actually holds, so a truncated file is read as far as
+      // it is intact rather than refused outright.
+      return await readRange(file, absAt,
+                             Math.min(fileSize - absAt, box.size + MOOV_TAIL_SLACK_BYTES));
+    }
+    absAt += box.size;
+  }
+  return undefined;
+}
+
+/**
+ * How much of the file's END is read looking for `tagMp4`'s `uuid` box
+ * (STC-445). The box is 54 bytes; 4 KB leaves room for a `free`/`skip` or
+ * another vendor's box sitting after it, and is one bounded read.
+ */
+const UUID_TAIL_PROBE_BYTES = 4096;
+
+async function probeAndIdMp4(file: string, fileSize: number):
+    Promise<{ facts?: MediaFacts; id?: string }> {
+  const moov = await locateMoovBytes(file, fileSize);
+  if (!moov) return {};
+
+  // TWO reads, because the id and the facts are not in the same place
+  // (STC-445). `moov` carries the facts. The id is in a `uuid` box `tagMp4`
+  // appends at EOF — which for a RAW CAPTURE (`ftyp mdat moov uuid`) really
+  // does sit just past `moov`, and for an EXPORT (`ftyp moov mdat uuid`, what
+  // `mp4-muxer` writes) is the whole `mdat` away: measured at 37-154 MB on
+  // real exports, against a 4 KB slack window. Reading `moov` alone therefore
+  // found the id on every take made by the helper and on NO exported file,
+  // which is two tiles per capture and no Edit on the finished one.
+  //
+  // The `moov` window is still tried first: for a raw capture it already
+  // holds the tag, so that costs nothing and keeps working if the tail read
+  // is short (a file truncated mid-`uuid`).
+  const fromMoov = readMp4CaptureId(moov);
+  if (fromMoov) return { facts: probeMp4(moov), id: fromMoov };
+
+  const tailStart = Math.max(0, fileSize - UUID_TAIL_PROBE_BYTES);
+  const tail = await readRange(file, tailStart, Math.min(UUID_TAIL_PROBE_BYTES, fileSize));
+  return { facts: probeMp4(moov), id: readMp4CaptureIdInTail(tail) };
+}
+
+async function probeAndIdPng(file: string, fileSize: number):
+    Promise<{ facts?: MediaFacts; id?: string }> {
+  // ImageIO (and `tagPng`) can write a colour-profile chunk ahead of the id
+  // chunk — both land before the first IDAT — so `probePng`'s own 24-byte
+  // need is not enough to REACH the id. Reusing the MP4 side's bound here
+  // is a generous, still-bounded window for a real screenshot.
+  const front = await readRange(file, 0, Math.min(MP4_TAIL_PROBE_BYTES, fileSize));
+  return { facts: probePng(front), id: readPngCaptureId(front) };
+}
+
+/**
+ * A HEIC carries its id and is matched to its bundle; it is still not
+ * PROBED, so it lists with no dimensions.
+ *
+ * Both halves are deliberate. Measured on real hardware 2026-09-23, an
+ * ImageIO HEIC export DOES carry the id — the same XMP route a PNG takes,
+ * because `kCGImagePropertyPNGDescription` is normalised into XMP rather
+ * than being PNG-specific the way the property name suggests. So the file
+ * had its identity all along and only the reader was missing, which is the
+ * same shape as STC-413's own `tEXt`-vs-`iTXt` Critical one format over.
+ * Dimensions would mean a real HEIF item-property parse (`iprp`/`ipco`/
+ * `ispe`) for a format nothing in the UI can even select, which is the work
+ * for little return the note below still describes.
+ *
+ * The window is `probeAndIdPng`'s. On a 1,200x800 export the id sits at byte
+ * 1,668 of 1,009,782 — see `readHeicCaptureId` for the layout it was read
+ * out of.
+ */
+async function probeAndIdHeic(file: string, fileSize: number):
+    Promise<{ facts?: MediaFacts; id?: string }> {
+  const front = await readRange(file, 0, Math.min(MP4_TAIL_PROBE_BYTES, fileSize));
+  return { id: readHeicCaptureId(front) };
+}
+
+/**
+ * `.jpg`/`.jpeg` have no probe and no id here, and that is RULED, not
+ * forgotten — real header parsing for them is work for little return, since
+ * `probePng`/`probeMp4` (Task 4) and their id readers (Tasks 2-3) are the
+ * whole interface this task was given. A JPEG also genuinely carries no id
+ * to read: the same measurement that found one in a HEIC found none in a
+ * JPEG, so this is a limitation of the WRITER, not a missing reader. Such a
+ * file lists with no dimensions and is never matched to a bundle.
+ */
+async function probeFinishedFile(file: string, ext: string, fileSize: number):
+    Promise<{ facts?: MediaFacts; id?: string }> {
+  if (ext === ".mp4") return probeAndIdMp4(file, fileSize);
+  if (ext === ".png") return probeAndIdPng(file, fileSize);
+  if (ext === ".heic") return probeAndIdHeic(file, fileSize);
+  return {};
+}
+
+const STAMP_RE = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})$/;
+
+/**
+ * `takes.ts`'s own `stamp(at)` naming, parsed back into epoch ms in LOCAL
+ * time — the same zone it was formatted in. Undefined for anything not
+ * exactly that shape, so a caller can fall back rather than mis-sorting on
+ * digits that only coincidentally look like a timestamp.
+ *
+ * Used only where a bundle exists but its own richer read (`readRecording`/
+ * `readStill`, whose `recordedAt`/`capturedAt` stay mtime-based, unchanged
+ * by this task) could not run — the fallback item built straight from a
+ * matched file still needs SOME notion of when it was captured, and the
+ * bundle's stamped directory name says so more reliably than any mtime,
+ * which copying or restoring files does not preserve.
+ */
+function stampToMs(name: string): number | undefined {
+  const m = STAMP_RE.exec(name);
+  if (!m) return undefined;
+  const [, y, mo, d, h, mi, s] = m;
+  const at = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+  return Number.isNaN(at.getTime()) ? undefined : at.getTime();
+}
+
 /**
  * A label is decoration. Losing it must never cost the take, so a corrupt
  * take.json degrades to "no label" rather than invalidating anything. Shared
@@ -92,58 +369,368 @@ async function readLabel(dir: string): Promise<string | undefined> {
 interface Scan {
   takes: TakeInfo[];
   stills: StillInfo[];
+  /**
+   * Finished captures with no bundle-derived richness — no bundle at all, or
+   * one that exists (even matched by id) but did not parse as a usable
+   * recording/still. See `library-items.ts`'s `FinishedFileInfo`.
+   */
+  loose: FinishedFileInfo[];
   invalid: InvalidItem[];
 }
 
+/** A candidate bundle directory. */
+interface BundleCandidate {
+  dir: string;
+  names: string[];
+  /**
+   * True for a bundle sitting at the TOP LEVEL rather than under `raw/` —
+   * i.e. one made before STC-413 moved sources down a level. Its export may
+   * still be buried inside it (`findBuriedExport`), which is the one place
+   * the two positions genuinely behave differently.
+   */
+  legacy: boolean;
+}
+
 /**
- * One pass over the storage root, classifying every directory.
+ * The pre-STC-413 export sitting INSIDE a legacy bundle, if there is one.
  *
- * A directory holding `anchors.json` is a recording; one holding `shot.json` is
- * a still; anything else is reported invalid. **Before this existed, a still
- * was reported as a BROKEN RECORDING** — `listTakes` looked for anchors.json,
- * did not find one, and said "not a recording", which is true and useless. Every
- * still capture since STC-289 has been sitting in the library's invalid list.
+ * The spec promises "a legacy bundle holding an `export-*.mp4` lists as
+ * finished, pointing at the buried file", and without this it did not:
+ * `scanFinishedFiles` reads only top-level entries, so a take exported
+ * before this branch had `file` unset — it listed as never-exported, and
+ * `share:publish`, which used to find it with a plain `existsSync` and now
+ * resolves by id among top-level files, reported **every** pre-STC-413 take
+ * as "This take has not been exported yet". Nothing was lost, but it is a
+ * user-visible migration regression against an explicit promise.
  *
- * A broken take is REPORTED, never thrown and never silently skipped. One
- * unreadable directory must not hide the rest of someone's recordings, and a
- * take that quietly vanishes from the list is indistinguishable from one that
- * was deleted.
+ * Only ever consulted for a LEGACY bundle. A `raw/` bundle is written by
+ * this branch's own code, which puts its export at the top level; a file
+ * matching this shape inside one would be something else entirely.
+ *
+ * The exact `export-<bundle name>.mp4` is preferred because that is what the
+ * old `exportMediaName` produced, and a lexicographic fallback covers the
+ * spec's looser `export-*.mp4` wording without making the answer depend on
+ * `readdir` order, which is not sorted on every filesystem.
  */
-async function scanRoot(env: NodeJS.ProcessEnv): Promise<Scan> {
-  const root = takesRoot(env);
+export function findBuriedExport(dir: string, name: string, names: string[]): string | undefined {
+  const exact = `export-${name}.mp4`;
+  if (names.includes(exact)) return join(dir, exact);
+  const any = names.filter((n) => /^export-.+\.mp4$/i.test(n)).sort();
+  return any[0] ? join(dir, any[0]) : undefined;
+}
+
+/**
+ * Every directory directly inside `container`, skipping dotfiles (rule 2)
+ * and anything that vanished mid-scan.
+ *
+ * Deliberately NOT pre-filtered on `anchors.json`/`shot.json` presence —
+ * `readBundleInfo` is what decides that, and a directory carrying NEITHER
+ * still needs to be REPORTED (`no anchors.json — not a recording`, the exact
+ * existing behaviour `app/test/library.test.ts` pins for a directory that is
+ * "neither kind"), not silently skipped. Filtering here would turn a broken
+ * take into one that quietly vanished from the list, which this file's own
+ * header already names as indistinguishable from a deleted one.
+ *
+ * Shared between `raw/`'s children and the top-level legacy scan (rule 4) —
+ * one definition of "what counts as a directory worth reading here", used in
+ * both positions, rather than two that could drift.
+ */
+async function bundleCandidatesIn(container: string, subNames: string[],
+                                  legacy: boolean): Promise<BundleCandidate[]> {
+  const out: BundleCandidate[] = [];
+  for (const name of subNames) {
+    if (name.startsWith(".")) continue;
+    const dir = join(container, name);
+    let st;
+    try { st = await stat(dir); } catch { continue; }
+    if (!st.isDirectory()) continue;
+    let names: string[];
+    try { names = await readdir(dir); } catch { continue; }
+    out.push({ dir, names, legacy });
+  }
+  return out;
+}
+
+/** A finished, top-level media file — rule 1's whole scope. */
+interface FinishedFile {
+  file: string;
+  /** The stem: becomes the item's id when no bundle is matched to it. */
+  name: string;
+  ext: string;
+  bytes: number;
+  mtimeMs: number;
+  facts?: MediaFacts;
+  id?: string;
+}
+
+/**
+ * Rule 1: every top-level entry with a media extension is a finished
+ * capture. Its header is read, its facts probed and its id extracted —
+ * never its whole content. A file the probe cannot make sense of (a
+ * genuinely corrupt one, `broken.mp4`-shaped) still lists, with no facts and
+ * no id, rather than being dropped: this scan degrades, it does not throw.
+ */
+async function scanFinishedFiles(root: string, entries: string[]): Promise<FinishedFile[]> {
+  const out: FinishedFile[] = [];
+  for (const name of entries) {
+    if (name.startsWith(".")) continue;               // rule 2
+    const ext = extname(name).toLowerCase();
+    if (!MEDIA_EXTENSIONS.has(ext)) continue;           // rule 1's scope
+    const file = join(root, name);
+    let st;
+    try { st = await stat(file); } catch { continue; }         // vanished mid-scan
+    if (!st.isFile()) continue;                         // e.g. an oddly-named directory
+    const { facts, id } = await probeFinishedFile(file, ext, st.size);
+    out.push({ file, name: basename(name, ext), ext, bytes: st.size, mtimeMs: st.mtimeMs, facts, id });
+  }
+  return out;
+}
+
+/**
+ * Rule 1's scan, addressable on its own (STC-413) — every top-level finished
+ * file with whatever embedded id it carries, read once, with no `raw/`
+ * walking and no bundle reading.
+ *
+ * `main.ts` needs exactly this twice: resolving a re-export's destination by
+ * IDENTITY (a bundle's own id may already belong to a top-level file — that
+ * file, renamed or not, is where a re-export must land) and resolving
+ * `share:publish`'s source the same way. A second id-matching pass written
+ * inline in `main.ts` would be the "second scanner" this file's own header
+ * already forbids — one function, not two copies of the lookup `scanRoot`'s
+ * own rule 1 already performs.
+ */
+export async function scanFinishedFilesAt(env: NodeJS.ProcessEnv, saveFolder: string | null):
+    Promise<FinishedFile[]> {
+  const root = takesRoot(env, saveFolder);
+  let entries: string[];
+  try { entries = await readdir(root); } catch { return []; }
+  return scanFinishedFiles(root, entries);
+}
+
+type BundleResult =
+  | { kind: "recording"; info: TakeInfo }
+  | { kind: "still"; info: StillInfo }
+  | { kind: "invalid"; reason: string };
+
+/**
+ * Dispatch a bundle to `readRecording`/`readStill` (unchanged — the bundle
+ * path is correct, only its call site moved) and report the outcome locally
+ * rather than pushing straight into a shared `invalid` list. The caller
+ * decides whether a failure here is real: a bundle matched to a live
+ * finished file is not broken from the user's point of view, whatever
+ * happened to its own raw materials, and must not be reported as such.
+ */
+async function readBundleInfo(dir: string, name: string, names: string[]): Promise<BundleResult> {
+  let reason = "could not be read";
+  const fail = (r: string) => { reason = r; };
+  if (names.includes("shot.json")) {
+    const out: StillInfo[] = [];
+    await readStill(dir, name, names, out, fail);
+    return out[0] ? { kind: "still", info: out[0] } : { kind: "invalid", reason };
+  }
+  const out: TakeInfo[] = [];
+  await readRecording(dir, name, names, out, fail);
+  return out[0] ? { kind: "recording", info: out[0] } : { kind: "invalid", reason };
+}
+
+/**
+ * One pass over the storage root, per the ticket's four scan rules
+ * (`.superpowers/sdd/.../task-8-brief.md`):
+ *
+ * 1. A top-level media file is a finished capture (`scanFinishedFiles`).
+ * 2. `raw/` and any dotfile are skipped by rule 1 — never treated as a file.
+ * 3. `raw/`'s children carrying `anchors.json`/`shot.json` are bundles.
+ * 4. A top-level directory carrying either is a LEGACY bundle — the whole
+ *    migration story, and what keeps this task green before Task 9 moves
+ *    anything: this task writes nothing, so both positions must be read.
+ *
+ * Matching is by embedded id, never by name — a bundle's `capture.json` and
+ * a file's own tag are compared directly, so a file renamed in Finder is
+ * still found. A bundle whose id matches nothing currently at top level, or
+ * whose `capture.json` does not exist at all (never exported), is an
+ * "unfinished" capture: `dir` set, `file` absent. A file matching no bundle
+ * is either foreign or one whose bundle is already gone.
+ *
+ * A bundle that fails its own richer read (`readBundleInfo`'s `invalid`
+ * outcome) is reported broken ONLY when nothing else stands in for it. A
+ * matched finished file means the capture itself is intact, so that case
+ * degrades to a `loose` item built from the FILE's own header instead —
+ * reporting a working capture as broken because its now-redundant raw
+ * materials rotted would be exactly the "vanishes" failure this file's own
+ * header already warns against, aimed at the wrong object.
+ */
+async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Promise<Scan> {
+  const root = takesRoot(env, saveFolder);
   let entries: string[];
   try {
     entries = await readdir(root);
   } catch {
-    return { takes: [], stills: [], invalid: [] };   // no recordings folder yet is not an error
+    return { takes: [], stills: [], loose: [], invalid: [] };   // no folder yet is not an error
   }
+
+  const finished = await scanFinishedFiles(root, entries);
+  const byId = new Map<string, FinishedFile>();
+  for (const f of finished) if (f.id) byId.set(f.id, f);
+  const matchedFiles = new Set<string>();
+
+  const rawDir = join(root, RAW_SUBDIR);
+  let rawSubNames: string[] = [];
+  try { rawSubNames = await readdir(rawDir); } catch { /* no raw/ yet */ }
+  const legacyNames = entries.filter((n) => n !== RAW_SUBDIR);
+
+  const bundles = [
+    ...(await bundleCandidatesIn(rawDir, rawSubNames, false)),
+    ...(await bundleCandidatesIn(root, legacyNames, true)),
+  ];
 
   const takes: TakeInfo[] = [];
   const stills: StillInfo[] = [];
+  const loose: FinishedFileInfo[] = [];
   const invalid: InvalidItem[] = [];
 
-  for (const name of entries.sort().reverse()) {
-    const dir = join(root, name);
-    let names: string[];
-    try {
-      if (!(await stat(dir)).isDirectory()) continue;   // .DS_Store and friends
-      names = await readdir(dir);
-    } catch { continue; }
+  for (const { dir, names, legacy } of bundles) {
+    const name = basename(dir);
 
-    const fail = (reason: string) => invalid.push({ dir, name, reason });
+    // A bundle's own identity, read lazily — absent for one never exported,
+    // since `capture.json` is written only at export time. Through
+    // `readBundleId`, which is the ONE reader (M2): this used to be its own
+    // inline copy, and the three copies did not agree about a corrupt
+    // document.
+    const bundleId = await readBundleId(dir);
+    const match = bundleId ? byId.get(bundleId) : undefined;
 
-    if (names.includes("shot.json")) {
-      await readStill(dir, name, names, stills, fail);
+    const result = await readBundleInfo(dir, name, names);
+    if (result.kind !== "invalid") {
+      if (match) {
+        result.info.file = match.file;
+        matchedFiles.add(match.file);
+        // STC-413 Task 13 (fix round 1): take.json is retired for a
+        // FINISHED capture — the file's own name is the identity now, and a
+        // rename writes to the file, never to this sidecar. `readRecording`/
+        // `readStill` still read it unconditionally (a label is decoration;
+        // the read is cheap and shared with the unfinished path below), so a
+        // stale label from before this take was ever matched must not leak
+        // through — but DISCARDING it outright (the first pass here) left
+        // `LibraryItem.label` empty for every matched item, and
+        // `library-view.ts`'s title falls back to `item.id`, which for a
+        // matched item is deliberately the BUNDLE's stamped name (immune to
+        // renames, so sort order survives one) — so the tile went on
+        // showing the OLD stamp forever, on screen, after a rename that had
+        // correctly renamed the FILE. The fix is to derive the label from
+        // the file instead of discarding it: it still comes from nowhere
+        // near take.json, so the stale-sidecar problem stays solved, and the
+        // title now says what the file is actually called.
+        result.info.label = basename(match.file, extname(match.file));
+      } else if (legacy) {
+        // No top-level file carries this bundle's id — but a bundle made
+        // before STC-413 keeps its export INSIDE itself, which the top-level
+        // scan structurally cannot see. Point at it rather than reporting a
+        // take that was exported as never exported (the spec's own migration
+        // promise). No `label` is derived from it: the buried name is
+        // `export-<stamp>.mp4`, which says nothing the bundle's own stamp
+        // does not already say, and the rename UI writes to a top-level
+        // file, not into `raw/`.
+        result.info.file = findBuriedExport(dir, name, names);
+      }
+      // readRecording/readStill compute recordedAt/capturedAt from a
+      // sidecar's mtime — unchanged, per the brief ("keep them... correct").
+      // The bundle's own stamped NAME is preferred here, at the call site,
+      // wherever it parses: several bundles written in the same test (or the
+      // same second, on a real machine restoring from a backup) can have
+      // mtimes that disagree with the order their names already encode, and
+      // `listLibrary`'s sort is what a Finder rename must not be able to
+      // scramble — the directory name never changes, so it is the more
+      // reliable of the two.
+      const stamped = stampToMs(name);
+      if (stamped !== undefined) {
+        if (result.kind === "recording") result.info.recordedAt = stamped;
+        else result.info.capturedAt = stamped;
+      }
+      if (result.kind === "recording") takes.push(result.info);
+      else stills.push(result.info);
       continue;
     }
-    await readRecording(dir, name, names, takes, fail);
+
+    // The bundle's own richer read failed. Reported REGARDLESS of a match
+    // (review round 1, Important 1): a corrupt bundle that also happens to
+    // have a live finished file is still corrupt, and suppressing the report
+    // used to drop it out of `listTakes` (which reads `invalid`, not
+    // `loose`) with no trace at all — exactly the "vanishes" failure this
+    // file's own header forbids. A matched finished file additionally gets a
+    // working tile (`loose`) alongside the report, so nobody is worse off
+    // than before: the playable file, AND the honest "this needs attention"
+    // line.
+    if (match) {
+      matchedFiles.add(match.file);
+      loose.push({
+        file: match.file,
+        id: name,                                          // the bundle's own stamped name
+        dir,
+        createdAt: stampToMs(name) ?? match.mtimeMs,
+        bytes: match.bytes,
+        width: match.facts?.width,
+        height: match.facts?.height,
+        durationMs: match.facts?.durationMs,
+        isVideo: match.ext === ".mp4",
+        note: "This capture's source files could not be read.",
+      });
+      invalid.push({ dir, name, reason: result.reason });
+    } else if (bundleId) {
+      // `capture.json` is minted LAZILY, at export time (Task 5) — its mere
+      // presence PROVES this bundle was exported to something, even though
+      // nothing here can say what: a JPEG export carries no readable id at
+      // all (ImageIO writes nothing a JPEG can hold — measured 2026-09-23,
+      // see `readHeicCaptureId`), and a PNG/HEIC/MP4 export's file may
+      // simply have been moved or deleted since. Either way this is NOT
+      // "never exported", so it must not be
+      // reported the same way a genuinely crash-truncated take is — that
+      // would be a lie about a capture that already did its job. Listed
+      // instead, degraded: no `file` to point at, so `looseFileItem` keeps
+      // its actions to what a bare directory can still do (Important 3).
+      // A legacy bundle's export is buried inside it, so "could not be
+      // linked" is often simply "not at the top level" — point at it when it
+      // is there, and say the honest thing in each case.
+      const buried = legacy ? findBuriedExport(dir, name, names) : undefined;
+      loose.push({
+        id: name,
+        dir,
+        file: buried,
+        createdAt: stampToMs(name) ?? 0,
+        bytes: await dirSize(dir, names),
+        isVideo: buried ? true : !names.includes("shot.json"),
+        note: buried
+          ? "This capture's source files could not be read."
+          : "This capture was exported, but its finished file could not be linked back to it.",
+      });
+    } else {
+      // Never exported (no capture.json) AND the bundle's own read failed —
+      // genuinely broken, the crash-truncated-video shape this scanner has
+      // always reported.
+      invalid.push({ dir, name, reason: result.reason });
+    }
   }
 
-  // Directory names are timestamps, so name order IS chronological order — and
-  // it survives files being copied around, which mtime does not.
+  for (const f of finished) {
+    if (matchedFiles.has(f.file)) continue;
+    loose.push({
+      file: f.file,
+      id: f.name,
+      createdAt: f.mtimeMs,
+      bytes: f.bytes,
+      width: f.facts?.width,
+      height: f.facts?.height,
+      durationMs: f.facts?.durationMs,
+      isVideo: f.ext === ".mp4",
+    });
+  }
+
+  // Bundle directory names are timestamps, so name order IS chronological
+  // order for THESE arrays — and it survives files being copied around,
+  // which mtime does not. `listLibrary`'s own combined sort (createdAt) is
+  // what a renamed FILE needs; a bundle is never renamed by the user.
   takes.sort((a, b) => b.name.localeCompare(a.name));
   stills.sort((a, b) => b.name.localeCompare(a.name));
-  return { takes, stills, invalid };
+  return { takes, stills, loose, invalid };
 }
 
 async function readRecording(dir: string, name: string, names: string[],
@@ -235,17 +822,19 @@ async function readStill(dir: string, name: string, names: string[],
 }
 
 /**
- * The library: both kinds, newest first, already presented.
+ * The library: every kind, newest first, already presented.
  *
- * Sorted across kinds by the directory name, which is a timestamp for both — so
- * a demo session that produced a recording and three stills reads back in the
- * order it happened, which is the whole argument for one index.
+ * Sorted by `createdAt`, not by name or id (STC-413) — a bundle's directory
+ * name is still a timestamp and never changes, but a FILE'S name is now
+ * whatever the user renamed it to in Finder, and renaming must not reorder
+ * the library. Taken from the bundle's stamped name where there is one, and
+ * from the file's own mtime where there is not.
  */
-export async function listLibrary(env: NodeJS.ProcessEnv,
+export async function listLibrary(env: NodeJS.ProcessEnv, saveFolder: string | null,
                                   filter: string = DEFAULT_LIBRARY_FILTER): Promise<LibraryList> {
-  const { takes, stills, invalid } = await scanRoot(env);
-  const all = [...takes.map(recordingItem), ...stills.map(stillItem)];
-  all.sort((a, b) => b.id.localeCompare(a.id));
+  const { takes, stills, loose, invalid } = await scanRoot(env, saveFolder);
+  const all = [...takes.map(recordingItem), ...stills.map(stillItem), ...loose.map(looseFileItem)];
+  all.sort((a, b) => b.createdAt - a.createdAt);
   const chosen = LIBRARY_FILTERS.some((f) => f.id === filter) ? filter : DEFAULT_LIBRARY_FILTER;
   return { items: applyFilter(all, chosen), invalid, filters: LIBRARY_FILTERS, filter: chosen };
 }
@@ -259,7 +848,7 @@ export async function listLibrary(env: NodeJS.ProcessEnv,
  * answers to "what is a take", which is exactly what the ticket's one-index
  * constraint forbids.
  */
-export async function listTakes(env: NodeJS.ProcessEnv): Promise<TakeList> {
-  const { takes, invalid } = await scanRoot(env);
+export async function listTakes(env: NodeJS.ProcessEnv, saveFolder: string | null): Promise<TakeList> {
+  const { takes, invalid } = await scanRoot(env, saveFolder);
   return { takes, invalid };
 }

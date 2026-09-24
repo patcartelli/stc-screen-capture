@@ -2,8 +2,9 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
   <title>Capture</title>
+  <link rel="stylesheet" href="tokens.css">
   <style>
     /* ── instrument visual language (STC-372) ───────────────────────────────
        A restyle only: renderer.ts and library-view.ts reach the document
@@ -11,109 +12,9 @@
        class a script branches on, or the <body> markup — only color, type
        and the token system that drives them. See STC-369 for the type ramp
        this ticket's surfaces don't yet draw from, and STC-374/375 for what
-       the main window becomes next. */
-
-    @font-face {
-      font-family: 'Geist';
-      src: url('fonts/Geist-Light.woff2') format('woff2');
-      font-weight: 300; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'Geist';
-      src: url('fonts/Geist-Regular.woff2') format('woff2');
-      font-weight: 400; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'Geist';
-      src: url('fonts/Geist-Medium.woff2') format('woff2');
-      font-weight: 500; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'Geist';
-      src: url('fonts/Geist-SemiBold.woff2') format('woff2');
-      font-weight: 600; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'JetBrains Mono';
-      src: url('fonts/JetBrainsMono-Regular.woff2') format('woff2');
-      font-weight: 400; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'JetBrains Mono';
-      src: url('fonts/JetBrainsMono-Medium.woff2') format('woff2');
-      font-weight: 500; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'Silkscreen';
-      src: url('fonts/Silkscreen-Regular.woff2') format('woff2');
-      font-weight: 400; font-style: normal; font-display: swap;
-    }
-
-    :root {
-      color-scheme: light dark;
-      --font-sans: 'Geist', -apple-system, system-ui, sans-serif;
-      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-      --font-pixel: 'Silkscreen', 'JetBrains Mono', ui-monospace, monospace;
-
-      /* Type ramp — sans (Geist). No view sets a font-size inline. */
-      --type-label: 10px; --type-label-weight: 500; --type-label-tracking: 0.10em;
-      --type-meta: 11px; --type-meta-weight: 400; --type-meta-tracking: 0.02em;
-      --type-body: 12px; --type-body-weight: 400; --type-body-lh: 1.4;
-      --type-body-strong: 12px; --type-body-strong-weight: 600; --type-body-strong-lh: 1.4;
-      --type-heading: 13px; --type-heading-weight: 600; --type-heading-lh: 1.3;
-      --type-read: 13px; --type-read-weight: 400; --type-read-lh: 1.5;
-      --type-title: 15px; --type-title-weight: 300; --type-title-tracking: -0.01em; --type-title-lh: 1.3;
-      --type-display: 20px; --type-display-weight: 300; --type-display-tracking: -0.02em; --type-display-lh: 1.1;
-
-      /* Type ramp — mono (JetBrains Mono) with tabular-nums */
-      --type-value-sm: 11px; --type-value-sm-weight: 400; --type-value-sm-lh: 1.4;
-      --type-value: 12px; --type-value-weight: 400; --type-value-lh: 1.4;
-
-      /* Type ramp — pixel (Silkscreen) at 8px grid multiples only */
-      --type-timer-pill: 16px; --type-timer-pill-lh: 1;
-      --type-timer: 32px; --type-timer-lh: 1;
-
-      /* Light tokens. There is no in-app theme switch — prefers-color-scheme
-         below is the only signal, same as the color-scheme line already was. */
-      --bg: #f6f6f4;
-      --surface: #ffffff;
-      --surface-hover: #eeeeeb;
-      --border: rgba(15, 15, 12, .14);
-      --border-strong: rgba(15, 15, 12, .30);
-      --text: #171714;
-      --text-dim: rgba(23, 23, 20, .62);
-      --text-faint: rgba(23, 23, 20, .40);
-      --accent: #3b6fe0;
-      --accent-soft: rgba(59, 111, 224, .14);
-      --rec: #d33a3a;
-      --rec-soft: rgba(211, 58, 58, .12);
-      --warn: #b9502c;
-      --warn-soft: rgba(185, 80, 44, .12);
-      --focus: #4f86ff;
-
-      font-family: var(--font-sans);
-      font-size: var(--type-body);
-      line-height: 1.5;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #131315;
-        --surface: #1c1c1f;
-        --surface-hover: #26262a;
-        --border: rgba(255, 255, 255, .12);
-        --border-strong: rgba(255, 255, 255, .26);
-        --text: #f1f1ee;
-        --text-dim: rgba(241, 241, 238, .64);
-        --text-faint: rgba(241, 241, 238, .42);
-        --accent: #7aa2ff;
-        --accent-soft: rgba(122, 162, 255, .18);
-        --rec: #ff6b6b;
-        --rec-soft: rgba(255, 107, 107, .16);
-        --warn: #e0925a;
-        --warn-soft: rgba(224, 146, 90, .16);
-        --focus: #7aa2ff;
-      }
-    }
+       the main window becomes next. The fonts, type ramp and light/dark
+       color tokens themselves moved to tokens.css (STC-443) — this window no
+       longer owns the base, only what extends or consumes it. */
 
     body { margin: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px;
            background: var(--bg); color: var(--text); }
@@ -131,8 +32,27 @@
     button:hover:not([disabled]) { background: var(--surface-hover); }
     button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     button[disabled] { opacity: .4; cursor: default; }
-    #record { font-weight: 600; border-color: var(--rec); color: var(--rec); }
+    /* STC-442: Record and Shot are the primary pair — same weight and
+       treatment as each other (bold, a colored border/label, a soft-tint
+       hover). Record keeps --rec (it already meant "this one records");
+       Shot has no such meaning of its own, so it takes the app's ordinary
+       --accent — same strength, the app's default interactive color rather
+       than a third invented one. Settings, below, drops out of this pair
+       entirely rather than getting a third color in the same treatment. */
+    #record, #capturestill { font-weight: 600; }
+    #record { border-color: var(--rec); color: var(--rec); }
     #record:hover:not([disabled]) { background: var(--rec-soft); }
+    #capturestill { border-color: var(--accent); color: var(--accent); }
+    #capturestill:hover:not([disabled]) { background: var(--accent-soft); }
+    /* Secondary: a door into configuration, not a peer of the two capture
+       actions above. Quieter border and label color only — still a normal
+       weight-500 control (see the comment above), never bold, never tinted
+       on hover with an accent it isn't part of. `margin-left: auto` in a
+       `.row` flex container pushes it (and #state, ordered just before it
+       in the markup) to the row's trailing edge, away from the primary
+       pair. */
+    #settings { border-color: var(--border); color: var(--text-dim); background: transparent; }
+    #settings:hover:not([disabled]) { background: var(--surface-hover); color: var(--text); }
     .row { display: flex; gap: 10px; align-items: center; }
     /* `.row`'s `display: flex` and the UA stylesheet's `[hidden] { display:
        none }` are equal specificity, and an author rule wins THAT tie
@@ -141,13 +61,19 @@
        Restated explicitly, and !important because nothing here should ever
        need to out-rank "this element is hidden". */
     [hidden] { display: none !important; }
-    #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-dim); }
+    /* STC-442: a status readout, not trailing text — a chip, the same small
+       uppercase-label idiom as .libbadge/.subhead/#modelcode elsewhere in
+       this window, so it reads as "the app reporting a state" rather than
+       as a caption hanging off the last button. `margin-left: auto` pushes
+       it (and #settings after it) to the row's trailing edge. */
+    #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+              font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
+              text-transform: uppercase; color: var(--text-dim);
+              background: var(--surface-hover); border: 1px solid var(--border);
+              border-radius: 999px; padding: 4px 10px; margin-left: auto; }
     table { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     td { padding: 2px 14px 2px 0; }
     td:first-child { color: var(--text-dim); font-family: var(--font-sans); }
-    #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid var(--warn);
-             background: var(--warn-soft); display: none; white-space: pre-wrap; }
-    #alert.show { display: block; }
     h2 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); margin: 4px 0 0; color: var(--text-dim); }
     .take { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
             padding: 7px 0; border-top: 1px solid var(--border); }
@@ -191,7 +117,7 @@
                 background: var(--surface-hover); color: var(--text-dim); }
     /* Coloured from the badge's own TEXT, so this stylesheet is the only place
        that knows there are two kinds — and the view module still does not. */
-    .libbadge[data-badge="Still"] { background: var(--accent-soft); color: var(--accent); }
+    .libbadge[data-badge="Shot"] { background: var(--accent-soft); color: var(--accent); }
     .libtitle { font-size: var(--type-body-strong); font-weight: var(--type-body-strong-weight); overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
     .libtile .meta { color: var(--text-dim); font-size: var(--type-value-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
@@ -211,10 +137,13 @@
        this branch's own removal of #player and everything under it wins the
        conflict rather than reintroducing a restyled copy of a section that
        no longer exists in this window. */
-    /* still capture preferences: the destination folder (STC-293) and the
-       post-capture floating thumbnail (STC-296). The DECORATED still itself
-       is composited and exported from the thumbnail's own window now — see
-       app/renderer/thumbnail.html — so nothing here draws a preview. */
+    /* The Preferences section's rows: the save location (STC-293's
+       destination folder, unified by STC-412 into the one `saveFolder` that
+       governs recordings, shots and the library root alike) and the
+       post-capture floating thumbnail's own preferences (STC-296). The
+       DECORATED still itself is composited and exported from the thumbnail's
+       own window now — see app/renderer/thumbnail.html — so nothing here
+       draws a preview. The class name is older than the section. */
     .stillrow { display: flex; align-items: center; gap: 8px; margin-top: 6px;
                 font-size: var(--type-body); flex-wrap: wrap; }
     .stillrow label { display: flex; align-items: center; gap: 4px; }
@@ -252,6 +181,17 @@
     #profilesheet h1 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); }
     #profilesheet-head { justify-content: space-between; }
     #profileclose { padding: 3px 9px; font-size: var(--type-body); line-height: 1; }
+    /* STC-430: the sheet has exactly two PEER sections — Profile (how a
+       recording is formatted: Scope/Source/Camera/Mic) and Preferences
+       (everything app-level, shortcuts included). "Countdown" and "Shot
+       shortcuts" used to be their own <h2>, styled identically to Profile
+       and Preferences, so the sheet read as four flat sections and the
+       boundary the split exists to draw was invisible. They are grouping
+       labels WITHIN Preferences now — same small/uppercase treatment as
+       #modelcode and .libbadge — subordinate rather than a peer heading. */
+    .subhead { font-size: var(--type-label); font-weight: var(--type-label-weight);
+               letter-spacing: var(--type-label-tracking); text-transform: uppercase;
+               color: var(--text-faint); }
 
     /* ── the pill (STC-375) ──────────────────────────────────────────────
        Record collapses this real window to a 26px-tall pill (pill-window.ts);
@@ -340,23 +280,42 @@
       <span id="pill-stop" aria-hidden="true"></span>
     </button>
     <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
-    <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
-    <label id="mic-label">Mic <select id="mic"><option value="">Off</option></select></label>
-    <button id="profile" title="Shot preferences and shortcuts">Profile</button>
     <span id="state">starting…</span>
-  </div>
-  <div class="row">
-    <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
+    <button id="settings" title="Profile, preferences and shortcuts">Settings</button>
   </div>
   <div id="stillstatus" hidden></div>
-  <div id="alert"></div>
 
-  <table>
+  <!--
+    The camera and mic readouts are ALWAYS visible — deliberately outside
+    `#diagnostics`, which the Show diagnostics preference hides by default.
+
+    These two are not instrumentation (STC-412 final review, I2). They were
+    built as one half of a PAIR with the warning that accompanies them —
+    `renderer.ts`'s own words, still in that file: "the row is the
+    at-a-glance state, the alert is the thing that cannot be missed". The
+    case they exist for is STC-286's: a camera that OPENS, reports its name,
+    and then silently delivers nothing (clamshell, a covered lens, another
+    app holding the device), which until these existed looked exactly like a
+    camera that worked. Behind the diagnostics toggle, with the alert now a
+    toast that takes itself away, such a take would report itself for a few
+    seconds and then leave no trace anywhere — which is the whole failure
+    this reporting was added to remove.
+
+    Everything else that WAS in that table (pid, frames, dropped, events,
+    cursor shapes, elapsed) really is developer instrumentation and stays
+    behind the toggle, which is what Task 4 was for.
+  -->
+  <table id="devicestate">
+    <tbody>
+      <tr><td>camera</td><td id="camera-state">—</td></tr>
+      <tr><td>mic</td><td id="mic-state">—</td></tr>
+    </tbody>
+  </table>
+
+  <table id="diagnostics" hidden>
     <tbody>
       <tr><td>helper pid</td><td id="pid">—</td></tr>
       <tr><td>helper</td><td id="alive">—</td></tr>
-      <tr><td>camera</td><td id="camera-state">—</td></tr>
-      <tr><td>mic</td><td id="mic-state">—</td></tr>
       <tr><td>frames</td><td id="frames">—</td></tr>
       <tr><td>dropped</td><td id="dropped">—</td></tr>
       <tr><td>events</td><td id="events">—</td></tr>
@@ -375,24 +334,55 @@
   -->
   <aside id="profilesheet">
     <div class="row" id="profilesheet-head">
-      <h1>Profile</h1>
+      <h1>Settings</h1>
       <button id="profileclose" aria-label="Close">×</button>
     </div>
 
-    <h2>Shot</h2>
+    <h2>Profile</h2>
+    <div class="row">
+      <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
+    </div>
+    <div class="row">
+      <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
+      <label id="mic-label">Mic <select id="mic"><option value="">Off</option></select></label>
+    </div>
+
+    <h2>Preferences</h2>
     <!--
-      The destination folder (STC-293) and the post-capture floating
-      thumbnail's preferences (STC-296). The decorated still itself — style,
-      redact, copy, save — is the thumbnail's own compact panel now
-      (app/renderer/thumbnail.html, "the whole still UI in v1"); nothing here
-      previews or exports a shot.
+      The save location first, because it is the one preference here that
+      decides where a user's own files END UP.
+
+      It used to sit under its own `<h2>Shot</h2>` heading, which was true
+      while it was `still.destination` and governed stills alone. STC-412
+      unified it: `saveFolder` is where RECORDINGS go, where shots go, AND
+      which root the library scans (`takes.ts`'s `takesRoot`) — so a "Shot"
+      heading over it named a third of what it does, and a section of its own
+      read as a peer of Preferences rather than part of it. The post-capture
+      panel's own preferences follow it here for the same reason: they are
+      preferences, and the heading that used to separate them was the stale
+      half of this row's own story.
+
+      `#stilldest` shows a REAL resolved path, never "beside the shot" —
+      there is no per-shot override left to describe, and an unset
+      `saveFolder` resolves to a real folder (`recorder:resolvedSaveFolder`,
+      which calls the same `takesRoot` main writes through rather than
+      re-deriving the default in the renderer).
     -->
     <div class="stillrow">
-      <span>Saving to</span>
-      <span id="stilldest">beside the shot</span>
+      <span>Recordings and shots save to</span>
+      <span id="stilldest">…</span>
       <button id="stillchoosedest">Change…</button>
-      <button id="stillcleardest">Beside the shot</button>
     </div>
+    <!--
+      The post-capture floating thumbnail's own preferences (STC-296). The
+      decorated still itself — style, redact, copy, save — is the thumbnail's
+      compact panel now (app/renderer/thumbnail.html, "the whole still UI in
+      v1"); nothing here previews or exports a shot.
+
+      STC-392: the panel no longer closes itself, so there is no timeout or
+      settle-action preference to offer here any more — it waits for you to
+      choose an action.
+    -->
     <div class="stillrow">
       <label>Panel corner <select id="thumbcorner">
         <option value="bottom-right">Bottom right</option>
@@ -400,30 +390,34 @@
         <option value="top-right">Top right</option>
         <option value="top-left">Top left</option>
       </select></label>
-      <label title="Never less than 3 seconds">Closes after
-        <input id="thumbtimeout" type="number" min="3" max="60" step="1" style="width:3.5em">s</label>
-      <label>then <select id="thumbsettle">
-        <option value="save">Save</option>
-        <option value="copy">Copy</option>
-      </select></label>
       <label title="Skip the panel entirely and copy every shot straight to the clipboard">
         <input type="checkbox" id="thumbskip"> Skip it — straight to clipboard</label>
     </div>
+    <div class="stillrow">
+      <label title="Show helper pid, frame/drop counts and event counts on the main window">
+        <input type="checkbox" id="showdiagnostics"> Show diagnostics</label>
+    </div>
 
-    <h2>Countdown</h2>
     <!--
       STC-391. One countdown, two ways in: Record always counts down, and a
       still capture only when it was started with the self-timer. The options
       are built from `countdown.ts`'s COUNTDOWN_OPTIONS rather than listed
       here, so the list and the clamp that has to accept it cannot drift.
+
+      STC-430: "Countdown" was its own `<h2>`, a peer of Profile and
+      Preferences — this is a Preferences field like the ones above it, not
+      a third section, so it gets `.subhead` rather than another heading.
     -->
+    <div class="subhead">Countdown</div>
     <div class="stillrow">
       <label title="Record always counts down. A shot counts down only when started with the self-timer.">Counts
         down for <select id="countdownms"></select></label>
       <span id="countdownhint">Applies to Record, and to Shot with Self-Timer.</span>
     </div>
 
-    <h2>Shot shortcuts</h2>
+    <!-- STC-430: same as Countdown above — a Preferences field, not a
+         fourth section, so `.subhead` rather than `<h2>`. -->
+    <div class="subhead">Shot shortcuts</div>
     <div id="shortcuts"></div>
     <div id="shortcutfoot">
       <button id="resetshortcuts">Restore defaults</button>

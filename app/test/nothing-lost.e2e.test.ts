@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseShot } from "../../transform/src/shot.js";
 import { SETTLE_READY_MS } from "../src/thumbnail.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount } from "./_windows.js";
 
 /**
  * STC-301 gate 4 — nothing lost.
@@ -31,10 +33,9 @@ import { SETTLE_READY_MS } from "../src/thumbnail.js";
  * ## What makes it deterministic on a CI runner
  *
  * The ticket's Constraints section demands an answer to that, having paid for
- * flaky gates three times. Three things:
+ * flaky gates three times. Two things (STC-392 removed a third — there is no
+ * panel timeout to set to a floor any more):
  *
- *  - The panel's timeout is set to the FLOOR (3 s) on disk before launch, so
- *    the settle is bounded and known rather than the 6 s default.
  *  - Nothing here polls for a panel to appear or races an animation. It waits
  *    on the only durable artefact — directories on disk — with a generous
  *    bound, and the directories are written by `capture-still` itself, before
@@ -42,6 +43,15 @@ import { SETTLE_READY_MS } from "../src/thumbnail.js";
  *  - The captures are fired through `still:capture`'s `display` action, which
  *    opens no overlay and needs no pointer, so there is no window-server
  *    interaction to lose a race with.
+ *
+ * ## What "nothing lost" means, post-STC-392
+ *
+ * The gate's own wording ("lets every thumbnail time out untouched") is the
+ * OLD mechanism; the property it was checking survives it. A burst that is
+ * never touched used to reach N exports; now it reaches N panels still open
+ * and N takes still in temp storage — untouched either way, and "recoverable"
+ * a word STC-393's crash recovery now makes literally true rather than a
+ * synonym for "already saved".
  */
 const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
@@ -58,19 +68,16 @@ const N = 5;
 /**
  * Teardown gets a bound of its own, and the number is derived rather than felt.
  *
- * This gate deliberately leaves the app mid-burst: a panel replaced before its
- * page had finished loading is settling, and a settle waits up to
- * `SETTLE_READY_MS` for the first composite (STC-296, #102) before it exports.
- * So `app.close()` can legitimately have that much work behind it — and
- * vitest's default hook timeout is 10 s, which is the SAME NUMBER, making the
- * teardown a coin flip. Observed failing 1 run in 5 here with the test body
- * itself green, which is the shape of flake the ticket's Constraints section
- * refuses.
- *
- * A bound that does not clear the wait it is sitting on top of is the "a new
- * bound must be checked against every bound already covering the same code"
- * trap CLAUDE.md records three times. It is derived from `SETTLE_READY_MS`
- * rather than restated, so raising that wait cannot silently un-do this.
+ * This gate deliberately leaves the app mid-burst, with several panels still
+ * open. Before STC-392, closing them meant settling each — waiting up to
+ * `SETTLE_READY_MS` for a first composite (STC-296, #102) before exporting —
+ * and vitest's default hook timeout (10 s) was the SAME NUMBER `SETTLE_READY_MS`
+ * happened to be, making teardown a coin flip; observed failing 1 run in 5.
+ * `dismissNow` no longer waits on the renderer at all, so this bound is more
+ * generous than teardown needs today — kept derived from `SETTLE_READY_MS`
+ * rather than cut to the bone, since a future renderer round trip (Task 4's
+ * export-then-close) would need slack here again and a restated number would
+ * not move with it.
  */
 const TEARDOWN_MS = SETTLE_READY_MS + 20_000;
 
@@ -84,11 +91,11 @@ async function launch(): Promise<Launched> {
   const tempTakes = mkdtempSync(join(tmpdir(), "stc-nothinglost-temp-"));
   const destDir = mkdtempSync(join(tmpdir(), "stc-nothinglost-dest-"));
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-  // Seeded on DISK: `recorder:setSettings` strips `still.destination` by design
-  // (STC-293 review, #92). The timeout is the FLOOR, so the settle is bounded.
+  // Seeded on DISK: `recorder:setSettings` strips `saveFolder` by design
+  // (STC-293 review, #92 — `saveFolder` replaced `still.destination` at
+  // STC-412).
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    still: { destination: destDir },
-    thumbnail: { timeoutMs: 3000, settleAction: "save" },
+    saveFolder: destDir,
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],
@@ -99,15 +106,24 @@ async function launch(): Promise<Launched> {
       STC_NO_SHUTTER: "1",
     },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#capturestill");
   return { win, recordings, tempTakes, destDir };
 }
 
-/** Every take directory that holds a shot, with the document it carries. */
-function shotsIn(recordings: string): { name: string; dir: string }[] {
-  return readdirSync(recordings)
-    .map((name) => ({ name, dir: join(recordings, name) }))
+/**
+ * Every take directory that holds a shot, with the document it carries.
+ *
+ * Tolerates a missing `root` (STC-413's `raw/` need not exist at all until
+ * something is promoted into it) rather than throwing ENOENT — a promotion
+ * check that can crash on "nothing promoted yet" is not a check that
+ * discriminates anything.
+ */
+function shotsIn(root: string): { name: string; dir: string }[] {
+  if (!existsSync(root)) return [];
+  return readdirSync(root)
+    .map((name) => ({ name, dir: join(root, name) }))
     .filter((t) => existsSync(join(t.dir, "shot.json")));
 }
 
@@ -146,45 +162,65 @@ describe("gate 4: nothing is lost in a burst of captures", () => {
   }, 120_000);
 
   /**
-   * And every one of them SETTLES, untouched.
+   * And every one of them WAITS, untouched (STC-392, restating a test that
+   * asserted the OLD contract rather than loosening it).
    *
    * The shots being on disk is the helper's doing and happens before any panel
    * exists. What this half proves is the ticket's actual sentence — "lets every
-   * thumbnail time out untouched" — which is a different claim: N panels must
-   * each reach an export without a person touching any of them.
+   * thumbnail time out untouched" was true when there was a timeout to let
+   * fire; the property it stood for — a burst nobody touches loses nothing —
+   * is kept a different way now: N panels stay OPEN rather than each reaching
+   * an export, and their N takes stay in temp storage rather than moving to
+   * the destination folder.
    *
    * What that exercises has CHANGED under the gate, and the assertion is worth
    * more for it. It used to be the replace path — a capture arriving while a
    * panel showed replaced it, and the outgoing shot had to be settled rather
    * than discarded. Captures stack now (#104), so what a burst reaches is N
-   * panels alive at once, each holding its own timer and settling on its own
-   * clock, with N exports overlapping in the destination folder. The property
-   * asserted is identical and the mechanism underneath it is not, which is the
-   * point of asserting the OUTCOME (N files) rather than the mechanism.
+   * panels alive at once — still true post-STC-392, only none of them ever
+   * settle on their own any more.
    *
-   * `N` is 5 because the ticket says five, and `MAX_STACKED` happens to be 5
-   * as well, so today this burst fills the stack exactly and evicts nothing.
-   * Lower the cap and the same burst would additionally exercise overflow
-   * eviction — a broader run of the same assertion, not a broken one, which is
-   * why nothing here is pinned to that coincidence.
+   * `N` is 5 because the ticket says five. It USED to also equal
+   * `MAX_STACKED`, so this burst filled the stack exactly and evicted
+   * nothing — worth recording as history rather than deleting outright,
+   * because it explains why this assertion once needed no further comment.
+   * Task 5b (STC-392 D7) lowered `MAX_STACKED` to 3, so this same burst now
+   * DOES push two panels over the cap. That no longer threatens this
+   * assertion the way it once would have: overflow used to DISMISS (destroy)
+   * the evicted panel, which really would have meant fewer than N windows
+   * and fewer than N recoverable shots. It no longer destroys anything —
+   * a panel past the cap is HIDDEN, not torn down — so `N` windows and `N`
+   * shots in temp storage both still hold; only the VISIBLE count is now
+   * `MAX_STACKED` rather than `N`, which this gate does not assert on either
+   * side and so is silent about here on purpose.
    */
-  test(`ignoring all ${N} panels still exports all ${N}`, async () => {
-    const { win, recordings, destDir } = await launch();
+  test(`ignoring all ${N} panels still exports none of them`, async () => {
+    const { win, tempTakes, destDir } = await launch();
     for (let i = 0; i < N; i++) {
       await win.evaluate(() => (window as any).recorder.captureStill("display"));
     }
 
-    // Waits on the durable artefact rather than on any panel's animation: the
-    // exported files. The bound is generous because it covers N settles plus
-    // the last panel's own 3 s timeout, and the failure message says how far it
-    // got rather than only that it waited.
-    await expect.poll(() => readdirSync(destDir).length, { timeout: 60_000 }).toBe(N);
+    // Waits on the durable artefact rather than on any panel's animation: N
+    // real BrowserWindows on screen.
+    await expect.poll(() => windowCount(app!, "thumbnail.html"),
+                       { timeout: 60_000 }).toBe(N);
 
-    // Belt and braces: the shots are still there too. An export that consumed
-    // its source would pass the line above and lose the take.
-    expect(shotsIn(recordings).length).toBe(N);
-    for (const f of readdirSync(destDir)) {
-      expect(readFileSync(join(destDir, f)).length, `${f} is empty`).toBeGreaterThan(0);
-    }
+    // Nothing exported, nothing promoted to the library, and nothing lost
+    // either: every shot is still exactly where `capture-still` wrote it —
+    // temp storage, never decided.
+    //
+    // `destDir` — the seeded `saveFolder` — is the app's real `takesRoot`,
+    // wins over `STC_RECORDINGS_DIR` (`takesRoot`'s own precedence), and is
+    // checked at its TOP LEVEL rather than at `destDir/raw`: a promoted
+    // bundle would create `raw/` itself, which a top-level `readdirSync`
+    // already sees, so this one check catches both an exported file AND a
+    // promoted bundle appearing anywhere under the real root. A prior version
+    // of this test also checked the `STC_RECORDINGS_DIR`-named directory
+    // directly, which `saveFolder` shadows here (STC-412) — that check was
+    // vacuous even before STC-413 (nothing is ever written there), and adding
+    // `raw/` to its path would not have fixed that, so it is removed rather
+    // than repointed at the wrong root.
+    expect(readdirSync(destDir).length).toBe(0);
+    expect(shotsIn(tempTakes).length).toBe(N);
   }, 180_000);
 });

@@ -7,6 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withCountdown, withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { HIDE_SETTLE_MS } from "../src/overlay-session.js";
+import { toastPage } from "./_toast.js";
 
 /**
  * The whole Record flow, in a real app (STC-388).
@@ -206,7 +207,7 @@ describe("Escape writes nothing, at either phase", () => {
     expect(readdirSync(tempTakes).length).toBe(before);
     expect(readLines(startLog)).toEqual([]);
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
   }, 120_000);
 
   test("Escape in the options phase — the newly reachable state", async () => {
@@ -227,7 +228,7 @@ describe("Escape writes nothing, at either phase", () => {
     expect(readdirSync(tempTakes).length).toBe(before);
     expect(readLines(startLog)).toEqual([]);
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
   }, 120_000);
 });
 
@@ -549,7 +550,7 @@ describe("recordFlowActive guards its own gap (Finding 6, STC-388 review)", () =
     await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
     await expect.poll(async () => (await status(win)).state, { timeout: 15_000 }).toBe("recording");
     // No alert from a second flow's `bad-state` reaching the window.
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
     expect(readdirSync(tempTakes).length).toBe(1);
     // Settled: no further start ever lands, even after giving a stray second
     // flow time to have reached the helper.

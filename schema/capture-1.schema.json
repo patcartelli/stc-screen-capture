@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "capture-1",
+  "description": "A bundle's stable identity (STC-413). Written lazily at export time; absent from a bundle that has never been exported.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+  }
+}

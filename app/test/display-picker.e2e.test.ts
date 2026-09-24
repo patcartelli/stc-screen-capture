@@ -3,6 +3,7 @@ import { _electron as electron, type ElectronApplication } from "playwright";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { waitForStart } from "./_start-log.js";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
@@ -43,6 +44,9 @@ async function launch(opts: { userData: string; recordings: string; startLog?: s
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
+  // STC-412: the Source picker lives inside the Settings sheet now. Open it
+  // once here, as a user does, so these tests drive it the way it is reached.
+  await win.click("#settings");
   return win;
 }
 
@@ -114,8 +118,7 @@ describe("the display picker", () => {
     // STC_FAKE_DISPLAYS list, which only feeds the `#display` dropdown's text.
     const wantDisplayId = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().id);
     await startRecordFlow(app!, win);
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.displayId, `start payload was ${JSON.stringify(cmd)}`).toBe(wantDisplayId);
     // The whole settings panel still locks during a take (`lockSettings` in
@@ -155,8 +158,7 @@ describe("the display picker", () => {
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     const wantDisplayId = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().id);
     await startRecordFlow(app!, win, { fullDisplay: true });
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.displayId, `start payload was ${JSON.stringify(cmd)}`).toBe(wantDisplayId);
     expect("region" in cmd, `start payload was ${JSON.stringify(cmd)}`).toBe(false);
   }, 180_000);

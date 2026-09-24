@@ -9,8 +9,8 @@ import {
   type ExportOptions,
 } from "@transform/still-export.js";
 import {
-  DEFAULT_CORNER, DEFAULT_THUMBNAIL_TIMEOUT_MS, clampTimeoutMs, parseCorner, parseSettleAction,
-  type Corner, type SettleAction,
+  DEFAULT_CORNER, parseCorner,
+  type Corner,
 } from "./thumbnail.js";
 import {
   DEFAULT_EMBED_TEMPLATE, DEFAULT_SLUG, slugIsValid,
@@ -112,6 +112,23 @@ export interface Settings {
    * video go when it leaves", not "what does the encode look like".
    */
   share: ShareSettings;
+  /**
+   * Where recordings and stills are saved, or null for "not chosen yet" —
+   * which resolves to the same default takesRoot() always computed
+   * (env.STC_RECORDINGS_DIR || ~/Desktop/stc), so an untouched install
+   * behaves identically to before this field existed, and an E2E fixture's
+   * STC_RECORDINGS_DIR isolation never gets baked into a persisted
+   * settings.json. Replaces StillSettings.destination and the "beside the
+   * shot" concept (STC-412): there is one save location, not a per-still
+   * override.
+   */
+  saveFolder: string | null;
+  /**
+   * Whether the diagnostics table (helper pid, frame counts, event counts,
+   * …) is shown on the main window (STC-412). Off by default — developer
+   * instrumentation, not something a normal user needs in view.
+   */
+  showDiagnostics: boolean;
 }
 
 export interface ShareSettings {
@@ -136,10 +153,6 @@ export const DEFAULT_SHARE_SETTINGS: ShareSettings = {
 
 export interface ThumbnailSettings {
   corner: Corner;
-  /** Milliseconds; never below `MIN_THUMBNAIL_TIMEOUT_MS` (thumbnail.ts). */
-  timeoutMs: number;
-  /** What an ignored (timed-out) or explicitly closed panel does with the shot. */
-  settleAction: SettleAction;
   /**
    * "Some days you take twenty shots and want none of this" (the ticket's own
    * words). When set, a capture never shows the panel at all and goes straight
@@ -150,24 +163,14 @@ export interface ThumbnailSettings {
 }
 
 export const DEFAULT_THUMBNAIL_SETTINGS: ThumbnailSettings = {
-  corner: DEFAULT_CORNER, timeoutMs: DEFAULT_THUMBNAIL_TIMEOUT_MS, settleAction: "save", skip: false,
+  corner: DEFAULT_CORNER, skip: false,
 };
 
 export interface StillSettings extends ExportOptions {
-  /**
-   * Where saves go, or null for "beside the shot, in its own take directory".
-   *
-   * Null rather than a hardcoded ~/Desktop: a still that has not been given a
-   * home belongs with the `shot.json` it was rendered from, which is the one
-   * place it can never be orphaned from its source. A user who picks a folder
-   * gets that folder; nobody gets a surprise.
-   */
-  destination: string | null;
 }
 
 export const DEFAULT_STILL_SETTINGS: StillSettings = {
   ...DEFAULT_EXPORT_OPTIONS,
-  destination: null,
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -176,15 +179,14 @@ export const DEFAULT_SETTINGS: Settings = {
   still: { ...DEFAULT_STILL_SETTINGS },
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
   share: { ...DEFAULT_SHARE_SETTINGS },
+  saveFolder: null, showDiagnostics: false,
 };
 
 /**
  * Never throws, and never half-trusts.
  *
  * Each field is validated on its own terms — an unknown format becomes the
- * default rather than reaching ImageIO as a string it will refuse, and a
- * destination that is not an absolute path is treated as unset rather than
- * resolved against whatever the process's working directory happens to be.
+ * default rather than reaching ImageIO as a string it will refuse.
  * `flattenColor` is deliberately NOT persisted with a default: it is the
  * answer to a question the user was asked (STC-293's "having said so first"),
  * and a stored default would silently answer it for them next time.
@@ -193,15 +195,12 @@ function cleanStill(v: unknown): StillSettings {
   const d = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
   const template = typeof d.template === "string" && d.template.trim()
     ? d.template : DEFAULT_FILENAME_TEMPLATE;
-  const destination = typeof d.destination === "string" && d.destination.startsWith("/")
-    ? d.destination : null;
   return {
     format: parseFormat(d.format),
     quality: clampQuality(d.quality),
     scale: parseScale(d.scale),
     stripMetadata: d.stripMetadata === true,
     template,
-    destination,
   };
 }
 
@@ -213,8 +212,6 @@ function cleanThumbnail(v: unknown): ThumbnailSettings {
   const d = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
   return {
     corner: parseCorner(d.corner),
-    timeoutMs: clampTimeoutMs(d.timeoutMs),
-    settleAction: parseSettleAction(d.settleAction),
     skip: d.skip === true,
   };
 }
@@ -241,6 +238,14 @@ function cleanShare(v: unknown): ShareSettings {
 /** A display id is a positive integer; anything else is "automatic". */
 function cleanDisplayId(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
+}
+
+/**
+ * An absolute path is trusted; anything else (relative, missing, garbage)
+ * is null — "not chosen" — never resolved against the process's cwd.
+ */
+export function cleanSaveFolder(v: unknown): string | null {
+  return typeof v === "string" && v.startsWith("/") ? v : null;
 }
 
 /**
@@ -310,6 +315,9 @@ export function readSettings(dir: string): Settings {
     still: cleanStill(doc.still),
     thumbnail: cleanThumbnail(doc.thumbnail),
     share: cleanShare(doc.share),
+    saveFolder: cleanSaveFolder(doc.saveFolder),
+    showDiagnostics: typeof doc.showDiagnostics === "boolean"
+      ? doc.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
   };
 }
 
@@ -347,6 +355,9 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     // on a physical LED.
     shutterSound: merged.shutterSound !== false,
     countdownMs: clampCountdownMs(merged.countdownMs),
+    saveFolder: cleanSaveFolder(merged.saveFolder),
+    showDiagnostics: typeof merged.showDiagnostics === "boolean"
+      ? merged.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
   };
   try {
     writeFileSync(join(dir, FILE), JSON.stringify(clean, null, 2));

@@ -96,6 +96,11 @@ struct StillExportRequest: Equatable {
     /// ISO 8601. Absent means the caller asked for the metadata to be stripped
     /// — see `imageProperties` for why the colour profile is not covered by it.
     let capturedAt: String?
+    /// The bundle's stable identity (STC-413), embedded so a finished file can
+    /// point back at its source `raw/` bundle after being renamed or moved.
+    /// Opaque — no timestamp, no path — which is exactly why it is not gated
+    /// on the same strip `capturedAt` is: see `stillImageProperties`.
+    let captureId: String?
 
     /// True when the encode has somewhere to go. A request with neither is not
     /// a cheap no-op, it is a caller that has lost track of what it wanted.
@@ -117,6 +122,7 @@ enum StillExportError: Error, Equatable, CustomStringConvertible {
     case badFormat(String)
     case badColorSpace(String)
     case badFile(String)
+    case badCaptureId(String)
     case noDestination
     case rgbaUnreadable(String)
     case rgbaSizeMismatch(expected: Int, got: Int)
@@ -131,6 +137,7 @@ enum StillExportError: Error, Equatable, CustomStringConvertible {
         case .badFormat:         return "bad-format"
         case .badColorSpace:     return "bad-color-space"
         case .badFile:           return "bad-file"
+        case .badCaptureId:      return "bad-capture-id"
         case .noDestination:     return "no-destination"
         case .rgbaUnreadable:    return "rgba-unreadable"
         case .rgbaSizeMismatch:  return "rgba-size-mismatch"
@@ -152,6 +159,8 @@ enum StillExportError: Error, Equatable, CustomStringConvertible {
             return "colorSpace must be srgb or display-p3, not \"\(c)\""
         case .badFile(let f):
             return "file must be an absolute path, not \"\(f)\""
+        case .badCaptureId(let id):
+            return "captureId must be \"cap_\" followed by 26 Crockford base32 characters, not \"\(id)\""
         case .noDestination:
             return "export-still needs somewhere to put the image: a \"file\", \"clipboard\": true, or both"
         case .rgbaUnreadable(let why):
@@ -200,6 +209,15 @@ func clampExportQuality(_ v: Double?) -> Double {
     return Swift.min(1, Swift.max(0, v))
 }
 
+/// Mirrors `transform/src/capture-id.ts`'s `isCaptureId` — `cap_` plus 26
+/// Crockford base32 characters (no I, L, O, U, so a transcribed id cannot be
+/// ambiguous). Two languages cannot share one regex literal, so this is
+/// checked by hand against that file's `ALPHABET` and pinned by the harness
+/// tests above rather than imported.
+func isValidCaptureId(_ s: String) -> Bool {
+    s.range(of: "^cap_[0-9A-HJKMNP-TV-Z]{26}$", options: .regularExpression) != nil
+}
+
 func parseStillExportRequest(_ cmd: [String: Any]) -> Result<StillExportRequest, StillExportError> {
     guard let rgba = cmd["rgba"] as? String, !rgba.isEmpty else { return .failure(.missingRgba) }
     guard rgba.hasPrefix("/") else { return .failure(.badFile(rgba)) }
@@ -237,12 +255,22 @@ func parseStillExportRequest(_ cmd: [String: Any]) -> Result<StillExportRequest,
     // opaque and this only makes the layout say so.
     let alpha = (cmd["alpha"] as? Bool ?? true) && format.keepsAlpha
 
+    // Empty means absent, the same convention `capturedAt` already uses — a
+    // caller that never had an id (STC-297's redaction path, still-writeShot,
+    // anything that has not adopted STC-413 yet) must not be refused for
+    // omitting a field it was never asked to send.
+    let captureId = (cmd["captureId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    if let captureId, !isValidCaptureId(captureId) {
+        return .failure(.badCaptureId(captureId))
+    }
+
     let request = StillExportRequest(
         rgbaPath: rgba, width: width, height: height, alpha: alpha,
         colorSpace: colorSpace, format: format,
         quality: clampExportQuality(exportDouble(cmd["quality"])),
         file: file, clipboard: clipboard,
-        capturedAt: (cmd["capturedAt"] as? String).flatMap { $0.isEmpty ? nil : $0 })
+        capturedAt: (cmd["capturedAt"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+        captureId: captureId)
 
     guard request.hasDestination else { return .failure(.noDestination) }
     guard request.expectedBytes != nil else {
@@ -296,6 +324,17 @@ func exifDateString(fromISO iso: String) -> String? {
 
 /// What ImageIO is told about the image, beyond the pixels.
 ///
+/// ## The capture id is not metadata, and it is set FIRST
+///
+/// `captureId` is written into the PNG dictionary BEFORE the `capturedAt`
+/// guard below can return early. Identity is not metadata in the privacy
+/// sense that `stripMetadata` governs — it carries no timestamp, no path, and
+/// nothing that says where the user was — so a caller that stripped every
+/// other field must not also lose the one string that lets a renamed or
+/// moved file find its way back to its bundle. Putting this block after the
+/// guard would make a stripped export permanently unable to be re-linked;
+/// `still-encode-decisions.test.ts` asserts the two are independent.
+///
 /// ## The colour profile is not in here, and that is the point
 ///
 /// It comes from the `CGImage`'s own colour space and is embedded on every
@@ -322,6 +361,10 @@ func stillImageProperties(_ r: StillExportRequest) -> [CFString: Any] {
     var props: [CFString: Any] = [:]
     if r.format.isLossy {
         props[kCGImageDestinationLossyCompressionQuality] = r.quality
+    }
+    // Set BEFORE the capturedAt guard returns — see the doc comment above.
+    if let id = r.captureId {
+        props[kCGImagePropertyPNGDictionary] = [kCGImagePropertyPNGDescription: id]
     }
     guard let iso = r.capturedAt, let stamp = exifDateString(fromISO: iso) else { return props }
     props[kCGImagePropertyTIFFDictionary] = [kCGImagePropertyTIFFDateTime: stamp]

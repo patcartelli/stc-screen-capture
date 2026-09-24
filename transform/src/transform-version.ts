@@ -111,8 +111,24 @@ import {
  * own note already drew out: a document can render differently under the
  * new code than under the old one, on the SAME session, which is the
  * question this stamp exists to answer, not "did a constant move".
+ *
+ * ## Version 8: the cursor goes through the crop too (STC-421)
+ *
+ * A bug fix, and it moves pixels on every zoomed take. Since version 5 the
+ * compositor has drawn `zoom.crop` stretched over the canvas while `render()`
+ * went on placing the cursor with `displayToOutput` alone — the map for a
+ * capture that FILLS the canvas — so the moment a crop was active the
+ * picture magnified and the pointer stayed where the un-zoomed frame would
+ * have put it. Found validating auto-zoom against the Music Network take:
+ * trigger right, framing right, pointer wrong. The cursor's position,
+ * velocity and `pxPerPoint` now take the same step through the crop
+ * (`spaces.ts`'s `throughCrop`/`throughCropVector`), and the whole-frame
+ * case is the identity BY CONSTRUCTION, so a take with zoom off renders
+ * exactly what version 7 did. No constant reaches the pixels for the first
+ * time, so the fingerprint is unchanged; the bump records that every
+ * export with a zoom in it now differs from the same document at 7.
  */
-export const TRANSFORM_VERSION = 7;
+export const TRANSFORM_VERSION = 8;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -123,6 +139,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 5, since: "2026-09-14", changed: "manual zoom override, phase 1 (STC-330): project-6's overrides table gives a derived window a tuned crop rect and/or easing preset; render() blends the crop toward that target as zoom.amount eases (spaces.ts's lerpRect). Windows sharing a resolved easing are grouped and simmed independently, composed by max (zoom-override.ts). The FIRST version where the picture actually moves for a real take — a window with no override still crops to the whole frame, but one with an override now renders different pixels than the same take without it" },
   { version: 6, since: "2026-09-14", changed: "auto-zoom stage 2 (STC-326): a window with no manual override now derives its own crop via zoom-change.ts's deriveZoomCrop — the change track (session.changes) when it covers the window, greedy dead-zone cursor clustering otherwise (the fallback every take hits today, since no changes.json exists yet). A trusted null (everything changed, nothing did, or the union was barely tighter than the full frame) still crops to the whole frame; anything else blends toward a real target the same way a manual override does. The FIRST version where a take with NO overrides at all can render different pixels than the same take with auto-zoom off" },
   { version: 7, since: "2026-09-15", changed: "manual override, phase 2 (STC-331): project-6's overrides table gains a 'manual' variant — a window with no derived counterpart at all, authored with its own startNs/endNs/rect and a REQUIRED easing. Spliced into the same window list a derived window lives in (zoom-override.ts's manualWindows/CombinedZoomWindow) and resolved at the same first tier a geometry override is. nearestWindow (zoom-override.ts) and inWindow (zoom.ts) both moved from a sorted-disjoint bisect to a plain scan, since a manual window carries no promise of not overlapping a derived one or another manual one. No new constant reaches the pixels, so the fingerprint is unchanged; the bump records that a document can now render a span of time no derivation would ever have opened a window for" },
+  { version: 8, since: "2026-09-19", changed: "the cursor follows the zoom crop (STC-421): render() now maps the pointer's position, velocity and pxPerPoint through zoom.crop (spaces.ts's throughCrop/throughCropVector) — the same crop the compositor stretches over the canvas — instead of placing it as if the whole capture filled the canvas. Since version 5 every zoomed frame had the picture magnified and the pointer left where the un-zoomed frame would have put it. Whole-frame crop is the identity by construction, so zoom-off pixels are unchanged; the fingerprint is unchanged because no constant moved" },
 ];
 
 /**

@@ -6,12 +6,10 @@ interface DisplayInfo {
 }
 interface StillSettingsView {
   format: string; quality: number; scale: string;
-  stripMetadata: boolean; template: string; destination: string | null;
+  stripMetadata: boolean; template: string;
 }
 interface ThumbnailSettingsView {
   corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
-  timeoutMs: number;
-  settleAction: "save" | "copy";
   skip: boolean;
 }
 interface AppSettings {
@@ -27,6 +25,10 @@ interface AppSettings {
   still: StillSettingsView;
   /** STC-296. */
   thumbnail: ThumbnailSettingsView;
+  /** STC-412: where recordings and stills are saved, replacing still.destination. */
+  saveFolder: string | null;
+  /** STC-412: show diagnostics table. */
+  showDiagnostics: boolean;
 }
 interface Take {
   dir: string; name: string; durationMs: number;
@@ -50,8 +52,12 @@ declare const recorder: {
   getShot(dir: string): Promise<Shot>;
   reopenStill(dir: string): Promise<{ ok: boolean }>;
   duplicateStill(dir: string): Promise<{ ok: boolean; dir: string }>;
-  labelTake(dir: string, label: string): Promise<boolean>;
-  deleteTake(dir: string): Promise<{ deleted: boolean }>;
+  // STC-413: the file IS the name now. `file` wins when present (a real
+  // rename on disk, through `takes.ts`'s `renameCapture`); `dir` alone falls
+  // back to the old take.json label, for a bundle with no finished file yet.
+  renameCapture(file: string | undefined, dir: string | undefined, name: string): Promise<string>;
+  deleteTake(file: string | undefined, dir: string | undefined):
+    Promise<{ deleted: boolean; cancelled?: boolean; detail?: string }>;
   // The take player is its own window now (STC-373) — this opens it. Every
   // channel the old in-page player used (`openPreview`, `writeExport`,
   // `publish`, and the rest) moved to `editor-preload.ts`, the only bridge
@@ -62,14 +68,17 @@ declare const recorder: {
   setShortcut(action: BindableAction, accelerator: string | null):
     Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
-  chooseStillDestination(): Promise<{ destination: string | null }>;
-  clearStillDestination(): Promise<{ destination: string | null }>;
+  chooseStillDestination(): Promise<{ saveFolder: string | null }>;
+  /** The resolved save location — never null, never a phrase (STC-412 I1). */
+  resolvedSaveFolder(): Promise<string>;
   start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
   on(event: string, cb: (p: any) => void): () => void;
   /** STC-375: the pill's measured content width, fire-and-forget. */
   reportPillWidth(px: number): void;
+  /** STC-412: show a warning via the toast. */
+  showToast(text: string): void;
 };
 
 import { COUNTDOWN_OPTIONS } from "./countdown.js";
@@ -334,7 +343,7 @@ async function refreshCaptureSettingsForRecording(): Promise<void> {
 // handling below: that handler runs in the CAPTURE phase and calls
 // `stopImmediatePropagation` whenever a shortcut is being listened for, so
 // this bubble-phase listener never sees the keystroke in that case.
-const profileBtn = $("profile") as HTMLButtonElement;
+const profileBtn = $("settings") as HTMLButtonElement;
 const profileSheet = $("profilesheet");
 const profileCloseBtn = $("profileclose") as HTMLButtonElement;
 
@@ -350,8 +359,7 @@ document.addEventListener("keydown", (e) => {
 let currentDir: string | undefined;
 
 function setState(text: string): void { $("state").textContent = text; }
-function alertUser(text: string): void { $("alert").textContent = text; $("alert").classList.add("show"); }
-function clearAlert(): void { $("alert").classList.remove("show"); }
+function alertUser(text: string): void { recorder.showToast(text); }
 function stillStatus(text?: string): void {
   const el = $("stillstatus");
   if (!text) { el.setAttribute("hidden", ""); el.textContent = ""; return; }
@@ -406,7 +414,6 @@ async function reportStill(r: StillResult): Promise<void> {
  */
 stillBtn.addEventListener("click", async () => {
   stillBtn.disabled = true;
-  clearAlert();
   stillStatus();
   try {
     await reportStill(await recorder.captureStill("region"));
@@ -494,7 +501,6 @@ const START_FAULTS: Record<string, string> = {
 
 recordBtn.addEventListener("click", async () => {
   recordBtn.disabled = true;
-  clearAlert();
   try {
     if (!recording) {
       const r = await recorder.start();
@@ -627,6 +633,13 @@ recorder.on("recorder:recording-state", (s: { recording: boolean; dir?: string }
  * got no confirmation it worked, no notice when it did NOT, and a PiP that
  * appeared a beat late and read as a glitch. The gap is inherent; being unable
  * to tell a working camera from a broken one was not.
+ *
+ * `#camera-state` (and `#mic-state`) live OUTSIDE `#diagnostics` in
+ * `index.html` for exactly that reason — STC-412 Task 4 put the debug table
+ * behind a preference that is off by default, and these two rows were never
+ * debug output: they are the persistent half of the pair described at
+ * `helper:warning` below, and the only thing left on screen once the warning
+ * toast has taken itself away.
  */
 function setCamera(text: string): void { $("camera-state").textContent = text; }
 
@@ -744,6 +757,11 @@ recorder.on("helper:warning", (l) => {
     // remove. "no frames" is not the same as "failed to open", and the row
     // said the device name right up until this fired. Name the state, not
     // just the code.
+    //
+    // The two halves are now more different than they were, which is why the
+    // row has to be always-visible (STC-412 final review, I2): the alert is a
+    // toast that dismisses itself, so the row is the ONLY thing that still
+    // says "this take had no camera" a minute later.
     setCamera(code === "camera-no-frames" ? "no frames" : `failed — ${code}`);
     alertUser(l.detail ? `${camera}\n\n${l.detail}` : camera);
     return;
@@ -776,18 +794,32 @@ const fmtSize = (b: number) =>
 // compact window now (STC-296, "the whole still UI in v1";
 // app/renderer/thumbnail.html, app/src/thumbnail-renderer.ts). What remains
 // here is the two things that are genuinely PREFERENCES rather than per-shot
-// controls: the destination folder, and where and how long the thumbnail
-// shows itself. Both are read through the same `recorder:getSettings` /
-// `recorder:setSettings` every other preference in this window uses.
+// controls: the destination folder, and where the thumbnail shows itself.
+// STC-392 removed the third one, how long it waited before closing itself —
+// it does not any more. Both are read through the same `recorder:getSettings`
+// / `recorder:setSettings` every other preference in this window uses.
 
-function showDestination(dest: string | null): void {
-  $("stilldest").textContent = dest ?? "beside the shot";
+/**
+ * The save location, as a real path — always, whether or not one was ever
+ * chosen (STC-412 final review, I1).
+ *
+ * This used to be `showDestination(dest ?? "beside the shot")`, reading
+ * `saveFolder` straight off the settings and rendering null as a phrase. Both
+ * halves were wrong once STC-412 unified the setting: "beside the shot"
+ * described `still.destination`'s per-shot fallback, which no longer exists,
+ * and a null `saveFolder` is not "nowhere chosen yet" — it resolves to a real
+ * directory this process is already writing takes into. So it is asked for
+ * rather than derived: main answers with `takesRoot`'s own output, the same
+ * function that decides where the files actually go.
+ */
+async function refreshDestination(): Promise<void> {
+  $("stilldest").textContent = await recorder.resolvedSaveFolder();
 }
 
 const thumbCornerSel = $("thumbcorner") as HTMLSelectElement;
-const thumbTimeoutInput = $("thumbtimeout") as HTMLInputElement;
-const thumbSettleSel = $("thumbsettle") as HTMLSelectElement;
 const thumbSkipBox = $("thumbskip") as HTMLInputElement;
+const showDiagnosticsBox = $("showdiagnostics") as HTMLInputElement;
+const diagnosticsTable = $("diagnostics") as HTMLTableElement;
 const countdownSel = $("countdownms") as HTMLSelectElement;
 
 // Built from the module that owns the clamp, never hand-listed in the markup
@@ -801,17 +833,21 @@ for (const { ms, label } of COUNTDOWN_OPTIONS) {
 }
 
 async function loadStillPreferences(): Promise<void> {
-  const { still, thumbnail, countdownMs } = await recorder.getSettings();
-  showDestination(still.destination);
+  const { thumbnail, countdownMs, showDiagnostics } = await recorder.getSettings();
   thumbCornerSel.value = thumbnail.corner;
-  thumbTimeoutInput.value = String(Math.round(thumbnail.timeoutMs / 1000));
-  thumbSettleSel.value = thumbnail.settleAction;
   thumbSkipBox.checked = thumbnail.skip;
+  showDiagnosticsBox.checked = showDiagnostics;
+  diagnosticsTable.hidden = !showDiagnostics;
   // A stored value that is not one of the offered options — 0, or a number
   // someone typed into the file — leaves the select showing nothing rather
   // than silently misreporting itself as 3 seconds.
   countdownSel.value = COUNTDOWN_OPTIONS.some((o) => o.ms === countdownMs)
     ? String(countdownMs) : "";
+  // LAST, and deliberately: this one is a second IPC round trip rather than a
+  // field of the settings already in hand, and the whole function is called
+  // as `void … .catch(() => {})`. Put first, a failure here would leave every
+  // control below it unset for a reason that has nothing to do with them.
+  await refreshDestination();
 }
 
 /** Every control here changes ONE field; the rest of `thumbnail` is read fresh and kept. */
@@ -821,25 +857,21 @@ async function patchThumbnail(patch: Partial<AppSettings["thumbnail"]>): Promise
 }
 
 $("stillchoosedest").addEventListener("click", async () => {
-  showDestination((await recorder.chooseStillDestination()).destination);
-});
-$("stillcleardest").addEventListener("click", async () => {
-  showDestination((await recorder.clearStillDestination()).destination);
+  // The picker's own reply is deliberately not what is displayed: a cancel
+  // answers with the CURRENT `saveFolder`, which is null on an untouched
+  // install, and re-deriving a path from that here is the second computation
+  // of the default `refreshDestination` exists to avoid.
+  await recorder.chooseStillDestination();
+  await refreshDestination();
 });
 thumbCornerSel.addEventListener("change", () => {
   void patchThumbnail({ corner: thumbCornerSel.value as AppSettings["thumbnail"]["corner"] });
 });
-thumbTimeoutInput.addEventListener("change", () => {
-  const seconds = Number(thumbTimeoutInput.value);
-  // An out-of-range or unparsable value is left for `readSettings`'s own
-  // floor to correct rather than validated twice — the same rule every other
-  // preference in this window follows for its own stored validator.
-  if (Number.isFinite(seconds)) void patchThumbnail({ timeoutMs: Math.round(seconds * 1000) });
-});
-thumbSettleSel.addEventListener("change", () => {
-  void patchThumbnail({ settleAction: thumbSettleSel.value as AppSettings["thumbnail"]["settleAction"] });
-});
 thumbSkipBox.addEventListener("change", () => void patchThumbnail({ skip: thumbSkipBox.checked }));
+showDiagnosticsBox.addEventListener("change", async () => {
+  diagnosticsTable.hidden = !showDiagnosticsBox.checked;
+  await recorder.setSettings({ showDiagnostics: showDiagnosticsBox.checked });
+});
 countdownSel.addEventListener("change", () => {
   // `countdownMs` is a top-level preference rather than a block, so it needs
   // no read-merge-write the way `thumbnail` does — `writeSettings` merges it
@@ -874,8 +906,14 @@ const THUMB_MAX_EDGE = 480;
  * true if it is literally the same code.
  */
 async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promise<void> {
-  const shot = await recorder.getShot(item.dir);
-  const bytes = await recorder.getFrame(item.dir, shot.frame.file);
+  // A "render" thumbnail only ever exists for a still WITH a bundle —
+  // `library-items.ts`'s `stillItem` is the only place that sets
+  // `thumbnail.source === "render"`, and it only runs for bundle-backed
+  // stills. Structural, not a possibility this function has to weigh.
+  const dir = item.dir;
+  if (!dir) throw new Error("a rendered thumbnail needs a bundle directory");
+  const shot = await recorder.getShot(dir);
+  const bytes = await recorder.getFrame(dir, shot.frame.file);
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   try {
     // The stored decoration, filled in from the mode's presets exactly as the
@@ -908,7 +946,7 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
     img.src = URL.createObjectURL(blob);
     // Cached AFTER it is on screen: a failed write costs the cache, never the
     // picture the user is already looking at.
-    try { await recorder.writeThumbnail(item.dir, await blob.arrayBuffer()); }
+    try { await recorder.writeThumbnail(dir, await blob.arrayBuffer()); }
     catch { /* an uncached tile simply renders again next time */ }
   } finally {
     // ~30 MB at 4K, and 500 of them is the tab-killer this repo already
@@ -920,7 +958,11 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
 /** Show a cached thumbnail, decoding it in the main process's stead. */
 async function showCachedThumbnail(item: LibraryItem, img: HTMLImageElement,
                                    file: string): Promise<void> {
-  const bytes = await recorder.getFrame(item.dir, file);
+  // A cached "file" thumbnail lives INSIDE the take directory (rule 5,
+  // library-items.ts), so this too only ever runs for a bundle-backed still.
+  const dir = item.dir;
+  if (!dir) throw new Error("a cached thumbnail lives inside a bundle directory");
+  const bytes = await recorder.getFrame(dir, file);
   img.src = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
 }
 
@@ -931,21 +973,67 @@ const libraryCallbacks: LibraryCallbacks = {
       // criterion. Which actions an item offers was decided by the adapter, so
       // an id that cannot apply to this item never reaches here.
       if (id === "open") await openItem(item);
-      else if (id === "duplicate") { await recorder.duplicateStill(item.dir); await refreshTakes(); }
-      else if (id === "reveal") await recorder.reveal(item.dir);
+      else if (id === "duplicate") {
+        // Bundle-only, same reason "open" is: the adapter never offers this
+        // id for an item with no `dir` (rule: an action needing a bundle
+        // must not be offered without one).
+        const dir = item.dir;
+        if (!dir) throw new Error("duplicate needs a bundle directory");
+        await recorder.duplicateStill(dir); await refreshTakes();
+      }
+      else if (id === "reveal") {
+        // Reveal has no bundle-only requirement — a plain finished file is
+        // just as revealable as a directory, so this falls back to `file`
+        // rather than refusing. `dir` still wins when both exist, unchanged
+        // from before this item could ever lack one.
+        const target = item.dir ?? item.file;
+        if (!target) throw new Error("nothing to reveal");
+        await recorder.reveal(target);
+      }
       else if (id === "delete") {
+        // STC-413: BOTH halves go, not one or the other — a matched item is
+        // a finished file at the top level and its source bundle in `raw/`,
+        // and main trashes whichever of the two it is actually given rather
+        // than this view picking one the way the old `dir ?? file` fallback
+        // did (which silently left the other half behind).
+        if (!item.file && !item.dir) throw new Error("nothing to delete");
         // A take the editor has open is handled main-side (STC-373): deleting
         // it clears main's own per-window `openTake` entry for that path, so
         // an open editor window's writes correctly start refusing rather than
         // landing in a directory `take:delete` just trashed.
-        const r = await recorder.deleteTake(item.dir);
-        if (r.deleted) await refreshTakes();
+        const r = await recorder.deleteTake(item.file, item.dir);
+        // STC-413 review round 1: refresh on any NON-CANCELLED outcome, not
+        // only full success. A PARTIAL failure (one half trashed, the other
+        // not) still changed the filesystem — the old code's `if (r.deleted)`
+        // left this tile's `file`/`dir` stale after exactly that, so a retry
+        // re-sent the ALREADY-TRASHED half's path and (before main's own
+        // fix) threw before ever reaching the half still there. A Cancel is
+        // the one outcome that legitimately changes nothing
+        // (`trashWithConfirmation`'s own rule), so it alone skips this.
+        if (!r.cancelled) {
+          await refreshTakes();
+          // A REAL failure used to reach nobody: this action's own `detail`
+          // was discarded before STC-300's revision removed the only other
+          // door (the post-capture panel's "confirm" Trash) that ever
+          // surfaced one.
+          if (!r.deleted) alertUser(r.detail ?? "Could not delete this take.");
+        }
       }
     } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async rename(item, label) {
-    try { await recorder.labelTake(item.dir, label); await refreshTakes(); }
-    catch (e: any) { alertUser(String(e?.message ?? e)); }
+    // STC-413: rename does not need a bundle any more, so both `file` and
+    // `dir` are handed through unresolved and main decides — `file` wins
+    // (a real rename on disk) when there is one, `dir` alone falls back to
+    // the old take.json label, and neither refuses loudly rather than doing
+    // nothing silently, which is what this replaced (Task 8's
+    // `looseFileItem` offers "rename" on an item with no bundle at all, and
+    // the old handler here dropped that click on the floor).
+    try {
+      if (!item.file && !item.dir) throw new Error("nothing to rename");
+      await recorder.renameCapture(item.file, item.dir, label);
+      await refreshTakes();
+    } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async setFilter(id) { libraryFilter = id; await refreshTakes(); },
   async paintThumbnail(item, img) {
@@ -960,11 +1048,11 @@ const libraryCallbacks: LibraryCallbacks = {
 /**
  * Open whatever this item is.
  *
- * The one place the two kinds' destinations differ, and it is a MAIN-process
- * decision rather than a view's: a recording goes to the editor window
- * (STC-373), a still goes back into the post-capture panel with its
- * decoration intact. The view asked for "open" and does not know which
- * happened.
+ * Both kinds go to an editor window now — a recording to `editor.ts`
+ * (STC-373), a still to the still editor (STC-300 revision; `main.ts`'s
+ * `still:reopen` used to re-present the post-capture panel instead). Which
+ * window is still a MAIN-process decision, not a view's: the view asked for
+ * "open" and does not know which happened.
  *
  * Told apart by what the adapter said the item HAS — a still is the thing with
  * a thumbnail to render or cached — rather than by its kind. That reads as a
@@ -973,16 +1061,21 @@ const libraryCallbacks: LibraryCallbacks = {
  * is a rule about the interface, which is where it is allowed to live.
  */
 async function openItem(item: LibraryItem): Promise<void> {
+  // "open" is never offered by the adapter for an item with no bundle — both
+  // branches below need the raw materials (or shot.json) that only a
+  // directory carries, so this is a structural guard, not a UI decision.
+  const dir = item.dir;
+  if (!dir) return;
   if (item.thumbnail.source === "none") {
     // The take player is the editor's own window now (STC-373).
     try {
-      await recorder.openEditor(item.dir, item.id);
+      await recorder.openEditor(dir, item.id);
     } catch (e: any) {
       alertUser(`Could not open "${item.label ?? item.id}".\n${e?.message ?? e}`);
     }
     return;
   }
-  await recorder.reopenStill(item.dir);
+  await recorder.reopenStill(dir);
 }
 
 async function refreshTakes(): Promise<void> {

@@ -1,6 +1,6 @@
 import {
   app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage,
-  type IpcMainInvokeEvent,
+  powerMonitor, type IpcMainInvokeEvent,
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
@@ -9,7 +9,7 @@ import {
 } from "./hotkeys.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
-  thumbnailMenuTemplate, type ThumbMenuContext, type ThumbMenuId,
+  buildThumbMenu, type ThumbMenuContext, type ThumbMenuId,
 } from "./thumbnail-menu.js";
 import { playShutter } from "./shutter.js";
 import {
@@ -19,22 +19,23 @@ import {
 import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite } from "@transform/shot.js";
 import { isProjectVersion } from "@transform/project-version.js";
+import { withTimeout } from "@transform/timeout.js";
 import {
-  DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, exportMediaName, planPublish,
+  DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
   publicSrc, type PublishPlan,
 } from "./share.js";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
-import { readFile, writeFile, stat, open, copyFile, rm, mkdir } from "node:fs/promises";
+import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
-import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake } from "./takes.js";
+import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, renameCapture } from "./takes.js";
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
-  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes,
+  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
 } from "./temp-takes.js";
-import { listTakes, listLibrary, THUMBNAIL_FILE } from "./library.js";
+import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
@@ -42,12 +43,19 @@ import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js
 import type { WindowInfo } from "./selection.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
-  afterCapture as showThumbnailsAfterCapture, closeThumbnail,
+  afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
+  unsavedTakeDirs, takeFor,
 } from "./thumbnail-window.js";
+import { promotes, trashStyle } from "./panel-actions.js";
+import { quitDecision } from "./quit-guard.js";
 import { openEditor } from "./editor-window.js";
+import { openStillEditor } from "./still-editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
+import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
+import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
+import { ensureCaptureId, readBundleId } from "./capture-identity.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -81,6 +89,17 @@ let sup: HelperSupervisor | undefined;
 let pillContentWidthPx = MIN_PILL_WIDTH_PX;
 ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
   if (typeof px === "number" && Number.isFinite(px) && px > 0) pillContentWidthPx = px;
+});
+// The message toast's ✕ (STC-412 final review, C1). `hideToast` is
+// idempotent and always acts on the one toast that is up, so this needs no
+// argument and cannot close the wrong window.
+ipcMain.on("toast:dismiss", () => hideToast());
+ipcMain.on("toast:message", (_e, text: unknown) => {
+  if (typeof text !== "string" || !text) return;
+  showMessageToast(text, {
+    corner: readSettings(app.getPath("userData")).thumbnail.corner,
+    dist: here, rendererDir: join(here, "..", "renderer"),
+  });
 });
 /**
  * The take each WINDOW may currently read, set only by preview:open.
@@ -152,9 +171,22 @@ let lastStillFile: string | undefined;
  * take (the library grid, the editor, duplicate) keep using
  * `insideTakesRoot` unwidened: a temp take has no business reaching them.
  */
-function insideCaptureRoot(env: NodeJS.ProcessEnv, dir: string): boolean {
-  return insideTakesRoot(env, dir) || insideTempTakesRoot(env, dir);
+function insideCaptureRoot(env: NodeJS.ProcessEnv, saveFolder: string | null, dir: string): boolean {
+  return insideTakesRoot(env, saveFolder, dir) || insideTempTakesRoot(env, dir);
 }
+
+/**
+ * Deletions the ✕ has promised but not yet committed (STC-392 Task 6). One
+ * instance for the whole process, the same reason `openTakes` and `tray`
+ * above are module-level rather than per-window — a promised deletion
+ * outlives the panel it was pressed from.
+ */
+const pendingTrash = new PendingTrash();
+
+/** How often to check for a promise whose undo window has elapsed. Small
+ * enough that the toast's own bar (driven by the identical `UNDO_WINDOW_MS`)
+ * and the moment the file actually moves cannot drift far apart. */
+const TRASH_SWEEP_INTERVAL_MS = 1_000;
 
 // The renderer is sandboxed and cannot read files. It gets bytes over IPC and
 // never names a path: it may ask for one of a few fixed filenames, and only
@@ -230,7 +262,13 @@ function openLibrary(): void {
 }
 
 function startSupervisor(): void {
-  sup = HelperSupervisor.start(HELPER, { statsIntervalMs: 500 });
+  sup = HelperSupervisor.start(HELPER, {
+    statsIntervalMs: 500,
+    // Read fresh at the moment of every promotion (STC-412) — never cached —
+    // so a saveFolder chosen mid-session is honoured by the very next clean
+    // stop, with no synced field for the two to drift out of step over.
+    getSaveFolder: () => readSettings(app.getPath("userData")).saveFolder,
+  });
   sup.on("ready", (l) => send("helper:ready", l));
   sup.on("stats", (l) => send("helper:stats", l));
   sup.on("respawned", (i) => send("helper:respawned", i));
@@ -361,18 +399,20 @@ async function recoverUnsavedTakes(): Promise<void> {
   // Oldest first: `presentThumbnail` always unshifts its newest call to the
   // front of the stack, so presenting in this order leaves the genuinely
   // most-recent recovered take frontmost — matching the ticket's "most
-  // recent first, and focuses it" for the one part of that rule this app can
-  // still express (`showInactive`, not real OS focus — see thumbnail-window.ts).
+  // recent first, and focuses it" (STC-392 focus rule 1 does the actual
+  // focusing now; see thumbnail-window.ts).
   const ordered = [...orphaned].reverse();
-  const { thumbnail } = readSettings(app.getPath("userData"));
+  const { thumbnail, saveFolder } = readSettings(app.getPath("userData"));
   for (const t of ordered) {
     if (t.kind === "still") {
       try {
         const shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
         presentThumbnail({
-          dir: t.dir, shot, corner: thumbnail.corner, timeoutMs: thumbnail.timeoutMs,
+          dir: t.dir, shot, corner: thumbnail.corner,
+          // A recovered temp take has never been decided on — nobody has
+          // said yes to it, the same as an ordinary fresh capture.
+          take: { kind: "shot", origin: "fresh" },
           dist: here, rendererDir: join(here, "..", "renderer"),
-          settleAction: thumbnail.settleAction,
         });
       } catch (e) {
         console.error("[recovery] could not reopen a recovered still:", t.dir, e);
@@ -383,7 +423,7 @@ async function recoverUnsavedTakes(): Promise<void> {
       // (rather than let it expire silently in 7 days) and bring the library
       // where it now lives in front of the user.
       try {
-        await promoteTake(process.env, t.dir);
+        await promoteTake(process.env, saveFolder, t.dir);
         openLibrary();
       } catch (e) {
         console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
@@ -444,7 +484,20 @@ function migrateLegacyAppData(): void {
   }
 }
 
+/**
+ * Set once, if ever, by `powerMonitor`'s own `shutdown` event — see the
+ * long comment at `quitDecision`'s call site in `before-quit` for what this
+ * is and is not known to do on this machine.
+ */
+let systemShuttingDown = false;
+
 app.whenReady().then(async () => {
+  // Subscribed before anything else touches quit machinery, so there is no
+  // window during startup where a shutdown notification could arrive and be
+  // missed. See the comment at `quitDecision`'s call site for the whole
+  // story; this line by itself proves only that the module is reachable.
+  powerMonitor.on("shutdown", () => { systemShuttingDown = true; });
+
   // FIRST, before anything reads settings or looks for unsaved takes — both
   // of those resolve paths that this rename moved (STC-397).
   migrateLegacyAppData();
@@ -468,7 +521,38 @@ app.whenReady().then(async () => {
   await mkdir(tempTakesRoot(process.env), { recursive: true }).catch((e) => {
     console.error("[temp-takes] could not create the temp root:", e);
   });
-  setInterval(() => { void purgeStaleTempTakes(process.env).catch(() => {}); }, TEMP_PURGE_INTERVAL_MS);
+  setInterval(() => {
+    void purgeStaleTempTakes(process.env).catch(() => {});
+    // Same timer, a different root (STC-413): `raw/` bundles are not temp
+    // takes and age from a different clock (a marker written on first
+    // sighting orphaned, not the bundle's own creation), but the cadence
+    // this app already sweeps on is exactly right for both. `temp-takes.ts`
+    // stays Electron-free, so `sweepOrphanedBundles` only DECIDES which
+    // bundles are due; trashing one is done HERE, through `shell.trashItem`
+    // — the same split `pendingTrash.due()` -> `shell.trashItem` uses a few
+    // lines down — so a mistaken sweep is one Finder restore away, never
+    // an `rm` nobody can undo.
+    const { saveFolder } = readSettings(app.getPath("userData"));
+    void sweepOrphanedBundles(process.env, saveFolder).then((due) => {
+      for (const dir of due) {
+        shell.trashItem(dir).catch((e) => {
+          console.error("[orphan-sweep] could not trash an orphaned bundle:", dir, e);
+        });
+      }
+    }).catch((e) => {
+      console.error("[orphan-sweep] failed:", e);
+    });
+  }, TEMP_PURGE_INTERVAL_MS);
+  // Keeps every promise `panel:trash` makes (STC-392 Task 6): whatever
+  // `pendingTrash.due()` hands back has had its whole undo window elapse, so
+  // it is committed to the real Trash here rather than on any UI timer.
+  setInterval(() => {
+    for (const dir of pendingTrash.due()) {
+      shell.trashItem(dir).catch((e) => {
+        console.error("[trash] could not commit a promised deletion:", dir, e);
+      });
+    }
+  }, TRASH_SWEEP_INTERVAL_MS);
 
   startSupervisor();
   shortcuts = readSettings(app.getPath("userData")).shortcuts;
@@ -515,14 +599,33 @@ app.on("window-all-closed", async () => {
 // Electron does not await an async listener here, so the first pass holds
 // the quit until the shutdown has actually finished, then re-issues it.
 let quitting = false;
-app.on("before-quit", (e) => {
-  if (quitting) return;
-  e.preventDefault();
-  quitting = true;
-  // An overlay still up at quit would outlive its window list and sit on the
-  // screen with nothing left to answer it. A thumbnail still up is worse if
-  // left alone — its shot would never be saved — so closing it SETTLES it
-  // (STC-296), not merely discards the window.
+
+/**
+ * The teardown every quit eventually runs, whichever path decided to allow
+ * it — a plain quit with nothing unsaved, "Quit Anyway", or "Save All" once
+ * the promotions it does are finished.
+ *
+ * An overlay still up at quit would outlive its window list and sit on the
+ * screen with nothing left to answer it. A thumbnail still up is closed
+ * WITHOUT exporting or deleting anything (STC-392 D7) — its take is left
+ * exactly where it is (in the library if `before-quit` already promoted it
+ * for Save All, in temp storage otherwise), where STC-393's recovery prompt
+ * offers a temp one back on the next launch. Nothing here ever deletes a
+ * take (ruling 3) — `closeThumbnail`'s own doc comment says the same of the
+ * windows it destroys.
+ *
+ * The one EXCEPTION to "nothing here deletes a take" is a promise `panel:trash`
+ * already made (STC-392 Task 6, `pending-trash.ts`): quitting KEEPS it rather
+ * than losing it, because a promised deletion left sitting in temp storage
+ * would be found by STC-393's recovery prompt on the next launch and offered
+ * back as an "unsaved take" — the app handing someone a thing they deliberately
+ * deleted. That commit runs BEFORE `closeThumbnail()`, not after: a toast's
+ * Undo racing the quit calls `presentThumbnail` again (see `panel:undoTrash`),
+ * and ordering it first means that re-presented panel is still in the list
+ * `closeThumbnail()` reads and tears down, rather than appearing after that
+ * step has already run and outliving it.
+ */
+function runQuitTeardown(): void {
   globalShortcut.unregisterAll();
   tray?.destroy();
   tray = undefined;
@@ -530,41 +633,165 @@ app.on("before-quit", (e) => {
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
   cancelCountdown();
-  closeThumbnail()
+  hideToast();
+  // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
+  // is still armed for as long as this chain's own `await`s give the event
+  // loop a turn, and reading non-destructively would let it ALSO pick up
+  // whatever this commits, handing the same directory to `shell.trashItem`
+  // twice. Draining removes them from `pendingTrash` in this same tick, so
+  // whichever of the two runs first is the only one that ever sees them.
+  // Each stage is timed and the whole chain reported on stderr at the end
+  // (STC-427): on CI this chain has exceeded a 30 s test-teardown bound with
+  // nothing saying WHICH stage took the time, and a wait nobody can attribute
+  // is a wait nobody can fix.
+  const t0 = Date.now();
+  const marks: string[] = [];
+  const mark = (what: string) => { marks.push(`${what}=${Date.now() - t0}ms`); };
+  // Each commit is BOUNDED (STC-427): on the macOS CI runner `shell.trashItem`
+  // sometimes never settled, and a chain whose first link never settles is
+  // an app that can never quit — seen as a 30 s test-teardown hang with no
+  // `[quit] teardown` line ever printed. `STC_QUIT_FAULT=trash-hangs` makes
+  // that exact path reachable on demand; its natural trigger is the OS.
+  const commit = (d: string): Promise<void> =>
+    process.env.STC_QUIT_FAULT === "trash-hangs" ? new Promise<void>(() => {}) : shell.trashItem(d);
+  Promise.all(pendingTrash.drainAll().map((d) =>
+    withTimeout(commit(d), TRASH_COMMIT_AT_QUIT_MS, `committing a promised deletion at quit (${d})`)
+      .catch((e) => console.error("[trash] could not commit at quit — the take stays in temp storage:", d, e))))
+    .then(() => { mark("trash"); return closeThumbnail(); })
     .catch(() => {})
-    .then(() => closeOverlay())
+    .then(() => { mark("thumbnail"); return closeOverlay(); })
     .catch(() => {})
-    .then(() => (sup ? sup.shutdown() : Promise.resolve()))
+    .then(() => { mark("overlay"); return sup ? sup.shutdown() : Promise.resolve(); })
     .catch(() => {})
-    .finally(() => app.quit());
+    .finally(() => {
+      mark("helper");
+      console.error(`[quit] teardown ${marks.join(" ")}`);
+      app.quit();
+    });
+}
+
+app.on("before-quit", (e) => {
+  if (quitting) return;
+  e.preventDefault();
+
+  // A take `panel:trash` has PROMISED to delete (Task 6) is not counted here,
+  // and needs no extra check to arrange that: `panel:trash` dismisses the
+  // panel the instant it promises the deletion (see that handler), and
+  // `unsavedTakeDirs()` only ever counts takes with an OPEN panel — so a
+  // pending-trash take has already left this list by the time this line
+  // runs. The user already decided its fate; counting it would inflate the
+  // warning ("3 takes aren't saved" when one is being deleted on purpose) and
+  // "Save All" would promote it into the library, resurrecting the very take
+  // the ✕ was pressed on.
+  const unhandled = unsavedTakeDirs().length;
+  /**
+   * STC-392 D8 — telling a user-initiated ⌘Q apart from a logout, restart or
+   * shutdown so the warning below can skip the second case (see
+   * `quit-guard.ts`'s module doc for WHY it must skip it, not just that it
+   * does).
+   *
+   * WHAT WAS ACTUALLY CHECKED, on this machine (`sw_vers`: macOS 27.0,
+   * arm64) with the Electron version this app is built against
+   * (`node_modules/electron`: 43.4.1): that build's own bundled type
+   * declarations (`node_modules/electron/electron.d.ts`, the `powerMonitor`
+   * `'shutdown'` event) are annotated `@platform linux,darwin` — darwin
+   * support here is NEWER than the "documented for Linux and Windows" belief
+   * this ticket started from, which was true of older Electron releases and
+   * is not true of this one.
+   *
+   * That is a claim about the DOCS, not an observation of the EVENT firing.
+   * Actually confirming it needs a real logout or restart, and this session
+   * deliberately did not trigger one: doing so would have ended this dev
+   * session (and everything else running on the machine) along with the
+   * app, which is a destructive action nobody asked for just to answer a
+   * question the code below already degrades safely without an answer to.
+   * `systemShuttingDown` (above) starts false and is flipped only by a real
+   * `powerMonitor` `'shutdown'` callback — if that callback never arrives
+   * (wrong event, wrong platform build, anything), every quit reads as
+   * user-initiated and this warns every time, which IS the ticket's own
+   * documented fallback ("warn every time" is a smaller fault than blocking
+   * a shutdown), arrived at by construction rather than by a flag nobody
+   * checks. Confirming the event actually fires needs a person, on this
+   * hardware, watching a real logout — see docs/STC-392-RUNBOOK.md.
+   */
+  const decision = quitDecision({ unhandled, systemInitiated: systemShuttingDown });
+  if (decision === "quit") {
+    quitting = true;
+    runQuitTeardown();
+    return;
+  }
+
+  // decision === "warn": a person is still at the keyboard and there is
+  // something to lose. Ruling 1: Cancel is both `defaultId` AND `cancelId` —
+  // buttons[2] — so Escape does the same thing Return-on-nothing-pressed
+  // does, rather than picking the FIRST button the way a dialog that only
+  // sets `cancelId` would.
+  void dialog.showMessageBox({
+    type: "warning",
+    buttons: ["Save All", "Quit Anyway", "Cancel"],
+    defaultId: 2,
+    cancelId: 2,
+    message: unhandled === 1 ? "1 take isn't saved" : `${unhandled} takes aren't saved`,
+    detail: "Save All writes them to your library, then quits. Quit Anyway leaves them where "
+      + "they are — nothing is deleted, and they're offered back the next time you open the app.",
+  }).then(async ({ response }) => {
+    if (response === 2) return; // Cancel: quit stays prevented, `quitting` stays false.
+    if (response === 0) {
+      // Save All must not trap the user (ruling 2): a promotion that fails
+      // (a full disk, say) is reported and skipped, never retried and never
+      // turned into a second dialog. The take that failed stays in temp
+      // storage, which is the same backstop Quit Anyway already relies on —
+      // STC-393's recovery prompt finds it on the next launch either way.
+      const { saveFolder } = readSettings(app.getPath("userData"));
+      for (const dir of unsavedTakeDirs()) {
+        await promoteTake(process.env, saveFolder, dir).catch((err) => {
+          console.error("[quit] could not save a take before quitting:", dir, err);
+        });
+      }
+    }
+    quitting = true;
+    runQuitTeardown();
+  });
 });
 
 ipcMain.handle("recorder:getSettings", async (): Promise<Settings> =>
   readSettings(app.getPath("userData")));
 
 /**
+ * Where recordings and shots ACTUALLY land right now — the settings' own
+ * `saveFolder` when one has been chosen, and otherwise the resolved default
+ * (`STC_RECORDINGS_DIR`, or ~/Desktop/stc).
+ *
+ * A separate channel rather than a field on `recorder:getSettings`, because
+ * it is not a setting: it is `takesRoot`'s answer, and the whole point is
+ * that the renderer does not compute it. `recorder:getSettings` hands back a
+ * `saveFolder` of null for "not chosen yet", and the preferences row used to
+ * render that null as the words "beside the shot" — which described
+ * `still.destination`'s old per-shot fallback and has been wrong since
+ * STC-412 unified the two: an unset `saveFolder` is not "no location", it is
+ * a real folder the app is already writing to. Answering with `takesRoot`'s
+ * own output is what keeps the string on screen and the directory on disk
+ * from being two independent derivations of one default.
+ */
+ipcMain.handle("recorder:resolvedSaveFolder", async (): Promise<string> =>
+  takesRoot(process.env, readSettings(app.getPath("userData")).saveFolder));
+
+/**
  * The renderer's own preferences, minus the ones it may not name.
  *
- * `still.destination` is main's alone: it decides WHERE THIS PROCESS WRITES,
- * and `resolveExportOptions` documents in as many words that a renderer cannot
- * choose it. That guarantee was true of the export request and false here —
- * this generic handler passed the whole patch through, so the destination was
- * settable after all through a different door. A comment that promises more
- * than the code delivers is worse than no comment.
- *
- * The dedicated channel stays: `still:chooseDestination` sets it from a native
- * folder picker, which is a person choosing, not the renderer.
+ * `saveFolder` is main's alone (STC-412, replacing `still.destination`): it
+ * decides WHERE THIS PROCESS WRITES, and a renderer that could set it through
+ * this generic patch — handed the settings to populate its controls and
+ * sending them back — would be choosing it through a different door than the
+ * one the design intends. The dedicated channel stays: `still:chooseDestination`
+ * sets it from a native folder picker, which is a person choosing, not the
+ * renderer.
  */
 ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Promise<Settings> => {
-  const clean: Partial<Settings> = { ...(patch ?? {}) };
-  if (clean.still) {
-    // Destructured rather than deleted, so `destination` is named here and a
-    // reader can see exactly which key does not survive.
-    const { destination: _mainsAlone, ...rest } = clean.still;
-    // `writeSettings` merges `still` one level deep, so an absent destination
-    // keeps the stored one rather than clearing it.
-    clean.still = rest as Partial<Settings>["still"];
-  }
+  // Destructured rather than deleted, so `saveFolder` is named here and a
+  // reader can see exactly which key does not survive.
+  const { saveFolder: _mainsAlone, ...withoutSaveFolder } = { ...(patch ?? {}) };
+  const clean: Partial<Settings> = withoutSaveFolder as Partial<Settings>;
   if (clean.share) {
     // Same rule, same reason (STC-242): `share.destination` is a folder in the
     // user's own site repo, and a renderer that could name it could make this
@@ -700,10 +927,15 @@ async function recordFlowBody(
     });
     if (!countdownFired(counted.outcome)) return { ok: false, cancelled: true };
   }
-
   // Any floating panel still on screen would be IN the take, and unlike a shot
-  // there is no exclusion list for `start` to be added to. SETTLED rather than
-  // hidden, the same call quit makes.
+  // there is no exclusion list for `start` to be added to.
+  // CLOSED rather than merely hidden (`closeThumbnail`, the same call quit
+  // makes) — hiding it for the length of a recording would leave it sitting
+  // out of sight with nothing to bring it back, since nothing times out any
+  // more. Its take is left in temp storage rather than exported (STC-392); a
+  // pending panel deliberately bumped by starting a recording is a choice the
+  // recovery prompt can still surface later, not a silent save.
+  // After the countdown, so a cancelled one costs a pending panel nothing.
   await closeThumbnail().catch(() => {});
 
   // Temp storage, not the library (STC-393): the take is not real until a
@@ -878,17 +1110,19 @@ async function captureStill(action: ShotAction, source: CaptureSource): Promise<
     // renderer: a capture from the hotkey or the menu bar has no window at
     // all, and the panel is the only place a decorated still can be gotten out
     // of the app in v1. `skip` bypasses it entirely: the ticket's own words are
-    // "go straight to clipboard", so a silent capture always copies, whatever
-    // the (otherwise inapplicable) settle-action preference says.
+    // "go straight to clipboard", so a silent capture always copies — fixed by
+    // `thumbnail-window.ts` the moment `silent` is set, never a preference
+    // (STC-392 removed the general settle-action one this used to fall back to).
     // Never lets a panel failure cost the CAPTURE — the shot is already on
     // disk in `dir` by this point, the same "nothing lost by doing nothing"
     // rule the old still panel followed for exactly this reason.
     try {
       const { thumbnail } = readSettings(app.getPath("userData"));
       presentThumbnail({
-        dir, shot: r.shot, corner: thumbnail.corner, timeoutMs: thumbnail.timeoutMs,
+        dir, shot: r.shot, corner: thumbnail.corner,
+        take: { kind: "shot", origin: "fresh" },
         dist: here, rendererDir: join(here, "..", "renderer"),
-        ...(thumbnail.skip ? { settleAction: "copy" as const, silent: true } : { settleAction: thumbnail.settleAction }),
+        ...(thumbnail.skip ? { silent: true } : {}),
       });
     } catch (e) {
       console.error("[thumbnail] could not present:", e);
@@ -1110,7 +1344,8 @@ ipcMain.handle("recorder:stop", async () => {
 // ---- the library: one index over two kinds (STC-294) ----------------------
 
 ipcMain.handle("library:list", async (_e, filter?: string) =>
-  listLibrary(process.env, typeof filter === "string" ? filter : undefined));
+  listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
+             typeof filter === "string" ? filter : undefined));
 
 /**
  * Cache a decorated thumbnail beside the document it was rendered from.
@@ -1131,7 +1366,8 @@ ipcMain.handle("library:list", async (_e, filter?: string) =>
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuffer) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
   const buf = Buffer.from(bytes);
@@ -1142,39 +1378,40 @@ ipcMain.handle("library:writeThumbnail", async (_e, dir: string, bytes: ArrayBuf
   return true;
 });
 
-/**
- * Re-open a stored shot into the post-capture panel (STC-294).
- *
- * The payoff of keeping the decoration in JSON: the panel is handed the STORED
- * document, so the mode, the canvas and STC-297's redaction regions all come
- * back exactly as they were left, and the shot can be re-exported without
- * re-capturing. It is the same panel a fresh capture gets — not a second still
- * UI, which is what STC-293's Note and STC-300's gate both forbid.
- *
- * `settleAction: "none"` is the one difference and it matters: ignoring a
- * FRESH capture must still save it, because the panel is the only place it
- * exists; ignoring a re-opened one must do nothing at all, because it is
- * already on disk and a second copy is not what a glance meant.
- */
 /** The stored document for one shot, so the library can render its decoration. */
 ipcMain.handle("library:shot", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to read a path outside the recordings folder");
   }
   return parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
 });
 
+/**
+ * Re-opening a shot from the library goes straight to the still editor now
+ * (STC-300 revision) — the same door a recording's "Open" already used
+ * (`editor.ts`, STC-373). It used to re-present the post-capture panel with
+ * `origin: "library"`; once Edit became reachable from there too, sending a
+ * deliberate re-open through the panel first was an extra click to the thing
+ * someone reopening old work most likely wants (redact, or just look), while
+ * Copy/Delete/Reveal for a kept take are already on the library grid's own
+ * tile menu (`library-items.ts`) and lose nothing by this change.
+ *
+ * Crash recovery's OWN re-presentation of an orphaned still (`recoverUnsavedTakes`,
+ * STC-393) is unrelated and still goes through `presentThumbnail` — that is a
+ * prompt about a take nobody decided on yet, not a deliberate re-open of one
+ * already kept, and the panel's Save/Copy/Trash are exactly what it needs.
+ */
 ipcMain.handle("still:reopen", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
-  const shot = parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
-  const { thumbnail } = readSettings(app.getPath("userData"));
-  presentThumbnail({
-    dir, shot, corner: thumbnail.corner, timeoutMs: thumbnail.timeoutMs,
-    settleAction: "none",
-    dist: here, rendererDir: join(here, "..", "renderer"),
-  });
+  // Read only to fail loudly on a shot this build cannot load, the same
+  // courtesy the old panel-based path gave — `openStillEditor` itself reads
+  // the document again once its own window exists.
+  parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
+  openStillEditor({ dir, dist: here, rendererDir: join(here, "..", "renderer") });
   return { ok: true };
 });
 
@@ -1188,50 +1425,252 @@ ipcMain.handle("still:reopen", async (_e, dir: string) => {
  * `duplicateTake`; this handler is only validation and the IPC boundary.
  */
 ipcMain.handle("still:duplicate", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to duplicate a path outside the recordings folder");
   }
   // Read it back through `parseShot` first: duplicating a document this build
   // cannot load would produce a second directory the library also refuses.
   parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
-  const dest = await duplicateTake(process.env, dir, THUMBNAIL_FILE);
+  const dest = await duplicateTake(process.env, saveFolder, dir, THUMBNAIL_FILE);
   return { ok: true, dir: dest };
 });
 
-ipcMain.handle("recorder:takes", async () => listTakes(process.env));
+ipcMain.handle("recorder:takes", async () =>
+  listTakes(process.env, readSettings(app.getPath("userData")).saveFolder));
 
-ipcMain.handle("take:label", async (_e, dir: string, label: string) => {
-  await setTakeLabel(process.env, dir, label);
-  return true;
+/**
+ * Rename a capture (STC-413) — the file IS the name now. `file` wins when
+ * present, which is the whole ticket: renaming here does the same thing as
+ * renaming in Finder. A bundle with no file yet (never exported) has no
+ * user-facing filename to rename, so it falls back to the old take.json
+ * label — the one case `setTakeLabel` is still for. Neither present refuses
+ * loudly rather than silently doing nothing: `renderer.ts`'s old handler
+ * used to `if (!dir) return;` before ever reaching here, which dropped a
+ * rename on the floor for any item Task 8's `looseFileItem` offered Rename
+ * to but had no `dir` for.
+ *
+ * `renameCapture`/`setTakeLabel` each validate their own path is inside the
+ * recordings folder — this handler does not repeat that check, the same way
+ * `take:delete` trusts each target's own validation rather than a second
+ * copy here. **Both really do now**: this comment was true of `renameCapture`
+ * and not of `setTakeLabel`, which used `dir.startsWith(root)` — the check
+ * `takes.ts`'s own header spends a paragraph explaining is "not that test"
+ * (`<root>-other` and `<root>/../../tmp/evil` both pass it). Fixed there
+ * rather than by adding a second check here (I4); a claim in a comment that
+ * the code does not keep is worse than no claim, because it is what the next
+ * reader trusts instead of looking.
+ */
+ipcMain.handle("take:rename", async (_e, file: string | undefined, dir: string | undefined, name: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof file === "string" && file.length > 0) {
+    return await renameCapture(process.env, saveFolder, file, name);
+  }
+  if (typeof dir === "string" && dir.length > 0) {
+    await setTakeLabel(process.env, saveFolder, dir, name);
+    return dir;
+  }
+  throw new Error("nothing to rename");
 });
 
-ipcMain.handle("take:delete", async (_e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
-    throw new Error("refusing to delete a path outside the recordings folder");
+/**
+ * One thing `trashWithConfirmation` is asked to move, plus how it reads in a
+ * sentence when a PARTIAL failure has to name it (STC-413 review round 1).
+ * `panel:trash`'s single-target call has no partial-failure sentence to
+ * build, so its label is never actually read; it exists only so every call
+ * site has one shape.
+ */
+interface TrashTarget {
+  path: string;
+  label: string;
+  /** Whether `label` takes "were" rather than "was" in a partial-failure
+   *  sentence — "its source materials" is plural noun phrasing regardless of
+   *  how many targets this run happens to have, so this is a property of
+   *  the LABEL, not derivable from a target count. */
+  plural: boolean;
+}
+
+/**
+ * Attempt exactly one target, independent of any other (STC-413 review round
+ * 1, Important finding).
+ *
+ * A path that no longer exists is the outcome a delete WANTS, not a
+ * failure — `existsSync` first, rather than letting `shell.trashItem` answer
+ * for a gone path and hoping its rejection is recognisably an ENOENT (it
+ * is not: on macOS it is `The file "…" doesn't exist.`, an NSError message
+ * with no code this process can match portably). This is what lets a RETRY
+ * after a partial failure get past the half that already went instead of
+ * throwing on it before ever reaching the half still there — without it, a
+ * retry recreates exactly the bug this task closes, just with the roles of
+ * "gone" and "left behind" swapped.
+ */
+async function trashOne(path: string): Promise<{ ok: boolean; detail?: string }> {
+  if (!existsSync(path)) return { ok: true };
+  try {
+    await withTimeout(shell.trashItem(path), TRASH_COMMIT_AT_QUIT_MS, `moving to the Trash (${path})`);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, detail: String(e?.message ?? e) };
   }
-  if (!win) throw new Error("no window");
+}
 
-  // The only irreversible action in the app, so it asks first — and then does
-  // not actually destroy anything: shell.trashItem moves the take to the Trash,
-  // where a mistaken click is one restore away. Never unlink.
-  const { response } = await dialog.showMessageBox(win, {
-    type: "warning",
-    buttons: ["Move to Trash", "Cancel"],
-    defaultId: 1,
-    cancelId: 1,
-    message: "Move this recording to the Trash?",
-    detail: dir,
-  });
-  if (response !== 0) return { deleted: false };
+/**
+ * The honest form of a partial failure (the reviewer's own wording): name
+ * what moved AND what did not, rather than surfacing whichever path
+ * happened to carry an error and saying nothing about the other. Only
+ * reachable with more than one target and at least one success; a target
+ * list that failed OUTRIGHT (nothing succeeded) falls back to the plain
+ * error text, which is the single-target case's own existing behaviour.
+ */
+function describeTrashOutcome(
+  outcomes: Array<{ target: TrashTarget; ok: boolean; detail?: string }>,
+): string {
+  const failed = outcomes.filter((o) => !o.ok);
+  const succeeded = outcomes.filter((o) => o.ok);
+  if (succeeded.length === 0) {
+    return failed.map((f) => f.detail).filter(Boolean).join("; ")
+      || "Could not move this take to the Trash.";
+  }
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const namesOf = (list: typeof outcomes) => list.map((o) => o.target.label).join(" and ");
+  // More than one succeeded is plural regardless of either label's own
+  // grammar; exactly one defers to THAT target's own `plural` (STC-413
+  // review round 1 — "its source materials" is plural on its own, "the
+  // file" is not, and which one is on the SUCCEEDED side varies with which
+  // half actually failed).
+  const verb = succeeded.length === 1 ? (succeeded[0]!.target.plural ? "were" : "was") : "were";
+  return `${cap(namesOf(succeeded))} ${verb} removed; `
+       + `${namesOf(failed)} could not be.`;
+}
 
-  // A window with this take open no longer has anywhere valid to write.
-  for (const [sid, d] of openTakes) if (d === dir) openTakes.delete(sid);
-  await shell.trashItem(dir);
-  return { deleted: true };
+/**
+ * Ask first, then move to the Trash — never `rm`, so a mistaken click is one
+ * Finder restore away. `take:delete`'s original body (STC-294), lifted out
+ * here (STC-392 Task 6) so `panel:trash`'s "confirm" style (`trashStyle`,
+ * `panel-actions.ts`) can call the SAME dialog rather than a second copy
+ * asking the same question with a second string — two modals for one
+ * question is exactly the "one value, two copies" defect this codebase keeps
+ * finding. Both callers already validate every path against their own root
+ * before reaching this; it does not re-check.
+ *
+ * `targets` carries more than one entry for STC-413's two-object delete: a
+ * matched library item is a finished FILE at the top level and its source
+ * BUNDLE in `raw/`, and both have to go together or a delete silently
+ * orphans one half. ONE dialog covers both — the user pressed Delete once,
+ * so asking twice would be its own defect, not extra safety.
+ *
+ * Each target is attempted INDEPENDENTLY via `Promise.all` over
+ * `trashOne` (STC-413 review round 1) — a sequential loop that threw out of
+ * its own iteration on the first failure used to decide the SECOND path's
+ * fate by never reaching it, which is exactly the bug this task exists to
+ * close, recreated inside its own error path. `trashOne` never rejects (it
+ * catches its own failure and reports it), so `Promise.all` here cannot
+ * short-circuit on one target's trouble. Each is BOUNDED the same way a
+ * quit-time commit already is (`TRASH_COMMIT_AT_QUIT_MS`, STC-427's own
+ * constant — `shell.trashItem` has hung a CI runner for 30s before, and
+ * there is no reason a library delete's bound should be a different
+ * number). There is no rollback if one target fails after another already
+ * moved — `shell.trashItem` has no inverse, the same fact
+ * `pending-trash.ts`'s module doc already states — so a partial failure is
+ * reported honestly (`describeTrashOutcome`) rather than pretended away.
+ */
+async function trashWithConfirmation(
+  targets: TrashTarget[],
+): Promise<{ ok: boolean; detail?: string; cancelled?: boolean }> {
+  if (!win) return { ok: false, detail: "no window" };
+  if (targets.length === 0) return { ok: false, detail: "nothing to delete" };
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: "warning",
+      buttons: ["Move to Trash", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      message: targets.length > 1
+        ? "Move this take's file and its source materials to the Trash?"
+        : "Move this take to the Trash?",
+      detail: targets.map((t) => t.path).join("\n"),
+    });
+    // Cancelling is a decision, not a fault (STC-392 review, I5) — the same
+    // rule `runExport`'s Save As cancel already follows
+    // (`thumbnail-renderer.ts`): `cancelled` is a field of its own, checked
+    // by the renderer BEFORE `!r.ok`, so a Cancel reads as nothing happened
+    // rather than "Could not delete: cancelled".
+    if (response !== 0) return { ok: false, cancelled: true };
+
+    // A window with this take open no longer has anywhere valid to write —
+    // cleared for every target regardless of what its own trash attempt
+    // does, since writing into a path mid-deletion is wrong either way.
+    for (const [sid, d] of openTakes) if (targets.some((t) => t.path === d)) openTakes.delete(sid);
+
+    const outcomes = await Promise.all(targets.map(async (target) => {
+      const r = await trashOne(target.path);
+      return { target, ...r };
+    }));
+
+    // No-op unless a panel is showing one of these (the `panel:trash`
+    // "confirm" path — a re-opened library shot); `take:delete`'s own caller
+    // (the library grid) never has one open for the take it is deleting.
+    // Only for what actually left — a target that failed may still be
+    // showing, and dismissing its panel would be one more thing to explain.
+    for (const o of outcomes) if (o.ok) dismissThumbnail(o.target.path);
+
+    const failed = outcomes.filter((o) => !o.ok);
+    if (failed.length === 0) return { ok: true };
+    return { ok: false, detail: describeTrashOutcome(outcomes) };
+  } catch (e: any) {
+    // STC-392 review, I2: `dialog.showMessageBox` and `shell.trashItem` were
+    // previously UNCAUGHT here, so a rejection (a real Trash failure, say)
+    // escaped as an unhandled promise rejection in the renderer's `perform()`
+    // — `setStatus` never ran and `discard()`'s restore-on-failure never
+    // fired, leaving a panel that looked hidden-but-alive with no message and
+    // no way back. Caught and reported the same way every other take-moving
+    // handler in this file already is (`panel:save`/`panel:edit`). `trashOne`
+    // never throws, so anything landing here is `dialog.showMessageBox`
+    // itself failing, not a per-target trash failure.
+    return { ok: false, detail: String(e?.message ?? e) };
+  }
+}
+
+/**
+ * `detail`/`cancelled` are passed through now, not discarded (found while
+ * removing the panel's own re-open door, STC-300 revision): a real
+ * `trashWithConfirmation` failure used to be surfaced ONLY via the panel's
+ * "confirm" path (`origin: "library"`), and that door closing left this one —
+ * the grid's own Delete, which has ALWAYS called the same function — silently
+ * doing nothing on a real failure. `renderer.ts`'s `act()` is what now tells
+ * a genuine failure (alert) apart from a Cancel (say nothing), the same
+ * distinction `trashWithConfirmation`'s own doc already draws.
+ *
+ * STC-413: a capture is now up to two objects — the finished FILE at the top
+ * level and its source BUNDLE in `raw/` — and `LibraryItem` already knows
+ * which of the two this item has (Task 8's scan resolved that by embedded
+ * id). So this does NOT re-resolve a bundle from `file` or vice versa; it
+ * trusts whatever `renderer.ts` hands it (the item's own `file`/`dir`) and
+ * only validates each path it is actually given. Either may be absent (a
+ * foreign file has no bundle; an unexported bundle has no file) but not
+ * both — nothing to delete refuses outright rather than silently doing
+ * nothing.
+ */
+ipcMain.handle("take:delete", async (_e, file?: string, dir?: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  const targets: TrashTarget[] = [];
+  if (typeof file === "string" && file.length > 0) targets.push({ path: file, label: "the file", plural: false });
+  if (typeof dir === "string" && dir.length > 0) {
+    targets.push({ path: dir, label: "its source materials", plural: true });
+  }
+  if (targets.length === 0) throw new Error("nothing to delete");
+  for (const t of targets) {
+    if (!insideTakesRoot(process.env, saveFolder, t.path)) {
+      throw new Error("refusing to delete a path outside the recordings folder");
+    }
+  }
+  const r = await trashWithConfirmation(targets);
+  return { deleted: r.ok, cancelled: r.cancelled, detail: r.detail };
 });
 
 ipcMain.handle("preview:open", async (e, dir: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
   setOpenTake(e, dir);
@@ -1249,7 +1688,8 @@ ipcMain.handle("preview:close", async (e) => { clearOpenTake(e); });
  * not something the renderer reaches with its own `BrowserWindow`.
  */
 ipcMain.handle("editor:open", async (_e, dir: string, name: string) => {
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
   openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer") });
@@ -1278,6 +1718,21 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
   return true;
 });
 
+/**
+ * STC-413: a media export (.mp4/.png) is a DELIVERABLE and lands at the top
+ * level of the folder now, beside whatever the user has already renamed;
+ * `exportManifestName`'s .json stays provenance about the source and keeps
+ * writing into the bundle — the top level is media files only.
+ *
+ * The media destination is resolved by IDENTITY, never by name. Naively
+ * repointing the old `join(openTake, name)` at the folder root would still be
+ * wrong: export, rename the result to `login-bug.mp4` in Finder, re-export,
+ * and a name-derived destination writes a FRESH `<stamp>.mp4` beside it —
+ * two top-level files carrying the SAME embedded id, two tiles for one
+ * capture, and an orphan sweep that can never tell which is current. So a
+ * top-level file already carrying this bundle's id (if one exists) IS the
+ * destination; only a bundle with no finished file yet gets the derived name.
+ */
 ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
@@ -1292,9 +1747,45 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   if (TAKE_FILES.has(name) || name === "take.json") {
     throw new Error(`refusing to overwrite the take's own "${name}"`);
   }
-  const dest = join(openTake, name);
+
+  if (name.endsWith(".json")) {
+    const dest = join(openTake, name);
+    await writeFile(dest, Buffer.from(bytes));
+    return dest;
+  }
+
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  const root = takesRoot(process.env, saveFolder);
+  const id = await ensureCaptureId(openTake);
+  const files = await scanFinishedFilesAt(process.env, saveFolder);
+  const matched = files.find((f) => f.id === id)?.file;
+  const dest = matched ?? join(root, name);
+  // Widened overwrite guard (STC-413): at the top level, the hazard the
+  // leaf-name check above guards against is different and worse than inside
+  // a bundle. A file already sitting at the DERIVED name whose id is absent
+  // or belongs to some OTHER bundle is someone else's capture, or a file the
+  // user placed there by hand — silently replacing it would be data loss. A
+  // match found above is provably this bundle's own prior export (its id was
+  // read, not assumed), so it needs no second check.
+  if (!matched && files.some((f) => f.file === dest)) {
+    throw new Error(`refusing to overwrite "${name}" — it belongs to a different capture`);
+  }
   await writeFile(dest, Buffer.from(bytes));
   return dest;
+});
+
+/**
+ * STC-413: the editor's export path (`app/src/editor.ts:1237`) is a
+ * renderer, and `ensureCaptureId` reaches `node:fs` — a browser-typechecked
+ * module cannot import it directly, so the id crosses the bridge instead.
+ * The take directory comes from the SAME `openTakes` map every other
+ * `preview:*` handler reads, so this only ever answers for a window that has
+ * actually opened a take.
+ */
+ipcMain.handle("take:captureId", async (e) => {
+  const openTake = getOpenTake(e);
+  if (!openTake) throw new Error("no take is open");
+  return await ensureCaptureId(openTake);
 });
 
 /**
@@ -1323,7 +1814,8 @@ ipcMain.handle("still:export", async (_e, req: {
   dir?: string;
 }) => {
   if (!sup) throw new Error("supervisor not running");
-  const stored = readSettings(app.getPath("userData")).still;
+  const settingsNow = readSettings(app.getPath("userData"));
+  const stored = settingsNow.still;
 
   // What the renderer may decide about this one export, and what only the
   // stored preference decides. In `still-io.ts` rather than inline here: a
@@ -1332,17 +1824,23 @@ ipcMain.handle("still:export", async (_e, req: {
   // every saved frame.
   const options = resolveExportOptions(stored, req.options);
 
-  // The decision point (STC-393): every `still:export` call — Save, Copy,
-  // and Save As alike — is a "keep it" outcome, the only thing this panel
-  // model has that isn't an explicit discard. If the take is still in temp,
-  // promote it to the library FIRST, so `fallbackDir` below (the "beside the
-  // shot" default) resolves inside the take's final home rather than a
-  // directory about to be moved out from under the file just written there.
-  // `dir` is reassigned rather than left as `req.dir` so the reply can hand
-  // the renderer its new location.
-  let dir = req.dir && insideCaptureRoot(process.env, req.dir) ? req.dir : undefined;
-  if (dir) {
-    try { dir = await promoteTake(process.env, dir); }
+  // The decision point, narrowed by STC-392 (D5). It used to be "every
+  // `still:export` call is a keep", which was true while Copy was terminal.
+  // The panel now stays open after a Copy so the user can still Save — or
+  // Trash — and a Copy that had promoted would leave that Trash deleting
+  // something already sitting in the library.
+  //
+  // `req.target.file` is the predicate, not an action name: this handler is
+  // reached by the panel, the main window and the editor alike, and "does
+  // this export write a file" is the one question all three can answer.
+  // Save As is a file write and so promotes, which is correct — it is a save
+  // that asks first, not a different outcome. `dir` is reassigned rather
+  // than left as `req.dir` so the reply can hand the renderer its new
+  // location.
+  let dir = req.dir && insideCaptureRoot(process.env, settingsNow.saveFolder, req.dir)
+    ? req.dir : undefined;
+  if (dir && req.target.file) {
+    try { dir = await promoteTake(process.env, settingsNow.saveFolder, dir); }
     catch (e) {
       console.error("[still] could not move the shot into the library:", dir, e);
     }
@@ -1355,7 +1853,24 @@ ipcMain.handle("still:export", async (_e, req: {
   // path is handed to the helper, which CREATES directories and writes an
   // image at it. A `..` segment or a sibling folder with the same prefix both
   // pass a prefix test.
-  const fallbackDir = dir && insideCaptureRoot(process.env, dir) ? dir : undefined;
+  const fallbackDir = dir && insideCaptureRoot(process.env, settingsNow.saveFolder, dir)
+    ? dir : undefined;
+
+  // STC-413: the bundle's stable identity, embedded so the finished file can
+  // point back to its source bundle after being renamed or moved. Only when
+  // there IS a bundle — `fallbackDir` is its (already-promoted, above) path.
+  // A caller with no take of its own gets no id: there is nothing in `raw/`
+  // for it to identify. Best-effort: a bundle that cannot be tagged (a
+  // deleted destination folder, a disk error) should still let the export
+  // through — identity is a nicety on top of the file, not a reason to lose
+  // the capture the user is trying to save.
+  let captureId: string | undefined;
+  if (fallbackDir) {
+    try { captureId = await ensureCaptureId(fallbackDir); }
+    catch (e) {
+      console.error("[still] could not mint a capture id for", fallbackDir, e);
+    }
+  }
 
   const still: CompositedStill = {
     bytes: req.bytes,
@@ -1387,11 +1902,15 @@ ipcMain.handle("still:export", async (_e, req: {
     const r = await exportStill((params) => sup!.exportStill(params),
                                 { still, target: req.target, options, info: req.info,
                                   ...(explicitFile ? { explicitFile } : {}),
-                                  ...(fallbackDir ? { fallbackDir } : {}) },
+                                  ...(fallbackDir ? { fallbackDir } : {}),
+                                  ...(captureId ? { captureId } : {}) },
                                 // `stored`, never the merged options: the
-                                // destination folder and the strip are read
-                                // from here, and both are main's alone.
-                                stored, app.getPath("temp"));
+                                // metadata strip is read from here and is
+                                // main's alone. `settingsNow.saveFolder`
+                                // (STC-412) is main's alone the same way —
+                                // read fresh here rather than from anything
+                                // the renderer sent.
+                                stored, settingsNow.saveFolder, app.getPath("temp"));
     // Only a save is worth revealing. A copy's file lives in the cache and
     // exists so the pasteboard's URL points somewhere, not for the user.
     if (req.target.file && r.file) lastStillFile = r.file;
@@ -1407,7 +1926,9 @@ ipcMain.handle("still:export", async (_e, req: {
 });
 
 /**
- * The destination folder, chosen by the user.
+ * The save folder, chosen by the user (STC-412 — recordings and stills share
+ * one `saveFolder`, replacing `still.destination` and the "beside the shot"
+ * default).
  *
  * A folder picker rather than a save panel, deliberately: the ticket's default
  * path out of the app is "no interaction at all", so the place is chosen once
@@ -1416,23 +1937,23 @@ ipcMain.handle("still:export", async (_e, req: {
  */
 ipcMain.handle("still:chooseDestination", async () => {
   if (!win) throw new Error("no window");
-  const current = readSettings(app.getPath("userData")).still.destination;
+  const current = readSettings(app.getPath("userData")).saveFolder;
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: "Where should shots be saved?",
+    title: "Where should recordings and shots be saved?",
     properties: ["openDirectory", "createDirectory"],
     ...(current ? { defaultPath: current } : {}),
     buttonLabel: "Choose",
   });
-  if (canceled || !filePaths[0]) return { destination: current };
-  const destination = filePaths[0];
-  writeSettings(app.getPath("userData"), { still: { ...readSettings(app.getPath("userData")).still, destination } });
-  return { destination };
+  if (canceled || !filePaths[0]) return { saveFolder: current };
+  const saveFolder = filePaths[0];
+  writeSettings(app.getPath("userData"), { saveFolder });
+  return { saveFolder };
 });
 
 /**
  * The floating thumbnail's right-click menu (STC-296 follow-up).
  *
- * Built here and popped up here: `thumbnailMenuTemplate` decides the contents
+ * Built here and popped up here: `buildThumbMenu` decides the contents
  * where a test can read them, and this turns them into the one thing no test
  * can — a real `Menu`. Answers with the chosen id, or `null` when the menu was
  * dismissed, so the renderer performs the action with the same code its own
@@ -1443,8 +1964,13 @@ ipcMain.handle("thumbnail:menu", async (e, ctx: ThumbMenuContext) => {
   return await new Promise<ThumbMenuId | null>((resolve) => {
     let answered = false;
     const answer = (id: ThumbMenuId | null) => { if (!answered) { answered = true; resolve(id); } };
-    const menu = Menu.buildFromTemplate(thumbnailMenuTemplate({
-      redacting: ctx?.redacting === true, busy: ctx?.busy === true,
+    const menu = Menu.buildFromTemplate(buildThumbMenu({
+      // A malformed or absent `take` defaults to a fresh shot — the widest
+      // set of the four actions — rather than throwing and losing the whole
+      // menu over one bad field on a channel only this app's own renderer
+      // ever calls.
+      take: ctx?.take ?? { kind: "shot", origin: "fresh" },
+      busy: ctx?.busy === true,
     }).map((item) => item.type === "separator"
       ? { type: "separator" as const }
       : { label: item.label, enabled: item.enabled !== false, click: () => answer(item.id) }));
@@ -1476,7 +2002,8 @@ ipcMain.handle("still:dragFile", async (_e, req: {
   info: { app?: string; title?: string; mode: string };
 }) => {
   if (!sup) throw new Error("supervisor not running");
-  const stored = readSettings(app.getPath("userData")).still;
+  const settingsNow = readSettings(app.getPath("userData"));
+  const stored = settingsNow.still;
   const options = resolveExportOptions(stored, req.options);
   const still: CompositedStill = {
     bytes: req.bytes, width: req.width, height: req.height,
@@ -1487,7 +2014,7 @@ ipcMain.handle("still:dragFile", async (_e, req: {
     const r = await exportStill((params) => sup!.exportStill(params), {
       still, target: { file: true, clipboard: false }, options, info: req.info,
       explicitFile: join(cache, plannedFileName(options, req.info, still)),
-    }, stored, app.getPath("temp"));
+    }, stored, settingsNow.saveFolder, app.getPath("temp"));
     // Deliberately NOT `lastStillFile`: see the note above.
     return { ok: true, file: r.file };
   } catch (e: any) {
@@ -1529,34 +2056,173 @@ ipcMain.on("still:startDrag", (e, file: string) => {
  * it — a prefix test passes a `..` segment.
  */
 ipcMain.handle("still:revealShot", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir) || !existsSync(dir)) return false;
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir) || !existsSync(dir)) {
+    return false;
+  }
   shell.showItemInFolder(dir);
   return true;
 });
 
 /**
- * Throw a shot away (STC-296's right-click Delete).
+ * The panel's three take-moving actions (STC-392).
  *
- * To the TRASH, never `rm`, and with no confirmation. `recorder:deleteTake`
- * puts a modal in front of the same call and that is right there — a recording
- * is minutes of work and the library is a place you browse. A shot whose panel
- * is still on screen is seconds old with the pointer already on it, and the
- * Trash is what makes "no confirmation" safe rather than reckless.
+ * Separate from `still:export` on purpose: that handler answers "turn these
+ * pixels into a file or a clipboard entry", which the editor and the main
+ * window ask too. These three answer "what happens to this TAKE", which only
+ * the panel asks — and each of them is reached by up to four different
+ * gestures in the panel (a button, the ⌘ keyboard accelerator, the context
+ * menu, and for trash a swipe), so a single handler each is what keeps those
+ * from drifting.
  *
- * The caller is responsible for having stopped its own settle first: this
- * removes the directory the panel would otherwise export from.
+ * Every one validates the directory against the capture roots before it acts.
+ * The renderer names a take; it never hands main a path to act on.
  */
-ipcMain.handle("still:deleteShot", async (_e, dir: string) => {
-  if (typeof dir !== "string" || !insideCaptureRoot(process.env, dir)) {
-    return { ok: false, detail: "not a shot this app wrote" };
+ipcMain.handle("panel:save", async (_e, dir: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
+    return { ok: false, detail: "not a take this app wrote" };
   }
-  if (!existsSync(dir)) return { ok: true };
   try {
-    await shell.trashItem(dir);
-    return { ok: true };
-  } catch (err: any) {
-    return { ok: false, detail: String(err?.message ?? err) };
+    // Asked, not assumed: `promotes("save")` is `panel-actions.ts`'s own
+    // answer, not a second place this handler decides "save promotes" for
+    // itself. If that predicate ever disagreed with what this does, the two
+    // copies of "save promotes" this repo has already paid for five ways
+    // (CLAUDE.md) would be back, just split across a renderer file and this
+    // one instead of two renderer files.
+    const promoted = promotes("save") ? await promoteTake(process.env, saveFolder, dir) : dir;
+    dismissThumbnail(dir);
+    return { ok: true, dir: promoted };
+  } catch (e: any) {
+    return { ok: false, detail: String(e?.message ?? e) };
   }
+});
+
+/**
+ * Edit promotes first, and not as a convenience: both editors refuse any
+ * path outside the recordings root, so a take in temp storage cannot be
+ * opened at all. Which editor opens depends on what this panel is showing —
+ * `takeFor(dir)?.kind`, the same source `panel:trash` already reads `origin`
+ * from (STC-392 review, I7), never re-derived from the path a second way. A
+ * recording opens `editor.ts` (preview, trim, export, share); its own Save is
+ * about the EXPORT — the ticket's "you may only be trimming" — not about
+ * whether the take is kept, which is what this promote settles. A shot opens
+ * `still-editor-window.ts` (STC-300), whose only job today is the redaction
+ * tool that used to live in this panel.
+ */
+ipcMain.handle("panel:edit", async (_e, dir: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
+    return { ok: false, detail: "not a take this app wrote" };
+  }
+  try {
+    // Same reasoning as `panel:save` above: `promotes("edit")` is asked, not
+    // hardcoded — this handler has no opinion of its own about whether Edit
+    // promotes.
+    const kind = takeFor(dir)?.kind ?? "shot";
+    const opened = promotes("edit") ? await promoteTake(process.env, saveFolder, dir) : dir;
+    if (kind === "shot") {
+      openStillEditor({ dir: opened, dist: here, rendererDir: join(here, "..", "renderer") });
+    } else {
+      openEditor({ dir: opened, name: basename(opened),
+                   dist: here, rendererDir: join(here, "..", "renderer") });
+    }
+    dismissThumbnail(dir);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, detail: String(e?.message ?? e) };
+  }
+});
+
+/**
+ * Close the panel without deciding anything (STC-412) — the take is
+ * untouched: still in temp storage if it was fresh, still in the library if
+ * it was re-opened. Governed entirely by STC-393's existing purge and
+ * crash-recovery, the same as ignoring the panel always was before
+ * STC-392 removed the timeout that used to do this automatically.
+ */
+ipcMain.handle("panel:dismiss", async (_e, dir: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
+    return { ok: false, detail: "not a take this app wrote" };
+  }
+  dismissThumbnail(dir);
+  return { ok: true };
+});
+
+/**
+ * Throw a take away (STC-296's right-click Delete, and now the ✕ button, the
+ * ⌘⌫ key and the swipe).
+ *
+ * Two styles, decided by `trashStyle(origin)` (`panel-actions.ts`, D1) —
+ * never a second opinion here about which take gets which: a take re-opened
+ * from the library is already kept, so deleting it is destroying something
+ * the user chose and gets `trashWithConfirmation`'s modal, the same one
+ * `take:delete` uses. A fresh capture still in temp storage gets the timed
+ * undo (STC-392 Task 6, `pending-trash.ts`): nothing is trashed yet. The ✕
+ * PROMISES to, closes the panel, and puts up a toast; the promise is kept by
+ * the sweep in `app.whenReady()` once `UNDO_WINDOW_MS` elapses, or broken by
+ * `panel:undoTrash` before then. `shell.trashItem` has no inverse, so this is
+ * the only version of "undo" that does not lie about what the filesystem can
+ * do — see `pending-trash.ts`'s module doc for the whole reasoning.
+ */
+ipcMain.handle("panel:trash", async (_e, dir: string) => {
+  const { saveFolder, thumbnail } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
+    return { ok: false, detail: "not a take this app wrote" };
+  }
+  // The panel's OWN `take.origin` (STC-392 review, I7) — not re-derived from
+  // the path a second time. The path-based answer is kept only as a
+  // fallback for the case no panel is open for this dir, which should never
+  // happen in practice (this handler is always reached from that panel's own
+  // renderer) but must still answer something rather than throw.
+  const origin = takeFor(dir)?.origin
+    ?? (insideTempTakesRoot(process.env, dir) ? "fresh" : "library");
+  if (trashStyle(origin) === "confirm") {
+    return trashWithConfirmation([{ path: dir, label: "this take", plural: false }]);
+  }
+
+  if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
+  pendingTrash.promise(dir);
+  dismissThumbnail(dir);
+  showUndoToast({
+    dir, corner: thumbnail.corner,
+    dist: here, rendererDir: join(here, "..", "renderer"),
+  });
+  return { ok: true };
+});
+
+/**
+ * Break a promise `panel:trash` made, and bring the panel back.
+ *
+ * `false` when there was nothing to take back — `PendingTrash.undo` already
+ * refuses a take that was never promised or has already been committed, so a
+ * stale toast (or a doubled click) cannot reopen a panel for a take already
+ * in the Trash. On success the panel is re-presented from the STORED shot
+ * document, exactly like `still:reopen`/crash recovery — nothing was ever
+ * moved, so the take is still sitting in temp storage under `dir`.
+ */
+ipcMain.handle("panel:undoTrash", async (_e, dir: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) return false;
+  if (!pendingTrash.undo(dir)) return false;
+  hideToast();
+  try {
+    const shot = JSON.parse(await readFile(join(dir, "shot.json"), "utf8"));
+    const { thumbnail } = readSettings(app.getPath("userData"));
+    presentThumbnail({
+      dir, shot, corner: thumbnail.corner,
+      // A promise only ever exists for a take Save/Save-All could otherwise
+      // resurrect (`trashStyle` above), which is exactly `origin: "fresh"` —
+      // an undone deletion is nothing more than the panel it was closed from,
+      // reopened.
+      take: { kind: "shot", origin: "fresh" },
+      dist: here, rendererDir: join(here, "..", "renderer"),
+    });
+  } catch (e) {
+    console.error("[trash] could not re-present after undo:", dir, e);
+  }
+  return true;
 });
 
 /** Show the last SAVED still in the Finder. Takes no path — see `lastStillFile`. */
@@ -1564,13 +2230,6 @@ ipcMain.handle("still:reveal", async () => {
   if (!lastStillFile) return false;
   shell.showItemInFolder(lastStillFile);
   return true;
-});
-
-/** Back to "beside the shot", without needing a folder picker to express it. */
-ipcMain.handle("still:clearDestination", async () => {
-  const still = readSettings(app.getPath("userData")).still;
-  writeSettings(app.getPath("userData"), { still: { ...still, destination: null } });
-  return { destination: null };
 });
 
 /**
@@ -1582,7 +2241,8 @@ ipcMain.handle("still:clearDestination", async () => {
  * place `still:capture` ever writes.
  */
 ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
-  if (!insideCaptureRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to read a path outside the recordings folder");
   }
   if (!/^[A-Za-z0-9._-]+\.png$/.test(name) || name.includes("..")) {
@@ -1593,34 +2253,50 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
 });
 
 /**
- * Store this shot's redaction regions (STC-297), so they survive the panel and
- * the app.
+ * Store this shot's redaction regions (STC-297) and decoration mode
+ * (STC-392 review, I2), so they survive the panel and the app.
  *
- * The renderer sends REGIONS, never a document. That is the whole shape of
- * this handler: `shot.json` IS the still — the description is the artefact and
- * the pixels are derived (shot.ts's header) — so letting a sandboxed renderer
- * hand over a replacement document would let it rewrite the display, the crop,
- * the frame's filename and the capture time of a file the app then treats as
- * authoritative. Instead the stored document is read, the ONE field the panel
- * is allowed to change is replaced, and the result goes back through
- * `parseShot` before anything is written — so a region the schema would refuse
- * cannot reach the disk, and neither can a document this process did not
- * already have.
+ * The renderer sends REGIONS and a MODE, never a document. That is the whole
+ * shape of this handler: `shot.json` IS the still — the description is the
+ * artefact and the pixels are derived (shot.ts's header) — so letting a
+ * sandboxed renderer hand over a replacement document would let it rewrite
+ * the display, the crop, the frame's filename and the capture time of a file
+ * the app then treats as authoritative. Instead the stored document is read,
+ * only the fields the panel is allowed to change are replaced, and the
+ * result goes back through `parseShot` before anything is written — so a
+ * region the schema would refuse cannot reach the disk, and neither can a
+ * document this process did not already have.
+ *
+ * Widening this channel to carry `mode` alongside `redactions` is still safe
+ * under that rule, and it is why the mode never rode along before: `mode` is
+ * a closed, low-risk enum — `parseShot` already refuses anything not in
+ * `DECORATION_MODES` (and refuses a `WINDOW_MODES` value on a shot that
+ * cannot carry it), the same way it already refuses a malformed redaction —
+ * so it costs the handler nothing more than the redactions already spend to
+ * keep "the renderer may change a shot's decoration and nothing else about
+ * it" true. `mode` is optional on the wire (`undefined` keeps the stored
+ * value) so a redaction-only call — the undo button, a drawn box — need not
+ * repeat a mode nothing about it changed.
  *
  * The write is not atomic and deliberately is not: the alternative is a temp
  * file plus a rename in the take directory, and a half-written `shot.json`
  * from a crash mid-write costs the DECORATION, never the capture — `frame.png`
  * is untouched here and is what the shot actually is.
  */
-ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown) => {
-  if (!insideCaptureRoot(process.env, dir)) {
+ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
   const file = join(dir, "shot.json");
   const stored = parseShot(JSON.parse(await readFile(file, "utf8")));
   const next = parseShot({
     ...stored,
-    decoration: { ...stored.decoration, redactions },
+    decoration: {
+      ...stored.decoration,
+      redactions,
+      ...(mode !== undefined ? { mode } : {}),
+    },
   });
   // Through `shotForWrite`, which decides the VERSION: a shot with no
   // annotations stays shot-1 and must not carry the v2-only key, since shot-1
@@ -1727,12 +2403,28 @@ ipcMain.handle("share:publish", async (e): Promise<{
 }> => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
-  const { share } = readSettings(app.getPath("userData"));
+  const { share, saveFolder } = readSettings(app.getPath("userData"));
   const takeName = basename(openTake);
+  // STC-413: resolved by identity, never derived from the take name — a
+  // renamed export must still be found. `planPublish` no longer re-derives
+  // a path itself; it takes whatever this scan found (or null).
+  //
+  // `readBundleId`, NOT `ensureCaptureId` (M5). Publishing is a read of what
+  // has already been exported, and this was the one path that could MINT and
+  // WRITE a `capture.json` into a bundle the user had only asked to publish
+  // — and then, in the very case where the write happened (no document, so
+  // nothing exported), go on to report "no export yet" anyway. A side effect
+  // on a path that then refuses is the worst of both.
+  const id = await readBundleId(openTake);
+  const files = id ? await scanFinishedFilesAt(process.env, saveFolder) : [];
+  // A take made before STC-413 keeps its export INSIDE its own directory,
+  // where the top-level scan cannot see it (I2). Without this fallback every
+  // pre-branch take reports as never exported.
+  const exportFile = (id ? files.find((f) => f.id === id)?.file : undefined)
+    ?? await legacyExportIn(openTake, takeName)
+    ?? null;
   const plan = planPublish({
-    takeName,
-    takeDir: openTake,
-    exportExists: existsSync(join(openTake, exportMediaName(takeName))),
+    exportFile,
     destination: share.destination,
     slug: share.slug,
   });
@@ -1757,6 +2449,27 @@ ipcMain.handle("share:publish", async (e): Promise<{
     }),
   };
 });
+
+/**
+ * A pre-STC-413 export still sitting inside its own take directory (I2).
+ *
+ * Shares `library.ts`'s `findBuriedExport` rather than re-deriving the name
+ * here — the scan and this handler must agree about which file a legacy
+ * take's tile points at, and two spellings of one rule is this codebase's
+ * most-repeated defect.
+ *
+ * Not guarded on the bundle being legacy: a `raw/` bundle written by this
+ * branch never contains an `export-*.mp4` at all, so the lookup simply finds
+ * nothing there, and a guard would be a second place to get the raw/legacy
+ * distinction right.
+ */
+async function legacyExportIn(dir: string, name: string): Promise<string | undefined> {
+  try {
+    return findBuriedExport(dir, name, await readdir(dir));
+  } catch {
+    return undefined;
+  }
+}
 
 /** What the export actually encoded, from its own manifest, or nothing. */
 async function exportedSize(dir: string, takeName: string):
@@ -1793,7 +2506,8 @@ ipcMain.handle("share:reveal", async () => {
 ipcMain.handle("recorder:reveal", async (_e, dir: string) => {
   // Only ever reveal something inside the recordings folder: `dir` arrives from
   // the renderer, and the renderer should not be able to open arbitrary paths.
-  if (!insideTakesRoot(process.env, dir)) {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to reveal a path outside the recordings folder");
   }
   shell.showItemInFolder(dir);

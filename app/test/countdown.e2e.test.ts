@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
+import { stubQuitDialog } from "./_quit-fixture.js";
+import { toastPage } from "./_toast.js";
 
 /**
  * The countdown, wired through the real app (STC-391).
@@ -71,6 +73,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
            STC_FAKE_START_LOG: startLog, STC_FAKE_STILL_LOG: stillLog,
            STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#record");
   return { win, startLog, stillLog, tempTakes };
@@ -165,7 +168,7 @@ describe("Record always counts down", () => {
     // The ticket's requirement 1 in full: "returns to idle". A cancellation is
     // not a failure, so no alert either.
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
     // Deliberately NOT a directory count: nothing on the recording path
     // creates a take directory before the helper does (`newTempTakeDir` only
     // names one), so a count would read the same whether the cancel took or
@@ -248,7 +251,7 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     // countdown again rather than be refused for a capture that has ended.
     await startRecordFlow(app!, win);
     await countdownPage();
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
 
     // Found migrating this test onto the real overlay flow (STC-388, task
     // 6b): STC_COUNTDOWN_FAULT stays set for the whole process, not one shot,
@@ -299,14 +302,14 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
     await startRecordFlow(app!, win);
     await countdownPage();
-    expect(await win.textContent("#alert")).toBeFalsy();
+    expect(await toastPage(app!)).toBeUndefined();
   }, 120_000);
 });
 
 describe("the countdown duration is choosable (STC-391, from hardware)", () => {
   test("the profile sheet offers the options, and the pick is what Record waits", async () => {
     const { win, startLog } = await launch();
-    await win.click("#profile");
+    await win.click("#settings");
     await win.waitForSelector("#countdownms");
 
     // Built from COUNTDOWN_OPTIONS, not hand-listed in the markup.
@@ -336,9 +339,10 @@ describe("the countdown duration is choosable (STC-391, from hardware)", () => {
                STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
                STC_HELPER_BIN: FAKE_HELPER },
       });
+      await stubQuitDialog(app);
       const w = await app.firstWindow();
       await w.waitForSelector("#record");
-      await w.click("#profile");
+      await w.click("#settings");
       await w.waitForSelector("#countdownms");
       return w;
     };

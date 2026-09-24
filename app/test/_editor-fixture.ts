@@ -1,16 +1,34 @@
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
+import { clickThatCloses } from "./_windows.js";
 
 const root = join(__dirname, "..", "..");
 
-/** Launch the app against a recordings root, and wait for the library to list something. */
+/**
+ * Launch the app against a recordings root, and wait for the library to list
+ * something.
+ *
+ * STC-403: this used to launch with no `--user-data-dir`, so the app loaded
+ * the DEVELOPER's real `~/Library/Application Support/Capture/settings.json`
+ * — on a machine with a save folder set, every editor E2E through this
+ * fixture wrote real PNGs to the real Desktop and then failed asserting on a
+ * file that landed somewhere else entirely. Isolated now, the same way every
+ * other fixture in this repo already is. `saveFolder` (STC-412) is seeded to
+ * `null` explicitly rather than left to an empty settings file, so "beside
+ * the take" is the ASSERTED default these tests rely on, not an accident of
+ * what a fresh profile happens to produce.
+ */
 export async function launchApp(dir: string, env: Record<string, string> = {}):
     Promise<{ app: ElectronApplication; win: Page }> {
+  const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+  writeFileSync(join(userData, "settings.json"), JSON.stringify({
+    saveFolder: null,
+  }));
   const app = await electron.launch({
-    args: [root], cwd: root,
+    args: [root, `--user-data-dir=${userData}`], cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: dir,
       // Isolated the same way the library root is (STC-393): without this,
@@ -76,41 +94,15 @@ export async function inkiness(page: Page): Promise<number> {
 /**
  * Click the editor's Close button and wait for the window to actually go away.
  *
- * `editor.ts`'s handler calls `window.close()` synchronously (`$("closepreview")
- * .addEventListener("click", () => window.close())`), so the click destroys the
- * very page Playwright is still doing its post-click bookkeeping on. When the
- * window wins that race, `click()` REJECTS — "Target page, context or browser
- * has been closed" — for a click that landed and did exactly what it was asked
- * to do. That is how master run 418 went red on a working Close button
- * (STC-386); the call log shows the element "visible, enabled and stable",
- * "done scrolling", "performing click action", and then the target gone.
- *
- * The tolerance below is safe because it is NOT the assertion — `closed` is.
- * Three outcomes, told apart rather than lumped together:
- *
- *   - the click resolves  -> still wait for the close, so a click that landed
- *                            on a button that did nothing continues to fail;
- *   - the click rejects and the window closes -> the race, and a pass: the
- *                            only way to lose the page here is to have closed it;
- *   - the click rejects and the window does NOT close -> a real failure, and
- *                            the CLICK's own error is rethrown, because "could
- *                            not find #closepreview" says more than a close
- *                            that timed out waiting on a click that never was.
- *
- * So no error string is matched and no ordering between the rejection and the
- * `close` event is assumed. `app/test/close-editor-window.test.ts` drives all
- * four branches against a stub page — the race needs a real window to lose a
- * real click at a real instant, which is the multi-way timing coincidence this
- * repo has already paid for chasing live (STC-343's discard race).
+ * `editor.ts` closes the window synchronously in the click handler, so the
+ * click can reject for a click that landed — STC-386, master run 418. The
+ * tolerance and its three outcomes live in `_windows.ts`'s `actThatCloses`
+ * now (STC-434), shared with every other button that closes its own window;
+ * `app/test/close-editor-window.test.ts` still drives all four branches
+ * through this entry point.
  */
-export async function closeEditorWindow(page: Page, timeout = 15_000): Promise<void> {
-  const closed = page.waitForEvent("close", { timeout });
-  const clickErr = await page.click("#closepreview").then(() => undefined, (e: unknown) => e);
-  if (clickErr !== undefined) {
-    await closed.catch(() => { throw clickErr; });
-    return;
-  }
-  await closed;
+export function closeEditorWindow(page: Page, timeout = 15_000): Promise<void> {
+  return clickThatCloses(page, "#closepreview", timeout);
 }
 
 /** Open the export dialog (STC-373) — legibility, output size and share all live in it now. */
@@ -192,4 +184,25 @@ export async function dragOnStage(
   await win.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2);
   await win.mouse.move(b.x, b.y);
   await win.mouse.up();
+}
+
+/**
+ * Press Done in the override editor and wait until the editor has actually
+ * LEFT edit mode (STC-427).
+ *
+ * `closeOverrideEditor` (editor.ts) awaits the project write and only THEN
+ * runs `resetEditingState` + `updateManualDraftBlock`, which hide
+ * `#overridebar` and strip `zoomblock selected` off the static `#manualdraft`
+ * in one synchronous run. Every test that polled `project.json` for the
+ * committed override and then clicked `.zoomblock` again was polling a SIDE
+ * EFFECT that lands before the UI follows it: on a loaded CI runner the
+ * next click's locator snapshot caught `#manualdraft` still carrying the
+ * class, mid-hide, and waited 30 s for it to become visible (runs
+ * 35451943868 and 35452722657, two files, the same
+ * `locator resolved to <div id="manualdraft" class="zoomblock selected">`).
+ * `#overridebar` hidden is the signal the next click actually depends on.
+ */
+export async function pressOverrideDone(page: Page, timeout = 10_000): Promise<void> {
+  await page.click("#overridedone");
+  await page.waitForSelector("#overridebar", { state: "hidden", timeout });
 }

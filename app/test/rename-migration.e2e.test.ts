@@ -13,8 +13,13 @@ import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "../src/product.js";
  * present after the rename" — and the one part of this change that can
  * actually destroy something a user cares about. `productName` moves
  * `app.getPath("userData")`, so a real configuration (camera, mic, four
- * custom hotkeys, still and share destinations) is left in a folder the
- * renamed app no longer reads.
+ * custom hotkeys, the save folder and share destination) is left in a folder
+ * the renamed app no longer reads. The seeded fixture below still writes the
+ * pre-STC-412 `still.destination` shape deliberately — it stands in for a
+ * REAL legacy settings.json written before that field moved to the top-level
+ * `saveFolder`, and the migration copies the file wholesale regardless of its
+ * shape, so this needs no functional change: `readSettings` simply ignores
+ * the now-unknown key on the far side, same as it ignores any other one.
  *
  * Driven through the REAL app rather than by calling the migration directly,
  * because the property under test is an ORDERING one: the migration has to
@@ -70,7 +75,7 @@ describe("settings survive the rename to Capture (STC-397)", () => {
       shortcuts: { region: "Control+Alt+Shift+Command+7" },
       still: { format: "heic", quality: 0.5, scale: "native",
                stripMetadata: true, template: "{app}", destination: null },
-      thumbnail: { corner: "top-left", timeoutMs: 9000, settleAction: "copy", skip: false },
+      thumbnail: { corner: "top-left", skip: true },
     });
     const win = await launch(userData);
 
@@ -80,7 +85,7 @@ describe("settings survive the rename to Capture (STC-397)", () => {
     expect(settings.still.format).toBe("heic");
     expect(settings.still.stripMetadata).toBe(true);
     expect(settings.thumbnail.corner).toBe("top-left");
-    expect(settings.thumbnail.timeoutMs).toBe(9000);
+    expect(settings.thumbnail.skip).toBe(true);
 
     // On disk in the new home too, so the NEXT launch needs no migration.
     expect(existsSync(join(userData, "settings.json"))).toBe(true);
@@ -93,22 +98,22 @@ describe("settings survive the rename to Capture (STC-397)", () => {
     // The migration runs on every launch, so the second launch must not
     // undo what the first one's user did. This is the idempotence that makes
     // "runs unconditionally at startup" safe rather than destructive.
-    const { userData, legacy } = seedLegacy({ thumbnail: { corner: "top-left", timeoutMs: 9000 } });
+    const { userData, legacy } = seedLegacy({ thumbnail: { corner: "top-left" } });
 
     const win = await launch(userData);
     await win.evaluate(() => (window as any).recorder.setSettings(
-      { thumbnail: { corner: "bottom-right", timeoutMs: 4000, settleAction: "save", skip: false } }));
+      { thumbnail: { corner: "bottom-right", skip: true } }));
     await app!.close();
     app = undefined;
 
-    // The legacy copy still says top-left/9000; the new one says otherwise.
+    // The legacy copy still says top-left; the new one says otherwise.
     expect(JSON.parse(readFileSync(join(legacy, "settings.json"), "utf8")).thumbnail.corner)
       .toBe("top-left");
 
     const win2 = await launch(userData);
     const settings = await win2.evaluate(() => (window as any).recorder.getSettings());
     expect(settings.thumbnail.corner).toBe("bottom-right");
-    expect(settings.thumbnail.timeoutMs).toBe(4000);
+    expect(settings.thumbnail.skip).toBe(true);
   }, 90_000);
 
   test("a fresh install with no legacy folder starts on defaults, not an error", async () => {
