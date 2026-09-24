@@ -26,7 +26,8 @@ contextBridge.exposeInMainWorld("recorder", {
   // rather than an in-page preview. `openPreview`/`closePreview`/`writeProject`
   // /`writeExport` and the rest of the old in-page player's channels moved to
   // `editor-preload.ts`, which is the only bridge that still calls them.
-  openEditor: (dir: string, name: string) => ipcRenderer.invoke("editor:open", dir, name),
+  openEditor: (dir: string, name: string, autoShare?: boolean) =>
+    ipcRenderer.invoke("editor:open", dir, name, autoShare),
   // `action` is STC-292's: the hotkey and the menu bar ask for a specific
   // capture mode, the button asks for none.
   captureStill: (action?: string) => ipcRenderer.invoke("still:capture", action),

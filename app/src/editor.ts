@@ -97,6 +97,10 @@ const fmtEstimate = (ms: number) => {
 const params = new URLSearchParams(location.search);
 const takeDir = params.get("dir") ?? "";
 const takeName = params.get("name") ?? "";
+// STC-429: the library's "Share" tile action opens the take here and asks
+// for its own Share flow to run immediately, rather than duplicating
+// share.ts's plumbing in the grid.
+const autoShare = params.get("autoShare") === "1";
 
 // ---- state ------------------------------------------------------------------
 
@@ -1755,6 +1759,15 @@ void (async () => {
   }
   try {
     await openTakeOrThrow(takeDir);
+    // Share now lives inside the export dialog (STC-444 slice 3) — open it
+    // the same way `#openexport`'s own click does, so the slug field and
+    // site-folder note are populated before `publish()` reads them, and so
+    // the person can actually see the status line while it runs.
+    if (autoShare) {
+      if (!exportDialog.open) exportDialog.showModal();
+      await refreshShareRow();
+      void publish();
+    }
   } catch (e: any) {
     alertUser(`Could not open "${takeName || takeDir}".\n${e?.message ?? e}`);
   }

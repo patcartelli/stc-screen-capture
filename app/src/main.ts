@@ -1590,12 +1590,12 @@ ipcMain.handle("preview:close", async (e) => { clearOpenTake(e); });
  * already is: the window that gets created is `editor-window.ts`'s concern,
  * not something the renderer reaches with its own `BrowserWindow`.
  */
-ipcMain.handle("editor:open", async (_e, dir: string, name: string) => {
+ipcMain.handle("editor:open", async (_e, dir: string, name: string, autoShare?: boolean) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
-  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer") });
+  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer"), autoShare });
   return true;
 });
 

@@ -25,7 +25,8 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false });
+                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false,
+                 libraryView: "grid" });
     expect(DEFAULT_SETTINGS.camera).toBe(false);
   });
 
@@ -64,7 +65,8 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false });
+                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false,
+                 libraryView: "grid" });
   });
 
   test("an unwritable directory does not throw — the preference is not worth a crash", () => {
@@ -118,7 +120,8 @@ describe("the display preference (STC-247)", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false });
+                 scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false,
+                 libraryView: "grid" });
   });
 });
 

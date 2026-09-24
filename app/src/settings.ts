@@ -146,6 +146,12 @@ export interface Settings {
    * instrumentation, not something a normal user needs in view.
    */
   showDiagnostics: boolean;
+  /**
+   * The take library's layout (STC-429): the original grid, or a row-based
+   * list. Sticky, the same as every other layout preference here — a chosen
+   * view stays chosen across launches.
+   */
+  libraryView: "grid" | "list";
 }
 
 export interface ScopeRegion {
@@ -230,7 +236,7 @@ export const DEFAULT_SETTINGS: Settings = {
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
   share: { ...DEFAULT_SHARE_SETTINGS },
   scope: { ...DEFAULT_SCOPE_SETTINGS },
-  saveFolder: null, showDiagnostics: false,
+  saveFolder: null, showDiagnostics: false, libraryView: "grid",
 };
 
 /**
@@ -286,6 +292,11 @@ function cleanShare(v: unknown): ShareSettings {
 /** A display id is a positive integer; anything else is "automatic". */
 function cleanDisplayId(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
+}
+
+/** Anything but the literal "list" reads as "grid" — the original layout. */
+function cleanLibraryView(v: unknown): "grid" | "list" {
+  return v === "list" ? "list" : "grid";
 }
 
 /**
@@ -404,6 +415,7 @@ export function readSettings(dir: string): Settings {
     saveFolder: cleanSaveFolder(doc.saveFolder),
     showDiagnostics: typeof doc.showDiagnostics === "boolean"
       ? doc.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
+    libraryView: cleanLibraryView(doc.libraryView),
   };
 }
 
@@ -446,6 +458,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     saveFolder: cleanSaveFolder(merged.saveFolder),
     showDiagnostics: typeof merged.showDiagnostics === "boolean"
       ? merged.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
+    libraryView: cleanLibraryView(merged.libraryView),
   };
   try {
     writeFileSync(join(dir, FILE), JSON.stringify(clean, null, 2));
