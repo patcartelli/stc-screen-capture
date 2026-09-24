@@ -1,0 +1,111 @@
+/* ── shared instrument tokens (STC-443) ─────────────────────────────────
+   The one token set every renderer window loads: fonts, the type ramp, and
+   the light/dark color tokens. Lifted verbatim from `index.html`'s own
+   :root block (STC-372) — this file does not decide anything new, it just
+   stops three windows from each keeping their own copy.
+
+   A window's own <style> may EXTEND this with semantic tokens this file has
+   no opinion on (editor.html's --clip/--zoom), but must not redefine a
+   token declared here — that is exactly the drift this ticket removes. */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('fonts/Geist-Light.woff2') format('woff2');
+  font-weight: 300; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('fonts/Geist-Regular.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('fonts/Geist-Medium.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('fonts/Geist-SemiBold.woff2') format('woff2');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('fonts/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Silkscreen';
+  src: url('fonts/Silkscreen-Regular.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+
+:root {
+  color-scheme: light dark;
+  --font-sans: 'Geist', -apple-system, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-pixel: 'Silkscreen', 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Type ramp — sans (Geist). No view sets a font-size inline. */
+  --type-label: 10px; --type-label-weight: 500; --type-label-tracking: 0.10em;
+  --type-meta: 11px; --type-meta-weight: 400; --type-meta-tracking: 0.02em;
+  --type-body: 12px; --type-body-weight: 400; --type-body-lh: 1.4;
+  --type-body-strong: 12px; --type-body-strong-weight: 600; --type-body-strong-lh: 1.4;
+  --type-heading: 13px; --type-heading-weight: 600; --type-heading-lh: 1.3;
+  --type-read: 13px; --type-read-weight: 400; --type-read-lh: 1.5;
+  --type-title: 15px; --type-title-weight: 300; --type-title-tracking: -0.01em; --type-title-lh: 1.3;
+  --type-display: 20px; --type-display-weight: 300; --type-display-tracking: -0.02em; --type-display-lh: 1.1;
+
+  /* Type ramp — mono (JetBrains Mono) with tabular-nums */
+  --type-value-sm: 11px; --type-value-sm-weight: 400; --type-value-sm-lh: 1.4;
+  --type-value: 12px; --type-value-weight: 400; --type-value-lh: 1.4;
+
+  /* Type ramp — pixel (Silkscreen) at 8px grid multiples only */
+  --type-timer-pill: 16px; --type-timer-pill-lh: 1;
+  --type-timer: 32px; --type-timer-lh: 1;
+
+  /* Light tokens. There is no in-app theme switch — prefers-color-scheme
+     below is the only signal, same as the color-scheme line already was. */
+  --bg: #f6f6f4;
+  --surface: #ffffff;
+  --surface-hover: #eeeeeb;
+  --border: rgba(15, 15, 12, .14);
+  --border-strong: rgba(15, 15, 12, .30);
+  --text: #171714;
+  --text-dim: rgba(23, 23, 20, .62);
+  --text-faint: rgba(23, 23, 20, .40);
+  --accent: #3b6fe0;
+  --accent-soft: rgba(59, 111, 224, .14);
+  --rec: #d33a3a;
+  --rec-soft: rgba(211, 58, 58, .12);
+  --warn: #b9502c;
+  --warn-soft: rgba(185, 80, 44, .12);
+  --focus: #4f86ff;
+
+  font-family: var(--font-sans);
+  font-size: var(--type-body);
+  line-height: 1.5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131315;
+    --surface: #1c1c1f;
+    --surface-hover: #26262a;
+    --border: rgba(255, 255, 255, .12);
+    --border-strong: rgba(255, 255, 255, .26);
+    --text: #f1f1ee;
+    --text-dim: rgba(241, 241, 238, .64);
+    --text-faint: rgba(241, 241, 238, .42);
+    --accent: #7aa2ff;
+    --accent-soft: rgba(122, 162, 255, .18);
+    --rec: #ff6b6b;
+    --rec-soft: rgba(255, 107, 107, .16);
+    --warn: #e0925a;
+    --warn-soft: rgba(224, 146, 90, .16);
+    --focus: #7aa2ff;
+  }
+}

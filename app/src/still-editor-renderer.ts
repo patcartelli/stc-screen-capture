@@ -66,6 +66,11 @@ function regionCountText(): string {
   return regions.length === 0 ? "No boxes." : `${regions.length} ${regions.length === 1 ? "box" : "boxes"}.`;
 }
 
+/** STC-443: Undo is disabled with nothing to undo — the one state the icon
+ * toolbar's own ticket calls out by name. Called after every change to
+ * `regions`, the same way `draw()`/`setHint()` already are. */
+function updateUndoState(): void { undoBtn.disabled = regions.length === 0; }
+
 /**
  * The shot as the editor currently describes it: the stored mode, with
  * whatever `regions` now holds. `layoutStill` positions a shot's redaction
@@ -188,15 +193,19 @@ canvas.addEventListener("pointerup", (e) => {
   void draw();
   void persistDecoration();
   setHint(regionCountText());
+  updateUndoState();
 });
 
-undoBtn.addEventListener("click", () => {
+function undo(): void {
   if (regions.length === 0) return;
   regions = undoLast(regions);
   void draw();
   void persistDecoration();
   setHint(regionCountText());
-});
+  updateUndoState();
+}
+
+undoBtn.addEventListener("click", undo);
 
 /**
  * Write the finished image to the save folder (STC-446).
@@ -267,7 +276,17 @@ async function saveFinished(): Promise<void> {
 saveBtn.addEventListener("click", () => void saveFinished());
 
 doneBtn.addEventListener("click", () => window.close());
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.close(); });
+// STC-443: each icon button names its shortcut in its own tooltip — this is
+// what makes that true rather than decorative. ⌘Z/⌘S are trapped and
+// preventDefault'd so they never fall through to a browser-native undo/save
+// that has nothing to do with this document.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { window.close(); return; }
+  if (!e.metaKey) return;
+  const key = e.key.toLowerCase();
+  if (key === "z") { e.preventDefault(); undo(); }
+  else if (key === "s") { e.preventDefault(); if (!saveBtn.disabled) void saveFinished(); }
+});
 
 // Refit on every resize — the one thing a fixed `REDACT_SIZE` panel never
 // needed and a real, resizable window always does.
@@ -277,9 +296,12 @@ window.addEventListener("resize", () => {
   resizeTimer = setTimeout(() => void draw(), 60);
 });
 
+updateUndoState();
+
 void (async () => {
   shot = await window.stillEditor.getShot(dir);
   regions = [...shot.decoration.redactions];
+  updateUndoState();
   const bytes = await window.stillEditor.getFrame(dir, shot.frame.file);
   frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   await draw();
