@@ -32,8 +32,27 @@
     button:hover:not([disabled]) { background: var(--surface-hover); }
     button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     button[disabled] { opacity: .4; cursor: default; }
-    #record { font-weight: 600; border-color: var(--rec); color: var(--rec); }
+    /* STC-442: Record and Shot are the primary pair — same weight and
+       treatment as each other (bold, a colored border/label, a soft-tint
+       hover). Record keeps --rec (it already meant "this one records");
+       Shot has no such meaning of its own, so it takes the app's ordinary
+       --accent — same strength, the app's default interactive color rather
+       than a third invented one. Settings, below, drops out of this pair
+       entirely rather than getting a third color in the same treatment. */
+    #record, #capturestill { font-weight: 600; }
+    #record { border-color: var(--rec); color: var(--rec); }
     #record:hover:not([disabled]) { background: var(--rec-soft); }
+    #capturestill { border-color: var(--accent); color: var(--accent); }
+    #capturestill:hover:not([disabled]) { background: var(--accent-soft); }
+    /* Secondary: a door into configuration, not a peer of the two capture
+       actions above. Quieter border and label color only — still a normal
+       weight-500 control (see the comment above), never bold, never tinted
+       on hover with an accent it isn't part of. `margin-left: auto` in a
+       `.row` flex container pushes it (and #state, ordered just before it
+       in the markup) to the row's trailing edge, away from the primary
+       pair. */
+    #settings { border-color: var(--border); color: var(--text-dim); background: transparent; }
+    #settings:hover:not([disabled]) { background: var(--surface-hover); color: var(--text); }
     .row { display: flex; gap: 10px; align-items: center; }
     /* `.row`'s `display: flex` and the UA stylesheet's `[hidden] { display:
        none }` are equal specificity, and an author rule wins THAT tie
@@ -42,7 +61,16 @@
        Restated explicitly, and !important because nothing here should ever
        need to out-rank "this element is hidden". */
     [hidden] { display: none !important; }
-    #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-dim); }
+    /* STC-442: a status readout, not trailing text — a chip, the same small
+       uppercase-label idiom as .libbadge/.subhead/#modelcode elsewhere in
+       this window, so it reads as "the app reporting a state" rather than
+       as a caption hanging off the last button. `margin-left: auto` pushes
+       it (and #settings after it) to the row's trailing edge. */
+    #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+              font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
+              text-transform: uppercase; color: var(--text-dim);
+              background: var(--surface-hover); border: 1px solid var(--border);
+              border-radius: 999px; padding: 4px 10px; margin-left: auto; }
     table { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     td { padding: 2px 14px 2px 0; }
     td:first-child { color: var(--text-dim); font-family: var(--font-sans); }
@@ -260,8 +288,8 @@
       <span id="pill-stop" aria-hidden="true"></span>
     </button>
     <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
-    <button id="settings" title="Profile, preferences and shortcuts">Settings</button>
     <span id="state">starting…</span>
+    <button id="settings" title="Profile, preferences and shortcuts">Settings</button>
   </div>
   <div id="stillstatus" hidden></div>
 
