@@ -7,7 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { REDACTION_FILL_ON_LIGHT, REDACTION_FILL_ON_DARK } from "../../transform/src/still-redact.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
-import { stubQuitDialog } from "./_quit-fixture.js";
+import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { windowCount, hasWindow, clickThatCloses } from "./_windows.js";
 import { RAW_SUBDIR } from "../src/takes.js";
 import { keptFileRequests } from "./_still-log.js";
@@ -41,7 +41,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

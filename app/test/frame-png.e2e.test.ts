@@ -3,6 +3,7 @@ import { type ElectronApplication, type Page } from "playwright";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { launchWithTakeInEditor } from "./_editor-fixture.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * STC-298: the frame the playhead is on, as a PNG, copied or saved.
@@ -44,7 +45,7 @@ import { launchWithTakeInEditor } from "./_editor-fixture.js";
  * still pass if the destination quietly went back to being the bundle's.
  */
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 async function openTake():
     Promise<{ win: Page; mainWin: Page; takeDir: string; root: string }> {

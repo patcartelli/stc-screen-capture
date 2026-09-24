@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
 import { productStamp } from "../src/product.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * The model code, end to end (STC-399): the instrument strip shows the bare
@@ -16,7 +17,7 @@ import { productStamp } from "../src/product.js";
 const root = join(__dirname, "..", "..");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 describe("the model code (STC-399)", () => {
   test("shows on the instrument strip, and disappears with everything else when the pill collapses", async () => {

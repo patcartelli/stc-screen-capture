@@ -8,6 +8,7 @@ import { withoutCountdown } from "./_countdown-fixture.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { windowCount, pageWithUrl, pageMatching, clickThatCloses } from "./_windows.js";
 import { RAW_SUBDIR } from "../src/takes.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -22,7 +23,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 describe("quitting while recording", () => {
   test("stops the recording, waits for the stop, then quits the helper", async () => {

@@ -1,4 +1,4 @@
-import { HelperClient, type HelperLine, type SpawnOptions } from "./helper-client.js";
+import { HelperClient, QUIT_GRACE_MS, type HelperLine, type SpawnOptions } from "./helper-client.js";
 import type { SupervisorState } from "./supervisor-state.js";
 import { promoteTake } from "./temp-takes.js";
 
@@ -185,7 +185,7 @@ export class HelperSupervisor {
     if (this.state === "recording") await this.stopRecording().catch(() => {});
     const exited = c.waitForExit();
     await c.request("quit").catch(() => {});
-    await Promise.race([exited, new Promise((r) => setTimeout(r, 2000))]);
+    await Promise.race([exited, new Promise((r) => setTimeout(r, QUIT_GRACE_MS))]);
     c.kill();
     this.state = "stopped";
   }
