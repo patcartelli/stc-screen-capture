@@ -119,3 +119,38 @@ export async function pageMatching(
 export function pageWithUrl(app: ElectronApplication, urlPart: string, timeoutMs?: number): Promise<Page> {
   return pageMatching(app, (p) => p.url().includes(urlPart), `url containing "${urlPart}"`, timeoutMs);
 }
+
+/**
+ * Do something that CLOSES `page`'s own window, and wait until it has.
+ *
+ * Save, Trash, Edit, Dismiss, Undo on the toast, Done, the editor's Close:
+ * each handler destroys its window synchronously, so the click destroys the
+ * page Playwright is still doing its post-click bookkeeping on, and `click()`
+ * REJECTS ("Target page, context or browser has been closed") for an action
+ * that landed. Idle, the bookkeeping wins; under load, the window does
+ * (STC-386 on CI; reproduced for panel-waits under load in STC-434).
+ *
+ * The `close` event is the assertion, not the click:
+ *   - action resolves                  -> still wait for close, so a button
+ *                                         that does nothing still fails;
+ *   - action rejects, window closes    -> the race; a pass;
+ *   - action rejects, window stays     -> the ACTION's error is rethrown.
+ * No error text is matched and no ordering is assumed.
+ * `close-editor-window.test.ts` drives all four branches with a stub page.
+ *
+ * Only for windows that are DESTROYED. A hidden window never emits `close`.
+ */
+export async function actThatCloses(page: Page, act: () => Promise<unknown>, timeout = 15_000): Promise<void> {
+  const closed = page.waitForEvent("close", { timeout });
+  const err = await act().then(() => undefined, (e: unknown) => e);
+  if (err !== undefined) {
+    await closed.catch(() => { throw err; });
+    return;
+  }
+  await closed;
+}
+
+/** `actThatCloses` for the common case: one click on `selector`. */
+export function clickThatCloses(page: Page, selector: string, timeout = 15_000): Promise<void> {
+  return actThatCloses(page, () => page.click(selector), timeout);
+}

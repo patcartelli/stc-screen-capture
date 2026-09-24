@@ -8,8 +8,8 @@ import { MAX_STACKED } from "../src/thumbnail.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
-import { windowCount, hasWindow, pageWithUrl, pageMatching } from "./_windows.js";
-import { keptFileRequests } from "./_still-log.js";
+import { windowCount, hasWindow, pageWithUrl, pageMatching, clickThatCloses, actThatCloses } from "./_windows.js";
+import { keptFileRequests, exportRequests } from "./_still-log.js";
 import { RAW_SUBDIR } from "../src/takes.js";
 
 /**
@@ -287,7 +287,7 @@ describe("the panel waits (STC-392)", () => {
   test("Save promotes, and closes the panel", async () => {
     const { app: electronApp, temp, recordings } = await launch();
     const panel = await panelWindow(electronApp);
-    await panel.click("#save");
+    await clickThatCloses(panel, "#save");
     await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(0);
 
@@ -408,7 +408,9 @@ describe("the panel waits (STC-392)", () => {
     // needed the in-browser fix above.
     const elapsed = Date.now() - pressedAt;
     if (elapsed < 500) await sleep(500 - elapsed);
-    await pressTrashKey();
+    // Past the window the key DELETES, which closes this panel's own window
+    // under the evaluate that pressed it — the act-that-closes race.
+    await actThatCloses(panel, pressTrashKey);
     // Exactly the pressed panel goes; an unpressed earlier one (if a retry
     // happened) stays, which is what tells a real delete from a stray close.
     await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
@@ -438,7 +440,7 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
 
   test("pressing Trash closes the panel, puts up an undo toast, and leaves the take in temp", async () => {
     const { app: electronApp, temp } = await launch();
-    await (await panelWindow(electronApp)).click("#trash");
+    await clickThatCloses(await panelWindow(electronApp), "#trash");
 
     await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(0);
@@ -454,11 +456,11 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
 
   test("pressing Undo brings the panel back, and the take is still in temp", async () => {
     const { app: electronApp, temp } = await launch();
-    await (await panelWindow(electronApp)).click("#trash");
+    await clickThatCloses(await panelWindow(electronApp), "#trash");
     await expect.poll(() => windowCount(electronApp, "toast.html"),
                        { timeout: POLL_MS }).toBe(1);
 
-    await (await toastWindow(electronApp)).click("#undo");
+    await clickThatCloses(await toastWindow(electronApp), "#undo");
 
     // The toast goes...
     await expect.poll(() => windowCount(electronApp, "toast.html"),
@@ -478,7 +480,7 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
 
   test("letting the toast expire commits the deletion — temp ends up empty", async () => {
     const { app: electronApp, temp } = await launch();
-    await (await panelWindow(electronApp)).click("#trash");
+    await clickThatCloses(await panelWindow(electronApp), "#trash");
     await expect.poll(() => windowCount(electronApp, "toast.html"),
                        { timeout: POLL_MS }).toBe(1);
     // Still there right after the promise, before any window has elapsed.
@@ -676,7 +678,7 @@ describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
   test("a silent (skip-the-panel) capture never occupies a slot in the cap (STC-426)", async () => {
     // Three real panels fill the cap exactly — nothing hidden, nothing to
     // spare.
-    const { win } = await launch({ captures: MAX_STACKED });
+    const { win, stillLog } = await launch({ captures: MAX_STACKED });
     await expect.poll(() => thumbnailPanels(app!).then((p) => p.filter((x) => x.visible).length),
                        { timeout: POLL_MS }).toBe(MAX_STACKED);
     const before = await thumbnailPanels(app!);
@@ -696,13 +698,23 @@ describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
     // (hidden) `BrowserWindow` while it composites — rather than for any
     // visible change, since the correct behaviour here is exactly NO
     // visible change to the other three.
+    //
+    // Its COPY first. A count poll alone is satisfied by its first sample
+    // (`_windows.ts`): under load it read 3 before the silent window's url
+    // had even committed, and the exact read below then caught it arriving —
+    // 4, reported as the cap being breached. The copy is the one export only
+    // the silent panel makes (the visible panels' paint-time drag-out files
+    // are `clipboard: false`), so once it is logged the window has certainly
+    // existed, and a count of 3 means it is gone.
+    await expect.poll(() => exportRequests(stillLog).some((x) => x.clipboard === true),
+                       { timeout: POLL_MS }).toBe(true);
     await expect.poll(() => thumbnailPanels(app!).then((p) => p.length),
                        { timeout: POLL_MS }).toBe(MAX_STACKED);
     const after = await thumbnailPanels(app!);
     expect(after.map((p) => p.url).sort()).toEqual(before.map((p) => p.url).sort());
     expect(after.every((p) => p.visible)).toBe(true);
     // Declared timeout: 60s overhead + `launch`'s poll (15s) + visible-count
-    // poll (15s) + the silent-panel-gone poll (15s) = 105s summed; declared
-    // above that.
-  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 3 * POLL_MS + 60_000);
+    // poll (15s) + the silent copy poll (15s) + the silent-panel-gone poll
+    // (15s) = 120s summed; declared above that.
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 4 * POLL_MS + 60_000);
 });
