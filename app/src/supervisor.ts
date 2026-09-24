@@ -1,14 +1,6 @@
-import { HelperClient, type HelperLine, type SpawnOptions } from "./helper-client.js";
+import { HelperClient, QUIT_GRACE_MS, type HelperLine, type SpawnOptions } from "./helper-client.js";
 import type { SupervisorState } from "./supervisor-state.js";
 import { promoteTake } from "./temp-takes.js";
-
-/**
- * How long `shutdown()` gives the helper to exit on its own after `quit`
- * before killing it. Exported so the e2e suite's close bound
- * (`_quit-fixture.ts`'s `APP_CLOSE_MS`) is derived from it rather than
- * restating the number.
- */
-export const QUIT_GRACE_MS = 2_000;
 
 /**
  * Keeps a helper process alive and makes its death legible.

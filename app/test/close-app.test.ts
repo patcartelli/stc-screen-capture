@@ -3,8 +3,7 @@ import { EventEmitter } from "node:events";
 import type { ElectronApplication } from "playwright";
 import { closeApp, SLOW_CLOSE_MS, APP_CLOSE_MS, CLOSE_GIVE_UP_MARGIN_MS } from "./_quit-fixture.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
-import { DEFAULT_REQUEST_TIMEOUT_MS } from "../src/helper-client.js";
-import { QUIT_GRACE_MS } from "../src/supervisor.js";
+import { DEFAULT_REQUEST_TIMEOUT_MS, QUIT_GRACE_MS } from "../src/helper-client.js";
 
 /**
  * `closeApp` against a stub app (STC-449). A real slow close needs the macOS

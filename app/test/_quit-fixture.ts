@@ -1,7 +1,6 @@
 import type { ElectronApplication } from "playwright";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
-import { DEFAULT_REQUEST_TIMEOUT_MS } from "../src/helper-client.js";
-import { QUIT_GRACE_MS } from "../src/supervisor.js";
+import { DEFAULT_REQUEST_TIMEOUT_MS, QUIT_GRACE_MS } from "../src/helper-client.js";
 
 /**
  * Answer the before-quit "unsaved takes" dialog (STC-392), so `app.close()`
