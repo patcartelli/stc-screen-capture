@@ -13,7 +13,7 @@ import {
   type Corner,
 } from "./thumbnail.js";
 import {
-  DEFAULT_EMBED_TEMPLATE, DEFAULT_SLUG, slugIsValid,
+  DEFAULT_EMBED_TEMPLATE,
 } from "./share.js";
 
 /**
@@ -185,14 +185,20 @@ export interface ShareSettings {
    * directory nobody asked about. `planPublish` refuses rather than defaulting.
    */
   destination: string | null;
-  /** The stable published name — see `DEFAULT_SLUG` for why it is not the take's. */
-  slug: string;
   /** The paste-able embed, as a template. Provisional; see `DEFAULT_EMBED_TEMPLATE`. */
   embedTemplate: string;
 }
 
+/**
+ * `slug` lived here until STC-444 slice 3 moved it onto each take's own
+ * project (`Project.slug`, `transform/src/types.ts`) — one global name could
+ * not serve more than one demo at a time. `cleanShare` below still accepts
+ * and drops an old stored `slug` rather than refusing the whole settings
+ * file over it, the same "a field this build does not have is not this
+ * build's problem" rule the rest of this parser follows.
+ */
 export const DEFAULT_SHARE_SETTINGS: ShareSettings = {
-  destination: null, slug: DEFAULT_SLUG, embedTemplate: DEFAULT_EMBED_TEMPLATE,
+  destination: null, embedTemplate: DEFAULT_EMBED_TEMPLATE,
 };
 
 export interface ThumbnailSettings {
@@ -262,22 +268,19 @@ function cleanThumbnail(v: unknown): ThumbnailSettings {
 }
 
 /**
- * Same rule again — and the slug is validated rather than sanitised.
- *
- * A stored slug that no longer passes `slugIsValid` falls back to the default
- * instead of being repaired into something adjacent: silently turning
- * "My Demo" into "my-demo" would publish to a path the user never chose and
- * never saw, and the page embedding the old one would break without saying so.
- * Refuse and show the default; the user retypes it once.
+ * `slug` is read from `d` for nothing — see `DEFAULT_SHARE_SETTINGS`'s own
+ * comment. A document written before STC-444 slice 3 still has one sitting
+ * in `share.slug`; this simply does not carry it into `ShareSettings`, the
+ * same "a field this build does not have is not this build's problem" rule
+ * every other stray key in a settings file already follows.
  */
 function cleanShare(v: unknown): ShareSettings {
   const d = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
   const destination = typeof d.destination === "string" && d.destination.startsWith("/")
     ? d.destination : null;
-  const slug = typeof d.slug === "string" && slugIsValid(d.slug) ? d.slug : DEFAULT_SLUG;
   const embedTemplate = typeof d.embedTemplate === "string" && d.embedTemplate.trim()
     ? d.embedTemplate : DEFAULT_EMBED_TEMPLATE;
-  return { destination, slug, embedTemplate };
+  return { destination, embedTemplate };
 }
 
 /** A display id is a positive integer; anything else is "automatic". */
