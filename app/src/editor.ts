@@ -155,6 +155,7 @@ function applySpanTransform(): void {
   ($("override-blocks") as HTMLElement).style.transform = transform;
   updateTicks();
   renderRulerTicks();
+  renderBookmarks();
 }
 
 // ---- the ruler's adaptive ticks + played line (STC-444 slice 2) ------------
@@ -273,6 +274,7 @@ $("ruler").addEventListener("pointerdown", (e) => {
   // button's pointer events on the very first pointerdown — a click that
   // never reaches the button, watched failing before this was added.
   if ((e.target as HTMLElement).closest("#ruleractivitytoggle")) return;
+  if ((e.target as HTMLElement).closest(".rulerbookmark")) return;
   panning = true;
   panLastX = (e as PointerEvent).clientX;
   ($("ruler") as HTMLElement).setPointerCapture((e as PointerEvent).pointerId);
@@ -392,6 +394,84 @@ function setTrim(startNs: number, endNs: number, persist: boolean): void {
   updateTrimUI();
   if (persist) void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 }
+
+// ---- bookmarks (STC-444 slice 4) --------------------------------------------
+//
+// project-8's `bookmarks` are session-relative ns (the same units `trim`
+// uses); `scrubber.ts`'s ScrubState works in FRAMES (rule 1), so the boundary
+// is here, the same split `scrubState()`/`applyScrubAction` already draw for
+// `trimIn`/`trimOut`. M toggles the marker at the playhead's own FRAME —
+// `frameToNs(currentFrame())`, not `player.currentNs`, so a bookmark set while
+// paused exactly on a frame round-trips through the frame grid and a second M
+// press finds the same ns again rather than landing a few sub-frame ns off.
+
+function sortedBookmarks(list: readonly number[]): number[] {
+  return [...new Set(list)].sort((a, b) => a - b);
+}
+
+function addBookmark(ns: number): void {
+  if (!openProject) return;
+  openProject.bookmarks = sortedBookmarks([...(openProject.bookmarks ?? []), ns]);
+  renderBookmarks();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+function removeBookmark(ns: number): void {
+  if (!openProject) return;
+  openProject.bookmarks = (openProject.bookmarks ?? []).filter((b) => b !== ns);
+  renderBookmarks();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+function toggleBookmarkAtPlayhead(): void {
+  if (!player || !openProject) return;
+  const ns = frameToNs(currentFrame(), player.durationNs);
+  (openProject.bookmarks ?? []).includes(ns) ? removeBookmark(ns) : addBookmark(ns);
+}
+
+/**
+ * Rebuilds #ruler-bookmarks the same way renderRulerTicks rebuilds
+ * #ruler-ticks: authored as a fraction of FULL duration (left: %) so the
+ * shared pan/zoom transform on #ruler-content carries it for free, with the
+ * marker's own WIDTH corrected by 1/scale so it stays a constant on-screen
+ * px — the same fight ticks and the playhead already have with scaleX().
+ */
+function renderBookmarks(): void {
+  const el = $("ruler-bookmarks") as HTMLElement;
+  el.innerHTML = "";
+  if (!player || !openProject || !(player.durationNs > 0)) return;
+  const durationNs = player.durationNs;
+  const span = Math.max(1, spanEnd - spanStart);
+  const scale = durationNs / span;
+  const widthPx = Math.max(0.05, 3 / scale);
+  const frag = document.createDocumentFragment();
+  for (const ns of openProject.bookmarks ?? []) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rulerbookmark";
+    btn.style.left = `${Math.max(0, Math.min(100, (ns / durationNs) * 100))}%`;
+    btn.style.width = `${widthPx}px`;
+    btn.dataset.ns = String(ns);
+    btn.setAttribute("aria-label", `Bookmark at ${fmtClock(ns)}`);
+    btn.title = `${fmtClock(ns)} — right-click to remove`;
+    frag.appendChild(btn);
+  }
+  el.appendChild(frag);
+}
+
+($("ruler-bookmarks") as HTMLElement).addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest(".rulerbookmark") as HTMLElement | null;
+  if (!btn || !player) return;
+  e.stopPropagation();
+  void player.seek(Number(btn.dataset.ns));
+});
+($("ruler-bookmarks") as HTMLElement).addEventListener("contextmenu", (e) => {
+  const btn = (e.target as HTMLElement).closest(".rulerbookmark") as HTMLElement | null;
+  if (!btn) return;
+  e.preventDefault();
+  removeBookmark(Number(btn.dataset.ns));
+});
+$("togglebookmark").addEventListener("click", toggleBookmarkAtPlayhead);
 
 // ---- the Clip and Zoom lanes (STC-373) --------------------------------------
 
@@ -1317,6 +1397,7 @@ function scrubState(): ScrubState {
   return {
     frame: currentFrame(), durationNs, rate: player?.rate ?? 0,
     ...(trim ? { trimIn: nsToFrame(trim.startNs, durationNs), trimOut: nsToFrame(trim.endNs, durationNs) } : {}),
+    bookmarks: (openProject?.bookmarks ?? []).map((ns) => nsToFrame(ns, durationNs)),
   };
 }
 
@@ -1343,6 +1424,9 @@ function applyScrubAction(action: ScrubAction): void {
       }
       break;
     }
+    case "bookmark":
+      toggleBookmarkAtPlayhead();
+      break;
   }
 }
 

@@ -1,10 +1,10 @@
-# STC-444 runbook — the editor's header row, timeline and share (slices 1–3 of 4)
+# STC-444 runbook — the editor's header row, timeline, share and bookmarks (all 4 slices)
 
 **Run from:** `claude/fervent-goodall-rkautv` (PR #217). Until that PR merges, this runbook is not on `master`.
 
 **Result, 2026-09-24:** Patrick ran every item on real hardware and approved all seven of slice 1's original checks. Separately, the design still differed from his Figma mockups. That gap was closed from the Figma file itself, not from the screenshots on the ticket, through several rounds of HTML variant comparisons — each slice below names which comparison and which picks came from it.
 
-None of slice 2 or slice 3 has run on a Mac yet.
+None of slice 2, slice 3 or slice 4 has run on a Mac yet.
 
 ## Slice 1 — the header row, built 2026-09-24
 
@@ -198,3 +198,65 @@ still-capture save-folder row exactly.
 5. **The site-folder Preferences row** — does it read as belonging with the
    save-location row above it, or does the pairing feel arbitrary since one
    is about recordings and the other about a published copy of one?
+
+## Slice 4 — bookmarks, built 2026-09-24
+
+The ticket's deferred fourth item. Three product decisions, settled by
+asking directly (no HTML comparison — this slice is a data model and a
+keyboard grammar, not a visual question): bookmarks are per-take and
+persisted (a new schema field, `project.bookmarks`), not a session-only
+scratch list; ArrowUp/ArrowDown jump between them, on top of the mark/jump
+keys the scrubber already has; and a bookmark is removable, not
+write-only.
+
+### What moved
+
+- **`project-8.schema.json`** adds `bookmarks`: session-relative integer ns
+  (the same units `trim` uses, not an export-frame index — a bookmark must
+  still mean the same instant if a later build's export fps ever changes,
+  which frame N cannot promise across that change). Absent means none;
+  `parseProject`'s new `cleanBookmarks` sorts, de-duplicates and clamps to
+  the take, the same "one bad entry must not cost the others" rule every
+  other array field in `trim.ts` already follows. `projectForWrite` also
+  fixed the slug line from `version === 7` to `version >= 7` — the same
+  "promoting the version must not drop the field below it" bug class
+  `overrides` was found with when v7 was minted, now caught by a test
+  (`V8 IS A SUPERSET OF V7`) rather than by hand a second time.
+- **M bookmarks the playhead's own frame; a second M there removes it.**
+  `scrubber.ts`'s `decideKey` does not decide add vs. remove itself — the
+  same reason `mark`/I/O do not decide what "in" means against the
+  existing trim — `editor.ts`'s `toggleBookmarkAtPlayhead` resolves it
+  against the take's actual bookmark list, which lives on the project, not
+  in scrubber state. **ArrowUp/ArrowDown jump to the nearest bookmark**
+  in that direction (Premiere's own convention) and do nothing at the near
+  end — never wrap to the far one. Both keys were free: nothing in this
+  window claimed bare Up/Down before this (only Left/Right/Home/End did),
+  and M was not used anywhere in the editor.
+- **A marker per bookmark on the ruler** (`#ruler-bookmarks`, a new
+  `--bookmark` gold token distinct from the played bar's blue and the
+  Zoom lane's orange), positioned as a fraction of full duration exactly
+  like a tick so the shared pan/zoom transform carries it for free, with
+  the same `1/scale` width correction a tick's width already gets.
+  **Click seeks to it; right-click removes it** — the second, mouse-only
+  way to remove one, since M only reaches a bookmark the playhead is
+  exactly parked on. A `#togglebookmark` text button sits in the trim bar
+  next to In/Out/Full take, doing exactly what M does — this file's own
+  stated rule that every keyboard action gets a matching visible button.
+
+### Only a Mac can settle these
+
+1. **Do the markers read as bookmarks** at 3px (the same width-correction
+   trick a tick uses) against the ruler's other marks — the tick lines,
+   the played bar, the playhead — or do they get lost, especially at a
+   zoomed-out view of a long take where several might sit close together?
+2. **Right-click to remove** — is that discoverable at all without the
+   tooltip, or does it need a visible affordance (a small × on hover)
+   rather than relying on the title text alone?
+3. **Up/Down as the jump keys** — do they feel natural, or does reaching
+   for Up/Down while the rest of the grammar lives on J/K/L/I/O/Home/End
+   read as an odd key to reach for? (Premiere's own convention was the
+   reasoning, not a usability test on this app specifically.)
+4. **M while playing** — does bookmarking mid-shuttle feel right, or does
+   it need to pause the take the way I/O do not either? (Unbuilt on
+   purpose, matching I/O's own existing behaviour — flagged here in case
+   a real take changes that judgement.)

@@ -201,7 +201,15 @@ export type ScrubAction =
   /** Play at a signed multiple of real time; 0 means stop. */
   | { kind: "shuttle"; rate: number }
   /** Set the in or out point at the playhead. */
-  | { kind: "mark"; which: "in" | "out" };
+  | { kind: "mark"; which: "in" | "out" }
+  /**
+   * Toggle a bookmark at the playhead's frame (STC-444 slice 4). Unconditional,
+   * the same way "mark" is: this module does not decide add vs. remove — that
+   * needs the take's actual bookmark LIST, which the caller owns (bookmarks are
+   * persisted on the project, not scrubber state), so the caller resolves it
+   * exactly as it already resolves what "mark in" means against the existing trim.
+   */
+  | { kind: "bookmark"; frame: number };
 
 export interface KeyChord {
   key: string;
@@ -226,6 +234,14 @@ export interface ScrubState {
    */
   trimIn?: number;
   trimOut?: number;
+  /**
+   * Bookmarked frames (STC-444 slice 4), for ArrowUp/ArrowDown to jump between —
+   * NOT required to be sorted; decideKey sorts its own copy, so a caller handing
+   * over `project.bookmarks` in storage order (already sorted, but that is the
+   * project's own invariant, not this module's to trust) costs nothing extra.
+   * Absent is the same as empty: no bookmark to jump to.
+   */
+  bookmarks?: readonly number[];
 }
 
 /**
@@ -257,6 +273,20 @@ export function decideKey(chord: KeyChord, state: ScrubState): ScrubAction | nul
       return { kind: "seek", frame: clampFrame(state.trimIn ?? 0, state.durationNs) };
     case "End":
       return { kind: "seek", frame: clampFrame(state.trimOut ?? lastFrame(state.durationNs), state.durationNs) };
+    // Premiere's own convention (STC-444 slice 4): M marks a bookmark, bare
+    // Up/Down jump between them. Null — not a no-op seek to the same frame —
+    // when there is nothing in that direction, so the caller knows not to
+    // preventDefault a key that did nothing (rule 8's whole reason for
+    // returning null rather than an action the caller would have to detect
+    // is a no-op after the fact).
+    case "ArrowUp": {
+      const frame = nearestBookmark(state.bookmarks, state.frame, -1);
+      return frame === null ? null : { kind: "seek", frame };
+    }
+    case "ArrowDown": {
+      const frame = nearestBookmark(state.bookmarks, state.frame, 1);
+      return frame === null ? null : { kind: "seek", frame };
+    }
     default:
       break;
   }
@@ -277,9 +307,32 @@ export function decideKey(chord: KeyChord, state: ScrubState): ScrubAction | nul
       return { kind: "mark", which: "in" };
     case "o":
       return { kind: "mark", which: "out" };
+    case "m":
+      return { kind: "bookmark", frame: state.frame };
     default:
       return null;
   }
+}
+
+/**
+ * The nearest bookmarked frame strictly before (`direction: -1`) or after
+ * (`direction: 1`) `frame`, or null when there is none that way — never wraps.
+ */
+function nearestBookmark(
+  bookmarks: readonly number[] | undefined, frame: number, direction: -1 | 1,
+): number | null {
+  if (!bookmarks || bookmarks.length === 0) return null;
+  const sorted = [...bookmarks].sort((a, b) => a - b);
+  if (direction < 0) {
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      if (sorted[i]! < frame) return sorted[i]!;
+    }
+  } else {
+    for (const f of sorted) {
+      if (f > frame) return f;
+    }
+  }
+  return null;
 }
 
 /**

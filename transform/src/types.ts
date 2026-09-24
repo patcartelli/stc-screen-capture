@@ -213,7 +213,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -263,6 +263,18 @@ export interface Project {
    * unversioned by this field, at whatever version its other edits earned.
    */
   slug?: string;
+  /**
+   * Marked frames, as session-relative integer ns — the same units `trim`
+   * uses, not export-frame indices (project-8, STC-444 slice 4). The editor's
+   * own `scrubber.ts` works in frames, but a bookmark set once must still
+   * mean the same instant if a later build ever changed the export fps,
+   * which frame N cannot promise across that change and a timestamp can.
+   * Absent means none; `parseProject` fills `[]`, the same "no consumer has
+   * to tell 'none' from 'older document'" reasoning `overrides` already
+   * follows. Always sorted ascending and de-duplicated — a writer's job,
+   * never a reader's.
+   */
+  bookmarks?: number[];
 }
 
 /**

@@ -193,8 +193,8 @@ describe("rule 8 — the keyboard grammar", () => {
   test("a focused text field owns every bare key", () => {
     // Rule 8's whole point: typing "in" into the slug field must not mark an
     // in point, and typing a width must not shuttle.
-    for (const key of ["i", "o", "j", "k", "l", " ", "ArrowLeft", "ArrowRight"]) {
-      expect(decideKey({ key, inTextField: true }, state)).toBeNull();
+    for (const key of ["i", "o", "j", "k", "l", "m", " ", "ArrowLeft", "ArrowRight"]) {
+      expect(decideKey({ key, inTextField: true }, { ...state, bookmarks: [50] })).toBeNull();
     }
   });
 
@@ -203,7 +203,9 @@ describe("rule 8 — the keyboard grammar", () => {
     // shortcuts that have nothing to do with the timeline.
     expect(decideKey({ key: "c", metaKey: true, shiftKey: true }, state)).toBeNull();
     expect(decideKey({ key: "l", metaKey: true }, state)).toBeNull();
+    expect(decideKey({ key: "m", metaKey: true }, state)).toBeNull();
     expect(decideKey({ key: "ArrowRight", altKey: true }, state)).toBeNull();
+    expect(decideKey({ key: "ArrowUp", altKey: true }, { ...state, bookmarks: [50] })).toBeNull();
     expect(decideKey({ key: "1", ctrlKey: true, altKey: true, shiftKey: true, metaKey: true }, state))
       .toBeNull();
   });
@@ -227,6 +229,31 @@ describe("rule 8 — the keyboard grammar", () => {
     const trimmed = { ...state, trimIn: 30, trimOut: 90 };
     expect(decideKey({ key: "Home" }, trimmed)).toEqual({ kind: "seek", frame: 30 });
     expect(decideKey({ key: "End" }, trimmed)).toEqual({ kind: "seek", frame: 90 });
+  });
+
+  test("M bookmarks the playhead, unconditionally — the caller resolves add vs. remove (STC-444 slice 4)", () => {
+    expect(decideKey({ key: "m" }, state)).toEqual({ kind: "bookmark", frame: 100 });
+    expect(decideKey({ key: "M", shiftKey: true }, state)).toEqual({ kind: "bookmark", frame: 100 });
+  });
+
+  test("Up/Down jump to the nearest bookmark in that direction, never wrapping", () => {
+    const bookmarked = { ...state, bookmarks: [10, 50, 150] };
+    expect(decideKey({ key: "ArrowUp" }, bookmarked)).toEqual({ kind: "seek", frame: 50 });
+    expect(decideKey({ key: "ArrowDown" }, bookmarked)).toEqual({ kind: "seek", frame: 150 });
+    // Off the near end: nothing that way, not a wrap to the far end.
+    expect(decideKey({ key: "ArrowUp" }, { ...bookmarked, frame: 5 })).toBeNull();
+    expect(decideKey({ key: "ArrowDown" }, { ...bookmarked, frame: 200 })).toBeNull();
+  });
+
+  test("Up/Down are unclaimed with no bookmarks, so the caller does not preventDefault them", () => {
+    expect(decideKey({ key: "ArrowUp" }, state)).toBeNull();
+    expect(decideKey({ key: "ArrowDown" }, { ...state, bookmarks: [] })).toBeNull();
+  });
+
+  test("a bookmark sitting exactly on the playhead is neither 'before' nor 'after' it", () => {
+    const onIt = { ...state, bookmarks: [80, 100, 120] };
+    expect(decideKey({ key: "ArrowUp" }, onIt)).toEqual({ kind: "seek", frame: 80 });
+    expect(decideKey({ key: "ArrowDown" }, onIt)).toEqual({ kind: "seek", frame: 120 });
   });
 });
 
