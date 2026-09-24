@@ -2,8 +2,9 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
   <title>Capture</title>
+  <link rel="stylesheet" href="tokens.css">
   <style>
     /* ── instrument visual language (STC-372) ───────────────────────────────
        A restyle only: renderer.ts and library-view.ts reach the document
@@ -11,109 +12,9 @@
        class a script branches on, or the <body> markup — only color, type
        and the token system that drives them. See STC-369 for the type ramp
        this ticket's surfaces don't yet draw from, and STC-374/375 for what
-       the main window becomes next. */
-
-    @font-face {
-      font-family: 'Geist';
-      src: url('fonts/Geist-Light.woff2') format('woff2');
-      font-weight: 300; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'Geist';
-      src: url('fonts/Geist-Regular.woff2') format('woff2');
-      font-weight: 400; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'Geist';
-      src: url('fonts/Geist-Medium.woff2') format('woff2');
-      font-weight: 500; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'Geist';
-      src: url('fonts/Geist-SemiBold.woff2') format('woff2');
-      font-weight: 600; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'JetBrains Mono';
-      src: url('fonts/JetBrainsMono-Regular.woff2') format('woff2');
-      font-weight: 400; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'JetBrains Mono';
-      src: url('fonts/JetBrainsMono-Medium.woff2') format('woff2');
-      font-weight: 500; font-style: normal; font-display: swap;
-    }
-    @font-face {
-      font-family: 'Silkscreen';
-      src: url('fonts/Silkscreen-Regular.woff2') format('woff2');
-      font-weight: 400; font-style: normal; font-display: swap;
-    }
-
-    :root {
-      color-scheme: light dark;
-      --font-sans: 'Geist', -apple-system, system-ui, sans-serif;
-      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-      --font-pixel: 'Silkscreen', 'JetBrains Mono', ui-monospace, monospace;
-
-      /* Type ramp — sans (Geist). No view sets a font-size inline. */
-      --type-label: 10px; --type-label-weight: 500; --type-label-tracking: 0.10em;
-      --type-meta: 11px; --type-meta-weight: 400; --type-meta-tracking: 0.02em;
-      --type-body: 12px; --type-body-weight: 400; --type-body-lh: 1.4;
-      --type-body-strong: 12px; --type-body-strong-weight: 600; --type-body-strong-lh: 1.4;
-      --type-heading: 13px; --type-heading-weight: 600; --type-heading-lh: 1.3;
-      --type-read: 13px; --type-read-weight: 400; --type-read-lh: 1.5;
-      --type-title: 15px; --type-title-weight: 300; --type-title-tracking: -0.01em; --type-title-lh: 1.3;
-      --type-display: 20px; --type-display-weight: 300; --type-display-tracking: -0.02em; --type-display-lh: 1.1;
-
-      /* Type ramp — mono (JetBrains Mono) with tabular-nums */
-      --type-value-sm: 11px; --type-value-sm-weight: 400; --type-value-sm-lh: 1.4;
-      --type-value: 12px; --type-value-weight: 400; --type-value-lh: 1.4;
-
-      /* Type ramp — pixel (Silkscreen) at 8px grid multiples only */
-      --type-timer-pill: 16px; --type-timer-pill-lh: 1;
-      --type-timer: 32px; --type-timer-lh: 1;
-
-      /* Light tokens. There is no in-app theme switch — prefers-color-scheme
-         below is the only signal, same as the color-scheme line already was. */
-      --bg: #f6f6f4;
-      --surface: #ffffff;
-      --surface-hover: #eeeeeb;
-      --border: rgba(15, 15, 12, .14);
-      --border-strong: rgba(15, 15, 12, .30);
-      --text: #171714;
-      --text-dim: rgba(23, 23, 20, .62);
-      --text-faint: rgba(23, 23, 20, .40);
-      --accent: #3b6fe0;
-      --accent-soft: rgba(59, 111, 224, .14);
-      --rec: #d33a3a;
-      --rec-soft: rgba(211, 58, 58, .12);
-      --warn: #b9502c;
-      --warn-soft: rgba(185, 80, 44, .12);
-      --focus: #4f86ff;
-
-      font-family: var(--font-sans);
-      font-size: var(--type-body);
-      line-height: 1.5;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #131315;
-        --surface: #1c1c1f;
-        --surface-hover: #26262a;
-        --border: rgba(255, 255, 255, .12);
-        --border-strong: rgba(255, 255, 255, .26);
-        --text: #f1f1ee;
-        --text-dim: rgba(241, 241, 238, .64);
-        --text-faint: rgba(241, 241, 238, .42);
-        --accent: #7aa2ff;
-        --accent-soft: rgba(122, 162, 255, .18);
-        --rec: #ff6b6b;
-        --rec-soft: rgba(255, 107, 107, .16);
-        --warn: #e0925a;
-        --warn-soft: rgba(224, 146, 90, .16);
-        --focus: #7aa2ff;
-      }
-    }
+       the main window becomes next. The fonts, type ramp and light/dark
+       color tokens themselves moved to tokens.css (STC-443) — this window no
+       longer owns the base, only what extends or consumes it. */
 
     body { margin: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px;
            background: var(--bg); color: var(--text); }
@@ -131,8 +32,27 @@
     button:hover:not([disabled]) { background: var(--surface-hover); }
     button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     button[disabled] { opacity: .4; cursor: default; }
-    #record { font-weight: 600; border-color: var(--rec); color: var(--rec); }
+    /* STC-442: Record and Shot are the primary pair — same weight and
+       treatment as each other (bold, a colored border/label, a soft-tint
+       hover). Record keeps --rec (it already meant "this one records");
+       Shot has no such meaning of its own, so it takes the app's ordinary
+       --accent — same strength, the app's default interactive color rather
+       than a third invented one. Settings, below, drops out of this pair
+       entirely rather than getting a third color in the same treatment. */
+    #record, #capturestill { font-weight: 600; }
+    #record { border-color: var(--rec); color: var(--rec); }
     #record:hover:not([disabled]) { background: var(--rec-soft); }
+    #capturestill { border-color: var(--accent); color: var(--accent); }
+    #capturestill:hover:not([disabled]) { background: var(--accent-soft); }
+    /* Secondary: a door into configuration, not a peer of the two capture
+       actions above. Quieter border and label color only — still a normal
+       weight-500 control (see the comment above), never bold, never tinted
+       on hover with an accent it isn't part of. `margin-left: auto` in a
+       `.row` flex container pushes it (and #state, ordered just before it
+       in the markup) to the row's trailing edge, away from the primary
+       pair. */
+    #settings { border-color: var(--border); color: var(--text-dim); background: transparent; }
+    #settings:hover:not([disabled]) { background: var(--surface-hover); color: var(--text); }
     .row { display: flex; gap: 10px; align-items: center; }
     /* `.row`'s `display: flex` and the UA stylesheet's `[hidden] { display:
        none }` are equal specificity, and an author rule wins THAT tie
@@ -141,7 +61,16 @@
        Restated explicitly, and !important because nothing here should ever
        need to out-rank "this element is hidden". */
     [hidden] { display: none !important; }
-    #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-dim); }
+    /* STC-442: a status readout, not trailing text — a chip, the same small
+       uppercase-label idiom as .libbadge/.subhead/#modelcode elsewhere in
+       this window, so it reads as "the app reporting a state" rather than
+       as a caption hanging off the last button. `margin-left: auto` pushes
+       it (and #settings after it) to the row's trailing edge. */
+    #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+              font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
+              text-transform: uppercase; color: var(--text-dim);
+              background: var(--surface-hover); border: 1px solid var(--border);
+              border-radius: 999px; padding: 4px 10px; margin-left: auto; }
     table { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     td { padding: 2px 14px 2px 0; }
     td:first-child { color: var(--text-dim); font-family: var(--font-sans); }
@@ -359,8 +288,8 @@
       <span id="pill-stop" aria-hidden="true"></span>
     </button>
     <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
-    <button id="settings" title="Profile, preferences and shortcuts">Settings</button>
     <span id="state">starting…</span>
+    <button id="settings" title="Profile, preferences and shortcuts">Settings</button>
   </div>
   <div id="stillstatus" hidden></div>
 
