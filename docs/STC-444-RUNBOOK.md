@@ -4,14 +4,29 @@
 
 **Result, 2026-09-24:** Patrick ran every item on real hardware and approved all seven. Separately, the design still differs from his Figma mockups. That gap is being closed from the Figma file itself, not from the screenshots on the ticket.
 
+**Update, 2026-09-24 (same day):** item 1 below is now WRONG and kept only for
+history. Patrick reviewed an HTML variant comparison (four artboards: the
+shipped centred layout, a Figma-close left-aligned/bigger-icon/near-black
+variant, a centred-but-larger variant, and three divider/timecode
+treatments) and picked the left-aligned transport ("variant B") plus the
+shipped hairline divider/tight timecode ("variant 1"). The header no longer
+centres the transport at all — see the next section and the CSS comment in
+`editor.html`.
+
 Slice 1 is a **rough-in**. It goes into the product so we can see how it feels
 there, not to settle the design. Patrick's mockups are inspiration, not a spec.
 
 ## What moved
 
-- **One header row** under the preview: timecode, then the transport, then
-  output. The grid is `minmax(0,1fr) auto minmax(0,1fr)`, which keeps the
-  transport centred on the window.
+- **One header row** under the preview: the transport anchored to the LEFT
+  edge, output pinned to the right — `justify-content: space-between`, no
+  longer the centred 3-column grid slice 1 shipped with (superseded
+  2026-09-24, see the update above). The timecode sits above the ruler, not
+  in this row.
+- **The panel is near-black** (`#0a0a0b`), darker than the rest of the app's
+  shared dark tokens (`#131315`) — picked from the same variant comparison.
+- **Icons are bigger**: 40px buttons / 20px glyphs at a 1.15 stroke, up from
+  slice 1's 30px/16px at 1.25.
 - **Transport:** `|<` `◁|` `▶` `|▷` `>|` as hairline icons. `|<` and `>|` are
   Home and End, which now go to the trim's in and out points (the ends of the
   take when untrimmed, as before). The step buttons are ← and →; ⇧-click
@@ -34,11 +49,14 @@ them.
 
 ## Only a Mac can settle these
 
-1. **Does the transport feel centred?** Drag the window from 640px up to full
-   width while playing. The play button must not move sideways as the timecode
-   ticks or the window resizes.
-2. **Are the glyphs legible** at 16px with a 1.25 stroke, in light and dark?
-   Pay most attention to `◁|` and `|▷`: do they read as "step", not "skip"?
+1. ~~Does the transport feel centred?~~ **Superseded 2026-09-24** — the
+   transport is left-anchored now, by choice; there is nothing to check here
+   any more. Check instead that it stays flush against the left edge (not
+   drifting, not clipped) as the window resizes from 640px to full width.
+2. **Are the glyphs legible** at 20px with a 1.15 stroke, against the
+   near-black panel? (The editor is always dark now — no OS-light-mode case
+   to check here any more.) Pay most attention to `◁|` and `|▷`: do they
+   read as "step", not "skip"?
 3. **Hover, active and focus.** Tab through the row. Every button should show a
    focus ring, and hovering one should show its tooltip with the shortcut.
 4. **Space after a click.** Click `|▷`, then press Space. Playback must toggle

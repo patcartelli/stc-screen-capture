@@ -16,13 +16,17 @@
        Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
        "follow the OS" default (the still editor was moved OFF forced dark
        with his sign-off; this is the mirror-image decision for the video
-       editor, asked and confirmed before writing it). Same values as
-       tokens.css's own dark media block, duplicated rather than shared
+       editor, asked and confirmed before writing it). Every value but --bg
+       is tokens.css's own dark media block, duplicated rather than shared
        because this window alone deviates — index.html and still-editor.html
-       still track prefers-color-scheme untouched. */
+       still track prefers-color-scheme untouched. --bg alone goes darker
+       than that block's #131315: Patrick picked the near-black panel from
+       an HTML variant comparison (2026-09-24, variant "B") over the shared
+       dark tokens' own background — --surface and the rest stay put since
+       only --bg was compared. */
     :root {
       color-scheme: dark;
-      --bg: #131315;
+      --bg: #0a0a0b;
       --surface: #1c1c1f;
       --surface-hover: #26262a;
       --border: rgba(255, 255, 255, .12);
@@ -77,23 +81,25 @@
     #overridebox { position: absolute; border: 1.5px solid var(--zoom);
                    background: rgba(216,138,59,.12); pointer-events: none; }
 
-    /* ── the header row (STC-444, Figma pass): transport centred, output
-       right ────────────────────────────────────────────────────────────
-       The timecode moved OUT of the header and now sits above the ruler
-       instead (Patrick's Figma; the ticket's original "option C" put it
-       here — he confirmed the mockup wins). `.left` stays as an empty grid
-       cell rather than being deleted: `minmax(0, 1fr) auto minmax(0, 1fr)`
-       still needs a symmetric column on both sides of `auto` to keep the
-       transport centred on the WINDOW, the one thing this grid is for, even
-       with nothing in it. The container is `.editorbody`, an ANCESTOR of
-       both the header and the new timecode row, because a container query
-       asks an ancestor, never the element it is written on — moving the
-       timecode out of `.headerwrap` is exactly why this container moved up
-       a level with it. */
-    .header { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-              align-items: center; gap: 12px; padding: 2px 0; }
-    .header .transport { display: flex; align-items: center; gap: 4px; }
-    .header .right { justify-self: end; display: flex; align-items: center; gap: 4px; }
+    /* ── the header row (STC-444, Figma pass): transport LEFT, output right
+       ────────────────────────────────────────────────────────────────────
+       Reverses the slice-1 decision (STC-444-RUNBOOK.md's own "does the
+       transport feel centred?" check) after Patrick picked variant "B" from
+       an HTML comparison, 2026-09-24: the transport anchors to the left
+       edge now, matching his Figma, rather than centring on the window —
+       `justify-content: space-between` is the whole layout, no longer a
+       3-column grid with an empty spacer column to keep one centred. The
+       timecode moved OUT of the header and now sits above the ruler instead
+       (the ticket's original "option C" put it here — Patrick's Figma
+       wins). The container is `.editorbody`, an ANCESTOR of both the header
+       and the new timecode row, because a container query asks an
+       ancestor, never the element it is written on — moving the timecode
+       out of `.headerwrap` is exactly why this container moved up a level
+       with it. */
+    .header { display: flex; align-items: center; justify-content: space-between;
+              gap: 12px; padding: 2px 0; }
+    .header .transport { display: flex; align-items: center; gap: 8px; }
+    .header .right { display: flex; align-items: center; gap: 8px; }
     /* Above the ruler now, not in the header. */
     .timecoderow { display: flex; align-items: baseline; gap: 10px; padding: 2px 0 4px; }
     #clock { font-size: var(--type-value); color: var(--text-dim); }
@@ -106,12 +112,16 @@
     @container (max-width: 820px) { #framestatus { display: none; } }
 
     /* Hairline icon buttons — the same states the still editor's toolbar
-       grew in STC-443: hover, active, focus-visible, disabled. */
-    .icon { width: 30px; height: 30px; padding: 0; border: none; border-radius: 6px;
+       grew in STC-443: hover, active, focus-visible, disabled. Sized per
+       variant "B" of the STC-444 Figma-pass comparison (2026-09-24): bigger
+       than slice 1's 30px/16px pair, with a slightly thinner relative
+       stroke (1.15 vs 1.25) so the larger glyphs stay hairline rather than
+       reading heavier. */
+    .icon { width: 40px; height: 40px; padding: 0; border: none; border-radius: 8px;
             display: inline-grid; place-items: center; color: var(--text-dim);
             background: transparent; flex: none; }
-    .icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
-                stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
+    .icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor;
+                stroke-width: 1.15; stroke-linecap: round; stroke-linejoin: round; }
     .icon svg .solid { fill: currentColor; stroke: none; }
     .icon:hover:not([disabled]) { color: var(--text); background: var(--surface-hover); }
     .icon:active:not([disabled]) { background: var(--border); }
@@ -305,16 +315,13 @@
 
   <div class="editorbody">
   <!--
-    The header row (STC-444, Figma pass): transport | output. The transport
-    is centred on the WINDOW, not on whatever the right group leaves over —
-    see the grid's own CSS note. Every button is an icon with an aria-label
-    and a tooltip naming its shortcut; there is no text label in this row by
-    design. `.left` is an intentional empty spacer — see the CSS comment —
-    now that the timecode lives above the ruler instead.
+    The header row (STC-444, Figma pass): transport | output, transport
+    anchored LEFT — see the CSS comment for why this replaced slice 1's
+    centred grid. Every button is an icon with an aria-label and a tooltip
+    naming its shortcut; there is no text label in this row by design.
   -->
   <div class="headerwrap">
     <div class="header">
-      <div class="left"></div>
       <div class="transport">
         <button type="button" class="icon" id="toin" aria-label="Go to in point" title="Go to in point (Home)">
           <svg viewBox="0 0 16 16"><path d="M3.5 3.5v9M11.5 4 7.5 8l4 4"/></svg>
