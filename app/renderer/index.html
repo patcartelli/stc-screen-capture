@@ -228,7 +228,9 @@
        part of the visible page only under `.pill-collapsed`.
 
        Everything else in #record-row is hidden when collapsed — the still-
-       capture button, the camera checkbox, the Profile button, the state
+       capture button, the camera checkbox, the Settings button (labelled
+       "Profile, preferences and shortcuts" — not #recprofile below, STC-447's
+       recording-profile selector, which is its own button), the state
        readout — and every OTHER row in the body (profile sheet included, if
        it happened to be open: a sliver of a slide-over panel in a 26px
        window is its own kind of broken). */
@@ -237,13 +239,26 @@
     body.pill-collapsed #record-row > *:not(#pill) { display: none; }
     body.pill-collapsed #record-row { margin: 0; }
 
+    /* STC-447 visual pass: a ring and a shadow, mirroring pill.ts's
+       PILL_THEME.ring/.shadow verbatim (CSS cannot import that module — see
+       the header above) — the STC-375 runbook's own open question, "is the
+       whole pill legible against whatever is likely to be behind it", had no
+       automated answer before this; a floating dark chip with no edge of its
+       own can disappear into an equally dark window behind it, and a flat
+       fill with no shadow reads as printed onto the desktop rather than
+       floating above it. Both are subtle on purpose: this is a small
+       instrument that sits over someone else's work for the length of a
+       take, not a dialog asking to be looked at. */
     #pill {
       position: fixed; top: -9999px; left: -9999px; visibility: hidden;
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 0 10px; height: 32px; box-sizing: border-box;
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 0 11px; height: 32px; box-sizing: border-box;
       background: #0b0b0c; color: #f5f5f5; font: var(--type-timer-pill)/1 var(--font-pixel);
-      border: none; border-radius: 16px; cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 16px; cursor: pointer;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+      transition: background-color 120ms ease;
     }
+    #pill:hover { background: #17171a; }
     body.pill-collapsed #pill {
       position: static; top: auto; left: auto; visibility: visible;
       width: 100%; height: 100%;
@@ -272,6 +287,24 @@
       width: 8px; height: 8px; border-radius: 2px; flex: none;
       background: #f5f5f5;
     }
+
+    /* ── recording-profile selector (STC-447) ────────────────────────────
+       Optional, and never required to start a recording — a quiet control
+       in the same secondary register #settings already established (border
+       + dim label, no fill, a hover tint on the existing shared rule), not
+       a third color in the Record/Shot pair's treatment. The choice itself
+       lives behind a real click on a native macOS menu (`recorder:profileMenu`
+       in main.ts), never a DOM panel — "sits behind a click, not shown by
+       default" is the menu itself, not a second disclosure state layered
+       on top of it. The label doubles as the status: "Profile" when none is
+       set, the chosen profile's own name once one is. Hidden while collapsed
+       to the pill for free, the same way Shot and Settings already are
+       (`body.pill-collapsed #record-row > *:not(#pill)`, above) — a profile
+       cannot be changed mid-take, and `renderer.ts`'s `lockSettings` disables
+       it defensively for the same reason it disables the scope controls. */
+    #recprofile { border-color: var(--border); color: var(--text-dim); background: transparent; }
+    #recprofile:hover:not([disabled]) { background: var(--surface-hover); color: var(--text); }
+    #recprofile[data-active] { border-color: var(--accent); color: var(--accent); }
   </style>
 </head>
 <body>
@@ -287,6 +320,7 @@
       <span id="pill-meter" aria-hidden="true"></span>
       <span id="pill-stop" aria-hidden="true"></span>
     </button>
+    <button id="recprofile" title="Recording profile — optional, sets the size this take opens at for export">Profile</button>
     <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
     <span id="state">starting…</span>
     <button id="settings" title="Profile, preferences and shortcuts">Settings</button>

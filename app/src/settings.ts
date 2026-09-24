@@ -15,6 +15,7 @@ import {
 import {
   DEFAULT_EMBED_TEMPLATE, DEFAULT_SLUG, slugIsValid,
 } from "./share.js";
+import { profileById } from "@transform/recording-profile.js";
 
 /**
  * User preferences, owned by the main process.
@@ -146,6 +147,19 @@ export interface Settings {
    * instrumentation, not something a normal user needs in view.
    */
   showDiagnostics: boolean;
+  /**
+   * The optional recording profile (STC-447), as a `RecordingProfile.id`, or
+   * null for "no preference" — the only behaviour that existed before this
+   * field did: a fresh take's `project.json` opens at the capture's own
+   * size. Sticky, like `displayId`/`scope`: a chosen profile stays chosen
+   * across launches and across takes, until cleared from the bar's own
+   * picker. Never required to start a recording — `recorder:start` does not
+   * read this field at all; it is applied once, after the fact, by
+   * `main.ts`'s `recording-ended` handler seeding a fresh take's
+   * `project.json` from it, the same door `defaultProject` would otherwise
+   * open with the capture's own size.
+   */
+  recordingProfileId: string | null;
 }
 
 export interface ScopeRegion {
@@ -225,6 +239,7 @@ export const DEFAULT_SETTINGS: Settings = {
   share: { ...DEFAULT_SHARE_SETTINGS },
   scope: { ...DEFAULT_SCOPE_SETTINGS },
   saveFolder: null, showDiagnostics: false,
+  recordingProfileId: null,
 };
 
 /**
@@ -305,6 +320,16 @@ function cleanMicDeviceUid(v: unknown): string | null {
 /** A CGWindowID is a non-negative integer. */
 function cleanWindowId(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
+}
+
+/**
+ * A stored id is trusted only as far as `profileById` still recognises it —
+ * same rule as `cleanShortcuts`: a file written by an older or newer build
+ * (a profile since renamed or removed) falls back to "no profile" rather
+ * than being carried as a string nothing can resolve.
+ */
+function cleanRecordingProfileId(v: unknown): string | null {
+  return typeof v === "string" ? profileById(v)?.id ?? null : null;
 }
 
 /**
@@ -401,6 +426,7 @@ export function readSettings(dir: string): Settings {
     saveFolder: cleanSaveFolder(doc.saveFolder),
     showDiagnostics: typeof doc.showDiagnostics === "boolean"
       ? doc.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
+    recordingProfileId: cleanRecordingProfileId(doc.recordingProfileId),
   };
 }
 
@@ -443,6 +469,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     saveFolder: cleanSaveFolder(merged.saveFolder),
     showDiagnostics: typeof merged.showDiagnostics === "boolean"
       ? merged.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
+    recordingProfileId: cleanRecordingProfileId(merged.recordingProfileId),
   };
   try {
     writeFileSync(join(dir, FILE), JSON.stringify(clean, null, 2));

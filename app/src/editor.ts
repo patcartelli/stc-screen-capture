@@ -55,6 +55,7 @@ import {
   clampTrim, isFullTake, minTrimNs,
 } from "@transform/trim";
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
+import { PROFILE_HINT_FILE } from "@transform/recording-profile";
 import type { Size } from "@transform/spaces";
 import { render } from "@transform/render";
 import {
@@ -994,12 +995,18 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   await editor.openPreview(dir);
 
   const dec = new TextDecoder();
-  const [anchors, events, mp4, projectRaw] = await Promise.all([
+  const [anchors, events, mp4, projectRaw, profileHint] = await Promise.all([
     editor.readTakeFile("anchors.json").then((b) => JSON.parse(dec.decode(b))),
     editor.readTakeFile("events.json").then((b) => JSON.parse(dec.decode(b)))
       .catch(() => ({ version: 1, events: [] })),
     readVideo(),
     editor.readTakeFile("project.json").then((b) => JSON.parse(dec.decode(b)))
+      .catch(() => null),
+    // STC-447: present only on a take recorded with a profile selected, and
+    // only until this, its first open — see `writeRecordingProfileHint`
+    // (main.ts) and `PROFILE_HINT_FILE`'s own doc comment for why main
+    // leaves this as two plain numbers rather than a real `project.json`.
+    editor.readTakeFile(PROFILE_HINT_FILE).then((b) => JSON.parse(dec.decode(b)) as Size)
       .catch(() => null),
   ]);
   const cameraMp4 = anchors.files?.camera ? await readVideo(anchors.files.camera) : undefined;
@@ -1007,8 +1014,14 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
   const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
+  // A hint only ever applies to a take with no project.json yet — once one
+  // exists (this take was opened before, or hand-authored), its own output
+  // size is the truth and the hint, if still on disk, is stale and ignored.
+  const seedSize = projectRaw == null
+    && Number.isInteger(profileHint?.width) && Number.isInteger(profileHint?.height)
+    ? profileHint! : { width: anchors.capture.width, height: anchors.capture.height };
   const project = parseProject(
-    projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
+    projectRaw, seedSize.width, seedSize.height, durationNs,
     anchors.camera?.present === true,
   );
 

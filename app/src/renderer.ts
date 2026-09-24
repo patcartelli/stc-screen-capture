@@ -41,6 +41,8 @@ interface AppSettings {
   saveFolder: string | null;
   /** STC-412: show diagnostics table. */
   showDiagnostics: boolean;
+  /** STC-447: the optional recording profile, or null for "no preference". */
+  recordingProfileId: string | null;
 }
 interface Take {
   dir: string; name: string; durationMs: number;
@@ -55,6 +57,9 @@ interface StillResult {
 declare const recorder: {
   getSettings: () => Promise<AppSettings>;
   setSettings: (p: Partial<AppSettings>) => Promise<AppSettings>;
+  // STC-447: pops the recording-profile menu; resolves with the chosen
+  // profile id, "none" for the clear-it entry, or null if dismissed.
+  profileMenu(): Promise<string | null>;
   devices(): Promise<{ displays?: DisplayInfo[]; mics?: MicInfo[]; stalled?: boolean; detail?: string }>;
   status(): Promise<{ state: string; pid?: number }>;
   takes(): Promise<{ takes: Take[]; invalid: { name: string; reason: string }[] }>;
@@ -109,6 +114,7 @@ import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
 import { MODEL_CODE } from "./product.js";
+import { RECORDING_PROFILES } from "@transform/recording-profile.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
@@ -138,6 +144,48 @@ pillBtn.addEventListener("click", () => recordBtn.click());
 new ResizeObserver(() => {
   recorder.reportPillWidth(Math.ceil(pillBtn.getBoundingClientRect().width));
 }).observe(pillBtn);
+
+// ---- recording profile (STC-447) ------------------------------------------
+//
+// Optional, sticky, and never gates Record — see settings.ts's own doc
+// comment on `recordingProfileId`. The picker is a real macOS menu built by
+// main.ts (`recorder:profileMenu`), not a DOM panel: this button's only job
+// is to pop it and then show what came back. `PROFILE_LABEL` mirrors
+// `RECORDING_PROFILES` rather than inventing a second name for each id — the
+// same "ask the one place that decides" rule `panel-actions.ts`'s callers
+// already follow for the thumbnail menu.
+const recProfileBtn = $("recprofile") as HTMLButtonElement;
+const PROFILE_LABEL = new Map(RECORDING_PROFILES.map((p) => [p.id, p.label]));
+
+function renderRecProfile(id: string | null): void {
+  const label = id != null ? PROFILE_LABEL.get(id) : undefined;
+  recProfileBtn.textContent = label ?? "Profile";
+  recProfileBtn.title = label
+    ? `Recording profile: ${label} — click to change`
+    : "Recording profile — optional, sets the size this take opens at for export";
+  if (label) recProfileBtn.dataset.active = "";
+  else delete recProfileBtn.dataset.active;
+}
+
+void (async () => {
+  try {
+    renderRecProfile((await recorder.getSettings()).recordingProfileId);
+  } catch {
+    renderRecProfile(null);
+  }
+})();
+
+recProfileBtn.addEventListener("click", async () => {
+  const chosen = await recorder.profileMenu();
+  if (chosen == null) return; // dismissed with no pick — leave it as it was
+  const recordingProfileId = chosen === "none" ? null : chosen;
+  try {
+    const saved = await recorder.setSettings({ recordingProfileId });
+    renderRecProfile(saved.recordingProfileId);
+  } catch (e) {
+    alertUser(`Could not save the recording profile: ${String(e)}`);
+  }
+});
 
 /**
  * Opt-in, default off, sticky. The stored preference is the authority — main
@@ -417,6 +465,10 @@ function lockSettings(locked: boolean): void {
   scopeSel.disabled = locked;
   pickWindowBtn.disabled = locked;
   pickRegionBtn.disabled = locked;
+  // STC-447: a profile is applied once, after the take ends — changing it
+  // mid-recording would not describe what is actually being recorded, the
+  // same reasoning every other control in this function already follows.
+  recProfileBtn.disabled = locked;
   // Locked, these stay disabled outright; unlocked, renderScope() puts them
   // back to whatever "is there something to clear" actually says.
   if (locked) { clearWindowBtn.disabled = true; clearRegionBtn.disabled = true; }
