@@ -1,11 +1,15 @@
 # STC-443 — editor polish: what to check on the Mac
 
+**CONFIRMED on real hardware, 2026-09-24** — run through this checklist and
+approved: the shared tokens, light/dark in all three windows, and the still
+editor's icon toolbar all work as built.
+
 Written on a Linux session with no Xcode/swiftc at all, not even the Command
 Line Tools this repo's other runbooks assume — so nothing here could be built
-or launched, only read and typechecked (`npm run typecheck`, clean). CI
-(`macos-15`) is the first real build and the first real run of any of this;
-treat a green CI tick as "it compiles and the wired e2e tests pass", not as
-"it looks right" — nothing here has been seen.
+or launched at implementation time, only read and typechecked (`npm run
+typecheck`, clean). CI (`macos-15`) went green first; this checklist is what
+closed the gap between "compiles and the wired e2e tests pass" and "it looks
+right".
 
 ## 1. One token set — verify light and dark in all three windows
 
@@ -69,11 +73,12 @@ hardware:
   now that it sits in a bar styled from the shared tokens rather than a
   window that was always dark.
 
-## What nobody has verified yet (said plainly, not hidden)
+## Verified
 
-Everything in this file. This ticket was implemented and typechecked without
-ever running the app — no Xcode toolchain existed to build the helper or
-launch Electron in this session's environment. The existing e2e coverage
-(`app/test/redaction.e2e.test.ts`) drives `#undo`/`#save`/`#done` by id and
-will catch a broken click handler or a missing element, but it asserts
-nothing about how any of this looks.
+All three sections above — confirmed on real hardware, 2026-09-24. This
+ticket was implemented and typechecked without ever running the app (no
+Xcode toolchain existed in the session's environment); the existing e2e
+coverage (`app/test/redaction.e2e.test.ts`) already drove `#undo`/`#save`/
+`#done` by id, and this pass is what checked how it actually looks and
+feels — light/dark in all three windows, the icon toolbar's states and
+shortcuts, and the "Capture" title on two windows.
