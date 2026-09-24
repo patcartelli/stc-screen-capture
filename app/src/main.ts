@@ -868,7 +868,14 @@ ipcMain.handle("recorder:start", async () => {
   // actual choice now. `sup.devices()` failing outright (helper not ready)
   // is not this check's problem — falling through leaves `startParams`
   // untouched and lets the existing catch below handle whatever happens.
-  const known = await sup.devices().catch(() => null);
+  //
+  // Only asked for when a device was actually picked — Automatic/Off are
+  // never stale by definition, and this is an extra IPC round trip on
+  // `recorder:start`'s critical path that every OTHER recording (the common
+  // case) has no reason to pay for.
+  const checkingDisplay = scope.kind === "display" && displayId != null;
+  const checkingMic = micDeviceUid != null;
+  const known = (checkingDisplay || checkingMic) ? await sup.devices().catch(() => null) : null;
   if (known) {
     const knownDisplays = Array.isArray((known as any).displays) ? (known as any).displays as { id: number }[] : [];
     const knownMics = Array.isArray((known as any).mics) ? (known as any).mics as { uid: string }[] : [];
@@ -878,7 +885,7 @@ ipcMain.handle("recorder:start", async () => {
     // a mic that really is missing while enumeration itself can't say so.
     const micEnumerationStalled = Boolean((known as any).stalled);
 
-    if (scope.kind === "display" && displayId != null && !knownDisplays.some((d) => d.id === displayId)) {
+    if (checkingDisplay && !knownDisplays.some((d) => d.id === displayId)) {
       const choice = await resolveDeviceNotFound("display");
       if (choice === "automatic") {
         displayId = null;
@@ -893,7 +900,7 @@ ipcMain.handle("recorder:start", async () => {
       }
     }
 
-    if (!micEnumerationStalled && micDeviceUid != null && !knownMics.some((m) => m.uid === micDeviceUid)) {
+    if (checkingMic && !micEnumerationStalled && !knownMics.some((m) => m.uid === micDeviceUid)) {
       const choice = await resolveDeviceNotFound("mic");
       if (choice === "off") {
         micDeviceUid = null;
