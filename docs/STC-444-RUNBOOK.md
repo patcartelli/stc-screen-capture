@@ -75,6 +75,20 @@ artboards, several rounds of feedback) — every choice below traces to a
 specific pick from that comparison, not a guess made while writing the real
 code.
 
+**Update, 2026-09-24 (real-hardware pass):** the first real look at this
+slice on a Mac (a 2:03 take with real activity) found it cluttered — three
+stacked lanes with a dense LED-bar Clip lane sitting directly against the
+Zoom lane. Two changes, both now in the same commit history as the rest of
+this slice: **Clip activity moved off its own lane onto the ruler**, as a
+faint backdrop toggled by a small button in the ruler's corner
+(`#ruleractivitytoggle`) — off by default, session-only, not persisted. The
+Clip lane itself is unchanged otherwise (still the trim controls: kept bar,
+`[`/`]` brackets, dimming, scrub). And **the Zoom lane now sits 16px below
+the Clip lane** instead of the uniform 2px every row otherwise shares. The
+bullet below describing the Clip lane's bars is about where that drawing
+CAME from; item 2 of this slice's Mac checklist is now stale in the same
+way slice 1's item 1 was — see the new checklist item 6.
+
 ### What moved
 
 - **The ruler is no longer blank.** Adaptive ticks (1s → 5s → 10s → 30s →
@@ -83,9 +97,10 @@ code.
   bright playhead mark. Ticks stayed the plain thin-line treatment ("variant
   A") — dots and a glowing/LED look were tried on the ruler specifically and
   dropped; only the Zoom lane kept a screen-like texture.
-- **The Clip lane's bars are LED rows**, lit from the bottom, at the real
+- **Clip activity's bars are LED rows**, lit from the bottom, at the real
   480-bucket density (`LANE_BUCKETS`) the code already computed — no new
-  density was invented for the visual.
+  density was invented for the visual. Originally drawn in the Clip lane
+  itself; moved onto the ruler the same day (see the update above).
 - **Trim handles are `[`/`]` brackets at a 1px stroke**, not a filled
   rectangle. Compared against a 2px stroke at both actual size and 4x
   magnified before picking 1px.
@@ -105,9 +120,10 @@ code.
    corrected by `1/scale` so it stays roughly a constant on-screen pixel at
    any zoom — confirm that actually holds together at real zoom levels
    rather than just on the sandbox's Xvfb screenshot this was built against.
-2. **Is the LED striping on the Clip lane visible** at real activity levels,
-   or does it read as a plain solid bar until you look very closely? The
-   fixture take used to build this has fairly flat/sparse activity.
+2. ~~Is the LED striping on the Clip lane visible at real activity levels?~~
+   **Superseded 2026-09-24** — the LED bars moved off the Clip lane onto the
+   ruler, as an off-by-default toggle; there is no standing Clip-lane
+   striping to check any more. See item 6 below for what replaced it.
 3. **Does the Zoom lane's dithered fill look like a screen** at real size,
    or too busy/noisy against real auto-zoom windows (which are usually
    wider than the synthetic ones in the comparison)?
@@ -116,6 +132,12 @@ code.
    thinner glyph can still read as harder to find with the pointer.
 5. **Does the cross-lane dimming read as one cut**, or does the Zoom lane's
    now-dimmed edge look broken/disabled rather than "outside the trim"?
+6. **The activity toggle (2026-09-24 update)**: is the small icon in the
+   ruler's corner easy to find and click at real size (it's only 16px)? Is
+   the LED overlay legible at 0.4 opacity against real (denser) activity
+   once toggled on, or does it need to be darker/lighter, or bigger? Does
+   toggling it on and off read as showing/hiding a judgment aid, or does it
+   look like something broke (a flicker, a layout shift)?
 
 ## Slice 3 — export dialog absorbs Share, built 2026-09-24
 
