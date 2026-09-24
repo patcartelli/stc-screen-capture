@@ -1,4 +1,4 @@
-# STC-444 runbook — the editor's header row (slice 1 of 4)
+# STC-444 runbook — the editor's header row and timeline (slices 1–2 of 4)
 
 **Run from:** `claude/fervent-goodall-rkautv` (PR #217). Until that PR merges, this runbook is not on `master`.
 
@@ -42,10 +42,57 @@ there, not to settle the design. Patrick's mockups are inspiration, not a spec.
 - The timecode is JetBrains Mono. Its `/ duration` half hides below a 680px
   header width, and the frame status line hides below 820px.
 
-Not in this slice: the ruler and trim brackets (slice 2), Export absorbing
-Share (slice 3), and bookmarks (deferred). The trim bar's In, Out and Full take
-buttons, and the share bar, are still text buttons until those slices replace
-them.
+Not in slice 1: the ruler and trim brackets (built in slice 2, below), Export
+absorbing Share (slice 3), and bookmarks (deferred). The trim bar's In, Out
+and Full take buttons, and the share bar, are still text buttons until slice
+3 replaces them.
+
+## Slice 2 — the ruler and timeline, built 2026-09-24
+
+Not yet run on a Mac. Built from a second HTML variant comparison
+(`timeline-variants` canvas: ten artboards, several rounds of feedback) —
+every choice below traces to a specific pick from that comparison, not a
+guess made while writing the real code.
+
+- **The ruler is no longer blank.** Adaptive ticks (1s → 5s → 10s → 30s →
+  1m → …, never closer than 6px — scrubber.ts's rule 9, now actually
+  implemented rather than only documented) plus a blue played line and a
+  bright playhead mark. Ticks stayed the plain thin-line treatment ("variant
+  A") — dots and a glowing/LED look were tried on the ruler specifically and
+  dropped; only the Zoom lane kept a screen-like texture.
+- **The Clip lane's bars are LED rows**, lit from the bottom, at the real
+  480-bucket density (`LANE_BUCKETS`) the code already computed — no new
+  density was invented for the visual.
+- **Trim handles are `[`/`]` brackets at a 1px stroke**, not a filled
+  rectangle. Compared against a 2px stroke at both actual size and 4x
+  magnified before picking 1px.
+- **Trim dimming now crosses both lanes** — a plain dim, not the old
+  diagonal hatch, so a cut reads as one cut through the whole timeline
+  rather than a Clip-lane-only visual language.
+- **The Zoom lane's fill is a dithered blue checkerboard**, the finer of two
+  compared pitches, replacing the old solid orange. `--zoom` (orange) is
+  untouched everywhere else (override selection, the manual-window dashed
+  border) — this was a scoped fill change, not a re-theme.
+
+### Only a Mac can settle these
+
+1. **Does panning/zooming the ruler feel right** with the new ticks and
+   played line riding along? They're authored as a fraction of full
+   duration exactly like `.kept`/`.cut-head`, with each tick's WIDTH
+   corrected by `1/scale` so it stays roughly a constant on-screen pixel at
+   any zoom — confirm that actually holds together at real zoom levels
+   rather than just on the sandbox's Xvfb screenshot this was built against.
+2. **Is the LED striping on the Clip lane visible** at real activity levels,
+   or does it read as a plain solid bar until you look very closely? The
+   fixture take used to build this has fairly flat/sparse activity.
+3. **Does the Zoom lane's dithered fill look like a screen** at real size,
+   or too busy/noisy against real auto-zoom windows (which are usually
+   wider than the synthetic ones in the comparison)?
+4. **Are the 1px bracket handles still comfortably grabbable** at actual
+   size, not just legible? They kept the old handle's 10x20 hit box, but a
+   thinner glyph can still read as harder to find with the pointer.
+5. **Does the cross-lane dimming read as one cut**, or does the Zoom lane's
+   now-dimmed edge look broken/disabled rather than "outside the trim"?
 
 ## Only a Mac can settle these
 
