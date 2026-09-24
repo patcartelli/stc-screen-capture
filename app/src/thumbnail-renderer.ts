@@ -253,7 +253,7 @@ function paintView(): void {
  * still goes through `still:export` like Copy, because it produces an actual
  * FILE at a place the user chooses, which promoting a directory does not.
  */
-type ExportAction = "copy" | "save-as";
+type ExportAction = "copy" | "save" | "save-as";
 
 async function runExport(action: ExportAction): Promise<boolean> {
   if (!composite) return false;
@@ -388,12 +388,31 @@ async function run(action: PanelAction): Promise<boolean> {
   }
   if (action === "save") {
     setStatus("Saving…");
+    // STC-446: Save WRITES THE FINISHED FILE, it does not only promote.
+    //
+    // It used to call `panel:save` alone, which promotes the bundle into
+    // `raw/` and writes nothing. That was right under the pre-STC-413 model,
+    // where the bundle WAS the artefact and the library rendered it from
+    // `shot.json` on demand. STC-413 redefined `raw/` as source material,
+    // never the deliverable — so a still that only promoted produced no
+    // deliverable at all, ever, by any route. Measured on a real folder:
+    // three top-level `.mp4` and zero `.png`.
+    //
+    // The export goes first because `still:export` promotes on its own for
+    // any file-writing target (`main.ts`), and that is the one owner of
+    // "a save promotes" rather than a second copy here. `panel:save` after
+    // it is then only the dismiss half, and is a no-op on the promote:
+    // `promoteTake` returns its argument unchanged for a directory already
+    // out of temp storage.
+    if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
+    if (!(await runExport("save"))) return false;
     const r = await window.thumb.save(dir);
     if (!r.ok) { setStatus(`Could not save: ${r.detail ?? "unknown error"}`); return false; }
     // The take has moved out of temp storage — every later call in this window
     // (reveal, trash) must use its new home. Same reason `dir` is a `let`.
     if (r.dir) dir = r.dir;
-    setStatus("Saved");
+    // NB the status `runExport` set names the file it wrote; not overwritten
+    // with a bare "Saved", which says strictly less.
     return true;
   }
   if (action === "edit") {

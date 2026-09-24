@@ -8,8 +8,8 @@ import { MAX_STACKED } from "../src/thumbnail.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { UNDO_WINDOW_MS } from "../src/panel-actions.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
-import { windowCount, hasWindow, pageWithUrl, pageMatching } from "./_windows.js";
-import { keptFileRequests } from "./_still-log.js";
+import { windowCount, hasWindow, pageWithUrl, pageMatching, clickThatCloses, actThatCloses } from "./_windows.js";
+import { keptFileRequests, exportRequests } from "./_still-log.js";
 import { RAW_SUBDIR } from "../src/takes.js";
 
 /**
@@ -194,9 +194,22 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
  * second is why this file failed on CI with `Cannot read properties of
  * undefined (reading 'click')` rather than with a timeout. See
  * `_windows.ts`'s `pageMatching`, which now owns the wait.
+ *
+ * **And loaded, which is STC-450's fix.** An attached page is one whose URL
+ * has committed, not one whose script has run. `thumbnail-renderer.js` is a
+ * classic `<script>` at the end of `thumbnail.html`'s body, and it is what
+ * binds every `#actions` button's click listener. A test that clicks from
+ * inside `panel.evaluate` (the in-flight test below does, on purpose) could
+ * land that click on a button with no listener yet, and read both buttons
+ * still enabled: `{ edit: false, save: false }`, run 36020497181. A classic
+ * script at the end of the body runs before `DOMContentLoaded`, so waiting
+ * for it here means the listeners are bound. The test named "hands back a
+ * panel whose buttons are already wired" holds that script back to prove it.
  */
-function panelWindow(app: ElectronApplication): Promise<Page> {
-  return pageWithUrl(app, "thumbnail.html");
+async function panelWindow(app: ElectronApplication): Promise<Page> {
+  const page = await pageWithUrl(app, "thumbnail.html");
+  await page.waitForLoadState("domcontentloaded");
+  return page;
 }
 
 describe("the panel waits (STC-392)", () => {
@@ -284,10 +297,69 @@ describe("the panel waits (STC-392)", () => {
       .toBe(false);
   }, 40_000);
 
+  describe("hands back a panel whose buttons are already wired (STC-450)", () => {
+    /**
+     * Hold `thumbnail-renderer.js` in the main process until the test says
+     * so, and fire one capture. A time-based delay would make the control
+     * below a race of its own; a held script cannot be late.
+     */
+    async function launchWithHeldRenderer(): Promise<{ electronApp: ElectronApplication; release: () => Promise<void> }> {
+      const { app: electronApp, win } = await launch({ captures: 0 });
+      await electronApp.evaluate(({ protocol, net }) => {
+        let release!: () => void;
+        const held = new Promise<void>((r) => { release = r; });
+        (globalThis as any).__releaseThumbnailRenderer = release;
+        protocol.handle("file", async (req) => {
+          if (req.url.endsWith("/thumbnail-renderer.js")) await held;
+          return net.fetch(req, { bypassCustomProtocolHandlers: true });
+        });
+      });
+      const r = await win.evaluate(() => (window as any).recorder.captureStill("display"));
+      if (!r.ok) throw new Error(`captureStill failed: ${JSON.stringify(r)}`);
+      return {
+        electronApp,
+        release: () => electronApp.evaluate(() => { (globalThis as any).__releaseThumbnailRenderer(); }),
+      };
+    }
+
+    /** Click Copy and read Edit/Save in the same tick, as the in-flight test does. */
+    const clickCopyAndRead = (panel: Page) => panel.evaluate(() => {
+      const loading = document.readyState === "loading";
+      (document.getElementById("copy") as HTMLButtonElement).click();
+      return {
+        loading,
+        edit: (document.getElementById("edit") as HTMLButtonElement).disabled,
+        save: (document.getElementById("save") as HTMLButtonElement).disabled,
+      };
+    });
+
+    test("control: an attached page can be clicked before its script has run, and the click is lost", async () => {
+      // What `panelWindow` used to return. If this stops reading the lost
+      // click, the hold no longer opens the window and the test below proves
+      // nothing.
+      const { electronApp, release } = await launchWithHeldRenderer();
+      const panel = await pageWithUrl(electronApp, "thumbnail.html");
+      expect(await clickCopyAndRead(panel)).toEqual({ loading: true, edit: false, save: false });
+      await release();
+    }, 40_000);
+
+    test("panelWindow waits for the script, so an in-page click reaches its listener", async () => {
+      const { electronApp, release } = await launchWithHeldRenderer();
+      let settled = false;
+      const pending = panelWindow(electronApp).then((p) => { settled = true; return p; });
+      await pageWithUrl(electronApp, "thumbnail.html");
+      await sleep(250);
+      expect(settled, "panelWindow resolved while the renderer script was still held").toBe(false);
+      await release();
+      const panel = await pending;
+      expect(await clickCopyAndRead(panel)).toEqual({ loading: false, edit: true, save: true });
+    }, 40_000);
+  });
+
   test("Save promotes, and closes the panel", async () => {
     const { app: electronApp, temp, recordings } = await launch();
     const panel = await panelWindow(electronApp);
-    await panel.click("#save");
+    await clickThatCloses(panel, "#save");
     await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(0);
 
@@ -408,7 +480,9 @@ describe("the panel waits (STC-392)", () => {
     // needed the in-browser fix above.
     const elapsed = Date.now() - pressedAt;
     if (elapsed < 500) await sleep(500 - elapsed);
-    await pressTrashKey();
+    // Past the window the key DELETES, which closes this panel's own window
+    // under the evaluate that pressed it — the act-that-closes race.
+    await actThatCloses(panel, pressTrashKey);
     // Exactly the pressed panel goes; an unpressed earlier one (if a retry
     // happened) stays, which is what tells a real delete from a stray close.
     await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
@@ -438,7 +512,7 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
 
   test("pressing Trash closes the panel, puts up an undo toast, and leaves the take in temp", async () => {
     const { app: electronApp, temp } = await launch();
-    await (await panelWindow(electronApp)).click("#trash");
+    await clickThatCloses(await panelWindow(electronApp), "#trash");
 
     await expect.poll(() => windowCount(electronApp, "thumbnail.html"),
                        { timeout: POLL_MS }).toBe(0);
@@ -454,11 +528,11 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
 
   test("pressing Undo brings the panel back, and the take is still in temp", async () => {
     const { app: electronApp, temp } = await launch();
-    await (await panelWindow(electronApp)).click("#trash");
+    await clickThatCloses(await panelWindow(electronApp), "#trash");
     await expect.poll(() => windowCount(electronApp, "toast.html"),
                        { timeout: POLL_MS }).toBe(1);
 
-    await (await toastWindow(electronApp)).click("#undo");
+    await clickThatCloses(await toastWindow(electronApp), "#undo");
 
     // The toast goes...
     await expect.poll(() => windowCount(electronApp, "toast.html"),
@@ -478,7 +552,7 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
 
   test("letting the toast expire commits the deletion — temp ends up empty", async () => {
     const { app: electronApp, temp } = await launch();
-    await (await panelWindow(electronApp)).click("#trash");
+    await clickThatCloses(await panelWindow(electronApp), "#trash");
     await expect.poll(() => windowCount(electronApp, "toast.html"),
                        { timeout: POLL_MS }).toBe(1);
     // Still there right after the promise, before any window has elapsed.
@@ -676,7 +750,7 @@ describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
   test("a silent (skip-the-panel) capture never occupies a slot in the cap (STC-426)", async () => {
     // Three real panels fill the cap exactly — nothing hidden, nothing to
     // spare.
-    const { win } = await launch({ captures: MAX_STACKED });
+    const { win, stillLog } = await launch({ captures: MAX_STACKED });
     await expect.poll(() => thumbnailPanels(app!).then((p) => p.filter((x) => x.visible).length),
                        { timeout: POLL_MS }).toBe(MAX_STACKED);
     const before = await thumbnailPanels(app!);
@@ -696,13 +770,23 @@ describe("the stack caps at three, and drops nothing (STC-392 D7)", () => {
     // (hidden) `BrowserWindow` while it composites — rather than for any
     // visible change, since the correct behaviour here is exactly NO
     // visible change to the other three.
+    //
+    // Its COPY first. A count poll alone is satisfied by its first sample
+    // (`_windows.ts`): under load it read 3 before the silent window's url
+    // had even committed, and the exact read below then caught it arriving —
+    // 4, reported as the cap being breached. The copy is the one export only
+    // the silent panel makes (the visible panels' paint-time drag-out files
+    // are `clipboard: false`), so once it is logged the window has certainly
+    // existed, and a count of 3 means it is gone.
+    await expect.poll(() => exportRequests(stillLog).some((x) => x.clipboard === true),
+                       { timeout: POLL_MS }).toBe(true);
     await expect.poll(() => thumbnailPanels(app!).then((p) => p.length),
                        { timeout: POLL_MS }).toBe(MAX_STACKED);
     const after = await thumbnailPanels(app!);
     expect(after.map((p) => p.url).sort()).toEqual(before.map((p) => p.url).sort());
     expect(after.every((p) => p.visible)).toBe(true);
     // Declared timeout: 60s overhead + `launch`'s poll (15s) + visible-count
-    // poll (15s) + the silent-panel-gone poll (15s) = 105s summed; declared
-    // above that.
-  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 3 * POLL_MS + 60_000);
+    // poll (15s) + the silent copy poll (15s) + the silent-panel-gone poll
+    // (15s) = 120s summed; declared above that.
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 4 * POLL_MS + 60_000);
 });

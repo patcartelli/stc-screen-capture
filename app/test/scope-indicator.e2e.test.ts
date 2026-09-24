@@ -7,6 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { FLASH_HOLD_MS, FLASH_FADE_MS } from "../src/scope-indicator-window.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { windowCount } from "./_windows.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /** Total time the flash's window can exist, hold plus fade, before it
  * destroys itself with no further input. Any test proving an EARLY cancel
@@ -52,7 +53,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

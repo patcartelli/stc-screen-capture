@@ -47,6 +47,9 @@ interface AppSettings {
   saveFolder: string | null;
   /** STC-412: show diagnostics table. */
   showDiagnostics: boolean;
+  /** STC-444 slice 3: the site folder, moved here from the editor window's
+   *  own sharebar — one setting for the whole app, not a per-take one. */
+  share: { destination: string | null };
 }
 interface Take {
   dir: string; name: string; durationMs: number;
@@ -90,6 +93,9 @@ declare const recorder: {
     Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   chooseStillDestination(): Promise<{ saveFolder: string | null }>;
+  /** STC-444 slice 3: the site folder picker, moved here from the editor
+   *  window's own bridge — same handler, a person choosing either way. */
+  chooseShareDestination(): Promise<{ destination: string | null }>;
   /** The resolved save location — never null, never a phrase (STC-412 I1). */
   resolvedSaveFolder(): Promise<string>;
   start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
@@ -961,6 +967,18 @@ async function refreshDestination(): Promise<void> {
   $("stilldest").textContent = await recorder.resolvedSaveFolder();
 }
 
+/**
+ * The site folder (STC-444 slice 3, moved here from the editor window's own
+ * sharebar) — unlike `saveFolder`, `share.destination` has no resolved
+ * fallback: null really does mean "not chosen yet", so it is shown as such
+ * rather than asking main to paper over it the way `resolvedSaveFolder` does
+ * for recordings.
+ */
+async function refreshSiteDestination(): Promise<void> {
+  const { share } = await recorder.getSettings();
+  $("sitedest").textContent = share.destination ?? "Not set";
+}
+
 const thumbCornerSel = $("thumbcorner") as HTMLSelectElement;
 const thumbSkipBox = $("thumbskip") as HTMLInputElement;
 const showDiagnosticsBox = $("showdiagnostics") as HTMLInputElement;
@@ -993,6 +1011,7 @@ async function loadStillPreferences(): Promise<void> {
   // as `void … .catch(() => {})`. Put first, a failure here would leave every
   // control below it unset for a reason that has nothing to do with them.
   await refreshDestination();
+  await refreshSiteDestination();
 }
 
 /** Every control here changes ONE field; the rest of `thumbnail` is read fresh and kept. */
@@ -1008,6 +1027,12 @@ $("stillchoosedest").addEventListener("click", async () => {
   // of the default `refreshDestination` exists to avoid.
   await recorder.chooseStillDestination();
   await refreshDestination();
+});
+$("sitechoosedest").addEventListener("click", async () => {
+  // Same reason `stillchoosedest` above re-fetches rather than trusting the
+  // picker's own reply: a cancel answers with the CURRENT destination.
+  await recorder.chooseShareDestination();
+  await refreshSiteDestination();
 });
 thumbCornerSel.addEventListener("change", () => {
   void patchThumbnail({ corner: thumbCornerSel.value as AppSettings["thumbnail"]["corner"] });

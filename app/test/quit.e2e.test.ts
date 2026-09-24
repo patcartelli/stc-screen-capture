@@ -6,8 +6,9 @@ import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
-import { windowCount } from "./_windows.js";
+import { windowCount, pageWithUrl, pageMatching, clickThatCloses } from "./_windows.js";
 import { RAW_SUBDIR } from "../src/takes.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -22,7 +23,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 describe("quitting while recording", () => {
   test("stops the recording, waits for the stop, then quits the helper", async () => {
@@ -127,24 +128,36 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
 
   /**
    * Stub the quit dialog, counting calls AND recording the last call's
-   * arguments — both read back from the MAIN process (STC-393's own
-   * pattern for a dialog stub).
+   * arguments — to a FILE, read back from the test process (STC-434).
+   *
+   * It used to keep both in the main process's `globalThis` and read them
+   * with `app.evaluate`. That cannot work for the answers that QUIT (Save All,
+   * Quit Anyway): the stub answers instantly, the app exits, and the next
+   * `app.evaluate` asks a process that is gone — `Target page, context or
+   * browser has been closed`. On an idle machine the first poll sample beats
+   * the exit; under load it does not (reproduced for STC-434). A file
+   * outlives the process, which is the same reason this file's
+   * "no dialog at all" tests already log to one.
    */
   async function stubQuitDialog(
     response: 0 | 1 | 2,
   ): Promise<{ calls: () => Promise<number>; lastArgs: () => Promise<any> }> {
-    await app!.evaluate(({ dialog }, resp) => {
-      (globalThis as any).__quitDialogCalls = 0;
-      (globalThis as any).__quitDialogArgs = undefined;
+    const log = join(mkdtempSync(join(tmpdir(), "stc-quitdialog-")), "calls.jsonl");
+    await app!.evaluate(({ dialog }, { resp, logPath }) => {
+      // `process.getBuiltinModule`: vitest rewrites `import()` inside
+      // `evaluate()` (CLAUDE.md), and Playwright's evaluate has no `require`.
+      const fs = process.getBuiltinModule("node:fs") as typeof import("node:fs");
       dialog.showMessageBox = (async (opts: unknown) => {
-        (globalThis as any).__quitDialogCalls++;
-        (globalThis as any).__quitDialogArgs = opts;
+        fs.appendFileSync(logPath, JSON.stringify(opts) + "\n");
         return { response: resp, checkboxChecked: false };
       }) as any;
-    }, response);
+    }, { resp: response, logPath: log });
+    const entries = (): any[] => existsSync(log)
+      ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
+      : [];
     return {
-      calls: () => app!.evaluate(() => (globalThis as any).__quitDialogCalls ?? 0),
-      lastArgs: () => app!.evaluate(() => (globalThis as any).__quitDialogArgs),
+      calls: async () => entries().length,
+      lastArgs: async () => entries().at(-1),
     };
   }
 
@@ -330,9 +343,10 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     // pressed from is matched by its own `dir` query param
     // (`crash-recovery.e2e.test.ts`'s own pattern for telling panels apart).
     const dir1 = r1.dir as string;
-    const panel1 = app!.windows().find((p) =>
-      p.url().includes("thumbnail.html") && new URL(p.url()).searchParams.get("dir") === dir1)!;
-    await panel1.click("#trash");
+    const panel1 = await pageMatching(app!, (p) =>
+      p.url().includes("thumbnail.html") && new URL(p.url()).searchParams.get("dir") === dir1,
+      `the panel for ${dir1}`);
+    await clickThatCloses(panel1, "#trash");
     await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(1);
     // Still in temp — only promised, well inside the 8s undo window.
     expect(tempTakes(temp).length).toBe(2);
@@ -360,8 +374,8 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     const before = tempTakes(temp);
     expect(before.length).toBe(1);
 
-    const panel = app!.windows().find((p) => p.url().includes("thumbnail.html"))!;
-    await panel.click("#trash");
+    const panel = await pageWithUrl(app!, "thumbnail.html");
+    await clickThatCloses(panel, "#trash");
     await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(0);
     // Still there — only promised, well inside the 8s undo window. If the
     // quit below relied on the periodic sweep alone (rather than committing
@@ -414,8 +428,8 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     const before = tempTakes(temp);
     expect(before.length).toBe(1);
 
-    const panel = app!.windows().find((p) => p.url().includes("thumbnail.html"))!;
-    await panel.click("#trash");
+    const panel = await pageWithUrl(app!, "thumbnail.html");
+    await clickThatCloses(panel, "#trash");
     await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(0);
 
     // The quit must COMPLETE, inside the bound plus the rest of the chain —
@@ -465,8 +479,9 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     await expect.poll(() => panelCount(), { timeout: POLL_MS }).toBe(2);
 
     const dir1 = r1.dir as string;
-    const panel1 = app!.windows().find((p) =>
-      p.url().includes("thumbnail.html") && new URL(p.url()).searchParams.get("dir") === dir1)!;
+    const panel1 = await pageMatching(app!, (p) =>
+      p.url().includes("thumbnail.html") && new URL(p.url()).searchParams.get("dir") === dir1,
+      `the panel for ${dir1}`);
 
     // Trash DESTROYS this very panel's window as part of handling the IPC
     // call that presses it, so awaiting `window.thumb.trash(dir)`'s own
@@ -483,7 +498,7 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
     // Not awaited for its own resolution — `.click()` resolves once the
     // click event is dispatched, well before the IPC round trip it triggers
     // finishes, so this line returning is not a synchronization point.
-    await panel1.click("#trash");
+    await clickThatCloses(panel1, "#trash");
     await closed;
 
     // Quit IMMEDIATELY — nothing waited beyond the window actually closing.

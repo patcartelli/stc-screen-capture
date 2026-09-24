@@ -19,7 +19,7 @@ import { runSwiftHarness } from "./_swift-harness.js";
  * transform's demuxer read a fragmented file the same way) possible from
  * here rather than requiring a Mac with a grant.
  *
- * Three files, one writer configuration each (`helper/test/fragmented-writer/
+ * Four files, one writer configuration each (`helper/test/fragmented-writer/
  * main.swift` mirrors `setupWriter()` exactly, fragmentation aside):
  *   - baseline: no `movieFragmentInterval`, finished cleanly — today's shape.
  *   - fragmented, finished cleanly — must demux IDENTICALLY to baseline,
@@ -27,6 +27,11 @@ import { runSwiftHarness } from "./_swift-harness.js";
  *   - fragmented, killed mid-write (`_exit()`, no `finishWriting`) — must
  *     still demux to something close to the frame count at the kill, which
  *     is the ticket's actual acceptance criterion.
+ *   - fragmented, finished cleanly, but with a real multi-fragment-interval
+ *     GAP where no sample was appended (STC-408, modelling what STC-240's
+ *     pause does to this writer — see the fourth test below) — must still
+ *     finish and demux every frame, with the gap intact rather than
+ *     collapsed or corrupted.
  */
 const FRAMES = 300;   // 5s at 60fps
 const FPS = 60;
@@ -36,7 +41,13 @@ function tmpOut(name: string): string {
   return join(mkdtempSync(join(tmpdir(), "stc-frag-")), name);
 }
 
-async function write(out: string, opts: { fragmentSec?: number; crashAfter?: number } = {}) {
+async function write(
+  out: string,
+  opts: {
+    fragmentSec?: number; crashAfter?: number; gapAfterFrame?: number; gapSec?: number;
+    realtime?: boolean; noExpectedRate?: boolean; notRealtime?: boolean;
+  } = {},
+) {
   await runSwiftHarness({
     label: "fragwriter",
     sources: ["helper/test/fragmented-writer/main.swift"],
@@ -46,6 +57,11 @@ async function write(out: string, opts: { fragmentSec?: number; crashAfter?: num
       STC_FRAG_FPS: String(FPS),
       ...(opts.fragmentSec ? { STC_FRAG_INTERVAL_SEC: String(opts.fragmentSec) } : {}),
       ...(opts.crashAfter ? { STC_FRAG_CRASH_AFTER: String(opts.crashAfter) } : {}),
+      ...(opts.gapAfterFrame ? { STC_FRAG_GAP_AFTER_FRAME: String(opts.gapAfterFrame) } : {}),
+      ...(opts.gapSec ? { STC_FRAG_GAP_SEC: String(opts.gapSec) } : {}),
+      ...(opts.realtime ? { STC_FRAG_REALTIME: "1" } : {}),
+      ...(opts.noExpectedRate ? { STC_FRAG_NO_EXPECTED_RATE: "1" } : {}),
+      ...(opts.notRealtime ? { STC_FRAG_NOT_REALTIME: "1" } : {}),
     },
     // Killing the process IS the test in the crash case — a non-zero/signal
     // exit there is expected, not a harness failure, so this function's own
@@ -130,4 +146,69 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
     const { demuxTrack } = await import("../../transform/src/demux.js");
     await expect(demuxTrack(readAb(out), "crashed-unfragmented.mp4")).rejects.toThrow();
   }, 120_000);
+
+  // STC-408: an ordinary, UNCRASHED take can still sit idle for seconds —
+  // that is what STC-240's pause does to this writer (PauseGate drops paused
+  // samples outright, so the next sample's PTS jumps by the pause's real
+  // duration). `finishWriting` runs normally; the question is whether a real
+  // gap finalizes and demuxes cleanly, every frame present, gap intact.
+  //
+  // The rows asserted here are STC-408's own question: does STC-394's
+  // `movieFragmentInterval` change what a gap does to a cleanly finished
+  // file? It does not. `frag-2s` crosses two 1 s fragment boundaries inside
+  // the gap and demuxes identically in shape to `nofrag-2s`.
+  //
+  // A gap of 3 s or MORE is a separate finding, and it belongs to STC-448. On
+  // CI's encoder the writer rejects an append 5-14 frames after frames resume
+  // (`-11800` / `-17771`). It does this with or without fragmentation, with
+  // real-time pacing, without `AVVideoExpectedSourceFrameRateKey`, and with
+  // `expectsMediaDataInRealTime = false` (run 35902771313 swept all of those).
+  // Those rows are not asserted here: the failure is not this ticket's
+  // property, and nobody has run them on a real encoder yet. CI's encoder is
+  // the paravirtualized one STC-259 measured behaving unlike hardware. The
+  // harness keeps every knob (`realtime`, `noExpectedRate`, `notRealtime`),
+  // so reproducing it is one line per row in CASES. STC-448 puts those rows
+  // back, on a Mac first, as its regression check.
+  const GAP_AFTER_FRAME = 120;   // 2s in at 60fps
+
+  type GapCase = {
+    name: string; gapSec: number;
+    fragmentSec?: number; realtime?: boolean; noExpectedRate?: boolean; notRealtime?: boolean;
+  };
+
+  /** Runs one case and describes its outcome in words; never throws. */
+  async function gapOutcome(c: GapCase): Promise<string> {
+    const out = tmpOut(`${c.name}.mp4`);
+    try {
+      await write(out, { ...c, gapAfterFrame: GAP_AFTER_FRAME });
+    } catch (e) {
+      const m = /append failed at frame (\d+)/.exec(String((e as Error)?.message ?? e));
+      return m ? `append failed at frame ${m[1]}` : `harness failed: ${String(e).split("\n")[0]}`;
+    }
+    const { demuxTrack } = await import("../../transform/src/demux.js");
+    const video = await demuxTrack(readAb(out), c.name);
+    const ptsStepNs = Math.trunc(1_000_000_000 / FPS);
+    const gapNs = Math.round(c.gapSec * 1_000_000_000);
+    if (video.framesNs.length !== FRAMES) return `demuxed ${video.framesNs.length} of ${FRAMES} frames`;
+    for (let i = 0; i < FRAMES; i++) {
+      const want = i * ptsStepNs + (i >= GAP_AFTER_FRAME ? gapNs : 0);
+      if (video.framesNs[i] !== want) return `frame ${i} at ${video.framesNs[i]} ns, expected ${want}`;
+    }
+    return "ok";
+  }
+
+  const CASES: GapCase[] = [
+    { name: "nofrag-0.5s", gapSec: 0.5 },
+    { name: "nofrag-1s", gapSec: 1 },
+    { name: "nofrag-2s", gapSec: 2 },
+    { name: "frag-2s", gapSec: 2, fragmentSec: FRAGMENT_SEC },
+  ];
+
+  test("a PTS gap up to 2 s, finished cleanly: every frame, gap intact, with or without fragmentation", async () => {
+    const rows: string[] = [];
+    for (const c of CASES) rows.push(`${c.name.padEnd(30)} ${await gapOutcome(c)}`);
+    const table = rows.join("\n");
+    process.stderr.write(`[fragmented-writer] gap matrix:\n${table}\n`);
+    expect(rows.every((r) => r.endsWith(" ok")), `gap matrix:\n${table}`).toBe(true);
+  }, 900_000);
 });

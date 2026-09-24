@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 import { parseShot } from "../../transform/src/shot.js";
-import { stubQuitDialog } from "./_quit-fixture.js";
+import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { windowCount } from "./_windows.js";
 
 /**
@@ -29,7 +29,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 interface Launched {
   win: Page;

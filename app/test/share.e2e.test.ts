@@ -4,11 +4,12 @@ import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
-import { exportManifestName, exportMediaName } from "../src/share.js";
+import { autoSlug, exportManifestName, exportMediaName } from "../src/share.js";
 import { openEditorFromLibrary, inkiness } from "./_editor-fixture.js";
 import { mintCaptureId } from "@transform/capture-id.js";
 import { CAPTURE_DOC_FILE, captureDocForWrite } from "@transform/capture-doc.js";
 import { tagMp4 } from "@transform/media-tag.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * STC-242 — share, end to end through the real handlers.
@@ -23,10 +24,16 @@ import { tagMp4 } from "@transform/media-tag.js";
  * `window.editor` in the EDITOR window now, not `window.recorder` in the
  * main one. `setSettings` stays on the main window's bridge, since general
  * preferences did not move.
+ *
+ * STC-444 slice 3: the slug moved off `settings.share` and onto each take's
+ * own `project.json` (`Project.slug`). `launch()` below seeds it there
+ * directly rather than through the editor's UI, the same reasoning
+ * `nothing-lost.e2e.test.ts` seeds `saveFolder` on disk instead of walking a
+ * picker no automated test can answer.
  */
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 const TAKE = "2026-08-24_10-00-00";
 
@@ -59,13 +66,27 @@ function mp4Bytes(): Uint8Array {
  * `saveFolder` (STC-412's field, `still.destination`'s replacement). What is
  * under test is what happens with a destination configured, not the dialog.
  */
-async function launch(opts: { withExport?: boolean; slug?: string } = {}): Promise<Launched> {
+async function launch(opts: { withExport?: boolean; slug?: string | null } = {}): Promise<Launched> {
   const { dir: recordings, takeDir } = makeTakeFolder(TAKE);
   const site = mkdtempSync(join(tmpdir(), "stc-site-"));
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    share: { destination: site, slug: opts.slug ?? "network" },
+    share: { destination: site },
   }));
+  // STC-444 slice 3: the slug is per-take now. `slug: null` tests the
+  // fallback path (a take whose project.json was never written, or never
+  // touched the field) — every other case seeds an explicit one so the
+  // existing "network.mp4" assertions below stay meaningful regardless of
+  // what `autoSlug` would make of this fixture's timestamp-shaped name.
+  if (opts.slug !== null) {
+    writeFileSync(join(takeDir, "project.json"), JSON.stringify({
+      version: 7,
+      output: { fps: 60, width: 1920, height: 1080 },
+      cursor: { style: "default", scale: 1 },
+      transform: { version: 1 },
+      slug: opts.slug ?? "network",
+    }));
+  }
   let exportedBytes: Buffer | undefined;
   if (opts.withExport !== false) {
     // Stand in for a real export. STC-413: `share:publish` resolves its
@@ -111,6 +132,23 @@ describe("share to the site folder", () => {
     expect(readFileSync(join(site, "network.mp4"))).toEqual(exportedBytes);
     // First publish into an empty folder replaced nothing, and says so.
     expect(r.replaced).toBe(false);
+  }, 60_000);
+
+  /**
+   * The fallback path: a take that has never written a `project.json` at
+   * all still publishes, under a name derived from its OWN folder name —
+   * `main.ts`'s `readProjectSlug` falling through to `autoSlug`, not a
+   * refusal for a take that simply hasn't opened the export dialog yet.
+   * `autoSlug`, not the raw take name: TAKE's underscore is not itself a
+   * valid slug character, so the published name is not literally
+   * `${TAKE}.mp4` — `share.test.ts` covers that transform on its own.
+   */
+  test("a take with no project.json yet still publishes, under its own name", async () => {
+    const { editorWin, site } = await launch({ slug: null });
+    const r = await publish(editorWin);
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(r.name).toBe(`${autoSlug(TAKE)}.mp4`);
+    expect(existsSync(join(site, `${autoSlug(TAKE)}.mp4`))).toBe(true);
   }, 60_000);
 
   /**
@@ -160,11 +198,28 @@ describe("share to the site folder", () => {
     expect(r.snippet).not.toContain('width="0"');
   }, 60_000);
 
-  test("reveal reports honestly when nothing has been published", async () => {
+  test("reveal reports honestly when nothing has been published this session", async () => {
     const { editorWin } = await launch();
     const r = await editorWin.evaluate(() => (window as any).editor.revealPublished());
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/nothing published/i);
+  }, 60_000);
+
+  /**
+   * "Show published" folded into publish's own success feedback (STC-444
+   * slice 3) — there is no standing reveal button any more, so this is the
+   * only way `share:reveal` can now say `ok: true`: the exact path a
+   * publish in THIS session just wrote to, remembered in-process rather
+   * than re-derived from settings (there is no global slug left to derive
+   * it from).
+   */
+  test("reveal succeeds after a publish, with the exact path just written", async () => {
+    const { editorWin, site } = await launch();
+    const published = await publish(editorWin);
+    expect(published.ok).toBe(true);
+    const r = await editorWin.evaluate(() => (window as any).editor.revealPublished());
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(r.file).toBe(join(site, "network.mp4"));
   }, 60_000);
 
   /**
@@ -182,11 +237,69 @@ describe("share to the site folder", () => {
   test("the renderer cannot set the site folder through setSettings", async () => {
     const { win, site } = await launch();
     const after = await win.evaluate(() => (window as any).recorder.setSettings({
-      share: { destination: "/tmp/somewhere-else", slug: "evil" },
+      share: { destination: "/tmp/somewhere-else" },
     }));
-    // The slug went through — it decides only what the file is called.
-    expect(after.share.slug).toBe("evil");
-    // The destination did not.
     expect(after.share.destination).toBe(site);
+  }, 60_000);
+});
+
+/**
+ * The export dialog's own Share row, driven through real clicks and typing —
+ * `describe("share to the site folder")` above calls `editor.publish()`
+ * directly and never touches `#shareslug`, so it cannot catch a bug in the
+ * dialog's OWN wiring: the field showing the wrong prefill, a click not
+ * persisting before publishing, the reveal button staying hidden after a
+ * real success.
+ */
+describe("the export dialog's Share row", () => {
+  test("prefills the slug from the take's own name when never published", async () => {
+    const { editorWin } = await launch({ slug: null });
+    await editorWin.click("#openexport");
+    await expect.poll(() => editorWin.inputValue("#shareslug"), { timeout: 10_000 })
+      .toBe(autoSlug(TAKE));
+  }, 60_000);
+
+  test("prefills the slug from the project when it has one", async () => {
+    const { editorWin } = await launch({ slug: "login-bug" });
+    await editorWin.click("#openexport");
+    await expect.poll(() => editorWin.inputValue("#shareslug"), { timeout: 10_000 })
+      .toBe("login-bug");
+  }, 60_000);
+
+  test("shows the configured site folder, read-only", async () => {
+    const { editorWin, site } = await launch();
+    await editorWin.click("#openexport");
+    await expect.poll(() => editorWin.textContent("#sitedestnote"), { timeout: 10_000 })
+      .toContain(site);
+  }, 60_000);
+
+  test("typing a custom slug and clicking Share persists and publishes under it", async () => {
+    const { editorWin, site } = await launch({ slug: null });
+    await editorWin.click("#openexport");
+    await editorWin.fill("#shareslug", "login-bug");
+    await editorWin.click("#share");
+    await expect.poll(() => editorWin.textContent("#sharestatus"), { timeout: 15_000 })
+      .toMatch(/Wrote|Replaced/);
+    expect(existsSync(join(site, "login-bug.mp4"))).toBe(true);
+    expect(existsSync(join(site, `${TAKE}.mp4`))).toBe(false);
+  }, 60_000);
+
+  test("Show in Finder appears only after a publish succeeds, from this row alone", async () => {
+    const { editorWin } = await launch();
+    await editorWin.click("#openexport");
+    expect(await editorWin.isHidden("#sharereveal")).toBe(true);
+    await editorWin.click("#share");
+    await expect.poll(() => editorWin.isVisible("#sharereveal"), { timeout: 15_000 }).toBe(true);
+  }, 60_000);
+
+  test("a bad slug is refused without persisting or publishing anything", async () => {
+    const { editorWin, site } = await launch({ slug: null });
+    await editorWin.click("#openexport");
+    await editorWin.fill("#shareslug", "Not A Slug");
+    await editorWin.click("#share");
+    await expect.poll(() => editorWin.textContent("#sharestatus"), { timeout: 10_000 })
+      .toMatch(/not a usable name/i);
+    expect(existsSync(join(site, "not-a-slug.mp4"))).toBe(false);
+    expect(existsSync(join(site, `${TAKE}.mp4`))).toBe(false);
   }, 60_000);
 });

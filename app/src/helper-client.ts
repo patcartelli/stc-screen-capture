@@ -25,6 +25,17 @@ import type { Readable } from "node:stream";
  */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * How long a helper that has been sent `quit` gets to exit on its own before
+ * `HelperSupervisor.shutdown()` kills it. It lives here, beside the request
+ * timeout, rather than in `supervisor.ts`: the e2e suite's close bound
+ * (`_quit-fixture.ts`'s `APP_CLOSE_MS`) is derived from both, and this module
+ * imports nothing but node built-ins. Importing `supervisor.ts` from the
+ * fixture would drag `library.ts` and its `@transform` imports into every test
+ * process, and the slow-test config has no such alias (STC-449).
+ */
+export const QUIT_GRACE_MS = 2_000;
+
 export interface HelperLine {
   ev: string;
   seq?: number;

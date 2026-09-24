@@ -121,7 +121,10 @@ describe("isProjectVersion", () => {
   });
 
   test("refuses everything else, including the near misses", () => {
-    for (const v of [0, 7, -1, 1.5, "1", null, undefined, NaN, [1]]) {
+    // STC-444 slice 3 minted project-7, so 8 is the current near miss —
+    // whichever number is ONE PAST the real top, never a fixed literal.
+    const pastTheTop = Math.max(...PROJECT_VERSIONS) + 1;
+    for (const v of [0, pastTheTop, -1, 1.5, "1", null, undefined, NaN, [1]]) {
       expect(isProjectVersion(v), `${JSON.stringify(v)}`).toBe(false);
     }
     for (const v of PROJECT_VERSIONS) expect(isProjectVersion(v)).toBe(true);
