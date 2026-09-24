@@ -44,6 +44,10 @@ contextBridge.exposeInMainWorld("recorder", {
   // frame grab goes through `still:export` like everything else now.
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   chooseStillDestination: () => ipcRenderer.invoke("still:chooseDestination"),
+  // The site folder (STC-444 slice 3, moved here from the editor window's
+  // own bridge) — same handler either way, `main.ts` does not care which
+  // window's sender asked.
+  chooseShareDestination: () => ipcRenderer.invoke("share:chooseDestination"),
   // Where recordings and shots actually land, resolved (STC-412 final
   // review, I1). Not derivable on this side: an unset `saveFolder` falls
   // through to `STC_RECORDINGS_DIR`/~/Desktop/stc inside `takes.ts`, and the

@@ -140,6 +140,32 @@ describe("the settings sheet", () => {
   });
 
   /**
+   * STC-444 slice 3. The site folder used to be its own row under the
+   * editor window's timeline, with its own picker button — this pins it
+   * moved into the main window's Preferences instead, alongside the save
+   * location it mirrors, and that an unset one reads "Not set" rather than
+   * a resolved guess (there is no real default to resolve to — see
+   * `refreshSiteDestination`'s own comment in renderer.ts).
+   */
+  test("the site folder is a Preferences row, unset by default", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await win.click("#settings");
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+
+    const savedUnderPreferences = await win.evaluate(() => {
+      const dest = document.getElementById("sitedest")!;
+      const row = dest.closest("div")!;
+      let prev = row.previousElementSibling;
+      while (prev && prev.tagName !== "H2") prev = prev.previousElementSibling;
+      return prev?.textContent ?? null;
+    });
+    expect(savedUnderPreferences).toBe("Preferences");
+
+    await expect.poll(() => win.textContent("#sitedest"), { timeout: 10_000 })
+      .toBe("Not set");
+  });
+
+  /**
    * STC-412 final review, I2. `camera-state`/`mic-state` were built as one
    * half of a PAIR with the warning that accompanies them (STC-287): the row
    * is the at-a-glance state, the alert is the thing that cannot be missed.

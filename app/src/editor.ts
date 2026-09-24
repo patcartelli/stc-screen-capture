@@ -14,6 +14,11 @@ interface StillSettingsView {
 }
 interface AppSettings {
   still: StillSettingsView;
+  // STC-444 slice 3: the export dialog shows this read-only (the picker
+  // itself moved to the main window's Preferences), so a take can be
+  // published without a second door back to a folder picker this window
+  // does not own.
+  share: { destination: string | null };
 }
 declare const editor: {
   openPreview: (dir: string) => Promise<boolean>;
@@ -41,7 +46,6 @@ declare const editor: {
     ok: boolean; plan: string; message?: string;
     file?: string; name?: string; replaced?: boolean; snippet?: string;
   }>;
-  chooseShareDestination(): Promise<{ destination: string | null }>;
   revealPublished(): Promise<{ ok: boolean; file?: string; message?: string }>;
   getVersion(): Promise<string>;
 };
@@ -69,8 +73,9 @@ import type { Rect } from "@transform/spaces";
 import {
   clampTrimFrame, decideKey, formatReadout, formatShuttle, frameAtFraction, frameToNs,
   fractionOfFrame, lastFrame, nsToFrame, rubberBandPx, tickStrideFrames, type ScrubAction,
+  type ScrubState,
 } from "./scrubber.js";
-import { exportManifestName, exportMediaName } from "./share.js";
+import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
 import { clipActivity, zoomCurve } from "./timeline-activity.js";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -134,7 +139,7 @@ function applySpanTransform(): void {
   const translatePct = durationNs > 0 ? -(spanStart / span) * 100 : 0;
   const transform = `scaleX(${scale}) translateX(${translatePct}%)`;
   ($("timeline") as HTMLElement).style.transform = transform;
-  ($("clip-canvas-wrap") as HTMLElement).style.transform = transform;
+  ($("ruler-activity-wrap") as HTMLElement).style.transform = transform;
   ($("zoom-canvas-wrap") as HTMLElement).style.transform = transform;
   ($("ruler-content") as HTMLElement).style.transform = transform;
   // STC-331, found fixing this file: editor.html's own comment already
@@ -150,6 +155,88 @@ function applySpanTransform(): void {
   // phase 1's read-only blocks ever did.
   ($("override-blocks") as HTMLElement).style.transform = transform;
   updateTicks();
+  renderRulerTicks();
+  renderBookmarks();
+}
+
+// ---- the ruler's adaptive ticks + played line (STC-444 slice 2) ------------
+//
+// Separate from updateTicks()/#ticks above, which is STC-338's export-frame
+// grid drawn over the CLIP LANE — a different feature that predates this
+// ticket and is untouched by it. This is the ruler's own time scale.
+
+/** 1s → 5s → 10s → 30s → 1m → …, doubling/quintupling in the same "nice
+ *  round interval" spirit as the ticket's own documented ladder, extended
+ *  past 1m for takes longer than a minute (this repo already has 5-minute
+ *  and 60s example recordings). */
+const TICK_LADDER_S = [1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600];
+/** Never closer than this (scrubber.ts rule 9, applied to the ruler). */
+const MIN_TICK_SPACING_PX = 6;
+
+const MAX_RULER_LAYOUT_RETRIES = 5;
+let rulerLayoutRetriesLeft = MAX_RULER_LAYOUT_RETRIES;
+/**
+ * Rebuilds #ruler-ticks from the current [spanStart, spanEnd] and the
+ * ruler's own on-screen width — the coarsest interval off TICK_LADDER_S
+ * whose on-screen spacing is still >= MIN_TICK_SPACING_PX. Ticks are
+ * authored as a fraction of FULL DURATION (left: %), so the shared pan/zoom
+ * transform on #ruler-content carries them for free; only each tick's WIDTH
+ * needs a 1/scale correction to stay a constant on-screen px, since
+ * scaleX() stretches the X axis a %-based left/width already lives on.
+ *
+ * Same retry-on-zero-width shape as updateTicks() above (STC-378) — a
+ * freshly created editor window is not guaranteed a final layout size on
+ * the first read, and this reads a DIFFERENT element's box (#ruler, not
+ * #timeline), so it needs its own retry counter rather than borrowing that
+ * function's.
+ */
+function renderRulerTicks(): void {
+  const rulerEl = $("ruler") as HTMLElement;
+  const width = rulerEl.getBoundingClientRect().width;
+  if (width <= 0 && player && rulerLayoutRetriesLeft > 0) {
+    rulerLayoutRetriesLeft--;
+    requestAnimationFrame(renderRulerTicks);
+    return;
+  }
+  rulerLayoutRetriesLeft = MAX_RULER_LAYOUT_RETRIES;
+  const ticksEl = $("ruler-ticks") as HTMLElement;
+  ticksEl.innerHTML = "";
+  if (!player || width <= 0) return;
+  const durationNs = player.durationNs;
+  if (!(durationNs > 0)) return;
+  const span = Math.max(1, spanEnd - spanStart);
+  const scale = durationNs / span;
+  const visibleS = span / 1e9;
+  const pxPerSecond = width / Math.max(1e-9, visibleS);
+  let interval = TICK_LADDER_S[TICK_LADDER_S.length - 1]!;
+  for (const candidate of TICK_LADDER_S) {
+    if (candidate * pxPerSecond >= MIN_TICK_SPACING_PX) { interval = candidate; break; }
+  }
+  const durationS = durationNs / 1e9;
+  const tickWidthPx = Math.max(0.05, 1 / scale);
+  const frag = document.createDocumentFragment();
+  for (let t = 0; t <= durationS + 1e-6; t += interval) {
+    const div = document.createElement("div");
+    div.className = "ruler-tick";
+    div.style.left = `${Math.min(100, (t / durationS) * 100)}%`;
+    div.style.width = `${tickWidthPx}px`;
+    frag.appendChild(div);
+  }
+  ticksEl.appendChild(frag);
+  // The playhead mark is the same kind of fixed-width thing a tick is.
+  ($("ruler-playhead") as HTMLElement).style.width = `${tickWidthPx}px`;
+}
+
+/** The blue played bar and its bright boundary mark — updated every
+ *  onTime tick, unlike renderRulerTicks (span/resize-driven only), since
+ *  this is cheap (two style writes) and needs the current position. */
+function updateRulerPlayhead(tNs: number): void {
+  if (!player) return;
+  const durationNs = player.durationNs;
+  if (!(durationNs > 0)) return;
+  const pct = Math.max(0, Math.min(100, (tNs / durationNs) * 100));
+  ($("ruler-played") as HTMLElement).style.width = `${pct}%`;
+  ($("ruler-playhead") as HTMLElement).style.left = `${pct}%`;
 }
 
 /** Pan by a fraction of the CURRENT span (positive moves later in the take). */
@@ -183,6 +270,12 @@ function zoomSpan(factor: number, anchorFraction: number): void {
 let panning = false;
 let panLastX = 0;
 $("ruler").addEventListener("pointerdown", (e) => {
+  // The activity toggle sits INSIDE #ruler (2026-09-24 declutter pass), and
+  // without this guard #ruler's own setPointerCapture below steals the
+  // button's pointer events on the very first pointerdown — a click that
+  // never reaches the button, watched failing before this was added.
+  if ((e.target as HTMLElement).closest("#ruleractivitytoggle")) return;
+  if ((e.target as HTMLElement).closest(".rulerbookmark")) return;
   panning = true;
   panLastX = (e as PointerEvent).clientX;
   ($("ruler") as HTMLElement).setPointerCapture((e as PointerEvent).pointerId);
@@ -220,13 +313,20 @@ function updateTrimUI(): void {
   kept.style.left = `${inPct}%`;
   kept.style.width = `${Math.max(0, outPct - inPct)}%`;
 
-  // Rule 4: what was cut is DIMMED, not fenced off.
+  // Rule 4: what was cut is DIMMED, not fenced off — across BOTH lanes now
+  // (STC-444 slice 2's "dimming across lanes"), not the Clip lane alone.
   const head = $("cut-head") as HTMLElement;
   head.style.left = "0%";
   head.style.width = `${Math.max(0, inPct)}%`;
   const tail = $("cut-tail") as HTMLElement;
   tail.style.left = `${outPct}%`;
   tail.style.width = `${Math.max(0, 100 - outPct)}%`;
+  const zHead = $("zoom-cut-head") as HTMLElement;
+  zHead.style.left = "0%";
+  zHead.style.width = `${Math.max(0, inPct)}%`;
+  const zTail = $("zoom-cut-tail") as HTMLElement;
+  zTail.style.left = `${outPct}%`;
+  zTail.style.width = `${Math.max(0, 100 - outPct)}%`;
   updateTicks();
 
   const w = exportWindow(openProject, player.durationNs);
@@ -277,7 +377,7 @@ function updateTicks(): void {
   ticks.style.setProperty("--tick-px", `${(width / lastFrame(player.durationNs)) * stride}px`);
 }
 
-window.addEventListener("resize", () => { if (player) updateTicks(); });
+window.addEventListener("resize", () => { if (player) { updateTicks(); renderRulerTicks(); } });
 
 async function persistProject(): Promise<void> {
   if (!openProject || !player) return;
@@ -296,15 +396,108 @@ function setTrim(startNs: number, endNs: number, persist: boolean): void {
   if (persist) void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 }
 
+// ---- bookmarks (STC-444 slice 4) --------------------------------------------
+//
+// project-8's `bookmarks` are session-relative ns (the same units `trim`
+// uses); `scrubber.ts`'s ScrubState works in FRAMES (rule 1), so the boundary
+// is here, the same split `scrubState()`/`applyScrubAction` already draw for
+// `trimIn`/`trimOut`. M toggles the marker at the playhead's own FRAME —
+// `frameToNs(currentFrame())`, not `player.currentNs`, so a bookmark set while
+// paused exactly on a frame round-trips through the frame grid and a second M
+// press finds the same ns again rather than landing a few sub-frame ns off.
+
+function sortedBookmarks(list: readonly number[]): number[] {
+  return [...new Set(list)].sort((a, b) => a - b);
+}
+
+function addBookmark(ns: number): void {
+  if (!openProject) return;
+  openProject.bookmarks = sortedBookmarks([...(openProject.bookmarks ?? []), ns]);
+  renderBookmarks();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+function removeBookmark(ns: number): void {
+  if (!openProject) return;
+  openProject.bookmarks = (openProject.bookmarks ?? []).filter((b) => b !== ns);
+  renderBookmarks();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+function toggleBookmarkAtPlayhead(): void {
+  if (!player || !openProject) return;
+  const ns = frameToNs(currentFrame(), player.durationNs);
+  (openProject.bookmarks ?? []).includes(ns) ? removeBookmark(ns) : addBookmark(ns);
+}
+
+/**
+ * Rebuilds #ruler-bookmarks the same way renderRulerTicks rebuilds
+ * #ruler-ticks: authored as a fraction of FULL duration (left: %) so the
+ * shared pan/zoom transform on #ruler-content carries it for free, with the
+ * marker's own WIDTH corrected by 1/scale so it stays a constant on-screen
+ * px — the same fight ticks and the playhead already have with scaleX().
+ */
+function renderBookmarks(): void {
+  const el = $("ruler-bookmarks") as HTMLElement;
+  el.innerHTML = "";
+  if (!player || !openProject || !(player.durationNs > 0)) return;
+  const durationNs = player.durationNs;
+  const span = Math.max(1, spanEnd - spanStart);
+  const scale = durationNs / span;
+  const widthPx = Math.max(0.05, 3 / scale);
+  const frag = document.createDocumentFragment();
+  for (const ns of openProject.bookmarks ?? []) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rulerbookmark";
+    btn.style.left = `${Math.max(0, Math.min(100, (ns / durationNs) * 100))}%`;
+    btn.style.width = `${widthPx}px`;
+    btn.dataset.ns = String(ns);
+    btn.setAttribute("aria-label", `Bookmark at ${fmtClock(ns)}`);
+    btn.title = `${fmtClock(ns)} — right-click to remove`;
+    frag.appendChild(btn);
+  }
+  el.appendChild(frag);
+}
+
+($("ruler-bookmarks") as HTMLElement).addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest(".rulerbookmark") as HTMLElement | null;
+  if (!btn || !player) return;
+  e.stopPropagation();
+  void player.seek(Number(btn.dataset.ns));
+});
+($("ruler-bookmarks") as HTMLElement).addEventListener("contextmenu", (e) => {
+  const btn = (e.target as HTMLElement).closest(".rulerbookmark") as HTMLElement | null;
+  if (!btn) return;
+  e.preventDefault();
+  removeBookmark(Number(btn.dataset.ns));
+});
+$("togglebookmark").addEventListener("click", toggleBookmarkAtPlayhead);
+
 // ---- the Clip and Zoom lanes (STC-373) --------------------------------------
 
 const LANE_BUCKETS = 480;
+/** The Clip activity's bars are lit from the bottom in LED-style rows
+ *  (STC-444 slice 2, "LED/LCD screen" HTML variant comparison) rather than
+ *  a solid fill — SEG the filled height of each row, GAP the dark space
+ *  after it. */
+const LED_ROW_SEG_PX = 2;
+const LED_ROW_GAP_PX = 1;
 
-function drawClipLane(): void {
-  const canvas = $("clip-activity") as HTMLCanvasElement;
-  const wrap = $("clip-canvas-wrap") as HTMLElement;
+/**
+ * Clip activity, drawn onto the RULER now, not its own lane (2026-09-24
+ * declutter pass, real-hardware feedback: three stacked lanes read as
+ * cluttered, and activity is a judgment aid for where to trim, not a
+ * control — it does not need a lane's worth of space to earn its keep).
+ * `#ruler[data-activity]`'s CSS opacity is what actually shows or hides
+ * it; this always redraws the canvas regardless, the same way the Zoom
+ * lane's canvas is kept current whether or not anything is selected on it.
+ */
+function drawRulerActivity(): void {
+  const canvas = $("ruler-activity") as HTMLCanvasElement;
+  const wrap = $("ruler-activity-wrap") as HTMLElement;
   const w = Math.max(1, Math.round(wrap.getBoundingClientRect().width)) || LANE_BUCKETS;
-  const h = 30;
+  const h = 18;
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
@@ -313,10 +506,48 @@ function drawClipLane(): void {
   const barW = w / activity.length;
   const style = getComputedStyle(document.documentElement).getPropertyValue("--clip").trim() || "#6a8fd8";
   ctx.fillStyle = style || "#6a8fd8";
+  const bw = Math.max(1, barW - 1);
+  const rowStride = LED_ROW_SEG_PX + LED_ROW_GAP_PX;
   for (let i = 0; i < activity.length; i++) {
-    const bh = Math.max(1, activity[i]! * (h - 4));
-    ctx.fillRect(i * barW, h - bh, Math.max(1, barW - 1), bh);
+    const bh = Math.max(1, activity[i]! * (h - 2));
+    const x = i * barW;
+    const top = h - bh;
+    for (let y = h; y > top; y -= rowStride) {
+      const segH = Math.min(LED_ROW_SEG_PX, y - top);
+      ctx.fillRect(x, y - segH, bw, segH);
+    }
   }
+}
+
+/** #ruleractivitytoggle's own state — never persisted: a view preference
+ *  for THIS look, not an edit decision, so it resets to off (declutter by
+ *  default) each time the editor opens, the same way "Viewer's eye" does. */
+function toggleRulerActivity(): void {
+  const btn = $("ruleractivitytoggle") as HTMLButtonElement;
+  const ruler = $("ruler") as HTMLElement;
+  const on = btn.getAttribute("aria-pressed") !== "true";
+  btn.setAttribute("aria-pressed", String(on));
+  ruler.toggleAttribute("data-activity", on);
+}
+$("ruleractivitytoggle").addEventListener("click", toggleRulerActivity);
+
+
+
+/** A crisp square-cell checkerboard (STC-444 slice 2: "LCD crisp", finer of
+ *  the two pitches compared) rather than a soft blur — `bg` is the gap
+ *  color between lit cells, so it should be the lane's own background. */
+const DITHER_TILE_PX = 4;
+function ditherPattern(ctx: CanvasRenderingContext2D, color: string, bg: string): CanvasPattern {
+  const tile = document.createElement("canvas");
+  tile.width = DITHER_TILE_PX; tile.height = DITHER_TILE_PX;
+  const tctx = tile.getContext("2d")!;
+  tctx.fillStyle = bg;
+  tctx.fillRect(0, 0, DITHER_TILE_PX, DITHER_TILE_PX);
+  tctx.fillStyle = color;
+  const half = DITHER_TILE_PX / 2;
+  tctx.fillRect(0, 0, half, half);
+  tctx.fillRect(half, half, half, half);
+  return ctx.createPattern(tile, "repeat")!;
 }
 
 function drawZoomLane(): void {
@@ -333,12 +564,16 @@ function drawZoomLane(): void {
     player.durationNs,
     LANE_BUCKETS,
   );
-  const style = getComputedStyle(document.documentElement).getPropertyValue("--zoom").trim() || "#d88a3b";
   // STC-330: a FILLED area, not a stroked line — the same sampled curve now
   // reads as one trapezoid per derived window (ease-in ramp, flat top,
   // ease-out ramp), with #override-blocks laying the click targets over it.
   // Nothing about the sampling changed; only how it is drawn.
-  ctx.fillStyle = style || "#d88a3b";
+  // STC-444 slice 2: the fill itself is a dithered --zoom-fill checkerboard
+  // now, not solid --zoom (which still owns the override-selection accents
+  // — see editor.html's --zoom-fill comment for why those stayed separate).
+  const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#4f7fe0";
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0a0a0b";
+  ctx.fillStyle = ditherPattern(ctx, fillColor, bg);
   ctx.beginPath();
   ctx.moveTo(0, h);
   for (let i = 0; i < curve.length; i++) {
@@ -354,7 +589,7 @@ function drawZoomLane(): void {
   ctx.fill();
 }
 
-function redrawLanes(): void { drawClipLane(); drawZoomLane(); layoutOverrideBlocks(); }
+function redrawLanes(): void { drawRulerActivity(); drawZoomLane(); layoutOverrideBlocks(); }
 window.addEventListener("resize", redrawLanes);
 
 // ---- manual zoom override (STC-330/331) — the block lane's editing half ---
@@ -973,6 +1208,7 @@ $("vieweye").addEventListener("change", () => {
 const exportDialog = $("exportdialog") as HTMLDialogElement;
 $("openexport").addEventListener("click", () => {
   if (!exportDialog.open) exportDialog.showModal();
+  void refreshShareRow();
 });
 $("closeexport").addEventListener("click", () => exportDialog.close());
 
@@ -1035,10 +1271,11 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   scrub.value = "0";
   player.onTime = (tNs, playing) => {
     const frame = nsToFrame(tNs, player!.durationNs);
-    $("clock").textContent = formatReadout(frame, player!.durationNs);
-    ($("playpause") as HTMLButtonElement).textContent = playing ? "Pause" : "Play";
+    setClock(formatReadout(frame, player!.durationNs));
+    setPlayState(playing);
     $("shuttle").textContent = formatShuttle(player!.rate);
     if (!scrubbing) scrub.value = String(frame);
+    updateRulerPlayhead(tNs);
   };
   await player.seek(player.firstRenderableNs);
   resetSpan();
@@ -1069,11 +1306,58 @@ async function closeTake(): Promise<void> {
   await editor.closePreview();
 }
 
-$("playpause").addEventListener("click", () => {
+// ---- the header row's transport (STC-444) -----------------------------
+//
+// Every button here is the SAME action its key already is — `decideKey`
+// decides, the button only builds the chord — so a click and a keystroke
+// cannot drift apart. Home/End go to the trim's in/out points (scrubber.ts's
+// ScrubState note), which is what `|<` and `>|` mean.
+
+/** `formatReadout`'s "current / duration", split across the two spans the
+ *  narrow-width container query needs — `#clock`'s textContent is unchanged. */
+let shownReadout = "";
+function setClock(readout: string): void {
+  if (readout === shownReadout) return;
+  shownReadout = readout;
+  const at = readout.indexOf(" / ");
+  $("clock-cur").textContent = at < 0 ? readout : readout.slice(0, at);
+  ($("clock").querySelector(".clock-dur") as HTMLElement).textContent = at < 0 ? "" : readout.slice(at);
+}
+
+/** Written only on a CHANGE: onTime fires every frame, and three attribute
+ *  writes per frame is style invalidation the playhead does not need. */
+let shownPlaying: boolean | undefined;
+function setPlayState(playing: boolean): void {
+  if (playing === shownPlaying) return;
+  shownPlaying = playing;
+  const btn = $("playpause") as HTMLButtonElement;
+  btn.toggleAttribute("data-playing", playing);
+  btn.setAttribute("aria-label", playing ? "Pause" : "Play");
+  btn.title = playing ? "Pause (Space · K)" : "Play (Space · K)";
+  $("stageplay").toggleAttribute("hidden", playing);
+}
+
+function togglePlay(): void {
   if (!player) return;
   player.isPlaying ? player.pause() : player.play(1);
   updateShuttleUI();
-});
+}
+
+function pressKey(key: string, shiftKey = false): void {
+  if (!player || !openProject) return;
+  const action = decideKey({ key, shiftKey }, scrubState());
+  if (action) applyScrubAction(action);
+}
+
+$("playpause").addEventListener("click", togglePlay);
+$("toin").addEventListener("click", () => pressKey("Home"));
+$("toout").addEventListener("click", () => pressKey("End"));
+$("stepback").addEventListener("click", (e) => pressKey("ArrowLeft", (e as MouseEvent).shiftKey));
+$("stepfwd").addEventListener("click", (e) => pressKey("ArrowRight", (e as MouseEvent).shiftKey));
+// The preview itself is the play button's second face, never a second
+// control (#rectoverlay sits over it while a zoom block is being edited, so
+// this never fires mid-edit).
+$("stage").addEventListener("click", togglePlay);
 $("closepreview").addEventListener("click", () => window.close());
 $("scrub").addEventListener("pointerdown", () => { scrubbing = true; });
 $("scrub").addEventListener("pointerup", () => { scrubbing = false; });
@@ -1109,7 +1393,7 @@ window.addEventListener("keydown", (e) => {
       ctrlKey: e.ctrlKey, altKey: e.altKey,
       inTextField: isTextField(document.activeElement),
     },
-    { frame: currentFrame(), durationNs: player.durationNs, rate: player.rate },
+    scrubState(),
   );
   if (!action) return;
   e.preventDefault();
@@ -1118,6 +1402,16 @@ window.addEventListener("keydown", (e) => {
 
 function currentFrame(): number {
   return player ? nsToFrame(player.currentNs, player.durationNs) : 0;
+}
+
+function scrubState(): ScrubState {
+  const durationNs = player?.durationNs ?? 0;
+  const trim = openProject?.trim;
+  return {
+    frame: currentFrame(), durationNs, rate: player?.rate ?? 0,
+    ...(trim ? { trimIn: nsToFrame(trim.startNs, durationNs), trimOut: nsToFrame(trim.endNs, durationNs) } : {}),
+    bookmarks: (openProject?.bookmarks ?? []).map((ns) => nsToFrame(ns, durationNs)),
+  };
 }
 
 function applyScrubAction(action: ScrubAction): void {
@@ -1143,12 +1437,15 @@ function applyScrubAction(action: ScrubAction): void {
       }
       break;
     }
+    case "bookmark":
+      toggleBookmarkAtPlayhead();
+      break;
   }
 }
 
 function updateShuttleUI(): void {
   $("shuttle").textContent = formatShuttle(player?.rate ?? 0);
-  ($("playpause") as HTMLButtonElement).textContent = player?.isPlaying ? "Pause" : "Play";
+  setPlayState(!!player?.isPlaying);
 }
 
 $("markin").addEventListener("click", () => {
@@ -1306,19 +1603,59 @@ async function runExport(): Promise<void> {
 $("export").addEventListener("click", () => void runExport());
 $("cancelexport").addEventListener("click", () => exportAbort?.abort());
 
-// ---- share ----------------------------------------------------------------
+// ---- share, folded into the export dialog (STC-444 slice 3) ---------------
+//
+// Used to be its own row under the timeline with its own folder picker and a
+// standing "Show published" button. The picker moved to the main window's
+// Preferences (one site folder for the whole app, not a per-editor-window
+// control); "Show published" folded into this row's own success feedback —
+// #sharereveal appears only after a publish THIS SESSION succeeds, per
+// main.ts's `share:reveal` comment on why a stale reveal is worse than none.
 
 function shareStatus(text: string): void { $("sharestatus").textContent = text; }
 
+/** What the slug field starts showing: whatever this take was last
+ *  published under, or a live default from its own name if never shared. */
+function currentSlugOrDefault(): string {
+  return openProject?.slug ?? autoSlug(takeName);
+}
+
+/** Re-synced every time the dialog opens, not cached: the site folder can
+ *  change in the main window's Preferences while this window stays open. */
+async function refreshShareRow(): Promise<void> {
+  ($("shareslug") as HTMLInputElement).value = currentSlugOrDefault();
+  $("sharereveal").setAttribute("hidden", "");
+  shareStatus("");
+  const { share } = await editor.getSettings();
+  $("sitedestnote").textContent = share.destination
+    ? `→ ${share.destination}` : "No site folder set — choose one in Preferences.";
+}
+
 async function publish(): Promise<void> {
+  if (!openProject || !player) return;
   const btn = $("share") as HTMLButtonElement;
+  const slug = ($("shareslug") as HTMLInputElement).value.trim();
+  if (!slugIsValid(slug)) {
+    shareStatus(`"${slug}" is not a usable name. Lowercase letters, digits and hyphens only.`);
+    return;
+  }
   btn.disabled = true;
+  $("sharereveal").setAttribute("hidden", "");
   shareStatus("Copying…");
   try {
+    // Committed BEFORE asking main to publish: `share:publish` reads
+    // project.json fresh rather than taking the slug as an argument (one
+    // value, one owner), so whatever is about to be shown as shared has to
+    // already be on disk when that read happens.
+    if (openProject.slug !== slug) {
+      openProject.slug = slug;
+      await persistProject();
+    }
     const r = await editor.publish();
     if (!r.ok) { shareStatus(r.message ?? "Could not share."); return; }
     const verb = r.replaced ? "Replaced" : "Wrote";
     shareStatus(`${verb} ${r.name}. Snippet copied.`);
+    $("sharereveal").removeAttribute("hidden");
     if (r.snippet) await navigator.clipboard.writeText(r.snippet).catch(() => {
       shareStatus(`${verb} ${r.name}. (Could not copy the snippet.)`);
     });
@@ -1330,21 +1667,24 @@ async function publish(): Promise<void> {
 }
 
 $("share").addEventListener("click", () => void publish());
-$("sharedest").addEventListener("click", () => void (async () => {
-  const { destination } = await editor.chooseShareDestination();
-  shareStatus(destination ? `Site folder: ${destination}` : "No site folder chosen.");
-})());
-$("revealshared").addEventListener("click", () => void (async () => {
+$("sharereveal").addEventListener("click", () => void (async () => {
   const r = await editor.revealPublished();
   if (!r.ok) shareStatus(r.message ?? "Nothing published yet.");
 })());
 
 // ---- the current frame as a still (STC-298/293) ----------------------------
 
+/** The header's quiet confirmation line. It fades after a few seconds but
+ *  keeps its text, so what was last copied or saved is still readable. */
+let frameStatusFade: ReturnType<typeof setTimeout> | undefined;
 function frameStatus(text: string): void {
   const el = $("framestatus");
   el.textContent = text;
+  el.title = text;
   el.removeAttribute("hidden");
+  el.classList.remove("stale");
+  clearTimeout(frameStatusFade);
+  frameStatusFade = setTimeout(() => el.classList.add("stale"), 4000);
 }
 
 function frameTemplate(tNs: number): string {
@@ -1378,8 +1718,34 @@ async function withFrame(action: "copy" | "save"): Promise<void> {
     frameBusy = false;
   }
 }
-$("copyframe").addEventListener("click", () => void withFrame("copy"));
-$("saveframe").addEventListener("click", () => void withFrame("save"));
+// One icon (STC-444): click copies, ⌥-click saves, and a right-click on it
+// OR on the preview opens a two-item menu with both.
+$("framegrab").addEventListener("click", (e) => void withFrame((e as MouseEvent).altKey ? "save" : "copy"));
+
+const frameMenu = $("framemenu") as HTMLElement;
+function openFrameMenu(x: number, y: number): void {
+  if (!player) return;
+  frameMenu.removeAttribute("hidden");
+  const r = frameMenu.getBoundingClientRect();
+  frameMenu.style.left = `${Math.max(4, Math.min(x, innerWidth - r.width - 4))}px`;
+  frameMenu.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 4))}px`;
+  ($("copyframe") as HTMLButtonElement).focus();
+}
+function closeFrameMenu(): void { frameMenu.setAttribute("hidden", ""); }
+for (const id of ["framegrab", "stagewrap"]) {
+  $(id).addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openFrameMenu((e as MouseEvent).clientX, (e as MouseEvent).clientY);
+  });
+}
+$("copyframe").addEventListener("click", () => { closeFrameMenu(); void withFrame("copy"); });
+$("saveframe").addEventListener("click", () => { closeFrameMenu(); void withFrame("save"); });
+document.addEventListener("pointerdown", (e) => {
+  if (!frameMenu.hidden && !frameMenu.contains(e.target as Node)) closeFrameMenu();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !frameMenu.hidden) { e.preventDefault(); e.stopImmediatePropagation(); closeFrameMenu(); }
+}, { capture: true });
 document.addEventListener("keydown", (e) => {
   if (!player || !(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
   if ((e.target as HTMLElement | null)?.tagName === "INPUT") return;
