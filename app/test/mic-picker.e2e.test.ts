@@ -51,21 +51,23 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
-  // STC-412: the Mic picker lives inside the Settings sheet now. Open it once
-  // here, as a user does, so these tests drive it the way it is reached.
-  await win.click("#settings");
+  // STC-414: the mic picker lives on the always-visible #devicestate row
+  // now, not behind Settings — no sheet to open first.
   return win;
 }
 
 /**
- * `refreshMics()` populates `#mic` from an async `devices()` round trip, so a
- * `selectOption` issued before it lands would fail on an option that does not
- * exist yet — not a product bug, a race in the test. Wait for the option
- * itself rather than a fixed delay.
+ * Opens the popover and picks the row with this label — "Off", or a device
+ * name from the fake helper's `mics` list. `refreshDevices()` populates the
+ * row list from an async `devices()` round trip, so a click issued before it
+ * lands would miss a row that does not exist yet — not a product bug, a race
+ * in the test. Wait for the row itself rather than a fixed delay.
  */
-async function waitForMicOption(win: Awaited<ReturnType<typeof launch>>, uid: string): Promise<void> {
-  await expect.poll(() => win.locator(`#mic option[value="${uid}"]`).count(), { timeout: 20_000 })
-    .toBeGreaterThan(0);
+async function pickMic(win: Awaited<ReturnType<typeof launch>>, label: string): Promise<void> {
+  await win.click("#mic-picker");
+  const row = win.locator(`#devicepopover >> text="${label}"`);
+  await expect.poll(() => row.count(), { timeout: 20_000 }).toBeGreaterThan(0);
+  await row.click();
 }
 
 describe("the mic picker", () => {
@@ -74,17 +76,16 @@ describe("the mic picker", () => {
     const { dir: recordings } = makeTakeFolder();
 
     let win = await launch({ userData, recordings });
-    await expect.poll(() => win.inputValue("#mic"), { timeout: 20_000 }).toBe("");
+    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("off");
     // The stand-in's default device list (_fake-helper.mjs) offers exactly
-    // one mic, "fixture-mic-1".
-    await waitForMicOption(win, "fixture-mic-1");
-    await win.selectOption("#mic", "fixture-mic-1");
-    await expect.poll(() => win.inputValue("#mic")).toBe("fixture-mic-1");
+    // one mic, "Fixture USB Mic" (uid "fixture-mic-1").
+    await pickMic(win, "Fixture USB Mic");
+    await expect.poll(() => win.textContent("#mic-state")).toBe("Fixture USB Mic");
     await app!.close();
     app = undefined;
 
     win = await launch({ userData, recordings });
-    await expect.poll(() => win.inputValue("#mic"), { timeout: 20_000 }).toBe("fixture-mic-1");
+    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("Fixture USB Mic");
   }, 180_000);
 
   // THE assertion for this ticket. Everything else can be right while the
@@ -97,9 +98,8 @@ describe("the mic picker", () => {
 
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await waitForMicOption(win, "fixture-mic-1");
-    await win.selectOption("#mic", "fixture-mic-1");
-    await expect.poll(() => win.inputValue("#mic")).toBe("fixture-mic-1");
+    await pickMic(win, "Fixture USB Mic");
+    await expect.poll(() => win.textContent("#mic-state")).toBe("Fixture USB Mic");
 
     await win.click("#record");
     const cmd = await waitForStart(startLog);
@@ -107,7 +107,7 @@ describe("the mic picker", () => {
     expect(cmd.micDeviceUid, `start payload was ${JSON.stringify(cmd)}`).toBe("fixture-mic-1");
     // While a take is running the setting must not look changeable: the
     // device is opened at start and closed at stop, same as the camera.
-    await expect.poll(() => win.isDisabled("#mic"), { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => win.isDisabled("#mic-picker"), { timeout: 20_000 }).toBe(true);
   }, 180_000);
 
   test("recording with no mic picked sends no micDeviceUid at all", async () => {
@@ -131,16 +131,17 @@ describe("the mic picker", () => {
     const { dir: recordings } = makeTakeFolder();
 
     let win = await launch({ userData, recordings });
-    await waitForMicOption(win, "fixture-mic-1");
-    await win.selectOption("#mic", "fixture-mic-1");
+    await pickMic(win, "Fixture USB Mic");
     await app!.close();
     app = undefined;
 
     // Relaunch with a device list that no longer includes the stored uid.
     win = await launch({ userData, recordings, mics: [] });
-    await expect.poll(() => win.locator("#mic option").allTextContents(), { timeout: 20_000 })
-      .toContain("Mic (not connected)");
-    await expect.poll(() => win.inputValue("#mic")).toBe("fixture-mic-1");
+    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("not connected");
+    await win.click("#mic-picker");
+    const stale = '#devicepopover >> text="Mic (not connected)"';
+    await expect.poll(() => win.locator(stale).count(), { timeout: 20_000 }).toBeGreaterThan(0);
+    expect(await win.getAttribute(stale, "aria-selected")).toBe("true");
   }, 180_000);
 });
 
@@ -158,8 +159,7 @@ describe("the mic says what it is doing", () => {
 
   test("a mic that opens is named, once it actually opens", async () => {
     const win = await launch({ ...dirs(), mic: "Fixture USB Mic" });
-    await waitForMicOption(win, "fixture-mic-1");
-    await win.selectOption("#mic", "fixture-mic-1");
+    await pickMic(win, "Fixture USB Mic");
     await win.click("#record");
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
       .toContain("Fixture USB Mic");
@@ -167,8 +167,7 @@ describe("the mic says what it is doing", () => {
 
   test("a mic that cannot be found says so instead of failing silently", async () => {
     const win = await launch({ ...dirs(), mic: "fail" });
-    await waitForMicOption(win, "fixture-mic-1");
-    await win.selectOption("#mic", "fixture-mic-1");
+    await pickMic(win, "Fixture USB Mic");
     await win.click("#record");
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
       .toContain("failed");
@@ -183,8 +182,7 @@ describe("the mic says what it is doing", () => {
   // proves the same claim without racing the runner's scheduling.
   test("a mic that opens and then sends nothing stops claiming it works", async () => {
     const win = await launch({ ...dirs(), mic: "noframes" });
-    await waitForMicOption(win, "fixture-mic-1");
-    await win.selectOption("#mic", "fixture-mic-1");
+    await pickMic(win, "Fixture USB Mic");
     await observeTextSequence(win, "mic-state");
 
     await win.click("#record");

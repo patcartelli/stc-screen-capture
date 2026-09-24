@@ -21,7 +21,8 @@ const dir = () => mkdtempSync(join(tmpdir(), "stc-settings-"));
 describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
-      .toEqual({ camera: false, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
+      .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
+                 shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
@@ -60,7 +61,8 @@ describe("the camera preference", () => {
     const d = dir();
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
-      .toEqual({ camera: true, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
+      .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
+                 shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
@@ -114,11 +116,50 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { displayId: 2 });
     writeSettings(d, { camera: true });
     expect(readSettings(d))
-      .toEqual({ camera: true, displayId: 2, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
+      .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
+                 shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
                  scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false });
+  });
+});
+
+describe("the camera device preference (STC-414)", () => {
+  test("defaults to automatic — null, which start() sends no cameraDeviceUid at all", () => {
+    expect(readSettings(dir()).cameraDeviceUid).toBeNull();
+    expect(DEFAULT_SETTINGS.cameraDeviceUid).toBeNull();
+  });
+
+  test("round-trips a uid and clears back to automatic", () => {
+    const d = dir();
+    writeSettings(d, { cameraDeviceUid: "FaceTime HD Camera" });
+    expect(readSettings(d).cameraDeviceUid).toBe("FaceTime HD Camera");
+    writeSettings(d, { cameraDeviceUid: null });
+    expect(readSettings(d).cameraDeviceUid).toBeNull();
+  });
+
+  // Same validation as micDeviceUid: a non-empty string or nothing.
+  test("a non-string or empty value reads as automatic, never as a fallback device", () => {
+    const d = dir();
+    for (const bad of ["", 1, true, {}, []]) {
+      writeFileSync(join(d, "settings.json"), JSON.stringify({ camera: true, cameraDeviceUid: bad }));
+      expect(readSettings(d).cameraDeviceUid, `cameraDeviceUid ${JSON.stringify(bad)}`).toBeNull();
+    }
+  });
+
+  test("a partial update leaves the camera device choice alone", () => {
+    const d = dir();
+    writeSettings(d, { cameraDeviceUid: "abc-123" });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).cameraDeviceUid).toBe("abc-123");
+  });
+
+  test("changing the camera device does not flip the camera on/off preference", () => {
+    const d = dir();
+    writeSettings(d, { camera: false });
+    writeSettings(d, { cameraDeviceUid: "abc-123" });
+    expect(readSettings(d).camera).toBe(false);
   });
 });
 

@@ -363,6 +363,13 @@ struct StartRequest: Equatable {
     /// no longer in the way) — it only carries the caller's own choice
     /// forward unexamined, the same latitude `region`/`windowId` get here.
     let micDeviceUid: String?
+    /// nil means "let `CameraCapture`'s own `pickCamera` ranking decide"
+    /// (STC-286, unchanged) — UNLIKE `micDeviceUid` above, this nil is
+    /// automatic rather than off; `camera` is what says whether a camera is
+    /// wanted at all. A non-nil value is an `AVCaptureDevice.uniqueID` the
+    /// app already showed the user in a picker (STC-414), carried forward
+    /// unexamined the same way `micDeviceUid` is.
+    let cameraDeviceUid: String?
 }
 
 enum StartRequestError: Error, Equatable, CustomStringConvertible {
@@ -436,8 +443,14 @@ func parseStartRequest(_ cmd: [String: Any]) -> Result<StartRequest, StartReques
     // whole take.
     let micRaw = cmd["micDeviceUid"] as? String
     let micDeviceUid = (micRaw?.isEmpty == false) ? micRaw : nil
+    // Same latitude as micDeviceUid just above (STC-414): a non-string or
+    // empty value falls back rather than refusing the take — here that
+    // fallback is pickCamera's ranking, not "no camera".
+    let cameraRaw = cmd["cameraDeviceUid"] as? String
+    let cameraDeviceUid = (cameraRaw?.isEmpty == false) ? cameraRaw : nil
     return .success(StartRequest(dir: dir, displayId: displayId, region: region,
-                                 windowId: windowId, camera: camera, micDeviceUid: micDeviceUid))
+                                 windowId: windowId, camera: camera, micDeviceUid: micDeviceUid,
+                                 cameraDeviceUid: cameraDeviceUid))
 }
 
 
