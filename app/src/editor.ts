@@ -14,6 +14,11 @@ interface StillSettingsView {
 }
 interface AppSettings {
   still: StillSettingsView;
+  // STC-444 slice 3: the export dialog shows this read-only (the picker
+  // itself moved to the main window's Preferences), so a take can be
+  // published without a second door back to a folder picker this window
+  // does not own.
+  share: { destination: string | null };
 }
 declare const editor: {
   openPreview: (dir: string) => Promise<boolean>;
@@ -41,7 +46,6 @@ declare const editor: {
     ok: boolean; plan: string; message?: string;
     file?: string; name?: string; replaced?: boolean; snippet?: string;
   }>;
-  chooseShareDestination(): Promise<{ destination: string | null }>;
   revealPublished(): Promise<{ ok: boolean; file?: string; message?: string }>;
   getVersion(): Promise<string>;
 };
@@ -70,7 +74,7 @@ import {
   fractionOfFrame, lastFrame, nsToFrame, rubberBandPx, tickStrideFrames, type ScrubAction,
   type ScrubState,
 } from "./scrubber.js";
-import { exportManifestName, exportMediaName } from "./share.js";
+import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
 import { clipActivity, zoomCurve } from "./timeline-activity.js";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -1094,6 +1098,7 @@ $("vieweye").addEventListener("change", () => {
 const exportDialog = $("exportdialog") as HTMLDialogElement;
 $("openexport").addEventListener("click", () => {
   if (!exportDialog.open) exportDialog.showModal();
+  void refreshShareRow();
 });
 $("closeexport").addEventListener("click", () => exportDialog.close());
 
@@ -1472,19 +1477,59 @@ async function runExport(): Promise<void> {
 $("export").addEventListener("click", () => void runExport());
 $("cancelexport").addEventListener("click", () => exportAbort?.abort());
 
-// ---- share ----------------------------------------------------------------
+// ---- share, folded into the export dialog (STC-444 slice 3) ---------------
+//
+// Used to be its own row under the timeline with its own folder picker and a
+// standing "Show published" button. The picker moved to the main window's
+// Preferences (one site folder for the whole app, not a per-editor-window
+// control); "Show published" folded into this row's own success feedback —
+// #sharereveal appears only after a publish THIS SESSION succeeds, per
+// main.ts's `share:reveal` comment on why a stale reveal is worse than none.
 
 function shareStatus(text: string): void { $("sharestatus").textContent = text; }
 
+/** What the slug field starts showing: whatever this take was last
+ *  published under, or a live default from its own name if never shared. */
+function currentSlugOrDefault(): string {
+  return openProject?.slug ?? autoSlug(takeName);
+}
+
+/** Re-synced every time the dialog opens, not cached: the site folder can
+ *  change in the main window's Preferences while this window stays open. */
+async function refreshShareRow(): Promise<void> {
+  ($("shareslug") as HTMLInputElement).value = currentSlugOrDefault();
+  $("sharereveal").setAttribute("hidden", "");
+  shareStatus("");
+  const { share } = await editor.getSettings();
+  $("sitedestnote").textContent = share.destination
+    ? `→ ${share.destination}` : "No site folder set — choose one in Preferences.";
+}
+
 async function publish(): Promise<void> {
+  if (!openProject || !player) return;
   const btn = $("share") as HTMLButtonElement;
+  const slug = ($("shareslug") as HTMLInputElement).value.trim();
+  if (!slugIsValid(slug)) {
+    shareStatus(`"${slug}" is not a usable name. Lowercase letters, digits and hyphens only.`);
+    return;
+  }
   btn.disabled = true;
+  $("sharereveal").setAttribute("hidden", "");
   shareStatus("Copying…");
   try {
+    // Committed BEFORE asking main to publish: `share:publish` reads
+    // project.json fresh rather than taking the slug as an argument (one
+    // value, one owner), so whatever is about to be shown as shared has to
+    // already be on disk when that read happens.
+    if (openProject.slug !== slug) {
+      openProject.slug = slug;
+      await persistProject();
+    }
     const r = await editor.publish();
     if (!r.ok) { shareStatus(r.message ?? "Could not share."); return; }
     const verb = r.replaced ? "Replaced" : "Wrote";
     shareStatus(`${verb} ${r.name}. Snippet copied.`);
+    $("sharereveal").removeAttribute("hidden");
     if (r.snippet) await navigator.clipboard.writeText(r.snippet).catch(() => {
       shareStatus(`${verb} ${r.name}. (Could not copy the snippet.)`);
     });
@@ -1496,11 +1541,7 @@ async function publish(): Promise<void> {
 }
 
 $("share").addEventListener("click", () => void publish());
-$("sharedest").addEventListener("click", () => void (async () => {
-  const { destination } = await editor.chooseShareDestination();
-  shareStatus(destination ? `Site folder: ${destination}` : "No site folder chosen.");
-})());
-$("revealshared").addEventListener("click", () => void (async () => {
+$("sharereveal").addEventListener("click", () => void (async () => {
   const r = await editor.revealPublished();
   if (!r.ok) shareStatus(r.message ?? "Nothing published yet.");
 })());

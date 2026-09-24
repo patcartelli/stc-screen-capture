@@ -120,7 +120,7 @@
                 font-size: var(--type-body); flex-wrap: wrap; }
     .stillrow label { display: flex; align-items: center; gap: 4px; }
     .stillrow button { padding: 3px 10px; font-size: var(--type-body); }
-    #stilldest { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
+    #stilldest, #sitedest { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
                  white-space: nowrap; max-width: 260px; direction: rtl; }
     .shortcut { display: flex; align-items: baseline; gap: 10px; padding: 5px 0;
                 border-top: 1px solid var(--border); }
@@ -367,6 +367,19 @@
       <span>Recordings and shots save to</span>
       <span id="stilldest">…</span>
       <button id="stillchoosedest">Change…</button>
+    </div>
+    <!--
+      The site folder (STC-444 slice 3), moved here from the editor window's
+      own sharebar — one folder for the whole app's shared demos, the same
+      reason `stilldest` above lives in Preferences and not per-take. Unlike
+      `stilldest`, `#sitedest` shows the RAW stored value, "Not set" and all
+      — `share.destination` has no resolved fallback to paper over a null
+      with (see `refreshSiteDestination`'s own comment in renderer.ts).
+    -->
+    <div class="stillrow">
+      <span>Shared demos publish to</span>
+      <span id="sitedest">…</span>
+      <button id="sitechoosedest">Change…</button>
     </div>
     <!--
       The post-capture floating thumbnail's own preferences (STC-296). The

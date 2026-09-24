@@ -56,6 +56,23 @@ export function slugIsValid(slug: string): boolean {
 }
 
 /**
+ * The slug a take starts with before anyone types over it (STC-444 slice 3).
+ *
+ * The slug moved from one global setting to a field on each take's project —
+ * this is what fills it in the FIRST time the export dialog shows the field,
+ * and what `share:publish` falls back to for a take whose project was never
+ * opened far enough to write one. Lowercase, non-alphanumeric runs collapsed
+ * to one hyphen, leading/trailing hyphens trimmed — the same shape
+ * SLUG_PATTERN requires, so the result never needs a second pass to become
+ * valid. A name that slugifies to nothing (all punctuation, or empty) falls
+ * back to DEFAULT_SLUG rather than publishing under an empty name.
+ */
+export function autoSlug(takeName: string): string {
+  const s = takeName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return s && slugIsValid(s) ? s : DEFAULT_SLUG;
+}
+
+/**
  * The name an export is written under the FIRST time (STC-413).
  *
  * No `export-` prefix any more — the prefix said "this is the rendered

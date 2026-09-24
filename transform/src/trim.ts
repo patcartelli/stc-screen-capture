@@ -149,6 +149,15 @@ export function parseProject(
   project.textPt = typeof doc.textPt === "number" && doc.textPt > 0 && doc.textPt <= 144
     ? doc.textPt : DEFAULT_TEXT_PT;
   project.overrides = cleanOverrides(doc.overrides);
+  // project-7 (STC-444 slice 3): carried as-is when it is a non-empty string.
+  // NOT validated against share.ts's SLUG_PATTERN here — that module is in
+  // `app/src`, and this one has no business depending on it (the dependency
+  // runs the other way, transform -> nothing app-specific). A slug that
+  // fails validation is still carried through rather than dropped, the same
+  // "corrupt sidecar loses the recording, never invents a fix" rule every
+  // other field here follows; planPublish is where an unusable one is
+  // actually refused, at the moment it would matter.
+  if (typeof doc.slug === "string" && doc.slug.length > 0) project.slug = doc.slug;
   return project;
 }
 
@@ -286,9 +295,10 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 {
-  // Highest first: a document needing v6 needs it whatever its zoom or
-  // textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 {
+  // Highest first: a document needing v7 needs it whatever its overrides,
+  // zoom or textPt say.
+  if (project.slug !== undefined) return 7;
   if (project.overrides && project.overrides.length > 0) return 6;
   if (project.textPt !== undefined && project.textPt !== DEFAULT_TEXT_PT) return 5;
   const z = project.zoom;
@@ -313,12 +323,13 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (!isFullTake(project, durationNs) && project.trim) out.trim = project.trim;
   // Only when it says something v3 cannot: writing the default block into
   // every document would push every take to v4 for a setting nobody touched.
-  // v5 and v6 are each supersets of what came before: a document that needs
-  // v6 for its overrides must still carry a non-default zoom or a non-default
-  // textPt if it has one, or that setting is silently dropped by the very
+  // v5, v6 and v7 are each supersets of what came before: a document that
+  // needs v7 for its slug must still carry whatever non-default overrides,
+  // zoom or textPt it has, or that setting is silently dropped by the very
   // write that promoted the version.
   if (version >= 4 && project.zoom && !isDefaultZoom(project.zoom)) out.zoom = project.zoom;
   if (version >= 5) out.textPt = project.textPt;
-  if (version === 6) out.overrides = project.overrides;
+  if (version >= 6) out.overrides = project.overrides;
+  if (version === 7) out.slug = project.slug;
   return out;
 }

@@ -213,7 +213,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -252,6 +252,17 @@ export interface Project {
    * `zoom` already follows.
    */
   overrides?: ZoomOverride[];
+  /**
+   * The stable name this take publishes under (project-7, STC-444 slice 3).
+   *
+   * Absent means "not yet decided": `share.ts`'s `autoSlug(takeName)`
+   * supplies a live default the editor shows and edits, but this field is
+   * only ever SET on a successful share, once a specific string is the
+   * thing actually published — same reasoning `textPt` follows for not
+   * writing the default into every document. A take never shared stays
+   * unversioned by this field, at whatever version its other edits earned.
+   */
+  slug?: string;
 }
 
 /**

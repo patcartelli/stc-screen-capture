@@ -331,7 +331,12 @@
     #exportstatus { font-size: var(--type-value); opacity: .75; min-width: 130px; }
     .dialogfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
-    .sharebar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
+    /* Share (STC-444 slice 3), folded into this dialog from its own former
+       row — see the markup's own comment for what moved and why. */
+    .dialogdivider { border: none; border-top: 1px solid var(--border); margin: 14px 0 0; }
+    #shareslug { width: 10em; }
+    #sitedestnote { opacity: .6; font-size: var(--type-meta); overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; }
     #sharestatus { opacity: .75; }
   </style>
 </head>
@@ -506,12 +511,6 @@
     <button id="overridedone">Done</button>
   </div>
 
-  <div class="sharebar">
-    <button id="share" title="Copy this take's export into the site folder">Share to site</button>
-    <button id="sharedest">Site folder…</button>
-    <button id="revealshared" title="Show the published file in Finder">Show published</button>
-    <span id="sharestatus"></span>
-  </div>
   </div><!-- /.editorbody -->
 
   <dialog id="exportdialog">
@@ -541,6 +540,25 @@
       <progress id="exportprogress" max="1000" value="0"></progress>
       <span id="exportstatus" class="mono"></span>
       <button id="cancelexport">Cancel</button>
+    </div>
+    <hr class="dialogdivider">
+    <!--
+      Share, folded in from its own former row (STC-444 slice 3). The site
+      folder itself is chosen from the main window's Preferences now — this
+      is a read-only reminder of it, not a second picker — and the slug is
+      per-take (Project.slug), prefilled from the take's own name until
+      something is actually published under a specific one.
+    -->
+    <div class="dialogrow">
+      <label for="shareslug">Publish as</label>
+      <input id="shareslug" type="text" pattern="[a-z0-9][a-z0-9-]*"
+             aria-label="Publish slug">
+      <span id="sitedestnote" class="mono"></span>
+    </div>
+    <div class="dialogrow">
+      <button id="share" title="Copy this take's export into the site folder">Share to site</button>
+      <span id="sharestatus"></span>
+      <button id="sharereveal" hidden>Show in Finder</button>
     </div>
     <div class="dialogfoot">
       <button id="export">Export</button>

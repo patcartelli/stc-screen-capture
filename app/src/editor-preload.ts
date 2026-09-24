@@ -29,7 +29,6 @@ contextBridge.exposeInMainWorld("editor", {
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   getSettings: () => ipcRenderer.invoke("recorder:getSettings"),
   publish: () => ipcRenderer.invoke("share:publish"),
-  chooseShareDestination: () => ipcRenderer.invoke("share:chooseDestination"),
   revealPublished: () => ipcRenderer.invoke("share:reveal"),
   // STC-399: the export manifest stamp's version half.
   getVersion: () => ipcRenderer.invoke("app:version"),
