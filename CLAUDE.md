@@ -215,6 +215,10 @@ exactly the parallel work being looked for. Same reason `gh` is tested with
 send every query down a path that throws, so the REST fallback in the same file
 was never tried and the check was permanently 3 on a machine it works fine on.
 
+### Hand off a runbook WITH its branch
+
+**Every time you point Patrick at a runbook, name the branch to run it from**, together with the fetch/checkout commands. A runbook written for unmerged work lives only on that PR's branch, next to the code it tests. Run from `master`, it either isn't there or quietly tests the OLD build. If the work is unmerged, say so in the hand-off ("not on `master` yet, run it from `<branch>`"). Once it merges, say `master`.
+
 ### Concurrent sessions — isolate with a worktree
 
 **Multiple Claude Code sessions on this repo share the SAME working directory unless told otherwise, and that is not hypothetical.** On 2026-09-21, working STC-417, `git status`/`git branch --show-current` changed between consecutive commands with no checkout of that session's own — `git reflog` showed branch checkouts and commits from two OTHER live sessions (STC-416, STC-403, STC-421) interleaving in real time, and `ListAgents` confirmed three peer sessions active in this project at once. The same afternoon, STC-417 and STC-403 (a differently-numbered ticket, filed separately) independently root-caused and fixed the IDENTICAL bug — `npm run ticket -- STC-NNN` only greps for one ticket's own key, so it caught neither side of that collision (see the STC-403 row below). Worse: mid-session the shared directory was found mid-`git merge` (dozens of files staged) from a different peer session — touching anything there would have corrupted someone else's in-flight work.

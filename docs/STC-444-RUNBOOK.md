@@ -1,5 +1,9 @@
 # STC-444 runbook — the editor's header row (slice 1 of 4)
 
+**Run from:** `claude/fervent-goodall-rkautv` (PR #217). Until that PR merges, this runbook is not on `master`.
+
+**Result, 2026-09-24:** Patrick ran every item on real hardware and approved all seven. Separately, the design still differs from his Figma mockups. That gap is being closed from the Figma file itself, not from the screenshots on the ticket.
+
 Slice 1 is a **rough-in**. It goes into the product so we can see how it feels
 there, not to settle the design. Patrick's mockups are inspiration, not a spec.
 
