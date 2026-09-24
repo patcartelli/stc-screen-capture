@@ -194,9 +194,22 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
  * second is why this file failed on CI with `Cannot read properties of
  * undefined (reading 'click')` rather than with a timeout. See
  * `_windows.ts`'s `pageMatching`, which now owns the wait.
+ *
+ * **And loaded, which is STC-450's fix.** An attached page is one whose URL
+ * has committed, not one whose script has run. `thumbnail-renderer.js` is a
+ * classic `<script>` at the end of `thumbnail.html`'s body, and it is what
+ * binds every `#actions` button's click listener. A test that clicks from
+ * inside `panel.evaluate` (the in-flight test below does, on purpose) could
+ * land that click on a button with no listener yet, and read both buttons
+ * still enabled: `{ edit: false, save: false }`, run 36020497181. A classic
+ * script at the end of the body runs before `DOMContentLoaded`, so waiting
+ * for it here means the listeners are bound. The test named "hands back a
+ * panel whose buttons are already wired" holds that script back to prove it.
  */
-function panelWindow(app: ElectronApplication): Promise<Page> {
-  return pageWithUrl(app, "thumbnail.html");
+async function panelWindow(app: ElectronApplication): Promise<Page> {
+  const page = await pageWithUrl(app, "thumbnail.html");
+  await page.waitForLoadState("domcontentloaded");
+  return page;
 }
 
 describe("the panel waits (STC-392)", () => {
@@ -283,6 +296,65 @@ describe("the panel waits (STC-392)", () => {
     expect(await panel.evaluate(() => (document.getElementById("save") as HTMLButtonElement).disabled))
       .toBe(false);
   }, 40_000);
+
+  describe("hands back a panel whose buttons are already wired (STC-450)", () => {
+    /**
+     * Hold `thumbnail-renderer.js` in the main process until the test says
+     * so, and fire one capture. A time-based delay would make the control
+     * below a race of its own; a held script cannot be late.
+     */
+    async function launchWithHeldRenderer(): Promise<{ electronApp: ElectronApplication; release: () => Promise<void> }> {
+      const { app: electronApp, win } = await launch({ captures: 0 });
+      await electronApp.evaluate(({ protocol, net }) => {
+        let release!: () => void;
+        const held = new Promise<void>((r) => { release = r; });
+        (globalThis as any).__releaseThumbnailRenderer = release;
+        protocol.handle("file", async (req) => {
+          if (req.url.endsWith("/thumbnail-renderer.js")) await held;
+          return net.fetch(req, { bypassCustomProtocolHandlers: true });
+        });
+      });
+      const r = await win.evaluate(() => (window as any).recorder.captureStill("display"));
+      if (!r.ok) throw new Error(`captureStill failed: ${JSON.stringify(r)}`);
+      return {
+        electronApp,
+        release: () => electronApp.evaluate(() => { (globalThis as any).__releaseThumbnailRenderer(); }),
+      };
+    }
+
+    /** Click Copy and read Edit/Save in the same tick, as the in-flight test does. */
+    const clickCopyAndRead = (panel: Page) => panel.evaluate(() => {
+      const loading = document.readyState === "loading";
+      (document.getElementById("copy") as HTMLButtonElement).click();
+      return {
+        loading,
+        edit: (document.getElementById("edit") as HTMLButtonElement).disabled,
+        save: (document.getElementById("save") as HTMLButtonElement).disabled,
+      };
+    });
+
+    test("control: an attached page can be clicked before its script has run, and the click is lost", async () => {
+      // What `panelWindow` used to return. If this stops reading the lost
+      // click, the hold no longer opens the window and the test below proves
+      // nothing.
+      const { electronApp, release } = await launchWithHeldRenderer();
+      const panel = await pageWithUrl(electronApp, "thumbnail.html");
+      expect(await clickCopyAndRead(panel)).toEqual({ loading: true, edit: false, save: false });
+      await release();
+    }, 40_000);
+
+    test("panelWindow waits for the script, so an in-page click reaches its listener", async () => {
+      const { electronApp, release } = await launchWithHeldRenderer();
+      let settled = false;
+      const pending = panelWindow(electronApp).then((p) => { settled = true; return p; });
+      await pageWithUrl(electronApp, "thumbnail.html");
+      await sleep(250);
+      expect(settled, "panelWindow resolved while the renderer script was still held").toBe(false);
+      await release();
+      const panel = await pending;
+      expect(await clickCopyAndRead(panel)).toEqual({ loading: false, edit: true, save: true });
+    }, 40_000);
+  });
 
   test("Save promotes, and closes the panel", async () => {
     const { app: electronApp, temp, recordings } = await launch();
