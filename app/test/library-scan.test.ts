@@ -31,6 +31,38 @@ function mp4Bytes(): Uint8Array {
     ...box("moov", [...mvhd, ...box("trak", tkhd)])]);
 }
 
+/**
+ * A structurally valid HEIC skeleton carrying `id` where a real one carries
+ * it: XMP, inside `mdat`. Shaped from a real ImageIO export dumped
+ * 2026-09-23 — `ftyp` with a `heic` major brand and `mif1`/`miaf` compatible,
+ * then the XMP item's bytes living past `mdat`'s start.
+ */
+function heicBytes(id?: string): Uint8Array {
+  const xmp = id
+    ? `<x:xmpmeta><rdf:RDF><rdf:Description><dc:description><rdf:Alt>`
+      + `<rdf:li xml:lang="x-default">${id}</rdf:li>`
+      + `</rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>`
+    : "<x:xmpmeta><rdf:RDF/></x:xmpmeta>";
+  return new Uint8Array([
+    ...box("ftyp", [...chars("heic"), ...be32(0), ...chars("mif1"), ...chars("miaf")]),
+    ...box("meta", chars("hdlrpict")),
+    ...box("mdat", [...chars(xmp), 0x00, 0xff, 0xfe, 0x01]),
+  ]);
+}
+
+/** The minimum `shot.json` that reads back as a healthy still bundle. */
+const shotJson = () => ({
+  version: 1,
+  kind: "display-crop",
+  capturedAtNs: "1000000000",
+  timebase: { numer: 125, denom: 3 },
+  display: { id: 1, pointWidth: 1920, pointHeight: 1080, pixelWidth: 3840,
+             pixelHeight: 2160, backingScale: 2, originX: 0, originY: 0 },
+  crop: { x: 100, y: 80, width: 640, height: 360 },
+  frame: { file: "frame.png", width: 1280, height: 720, alpha: false },
+  decoration: { mode: "selected-area", canvas: "natural", cursor: false, redactions: [] },
+});
+
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "stc-lib-")); });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -192,6 +224,53 @@ describe("the scan reads the folder", () => {
     expect(items).toHaveLength(1);
     expect(items[0]!.label).toBe("renamed-clip");
     expect(items[0]!.label).not.toContain("stale");
+  });
+
+  /**
+   * STC-413 follow-up: the scan must MATCH a HEIC, not merely list it.
+   *
+   * The reader existing does not prove `probeFinishedFile` dispatches to it —
+   * this ticket's own recurring defect is a test that cannot fail, and a pure
+   * `readHeicCaptureId` test passes just as well with the `.heic` arm deleted.
+   * What discriminates is the COUNT: unmatched, the file and its bundle list
+   * as two separate tiles, which is precisely the bug.
+   *
+   * The HEIC bytes are built here rather than taken from the real encoder
+   * because this file must run on a checkout with no Swift toolchain;
+   * `helper/test/still-encode.test.ts` is where the real encoder's output is
+   * round-tripped.
+   */
+  test("a HEIC at top level matches its bundle — one tile, not two", async () => {
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(bundle, "shot.json"), JSON.stringify(shotJson()));
+    await writeFile(join(bundle, "frame.png"), new Uint8Array(2048));
+    await writeFile(join(root, "error-state.heic"), heicBytes(id));
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.file).toBe(join(root, "error-state.heic"));
+    expect(items[0]!.dir).toBe(bundle);
+    expect(items[0]!.label).toBe("error-state");
+  });
+
+  test("an untagged HEIC is a foreign file, not somebody else's bundle", async () => {
+    // The control. Without it, a dispatch that returned a CONSTANT id would
+    // pass the test above and attach every stray .heic to the first bundle.
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "capture.json"),
+      JSON.stringify({ version: 1, id: mintCaptureId() }));
+    await writeFile(join(bundle, "shot.json"), JSON.stringify(shotJson()));
+    await writeFile(join(bundle, "frame.png"), new Uint8Array(2048));
+    await writeFile(join(root, "downloaded.heic"), heicBytes());   // no id
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(2);                 // the stray file AND the bundle
+    expect(items.find((i) => i.file?.endsWith("downloaded.heic"))?.dir)
+      .toBeUndefined();
   });
 
   test("a foreign file has no bundle to name", async () => {
@@ -462,6 +541,112 @@ describe("the scan on a capture whose moov alone exceeds the read window", () =>
  * parse, id extract), not IO throughput. The IO half needs a real folder of
  * real exports on a Mac; see `docs/STC-413-RUNBOOK.md`.
  */
+/**
+ * An EXPORT's own box layout, which no fixture in this suite had (STC-445).
+ *
+ * `AVAssetWriter` — every raw capture — writes `ftyp mdat moov uuid`, so
+ * `moov` is LAST and `tagMp4`'s trailing tag sits 54 bytes behind it. Every
+ * fixture here is that shape, which is why `probeAndIdMp4` reading the id out
+ * of the `moov` window passed every test while failing on every real export.
+ *
+ * `mp4-muxer` — every export the app writes — puts `moov` FIRST:
+ * `ftyp moov mdat uuid`. The tag is then a whole `mdat` away. Measured on
+ * three real exports: gaps of 37, 100 and 154 MB against a 4 KB window.
+ *
+ * `mdat` here is deliberately larger than BOTH read windows, so a test that
+ * passes has really reached past it rather than having the tag fall into the
+ * `moov` slice by luck.
+ */
+function exportLayoutMp4(mdatBytes: number): Uint8Array {
+  const mvhd = box("mvhd", [0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(600), ...be32(3000)]);
+  const tkhd = box("tkhd", [
+    0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(1), ...be32(0), ...be32(0),
+    ...new Array(8).fill(0), 0, 0, 0, 0, 0, 0, 0, 0,
+    ...new Array(36).fill(0),
+    ...be32(1920 * 65536), ...be32(1080 * 65536),
+  ]);
+  return new Uint8Array([
+    ...box("ftyp", chars("isom")),
+    ...box("moov", [...mvhd, ...box("trak", tkhd)]),     // FIRST, not last
+    ...box("mdat", new Array(mdatBytes).fill(7)),
+  ]);
+}
+
+describe("an EXPORT's layout — moov first, the tag a whole mdat away (STC-445)", () => {
+  /** Comfortably past `MP4_TAIL_PROBE_BYTES` (64 KB) and the 4 KB slack. */
+  const BIG_MDAT = 200 * 1024;
+
+  test("an exported file is matched to its bundle", async () => {
+    const id = mintCaptureId();
+    const bytes = tagMp4(exportLayoutMp4(BIG_MDAT), id);
+
+    // The premise, asserted rather than assumed — without this the fixture
+    // could quietly become another moov-last case and pass for free, which is
+    // exactly how the original defect survived review.
+    const buf = Buffer.from(bytes);
+    const moovAt = buf.indexOf(Buffer.from("moov", "latin1")) - 4;
+    const moovEnd = moovAt + buf.readUInt32BE(moovAt);
+    const uuidAt = buf.lastIndexOf(Buffer.from("uuid", "latin1")) - 4;
+    expect(uuidAt, "the tag is after moov").toBeGreaterThan(moovEnd);
+    expect(uuidAt - moovEnd, "and a long way after it").toBeGreaterThan(64 * 1024);
+
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));
+    await writeFile(join(root, "login-bug.mp4"), bytes);
+
+    const { items } = await listLibrary(env, root);
+    // ONE tile, not two. This is the whole ticket.
+    expect(items).toHaveLength(1);
+    expect(items[0]!.file).toBe(join(root, "login-bug.mp4"));
+    expect(items[0]!.dir, "the finished file found its bundle").toBe(bundle);
+    // And the consequence a user actually sees: the tile can be opened.
+    expect(items[0]!.actions.map((a) => a.id)).toContain("open");
+  });
+
+  test("facts still come from moov, which the tail read must not displace", async () => {
+    const bytes = tagMp4(exportLayoutMp4(BIG_MDAT), mintCaptureId());
+    await writeFile(join(root, "clip.mp4"), bytes);
+    const { items } = await listLibrary(env, root);
+    expect(items[0]!.summary).toMatch(/1920×1080/);
+  });
+
+  test("an untagged export is still a foreign file, not a wrong match", async () => {
+    // The control. Without it a tail reader that returned a constant — or one
+    // that matched on any `uuid` box regardless of our magic — would pass the
+    // first test and attach every stray mp4 to the first bundle.
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"),
+      JSON.stringify({ version: 1, id: mintCaptureId() }));
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));
+    await writeFile(join(root, "holiday.mp4"), exportLayoutMp4(BIG_MDAT));   // untagged
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(2);
+    expect(items.find((i) => i.file?.endsWith("holiday.mp4"))?.dir).toBeUndefined();
+  });
+
+  test("a RAW CAPTURE's layout keeps working — moov last, tag behind it", async () => {
+    // The other half of the contract. The fix adds a tail read; it must not
+    // regress the shape every take the helper writes actually has.
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));
+    await writeFile(join(root, "raw-shape.mp4"), tagMp4(mp4Bytes(), id));
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.dir).toBe(bundle);
+  });
+});
+
 const SCAN_BACKSTOP_MS = 4000;
 
 test("500 files scan without going quadratic", async () => {

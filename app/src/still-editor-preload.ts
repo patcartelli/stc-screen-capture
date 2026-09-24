@@ -20,4 +20,10 @@ contextBridge.exposeInMainWorld("stillEditor", {
   // whatever the document already has, exactly as `still:writeShot`'s own
   // doc describes for "a redaction-only call".
   writeShot: (dir: string, redactions: unknown) => ipcRenderer.invoke("still:writeShot", dir, redactions),
+  // STC-446: the editor can write the finished file now. Both channels are
+  // the thumbnail panel's own (`still:export`, `recorder:getSettings`) — the
+  // editor is the ONLY door to a still already in the library, and until
+  // this it could not produce a deliverable from one.
+  exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
+  getSettings: () => ipcRenderer.invoke("recorder:getSettings"),
 });

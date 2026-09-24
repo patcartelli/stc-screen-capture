@@ -321,6 +321,67 @@ export function readMp4CaptureId(bytes: Uint8Array): string | undefined {
 }
 
 /**
+ * The id out of a slice taken from the END of an MP4 (STC-445).
+ *
+ * ## Why `readMp4CaptureId` is not enough
+ *
+ * That function walks top-level boxes from offset 0, so it needs a buffer
+ * that BEGINS at a box boundary. `library.ts` therefore fed it the `moov`
+ * window, on the assumption — stated in its own comment — that `tagMp4`'s
+ * `uuid` directly follows `moov`.
+ *
+ * True for a RAW CAPTURE: `AVAssetWriter` writes `ftyp mdat moov uuid`, so
+ * `moov` is last and the tag really is 54 bytes behind it. **False for an
+ * EXPORT**, which `mp4-muxer` writes as `ftyp moov mdat uuid` — the whole
+ * `mdat` sits in between. Measured on three real exports, 2026-09-23:
+ *
+ *     boogie woogie.mp4    moov ends      9,835   uuid at  37,457,728
+ *     2026-09-23_14-19-49  moov ends     23,211   uuid at 100,085,968
+ *     2026-09-23_15-24-26  moov ends     56,073   uuid at 154,231,646
+ *
+ * — gaps of 37 to 154 MB against a 4 KB slack window. So no export was ever
+ * matched to its bundle: two tiles per capture, no Edit on the finished
+ * file, and a re-export refused as "a different capture".
+ *
+ * ## Why this reads a TAIL rather than fixing the window
+ *
+ * `tagMp4` appends at EOF **unconditionally**, whatever the box order. The
+ * end of the file is therefore the one place the tag is always found, and it
+ * costs one small bounded read that does not care how big `mdat` is.
+ *
+ * ## Why a magic-anchored scan rather than a walk
+ *
+ * A tail slice does not begin at a box boundary, so it cannot be walked from
+ * its own offset 0. It CAN be anchored: `MP4_UUID` is 16 bytes this project
+ * chose, and a box's header sits immediately before them. So find the magic,
+ * then read the header BACKWARDS from it and check it really is a `uuid` box
+ * whose declared extent contains the body — structure, not a bare string
+ * match. `isCaptureId` gates the result as everywhere else, so the worst a
+ * misparse can do is return nothing.
+ *
+ * The LAST match wins: `tagMp4` drops any previous tag of ours before
+ * appending, but a file concatenated or repaired by other means could carry
+ * more than one, and the last is the most recently written.
+ */
+export function readMp4CaptureIdInTail(tail: Uint8Array): string | undefined {
+  let found: string | undefined;
+  for (let i = 0; i + MP4_UUID.length <= tail.length; i++) {
+    if (!isOurUuid(tail, i)) continue;
+    // The 8-byte box header immediately precedes the magic: size, then type.
+    const start = i - 8;
+    if (start < 0) continue;
+    if (ascii(tail, start + 4, 4) !== "uuid") continue;
+    const size = readBe32(tail, start);
+    if (size < 8 + MP4_UUID.length) continue;
+    const end = start + size;
+    if (end > tail.length) continue;          // the box runs past this slice
+    const value = ascii(tail, i + MP4_UUID.length, end - (i + MP4_UUID.length));
+    if (isCaptureId(value)) found = value;
+  }
+  return found;
+}
+
+/**
  * Append the id as a trailing top-level `uuid` box, dropping any of ours
  * already present so re-tagging replaces rather than accumulates.
  *
@@ -365,4 +426,83 @@ export function tagMp4(bytes: Uint8Array, id: string): Uint8Array {
   for (const [start, s] of keep) { out.set(bytes.subarray(start, start + s), at); at += s; }
   out.set(box, at);
   return out;
+}
+
+// ── HEIC ───────────────────────────────────────────────────────────────────
+
+/**
+ * Brands that mean "an HEIF-family still". `mif1`/`miaf` are the generic
+ * image-container brands and appear in the compatible list of every HEIC this
+ * app writes; the `he**`/`hev*` family are the HEVC-coded ones.
+ *
+ * This is a GUARD, not a dispatch — `library.ts` already picks the reader by
+ * extension. It exists so a file that is not an HEIF at all cannot reach the
+ * scan below on the strength of its filename.
+ */
+const HEIF_BRANDS = new Set([
+  "heic", "heix", "heim", "heis", "hevc", "hevx", "hevm", "hevs",
+  "mif1", "msf1", "miaf",
+]);
+
+function isHeif(b: Uint8Array): boolean {
+  for (const [type, start, size] of mp4Boxes(b)) {
+    // ISO-BMFF requires `ftyp` FIRST. Anything else leading means this is not
+    // a file we are willing to guess about.
+    if (type !== "ftyp") return false;
+    // major_brand, then minor_version (which spells no brand), then the
+    // compatible_brands list — walked as one run of 4-byte codes.
+    for (let at = start + 8; at + 4 <= start + size; at += 4) {
+      if (HEIF_BRANDS.has(ascii(b, at, 4))) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * The id out of a HEIC still.
+ *
+ * ## The measurement this is built on
+ *
+ * Taken on real hardware 2026-09-23, encoding one RGBA buffer through the
+ * REAL helper three times with the same id and scanning each output's bytes:
+ *
+ *     png   1,193 bytes   id present
+ *     heic  3,696 bytes   id present
+ *     jpeg  3,990 bytes   id ABSENT
+ *
+ * So `StillEncodeDecisions.swift` setting only `kCGImagePropertyPNGDictionary`
+ * does NOT mean the id is PNG-only: ImageIO normalises that description into
+ * XMP, and HEIF carries XMP as an item. JPEG genuinely carries nothing, and
+ * that stays a known limitation rather than a bug this module can close.
+ *
+ * On a 1,200x800 export (1,009,782 bytes) the XMP is `infe` item 9, type
+ * `mime`, content-type `application/rdf+xml`, located by `iloc` at
+ * offset 1,034 length 776 — with the id itself at byte 1,668. Well inside the
+ * front window `library.ts` already reads for a PNG.
+ *
+ * ## Why a scan and not an `iloc` parse
+ *
+ * The same reasoning `xmpCaptureId` records one format over, with one extra
+ * fact: **the XMP item's bytes live inside `mdat`** (`mdat` starts at 880
+ * above, the item at 1,034), so no cheap structural bound excludes the
+ * compressed HEVC payload. Excluding it exactly means resolving `iinf` →
+ * `infe` → `iloc` through every version and field-width variant those boxes
+ * allow — and the failure mode of getting that wrong on an unfamiliar
+ * encoder's file is the SAME silent miss the scan already has, for several
+ * times the code, inside a 500-file scan.
+ *
+ * What makes the scan safe is that it decides nothing: `captureIdIn` gates
+ * every candidate through `isCaptureId`, so the only strings this can return
+ * already match the exact `cap_` + 26-Crockford shape. For compressed bytes to
+ * spell one by accident they must hit 4 exact bytes and then 26 bytes each
+ * drawn from 32 of 256 values — about 2^-110 per position. A wrong id is not
+ * a risk worth writing a parser against; a missed one degrades to exactly
+ * today's behaviour.
+ *
+ * Bounded by whatever the caller hands in, never by this function.
+ */
+export function readHeicCaptureId(bytes: Uint8Array): string | undefined {
+  if (!isHeif(bytes)) return undefined;
+  return captureIdIn(bytes);
 }

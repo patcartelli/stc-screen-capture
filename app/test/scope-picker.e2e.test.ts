@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { windowCount } from "./_windows.js";
+import { waitForStarts } from "./_start-log.js";
 
 /**
  * The main window's capture scope (STC-370's region/window capability, wired
@@ -91,9 +92,6 @@ async function primaryBounds(): Promise<{ x: number; y: number; width: number; h
   return app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
 }
 
-const lastStart = (log: string): any =>
-  JSON.parse(readFileSync(log, "utf8").trim().split("\n").at(-1)!);
-
 describe("the scope picker", () => {
   test("defaults to Screen, with Record available and the display source shown", async () => {
     const { win } = await launch();
@@ -133,8 +131,7 @@ describe("the scope picker", () => {
     await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
 
     await win.click("#record");
-    await expect.poll(() => existsSync(startLog), { timeout: 20_000 }).toBe(true);
-    const cmd = lastStart(startLog);
+    const cmd = (await waitForStarts(startLog)).at(-1);
     expect(cmd.windowId).toBe(4711);
     expect(cmd.region).toBeUndefined();
     expect(cmd.displayId).toBeUndefined();
@@ -165,8 +162,7 @@ describe("the scope picker", () => {
     await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
 
     await win.click("#record");
-    await expect.poll(() => existsSync(startLog), { timeout: 20_000 }).toBe(true);
-    const cmd = lastStart(startLog);
+    const cmd = (await waitForStarts(startLog)).at(-1);
     expect(cmd.region).toEqual({ x: 100, y: 80, width: 200, height: 100 });
     expect(cmd.windowId).toBeUndefined();
     expect(cmd.displayId).toBe(await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().id));

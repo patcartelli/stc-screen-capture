@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
+import { waitForStart } from "./_start-log.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 import { toastText } from "./_toast.js";
@@ -87,9 +88,7 @@ describe("the camera toggle", () => {
     await expect.poll(() => win.isChecked("#camera")).toBe(true);
 
     await win.click("#record");
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
     // While a take is running the setting must not look changeable: the device
@@ -105,9 +104,7 @@ describe("the camera toggle", () => {
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     await win.click("#record");
-    await expect.poll(() => existsSync(startLog), { timeout: 30_000 }).toBe(true);
-
-    const cmd = JSON.parse(readFileSync(startLog, "utf8").trim().split("\n")[0]!);
+    const cmd = await waitForStart(startLog);
     expect(cmd.camera).toBe(false);
   }, 180_000);
 

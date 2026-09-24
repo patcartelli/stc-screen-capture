@@ -10,6 +10,7 @@ import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { stubQuitDialog } from "./_quit-fixture.js";
 import { windowCount, hasWindow } from "./_windows.js";
 import { RAW_SUBDIR } from "../src/takes.js";
+import { keptFileRequests } from "./_still-log.js";
 
 /**
  * Redaction, end to end (STC-297, moved into its own still editor by
@@ -309,5 +310,67 @@ describe("redaction", () => {
     // undo anything (there is nothing left to decide; the take was kept the
     // moment Edit was clicked).
     expect(storedRegions(dir)).toHaveLength(1);
+  }, 60_000);
+
+  /**
+   * STC-446: the editor can produce the deliverable.
+   *
+   * This window is the ONLY door to a still already in the library — a
+   * library Open comes straight here (`main.ts`'s `still:reopen`) and the
+   * tile offers no export — so until Save existed, a kept still could never
+   * leave the app. Measured on a real folder before the fix: three top-level
+   * `.mp4` and zero `.png`.
+   *
+   * Asserted off the helper's own request log rather than off a folder, for
+   * the reason `_still-log.ts` records: the panel writes a drag-out file into
+   * the clipboard cache the moment it paints, so "a file appeared" is not the
+   * same claim as "a file anybody kept". `keptFileRequests` filters that one
+   * out.
+   */
+  test("the editor's Save writes the finished file, at the top level (STC-446)", async () => {
+    const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
+    const { win, recordings } = await launch({ STC_FAKE_STILL_LOG: stillLog });
+    const { editor, dir } = await redactingEditor(win);
+
+    // Nothing kept yet — Edit promotes the bundle but writes no file. The
+    // control for the assertion below: without it, a drag-out file leaking
+    // past the cache filter would make this test pass on its own.
+    expect(keptFileRequests(stillLog)).toEqual([]);
+
+    // A region first, so the file written is demonstrably the DECORATED
+    // composite rather than the raw frame copied through.
+    await dragBox(editor, [0.25, 0.3], [0.75, 0.65]);
+    await expect.poll(() => storedRegions(dir).length, { timeout: 15_000 }).toBe(1);
+
+    await editor.click("#save");
+    await expect.poll(() => keptFileRequests(stillLog).length, { timeout: 15_000 }).toBe(1);
+
+    const kept = keptFileRequests(stillLog)[0];
+    // Into the save folder's TOP LEVEL. `raw/` is source material under
+    // STC-413, and a deliverable written in there would be invisible to the
+    // user and would sit beside the frame it was rendered from.
+    expect(kept.file.startsWith(join(recordings, RAW_SUBDIR)),
+           `wrote into raw/: ${kept.file}`).toBe(false);
+    expect(kept.file.startsWith(recordings), `wrote outside the save folder: ${kept.file}`).toBe(true);
+
+    // At the CAPTURE's resolution, not the window's. The editor draws a
+    // full-size composite and then fits a VIEW canvas to whatever size the
+    // window happens to be; exporting the view would make how you had the
+    // window sized decide what comes out — STC-318's "a way of looking must
+    // not change what comes out", in a second window.
+    //
+    // The numbers discriminate, which is the whole reason they are here:
+    // `_fake-helper.mjs` declares a 480x270 crop at 2x, so the frame is
+    // 960x540, while the editor window is 900x700 and its stage fits the
+    // view canvas to ~868 wide. Export the view instead of the composite and
+    // this reads 868, not 960. (Written the other way round first, against a
+    // guessed 1280x720 capture — the run said 960x540 and the fixture, not
+    // the code, was what I had wrong.)
+    expect(kept.width, `wrote ${kept.width}x${kept.height}`).toBeGreaterThanOrEqual(960);
+    expect(kept.height, `wrote ${kept.width}x${kept.height}`).toBeGreaterThanOrEqual(540);
+
+    // The window stays open — Save produces a file, it is not a way out.
+    // Done is still the only thing that closes this editor.
+    expect(await windowCount(app!, "still-editor.html")).toBe(1);
   }, 60_000);
 });

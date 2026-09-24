@@ -51,10 +51,11 @@ describe("the settings sheet", () => {
     expect(boxBeforeOpen!.x).toBeGreaterThanOrEqual(viewportWidth);
     await win.click("#settings");
     await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+    // Exactly two — not "contains", which would pass even if Countdown or
+    // Shot shortcuts were still their own <h2> peer sections (STC-430: they
+    // used to be, and the sheet read as four flat sections rather than two).
     const headings = await win.locator("#profilesheet h2").allTextContents();
-    expect(headings).toContain("Profile");
-    expect(headings).toContain("Preferences");
-    expect(headings.indexOf("Profile")).toBeLessThan(headings.indexOf("Preferences"));
+    expect(headings).toEqual(["Profile", "Preferences"]);
     expect(await win.isVisible("#scope")).toBe(true);
     expect(await win.isVisible("#camera")).toBe(true);
     expect(await win.isVisible("#mic")).toBe(true);
@@ -62,6 +63,41 @@ describe("the settings sheet", () => {
     expect(await win.locator("#diagnostics").isHidden()).toBe(true);
     await win.check("#showdiagnostics");
     expect(await win.locator("#diagnostics").isVisible()).toBe(true);
+  });
+
+  /**
+   * STC-430. "Countdown" and "Shot shortcuts" used to be their own `<h2>`,
+   * styled identically to Profile and Preferences — so a click-through read
+   * the sheet as four flat sections rather than the two the split promises.
+   * They are `.subhead` labels within Preferences now: present (so the
+   * fields stay scannable) but not `<h2>`, and positioned after the
+   * Preferences heading rather than before it or between Profile's fields.
+   */
+  test("Countdown and Shot shortcuts are Preferences subheads, not their own sections", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await win.click("#settings");
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+
+    const headings = await win.locator("#profilesheet h2").allTextContents();
+    expect(headings).not.toContain("Countdown");
+    expect(headings).not.toContain("Shot shortcuts");
+
+    const subheads = await win.locator("#profilesheet .subhead").allTextContents();
+    expect(subheads).toEqual(["Countdown", "Shot shortcuts"]);
+
+    // Both sit under the Preferences <h2>, not Profile's — read positionally,
+    // the same way the save-location test above pins its own placement.
+    const sectionOf = await win.evaluate(() => {
+      const bySubhead = (text: string) => {
+        const el = [...document.querySelectorAll("#profilesheet .subhead")]
+          .find((n) => n.textContent === text)!;
+        let prev = el.previousElementSibling;
+        while (prev && prev.tagName !== "H2") prev = prev.previousElementSibling;
+        return prev?.textContent ?? null;
+      };
+      return { countdown: bySubhead("Countdown"), shortcuts: bySubhead("Shot shortcuts") };
+    });
+    expect(sectionOf).toEqual({ countdown: "Preferences", shortcuts: "Preferences" });
   });
 
   /**

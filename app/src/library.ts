@@ -3,7 +3,8 @@ import { join, extname, basename } from "node:path";
 import { takesRoot, RAW_SUBDIR } from "./takes.js";
 import { parseShot, type Shot } from "@transform/shot.js";
 import { probePng, probeMp4, MP4_TAIL_PROBE_BYTES, type MediaFacts } from "@transform/media-probe.js";
-import { readPngCaptureId, readMp4CaptureId, readBe32 } from "@transform/media-tag.js";
+import { readPngCaptureId, readMp4CaptureId, readMp4CaptureIdInTail, readHeicCaptureId, readBe32 }
+  from "@transform/media-tag.js";
 import { readBundleId } from "./capture-identity.js";
 import {
   recordingItem, stillItem, looseFileItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
@@ -91,10 +92,10 @@ export * from "./library-items.js";
  */
 
 /**
- * What rule 1 of the scan recognises as a finished capture. `.jpg`/`.jpeg`/
- * `.heic` are in scope for LISTING (a file with one of these extensions is
- * still a capture) even though nothing here can probe or id-match them —
- * see `probeFinishedFile`.
+ * What rule 1 of the scan recognises as a finished capture. `.jpg`/`.jpeg`
+ * are in scope for LISTING (a file with one of these extensions is still a
+ * capture) even though nothing here can probe or id-match them; `.heic` is
+ * listed and id-matched but not probed — see `probeFinishedFile`.
  */
 const MEDIA_EXTENSIONS = new Set([".mp4", ".png", ".heic", ".jpg", ".jpeg"]);
 
@@ -245,15 +246,36 @@ async function locateMoovBytes(file: string, fileSize: number): Promise<Uint8Arr
   return undefined;
 }
 
+/**
+ * How much of the file's END is read looking for `tagMp4`'s `uuid` box
+ * (STC-445). The box is 54 bytes; 4 KB leaves room for a `free`/`skip` or
+ * another vendor's box sitting after it, and is one bounded read.
+ */
+const UUID_TAIL_PROBE_BYTES = 4096;
+
 async function probeAndIdMp4(file: string, fileSize: number):
     Promise<{ facts?: MediaFacts; id?: string }> {
   const moov = await locateMoovBytes(file, fileSize);
   if (!moov) return {};
-  // `moov` is followed immediately, within the same read, by any `uuid` tag
-  // `tagMp4` appended — `readMp4CaptureId`'s own top-level walk finds it by
-  // skipping over `moov` via its own declared size, exactly as it would on
-  // the whole file.
-  return { facts: probeMp4(moov), id: readMp4CaptureId(moov) };
+
+  // TWO reads, because the id and the facts are not in the same place
+  // (STC-445). `moov` carries the facts. The id is in a `uuid` box `tagMp4`
+  // appends at EOF — which for a RAW CAPTURE (`ftyp mdat moov uuid`) really
+  // does sit just past `moov`, and for an EXPORT (`ftyp moov mdat uuid`, what
+  // `mp4-muxer` writes) is the whole `mdat` away: measured at 37-154 MB on
+  // real exports, against a 4 KB slack window. Reading `moov` alone therefore
+  // found the id on every take made by the helper and on NO exported file,
+  // which is two tiles per capture and no Edit on the finished one.
+  //
+  // The `moov` window is still tried first: for a raw capture it already
+  // holds the tag, so that costs nothing and keeps working if the tail read
+  // is short (a file truncated mid-`uuid`).
+  const fromMoov = readMp4CaptureId(moov);
+  if (fromMoov) return { facts: probeMp4(moov), id: fromMoov };
+
+  const tailStart = Math.max(0, fileSize - UUID_TAIL_PROBE_BYTES);
+  const tail = await readRange(file, tailStart, Math.min(UUID_TAIL_PROBE_BYTES, fileSize));
+  return { facts: probeMp4(moov), id: readMp4CaptureIdInTail(tail) };
 }
 
 async function probeAndIdPng(file: string, fileSize: number):
@@ -267,18 +289,43 @@ async function probeAndIdPng(file: string, fileSize: number):
 }
 
 /**
- * `.jpg`/`.jpeg`/`.heic` have no probe here, and that is RULED, not
- * forgotten — real header/metadata parsing for two more formats is work for
- * little return, since `probePng`/`probeMp4` (Task 4) and their id readers
- * (Tasks 2-3) are the whole interface this task was given. Such a file
- * lists with no dimensions and — because there is no reader for either
- * format's embedded metadata — is never matched to a bundle by this scan,
- * whichever app produced it.
+ * A HEIC carries its id and is matched to its bundle; it is still not
+ * PROBED, so it lists with no dimensions.
+ *
+ * Both halves are deliberate. Measured on real hardware 2026-09-23, an
+ * ImageIO HEIC export DOES carry the id — the same XMP route a PNG takes,
+ * because `kCGImagePropertyPNGDescription` is normalised into XMP rather
+ * than being PNG-specific the way the property name suggests. So the file
+ * had its identity all along and only the reader was missing, which is the
+ * same shape as STC-413's own `tEXt`-vs-`iTXt` Critical one format over.
+ * Dimensions would mean a real HEIF item-property parse (`iprp`/`ipco`/
+ * `ispe`) for a format nothing in the UI can even select, which is the work
+ * for little return the note below still describes.
+ *
+ * The window is `probeAndIdPng`'s. On a 1,200x800 export the id sits at byte
+ * 1,668 of 1,009,782 — see `readHeicCaptureId` for the layout it was read
+ * out of.
+ */
+async function probeAndIdHeic(file: string, fileSize: number):
+    Promise<{ facts?: MediaFacts; id?: string }> {
+  const front = await readRange(file, 0, Math.min(MP4_TAIL_PROBE_BYTES, fileSize));
+  return { id: readHeicCaptureId(front) };
+}
+
+/**
+ * `.jpg`/`.jpeg` have no probe and no id here, and that is RULED, not
+ * forgotten — real header parsing for them is work for little return, since
+ * `probePng`/`probeMp4` (Task 4) and their id readers (Tasks 2-3) are the
+ * whole interface this task was given. A JPEG also genuinely carries no id
+ * to read: the same measurement that found one in a HEIC found none in a
+ * JPEG, so this is a limitation of the WRITER, not a missing reader. Such a
+ * file lists with no dimensions and is never matched to a bundle.
  */
 async function probeFinishedFile(file: string, ext: string, fileSize: number):
     Promise<{ facts?: MediaFacts; id?: string }> {
   if (ext === ".mp4") return probeAndIdMp4(file, fileSize);
   if (ext === ".png") return probeAndIdPng(file, fileSize);
+  if (ext === ".heic") return probeAndIdHeic(file, fileSize);
   return {};
 }
 
@@ -631,10 +678,11 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
     } else if (bundleId) {
       // `capture.json` is minted LAZILY, at export time (Task 5) — its mere
       // presence PROVES this bundle was exported to something, even though
-      // nothing here can say what: a JPEG/HEIC export carries no readable id
-      // at all (ImageIO writes the id only into the PNG dictionary — Task 6),
-      // and a PNG/MP4 export's file may simply have been moved or deleted
-      // since. Either way this is NOT "never exported", so it must not be
+      // nothing here can say what: a JPEG export carries no readable id at
+      // all (ImageIO writes nothing a JPEG can hold — measured 2026-09-23,
+      // see `readHeicCaptureId`), and a PNG/HEIC/MP4 export's file may
+      // simply have been moved or deleted since. Either way this is NOT
+      // "never exported", so it must not be
       // reported the same way a genuinely crash-truncated take is — that
       // would be a lie about a capture that already did its job. Listed
       // instead, degraded: no `file` to point at, so `looseFileItem` keeps

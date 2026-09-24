@@ -260,6 +260,17 @@
     #profilesheet h1 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); }
     #profilesheet-head { justify-content: space-between; }
     #profileclose { padding: 3px 9px; font-size: var(--type-body); line-height: 1; }
+    /* STC-430: the sheet has exactly two PEER sections — Profile (how a
+       recording is formatted: Scope/Source/Camera/Mic) and Preferences
+       (everything app-level, shortcuts included). "Countdown" and "Shot
+       shortcuts" used to be their own <h2>, styled identically to Profile
+       and Preferences, so the sheet read as four flat sections and the
+       boundary the split exists to draw was invisible. They are grouping
+       labels WITHIN Preferences now — same small/uppercase treatment as
+       #modelcode and .libbadge — subordinate rather than a peer heading. */
+    .subhead { font-size: var(--type-label); font-weight: var(--type-label-weight);
+               letter-spacing: var(--type-label-tracking); text-transform: uppercase;
+               color: var(--text-faint); }
 
     /* ── the pill (STC-375) ──────────────────────────────────────────────
        Record collapses this real window to a 26px-tall pill (pill-window.ts);
@@ -481,20 +492,26 @@
         <input type="checkbox" id="showdiagnostics"> Show diagnostics</label>
     </div>
 
-    <h2>Countdown</h2>
     <!--
       STC-391. One countdown, two ways in: Record always counts down, and a
       still capture only when it was started with the self-timer. The options
       are built from `countdown.ts`'s COUNTDOWN_OPTIONS rather than listed
       here, so the list and the clamp that has to accept it cannot drift.
+
+      STC-430: "Countdown" was its own `<h2>`, a peer of Profile and
+      Preferences — this is a Preferences field like the ones above it, not
+      a third section, so it gets `.subhead` rather than another heading.
     -->
+    <div class="subhead">Countdown</div>
     <div class="stillrow">
       <label title="Record always counts down. A shot counts down only when started with the self-timer.">Counts
         down for <select id="countdownms"></select></label>
       <span id="countdownhint">Applies to Record, and to Shot with Self-Timer.</span>
     </div>
 
-    <h2>Shot shortcuts</h2>
+    <!-- STC-430: same as Countdown above — a Preferences field, not a
+         fourth section, so `.subhead` rather than `<h2>`. -->
+    <div class="subhead">Shot shortcuts</div>
     <div id="shortcuts"></div>
     <div id="shortcutfoot">
       <button id="resetshortcuts">Restore defaults</button>

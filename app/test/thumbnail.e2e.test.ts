@@ -213,7 +213,7 @@ describe("the post-capture floating thumbnail", () => {
     expect(await panel.isVisible("#trash")).toBe(true);
   }, 60_000);
 
-  test("Save promotes the take into the library and closes the panel — it keeps no second copy", async () => {
+  test("Save promotes the take AND writes the finished file, then closes the panel", async () => {
     const { win, recordings, stillLog } = await launch();
     await captureDisplay(win);
     const panel = await thumbnailWindow();
@@ -227,20 +227,35 @@ describe("the post-capture floating thumbnail", () => {
     // window closing IS the confirmation this path is being tested for.
     await panel.click("#save");
     await noThumbnailWindow(15_000);
-    // `panel:save` PROMOTES the take (STC-393's `promoteTake`) — it MOVES a
-    // directory. The library IS the destination now, and a separate encoded
-    // copy anywhere the user keeps files is `still:export`'s job (Copy, Save
-    // As), not Save's.
+    // RESTATED, not loosened (STC-446). This used to assert Save kept "no
+    // second copy" — `panel:save` promotes a directory and wrote no file —
+    // and its own comment predicted this change: "wire a real save into this
+    // path and its file lands outside the cache, here."
     //
+    // It did, deliberately. That contract was right under the pre-STC-413
+    // model, where the bundle WAS the artefact and the library rendered it
+    // from `shot.json`. STC-413 made `raw/` source material, never the
+    // deliverable — so a Save that only promoted produced no deliverable at
+    // all, by any route, and a still could never leave the app. Measured on
+    // a real folder: three top-level `.mp4` and zero `.png`.
+    //
+    // The "second copy" is therefore the POINT, and it is exactly what a
+    // recording already has: source in `raw/`, finished file at the top
+    // level.
+    expect(ownTakes(recordings).length).toBe(1);
+
     // Read off the helper's own request log rather than off a folder
     // (STC-412 final review, I3), and `keptFileRequests` rather than every
-    // export: writing this as "no export at all" was tried first and FAILED
-    // against the real app, which is how it was learned that a panel writes
-    // its drag-out file into the clipboard cache the moment it paints. That
-    // one is not a copy anybody kept — see `_still-log.ts`. Wire a real save
-    // into this path and its file lands outside the cache, here.
-    expect(ownTakes(recordings).length).toBe(1);
-    expect(keptFileRequests(stillLog)).toEqual([]);
+    // export: a panel writes its drag-out file into the clipboard cache the
+    // moment it paints, and that is not a copy anybody kept — see
+    // `_still-log.ts`.
+    const kept = keptFileRequests(stillLog);
+    expect(kept, `kept-file exports: ${JSON.stringify(kept)}`).toHaveLength(1);
+    // Into the SAVE FOLDER's top level, not inside the bundle — `raw/` is
+    // source material and a deliverable written in there would be invisible
+    // to the user and would collide with the frame the bundle already holds.
+    expect(kept[0].file.startsWith(join(recordings, RAW_SUBDIR))).toBe(false);
+    expect(kept[0].file.startsWith(recordings)).toBe(true);
   }, 60_000);
 
   // "Ignoring it still saves" (the old contract) is now
