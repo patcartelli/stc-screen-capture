@@ -12,9 +12,42 @@
        rather than redefining anything tokens.css already declares. Constant
        across light/dark, same as before this ticket. */
     :root { --clip: #6a8fd8; --zoom: #d88a3b; }
+    /* STC-444 (Figma pass, 2026-09-24): the editor is ALWAYS dark, per
+       Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
+       "follow the OS" default (the still editor was moved OFF forced dark
+       with his sign-off; this is the mirror-image decision for the video
+       editor, asked and confirmed before writing it). Same values as
+       tokens.css's own dark media block, duplicated rather than shared
+       because this window alone deviates — index.html and still-editor.html
+       still track prefers-color-scheme untouched. */
+    :root {
+      color-scheme: dark;
+      --bg: #131315;
+      --surface: #1c1c1f;
+      --surface-hover: #26262a;
+      --border: rgba(255, 255, 255, .12);
+      --border-strong: rgba(255, 255, 255, .26);
+      --text: #f1f1ee;
+      --text-dim: rgba(241, 241, 238, .64);
+      --text-faint: rgba(241, 241, 238, .42);
+      --accent: #7aa2ff;
+      --accent-soft: rgba(122, 162, 255, .18);
+      --rec: #ff6b6b;
+      --rec-soft: rgba(255, 107, 107, .16);
+      --warn: #e0925a;
+      --warn-soft: rgba(224, 146, 90, .16);
+      --focus: #7aa2ff;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
-           display: flex; flex-direction: column; gap: 10px; }
+    /* Full-bleed video (STC-444 Figma pass): no body padding, no gap between
+       the video and the panel below it. `.editorbody` carries the padding
+       everything BELOW the video needs instead. */
+    body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+           display: flex; flex-direction: column; }
+    #alert { margin: 12px 16px 0; }
+    .editorbody { container-type: inline-size; display: flex; flex-direction: column;
+                  gap: 10px; padding: 16px; }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
     button { font: inherit; padding: 6px 14px; border-radius: 7px;
              border: 1px solid var(--border); background: transparent; color: inherit;
              cursor: pointer; }
@@ -27,7 +60,9 @@
              background: rgba(200,80,60,.1); display: none; white-space: pre-wrap; }
     #alert.show { display: block; }
 
-    #stage { width: 100%; height: auto; background: #000; border-radius: 6px; display: block; }
+    /* Full-bleed (STC-444 Figma pass): no rounded corners — the video runs
+       edge to edge against the window's own top/left/right. */
+    #stage { width: 100%; height: auto; background: #000; border-radius: 0; display: block; }
     #stage[data-vieweye] { width: var(--vieweye-w); max-width: none; }
     #stagewrap { overflow-x: auto; position: relative; }
 
@@ -42,24 +77,29 @@
     #overridebox { position: absolute; border: 1.5px solid var(--zoom);
                    background: rgba(216,138,59,.12); pointer-events: none; }
 
-    /* ── the header row (STC-444): timecode | transport | output ──────────
-       `minmax(0, 1fr) auto minmax(0, 1fr)`, not `1fr auto 1fr`: a bare 1fr
-       has an `auto` minimum, so a wide timecode would grow its own column
-       and push the transport off centre — the one thing this grid is for.
-       The container is the WRAPPER, because a container query asks an
-       ancestor, never the element it is written on. */
-    .headerwrap { container-type: inline-size; }
+    /* ── the header row (STC-444, Figma pass): transport centred, output
+       right ────────────────────────────────────────────────────────────
+       The timecode moved OUT of the header and now sits above the ruler
+       instead (Patrick's Figma; the ticket's original "option C" put it
+       here — he confirmed the mockup wins). `.left` stays as an empty grid
+       cell rather than being deleted: `minmax(0, 1fr) auto minmax(0, 1fr)`
+       still needs a symmetric column on both sides of `auto` to keep the
+       transport centred on the WINDOW, the one thing this grid is for, even
+       with nothing in it. The container is `.editorbody`, an ANCESTOR of
+       both the header and the new timecode row, because a container query
+       asks an ancestor, never the element it is written on — moving the
+       timecode out of `.headerwrap` is exactly why this container moved up
+       a level with it. */
     .header { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
               align-items: center; gap: 12px; padding: 2px 0; }
-    .header .left { justify-self: start; display: flex; align-items: baseline; gap: 10px;
-                    min-width: 0; white-space: nowrap; }
     .header .transport { display: flex; align-items: center; gap: 4px; }
     .header .right { justify-self: end; display: flex; align-items: center; gap: 4px; }
+    /* Above the ruler now, not in the header. */
+    .timecoderow { display: flex; align-items: baseline; gap: 10px; padding: 2px 0 4px; }
     #clock { font-size: var(--type-value); color: var(--text-dim); }
     #clock-cur { color: var(--text); }
     #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
-    /* Below this the duration goes and the current time stays; the transport
-       and the right group never wrap or shrink (the ticket's own rule). */
+    /* Below this the duration goes and the current time stays. */
     @container (max-width: 680px) { .clock-dur { display: none; } }
     /* The right group's status line is the first thing to go: `justify-self:
        end` on an overflowing item spills it LEFTWARD, over the transport. */
@@ -263,21 +303,18 @@
     <svg id="stageplay" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2 12.6 8 5 12.8Z" fill="currentColor"/></svg>
   </div>
 
+  <div class="editorbody">
   <!--
-    The header row (STC-444, option C): timecode | transport | output. The
-    transport is centred on the WINDOW, not on whatever the two side groups
-    leave over — see the grid's own CSS note. Every button is an icon with an
-    aria-label and a tooltip naming its shortcut; there is no text label in
-    this row by design.
+    The header row (STC-444, Figma pass): transport | output. The transport
+    is centred on the WINDOW, not on whatever the right group leaves over —
+    see the grid's own CSS note. Every button is an icon with an aria-label
+    and a tooltip naming its shortcut; there is no text label in this row by
+    design. `.left` is an intentional empty spacer — see the CSS comment —
+    now that the timecode lives above the ruler instead.
   -->
   <div class="headerwrap">
     <div class="header">
-      <div class="left">
-        <!-- textContent stays "current / duration": every test that reads
-             #clock reads the whole string, and only the CSS hides the tail. -->
-        <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
-        <span id="shuttle" class="mono"></span>
-      </div>
+      <div class="left"></div>
       <div class="transport">
         <button type="button" class="icon" id="toin" aria-label="Go to in point" title="Go to in point (Home)">
           <svg viewBox="0 0 16 16"><path d="M3.5 3.5v9M11.5 4 7.5 8l4 4"/></svg>
@@ -314,6 +351,10 @@
     </div>
   </div>
 
+  <!-- STC-444 Figma pass: a hairline divider between the transport and the
+       timeline, matching the mockup. -->
+  <hr class="divider">
+
   <!--
     The timeline (STC-373): a ruler over two lanes sharing one [a, b] span.
     Clip is pointer activity (app/src/timeline-activity.ts), weighted for
@@ -332,6 +373,14 @@
     the Clip lane's drag.
   -->
   <div class="timelinewrap">
+    <!-- Figma pass: the timecode moved out of the header to sit here,
+         above the ruler. textContent stays "current / duration": every
+         test that reads #clock reads the whole string, and only the CSS
+         hides the tail. -->
+    <div class="timecoderow">
+      <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
+      <span id="shuttle" class="mono"></span>
+    </div>
     <div id="ruler"><div id="ruler-content"></div></div>
     <div class="laneviewport clip">
       <span class="lanelabel">Clip</span>
@@ -405,6 +454,7 @@
     <button id="revealshared" title="Show the published file in Finder">Show published</button>
     <span id="sharestatus"></span>
   </div>
+  </div><!-- /.editorbody -->
 
   <dialog id="exportdialog">
     <div class="dialogrow">
