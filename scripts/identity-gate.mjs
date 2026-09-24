@@ -36,7 +36,7 @@ const server = await createServer({
       // they fall through to vite, the page's fetch resolves with vite's HTML,
       // r.json() throws, and the take loads camera-less — a clean PASS that
       // tested nothing.
-      if (!["anchors.json", "events.json", "project.json", "display.mp4", "camera.mp4", "mic.m4a"].includes(n)) return next();
+      if (!["anchors.json", "events.json", "project.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a"].includes(n)) return next();
       const f = join(sessionDir, n);
       // A camera-less take genuinely has no camera.mp4, and the page only asks
       // for it when anchors.files.camera is set — so a miss here means the
