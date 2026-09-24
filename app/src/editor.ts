@@ -92,6 +92,10 @@ const fmtEstimate = (ms: number) => {
 const params = new URLSearchParams(location.search);
 const takeDir = params.get("dir") ?? "";
 const takeName = params.get("name") ?? "";
+// STC-429: the library's "Share" tile action opens the take here and asks
+// for its own Share flow to run immediately, rather than duplicating
+// share.ts's plumbing in the grid.
+const autoShare = params.get("autoShare") === "1";
 
 // ---- state ------------------------------------------------------------------
 
@@ -1389,6 +1393,7 @@ void (async () => {
   }
   try {
     await openTakeOrThrow(takeDir);
+    if (autoShare) void publish();
   } catch (e: any) {
     alertUser(`Could not open "${takeName || takeDir}".\n${e?.message ?? e}`);
   }

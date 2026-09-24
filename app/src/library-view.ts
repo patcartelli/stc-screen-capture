@@ -26,6 +26,23 @@ import type { LibraryActionId, LibraryItem, LibraryList } from "./library-items.
  * are data it supplied. When something here needs a fact this module cannot
  * see, the instruction from the ticket is to widen `LibraryItem` deliberately —
  * never to reach for the kind at the call site.
+ *
+ * ## STC-429 — grid, list, and the button hierarchy
+ *
+ * A second layout (`view: "list"`) reuses the exact same card-building code as
+ * the grid; only the wrapper's class name differs (`.librow` vs `.libtile`),
+ * and CSS alone turns the same DOM into a row. No second builder, no branch
+ * on which layout is showing.
+ *
+ * Actions are still one flat, always-visible row of buttons — never a
+ * collapsed overflow menu — because several existing tests locate an action
+ * by `button[data-action="…"]` and click it directly; hiding "rename" or
+ * "reveal" behind a menu would need those to open it first. The visual
+ * hierarchy the ticket asks for (Edit/Share primary, Delete de-emphasised,
+ * Rename/Show/Duplicate quieter) is expressed as a CSS class keyed off the
+ * action id alone (`primary` for "open"/"share", `delete` for "delete",
+ * `tertiary` for everything else) — still data the adapter chose the shape
+ * of, never a kind check.
  */
 
 /** Everything the view needs done for it. Each is the shared UI's one door. */
@@ -36,6 +53,8 @@ export interface LibraryCallbacks {
   rename(item: LibraryItem, label: string): void | Promise<void>;
   /** A filter chip was chosen. */
   setFilter(id: string): void | Promise<void>;
+  /** The grid/list toggle was pressed (STC-429). */
+  setView(mode: "grid" | "list"): void | Promise<void>;
   /**
    * Put a picture in this tile.
    *
@@ -87,6 +106,40 @@ function filterBar(list: LibraryList, cb: LibraryCallbacks): HTMLElement {
   return bar;
 }
 
+/** The grid/list layout switch (STC-429), drawn beside the filter chips. */
+function viewSwitch(view: "grid" | "list", cb: LibraryCallbacks): HTMLElement {
+  const box = el("div", "libviewtoggle");
+  for (const mode of ["grid", "list"] as const) {
+    const btn = el("button", undefined, mode === "grid" ? "Grid" : "List");
+    btn.setAttribute("aria-pressed", String(mode === view));
+    if (mode === view) btn.classList.add("on");
+    btn.addEventListener("click", () => { if (mode !== view) void cb.setView(mode); });
+    box.append(btn);
+  }
+  return box;
+}
+
+/**
+ * If this item can be opened, make its thumbnail a second door to the same
+ * action (STC-429) — a large, obvious click target beside the explicit
+ * button, the same affordance a photo grid already trains people to expect.
+ * Driven entirely by whether an "open" action exists on THIS item, never by
+ * kind, so a loose file that withholds "open" gets no click handler either.
+ */
+function wireOpenOnThumb(box: HTMLElement, item: LibraryItem, cb: LibraryCallbacks): void {
+  const open = item.actions.find((a) => a.id === "open");
+  if (!open) return;
+  box.classList.add("clickable");
+  box.setAttribute("role", "button");
+  box.tabIndex = 0;
+  box.setAttribute("aria-label", `${open.label} ${item.label ?? item.id}`);
+  const fire = () => void cb.act("open", item);
+  box.addEventListener("click", fire);
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); }
+  });
+}
+
 /**
  * The picture, or the space where one would be.
  *
@@ -99,6 +152,11 @@ function thumb(item: LibraryItem, cb: LibraryCallbacks): HTMLElement {
   const box = el("div", "libthumb");
   if (item.thumbnail.source === "none") {
     box.classList.add("empty");
+    // A duration is a fact about the FILE, not about having a picture of it —
+    // shown here (STC-429) so a recording's placeholder box says more than
+    // "no thumbnail yet" without needing a poster frame to do it.
+    if (item.durationLabel) box.append(el("span", "libdur", item.durationLabel));
+    wireOpenOnThumb(box, item, cb);
     return box;
   }
   const img = el("img");
@@ -120,6 +178,7 @@ function thumb(item: LibraryItem, cb: LibraryCallbacks): HTMLElement {
     // than one that admits ignorance.
     console.error(`[library] could not draw a thumbnail for ${item.id}:`, e);
   }));
+  wireOpenOnThumb(box, item, cb);
   return box;
 }
 
@@ -194,23 +253,53 @@ function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks)
   input.select();
 }
 
-function tile(item: LibraryItem, cb: LibraryCallbacks): HTMLElement {
-  const card = el("div", "libtile");
+/**
+ * Which visual weight an action gets, by id alone (STC-429) — never by kind.
+ * "open"/"share" are the primary pair (the app's existing bold-border-plus-
+ * soft-hover idiom, the same one Record/Shot already use); "delete" keeps its
+ * own de-emphasised treatment; everything else (rename/reveal/duplicate) is
+ * the quiet tertiary group. All in ONE row, never a collapsed menu — several
+ * tests click an action by `data-action` directly, which a closed overflow
+ * menu would break.
+ */
+function actionClass(id: LibraryActionId): string {
+  if (id === "delete") return "delete";
+  if (id === "open" || id === "share") return "primary";
+  return "tertiary";
+}
+
+function tile(item: LibraryItem, cb: LibraryCallbacks, view: "grid" | "list"): HTMLElement {
+  const card = el("div", view === "list" ? "librow" : "libtile");
   card.dataset.id = item.id;
   // The badge is TEXT, so the tile is drawn the same way whatever it holds.
   // A class derived from it lets CSS colour the two apart without this file
   // knowing there are two.
   const badge = el("span", "libbadge", item.badge);
   badge.dataset.badge = item.badge;
+  const badgeRow = el("div", "libbadgerow");
+  badgeRow.append(badge);
+  // Stubbed data (STC-429): `edited` is always false today, so this never
+  // fires yet — the markup exists so real tracking has somewhere to land.
+  if (item.edited) {
+    const tag = el("span", "libedited");
+    tag.append(el("span", "dot"), document.createTextNode("Edited"));
+    badgeRow.append(tag);
+  }
 
   const title = titleFor(item);
+  // A second door to rename, alongside the button (STC-429) — Finder's own
+  // gesture. The button stays, both for discoverability and because it is
+  // what several existing tests drive directly.
+  if (item.actions.some((a) => a.id === "rename")) {
+    title.addEventListener("dblclick", () => renameInto(title, item, cb));
+  }
   const body = el("div", "libbody");
-  body.append(badge, title, el("div", "meta", item.summary));
+  body.append(badgeRow, title, el("div", "meta", item.summary));
   for (const note of item.notes) body.append(el("div", "meta", note));
 
   const actions = el("div", "libactions");
   for (const a of item.actions) {
-    const btn = el("button", a.id === "delete" ? "delete" : undefined, a.label);
+    const btn = el("button", actionClass(a.id), a.label);
     btn.dataset.action = a.id;
     btn.addEventListener("click", () => {
       // Rename is the one action the VIEW owns, because it is an edit in
@@ -235,7 +324,7 @@ function tile(item: LibraryItem, cb: LibraryCallbacks): HTMLElement {
  * no answer, and the view handles it by not asking.
  */
 export function renderLibrary(host: HTMLElement, list: LibraryList,
-                              cb: LibraryCallbacks): void {
+                              cb: LibraryCallbacks, view: "grid" | "list" = "grid"): void {
   painting?.disconnect();
   // `rootMargin` paints a screenful ahead, so a tile is ready by the time it
   // arrives rather than popping in after it. IntersectionObserver is absent
@@ -253,7 +342,9 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
     : undefined;
 
   host.textContent = "";
-  host.append(filterBar(list, cb));
+  const header = el("div", "libheader");
+  header.append(filterBar(list, cb), viewSwitch(view, cb));
+  host.append(header);
 
   if (!list.items.length && !list.invalid.length) {
     const empty = el("div", "libempty", list.filter === "all"
@@ -264,15 +355,18 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
     return;
   }
 
-  const grid = el("div", "libgrid");
-  grid.id = "libgrid";
-  for (const item of list.items) grid.append(tile(item, cb));
-  host.append(grid);
+  // `view === "grid"` keeps the original `#libgrid`/`.libtile` shape byte for
+  // byte — several tests locate a tile that way — and "list" is new ground
+  // with no such constraint.
+  const container = el("div", view === "list" ? "liblist" : "libgrid");
+  container.id = view === "list" ? "liblist" : "libgrid";
+  for (const item of list.items) container.append(tile(item, cb, view));
+  host.append(container);
 
   // The first screenful, unconditionally — see EAGER_TILES. With no observer at
   // all in this environment, everything, rather than leaving tiles blank
   // forever.
-  const boxes = [...grid.querySelectorAll<HTMLElement>(".libthumb")];
+  const boxes = [...container.querySelectorAll<HTMLElement>(".libthumb")];
   for (const box of painting ? boxes.slice(0, EAGER_TILES) : boxes) paintNow(box);
 
   for (const b of list.invalid) {
