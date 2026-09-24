@@ -68,6 +68,7 @@ import type { Rect } from "@transform/spaces";
 import {
   clampTrimFrame, decideKey, formatReadout, formatShuttle, frameAtFraction, frameToNs,
   fractionOfFrame, lastFrame, nsToFrame, rubberBandPx, tickStrideFrames, type ScrubAction,
+  type ScrubState,
 } from "./scrubber.js";
 import { exportManifestName, exportMediaName } from "./share.js";
 import { clipActivity, zoomCurve } from "./timeline-activity.js";
@@ -1022,8 +1023,8 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   scrub.value = "0";
   player.onTime = (tNs, playing) => {
     const frame = nsToFrame(tNs, player!.durationNs);
-    $("clock").textContent = formatReadout(frame, player!.durationNs);
-    ($("playpause") as HTMLButtonElement).textContent = playing ? "Pause" : "Play";
+    setClock(formatReadout(frame, player!.durationNs));
+    setPlayState(playing);
     $("shuttle").textContent = formatShuttle(player!.rate);
     if (!scrubbing) scrub.value = String(frame);
   };
@@ -1056,11 +1057,58 @@ async function closeTake(): Promise<void> {
   await editor.closePreview();
 }
 
-$("playpause").addEventListener("click", () => {
+// ---- the header row's transport (STC-444) -----------------------------
+//
+// Every button here is the SAME action its key already is — `decideKey`
+// decides, the button only builds the chord — so a click and a keystroke
+// cannot drift apart. Home/End go to the trim's in/out points (scrubber.ts's
+// ScrubState note), which is what `|<` and `>|` mean.
+
+/** `formatReadout`'s "current / duration", split across the two spans the
+ *  narrow-width container query needs — `#clock`'s textContent is unchanged. */
+let shownReadout = "";
+function setClock(readout: string): void {
+  if (readout === shownReadout) return;
+  shownReadout = readout;
+  const at = readout.indexOf(" / ");
+  $("clock-cur").textContent = at < 0 ? readout : readout.slice(0, at);
+  ($("clock").querySelector(".clock-dur") as HTMLElement).textContent = at < 0 ? "" : readout.slice(at);
+}
+
+/** Written only on a CHANGE: onTime fires every frame, and three attribute
+ *  writes per frame is style invalidation the playhead does not need. */
+let shownPlaying: boolean | undefined;
+function setPlayState(playing: boolean): void {
+  if (playing === shownPlaying) return;
+  shownPlaying = playing;
+  const btn = $("playpause") as HTMLButtonElement;
+  btn.toggleAttribute("data-playing", playing);
+  btn.setAttribute("aria-label", playing ? "Pause" : "Play");
+  btn.title = playing ? "Pause (Space · K)" : "Play (Space · K)";
+  $("stageplay").toggleAttribute("hidden", playing);
+}
+
+function togglePlay(): void {
   if (!player) return;
   player.isPlaying ? player.pause() : player.play(1);
   updateShuttleUI();
-});
+}
+
+function pressKey(key: string, shiftKey = false): void {
+  if (!player || !openProject) return;
+  const action = decideKey({ key, shiftKey }, scrubState());
+  if (action) applyScrubAction(action);
+}
+
+$("playpause").addEventListener("click", togglePlay);
+$("toin").addEventListener("click", () => pressKey("Home"));
+$("toout").addEventListener("click", () => pressKey("End"));
+$("stepback").addEventListener("click", (e) => pressKey("ArrowLeft", (e as MouseEvent).shiftKey));
+$("stepfwd").addEventListener("click", (e) => pressKey("ArrowRight", (e as MouseEvent).shiftKey));
+// The preview itself is the play button's second face, never a second
+// control (#rectoverlay sits over it while a zoom block is being edited, so
+// this never fires mid-edit).
+$("stage").addEventListener("click", togglePlay);
 $("closepreview").addEventListener("click", () => window.close());
 $("scrub").addEventListener("pointerdown", () => { scrubbing = true; });
 $("scrub").addEventListener("pointerup", () => { scrubbing = false; });
@@ -1096,7 +1144,7 @@ window.addEventListener("keydown", (e) => {
       ctrlKey: e.ctrlKey, altKey: e.altKey,
       inTextField: isTextField(document.activeElement),
     },
-    { frame: currentFrame(), durationNs: player.durationNs, rate: player.rate },
+    scrubState(),
   );
   if (!action) return;
   e.preventDefault();
@@ -1105,6 +1153,15 @@ window.addEventListener("keydown", (e) => {
 
 function currentFrame(): number {
   return player ? nsToFrame(player.currentNs, player.durationNs) : 0;
+}
+
+function scrubState(): ScrubState {
+  const durationNs = player?.durationNs ?? 0;
+  const trim = openProject?.trim;
+  return {
+    frame: currentFrame(), durationNs, rate: player?.rate ?? 0,
+    ...(trim ? { trimIn: nsToFrame(trim.startNs, durationNs), trimOut: nsToFrame(trim.endNs, durationNs) } : {}),
+  };
 }
 
 function applyScrubAction(action: ScrubAction): void {
@@ -1135,7 +1192,7 @@ function applyScrubAction(action: ScrubAction): void {
 
 function updateShuttleUI(): void {
   $("shuttle").textContent = formatShuttle(player?.rate ?? 0);
-  ($("playpause") as HTMLButtonElement).textContent = player?.isPlaying ? "Pause" : "Play";
+  setPlayState(!!player?.isPlaying);
 }
 
 $("markin").addEventListener("click", () => {
@@ -1328,10 +1385,17 @@ $("revealshared").addEventListener("click", () => void (async () => {
 
 // ---- the current frame as a still (STC-298/293) ----------------------------
 
+/** The header's quiet confirmation line. It fades after a few seconds but
+ *  keeps its text, so what was last copied or saved is still readable. */
+let frameStatusFade: ReturnType<typeof setTimeout> | undefined;
 function frameStatus(text: string): void {
   const el = $("framestatus");
   el.textContent = text;
+  el.title = text;
   el.removeAttribute("hidden");
+  el.classList.remove("stale");
+  clearTimeout(frameStatusFade);
+  frameStatusFade = setTimeout(() => el.classList.add("stale"), 4000);
 }
 
 function frameTemplate(tNs: number): string {
@@ -1365,8 +1429,34 @@ async function withFrame(action: "copy" | "save"): Promise<void> {
     frameBusy = false;
   }
 }
-$("copyframe").addEventListener("click", () => void withFrame("copy"));
-$("saveframe").addEventListener("click", () => void withFrame("save"));
+// One icon (STC-444): click copies, ⌥-click saves, and a right-click on it
+// OR on the preview opens a two-item menu with both.
+$("framegrab").addEventListener("click", (e) => void withFrame((e as MouseEvent).altKey ? "save" : "copy"));
+
+const frameMenu = $("framemenu") as HTMLElement;
+function openFrameMenu(x: number, y: number): void {
+  if (!player) return;
+  frameMenu.removeAttribute("hidden");
+  const r = frameMenu.getBoundingClientRect();
+  frameMenu.style.left = `${Math.max(4, Math.min(x, innerWidth - r.width - 4))}px`;
+  frameMenu.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 4))}px`;
+  ($("copyframe") as HTMLButtonElement).focus();
+}
+function closeFrameMenu(): void { frameMenu.setAttribute("hidden", ""); }
+for (const id of ["framegrab", "stagewrap"]) {
+  $(id).addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openFrameMenu((e as MouseEvent).clientX, (e as MouseEvent).clientY);
+  });
+}
+$("copyframe").addEventListener("click", () => { closeFrameMenu(); void withFrame("copy"); });
+$("saveframe").addEventListener("click", () => { closeFrameMenu(); void withFrame("save"); });
+document.addEventListener("pointerdown", (e) => {
+  if (!frameMenu.hidden && !frameMenu.contains(e.target as Node)) closeFrameMenu();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !frameMenu.hidden) { e.preventDefault(); e.stopImmediatePropagation(); closeFrameMenu(); }
+}, { capture: true });
 document.addEventListener("keydown", (e) => {
   if (!player || !(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
   if ((e.target as HTMLElement | null)?.tagName === "INPUT") return;

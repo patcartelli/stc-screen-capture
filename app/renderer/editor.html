@@ -42,9 +42,72 @@
     #overridebox { position: absolute; border: 1.5px solid var(--zoom);
                    background: rgba(216,138,59,.12); pointer-events: none; }
 
-    .transport { display: flex; align-items: center; gap: 10px; }
-    #clock { min-width: 132px; font-size: var(--type-value); opacity: .75; }
-    #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 600; opacity: .85; }
+    /* ── the header row (STC-444): timecode | transport | output ──────────
+       `minmax(0, 1fr) auto minmax(0, 1fr)`, not `1fr auto 1fr`: a bare 1fr
+       has an `auto` minimum, so a wide timecode would grow its own column
+       and push the transport off centre — the one thing this grid is for.
+       The container is the WRAPPER, because a container query asks an
+       ancestor, never the element it is written on. */
+    .headerwrap { container-type: inline-size; }
+    .header { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+              align-items: center; gap: 12px; padding: 2px 0; }
+    .header .left { justify-self: start; display: flex; align-items: baseline; gap: 10px;
+                    min-width: 0; white-space: nowrap; }
+    .header .transport { display: flex; align-items: center; gap: 4px; }
+    .header .right { justify-self: end; display: flex; align-items: center; gap: 4px; }
+    #clock { font-size: var(--type-value); color: var(--text-dim); }
+    #clock-cur { color: var(--text); }
+    #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
+    /* Below this the duration goes and the current time stays; the transport
+       and the right group never wrap or shrink (the ticket's own rule). */
+    @container (max-width: 680px) { .clock-dur { display: none; } }
+    /* The right group's status line is the first thing to go: `justify-self:
+       end` on an overflowing item spills it LEFTWARD, over the transport. */
+    @container (max-width: 820px) { #framestatus { display: none; } }
+
+    /* Hairline icon buttons — the same states the still editor's toolbar
+       grew in STC-443: hover, active, focus-visible, disabled. */
+    .icon { width: 30px; height: 30px; padding: 0; border: none; border-radius: 6px;
+            display: inline-grid; place-items: center; color: var(--text-dim);
+            background: transparent; flex: none; }
+    .icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+                stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
+    .icon svg .solid { fill: currentColor; stroke: none; }
+    .icon:hover:not([disabled]) { color: var(--text); background: var(--surface-hover); }
+    .icon:active:not([disabled]) { background: var(--border); }
+    .icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .icon.primary { color: var(--text); }
+    #playpause .when-playing { display: none; }
+    #playpause[data-playing] .when-playing { display: inline; }
+    #playpause[data-playing] .when-paused { display: none; }
+    #framestatus { font-size: var(--type-meta); color: var(--text-faint); margin-right: 6px;
+                   max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                   transition: opacity .4s ease; }
+    #framestatus.stale { opacity: 0; }
+
+    /* The play glyph over the preview is the transport's own play button
+       drawn a second time, not a second control: #stage's click calls the
+       same toggle, and the glyph only shows while paused. */
+    #stageplay { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px;
+                 margin: -22px 0 0 -22px; pointer-events: none; color: #fff; }
+    /* A dark hairline rather than a CSS drop-shadow: a filter over a canvas
+       that repaints every frame re-rasterises with it. */
+    #stageplay path { stroke: rgba(0,0,0,.45); stroke-width: .6; paint-order: stroke; }
+    #stageplay[hidden] { display: none; }
+    #stage { cursor: pointer; }
+
+    /* Copy frame / Save frame, from the frame button's right-click or the
+       preview's. A plain positioned list rather than a native Menu: the
+       preload bridge exposes no menu channel, and this is a rough-in. */
+    #framemenu { position: fixed; z-index: 20; min-width: 170px; padding: 4px;
+                 background: var(--surface); border: 1px solid var(--border-strong);
+                 border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+                 display: flex; flex-direction: column; }
+    #framemenu[hidden] { display: none; }
+    #framemenu button { border: none; border-radius: 5px; text-align: left; padding: 5px 8px;
+                        display: flex; justify-content: space-between; gap: 16px; }
+    #framemenu button:hover, #framemenu button:focus-visible { background: var(--accent-soft); outline: none; }
+    #framemenu kbd { font-family: var(--font-mono); font-size: var(--type-meta); color: var(--text-faint); }
 
     /* ── the timeline: a ruler and two lanes over one shared [a, b] span ─── */
     .timelinewrap { display: flex; flex-direction: column; gap: 2px; }
@@ -151,9 +214,8 @@
                  text-transform: uppercase; letter-spacing: var(--type-label-tracking); opacity: .5;
                  pointer-events: none; z-index: 4; }
 
-    .trimbar, .framebar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
-    #triminfo, #framestatus { opacity: .7; }
-    #framestatus[hidden] { display: none; }
+    .trimbar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
+    #triminfo { opacity: .7; }
 
     /* The selected block's own controls (STC-330) — a preset picker and a
        clear action, shown only while a block is selected. Sits where the
@@ -198,14 +260,58 @@
          rect always shows the UNZOOMED frame (see editor.ts) so a pointer
          pixel maps 1:1 to capture UV with no crop math to invert. -->
     <div id="rectoverlay" hidden><div id="overridebox" hidden></div></div>
+    <svg id="stageplay" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2 12.6 8 5 12.8Z" fill="currentColor"/></svg>
   </div>
 
-  <div class="transport">
-    <button id="playpause">Play</button>
-    <span id="clock" class="mono">0:00:00 / 0:00:00</span>
-    <span id="shuttle" class="mono"></span>
-    <button id="openexport">Export…</button>
-    <button id="closepreview">Close</button>
+  <!--
+    The header row (STC-444, option C): timecode | transport | output. The
+    transport is centred on the WINDOW, not on whatever the two side groups
+    leave over — see the grid's own CSS note. Every button is an icon with an
+    aria-label and a tooltip naming its shortcut; there is no text label in
+    this row by design.
+  -->
+  <div class="headerwrap">
+    <div class="header">
+      <div class="left">
+        <!-- textContent stays "current / duration": every test that reads
+             #clock reads the whole string, and only the CSS hides the tail. -->
+        <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
+        <span id="shuttle" class="mono"></span>
+      </div>
+      <div class="transport">
+        <button type="button" class="icon" id="toin" aria-label="Go to in point" title="Go to in point (Home)">
+          <svg viewBox="0 0 16 16"><path d="M3.5 3.5v9M11.5 4 7.5 8l4 4"/></svg>
+        </button>
+        <button type="button" class="icon" id="stepback" aria-label="Back one frame" title="Back one frame (← · ⇧← ten)">
+          <svg viewBox="0 0 16 16"><path d="M10.5 4v8L4.5 8Z"/><path d="M12.5 4v8"/></svg>
+        </button>
+        <button type="button" class="icon primary" id="playpause" aria-label="Play" title="Play (Space · K)">
+          <svg viewBox="0 0 16 16">
+            <path class="solid when-paused" d="M5 3.2 12.6 8 5 12.8Z"/>
+            <path class="solid when-playing" d="M4.5 3.5h2.2v9H4.5ZM9.3 3.5h2.2v9H9.3Z"/>
+          </svg>
+        </button>
+        <button type="button" class="icon" id="stepfwd" aria-label="Forward one frame" title="Forward one frame (→ · ⇧→ ten)">
+          <svg viewBox="0 0 16 16"><path d="M5.5 4v8l6-4Z"/><path d="M3.5 4v8"/></svg>
+        </button>
+        <button type="button" class="icon" id="toout" aria-label="Go to out point" title="Go to out point (End)">
+          <svg viewBox="0 0 16 16"><path d="M4.5 4l4 4-4 4M12.5 3.5v9"/></svg>
+        </button>
+      </div>
+      <div class="right">
+        <span id="framestatus" role="status" hidden></span>
+        <button type="button" class="icon" id="framegrab" aria-label="Copy frame"
+                title="Copy frame (⌘⇧C) · ⌥-click to save (⌘⇧S) · right-click for both">
+          <svg viewBox="0 0 16 16"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3"/><circle cx="8" cy="8" r="1.6"/></svg>
+        </button>
+        <button type="button" class="icon" id="openexport" aria-label="Export" title="Export…">
+          <svg viewBox="0 0 16 16"><path d="M8 2.5v7.5M4.8 6.8 8 10l3.2-3.2M3 13.5h10"/></svg>
+        </button>
+        <button type="button" class="icon" id="closepreview" aria-label="Close" title="Close">
+          <svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>
+        </button>
+      </div>
+    </div>
   </div>
 
   <!--
@@ -262,10 +368,9 @@
     </div>
   </div>
 
-  <div class="framebar">
-    <button id="copyframe" title="Copy the current frame as an image (⌘⇧C)">Copy frame</button>
-    <button id="saveframe" title="Save the current frame as a PNG beside the recording (⌘⇧S)">Save frame</button>
-    <span id="framestatus" hidden></span>
+  <div id="framemenu" role="menu" aria-label="Frame" hidden>
+    <button type="button" role="menuitem" id="copyframe">Copy frame <kbd>⌘⇧C</kbd></button>
+    <button type="button" role="menuitem" id="saveframe">Save frame <kbd>⌘⇧S</kbd></button>
   </div>
   <div class="trimbar">
     <button id="markin">In</button>

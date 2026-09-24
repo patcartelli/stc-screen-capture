@@ -222,6 +222,12 @@ describe("rule 8 — the keyboard grammar", () => {
     expect(decideKey({ key: "End" }, state))
       .toEqual({ kind: "seek", frame: lastFrame(state.durationNs) });
   });
+
+  test("on a trimmed take Home and End reach the in and out points (STC-444)", () => {
+    const trimmed = { ...state, trimIn: 30, trimOut: 90 };
+    expect(decideKey({ key: "Home" }, trimmed)).toEqual({ kind: "seek", frame: 30 });
+    expect(decideKey({ key: "End" }, trimmed)).toEqual({ kind: "seek", frame: 90 });
+  });
 });
 
 describe("rule 5 — a clamp is felt, not silent", () => {

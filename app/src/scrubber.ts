@@ -218,6 +218,14 @@ export interface ScrubState {
   durationNs: number;
   /** The current signed shuttle rate; 0 when stopped. */
   rate: number;
+  /**
+   * The trim's in and out points as FRAMES, when the take is trimmed (STC-444).
+   * Home and End go here rather than to the ends of the take: the edit's start
+   * is the in point, and the transport's `|<` `>|` buttons are these same two
+   * actions. Absent means untrimmed, which is exactly the old behaviour.
+   */
+  trimIn?: number;
+  trimOut?: number;
 }
 
 /**
@@ -246,9 +254,9 @@ export function decideKey(chord: KeyChord, state: ScrubState): ScrubAction | nul
     case "ArrowRight":
       return { kind: "seek", frame: clampFrame(state.frame + step, state.durationNs) };
     case "Home":
-      return { kind: "seek", frame: 0 };
+      return { kind: "seek", frame: clampFrame(state.trimIn ?? 0, state.durationNs) };
     case "End":
-      return { kind: "seek", frame: lastFrame(state.durationNs) };
+      return { kind: "seek", frame: clampFrame(state.trimOut ?? lastFrame(state.durationNs), state.durationNs) };
     default:
       break;
   }

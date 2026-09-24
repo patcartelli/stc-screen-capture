@@ -89,7 +89,7 @@ describe("the current preview frame as a PNG, from the editor window (STC-373)",
     await win.dispatchEvent("#scrub", "input");
     await expect.poll(() => win.textContent("#clock"), { timeout: 20_000 }).not.toMatch(/^0:00:00 /);
 
-    await win.click("#saveframe");
+    await win.click("#framegrab", { modifiers: ["Alt"] }); // ⌥-click saves (STC-444)
     await expect.poll(() => win.textContent("#framestatus"), { timeout: 20_000 }).toMatch(/^Saved frame at/);
     const pngs = readdirSync(root).filter((f) => /^frame-2026-08-24_10-00-00-\d+ms\.png$/.test(f));
     expect(pngs).toHaveLength(1);
@@ -115,7 +115,7 @@ describe("the current preview frame as a PNG, from the editor window (STC-373)",
 
   test("Copy frame puts the image on the clipboard and reports what it took", async () => {
     const { win } = await openTake();
-    await win.click("#copyframe");
+    await win.click("#framegrab");
     // The size, and the representations the pasteboard ACTUALLY accepted —
     // reported back from the helper rather than assumed. "png + tiff +
     // fileURL" is what makes Slack, Keynote and Finder each get something they
@@ -128,8 +128,8 @@ describe("the current preview frame as a PNG, from the editor window (STC-373)",
   test("works while playing: the still is taken and playback resumes", async () => {
     const { win, takeDir, root } = await openTake();
     await win.click("#playpause");
-    await expect.poll(() => win.textContent("#playpause"), { timeout: 10_000 }).toBe("Pause");
-    await win.click("#saveframe");
+    await expect.poll(() => win.getAttribute("#playpause", "aria-label"), { timeout: 10_000 }).toBe("Pause");
+    await win.click("#framegrab", { modifiers: ["Alt"] }); // ⌥-click saves (STC-444)
     await expect.poll(() => win.textContent("#framestatus"), { timeout: 20_000 }).toMatch(/^Saved frame at/);
     expect(framesAtRoot(root)).toHaveLength(1);
     expect(framesInBundle(takeDir)).toHaveLength(0);
@@ -139,7 +139,7 @@ describe("the current preview frame as a PNG, from the editor window (STC-373)",
     // animation frame — so read immediately after the save, the label can
     // still say "Play" while the player is already playing. CI run
     // 33910489117 caught exactly that gap on a loaded runner.
-    await expect.poll(() => win.textContent("#playpause"), { timeout: 10_000 }).toBe("Pause");
+    await expect.poll(() => win.getAttribute("#playpause", "aria-label"), { timeout: 10_000 }).toBe("Pause");
     const a = await win.textContent("#clock");
     await expect.poll(() => win.textContent("#clock"), { timeout: 10_000 }).not.toBe(a);
   }, 120_000);

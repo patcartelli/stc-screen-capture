@@ -156,7 +156,7 @@ describe("the keyboard grammar (rule 8), through real keystrokes", () => {
     await expect.poll(() => win.textContent("#shuttle"), { timeout: 10_000 }).toBe("1x");
     await win.keyboard.press("k");
     await expect.poll(() => win.textContent("#shuttle"), { timeout: 10_000 }).toBe("");
-    expect(await win.textContent("#playpause")).toBe("Play");
+    expect(await win.getAttribute("#playpause", "aria-label")).toBe("Play");
   }, 60_000);
 
   test("a shuttle actually moves the playhead, and K leaves it where it stopped", async () => {
@@ -433,5 +433,77 @@ describe("the export grid on the track (rule 9)", () => {
     const hidden = await win.evaluate(() =>
       document.getElementById("ticks")!.hasAttribute("hidden"));
     expect(hidden).toBe(false);
+  }, 60_000);
+});
+
+describe("the header row's icon transport (STC-444)", () => {
+  test("every transport button has a label and a tooltip that names its key", async () => {
+    const { win } = await openPreview();
+    const buttons = await win.evaluate(() =>
+      [...document.querySelectorAll(".header button")].map((b) => ({
+        id: b.id, label: b.getAttribute("aria-label"), title: b.getAttribute("title"),
+        text: (b.textContent ?? "").trim(),
+      })));
+    for (const b of buttons) {
+      expect(b.label, b.id).toBeTruthy();
+      // Icons only in the main chrome — the ticket's first acceptance line.
+      expect(b.text, b.id).toBe("");
+    }
+    const title = (id: string) => buttons.find((b) => b.id === id)!.title!;
+    expect(title("playpause")).toMatch(/Space/);
+    expect(title("stepback")).toMatch(/←/);
+    expect(title("stepfwd")).toMatch(/→/);
+    expect(title("toin")).toMatch(/Home/);
+    expect(title("toout")).toMatch(/End/);
+    expect(title("framegrab")).toMatch(/⌘⇧C/);
+  }, 60_000);
+
+  test("the step buttons move one frame, and shift-click ten", async () => {
+    const { win } = await openPreview();
+    await seekTo(win, 120);
+    await win.click("#stepfwd");
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(121);
+    await win.click("#stepback");
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(120);
+    await win.click("#stepfwd", { modifiers: ["Shift"] });
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(130);
+  }, 60_000);
+
+  test("|< and >| go to the trim's in and out points, and to the ends when untrimmed", async () => {
+    const { win } = await openPreview();
+    await seekTo(win, 120);
+    await win.click("#toout");
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(LAST_FRAME);
+    await win.click("#toin");
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(0);
+
+    await seekTo(win, 60);
+    await win.keyboard.press("i");
+    await seekTo(win, 180);
+    await win.keyboard.press("o");
+    await expect.poll(() => win.textContent("#triminfo"), { timeout: 10_000 }).toMatch(/–/);
+    await win.click("#toin");
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(60);
+    await win.keyboard.press("End");
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(180);
+  }, 60_000);
+
+  test("clicking the preview toggles play, and the glyph over it shows only while paused", async () => {
+    const { win } = await openPreview();
+    expect(await win.isVisible("#stageplay")).toBe(true);
+    await win.click("#stage");
+    await expect.poll(() => win.getAttribute("#playpause", "aria-label"), { timeout: 10_000 }).toBe("Pause");
+    expect(await win.isVisible("#stageplay")).toBe(false);
+    await win.click("#stage");
+    await expect.poll(() => win.getAttribute("#playpause", "aria-label"), { timeout: 10_000 }).toBe("Play");
+    expect(await win.isVisible("#stageplay")).toBe(true);
+  }, 60_000);
+
+  test("right-clicking the preview offers Copy frame and Save frame", async () => {
+    const { win } = await openPreview();
+    await win.click("#stage", { button: "right" });
+    expect(await win.isVisible("#framemenu")).toBe(true);
+    await win.keyboard.press("Escape");
+    expect(await win.isVisible("#framemenu")).toBe(false);
   }, 60_000);
 });
