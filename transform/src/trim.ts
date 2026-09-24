@@ -88,6 +88,8 @@ export function defaultProject(
     // 'none' from 'older document'" reasoning `zoom` already follows
     // (STC-295 first stated it for `decoration.annotations`).
     overrides: [],
+    // Same reasoning again (project-8, STC-444 slice 4).
+    bookmarks: [],
   };
   // A recorded camera track is part of the take, so a take that has one shows
   // its PiP without needing an edit document to say so.
@@ -149,7 +151,31 @@ export function parseProject(
   project.textPt = typeof doc.textPt === "number" && doc.textPt > 0 && doc.textPt <= 144
     ? doc.textPt : DEFAULT_TEXT_PT;
   project.overrides = cleanOverrides(doc.overrides);
+  // project-7 (STC-444 slice 3): carried as-is when it is a non-empty string.
+  // NOT validated against share.ts's SLUG_PATTERN here — that module is in
+  // `app/src`, and this one has no business depending on it (the dependency
+  // runs the other way, transform -> nothing app-specific). A slug that
+  // fails validation is still carried through rather than dropped, the same
+  // "corrupt sidecar loses the recording, never invents a fix" rule every
+  // other field here follows; planPublish is where an unusable one is
+  // actually refused, at the moment it would matter.
+  if (typeof doc.slug === "string" && doc.slug.length > 0) project.slug = doc.slug;
+  // project-8 (STC-444 slice 4): each entry on its own terms, the same rule
+  // every other array field in this parser follows — one bad value must not
+  // cost every other bookmark. Clamped to the take (a document from a
+  // re-take, or hand-edited past the end, is not a crash) and de-duplicated
+  // + sorted so `scrubber.ts`'s ArrowUp/ArrowDown never has to.
+  project.bookmarks = cleanBookmarks(doc.bookmarks, durationNs);
   return project;
+}
+
+function cleanBookmarks(v: unknown, durationNs: number): number[] {
+  if (!Array.isArray(v)) return [];
+  const out = new Set<number>();
+  for (const raw of v) {
+    if (Number.isInteger(raw) && raw >= 0 && raw <= durationNs) out.add(raw as number);
+  }
+  return [...out].sort((a, b) => a - b);
 }
 
 /**
@@ -286,9 +312,11 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 {
-  // Highest first: a document needing v6 needs it whatever its zoom or
-  // textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 {
+  // Highest first: a document needing v8 needs it whatever its slug,
+  // overrides, zoom or textPt say.
+  if (project.bookmarks && project.bookmarks.length > 0) return 8;
+  if (project.slug !== undefined) return 7;
   if (project.overrides && project.overrides.length > 0) return 6;
   if (project.textPt !== undefined && project.textPt !== DEFAULT_TEXT_PT) return 5;
   const z = project.zoom;
@@ -313,12 +341,16 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (!isFullTake(project, durationNs) && project.trim) out.trim = project.trim;
   // Only when it says something v3 cannot: writing the default block into
   // every document would push every take to v4 for a setting nobody touched.
-  // v5 and v6 are each supersets of what came before: a document that needs
-  // v6 for its overrides must still carry a non-default zoom or a non-default
-  // textPt if it has one, or that setting is silently dropped by the very
-  // write that promoted the version.
+  // v5 through v8 are each supersets of what came before: a document that
+  // needs v8 for its bookmarks must still carry whatever slug, non-default
+  // overrides, zoom or textPt it has, or that setting is silently dropped by
+  // the very write that promoted the version — `>=`, not `===`, is the fix
+  // STC-444 slice 4 made to the slug line below for exactly this reason
+  // (found by this same lesson when v7 was minted for `overrides`).
   if (version >= 4 && project.zoom && !isDefaultZoom(project.zoom)) out.zoom = project.zoom;
   if (version >= 5) out.textPt = project.textPt;
-  if (version === 6) out.overrides = project.overrides;
+  if (version >= 6) out.overrides = project.overrides;
+  if (version >= 7) out.slug = project.slug;
+  if (version >= 8) out.bookmarks = project.bookmarks;
   return out;
 }

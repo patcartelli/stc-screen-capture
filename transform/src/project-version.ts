@@ -26,7 +26,7 @@
  *
  * `project-version-seam.test.ts` refuses a third copy.
  */
-export const PROJECT_VERSIONS = [1, 2, 3, 4, 5, 6] as const;
+export const PROJECT_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 export type ProjectVersion = (typeof PROJECT_VERSIONS)[number];
 

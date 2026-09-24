@@ -235,14 +235,19 @@ describe("the capture shortcuts", () => {
 /**
  * STC-242: where a shared take goes. Same rules as every other block — an
  * unknown shape falls back whole, each field is validated on its own terms.
+ *
+ * The slug moved off this object in STC-444 slice 3 (it is per-take now,
+ * `Project.slug` in `transform/src/types.ts`) — `settings.test.ts` no
+ * longer has anything to say about it; `share.test.ts` covers `autoSlug`
+ * and `slugIsValid`, and `settings.ts`'s own `cleanShare` comment covers
+ * what happens to a slug still sitting in an old settings file.
  */
 describe("the share preferences (STC-242)", () => {
-  test("defaults to no site folder and the network slug", () => {
+  test("defaults to no site folder", () => {
     const s = readSettings(dir()).share;
     // Null rather than a guess: this app cannot know where someone keeps a
     // site checkout, and a wrong default writes a file somewhere unasked.
     expect(s.destination).toBeNull();
-    expect(s.slug).toBe("network");
     expect(s.embedTemplate).toContain("{src}");
   });
 
@@ -251,34 +256,6 @@ describe("the share preferences (STC-242)", () => {
     writeSettings(d, { share: { ...readSettings(d).share, destination: "/Users/me/site/public" } });
     writeSettings(d, { camera: true });
     expect(readSettings(d).share.destination).toBe("/Users/me/site/public");
-  });
-
-  test("changing the slug does NOT drop the site folder", () => {
-    const d = dir();
-    writeSettings(d, { share: { ...readSettings(d).share, destination: "/Users/me/site" } });
-    writeSettings(d, { share: { slug: "vividly" } as never });
-    const s = readSettings(d).share;
-    expect(s.slug).toBe("vividly");
-    expect(s.destination).toBe("/Users/me/site");
-  });
-
-  /**
-   * The one that is a decision rather than plumbing: a stored slug that no
-   * longer validates falls back to the DEFAULT rather than being repaired into
-   * something adjacent. Turning "My Demo" into "my-demo" would publish to a
-   * path the user never chose and never saw, while the page embedding the old
-   * one broke silently.
-   */
-  test("an invalid stored slug falls back rather than being repaired", () => {
-    const d = dir();
-    writeFileSync(join(d, "settings.json"),
-                  JSON.stringify({ share: { slug: "My Demo", destination: "/s" } }));
-    const s = readSettings(d).share;
-    expect(s.slug).toBe("network");
-    expect(s.slug).not.toBe("my-demo");
-    // The destination beside it is still honoured — one bad field does not
-    // cost the whole block.
-    expect(s.destination).toBe("/s");
   });
 
   test("a relative destination is treated as unset, not resolved against cwd", () => {
@@ -291,6 +268,21 @@ describe("the share preferences (STC-242)", () => {
     const d = dir();
     writeFileSync(join(d, "settings.json"), JSON.stringify({ share: { embedTemplate: "   " } }));
     expect(readSettings(d).share.embedTemplate).toContain("{src}");
+  });
+
+  /**
+   * A settings file written before STC-444 slice 3 still has `share.slug`
+   * sitting in it. This is the migration path: the stray field is dropped
+   * rather than tripping `additionalProperties`-style validation or leaking
+   * into `ShareSettings`, and the fields around it are still honoured.
+   */
+  test("a stray pre-slice-3 slug is dropped, not carried or repaired", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"),
+                  JSON.stringify({ share: { slug: "network", destination: "/s" } }));
+    const s = readSettings(d).share as unknown as Record<string, unknown>;
+    expect("slug" in s).toBe(false);
+    expect(s.destination).toBe("/s");
   });
 });
 

@@ -3,10 +3,11 @@ import { _electron as electron, type ElectronApplication } from "playwright";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 /** A minimal but valid take — enough to list, without copying 40MB of video. */
 function fakeTake(root: string, name: string) {

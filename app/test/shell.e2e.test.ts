@@ -6,11 +6,12 @@ import { join } from "node:path";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { PRODUCT_NAME } from "../src/product.js";
 import { toastPage } from "./_toast.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 const root = join(__dirname, "..", "..");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 async function launch() {
   // The bundle is built once in vitest.global-setup.ts. Building it here

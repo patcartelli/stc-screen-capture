@@ -22,3 +22,9 @@ tools/test-host/*.app/
 
 # Subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/
+
+# Session-local git worktree checkouts (EnterWorktree/ExitWorktree "keep") —
+# a full nested checkout with its own node_modules and .git, never a
+# deliverable. Found untracked at ~471MB after a "keep" exit with no
+# .gitignore entry to catch it (STC-444 slice 4, 2026-09-24).
+.claude/worktrees/

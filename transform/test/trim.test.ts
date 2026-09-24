@@ -189,6 +189,88 @@ describe("project-5: the recorded app's text size (STC-318)", () => {
   });
 });
 
+describe("project-8: bookmarks (STC-444 slice 4)", () => {
+  const Ajv = (AjvImport as any).default ?? AjvImport;
+  const schema = (n: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${n}.schema.json`), "utf8")));
+  const validate7 = schema(7);
+  const validate8 = schema(8);
+  const raw = (bookmarks: unknown) => ({
+    version: 8, transform: { version: 1 }, output: { fps: 60, width: 640, height: 360 },
+    cursor: { style: "default", scale: 1 }, bookmarks,
+  });
+
+  test("always an array after a parse, at every document version", () => {
+    for (const doc of [null, { version: 1 }, { version: 3 }, { version: 7 }, raw(undefined)]) {
+      expect(parseProject(doc, 640, 360, duration).bookmarks).toEqual([]);
+    }
+    expect(defaultProject(640, 360).bookmarks).toEqual([]);
+  });
+
+  test("sorts, de-duplicates, and drops nonsense entries rather than throwing", () => {
+    expect(parseProject(raw([2 * NS, NS, NS, 3 * NS]), 640, 360, duration).bookmarks)
+      .toEqual([NS, 2 * NS, 3 * NS]);
+    for (const bad of [-1, 1.5, "1", null, NaN, duration + 1]) {
+      expect(parseProject(raw([NS, bad]), 640, 360, duration).bookmarks,
+        `bookmark entry: ${JSON.stringify(bad)}`).toEqual([NS]);
+    }
+    expect(parseProject(raw("not an array"), 640, 360, duration).bookmarks).toEqual([]);
+  });
+
+  test("clamped to the take — a re-take that shrank the duration does not carry a bookmark past its end", () => {
+    expect(parseProject(raw([duration]), 640, 360, duration).bookmarks).toEqual([duration]);
+    expect(parseProject(raw([duration + 1]), 640, 360, duration).bookmarks).toEqual([]);
+  });
+
+  test("no bookmarks writes v7 with no bookmarks key, even once the take has a slug", () => {
+    const p: Project = { ...defaultProject(640, 360), slug: "network" };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(7);
+    expect(out.bookmarks).toBeUndefined();
+    expect(validate7(out), JSON.stringify(validate7.errors, null, 2)).toBe(true);
+  });
+
+  test("a bookmark writes v8, and round-trips", () => {
+    const p: Project = { ...defaultProject(640, 360), bookmarks: [NS, 2 * NS] };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(8);
+    expect(out.bookmarks).toEqual([NS, 2 * NS]);
+    expect(validate8(out), JSON.stringify(validate8.errors, null, 2)).toBe(true);
+    expect(parseProject(out, 640, 360, duration).bookmarks).toEqual([NS, 2 * NS]);
+  });
+
+  test("V8 IS A SUPERSET OF V7 — promoting the version must not drop the slug", () => {
+    // The same bug class `zoom` was found with when textPt minted v5, and
+    // `overrides` again when slug minted v7 (both `=== N` rather than `>= N`):
+    // a bookmark on a take that ALSO has a slug must not silently lose it the
+    // moment the bookmark pushes the document to v8.
+    const p: Project = { ...defaultProject(640, 360), slug: "network", bookmarks: [NS] };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(8);
+    expect(out.slug).toBe("network");
+    expect(out.bookmarks).toEqual([NS]);
+    expect(validate8(out), JSON.stringify(validate8.errors, null, 2)).toBe(true);
+    const back = parseProject(out, 640, 360, duration);
+    expect(back.slug).toBe("network");
+    expect(back.bookmarks).toEqual([NS]);
+  });
+
+  test("removing every bookmark returns the document to its old version", () => {
+    const p: Project = { ...defaultProject(640, 360), slug: "network", bookmarks: [NS] };
+    expect(projectForWrite(p, duration).version).toBe(8);
+    p.bookmarks = [];
+    expect(projectForWrite(p, duration).version).toBe(7);
+  });
+
+  test("project-8 refuses what the parser refuses", () => {
+    expect(validate8(raw([-1]))).toBe(false);
+    expect(validate8(raw([1.5]))).toBe(false);
+    expect(validate8(raw(["1"]))).toBe(false);
+    expect(validate8(raw([NS]))).toBe(true);
+    expect(validate8(raw([]))).toBe(true);
+  });
+});
+
 describe("estimateExportMs", () => {
   test("is the measured 11 ms/frame", () => {
     expect(estimateExportMs(60)).toBe(60 * EXPORT_MS_PER_FRAME);

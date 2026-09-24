@@ -541,6 +541,112 @@ describe("the scan on a capture whose moov alone exceeds the read window", () =>
  * parse, id extract), not IO throughput. The IO half needs a real folder of
  * real exports on a Mac; see `docs/STC-413-RUNBOOK.md`.
  */
+/**
+ * An EXPORT's own box layout, which no fixture in this suite had (STC-445).
+ *
+ * `AVAssetWriter` — every raw capture — writes `ftyp mdat moov uuid`, so
+ * `moov` is LAST and `tagMp4`'s trailing tag sits 54 bytes behind it. Every
+ * fixture here is that shape, which is why `probeAndIdMp4` reading the id out
+ * of the `moov` window passed every test while failing on every real export.
+ *
+ * `mp4-muxer` — every export the app writes — puts `moov` FIRST:
+ * `ftyp moov mdat uuid`. The tag is then a whole `mdat` away. Measured on
+ * three real exports: gaps of 37, 100 and 154 MB against a 4 KB window.
+ *
+ * `mdat` here is deliberately larger than BOTH read windows, so a test that
+ * passes has really reached past it rather than having the tag fall into the
+ * `moov` slice by luck.
+ */
+function exportLayoutMp4(mdatBytes: number): Uint8Array {
+  const mvhd = box("mvhd", [0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(600), ...be32(3000)]);
+  const tkhd = box("tkhd", [
+    0, 0, 0, 0, ...be32(0), ...be32(0), ...be32(1), ...be32(0), ...be32(0),
+    ...new Array(8).fill(0), 0, 0, 0, 0, 0, 0, 0, 0,
+    ...new Array(36).fill(0),
+    ...be32(1920 * 65536), ...be32(1080 * 65536),
+  ]);
+  return new Uint8Array([
+    ...box("ftyp", chars("isom")),
+    ...box("moov", [...mvhd, ...box("trak", tkhd)]),     // FIRST, not last
+    ...box("mdat", new Array(mdatBytes).fill(7)),
+  ]);
+}
+
+describe("an EXPORT's layout — moov first, the tag a whole mdat away (STC-445)", () => {
+  /** Comfortably past `MP4_TAIL_PROBE_BYTES` (64 KB) and the 4 KB slack. */
+  const BIG_MDAT = 200 * 1024;
+
+  test("an exported file is matched to its bundle", async () => {
+    const id = mintCaptureId();
+    const bytes = tagMp4(exportLayoutMp4(BIG_MDAT), id);
+
+    // The premise, asserted rather than assumed — without this the fixture
+    // could quietly become another moov-last case and pass for free, which is
+    // exactly how the original defect survived review.
+    const buf = Buffer.from(bytes);
+    const moovAt = buf.indexOf(Buffer.from("moov", "latin1")) - 4;
+    const moovEnd = moovAt + buf.readUInt32BE(moovAt);
+    const uuidAt = buf.lastIndexOf(Buffer.from("uuid", "latin1")) - 4;
+    expect(uuidAt, "the tag is after moov").toBeGreaterThan(moovEnd);
+    expect(uuidAt - moovEnd, "and a long way after it").toBeGreaterThan(64 * 1024);
+
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));
+    await writeFile(join(root, "login-bug.mp4"), bytes);
+
+    const { items } = await listLibrary(env, root);
+    // ONE tile, not two. This is the whole ticket.
+    expect(items).toHaveLength(1);
+    expect(items[0]!.file).toBe(join(root, "login-bug.mp4"));
+    expect(items[0]!.dir, "the finished file found its bundle").toBe(bundle);
+    // And the consequence a user actually sees: the tile can be opened.
+    expect(items[0]!.actions.map((a) => a.id)).toContain("open");
+  });
+
+  test("facts still come from moov, which the tail read must not displace", async () => {
+    const bytes = tagMp4(exportLayoutMp4(BIG_MDAT), mintCaptureId());
+    await writeFile(join(root, "clip.mp4"), bytes);
+    const { items } = await listLibrary(env, root);
+    expect(items[0]!.summary).toMatch(/1920×1080/);
+  });
+
+  test("an untagged export is still a foreign file, not a wrong match", async () => {
+    // The control. Without it a tail reader that returned a constant — or one
+    // that matched on any `uuid` box regardless of our magic — would pass the
+    // first test and attach every stray mp4 to the first bundle.
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"),
+      JSON.stringify({ version: 1, id: mintCaptureId() }));
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));
+    await writeFile(join(root, "holiday.mp4"), exportLayoutMp4(BIG_MDAT));   // untagged
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(2);
+    expect(items.find((i) => i.file?.endsWith("holiday.mp4"))?.dir).toBeUndefined();
+  });
+
+  test("a RAW CAPTURE's layout keeps working — moov last, tag behind it", async () => {
+    // The other half of the contract. The fix adds a tail read; it must not
+    // regress the shape every take the helper writes actually has.
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));
+    await writeFile(join(root, "raw-shape.mp4"), tagMp4(mp4Bytes(), id));
+
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.dir).toBe(bundle);
+  });
+});
+
 const SCAN_BACKSTOP_MS = 4000;
 
 test("500 files scan without going quadratic", async () => {

@@ -1,5 +1,6 @@
 import { BrowserWindow } from "electron";
 import { join } from "node:path";
+import { PRODUCT_NAME } from "./product.js";
 
 /**
  * The editor's window (STC-373) — the second surface in the three-surface
@@ -56,7 +57,7 @@ export function openEditor(opts: EditorOptions): void {
   }
   win = new BrowserWindow({
     width: 1000, height: 760, minWidth: 640, minHeight: 480,
-    title: "stc editor",
+    title: PRODUCT_NAME,
     webPreferences: {
       preload: join(opts.dist, "editor-preload.cjs"),
       contextIsolation: true, nodeIntegration: false,

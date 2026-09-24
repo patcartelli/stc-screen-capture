@@ -321,6 +321,67 @@ export function readMp4CaptureId(bytes: Uint8Array): string | undefined {
 }
 
 /**
+ * The id out of a slice taken from the END of an MP4 (STC-445).
+ *
+ * ## Why `readMp4CaptureId` is not enough
+ *
+ * That function walks top-level boxes from offset 0, so it needs a buffer
+ * that BEGINS at a box boundary. `library.ts` therefore fed it the `moov`
+ * window, on the assumption — stated in its own comment — that `tagMp4`'s
+ * `uuid` directly follows `moov`.
+ *
+ * True for a RAW CAPTURE: `AVAssetWriter` writes `ftyp mdat moov uuid`, so
+ * `moov` is last and the tag really is 54 bytes behind it. **False for an
+ * EXPORT**, which `mp4-muxer` writes as `ftyp moov mdat uuid` — the whole
+ * `mdat` sits in between. Measured on three real exports, 2026-09-23:
+ *
+ *     boogie woogie.mp4    moov ends      9,835   uuid at  37,457,728
+ *     2026-09-23_14-19-49  moov ends     23,211   uuid at 100,085,968
+ *     2026-09-23_15-24-26  moov ends     56,073   uuid at 154,231,646
+ *
+ * — gaps of 37 to 154 MB against a 4 KB slack window. So no export was ever
+ * matched to its bundle: two tiles per capture, no Edit on the finished
+ * file, and a re-export refused as "a different capture".
+ *
+ * ## Why this reads a TAIL rather than fixing the window
+ *
+ * `tagMp4` appends at EOF **unconditionally**, whatever the box order. The
+ * end of the file is therefore the one place the tag is always found, and it
+ * costs one small bounded read that does not care how big `mdat` is.
+ *
+ * ## Why a magic-anchored scan rather than a walk
+ *
+ * A tail slice does not begin at a box boundary, so it cannot be walked from
+ * its own offset 0. It CAN be anchored: `MP4_UUID` is 16 bytes this project
+ * chose, and a box's header sits immediately before them. So find the magic,
+ * then read the header BACKWARDS from it and check it really is a `uuid` box
+ * whose declared extent contains the body — structure, not a bare string
+ * match. `isCaptureId` gates the result as everywhere else, so the worst a
+ * misparse can do is return nothing.
+ *
+ * The LAST match wins: `tagMp4` drops any previous tag of ours before
+ * appending, but a file concatenated or repaired by other means could carry
+ * more than one, and the last is the most recently written.
+ */
+export function readMp4CaptureIdInTail(tail: Uint8Array): string | undefined {
+  let found: string | undefined;
+  for (let i = 0; i + MP4_UUID.length <= tail.length; i++) {
+    if (!isOurUuid(tail, i)) continue;
+    // The 8-byte box header immediately precedes the magic: size, then type.
+    const start = i - 8;
+    if (start < 0) continue;
+    if (ascii(tail, start + 4, 4) !== "uuid") continue;
+    const size = readBe32(tail, start);
+    if (size < 8 + MP4_UUID.length) continue;
+    const end = start + size;
+    if (end > tail.length) continue;          // the box runs past this slice
+    const value = ascii(tail, i + MP4_UUID.length, end - (i + MP4_UUID.length));
+    if (isCaptureId(value)) found = value;
+  }
+  return found;
+}
+
+/**
  * Append the id as a trailing top-level `uuid` box, dropping any of ours
  * already present so re-tagging replaces rather than accumulates.
  *

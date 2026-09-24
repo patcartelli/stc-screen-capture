@@ -2,10 +2,9 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  DEFAULT_EMBED_TEMPLATE, DEFAULT_SLUG, SLUG_PATTERN, embedSnippet, exportManifestName,
-  exportMediaName, planPublish, publicSrc, slugIsValid,
+  autoSlug, DEFAULT_EMBED_TEMPLATE, DEFAULT_SLUG, SLUG_PATTERN, embedSnippet,
+  exportManifestName, exportMediaName, planPublish, publicSrc, slugIsValid,
 } from "../src/share.js";
-import { DEFAULT_SHARE_SETTINGS } from "../src/settings.js";
 
 /**
  * STC-242 — the publish decisions, tested where they are decidable.
@@ -142,7 +141,28 @@ describe("slugs", () => {
 
   test("the default slug is itself valid", () => {
     expect(slugIsValid(DEFAULT_SLUG)).toBe(true);
-    expect(slugIsValid(DEFAULT_SHARE_SETTINGS.slug)).toBe(true);
+  });
+});
+
+describe("autoSlug", () => {
+  test("lowercases and collapses non-alphanumeric runs to one hyphen", () => {
+    expect(autoSlug("My Demo")).toBe("my-demo");
+    expect(autoSlug("2026-08-24_10-00-00")).toBe("2026-08-24-10-00-00");
+  });
+
+  test("trims leading and trailing hyphens the collapse can produce", () => {
+    expect(autoSlug("__My Demo!!")).toBe("my-demo");
+  });
+
+  test("falls back to DEFAULT_SLUG when there is nothing usable left", () => {
+    expect(autoSlug("")).toBe(DEFAULT_SLUG);
+    expect(autoSlug("!!!")).toBe(DEFAULT_SLUG);
+  });
+
+  test("what it returns always passes slugIsValid", () => {
+    for (const name of ["My Demo", "", "!!!", "2026-08-24_10-00-00", "Login Bug #42"]) {
+      expect(slugIsValid(autoSlug(name)), name).toBe(true);
+    }
   });
 });
 

@@ -5,9 +5,10 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   launchWithTakeInEditor, openEditorFromLibrary, inkiness, closeEditorWindow,
 } from "./_editor-fixture.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 describe("preview player in the editor window (STC-373)", () => {
   // The regression this exists for: the app could not open a take with a
@@ -95,7 +96,7 @@ describe("preview player in the editor window (STC-373)", () => {
     await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).not.toMatch(/^0:00:00 /);
     await editorWin.click("#playpause");
     // Wait for the UI to CONFIRM the pause rather than for a fixed delay.
-    await expect.poll(() => editorWin.textContent("#playpause"), { timeout: 20_000 }).toBe("Play");
+    await expect.poll(() => editorWin.getAttribute("#playpause", "aria-label"), { timeout: 20_000 }).toBe("Play");
     await expect.poll(async () => {
       const a2 = await editorWin.textContent("#clock");
       await new Promise((r) => setTimeout(r, 250));
