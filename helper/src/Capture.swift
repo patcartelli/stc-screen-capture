@@ -44,6 +44,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// (STC-303) — camera==nil is ambiguous between "never asked" and "asked,
     /// got nothing", and only this flag tells the two apart.
     private var wantCamera = false
+    /// STC-414: a uniqueID the app already showed the user, or nil for
+    /// `CameraCapture`'s own `pickCamera` ranking (unchanged). Only
+    /// meaningful when `wantCamera` is true — set unconditionally regardless,
+    /// the same latitude `wantMicUid` already gets independent of anything
+    /// else in the request.
+    private var wantCameraDeviceUid: String?
     /// The mic subsystem (STC-233) — same optional-subsystem shape as camera,
     /// same HIGH-1 race (an async open racing `stop()`), same reason it is
     /// guarded by `lock` rather than a bare `var`.
@@ -275,7 +281,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.finishStart(.failure(e))
             case .success(let target):
                 self.begin(target: target, camera: request.camera, micDeviceUid: request.micDeviceUid,
-                           systemAudio: request.systemAudio)
+                          cameraDeviceUid: request.cameraDeviceUid, systemAudio: request.systemAudio)
             }
         }
     }
@@ -362,11 +368,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `finishStart`, which is call-once. Handing this a second reference to the
     /// same completion is how a request gets answered twice.
     private func begin(target: CaptureTarget, camera wantCamera: Bool, micDeviceUid: String?,
-                       systemAudio wantSystemAudio: Bool) {
+                       cameraDeviceUid: String? = nil, systemAudio wantSystemAudio: Bool) {
         // Recorded before anything can fail below: writeSidecars must know
         // whether a camera was ever asked for, independent of whether this
         // particular start succeeds at opening one.
         self.wantCamera = wantCamera
+        self.wantCameraDeviceUid = cameraDeviceUid
         self.wantMicUid = micDeviceUid
         self.wantSystemAudio = wantSystemAudio
 
@@ -605,6 +612,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private func startCameraAsync() {
         let dir = self.dir
         let t0Ns = self.t0Ns
+        let deviceUid = self.wantCameraDeviceUid
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
 
@@ -619,7 +627,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self.lock.unlock()
             if stoppingAlready { return }
 
-            let cam = CameraCapture(dir: dir, t0Ns: t0Ns, pauseGate: self.pauseGate)
+            let cam = CameraCapture(dir: dir, t0Ns: t0Ns, pauseGate: self.pauseGate, deviceUid: deviceUid)
             let result = cam.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }

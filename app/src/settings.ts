@@ -60,6 +60,26 @@ export interface Settings {
    */
   micDeviceUid: string | null;
   /**
+  /**
+   * Which camera to record (STC-414), as the helper's
+   * `AVCaptureDevice.uniqueID`, or null for "let the helper rank candidates
+   * itself" — `CameraCapture.pickCamera`'s existing transportType ranking
+   * (STC-286), unchanged.
+   *
+   * UNLIKE `micDeviceUid`, null here IS "automatic" — the same shape as
+   * `displayId`, not the mic's. The mic's null-is-off rule exists because
+   * there is no safe automatic mic (a wedged CoreAudio bug); the camera has
+   * had a safe automatic choice since STC-286 (rank real hardware over a
+   * virtual device) and this field only lets a user NAME one instead, it
+   * does not remove the existing fallback. Whether the camera is used at all
+   * stays the separate `camera` boolean above — this is "which one", not
+   * "whether". Sticky like the others: a picked camera stays picked across
+   * launches, and if it is gone at `start` the helper refuses that device
+   * (never silently substitutes another) the same way a stale `micDeviceUid`
+   * or `displayId` is refused.
+   */
+  cameraDeviceUid: string | null;
+  /**
    * Record what the machine is PLAYING to system.m4a (STC-418). A boolean,
    * not a device — there is one system output — and OFF by default: nobody
    * records the machine's audio without having turned it on (Patrick,
@@ -238,7 +258,7 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  camera: false, displayId: null, micDeviceUid: null, systemAudio: false,
+  camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   still: { ...DEFAULT_STILL_SETTINGS },
@@ -322,6 +342,16 @@ export function cleanSaveFolder(v: unknown): string | null {
  * comment for why null here is not the same shape as a null `displayId`.
  */
 function cleanMicDeviceUid(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+/**
+ * Same validation as `cleanMicDeviceUid` — a non-empty string or nothing —
+ * but kept as its own function because the two nulls mean different things
+ * (see `Settings.cameraDeviceUid`'s own doc comment) and a shared helper
+ * would invite conflating them at a future call site.
+ */
+function cleanCameraDeviceUid(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
@@ -413,6 +443,7 @@ export function readSettings(dir: string): Settings {
     camera: typeof doc.camera === "boolean" ? doc.camera : DEFAULT_SETTINGS.camera,
     displayId: cleanDisplayId(doc.displayId),
     micDeviceUid: cleanMicDeviceUid(doc.micDeviceUid),
+    cameraDeviceUid: cleanCameraDeviceUid(doc.cameraDeviceUid),
     systemAudio: doc.systemAudio === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
@@ -454,6 +485,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     camera: merged.camera === true,
     displayId: cleanDisplayId(merged.displayId),
     micDeviceUid: cleanMicDeviceUid(merged.micDeviceUid),
+    cameraDeviceUid: cleanCameraDeviceUid(merged.cameraDeviceUid),
     // `=== true`, the camera's rule: off unless explicitly on.
     systemAudio: merged.systemAudio === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
