@@ -22,7 +22,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false,
+                 systemAudio: false, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -64,7 +64,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false,
+                 systemAudio: false, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -121,7 +121,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false,
+                 systemAudio: false, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -203,6 +203,29 @@ describe("the system-audio preference (STC-418)", () => {
     writeSettings(d, { systemAudio: true });
     writeSettings(d, { camera: true });
     expect(readSettings(d).systemAudio).toBe(true);
+  });
+});
+
+describe("the preview mute (STC-454)", () => {
+  test("defaults to sound ON; persists when muted and back", () => {
+    expect(readSettings(dir()).previewMuted).toBe(false);
+    expect(DEFAULT_SETTINGS.previewMuted).toBe(false);
+    const d = dir();
+    expect(writeSettings(d, { previewMuted: true }).previewMuted).toBe(true);
+    expect(readSettings(d).previewMuted).toBe(true);
+    expect(writeSettings(d, { previewMuted: false }).previewMuted).toBe(false);
+  });
+
+  test("anything but a literal true is unmuted; an unrelated write keeps it", () => {
+    for (const bad of ["true", 1, null, {}]) {
+      const d = dir();
+      writeFileSync(join(d, "settings.json"), JSON.stringify({ previewMuted: bad }));
+      expect(readSettings(d).previewMuted, `stored ${JSON.stringify(bad)}`).toBe(false);
+    }
+    const d = dir();
+    writeSettings(d, { previewMuted: true });
+    writeSettings(d, { systemAudio: true });
+    expect(readSettings(d).previewMuted).toBe(true);
   });
 });
 

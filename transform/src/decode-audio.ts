@@ -1,5 +1,6 @@
 import type { DemuxedAudio } from "./demux-audio.js";
 import { withTimeout, TimeoutError } from "./timeout.js";
+import { trackFromChunks, type PcmChunk, type PcmTrack } from "./audio-mix.js";
 
 /** One constant, so the bound and the message it prints cannot disagree — decode.ts's own rule. */
 const FLUSH_MS = 60_000;
@@ -51,4 +52,27 @@ export async function decodeAllAudio(audio: DemuxedAudio): Promise<AudioData[]> 
     throw new Error(`decoded ${out.length} audio chunks, expected ${audio.chunks.length}`);
   }
   return out;
+}
+
+/**
+ * Decoded `AudioData` → one contiguous planar track for audio-mix.ts, closing
+ * each `AudioData` as soon as it has been copied out (PHASE-0 §4b.3's rule),
+ * so the decoded track is held once, not twice. Shared by export's mix and
+ * the editor's preview audio (STC-454), so both hear the same samples.
+ */
+export function pcmTrackOf(decoded: AudioData[], label: string): PcmTrack | null {
+  const chunks: PcmChunk[] = [];
+  try {
+    for (const d of decoded) {
+      const channels = Array.from({ length: d.numberOfChannels }, (_, ch) => {
+        const plane = new Float32Array(d.numberOfFrames);
+        d.copyTo(plane, { planeIndex: ch, format: "f32-planar" });
+        return plane;
+      });
+      chunks.push({ timestampUs: d.timestamp, sampleRate: d.sampleRate, channels });
+    }
+  } finally {
+    for (const d of decoded) d.close();
+  }
+  return trackFromChunks(chunks, label);
 }

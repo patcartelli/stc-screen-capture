@@ -88,10 +88,12 @@ export function makeSystemAudioTakeFolder(
  * ~4.5 s long — enough for `loadSession` to demux and rebase, never enough
  * to decode (see `makeSystemAudioTakeFolder`).
  */
-function writePlaceholderAac(path: string, channels: 1 | 2): { frames: number; frameUs: number } {
+function writePlaceholderAac(path: string, channels: 1 | 2, undecodable = false): { frames: number; frameUs: number } {
   // AudioSpecificConfig: object type 2 (AAC-LC), frequency index 3 (48 kHz),
   // channel configuration 1 or 2 -> 00010 0011 0001|0010 000 -> 0x11 0x88|0x90.
-  const asc = new Uint8Array([0x11, channels === 1 ? 0x88 : 0x90]);
+  // `undecodable` writes object type 0 (00000 ...) instead: the container
+  // still parses and the channel count still reads, but no decoder accepts it.
+  const asc = new Uint8Array([undecodable ? 0x01 : 0x11, channels === 1 ? 0x88 : 0x90]);
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
     audio: { codec: "aac", numberOfChannels: channels, sampleRate: 48_000 },
@@ -116,9 +118,10 @@ function writePlaceholderAac(path: string, channels: 1 | 2): { frames: number; f
  */
 export function makeMicTakeFolder(
   takeName = "2026-09-25_11-00-00-mic",
+  opts: { undecodable?: boolean } = {},
 ): { dir: string; takeDir: string } {
   const { dir, takeDir } = makeTakeFolder(takeName);
-  const { frames, frameUs } = writePlaceholderAac(join(takeDir, "mic.m4a"), 1);
+  const { frames, frameUs } = writePlaceholderAac(join(takeDir, "mic.m4a"), 1, opts.undecodable);
   const anchors = JSON.parse(readFileSync(join(takeDir, "anchors.json"), "utf8"));
   anchors.version = 4;
   anchors.files = { ...anchors.files, mic: "mic.m4a" };

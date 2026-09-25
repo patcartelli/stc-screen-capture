@@ -7,10 +7,10 @@ import type { Project } from "./types.js";
 import { exportWindow, availableFrames } from "./trim.js";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
-import { decodeAllAudio } from "./decode-audio.js";
+import { decodeAllAudio, pcmTrackOf } from "./decode-audio.js";
 import {
-  MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks, exportAudioPlan,
-  type PcmChunk, type PcmTrack,
+  MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, exportAudioPlan,
+  type PcmTrack,
 } from "./audio-mix.js";
 import { tagMp4 } from "./media-tag.js";
 import { cleanNarration } from "./narration-clean.js";
@@ -478,27 +478,6 @@ export async function exportSession(
  */
 const MIX_BLOCK_FRAMES = 1024;
 
-/**
- * Decoded `AudioData` → one contiguous planar track for audio-mix.ts, closing
- * each `AudioData` as soon as it has been copied out (PHASE-0 §4b.3's rule),
- * so the decoded track is held once, not twice.
- */
-function pcmTrackOf(decoded: AudioData[], label: string): PcmTrack | null {
-  const chunks: PcmChunk[] = [];
-  try {
-    for (const d of decoded) {
-      const channels = Array.from({ length: d.numberOfChannels }, (_, ch) => {
-        const plane = new Float32Array(d.numberOfFrames);
-        d.copyTo(plane, { planeIndex: ch, format: "f32-planar" });
-        return plane;
-      });
-      chunks.push({ timestampUs: d.timestamp, sampleRate: d.sampleRate, channels });
-    }
-  } finally {
-    for (const d of decoded) d.close();
-  }
-  return trackFromChunks(chunks, label);
-}
 
 /**
  * A copy of `data` with a different `timestamp`, same samples. There is no
