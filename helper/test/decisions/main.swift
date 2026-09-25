@@ -273,7 +273,8 @@ func parseStart(_ cmd: [String: Any]) -> String {
         let w = r.windowId.map(String.init) ?? "-"
         let rg = r.region.map { "\($0.x),\($0.y),\($0.width),\($0.height)" } ?? "-"
         let mic = r.micDeviceUid ?? "-"
-        return "ok:dir=\(r.dir):display=\(d):window=\(w):region=\(rg):camera=\(r.camera):mic=\(mic)"
+        let cam = r.cameraDeviceUid ?? "-"
+        return "ok:dir=\(r.dir):display=\(d):window=\(w):region=\(rg):camera=\(r.camera):mic=\(mic):cameraUid=\(cam):sys=\(r.systemAudio)"
     case .failure(let e):
         return "err:\(e.code)"
     }
@@ -282,18 +283,21 @@ func parseStart(_ cmd: [String: Any]) -> String {
 check("dir is required", parseStart(["cmd": "start"]), "err:missing-dir")
 check("an empty dir is missing", parseStart(["dir": ""]), "err:missing-dir")
 check("no scope fields at all keeps phase-1 behaviour: whole display, none requested",
-      parseStart(["dir": "/tmp/x"]), "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-")
+      parseStart(["dir": "/tmp/x"]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
 check("a displayId alone is the phase-1 display scope",
-      parseStart(["dir": "/tmp/x", "displayId": 7]), "ok:dir=/tmp/x:display=7:window=-:region=-:camera=false:mic=-")
+      parseStart(["dir": "/tmp/x", "displayId": 7]),
+      "ok:dir=/tmp/x:display=7:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
 check("camera is carried alongside any scope",
-      parseStart(["dir": "/tmp/x", "camera": true]), "ok:dir=/tmp/x:display=-:window=-:region=-:camera=true:mic=-")
+      parseStart(["dir": "/tmp/x", "camera": true]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=true:mic=-:cameraUid=-:sys=false")
 check("a region on its own display is a region scope",
       parseStart(["dir": "/tmp/x", "displayId": 3,
                   "region": ["x": 10, "y": 20, "width": 300, "height": 200]]),
-      "ok:dir=/tmp/x:display=3:window=-:region=10.0,20.0,300.0,200.0:camera=false:mic=-")
+      "ok:dir=/tmp/x:display=3:window=-:region=10.0,20.0,300.0,200.0:camera=false:mic=-:cameraUid=-:sys=false")
 check("a windowId alone is a window scope",
       parseStart(["dir": "/tmp/x", "windowId": 42]),
-      "ok:dir=/tmp/x:display=-:window=42:region=-:camera=false:mic=-")
+      "ok:dir=/tmp/x:display=-:window=42:region=-:camera=false:mic=-:cameraUid=-:sys=false")
 check("region and windowId together is refused — pick one scope",
       parseStart(["dir": "/tmp/x", "windowId": 42,
                   "region": ["x": 0, "y": 0, "width": 1, "height": 1]]),
@@ -305,19 +309,47 @@ check("a malformed windowId is refused, not silently ignored (unlike a malformed
       parseStart(["dir": "/tmp/x", "windowId": -1]), "err:bad-window-id")
 check("a malformed displayId falls back to the phase-1 default rather than being refused",
       parseStart(["dir": "/tmp/x", "displayId": -1]),
-      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-")
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
 // A micDeviceUid names an exact device the app already showed the user —
 // never validated here (that needs SCShareableContent... no, needs
 // AVCaptureDevice.DiscoverySession, which only MicCapture.start touches).
 check("a micDeviceUid is carried through unexamined",
       parseStart(["dir": "/tmp/x", "micDeviceUid": "BuiltInMicrophoneDevice"]),
-      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=BuiltInMicrophoneDevice")
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=BuiltInMicrophoneDevice:cameraUid=-:sys=false")
 check("an empty micDeviceUid is the same as none — never a request for \"some\" mic",
       parseStart(["dir": "/tmp/x", "micDeviceUid": ""]),
-      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-")
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
 check("a non-string micDeviceUid is the same as none, not a crash",
       parseStart(["dir": "/tmp/x", "micDeviceUid": 42]),
-      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-")
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
+// STC-414: cameraDeviceUid gets the same latitude as micDeviceUid — carried
+// through unexamined here (CameraCapture.start is where a real uid either
+// matches a device or is refused), and a malformed value falls back to
+// automatic rather than being refused.
+check("a cameraDeviceUid is carried through unexamined",
+      parseStart(["dir": "/tmp/x", "cameraDeviceUid": "0x1234ABCD"]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=0x1234ABCD:sys=false")
+check("an empty cameraDeviceUid is the same as none — automatic ranking, not a named device",
+      parseStart(["dir": "/tmp/x", "cameraDeviceUid": ""]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
+check("a non-string cameraDeviceUid is the same as none, not a crash",
+      parseStart(["dir": "/tmp/x", "cameraDeviceUid": 42]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
+
+// STC-418: system audio is a boolean, not a device — one system output.
+check("systemAudio true is carried through",
+      parseStart(["dir": "/tmp/x", "systemAudio": true]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=true")
+check("systemAudio false is off",
+      parseStart(["dir": "/tmp/x", "systemAudio": false]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
+check("a non-boolean systemAudio is off, not a crash — the same latitude camera gets",
+      parseStart(["dir": "/tmp/x", "systemAudio": "yes"]),
+      "ok:dir=/tmp/x:display=-:window=-:region=-:camera=false:mic=-:cameraUid=-:sys=false")
+check("system audio is independent of the mic, the camera device, and a window scope",
+      parseStart(["dir": "/tmp/x", "windowId": 42, "micDeviceUid": "BuiltInMicrophoneDevice",
+                  "cameraDeviceUid": "0x1234ABCD", "systemAudio": true]),
+      "ok:dir=/tmp/x:display=-:window=42:region=-:camera=false:mic=BuiltInMicrophoneDevice:cameraUid=0x1234ABCD:sys=true")
 
 
 // ── what a window-scope take does about its window mid-take (STC-370) ──────

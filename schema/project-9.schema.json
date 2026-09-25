@@ -1,0 +1,328 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "stc:project-9",
+  "title": "stc project (edit document), v9",
+  "description": "Everything the user can change after recording. render(project, session, t) is a pure function of this document plus the session data. v9 adds `systemAudioLevel`: how loud the recorded system audio (anchors-6's system.m4a, STC-418) plays in preview and export, 0..1 — attenuate only, never boost, so it cannot clip; 0 mutes the track while the recording itself is kept. Absent means 1 (full level), and a document at full level stays at whatever version its other edits earned. v8 adds `bookmarks`: marked frames as session-relative integer ns, for the editor's Up/Down navigation (STC-444 slice 4) — ns rather than an export-frame index, so a bookmark still means the same instant if a later build's export fps ever changes. Sorted ascending, no duplicates; absent means none and parseProject fills []. v7 adds `slug`: the stable name this take publishes under (STC-444 slice 3) — absent means not yet decided, and share.ts's autoSlug(takeName) supplies a live default the editor shows without writing it here; only set on a successful share. Not validated against share.ts's SLUG_PATTERN in this schema (a stored slug that fails it is still a v8 document; planPublish is where an unusable one is refused). v6 adds `overrides`: manual zoom overrides — a discriminated union. The 'geometry' variant (STC-330) tunes a DERIVED window, keyed by its startNs (as a string). The 'manual' variant (STC-331) authors a window with no auto-zoom counterpart at all, carrying its own startNs/endNs and a REQUIRED easing, since there is no derived window or project default timing to fall back to. The 'removed' and 'retime' variants (STC-329) act on a DERIVED window without touching its crop: 'removed' drops it outright; 'retime' shifts its startNs and/or endNs (either optional, for a one-edge drag) while keeping the SAME windowId — the window's original derived startNs, unaffected by the retime. Every variant with a rect uses UV over the CAPTURE, the same space a redaction lives in. Absent on every document written before project-6; parseProject fills [].",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "output",
+    "cursor",
+    "transform"
+  ],
+  "definitions": {
+    "overrideRect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "description": "UV over the CAPTURE (0..1), not the output — the same space a redaction lives in.",
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    }
+  },
+  "properties": {
+    "version": {
+      "const": 9
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fps",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "fps": {
+          "enum": [
+            60
+          ],
+          "description": "export samples every other 120 Hz sim tick; only 60 supported in phase 1"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3840
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2160
+        }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "style",
+        "scale"
+      ],
+      "properties": {
+        "style": {
+          "enum": [
+            "default",
+            "circle"
+          ],
+          "description": "default is the macOS pointer set (STC-239); circle is the phase-1 placeholder, kept as an option"
+        },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 8
+        }
+      }
+    },
+    "pip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "corner",
+        "widthPct",
+        "marginPx"
+      ],
+      "description": "Fixed-corner picture-in-picture. Absent means no PiP.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "corner": {
+          "enum": [
+            "bottom-right"
+          ],
+          "description": "only corner implemented in phase 3"
+        },
+        "widthPct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "description": "fraction of output width; 0.125 gives 480px on a 3840px canvas"
+        },
+        "marginPx": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "trim": {
+      "type": "object",
+      "description": "Non-destructive in/out. Absent means the full take. Session-relative integer ns; endNs must be greater than startNs.",
+      "additionalProperties": false,
+      "required": [
+        "startNs",
+        "endNs"
+      ],
+      "properties": {
+        "startNs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "endNs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "description": "Which transform renders this edit. TRANSFORM_HISTORY in transform/src/transform-version.ts says what each number drew; a change to any constant that reaches the pixels bumps it.",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "zoom": {
+      "type": "object",
+      "description": "Auto-zoom settings (STC-325). Absent on every document written before project-4; parseProject fills the default.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Scales the eased amount. 1 is the preset's full travel; 0 is indistinguishable from off."
+        },
+        "preset": {
+          "enum": [
+            "calm",
+            "standard",
+            "snappy"
+          ],
+          "description": "Must equal ZOOM_PRESET_NAMES in transform/src/zoom.ts — a test holds the two together."
+        }
+      },
+      "required": [
+        "enabled",
+        "intensity",
+        "preset"
+      ],
+      "additionalProperties": false
+    },
+    "textPt": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 144,
+      "description": "The recorded application’s base text size in POINTS on the captured display. Points, not pixels: the legibility figure is textPt * embedWidth / display.pointWidth, and backingScale cancels. Absent means DEFAULT_TEXT_PT (13) in transform/src/legibility.ts."
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The stable name this take publishes under (STC-444 slice 3). Absent means not yet decided. Not pattern-constrained here — see the top-level description for why."
+    },
+    "systemAudioLevel": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "The system-audio track's level (STC-418), a linear gain applied after the take, never at capture: system.m4a is always recorded at full level so a bad setting can be undone. 0..1, attenuate only. Absent means 1; meaningless on a take with no system track, and harmless there."
+    },
+    "bookmarks": {
+      "type": "array",
+      "description": "Marked frames, as session-relative integer ns (STC-444 slice 4). Absent means none; parseProject fills []. Ordering and uniqueness are the writer's job, not enforced here (array order in JSON Schema is not a set constraint worth a draft-07 workaround) — trim.ts's cleanBookmarks is what actually sorts and de-duplicates on read.",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "overrides": {
+      "type": "array",
+      "description": "Manual zoom overrides. Absent means none. x+width and y+height must each be <= 1; that sum constraint is not expressible here and is the loader's job (transform/src/trim.ts's cleanOverrides), same as recording.ts's endNs > startNs.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "STC-330: tunes a DERIVED window. windowId matches that window's startNs (transform/src/zoom.ts's ZoomWindow), as a string — stage 1's merge rule guarantees uniqueness within one take.",
+            "required": [
+              "kind",
+              "windowId",
+              "rect"
+            ],
+            "properties": {
+              "kind": {
+                "const": "geometry"
+              },
+              "windowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rect": { "$ref": "#/definitions/overrideRect" },
+              "easing": {
+                "enum": [
+                  "calm",
+                  "standard",
+                  "snappy"
+                ],
+                "description": "Replaces the project's own zoom.preset for JUST this window. Absent means this window plays at the project's preset."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "STC-331: authors a window with no auto-zoom counterpart at all. Carries its own timing, unlike the geometry variant, and easing is REQUIRED — there is no derived window or project default to fall back to.",
+            "required": [
+              "kind",
+              "id",
+              "startNs",
+              "endNs",
+              "rect",
+              "easing"
+            ],
+            "properties": {
+              "kind": {
+                "const": "manual"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "startNs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "endNs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rect": { "$ref": "#/definitions/overrideRect" },
+              "easing": {
+                "enum": [
+                  "calm",
+                  "standard",
+                  "snappy"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "STC-329: drops a DERIVED window outright — it never plays, not even at its old crop. windowId matches that window's original startNs, the same key the geometry variant uses.",
+            "required": [
+              "kind",
+              "windowId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "removed"
+              },
+              "windowId": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "STC-329: shifts a DERIVED window's startNs and/or endNs, keeping its ORIGINAL startNs as windowId so a geometry override (or a later retime) keyed on it still finds the window. At least one bound is required — an entry naming neither shifts nothing.",
+            "required": [
+              "kind",
+              "windowId"
+            ],
+            "anyOf": [
+              { "required": ["startNs"] },
+              { "required": ["endNs"] }
+            ],
+            "properties": {
+              "kind": {
+                "const": "retime"
+              },
+              "windowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "startNs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "endNs": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

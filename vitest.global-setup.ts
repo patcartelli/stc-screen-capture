@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -24,10 +25,22 @@ import { fileURLToPath } from "node:url";
  *
  * A non-zero exit must throw: swiftc leaves the previous binary in place on
  * failure, so an unchecked build silently tests stale code.
+ *
+ * The Electron BINARY is fetched here too. Electron 43 has no postinstall: its
+ * `index.js` downloads the binary on the first `require("electron")`, which is
+ * Playwright's `_electron.launch()` — so `npm ci` finished in 2 s on CI and the
+ * download landed inside whichever E2E test launched first. That was
+ * panel-waits.e2e's "left alone, the panel is still there…", the slowest test
+ * in the suite at 17.6-20.0 s on runs 35934526803 and 36007134242, of which
+ * ~9 s was the download, charged against the 30 s launch default
+ * `PLAYWRIGHT_LAUNCH_OVERHEAD_MS` budgets for. Requiring it here pays the same
+ * cost once, outside every test's clock; it is a no-op once `dist/` is there,
+ * and it throws on a failed download, which is what should stop the run.
  */
 export default function setup() {
   execFileSync(fileURLToPath(new URL("./helper/build.sh", import.meta.url)), { stdio: "pipe" });
   execFileSync("node", [fileURLToPath(new URL("./app/build.mjs", import.meta.url))], {
     cwd: fileURLToPath(new URL(".", import.meta.url)), stdio: "pipe",
   });
+  createRequire(import.meta.url)("electron");
 }

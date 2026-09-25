@@ -4,8 +4,8 @@ import {
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
-  SHOT_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts,
-  type ShotAction, type ShortcutReport, type Shortcuts,
+  SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
+  type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
@@ -43,7 +43,6 @@ import {
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
-import { flashScopeIndicator, hideScopeIndicator } from "./scope-indicator-window.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
@@ -58,6 +57,7 @@ import { openEditor } from "./editor-window.js";
 import { openStillEditor } from "./still-editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
+import type { MicInfo } from "./mic-devices.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
 import { ensureCaptureId, readBundleId } from "./capture-identity.js";
@@ -145,6 +145,16 @@ let shortcutReport: ShortcutReport[] = [];
  */
 let capturing = false;
 /**
+ * Whether the overlay/countdown currently on screen belongs to a RECORD flow.
+ *
+ * ⌃⌥⇧⌘4 cancels its own flow but must NOT cancel a shot's overlay or a
+ * self-timer's countdown — ending someone's self-timer with the Record key is
+ * not what "Record toggles" means, and that possibility is new (STC-388 makes a
+ * latent hazard reachable: nothing could interrupt an in-flight capture from a
+ * hotkey before).
+ */
+let recordFlowActive = false;
+/**
  * The last still THIS process wrote, for `still:reveal` (STC-293).
  *
  * Remembered here rather than passed back through the renderer because a
@@ -192,7 +202,7 @@ const TRASH_SWEEP_INTERVAL_MS = 1_000;
 // origin to any non-http scheme. Serving the app itself over a custom scheme
 // would fix that, but IPC removes the origin question altogether.
 const TAKE_FILES = new Set([
-  "anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "project.json",
+  "anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a", "project.json",
   // STC-447: the recording-profile hint, present only on a take recorded
   // with a profile selected, and only until its first open (see
   // `writeRecordingProfileHint`/`PROFILE_HINT_FILE`).
@@ -203,6 +213,23 @@ function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+/**
+ * STC-432: with no `trafficLightPosition`, macOS draws the inset lights
+ * roughly where `index.html`'s `body { padding: 20px }` also starts
+ * `#title-row` — the two were never coordinated and landed on top of each
+ * other. These numbers are the SAME ones `index.html`'s own
+ * `--traffic-light-offset` uses to push the heading clear (cluster width +
+ * a gap); a change to one is a change to both, and they're named here
+ * rather than left as bare numbers in the BrowserWindow options.
+ *
+ * `X_PX` matches the body's own left padding, so the cluster's left edge is
+ * flush with where every other row's content starts. `Y_PX` centres the
+ * 12px dot cluster inside `#title-row`'s own ~20px height (the 15px/1.3
+ * line-height of its `h1`), offset by that same 20px top padding.
+ */
+const TRAFFIC_LIGHT_X_PX = 20;
+const TRAFFIC_LIGHT_Y_PX = 24;
+
 function createWindow(): void {
   setDockVisible(true);
   win = new BrowserWindow({
@@ -212,6 +239,12 @@ function createWindow(): void {
     // native traffic lights as an inset overlay (no drawn title strip), which
     // is what lets Record collapse the window to a 26px pill at all.
     titleBarStyle: "hidden",
+    // STC-432: aligned to `#title-row` rather than left at the OS default —
+    // see the constants above. Only `collapsePill`/`restorePill`
+    // (pill-window.ts) ever change VISIBILITY of the lights afterward; the
+    // position set here is untouched by collapse/restore, which is exactly
+    // what "come back in the same position" requires.
+    trafficLightPosition: { x: TRAFFIC_LIGHT_X_PX, y: TRAFFIC_LIGHT_Y_PX },
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(join(here, "..", "renderer", "index.html"));
@@ -338,6 +371,64 @@ function startSupervisor(): void {
   // STC-233: same reasoning, one device over — the mic also opens off the
   // critical path (MicCapture.swift) and reports separately once it resolves.
   sup.on("helper:mic-started", (l) => send("helper:mic-started", l));
+  // STC-388: the tray's Record item reads as Stop while a take is live, and
+  // its own state can change with no window open to notice — reuse the same
+  // heartbeat-confirmed events the pill already listens to (STC-375) rather
+  // than adding a second poll.
+  sup.on("stats", reconcileTrayRecording);
+  sup.on("recording-ended", reconcileTrayRecording);
+  sup.on("recording-lost", reconcileTrayRecording);
+  // STC-388 review, Finding 2: the MAIN WINDOW has exactly the same problem
+  // the tray already had one door earlier — a take begun or ended by the
+  // hotkey or the tray never told it anything, because `recording`, the
+  // button label, `#state` and `lockSettings` were written only inside the
+  // window's OWN click handler. `reconcileWindowRecording` is that same fix,
+  // one surface over, off the same three events.
+  sup.on("stats", reconcileWindowRecording);
+  sup.on("recording-ended", reconcileWindowRecording);
+  sup.on("recording-lost", reconcileWindowRecording);
+}
+
+/**
+ * Whether the tray's own template last believed a take was live — compared
+ * against `sup.state` on every heartbeat so `tray?.update` is only called on
+ * an actual transition, not every 500ms.
+ */
+let trayKnownRecording = false;
+function reconcileTrayRecording(): void {
+  const recording = sup?.state === "recording";
+  if (recording === trayKnownRecording) return;
+  trayKnownRecording = recording;
+  tray?.update({ shortcuts, busy: capturing, recording });
+}
+
+/**
+ * The window's own half of the same fix (STC-388 review, Finding 2).
+ *
+ * `sup.state` is CLAUDE.md's own named authority ("anything holding recording
+ * state must reconcile, or it sits there believing a recording is live"),
+ * and this is that rule applied to the main window rather than to the tray:
+ * `HelperSupervisor.stopRecording()` (a hotkey or tray-initiated stop) and
+ * `runRecordFlow` (a hotkey or tray-initiated start) both change it with no
+ * window listening at all today.
+ *
+ * Sent on EVERY stats tick, deliberately NOT gated on a transition tracked in
+ * here the way `reconcileTrayRecording` gates on `trayKnownRecording` — a
+ * MAIN-side "last known" tracker cannot stay correct, because a
+ * self-initiated start or stop updates the RENDERER synchronously (the click
+ * handler) without ever touching one. A window-initiated take that starts
+ * and stops again faster than one stats tick apart (exactly what this fix's
+ * own E2E test does, with no countdown in the way) would leave such a
+ * tracker at its initial `false` through the whole cycle — "false, now
+ * false" reads as no transition, and a real external stop right after would
+ * be silently dropped, the same class of bug this finding exists to fix.
+ * The renderer's own guard (`recorder:recording-state`'s listener) is what
+ * dedupes a message that agrees with what it already believes; this is the
+ * same cost `helper:stats` already pays every ~500ms.
+ */
+function reconcileWindowRecording(): void {
+  const recording = sup?.state === "recording";
+  send("recorder:recording-state", { recording, dir: recording ? sup?.recordingDir : undefined });
 }
 
 /**
@@ -542,8 +633,14 @@ app.whenReady().then(async () => {
   tray = installTray({ shortcuts, busy: capturing }, (id) => {
     if (id === "library") return openLibrary();
     if (id === "quit") return app.quit();
-    const action = SHOT_ACTIONS.find((a) => id === `capture:${a}`);
-    if (action) void captureStill(action, "menu-bar");
+    const action = BINDABLE_ACTIONS.find((a) => id === `action:${a}`);
+    if (!action) return;
+    if (action === "record") {
+      if (sup?.state === "recording") { void onRecordHotkey(); return; }
+      void runRecordFlow("menu-bar");
+      return;
+    }
+    if (isShotAction(action)) void captureStill(action, "menu-bar");
   });
   applyShortcuts(shortcuts);
   createWindow();
@@ -603,7 +700,6 @@ function runQuitTeardown(): void {
   globalShortcut.unregisterAll();
   tray?.destroy();
   tray = undefined;
-  hideScopeIndicator();
   // A countdown at quit answers its caller `cancelled`, so the capture or the
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
@@ -780,12 +876,6 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
     clean.share = rest as Partial<Settings>["share"];
   }
   const saved = writeSettings(app.getPath("userData"), clean);
-  // STC-381: a kind change or Clear cancels an in-progress flash (a pick
-  // followed immediately by changing your mind) — this is the only door
-  // `renderer.ts` uses to write `scope` (a kind change, `clearSource`), so
-  // gating on `clean.scope` being present catches every real case. A fresh
-  // pick starts its OWN flash from `pickCaptureTarget`, below.
-  if (clean.scope) hideScopeIndicator();
   return saved;
 });
 
@@ -822,71 +912,235 @@ ipcMain.handle("recorder:status", async () => ({
   pid: sup?.pid,
 }));
 
-ipcMain.handle("recorder:start", async () => {
-  // STC-381: before anything else, even the `no-capture-target` refusal
-  // below — a flash still on screen (Record pressed right after a pick)
-  // must never survive into a live take, whether or not the take starts.
-  hideScopeIndicator();
-  if (!sup) throw new Error("supervisor not running");
-  // A still capture in flight owns the overlay, the countdown panel and the
-  // helper's attention. Pressing Record into the middle of one used to start a
-  // take with that overlay on screen; STC-391 makes the window much easier to
-  // hit, since a self-timer spends seconds waiting with the main window still
-  // live, so it is refused with something to read rather than left to race.
-  if (capturing || overlayIsOpen() || countdownIsOpen()) {
+/**
+ * STC-433: what to do about a display or mic `runRecordFlow` finds is no
+ * longer connected once the overlay has closed and its pick is about to be
+ * used. Under STC-388 scope is chosen FRESH from a live list every time, so
+ * this is a narrower race than the old sticky-`displayId` design it
+ * replaces (the gap between the overlay closing and `startRecording`,
+ * mostly spent in the countdown) — but real hardware can still be unplugged
+ * in that gap, and a take silently recording with no audio (the old mic
+ * behaviour) or crashing on a `display-not-found` from the helper is still
+ * wrong either way.
+ *
+ * A native dialog rather than a toast (`alertUser`, renderer.ts) because
+ * this is a decision, not a notice — the same reason `recoverUnsavedTakes`
+ * above uses `dialog.showMessageBox` rather than a passive message for
+ * "these takes never made it to your library."
+ *
+ * There is no "choose a different one" branch here, unlike the picker this
+ * replaced: scope is no longer a sticky setting a profile-sheet control
+ * points at, so there is nothing to focus — the equivalent action is
+ * pressing Record again, which opens the overlay fresh against the current
+ * device list. `canFallBack` is false for a CROPPED region: its `region` is
+ * pixel coordinates on the vanished display, so there is no automatic
+ * display to fall back to that would still make sense of it — that case is
+ * a plain refusal. A missing MIC always has a fallback ("Turn Mic Off," the
+ * settled STC-233 decision against ever silently picking another mic).
+ */
+type DeviceFallback = "automatic" | "off" | "cancel";
+
+async function resolveDeviceNotFound(kind: "display" | "mic", canFallBack: boolean): Promise<DeviceFallback> {
+  if (!win || win.isDestroyed()) return "cancel";
+  const noun = kind === "display" ? "display" : "microphone";
+  if (!canFallBack) {
+    await dialog.showMessageBox(win, {
+      type: "warning",
+      buttons: ["OK"],
+      message: `The selected ${noun} is no longer connected`,
+      detail: "Press Record again to choose from what's available now.",
+    });
+    return "cancel";
+  }
+  const primaryLabel = kind === "display" ? "Use Automatic" : "Turn Mic Off";
+  const { response } = await dialog.showMessageBox(win, {
+    type: "warning",
+    buttons: [primaryLabel, "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `The selected ${noun} is no longer connected`,
+    detail: kind === "display"
+      ? "Record using whichever display is available instead."
+      : "Record with no microphone instead. Capture never picks a microphone automatically.",
+  });
+  if (response === 0) return kind === "display" ? "automatic" : "off";
+  return "cancel";
+}
+
+type RecordSource = "window" | "menu-bar" | "hotkey";
+type RecordResult =
+  | { ok: true; dir: string; info: unknown }
+  | { ok: false; cancelled: true }
+  | { ok: false; code: string; detail?: string };
+
+/**
+ * Scope, then options, then a countdown, then a take (STC-388).
+ *
+ * A FUNCTION, not just an IPC handler, for exactly the reason `captureStill`
+ * already is one: the hotkey and the menu-bar item have no renderer to route
+ * through, and the window's button must not be a second implementation that can
+ * drift. One flow, three doors.
+ *
+ * Scope is chosen FRESH every time and is never persisted — the settled shape
+ * of this ticket, which rejected sticky scope outright. It also keeps the
+ * invariant `recorder:start` used to carry: what the helper is pointed at is
+ * decided in the main process, never handed up from the renderer. The overlay
+ * is main's, so the outcome is already here.
+ */
+async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
+  if (!sup) return { ok: false, code: "no-supervisor" };
+  // A shot in flight owns the overlay, the countdown panel and the helper's
+  // attention. Refused with something to read rather than left to race.
+  //
+  // FINDING 6 (STC-388 review, HIGH). `recordFlowActive` is now part of THIS
+  // guard, and is set below in the SAME synchronous block as this check —
+  // never after an `await`. It used to be set only after two awaited helper
+  // round trips (`listWindows`/`micsForBar`), which is exactly the window a
+  // second ⌃⌥⇧⌘4 press is plausible in: nothing has appeared on screen yet.
+  // That press would pass this guard a second time — `overlayIsOpen()` and
+  // `countdownIsOpen()` are both still false, since neither has opened — and
+  // with the countdown set to Off (a shipped option) both flows could reach
+  // `sup.startRecording()` with different temp dirs, the second answered
+  // `bad-state` for a take that DID start. Checking the flag here closes
+  // that: a second call inside the gap now sees it already true.
+  if (capturing || overlayIsOpen() || countdownIsOpen() || recordFlowActive) {
     return { ok: false, code: "capture-in-flight" };
   }
-  // Read from the stored preference, NOT passed up from the renderer. Main
-  // already owns these settings, and a renderer-supplied value would be a
-  // second source of truth for what turns on a physical camera and what the
-  // helper is told to point at.
-  const { camera, displayId, micDeviceUid, scope, countdownMs } =
-    readSettings(app.getPath("userData"));
-  const startParams: Record<string, unknown> = { camera };
-  // Only when a device is actually picked (STC-233) — an absent field is
-  // "no mic" to the helper's own parseStartRequest, and there is no
-  // automatic mic the way there is an automatic display.
-  if (micDeviceUid != null) startParams.micDeviceUid = micDeviceUid;
-  if (scope.kind === "region" && scope.region) {
-    const { displayId: regionDisplayId, x, y, width, height } = scope.region;
-    startParams.displayId = regionDisplayId;
-    startParams.region = { x, y, width, height };
-  } else if (scope.kind === "window" && scope.windowId != null) {
-    startParams.windowId = scope.windowId;
-  } else if (scope.kind === "display") {
-    // displayId only when one was picked: absent means "the helper's first",
-    // and the helper refuses an id it cannot find (display-not-found) rather
-    // than recording another screen (STC-247).
-    if (displayId != null) startParams.displayId = displayId;
-  } else {
-    // The scope picker asks for a region or a window and nothing has been
-    // picked yet — refused here, before the helper is ever touched, on the
-    // same rule STC-247 already set for a stale displayId: a picker must not
-    // have its choice silently swapped for another.
-    return { ok: false, code: "no-capture-target" };
+  if (sup.state === "recording") return { ok: false, code: "already-recording" };
+
+  // Set HERE — synchronously, before any `await` — not after the helper round
+  // trips below. The flag covers the overlay AND the countdown, because
+  // ⌃⌥⇧⌘4 must be able to cancel either, and it is cleared in a `finally` so a
+  // throw anywhere inside (or a second flow's own `finally` running while
+  // this one is still live) cannot leave the hotkey believing a flow is still
+  // up, and cannot clear a DIFFERENT flow's flag out from under it — the flag
+  // is now set for the whole synchronous stretch a second call could arrive
+  // in, so there is no gap left for a second flow to exist at all.
+  recordFlowActive = true;
+  try {
+    let windows: WindowInfo[] = [];
+    try {
+      windows = windowsFromReply(await sup.listWindows());
+    } catch {
+      // Without a Screen Recording grant the helper cannot enumerate anything.
+      // Area mode needs no window list, so the overlay still opens; window mode
+      // will offer nothing to click, same as a shot.
+    }
+
+    const stored = readSettings(app.getPath("userData"));
+    const mics = await micsForBar();
+
+    return await recordFlowBody(source, stored, mics, windows);
+  } finally {
+    recordFlowActive = false;
   }
-  // STC-391: Record ALWAYS counts down — the countdown is what makes Record
-  // feel weightier than Capture. After the scope checks above and never
-  // before: the ticket makes scope and countdown separate steps, and counting
-  // down to a `no-capture-target` refusal would be three seconds spent on
-  // nothing.
-  //
-  // `readSettings` has already clamped it; clamped again so this site reads
-  // the same as the capture path and neither has to know which of them
-  // sanitised the value.
-  const ms = clampCountdownMs(countdownMs);
+}
+
+/** The flow proper. Split out so `recordFlowActive` has exactly one `finally`
+ * covering every step it needs to cover. */
+async function recordFlowBody(
+  source: RecordSource, stored: Settings, mics: MicInfo[], windows: WindowInfo[],
+): Promise<RecordResult> {
+  const { outcome, options } = await openOverlay({
+    windows, mode: "region", purpose: "record",
+    initialOptions: { micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics },
+    dist: here, renderer: join(here, "..", "renderer"),
+  });
+  if (outcome.kind === "cancelled" || !options) return { ok: false, cancelled: true };
+
+  // The bar's toggles ARE the sticky settings, so they are written back — only
+  // SCOPE is per-take. Written before the countdown, so a cancelled countdown
+  // still keeps a mic the user just chose.
+  writeSettings(app.getPath("userData"),
+                { camera: options.camera, micDeviceUid: options.micDeviceUid });
+
+  // THE start-param builder — the only place a Record's `start` request is
+  // assembled (spec §3). A new setting that reaches the helper (STC-420's
+  // show-clicks, say) is added HERE, in this one expression, never in a
+  // second builder beside it: two builders is two halves of one answer
+  // decided in two places.
+  const startParams: Record<string, unknown> = { camera: options.camera };
+  if (options.micDeviceUid != null) startParams.micDeviceUid = options.micDeviceUid;
+  // STC-414: from STORED settings — the bar has no camera-device control,
+  // only the camera on/off above. An absent field means "the helper's own
+  // pickCamera ranking", not "no camera" (that is `camera`'s job), so it is
+  // sent even when the camera is off; the helper only consults it once it
+  // has decided to open a camera at all.
+  if (stored.cameraDeviceUid != null) startParams.cameraDeviceUid = stored.cameraDeviceUid;
+  // STC-418: from STORED settings, never from the bar or the renderer — the
+  // bar has no system-audio control (that is STC-459). Only when on; absent
+  // is "off" to the helper's parseStartRequest.
+  if (stored.systemAudio) startParams.systemAudio = true;
+  let countdownDisplay: number | undefined;
+  if (outcome.kind === "window") {
+    startParams.windowId = outcome.windowId;
+  } else {
+    startParams.displayId = outcome.displayId;
+    countdownDisplay = outcome.displayId;
+    // `region` ONLY when this is not a full-display take: a crop covering the
+    // whole screen takes the helper's crop path instead of its full-display
+    // one. One expression, so the two paths cannot be chosen by two rules.
+    if (!options.fullDisplay) startParams.region = { ...outcome.crop };
+  }
+
+  // STC-433: check the overlay's own pick against the helper's current
+  // enumeration before the countdown, not after a doomed `start` — same
+  // "don't count down to a refusal" reasoning STC-391 already applies below.
+  // Only asked for when there is something to go stale in the first
+  // place — a window pick isn't checked (STC-247/STC-370 already refuse an
+  // unknown `windowId` at `start`, and the overlay's own window list was
+  // just enumerated), and this is an extra IPC round trip on Record's
+  // critical path that the common case shouldn't pay for.
+  const checkingDisplay = outcome.kind !== "window";
+  const checkingMic = options.micDeviceUid != null;
+  const known = (checkingDisplay || checkingMic) ? await sup!.devices().catch(() => null) : null;
+  if (known) {
+    const knownDisplays = Array.isArray((known as any).displays) ? (known as any).displays as { id: number }[] : [];
+    const knownMics = Array.isArray((known as any).mics) ? (known as any).mics as { uid: string }[] : [];
+    // A stalled CoreAudio enumeration means "unknown," never "gone" — forcing
+    // the mic off on a stall would be worse than today's behaviour, not
+    // better. The existing mic-not-found live warning stays the backstop for
+    // a mic that really is missing while enumeration itself can't say so.
+    const micEnumerationStalled = Boolean((known as any).stalled);
+
+    if (checkingDisplay && !knownDisplays.some((d) => d.id === outcome.displayId)) {
+      const choice = await resolveDeviceNotFound("display", options.fullDisplay === true);
+      if (choice === "automatic") {
+        delete startParams.displayId;
+        delete startParams.region;
+        countdownDisplay = undefined;
+      } else {
+        return { ok: false, cancelled: true };
+      }
+    }
+
+    if (checkingMic && !micEnumerationStalled && !knownMics.some((m) => m.uid === options.micDeviceUid)) {
+      const choice = await resolveDeviceNotFound("mic", true);
+      if (choice === "off") {
+        delete startParams.micDeviceUid;
+        // The sticky mic preference was just written above with this now-
+        // vanished uid — correct it so the popover doesn't keep offering a
+        // device that isn't there.
+        writeSettings(app.getPath("userData"), { micDeviceUid: null });
+        send("settings:changed", undefined);
+      } else {
+        return { ok: false, cancelled: true };
+      }
+    }
+  }
+
+  // Record ALWAYS counts down (STC-391) — it is what makes Record feel weightier
+  // than a shot. After the overlay has gone, never during it.
+  const ms = clampCountdownMs(stored.countdownMs);
   if (needsCountdown(ms)) {
     const counted = await runCountdown({
-      ms, purpose: "record",
-      displayId: countdownDisplayFor(scope, displayId),
+      ms, purpose: "record", displayId: countdownDisplay,
       dist: here, rendererDir: join(here, "..", "renderer"),
     });
-    // Requirement 1: nothing is recorded. `cancelled` rather than an error
-    // code the renderer would put in an alert — the user chose this.
     if (!countdownFired(counted.outcome)) return { ok: false, cancelled: true };
   }
-  // Any floating panel still on screen would be IN the take, and unlike a
-  // still capture there is no exclusion list for `start` to be added to.
+  // Any floating panel still on screen would be IN the take, and unlike a shot
+  // there is no exclusion list for `start` to be added to.
   // CLOSED rather than merely hidden (`closeThumbnail`, the same call quit
   // makes) — hiding it for the length of a recording would leave it sitting
   // out of sight with nothing to bring it back, since nothing times out any
@@ -895,6 +1149,7 @@ ipcMain.handle("recorder:start", async () => {
   // recovery prompt can still surface later, not a silent save.
   // After the countdown, so a cancelled one costs a pending panel nothing.
   await closeThumbnail().catch(() => {});
+
   // Temp storage, not the library (STC-393): the take is not real until a
   // clean stop promotes it, so a denied grant or a crash mid-recording leaves
   // nothing in the library at all rather than a broken entry someone has to
@@ -905,14 +1160,23 @@ ipcMain.handle("recorder:start", async () => {
   const existing = existsSync(root) ? readdirSync(root) : [];
   const dir = newTempTakeDir(process.env, new Date(), existing);
   try {
-    const r = await sup.startRecording(dir, startParams);
+    const r = await sup!.startRecording(dir, startParams);
+    console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
     // A missing Screen Recording grant is the common case and is actionable —
     // surface the helper's own code rather than a generic failure.
-    return { ok: false, code: e?.code ?? "start-failed", detail: e?.detail ?? String(e?.message ?? e) };
+    return { ok: false, code: e?.code ?? "start-failed",
+             detail: e?.detail ?? String(e?.message ?? e) };
   }
-});
+}
+
+/**
+ * The window's Record button. Carries NO parameters — see `runRecordFlow`: what
+ * the helper is pointed at is main's to decide, and the renderer supplying any
+ * of it would be a second source of truth for what turns on a camera.
+ */
+ipcMain.handle("recorder:start", async () => runRecordFlow("window"));
 
 /**
  * The helper's raw `windows` reply, turned into what the overlay wants.
@@ -929,61 +1193,27 @@ function windowsFromReply(r: HelperLine): WindowInfo[] {
 }
 
 /**
- * Choose what a RECORDING scopes to (STC-370's region/window capability,
- * wired to the window now) — a region or a window, through the same overlay
- * `capture-still` uses (STC-290). Persists the pick as the sticky `scope`
- * preference; a take does not need re-choosing every time it runs, the same
- * way a chosen display stays chosen (STC-247).
+ * The mics the bar can offer.
  *
- * Guarded the same way `captureStill` is: one overlay at a time, and never
- * while a take is already running — the scope a live recording is using
- * cannot be changed out from under it.
+ * `sup.devices()` — the SAME call the window's mic picker already makes through
+ * `recorder:devices`, and the same `mics` shape it already reads. A second
+ * enumeration with its own field names would be two answers to one question.
+ *
+ * Failure is not fatal and is not reported: an empty list disables the control,
+ * which is exactly what "no mic available" should look like, and a modal about
+ * it would sit between the user and a recording they asked for. `devices()` can
+ * also answer `{ stalled: true }` — the window's picker already tolerates that,
+ * and so does this: `mics` is simply absent and the control disables.
  */
-async function pickCaptureTarget(kind: "region" | "window"):
-  Promise<{ ok: boolean; cancelled?: boolean; scope?: Settings["scope"] }> {
-  if (!sup) return { ok: false };
-  if (sup.state === "recording" || capturing || overlayIsOpen()) return { ok: false };
-
-  let windows: WindowInfo[] = [];
+async function micsForBar(): Promise<MicInfo[]> {
   try {
-    windows = windowsFromReply(await sup.listWindows());
+    const r = await sup!.devices();
+    const mics = (r as { mics?: unknown }).mics;
+    return Array.isArray(mics) ? mics as MicInfo[] : [];
   } catch {
-    // Without a Screen Recording grant the helper cannot enumerate anything.
-    // Region mode needs no window list, so the overlay still opens; window
-    // mode will simply offer nothing to click, same as still capture.
+    return [];
   }
-
-  const { outcome } = await openOverlay({
-    windows, mode: kind, dist: here, renderer: join(here, "..", "renderer"),
-  });
-  if (outcome.kind === "cancelled") return { ok: true, cancelled: true };
-
-  // Trust what the overlay actually produced, not the mode it was opened in —
-  // the mode toggle inside it still works, the same reasoning
-  // `selectRegionOrWindow` already follows for still capture.
-  const pickedWindow = outcome.kind === "window"
-    ? windows.find((x) => x.id === outcome.windowId) : undefined;
-  const scope: Settings["scope"] = outcome.kind === "region"
-    ? { kind: "region", windowId: null, windowLabel: null,
-        region: { displayId: outcome.displayId, ...outcome.crop } }
-    : { kind: "window", region: null, windowId: outcome.windowId,
-        windowLabel: (() => {
-          const label = [pickedWindow?.app, pickedWindow?.title].filter(Boolean).join(" — ");
-          return label || `Window ${outcome.windowId}`;
-        })() };
-  const saved = writeSettings(app.getPath("userData"), { scope });
-  // STC-381: confirm the fresh pick with a brief outline, then get out of
-  // the way — CONFIRMED ON HARDWARE that showing it persistently on every
-  // main-window focus reads as naggy rather than helpful, so this is now
-  // the ONLY place the indicator is ever shown. `pickedWindow` is already in
-  // hand from the `windows` list fetched above, so this needs no second
-  // helper round trip for a fresh bounds lookup.
-  flashScopeIndicator({ scope: saved.scope, liveWindow: pickedWindow, rendererDir: join(here, "..", "renderer") });
-  return { ok: true, scope: saved.scope };
 }
-
-ipcMain.handle("recorder:pickCaptureTarget", async (_e, kind: string) =>
-  kind === "region" || kind === "window" ? pickCaptureTarget(kind) : { ok: false });
 
 /**
  * Select, then capture one frame (STC-290 handing off to STC-289), or capture a
@@ -1036,7 +1266,7 @@ async function captureStill(action: ShotAction, source: CaptureSource): Promise<
   }
 
   capturing = true;
-  tray?.update({ shortcuts, busy: true });
+  tray?.update({ shortcuts, busy: true, recording: sup?.state === "recording" });
   try {
     // Whatever panel is on screen from a PREVIOUS capture must be out of this
     // one's pixels (STC-296's acceptance list: "including a full-display
@@ -1124,7 +1354,7 @@ async function captureStill(action: ShotAction, source: CaptureSource): Promise<
     // panels that are NOT about to be replaced, so anything that returns
     // without presenting a new one has to put the stack back.
     showThumbnailsAfterCapture();
-    tray?.update({ shortcuts, busy: false });
+    tray?.update({ shortcuts, busy: false, recording: sup?.state === "recording" });
   }
 }
 
@@ -1180,22 +1410,6 @@ async function wholeDisplay(thumbExcluded: number[]): Promise<{ kind: string; pa
   return { kind: "display",
            params: { kind: "display-crop", displayId: display.id,
                      ...(thumbExcluded.length ? { excludeWindowIds: thumbExcluded } : {}) } };
-}
-
-/**
- * Which display a RECORDING is aimed at, for the countdown's benefit.
- *
- * A region scope names one; a display scope names one when the user picked it.
- * A window scope does not — finding it would mean a second helper round trip
- * for a window whose bounds nothing else here needs — and neither does an
- * automatic display, where the helper picks its own first. Both fall through
- * to the pointer's display, which is where the person pressing Record is
- * looking.
- */
-function countdownDisplayFor(scope: Settings["scope"], displayId: number | null): number | undefined {
-  if (scope.kind === "region" && scope.region) return scope.region.displayId;
-  if (scope.kind === "display" && displayId != null) return displayId;
-  return undefined;
 }
 
 /**
@@ -1262,8 +1476,10 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     }
     let ok = false;
     try {
-      ok = globalShortcut.register(plan.accelerator,
-                                   () => { void captureAndAnnounce(plan.action, "hotkey"); });
+      ok = globalShortcut.register(plan.accelerator, () => {
+        if (plan.action === "record") return void onRecordHotkey();
+        if (isShotAction(plan.action)) void captureAndAnnounce(plan.action, "hotkey");
+      });
     } catch {
       // A binding Electron cannot even parse. Reported as unavailable rather
       // than crashing the app on a preferences file someone edited by hand.
@@ -1271,14 +1487,36 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     }
     return ok ? { ...plan, registered: true } : { ...plan, problem: "unavailable", registered: false };
   });
-  tray?.update({ shortcuts, busy: capturing });
+  tray?.update({ shortcuts, busy: capturing, recording: sup?.state === "recording" });
   return shortcutReport;
+}
+
+/**
+ * ⌃⌥⇧⌘4 — one key, three meanings, in priority order (STC-388).
+ *
+ * Stop first: mid-take is the state where a dead key would be worst, and it is
+ * the gap the ticket exists to close ("no hotkey can stop a recording").
+ * Cancel second, and ONLY our own flow — see `recordFlowActive`.
+ */
+async function onRecordHotkey(): Promise<void> {
+  if (sup?.state === "recording") {
+    await sup.stopRecording().catch((e) => console.error("[record] stop failed:", e));
+    return;
+  }
+  if (recordFlowActive) {
+    // Whichever of the two is up; both are no-ops when they are not.
+    cancelCountdown();
+    await closeOverlay().catch(() => {});
+    return;
+  }
+  const r = await runRecordFlow("hotkey");
+  if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
 }
 
 ipcMain.handle("shortcuts:get", async () => ({ shortcuts, report: shortcutReport }));
 
-ipcMain.handle("shortcuts:set", async (_e, action: ShotAction, accelerator: string | null) => {
-  if (!SHOT_ACTIONS.includes(action)) throw new Error(`unknown capture action: ${action}`);
+ipcMain.handle("shortcuts:set", async (_e, action: BindableAction, accelerator: string | null) => {
+  if (!BINDABLE_ACTIONS.includes(action)) throw new Error(`unknown action: ${action}`);
   const plan = planShortcuts({ ...shortcuts, [action]: accelerator })
     .find((p) => p.action === action)!;
   if (plan.problem !== undefined) {
@@ -1661,12 +1899,12 @@ ipcMain.handle("preview:close", async (e) => { clearOpenTake(e); });
  * already is: the window that gets created is `editor-window.ts`'s concern,
  * not something the renderer reaches with its own `BrowserWindow`.
  */
-ipcMain.handle("editor:open", async (_e, dir: string, name: string) => {
+ipcMain.handle("editor:open", async (_e, dir: string, name: string, autoShare?: boolean) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
-  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer") });
+  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer"), autoShare });
   return true;
 });
 

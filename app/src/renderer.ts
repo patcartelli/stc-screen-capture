@@ -4,9 +4,9 @@ interface DisplayInfo {
   pointW: number; pointH: number; pixelW: number; pixelH: number;
   originX?: number; originY?: number;
 }
-/** STC-233. Mirrors Watchers.enumerateDevices's own "mics" shape. */
-interface MicInfo {
-  name: string; uid: string; bluetooth: boolean;
+/** STC-414. Mirrors Watchers.enumerateDevices's own "cameras" shape — name and uid only, no bluetooth. */
+interface CameraInfo {
+  name: string; uid: string;
 }
 interface StillSettingsView {
   format: string; quality: number; scale: string;
@@ -16,17 +16,15 @@ interface ThumbnailSettingsView {
   corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
   skip: boolean;
 }
-interface ScopeSettingsView {
-  kind: "display" | "region" | "window";
-  region: { displayId: number; x: number; y: number; width: number; height: number } | null;
-  windowId: number | null;
-  windowLabel: string | null;
-}
 interface AppSettings {
   camera: boolean;
   displayId: number | null;
   /** STC-233. null means no mic — never "automatic". */
   micDeviceUid: string | null;
+  /** STC-414. null means automatic (the helper's own ranking) — unlike micDeviceUid. */
+  cameraDeviceUid: string | null;
+  /** STC-418. Off by default; no control until the options bar (PR 4). */
+  systemAudio: boolean;
   /** STC-292. */
   shutterSound: boolean;
   /** STC-391: how long Record and the self-timer count down, ms. */
@@ -35,14 +33,14 @@ interface AppSettings {
   still: StillSettingsView;
   /** STC-296. */
   thumbnail: ThumbnailSettingsView;
-  /** STC-370/STC-374: what a recording captures. */
-  scope: ScopeSettingsView;
   /** STC-412: where recordings and stills are saved, replacing still.destination. */
   saveFolder: string | null;
   /** STC-412: show diagnostics table. */
   showDiagnostics: boolean;
   /** STC-447: the optional recording profile, or null for "no preference". */
   recordingProfileId: string | null;
+  /** STC-429: the take library's layout. */
+  libraryView: "grid" | "list";
   /** STC-444 slice 3: the site folder, moved here from the editor window's
    *  own sharebar — one setting for the whole app, not a per-take one. */
   share: { destination: string | null };
@@ -63,7 +61,10 @@ declare const recorder: {
   // STC-447: pops the recording-profile menu; resolves with the chosen
   // profile id, "none" for the clear-it entry, or null if dismissed.
   profileMenu(): Promise<string | null>;
-  devices(): Promise<{ displays?: DisplayInfo[]; mics?: MicInfo[]; stalled?: boolean; detail?: string }>;
+  devices(): Promise<{
+    displays?: DisplayInfo[]; mics?: MicInfo[]; cameras?: CameraInfo[];
+    stalled?: boolean; detail?: string;
+  }>;
   status(): Promise<{ state: string; pid?: number }>;
   takes(): Promise<{ takes: Take[]; invalid: { name: string; reason: string }[] }>;
   library(filter?: string): Promise<LibraryList>;
@@ -82,10 +83,12 @@ declare const recorder: {
   // channel the old in-page player used (`openPreview`, `writeExport`,
   // `publish`, and the rest) moved to `editor-preload.ts`, the only bridge
   // that still calls them.
-  openEditor(dir: string, name: string): Promise<boolean>;
+  // `autoShare` (STC-429) asks the editor to run its own Share flow as soon
+  // as the take is open, rather than duplicating share.ts's plumbing here.
+  openEditor(dir: string, name: string, autoShare?: boolean): Promise<boolean>;
   captureStill(action?: ShotAction): Promise<StillResult>;
   getShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
-  setShortcut(action: ShotAction, accelerator: string | null):
+  setShortcut(action: BindableAction, accelerator: string | null):
     Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   chooseStillDestination(): Promise<{ saveFolder: string | null }>;
@@ -95,8 +98,6 @@ declare const recorder: {
   /** The resolved save location — never null, never a phrase (STC-412 I1). */
   resolvedSaveFolder(): Promise<string>;
   start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
-  pickCaptureTarget(kind: "region" | "window"):
-    Promise<{ ok: boolean; cancelled?: boolean; scope?: ScopeSettingsView }>;
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
   on(event: string, cb: (p: any) => void): () => void;
@@ -108,9 +109,9 @@ declare const recorder: {
 
 import { COUNTDOWN_OPTIONS } from "./countdown.js";
 import {
-  ACTION_LABELS, SHOT_ACTIONS, acceleratorFromKeyStroke, explainShortcut,
+  ACTION_LABELS, BINDABLE_ACTIONS, acceleratorFromKeyStroke, explainShortcut,
   formatAccelerator, parseAccelerator,
-  type ShotAction, type ShortcutReport, type Shortcuts,
+  type BindableAction, type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { renderLibrary, type LibraryCallbacks } from "./library-view.js";
 import type { LibraryItem, LibraryList } from "./library-items.js";
@@ -121,11 +122,15 @@ import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
 import { MODEL_CODE } from "./product.js";
 import { RECORDING_PROFILES } from "@transform/recording-profile.js";
+import { micLabel, type MicInfo } from "./mic-devices.js";
+import {
+  deviceRows, decidePopoverToggle,
+  type DeviceLike, type DeviceChoice, type PopoverId,
+} from "./device-picker.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
 const stillBtn = $("capturestill") as HTMLButtonElement;
-const cameraBox = $("camera") as HTMLInputElement;
 let recording = false;
 
 // STC-399: the strip's own model plate — the bare code, no version (that is
@@ -190,32 +195,6 @@ recProfileBtn.addEventListener("click", async () => {
     renderRecProfile(saved.recordingProfileId);
   } catch (e) {
     alertUser(`Could not save the recording profile: ${String(e)}`);
-  }
-});
-
-/**
- * Opt-in, default off, sticky. The stored preference is the authority — main
- * reads it again at `start`, so this control only proposes changes.
- *
- * Disabled while recording: the helper opens the device at start and closes it
- * at stop, so a mid-take flip would misdescribe what is being recorded.
- */
-void (async () => {
-  try {
-    cameraBox.checked = (await recorder.getSettings()).camera;
-  } catch {
-    cameraBox.checked = false;
-  }
-})();
-
-cameraBox.addEventListener("change", async () => {
-  try {
-    const saved = await recorder.setSettings({ camera: cameraBox.checked });
-    // Show what was actually stored, not what was clicked.
-    cameraBox.checked = saved.camera;
-  } catch (e) {
-    cameraBox.checked = !cameraBox.checked;
-    alertUser(`Could not save the camera setting: ${String(e)}`);
   }
 });
 
@@ -285,200 +264,203 @@ displaySel.addEventListener("change", async () => {
 });
 
 /**
- * Which microphone to record (STC-233). "Off" is the default AND the only
- * automatic choice — unlike the display picker's "Automatic", there is no
- * safe "whichever mic is default": the settled decision (phase 0) forbids
- * taking one without the user naming it explicitly, because auto-grabbing a
- * Bluetooth mic once stalled capture and wedged CoreAudio system-wide. A
- * stored uid whose device is gone is shown as such, the same "(not
- * connected)" treatment the display picker already gives a missing display —
- * `start` would refuse that device (mic-not-found) rather than silently
- * recording another one, and the picker should not hide that before Record
- * is even pressed.
+ * Mic and camera device selection (STC-414), sharing one popover — see
+ * device-picker.ts's header for why one implementation serves both.
+ *
+ * The mic keeps STC-233's own rule: "Off" is the only automatic choice,
+ * because there is no safe default mic (auto-grabbing a Bluetooth mic once
+ * wedged CoreAudio system-wide). The camera keeps its existing on/off
+ * checkbox's behaviour as one of its rows, and ALSO offers "Automatic" —
+ * `CameraCapture`'s own transportType ranking (STC-286), which is what
+ * `camera: true` alone has always meant — alongside naming a device
+ * explicitly. Both give a stored uid that is no longer connected its own
+ * "(not connected)" row, the same treatment the display picker already
+ * gives a missing display: `start` refuses that device rather than
+ * silently recording another one, and the picker should not hide that
+ * before Record is even pressed.
  */
-const micSel = $("mic") as HTMLSelectElement;
-let storedMicUid: string | null = null;
+const cameraTrigger = $("camera-picker") as HTMLButtonElement;
+const micTrigger = $("mic-picker") as HTMLButtonElement;
+const devicePopover = $("devicepopover") as HTMLDivElement;
 
-function micLabel(m: MicInfo): string {
-  return m.bluetooth ? `${m.name} (Bluetooth)` : m.name;
+let storedCamera = false;
+let storedCameraUid: string | null = null;
+let storedMicUid: string | null = null;
+let knownMics: DeviceLike[] = [];
+let knownCameras: DeviceLike[] = [];
+let openPopover: PopoverId | null = null;
+
+function cameraChoice(): DeviceChoice {
+  if (!storedCamera) return { kind: "off" };
+  return storedCameraUid != null ? { kind: "device", uid: storedCameraUid } : { kind: "auto" };
+}
+function micChoice(): DeviceChoice {
+  return storedMicUid != null ? { kind: "device", uid: storedMicUid } : { kind: "off" };
 }
 
-async function refreshMics(): Promise<void> {
-  let mics: MicInfo[] = [];
+/**
+ * The trigger's own label at rest — what is CONFIGURED, not what a take is
+ * currently doing. `setCamera`/`setMic` (below) overwrite this with live
+ * status the moment a take actually opens the device; this only runs again
+ * once that take is over and something is picked anew, so it never fights
+ * "opening…" or a fault text mid-recording.
+ */
+function deviceStatusLabel(choice: DeviceChoice, devices: DeviceLike[]): string {
+  if (choice.kind === "off") return "off";
+  if (choice.kind === "auto") return "automatic";
+  return devices.find((d) => d.uid === choice.uid)?.name ?? "not connected";
+}
+function renderIdleStatus(): void {
+  if (recording) return;
+  setCamera(deviceStatusLabel(cameraChoice(), knownCameras));
+  setMic(deviceStatusLabel(micChoice(), knownMics));
+}
+
+async function refreshDevices(): Promise<void> {
   try {
     const r = await recorder.devices();
-    mics = Array.isArray(r.mics) ? r.mics : [];
+    knownMics = Array.isArray(r.mics) ? r.mics.map((m) => ({ name: micLabel(m), uid: m.uid })) : [];
+    knownCameras = Array.isArray(r.cameras) ? r.cameras : [];
   } catch {
-    mics = [];
+    knownMics = [];
+    knownCameras = [];
   }
-  const wanted = storedMicUid;
-  micSel.replaceChildren();
-  const off = document.createElement("option");
-  off.value = ""; off.textContent = "Off";
-  micSel.append(off);
-  for (const m of mics) {
-    const o = document.createElement("option");
-    o.value = m.uid; o.textContent = micLabel(m);
-    micSel.append(o);
-  }
-  if (wanted != null && !mics.some((m) => m.uid === wanted)) {
-    const o = document.createElement("option");
-    o.value = wanted; o.textContent = "Mic (not connected)";
-    micSel.append(o);
-  }
-  micSel.value = wanted ?? "";
+  renderIdleStatus();
 }
+
+function closePopover(): void {
+  if (openPopover == null) return;
+  openPopover = null;
+  devicePopover.hidden = true;
+  devicePopover.replaceChildren();
+}
+
+function renderPopover(): void {
+  if (openPopover == null) { devicePopover.hidden = true; return; }
+  const isMic = openPopover === "mic";
+  const rows = deviceRows(isMic
+    ? { devices: knownMics, current: micChoice(), offLabel: "Off", staleLabel: "Mic (not connected)" }
+    : { devices: knownCameras, current: cameraChoice(), offLabel: "Off", autoLabel: "Automatic",
+       staleLabel: "Camera (not connected)" });
+  devicePopover.replaceChildren();
+  for (const row of rows) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = row.label;
+    b.setAttribute("role", "option");
+    b.setAttribute("aria-selected", String(row.selected));
+    b.addEventListener("click", () => void pickDevice(isMic, row.choice));
+    devicePopover.append(b);
+  }
+  const trigger = isMic ? micTrigger : cameraTrigger;
+  const r = trigger.getBoundingClientRect();
+  devicePopover.hidden = false;
+  devicePopover.style.left = `${Math.round(r.left)}px`;
+  devicePopover.style.top = `${Math.round(r.bottom + 4)}px`;
+}
+
+async function pickDevice(isMic: boolean, choice: DeviceChoice): Promise<void> {
+  try {
+    const saved = isMic
+      ? await recorder.setSettings({ micDeviceUid: choice.kind === "device" ? choice.uid : null })
+      : await recorder.setSettings(
+          choice.kind === "off" ? { camera: false }
+          : choice.kind === "auto" ? { camera: true, cameraDeviceUid: null }
+          : { camera: true, cameraDeviceUid: choice.uid });
+    if (isMic) storedMicUid = saved.micDeviceUid;
+    else { storedCamera = saved.camera; storedCameraUid = saved.cameraDeviceUid; }
+  } catch (e) {
+    alertUser(`Could not save the ${isMic ? "mic" : "camera"} setting: ${String(e)}`);
+  }
+  closePopover();
+  renderIdleStatus();
+}
+
+function toggleDevicePopover(id: PopoverId): void {
+  openPopover = decidePopoverToggle(openPopover, id);
+  renderPopover();
+}
+cameraTrigger.addEventListener("click", (e) => { e.stopPropagation(); toggleDevicePopover("camera"); });
+micTrigger.addEventListener("click", (e) => { e.stopPropagation(); toggleDevicePopover("mic"); });
+// Outside click closes it — the popover itself and its own triggers stop
+// propagation above, so this only ever sees a click elsewhere.
+document.addEventListener("click", () => closePopover());
 
 void (async () => {
   try {
-    storedMicUid = (await recorder.getSettings()).micDeviceUid;
+    const s = await recorder.getSettings();
+    storedCamera = s.camera;
+    storedCameraUid = s.cameraDeviceUid;
+    storedMicUid = s.micDeviceUid;
   } catch {
-    storedMicUid = null;
+    storedCamera = false; storedCameraUid = null; storedMicUid = null;
   }
-  await refreshMics();
+  await refreshDevices();
 })();
 
-micSel.addEventListener("change", async () => {
-  const chosen = micSel.value === "" ? null : micSel.value;
-  try {
-    const saved = await recorder.setSettings({ micDeviceUid: chosen });
-    storedMicUid = saved.micDeviceUid;
-  } catch (e) {
-    alertUser(`Could not save the mic setting: ${String(e)}`);
-  }
-  await refreshMics();
-});
-
-/**
- * What a recording captures (STC-370's region/window capability, wired to the
- * window by STC-374): Screen (the existing display picker), Window, or Area.
- * Source is a genuinely separate control from Profile — the ticket's own
- * words — but it is also separate from the SCOPE picker's own persistence:
- * changing scope never forgets a previously chosen window or area, so
- * flipping back and forth does not mean re-picking.
- */
-const scopeSel = $("scope") as HTMLSelectElement;
-const displayLabelEl = $("display-label");
-const windowSourceEl = $("window-source");
-const regionSourceEl = $("region-source");
-const windowSourceLabel = $("window-source-label");
-const regionSourceLabel = $("region-source-label");
-const pickWindowBtn = $("pickwindow") as HTMLButtonElement;
-const pickRegionBtn = $("pickregion") as HTMLButtonElement;
-const clearWindowBtn = $("clearwindow") as HTMLButtonElement;
-const clearRegionBtn = $("clearregion") as HTMLButtonElement;
-
-let currentScope: ScopeSettingsView = { kind: "display", region: null, windowId: null, windowLabel: null };
-
-/** A region or window scope with nothing picked yet cannot start a take
- * (`recorder:start` refuses it as `no-capture-target`) — reflected here too,
- * so the button is not an invitation to press it and read the refusal. */
-function scopeHasTarget(): boolean {
-  if (currentScope.kind === "window") return currentScope.windowId != null;
-  if (currentScope.kind === "region") return currentScope.region != null;
-  return true;
-}
-
-/** Shows exactly the source control the current scope needs, and keeps the
- * Record button honest about whether pressing it would do anything. */
-function renderScope(): void {
-  const kind = currentScope.kind;
-  displayLabelEl.hidden = kind !== "display";
-  windowSourceEl.hidden = kind !== "window";
-  regionSourceEl.hidden = kind !== "region";
-  windowSourceLabel.textContent = currentScope.windowLabel ?? "No window chosen";
-  regionSourceLabel.textContent = currentScope.region
-    ? `${Math.round(currentScope.region.width)} × ${Math.round(currentScope.region.height)}`
-    : "No area chosen";
-  // Clearing an already-empty pick is a no-op the button should not invite —
-  // the STC-374 runbook's finding was that there was no way BACK to this
-  // state at all, not that the button needed to always be live.
-  if (!recording) {
-    clearWindowBtn.disabled = currentScope.windowId == null;
-    clearRegionBtn.disabled = currentScope.region == null;
-    recordBtn.disabled = !scopeHasTarget();
-  }
-}
-
-/** Forgets a chosen window or area without opening the picker — the gap the
- * STC-374 runbook found: `kind` stays put (Window/Area scope does not fall
- * back to Screen), only the target and its cosmetic label reset. */
-async function clearSource(kind: "region" | "window"): Promise<void> {
-  const patch = kind === "region"
-    ? { region: null }
-    : { windowId: null, windowLabel: null };
-  try {
-    const saved = await recorder.setSettings({ scope: { ...currentScope, ...patch } });
-    currentScope = saved.scope;
-  } catch (e) {
-    alertUser(`Could not clear the ${kind === "region" ? "area" : "window"}: ${String(e)}`);
-  }
-  renderScope();
-}
-clearWindowBtn.addEventListener("click", () => void clearSource("window"));
-clearRegionBtn.addEventListener("click", () => void clearSource("region"));
-
-scopeSel.addEventListener("change", async () => {
-  const kind = scopeSel.value as ScopeSettingsView["kind"];
-  try {
-    const saved = await recorder.setSettings({ scope: { ...currentScope, kind } });
-    currentScope = saved.scope;
-  } catch (e) {
-    alertUser(`Could not save the scope: ${String(e)}`);
-  }
-  scopeSel.value = currentScope.kind;
-  renderScope();
-});
-
-/**
- * Opens the same overlay `capture-still`'s region/window actions use, but to
- * PICK what a recording will scope to rather than to capture anything —
- * confirming stores the choice as a sticky preference (main-side) and this
- * only reflects what came back.
- */
-async function pickSource(kind: "region" | "window"): Promise<void> {
-  const btn = kind === "region" ? pickRegionBtn : pickWindowBtn;
-  btn.disabled = true;
-  try {
-    const r = await recorder.pickCaptureTarget(kind);
-    if (r.ok && r.scope) currentScope = r.scope;
-  } catch (e: any) {
-    alertUser(`Could not choose a ${kind === "region" ? "area" : "window"}: ${e?.message ?? e}`);
-  } finally {
-    btn.disabled = false;
-    renderScope();
-  }
-}
-pickWindowBtn.addEventListener("click", () => void pickSource("window"));
-pickRegionBtn.addEventListener("click", () => void pickSource("region"));
-
-void (async () => {
-  try {
-    currentScope = (await recorder.getSettings()).scope;
-  } catch {
-    // The default (display, automatic) already applies.
-  }
-  scopeSel.value = currentScope.kind;
-  renderScope();
-})();
-
-/** The camera, display and scope are fixed at start and released at stop, so
- * none may look changeable mid-take. */
+/** The camera, display and mic are fixed at start and released at stop, so
+ * none may look changeable mid-take. Scope is no longer among them (STC-388):
+ * it is chosen fresh in the overlay on every take, so there is nothing here
+ * to lock. */
 function lockSettings(locked: boolean): void {
-  cameraBox.disabled = locked;
+  cameraTrigger.disabled = locked;
   displaySel.disabled = locked;
-  micSel.disabled = locked;
-  scopeSel.disabled = locked;
-  pickWindowBtn.disabled = locked;
-  pickRegionBtn.disabled = locked;
+  micTrigger.disabled = locked;
   // STC-447: a profile is applied once, after the take ends — changing it
   // mid-recording would not describe what is actually being recorded, the
   // same reasoning every other control in this function already follows.
   recProfileBtn.disabled = locked;
-  // Locked, these stay disabled outright; unlocked, renderScope() puts them
-  // back to whatever "is there something to clear" actually says.
-  if (locked) { clearWindowBtn.disabled = true; clearRegionBtn.disabled = true; }
-  else renderScope();
+  // A disabled trigger cannot be the reason the popover stays open — close it
+  // outright rather than leaving it floating over a now-unclickable button.
+  if (locked) closePopover();
+}
+
+/**
+ * The ONE place `recording`, the button's label, `#state` and `lockSettings`
+ * are ever written (STC-388 review, Finding 2).
+ *
+ * Before this, each was set inline inside the Record button's OWN click
+ * handler — sound while every take began and ended at that button, and wrong
+ * the moment the hotkey and the tray item became two more doors to the same
+ * state with no window listening. `recorder.on("recorder:recording-state",
+ * …)` below is what calls this for a take THIS window did not itself start
+ * or stop; the click handler calls it for one it did. Either way this is the
+ * only function that writes any of these four things.
+ */
+function applyRecordingState(recording_: boolean): void {
+  recording = recording_;
+  recordBtn.textContent = recording ? "Stop" : "Record";
+  setState(recording ? "recording" : "idle");
+  // The device is opened at start and closed at stop, so the setting must
+  // not appear changeable mid-take — it would misdescribe the recording.
+  lockSettings(recording);
+}
+
+/**
+ * Finding 7 (folded into Finding 2's fix, same review): camera and mic are
+ * ALSO settable from the options bar (STC-388), not only from this
+ * window's own device pickers (STC-414) — so a take this window did not
+ * itself start may be running with settings the DOM still disagrees with.
+ * Re-reads the stored settings rather than trusting `storedCamera`/
+ * `storedCameraUid`/`storedMicUid` as they stand, and is called for a self-initiated start too
+ * (the overlay's bar can change either mid-flow, even from this window's own
+ * button), not only an externally-reconciled one.
+ */
+async function refreshCaptureSettingsForRecording(): Promise<void> {
+  try {
+    const s = await recorder.getSettings();
+    storedCamera = s.camera;
+    storedCameraUid = s.cameraDeviceUid;
+    storedMicUid = s.micDeviceUid;
+  } catch {
+    // Best-effort — the "opening…" labels below still reflect whatever this
+    // window already had, which is no worse than before this fix existed.
+  }
+  // Reset per take, and say "opening…" rather than "—": the camera opens
+  // off the critical path, so there IS a window where it is neither absent
+  // nor live, and that window is the whole complaint (STC-287).
+  setCamera(storedCamera ? "opening…" : "off");
+  setMic(storedMicUid != null ? "opening…" : "off");
 }
 // ---- profile sheet (STC-374) ------------------------------------------------
 //
@@ -498,7 +480,7 @@ function setProfileOpen(open: boolean): void {
 profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
 profileCloseBtn.addEventListener("click", () => setProfileOpen(false));
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Escape") setProfileOpen(false);
+  if (e.code === "Escape") { setProfileOpen(false); closePopover(); }
 });
 
 let currentDir: string | undefined;
@@ -589,11 +571,6 @@ recorder.on("still:captured", (r: StillResult) => { void reportStill(r); });
  * the app is broken.
  */
 const START_FAULTS: Record<string, string> = {
-  // Belt to `scopeHasTarget`'s brace: the button is disabled whenever this
-  // would fire, so reaching it at all means something else changed the scope
-  // between disabling and pressing — still worth a real message rather than
-  // a raw error code.
-  "no-capture-target": "Choose a window or an area to record before pressing Record.",
   // STC-391: a shot is mid-flight — most likely a self-timer, which
   // now spends seconds waiting with this window still live and pressable.
   "capture-in-flight":
@@ -664,25 +641,13 @@ recordBtn.addEventListener("click", async () => {
         alertUser(START_FAULTS[String(r.code)] ?? `Could not start: ${r.code}\n${r.detail ?? ""}`);
         setState("idle");
       } else {
-        recording = true;
-        // Reset per take, and say "opening…" rather than "—": the camera opens
-        // off the critical path, so there IS a window where it is neither
-        // absent nor live, and that window is the whole complaint (STC-287).
-        setCamera(cameraBox.checked ? "opening…" : "off");
-        setMic(storedMicUid != null ? "opening…" : "off");
-      // The device is opened at start and closed at stop, so the setting must
-      // not appear changeable mid-take — it would misdescribe the recording.
-      lockSettings(true);
+        applyRecordingState(true);
+        await refreshCaptureSettingsForRecording();
         currentDir = r.dir;
-        recordBtn.textContent = "Stop";
-        setState("recording");
       }
     } else {
       await recorder.stop();
-      recording = false;
-      lockSettings(false);
-      recordBtn.textContent = "Record";
-      setState("idle");
+      applyRecordingState(false);
       await refreshTakes();
     }
   } catch (e: any) {
@@ -697,12 +662,18 @@ recorder.on("helper:ready", (l) => {
   // A (re)started helper can enumerate; a respawned one may see a different
   // set of displays (or mics) than the last one did.
   void refreshDisplays();
-  void refreshMics();
+  void refreshDevices();
   if (!recording) setState("idle");
-  // Not unconditionally `false`: a window or area scope with nothing picked
-  // yet must stay disabled through a helper respawn, the same as it is on
-  // first load.
-  if (!recording) recordBtn.disabled = !scopeHasTarget();
+  // No precondition left to check (STC-388): Record opens the scope overlay
+  // itself, so there is nothing that can be unset when the button is
+  // pressed. It is disabled only while a REQUEST FROM THIS WINDOW is in
+  // flight (deferred minor #7, STC-388 review) — never merely because a take
+  // is running, which the click handler's own start/`finally` toggling
+  // already owns: `recording === true` shows "Stop" and stays pressable, or
+  // a take begun by the hotkey or the tray (Finding 2's reconciliation,
+  // `recorder:recording-state`) would leave this window with a disabled
+  // button it could never use to stop its own recording.
+  if (!recording) recordBtn.disabled = false;
 });
 
 recorder.on("helper:stats", (s) => {
@@ -739,10 +710,8 @@ const ENDED_BY_HELPER: Record<string, string> = {
 recorder.on("helper:recording-ended", (i) => {
   // The helper stopped by itself — a display change, or a display stream that
   // died. The file is valid; what would be wrong is leaving the button saying
-  // "Stop".
-  recording = false;
-  recordBtn.textContent = "Record";
-  setState("idle");
+  // "Stop" (or, before Finding 2's fix, the pickers still locked).
+  applyRecordingState(false);
   refreshTakes();
   const why = ENDED_BY_HELPER[String(i.reason)] ?? `Recording stopped by the recorder (${i.reason}).`;
   alertUser(`${why}\nWhat was captured up to that point was saved.`);
@@ -750,10 +719,32 @@ recorder.on("helper:recording-ended", (i) => {
 });
 
 recorder.on("helper:recording-lost", (i) => {
-  recording = false;
-  recordBtn.textContent = "Record";
-  setState("idle");
+  applyRecordingState(false);
   alertUser(`The recorder quit while recording — that take was not saved.\n${i.dir ?? ""}`);
+});
+
+/**
+ * STC-388 review, Finding 2 (CRITICAL). A take begun or ended by the hotkey
+ * or the tray never reached this window before — `stopRecording()` emits
+ * nothing at all (`endRecording` is only for a stop the HELPER decided on),
+ * and a hotkey-initiated `runRecordFlow` never touches this window either.
+ * `main.ts`'s `reconcileWindowRecording` is what notices, off `sup.state` —
+ * CLAUDE.md's own named authority — and this applies it.
+ *
+ * Guarded on an actual disagreement: a start or stop THIS window itself
+ * asked for already applied `applyRecordingState` synchronously inside the
+ * click handler, so by the time this fires (bounded by the next heartbeat,
+ * same latency the tray already accepts) `s.recording === recording` and
+ * there is nothing to do — this is only for the door that did NOT go through
+ * that handler.
+ */
+recorder.on("recorder:recording-state", (s: { recording: boolean; dir?: string }) => {
+  if (s.recording === recording) return;
+  applyRecordingState(s.recording);
+  if (s.recording) {
+    currentDir = s.dir;
+    void refreshCaptureSettingsForRecording();
+  }
 });
 
 /**
@@ -801,6 +792,23 @@ recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The 
 recorder.on("pill:state", (s: { collapsed: boolean }) => {
   document.body.classList.toggle("pill-collapsed", s.collapsed);
 });
+
+/**
+ * STC-433: Record's own flow (`runRecordFlow` in main.ts) turned the mic off
+ * on this window's behalf, when its overlay pick vanished before the take
+ * actually started. The mic popover's `storedMicUid` is now stale too, and
+ * nothing else would refresh it until the next `helper:ready` or a real
+ * unplug. There is no display equivalent under STC-388's fresh, never-
+ * persisted scope pick — a vanished display just refuses the take.
+ */
+recorder.on("settings:changed", () => {
+  void (async () => {
+    const s = await recorder.getSettings();
+    storedMicUid = s.micDeviceUid;
+    await refreshDevices();
+  })();
+});
+
 /**
  * Camera failures the user must actually see. Every one of these was already
  * being emitted and silently dropped: the handler below matched exactly one
@@ -822,6 +830,10 @@ const CAMERA_FAULTS: Record<string, string> = {
     "The camera opened but is not sending any frames, so this take will have no " +
     "picture-in-picture. A closed laptop lid, a covered lens, or another app using " +
     "the camera all look like this.",
+  // STC-414: the picker showed a real device at some point, and it is gone by the
+  // time the take actually opens it — the same shape as mic-not-found, and the
+  // same rule (refuse that device, never silently substitute another).
+  "camera-not-found": "The chosen camera is no longer available, so this take has no picture-in-picture.",
 };
 
 /**
@@ -830,15 +842,15 @@ const CAMERA_FAULTS: Record<string, string> = {
  * otherwise be silently dropped by the generic handler below.
  */
 const MIC_FAULTS: Record<string, string> = {
-  "mic-not-found": "The chosen microphone is no longer available, so this take has no audio.",
-  "mic-not-authorized": "Microphone access is not authorized, so this take has no audio.",
-  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no audio.",
-  "mic-device-input-failed": "The microphone could not be opened, so this take has no audio.",
-  "mic-input-refused": "The microphone could not be opened, so this take has no audio.",
-  "mic-writer-failed": "Recording the microphone failed, so this take has no audio.",
+  "mic-not-found": "The chosen microphone is no longer available, so this take has no microphone audio.",
+  "mic-not-authorized": "Microphone access is not authorized, so this take has no microphone audio.",
+  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no microphone audio.",
+  "mic-device-input-failed": "The microphone could not be opened, so this take has no microphone audio.",
+  "mic-input-refused": "The microphone could not be opened, so this take has no microphone audio.",
+  "mic-writer-failed": "Recording the microphone failed, so this take has no microphone audio.",
   "mic-no-frames":
     "The microphone opened but is not sending any audio, so this take will have no " +
-    "sound. Another app holding the device is the usual cause.",
+    "microphone audio. Another app holding the device is the usual cause.",
 };
 
 /**
@@ -1040,6 +1052,9 @@ countdownSel.addEventListener("change", () => {
 /** Which kind filter is showing. The adapter validates it; this only remembers it. */
 let libraryFilter = "all";
 
+/** Which layout the library draws in (STC-429) — read from settings at boot, below. */
+let libraryViewMode: "grid" | "list" = "grid";
+
 /**
  * The longest edge a cached library thumbnail is rendered at.
  *
@@ -1128,6 +1143,18 @@ const libraryCallbacks: LibraryCallbacks = {
       // criterion. Which actions an item offers was decided by the adapter, so
       // an id that cannot apply to this item never reaches here.
       if (id === "open") await openItem(item);
+      else if (id === "share") {
+        // Recording-only (the adapter never offers "share" for a still — the
+        // still editor has no publish surface yet, STC-429): open the take
+        // editor and let IT run the Share flow, rather than a second one here.
+        const dir = item.dir;
+        if (!dir) throw new Error("share needs a bundle directory");
+        try {
+          await recorder.openEditor(dir, item.id, true);
+        } catch (e: any) {
+          alertUser(`Could not open "${item.label ?? item.id}" to share it.\n${e?.message ?? e}`);
+        }
+      }
       else if (id === "duplicate") {
         // Bundle-only, same reason "open" is: the adapter never offers this
         // id for an item with no `dir` (rule: an action needing a bundle
@@ -1191,6 +1218,11 @@ const libraryCallbacks: LibraryCallbacks = {
     } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async setFilter(id) { libraryFilter = id; await refreshTakes(); },
+  async setView(mode) {
+    libraryViewMode = mode;
+    await recorder.setSettings({ libraryView: mode });
+    await refreshTakes();
+  },
   async paintThumbnail(item, img) {
     if (item.thumbnail.source === "file") {
       await showCachedThumbnail(item, img, item.thumbnail.file);
@@ -1236,13 +1268,23 @@ async function openItem(item: LibraryItem): Promise<void> {
 async function refreshTakes(): Promise<void> {
   const list = await recorder.library(libraryFilter);
   libraryFilter = list.filter;
-  renderLibrary($("takes"), list, libraryCallbacks);
+  renderLibrary($("takes"), list, libraryCallbacks, libraryViewMode);
 }
 
 
 recorder.status().then((s) => {
-  setState(s.state);
   if (s.pid) $("pid").textContent = String(s.pid);
+  // STC-388 review, Finding 2: a window opened (or reopened via "Open
+  // Library") WHILE a take started elsewhere is already running gets no
+  // transition to react to — `reconcileWindowRecording` only sends on a
+  // CHANGE, and this window has never seen one. Read the current state
+  // directly rather than waiting for the next one.
+  if (s.state === "recording") {
+    applyRecordingState(true);
+    void refreshCaptureSettingsForRecording();
+  } else {
+    setState(s.state);
+  }
   // A helper that could not be spawned at all fails in milliseconds — every
   // restart the supervisor allows has already been used up before this page
   // exists, so the gave-up event above was emitted to nobody. Read the state
@@ -1252,7 +1294,13 @@ recorder.status().then((s) => {
     alertUser("The recorder keeps failing to start. Restart the app.");
   }
 });
-refreshTakes();
+// The layout preference (STC-429) has to be known before the first render —
+// a bare `refreshTakes()` here would draw the grid once, then again in
+// whatever view the user actually chose, a visible flash on every launch.
+void (async () => {
+  libraryViewMode = (await recorder.getSettings()).libraryView;
+  await refreshTakes();
+})();
 
 // ---- capture shortcuts (STC-292) ------------------------------------------
 //
@@ -1264,15 +1312,17 @@ refreshTakes();
 const shortcutList = $("shortcuts");
 let shortcutState: { shortcuts: Shortcuts; report: ShortcutReport[] } | undefined;
 /** Which row is waiting for a keystroke, if any. */
-let listening: ShotAction | undefined;
+let listening: BindableAction | undefined;
 
-function reportFor(action: ShotAction): ShortcutReport | undefined {
+function reportFor(action: BindableAction): ShortcutReport | undefined {
   return shortcutState?.report.find((r) => r.action === action);
 }
 
 function renderShortcuts(): void {
   shortcutList.replaceChildren();
-  for (const action of SHOT_ACTIONS) {
+  // BINDABLE_ACTIONS, not the shot-only subset (STC-388): Record gets a
+  // rebindable row here like every other action.
+  for (const action of BINDABLE_ACTIONS) {
     const row = document.createElement("div");
     row.className = "shortcut";
 
@@ -1310,7 +1360,7 @@ function renderShortcuts(): void {
   }
 }
 
-async function applyShortcut(action: ShotAction, accelerator: string | null): Promise<void> {
+async function applyShortcut(action: BindableAction, accelerator: string | null): Promise<void> {
   listening = undefined;
   try {
     shortcutState = await recorder.setShortcut(action, accelerator);

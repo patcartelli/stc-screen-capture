@@ -14,6 +14,8 @@ interface StillSettingsView {
 }
 interface AppSettings {
   still: StillSettingsView;
+  /** STC-454: the preview's mute button, an app setting. */
+  previewMuted?: boolean;
   // STC-444 slice 3: the export dialog shows this read-only (the picker
   // itself moved to the main window's Preferences), so a take can be
   // published without a second door back to a folder picker this window
@@ -42,6 +44,7 @@ declare const editor: {
     premultiplied?: boolean; metadata?: string; code?: string; detail?: string;
   }>;
   getSettings: () => Promise<AppSettings>;
+  setPreviewMuted: (muted: boolean) => Promise<unknown>;
   publish(): Promise<{
     ok: boolean; plan: string; message?: string;
     file?: string; name?: string; replaced?: boolean; snippet?: string;
@@ -53,10 +56,16 @@ declare const editor: {
 import { loadSession, type LoadedSession } from "@transform/session";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
-import type { Project, ZoomOverride } from "@transform/types";
+import {
+  levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack,
+  micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
+} from "@transform/audio-mix";
+import { decodeAllAudio, pcmTrackOf } from "@transform/decode-audio";
+import { PreviewAudio } from "@transform/preview-audio";
+import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
 import {
   parseProject, projectForWrite, exportWindow, estimateExportMs,
-  clampTrim, isFullTake, minTrimNs,
+  clampTrim, isFullTake, minTrimNs, DEFAULT_NARRATION_CLEANUP,
 } from "@transform/trim";
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
 import { PROFILE_HINT_FILE } from "@transform/recording-profile";
@@ -98,6 +107,10 @@ const fmtEstimate = (ms: number) => {
 const params = new URLSearchParams(location.search);
 const takeDir = params.get("dir") ?? "";
 const takeName = params.get("name") ?? "";
+// STC-429: the library's "Share" tile action opens the take here and asks
+// for its own Share flow to run immediately, rather than duplicating
+// share.ts's plumbing in the grid.
+const autoShare = params.get("autoShare") === "1";
 
 // ---- state ------------------------------------------------------------------
 
@@ -1248,7 +1261,9 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   const cameraMp4 = anchors.files?.camera ? await readVideo(anchors.files.camera) : undefined;
   // STC-233: same reasoning as cameraMp4 above, one track over.
   const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
-  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a });
+  // STC-418: and again for system audio — loadSession refuses a claimed track that was not supplied.
+  const systemM4a = anchors.files?.system ? await readVideo(anchors.files.system) : undefined;
+  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a, systemM4a });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   // A hint only ever applies to a take with no project.json yet — once one
   // exists (this take was opened before, or hand-authored), its own output
@@ -1274,6 +1289,9 @@ async function openTakeOrThrow(dir: string): Promise<void> {
     setClock(formatReadout(frame, player!.durationNs));
     setPlayState(playing);
     $("shuttle").textContent = formatShuttle(player!.rate);
+    // STC-454: which clock the playhead follows, for the e2e suite (sound
+    // plays at 1x only, and then the picture runs on the audio clock).
+    ($("stage") as HTMLCanvasElement).dataset.clock = player!.clock;
     if (!scrubbing) scrub.value = String(frame);
     updateRulerPlayhead(tNs);
   };
@@ -1282,6 +1300,9 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   updateTrimUI();
   updateOutputSizeUI();
   updateLegibilityUI();
+  updateSystemAudioUI();
+  updateVoiceCleanUI();
+  void loadPreviewAudio(session, audioGen);
   applySpanTransform();
   redrawLanes();
 }
@@ -1296,12 +1317,25 @@ async function closeTake(): Promise<void> {
   draftRect = null;
   draftEasing = "";
   dragAnchorUv = null;
+  // STC-454: detach and drop the sound first, and bump the generation so a
+  // decode or a cleanup still in flight for THIS take lands nowhere.
+  audioGen++;
+  player?.attachAudio(null);
+  previewAudio?.close();
+  previewAudio = null;
+  rawMic = null;
+  cleanedMic = null;
+  cleanedFor = null;
+  cleanWanted = null;
+  setPreviewAudioState("none");
   player?.close();
   player = undefined;
   openSession = undefined;
   openProject = undefined;
   openCapture = undefined;
   openDisplay = undefined;
+  updateSystemAudioUI();
+  updateVoiceCleanUI();
   applyStageDisplay();
   await editor.closePreview();
 }
@@ -1367,6 +1401,263 @@ $("scrub").addEventListener("input", () => {
   void player.seek(frameToNs(Number(($("scrub") as HTMLInputElement).value), player.durationNs));
 });
 
+// ---- system-audio level (STC-418 PR 3) --------------------------------
+//
+// Shown only for a take that recorded system audio. The level lives on the
+// project (project-9's systemAudioLevel, 0..1) and is applied by the export's
+// mix (audio-mix.ts) — and, since STC-454, by the preview's sound, which
+// reads it per 100 ms chunk, so a move is heard while playing. `input`
+// updates the value live; `change` (release, or a key) is what persists, the
+// same drag-then-settle split the trim handles use.
+//
+// The slider is a DECIBEL fader, not the gain itself (audio-mix.ts's
+// levelFromSliderPct): a linear 30% still sounded loud on hardware.
+
+function updateSystemAudioUI(): void {
+  updateAudioButton();
+  const row = $("sysaudio");
+  const has = !!openSession?.systemAudio && !!openProject;
+  row.toggleAttribute("hidden", !has);
+  if (!has) return;
+  const level = openProject!.systemAudioLevel ?? 1;
+  ($("sysaudiolevel") as HTMLInputElement).value = String(sliderPctFromLevel(level));
+  $("sysaudiovalue").textContent = formatLevelDb(level);
+}
+
+$("sysaudiolevel").addEventListener("input", () => {
+  if (!openProject) return;
+  const pct = Number(($("sysaudiolevel") as HTMLInputElement).value);
+  openProject.systemAudioLevel = levelFromSliderPct(pct);
+  $("sysaudiovalue").textContent = formatLevelDb(openProject.systemAudioLevel);
+});
+$("sysaudiolevel").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- the Audio popover and the mic level (STC-454 part 2) ---------------
+//
+// Every audio control for the take lives in one popover behind the "Audio"
+// button (Patrick, 2026-09-25: the timecode row had filled up). The button
+// shows only for a take with audio; each row only for the track it acts on.
+// The mic level can BOOST (+12 dB at 100%, as recorded at 75%) and is saved
+// as project-11's `micLevel`; the preview reads it per chunk, so a move is
+// heard while playing. Same input/change split as the other sliders.
+
+function updateAudioButton(): void {
+  const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);
+  $("audiobtn").toggleAttribute("hidden", !has);
+  if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
+}
+
+function updateMicUI(): void {
+  updateAudioButton();
+  const has = !!openSession?.micAudio && !!openProject;
+  $("micaudio").toggleAttribute("hidden", !has);
+  if (!has) return;
+  const level = openProject!.micLevel ?? 1;
+  ($("miclevel") as HTMLInputElement).value = String(sliderPctFromMicLevel(level));
+  $("miclevelvalue").textContent = formatLevelDb(level);
+}
+
+$("miclevel").addEventListener("input", () => {
+  if (!openProject) return;
+  openProject.micLevel = micLevelFromSliderPct(Number(($("miclevel") as HTMLInputElement).value));
+  $("miclevelvalue").textContent = formatLevelDb(openProject.micLevel);
+});
+$("miclevel").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- narration cleanup (STC-455) ---------------------------------------
+//
+// Shown only for a take with a mic. One switch and one strength (Patrick,
+// 2026-09-25), saved to the project (project-10's narrationCleanup) and
+// applied by the export (narration-clean.ts, then the mix). The strength is
+// disabled, not reset, while the switch is off, so turning it back on returns
+// to the same setting. Same input/change split as the level above.
+
+function updateVoiceCleanUI(): void {
+  updateMicUI();
+  const row = $("voiceclean");
+  const has = !!openSession?.micAudio && !!openProject;
+  row.toggleAttribute("hidden", !has);
+  if (!has) return;
+  const n = openProject!.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP;
+  const pct = Math.round(n.strength * 100);
+  ($("voicecleanon") as HTMLInputElement).checked = n.enabled;
+  const strength = $("voicecleanstrength") as HTMLInputElement;
+  strength.value = String(pct);
+  strength.disabled = !n.enabled;
+  $("voicecleanvalue").textContent = `${pct}%`;
+}
+
+function currentCleanup(): NarrationCleanup {
+  return { ...(openProject?.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP) };
+}
+
+$("voicecleanon").addEventListener("change", () => {
+  if (!openProject) return;
+  openProject.narrationCleanup = { ...currentCleanup(), enabled: ($("voicecleanon") as HTMLInputElement).checked };
+  updateVoiceCleanUI();
+  refreshCleanMic();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+$("voicecleanstrength").addEventListener("input", () => {
+  if (!openProject) return;
+  const pct = Number(($("voicecleanstrength") as HTMLInputElement).value);
+  openProject.narrationCleanup = { ...currentCleanup(), strength: pct / 100 };
+  $("voicecleanvalue").textContent = `${pct}%`;
+});
+$("voicecleanstrength").addEventListener("change", () => {
+  // On release, not per `input`: every re-clean is ~1 s a minute of audio.
+  refreshCleanMic();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- preview sound (STC-454) ---------------------------------------------
+//
+// The preview plays the EXPORT's mix (preview-audio.ts over audio-mix.ts's
+// mixBlock), at 1x only, silent while dragging, with the picture following
+// the audio clock while it plays. Decoded after the take opens, so a take
+// with long audio shows its picture first; `audioGen` drops a decode (or a
+// cleanup) that lands after its take has closed.
+//
+// Narration cleanup is applied here too, the export's own `cleanNarration`,
+// run in `narration-worker.ts` so a long take does not stall the transport.
+// Until the cleaned mic arrives, whatever was playing keeps playing
+// (Patrick, 2026-09-25: "cleaned, after a short wait").
+
+let previewAudio: PreviewAudio | null = null;
+let previewMuted = false;
+let audioGen = 0;
+let rawMic: PcmTrack | null = null;
+let cleanedMic: PcmTrack | null = null;
+let cleanedFor: number | null = null;
+let cleanWanted: number | null = null;
+let cleanBusy = false;
+let cleanSeq = 0;
+let cleanWorker: Worker | null = null;
+
+type PreviewAudioState = "none" | "loading" | "ready" | "unavailable";
+
+function setPreviewAudioState(state: PreviewAudioState, detail = ""): void {
+  const btn = $("previewaudio") as HTMLButtonElement;
+  btn.dataset.state = state;
+  btn.toggleAttribute("hidden", state === "none");
+  btn.disabled = state === "unavailable";
+  updatePreviewAudioButton(detail);
+}
+
+function updatePreviewAudioButton(detail = ""): void {
+  const btn = $("previewaudio") as HTMLButtonElement;
+  btn.setAttribute("aria-pressed", String(previewMuted));
+  const label = previewMuted ? "Unmute preview sound" : "Mute preview sound";
+  btn.setAttribute("aria-label", label);
+  const state = btn.dataset.state;
+  btn.title = state === "loading" ? `${label} — preparing the sound…`
+    : state === "unavailable" ? `Preview sound unavailable${detail ? `: ${detail}` : ""}. Exports are not affected.`
+    : btn.dataset.cleaning === "true" ? `${label} — cleaning up the voice…`
+    : label;
+}
+
+function setCleaning(on: boolean): void {
+  ($("previewaudio") as HTMLButtonElement).dataset.cleaning = String(on);
+  updatePreviewAudioButton();
+}
+
+async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<void> {
+  if (!session.micAudio && !session.systemAudio) { setPreviewAudioState("none"); return; }
+  setPreviewAudioState("loading");
+  try {
+    const [mic, system] = await Promise.all([
+      session.micAudio ? decodeAllAudio(session.micAudio).then((d) => pcmTrackOf(d, "mic.m4a")) : null,
+      session.systemAudio ? decodeAllAudio(session.systemAudio).then((d) => pcmTrackOf(d, "system.m4a")) : null,
+    ]);
+    if (gen !== audioGen || !player) return;
+    rawMic = mic;
+    previewAudio = new PreviewAudio({ mic, system }, () => ({
+      system: openProject?.systemAudioLevel ?? 1,
+      mic: openProject?.micLevel ?? 1,
+    }));
+    previewAudio.setMuted(previewMuted);
+    player.attachAudio(previewAudio);
+    setPreviewAudioState(previewAudio.hasSound ? "ready" : "none");
+    refreshCleanMic();
+  } catch (e: any) {
+    // A track that will not decode costs the preview its SOUND, never its
+    // picture: the player carries on, on the wall clock, exactly as before.
+    if (gen !== audioGen) return;
+    setPreviewAudioState("unavailable", String(e?.message ?? e));
+  }
+}
+
+/** Point the preview at the mic the export would use: raw, or cleaned at the project's strength. */
+function refreshCleanMic(): void {
+  if (!previewAudio || !rawMic) return;
+  const cleanup = openProject?.narrationCleanup;
+  const { cleanMic } = exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup });
+  if (!cleanMic) {
+    cleanWanted = null;
+    previewAudio.setMic(rawMic);
+    if (!cleanBusy) setCleaning(false);
+    return;
+  }
+  if (cleanedMic && cleanedFor === cleanup!.strength) {
+    cleanWanted = null;
+    previewAudio.setMic(cleanedMic);
+    return;
+  }
+  cleanWanted = cleanup!.strength;
+  pumpClean();
+}
+
+function pumpClean(): void {
+  if (cleanBusy || cleanWanted === null || !rawMic) return;
+  const strength = cleanWanted;
+  const id = ++cleanSeq;
+  const gen = audioGen;
+  cleanBusy = true;
+  setCleaning(true);
+  // A COPY goes to the worker (and is transferred): the raw mic stays here,
+  // playable, for "off" and for the next strength.
+  const track: PcmTrack = { startNs: rawMic.startNs, sampleRate: rawMic.sampleRate, channels: rawMic.channels.map((c) => c.slice()) };
+  const worker = cleanWorker ??= new Worker("../dist/narration-worker.js");
+  worker.onmessage = (e: MessageEvent<{ id: number; track?: PcmTrack; error?: string }>) => {
+    if (e.data.id !== id) return;
+    cleanBusy = false;
+    if (gen !== audioGen) { setCleaning(false); return; }
+    if (e.data.track) {
+      cleanedMic = e.data.track;
+      cleanedFor = strength;
+      if (cleanWanted === strength) {
+        cleanWanted = null;
+        previewAudio?.setMic(cleanedMic);
+      }
+    } else {
+      // The export cleans on its own; a preview that cannot is still a
+      // preview. Keep playing what was playing and say so.
+      cleanWanted = null;
+      console.warn(`preview narration cleanup failed: ${e.data.error}`);
+    }
+    if (cleanWanted !== null) pumpClean();
+    else setCleaning(false);
+  };
+  worker.postMessage({ id, strength, track }, track.channels.map((c) => c.buffer as ArrayBuffer));
+}
+
+$("previewaudio").addEventListener("click", () => {
+  previewMuted = !previewMuted;
+  previewAudio?.setMuted(previewMuted);
+  updatePreviewAudioButton();
+  void editor.setPreviewMuted(previewMuted).catch(() => {});
+});
+
+void editor.getSettings().then((s) => {
+  previewMuted = s.previewMuted === true;
+  previewAudio?.setMuted(previewMuted);
+  updatePreviewAudioButton();
+}).catch(() => {});
+
 // ---- keyboard grammar (STC-338 rule 8) --------------------------------
 
 function isTextField(el: Element | null): boolean {
@@ -1387,6 +1678,15 @@ const RANGE_NATIVE_KEYS = new Set([
 window.addEventListener("keydown", (e) => {
   if (!player || !openProject) return;
   if (e.target === $("scrub") && RANGE_NATIVE_KEYS.has(e.key)) e.preventDefault();
+  // The level slider is the opposite case: its arrow keys adjust the LEVEL
+  // and must not also step the playhead (STC-418 PR 3).
+  if (e.target === $("sysaudiolevel") && RANGE_NATIVE_KEYS.has(e.key)) return;
+  if (e.target === $("voicecleanstrength") && RANGE_NATIVE_KEYS.has(e.key)) return;
+  if (e.target === $("miclevel") && RANGE_NATIVE_KEYS.has(e.key)) return;
+  // Space on the focused switch belongs to the SWITCH (STC-455). Without
+  // this the timeline takes it as play/pause and the switch never toggles —
+  // measured: the e2e's mutation check fails on exactly that.
+  if (e.target === $("voicecleanon") && (e.key === " " || e.key === "Enter")) return;
   const action = decideKey(
     {
       key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey,
@@ -1580,6 +1880,8 @@ async function runExport(): Promise<void> {
       encodedBytes: result.encodedBytes,
       micEncodedChunks: result.micEncodedChunks,
       audioOutputChunks: result.audioOutputChunks,
+      // STC-418: nonzero only when the take had system audio and was mixed.
+      mixEncodedChunks: result.mixEncodedChunks,
       output: exporting.output,
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {
@@ -1768,6 +2070,15 @@ void (async () => {
   }
   try {
     await openTakeOrThrow(takeDir);
+    // Share now lives inside the export dialog (STC-444 slice 3) — open it
+    // the same way `#openexport`'s own click does, so the slug field and
+    // site-folder note are populated before `publish()` reads them, and so
+    // the person can actually see the status line while it runs.
+    if (autoShare) {
+      if (!exportDialog.open) exportDialog.showModal();
+      await refreshShareRow();
+      void publish();
+    }
   } catch (e: any) {
     alertUser(`Could not open "${takeName || takeDir}".\n${e?.message ?? e}`);
   }

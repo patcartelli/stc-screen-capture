@@ -6,6 +6,27 @@ import type { LoadedSession } from "./session.js";
 import type { Project } from "./types.js";
 
 /**
+ * The preview's sound, as the player sees it (STC-454). Structural, so this
+ * file never touches Web Audio: `preview-audio.ts`'s `PreviewAudio` is the
+ * implementation. `start` returns the clock the playhead must follow while
+ * sound plays (the audio device's own), or null when nothing will be heard
+ * — and then the player keeps the wall clock, exactly as it always has.
+ */
+export interface PlaybackAudio {
+  start(tNs: number, rate: number): { anchorMs: number; nowMs: () => number } | null;
+  stop(): void;
+}
+
+/**
+ * How long the playhead must sit still after a seek DURING playback before
+ * sound restarts (STC-454, "silent while dragging"). A drag is a burst of
+ * seeks; restarting the sound on each would stutter a click every event.
+ */
+export const SEEK_SETTLE_MS = 150;
+
+const wallNow = () => performance.now();
+
+/**
  * The preview sink. A sink, not a renderer: every frame is render() composited
  * by the shared compositor, exactly as export does. The only difference is
  * where frames come from — seeking rather than forward-only.
@@ -17,7 +38,12 @@ export class PreviewPlayer {
   private raf = 0;
   private playing = false;
   private tNs = 0;
+  /** The anchor on whichever clock `clockNow` reads — the wall, or the audio device's (STC-454). */
   private playAnchorWallMs = 0;
+  private clockNow: () => number = wallNow;
+  private onAudioClock = false;
+  private audio: PlaybackAudio | null = null;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
   private playAnchorTNs = 0;
   private playRate = 0;
   private rendering = false;
@@ -139,11 +165,43 @@ export class PreviewPlayer {
     return this.viewOutput ? { ...this.project, output: this.effectiveOutput } : this.project;
   }
 
+  /**
+   * Attach (or detach, with null) the preview's sound. Arrives after the
+   * take's audio has decoded, which may be mid-playback: then it re-anchors
+   * at once, so the sound starts from where the picture already is.
+   */
+  attachAudio(audio: PlaybackAudio | null): void {
+    this.audio?.stop();
+    this.audio = audio;
+    if (this.playing) this.anchor(true);
+  }
+
+  /**
+   * THE one place playback is anchored (STC-454). With sound, the anchor and
+   * the clock both come from the audio device, so the picture follows what is
+   * heard and the two cannot drift; without, from the wall clock.
+   */
+  private anchor(withSound: boolean): void {
+    this.audio?.stop();
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer);
+    this.settleTimer = null;
+    const clock = withSound && this.playing ? this.audio?.start(this.tNs, this.playRate) ?? null : null;
+    this.clockNow = clock ? clock.nowMs : wallNow;
+    this.onAudioClock = !!clock;
+    this.playAnchorWallMs = clock ? clock.anchorMs : wallNow();
+    this.playAnchorTNs = this.tNs;
+  }
+
   async seek(tNs: number): Promise<void> {
     this.tNs = Math.max(0, Math.min(tNs, this.durationNs));
     if (this.playing) {
-      this.playAnchorWallMs = performance.now();
-      this.playAnchorTNs = this.tNs;
+      // Silent while the playhead is moving; the sound comes back once it
+      // has sat still for SEEK_SETTLE_MS (Patrick, 2026-09-25).
+      this.anchor(false);
+      this.settleTimer = setTimeout(() => {
+        this.settleTimer = null;
+        if (this.playing && !this.closed) this.anchor(true);
+      }, SEEK_SETTLE_MS);
     }
     await this.draw();
     this.onTime?.(this.tNs, this.playing);
@@ -156,6 +214,9 @@ export class PreviewPlayer {
    */
   get rate(): number { return this.playRate; }
 
+  /** Which clock the playhead is on right now: the audio device's while sound plays (STC-454). */
+  get clock(): "audio" | "wall" { return this.onAudioClock ? "audio" : "wall"; }
+
   /**
    * Change speed WITHOUT restarting playback.
    *
@@ -167,10 +228,7 @@ export class PreviewPlayer {
    */
   setRate(rate: number): void {
     this.playRate = rate;
-    if (this.playing) {
-      this.playAnchorWallMs = performance.now();
-      this.playAnchorTNs = this.tNs;
-    }
+    if (this.playing) this.anchor(true);
   }
 
   play(rate: number = 1): void {
@@ -184,8 +242,7 @@ export class PreviewPlayer {
     if (rate < 0 && this.tNs <= 0) this.tNs = this.durationNs;
     this.playRate = rate;
     this.playing = true;
-    this.playAnchorWallMs = performance.now();
-    this.playAnchorTNs = this.tNs;
+    this.anchor(true);
     const tick = () => {
       if (!this.playing || this.closed) return;
       // Time comes from the WALL CLOCK, not from a frame counter. If decoding
@@ -193,7 +250,12 @@ export class PreviewPlayer {
       // than sliding into slow motion — a preview that drifts from real time is
       // lying about the recording it is previewing. At 8x it drops seven of
       // every eight, which is what a shuttle is.
-      const elapsedNs = (performance.now() - this.playAnchorWallMs) * 1e6;
+      //
+      // While sound plays that clock is the AUDIO DEVICE's (STC-454), so the
+      // picture follows what is heard. Floored at 0: the sound's first sample
+      // is scheduled a few tens of ms ahead, and until it is heard the picture
+      // holds rather than running ahead of it.
+      const elapsedNs = Math.max(0, this.clockNow() - this.playAnchorWallMs) * 1e6;
       this.tNs = this.playAnchorTNs + elapsedNs * this.playRate;
       // Either end stops. Reverse has a floor exactly as forward has a
       // ceiling; without it a backward shuttle runs to negative time and the
@@ -215,6 +277,11 @@ export class PreviewPlayer {
   pause(): void {
     this.playing = false;
     this.playRate = 0;
+    this.audio?.stop();
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer);
+    this.settleTimer = null;
+    this.clockNow = wallNow;
+    this.onAudioClock = false;
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
   }

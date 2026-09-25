@@ -171,7 +171,10 @@ describe("the capture shortcuts", () => {
     expect(await isRegistered(DEFAULT_SHORTCUTS.display!)).toBe(false);
   }, 180_000);
 
-  test("restoring the defaults re-registers all three", async () => {
+  // STC-388: five now, not three — DEFAULT_SHORTCUTS grew a `record` binding,
+  // and this loops the object's own values rather than naming a count, so the
+  // new contract is "every default", however many there are.
+  test("restoring the defaults re-registers all five", async () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const { win } = await launch({ userData });
     await rebind(win, "region", "Control+Alt+Shift+F9");

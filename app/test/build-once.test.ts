@@ -47,4 +47,11 @@ describe("the app bundle is built once per run, not per test", () => {
     const setup = readFileSync(join(root, "vitest.global-setup.ts"), "utf8");
     expect(setup).toMatch(/build\.mjs/);
   });
+
+  test("the global setup fetches the Electron binary, so no E2E test pays for the download", () => {
+    // Electron 43 downloads lazily on first `require("electron")`; without
+    // this the first test to launch absorbs it (see vitest.global-setup.ts).
+    const setup = readFileSync(join(root, "vitest.global-setup.ts"), "utf8");
+    expect(setup).toMatch(/createRequire\(import\.meta\.url\)\("electron"\)/);
+  });
 });

@@ -4,6 +4,12 @@ import AVFoundation
 enum CameraError: Error, CustomStringConvertible {
     case noDevice
     case notAuthorized(AVAuthorizationStatus)
+    /// STC-414: the app already showed the user a `uniqueID` in a picker and
+    /// this one is gone — the camera's own version of `MicError.deviceNotFound`.
+    /// Only reachable when a `deviceUid` was actually passed to `start()`;
+    /// with none, `pickCamera`'s ranking is used unchanged and this case never
+    /// fires.
+    case deviceNotFound(uid: String, available: [String])
     case deviceInputFailed(Error)
     case sessionRefusedInput
     case writerFailed(Error?)
@@ -12,6 +18,9 @@ enum CameraError: Error, CustomStringConvertible {
         switch self {
         case .noDevice: return "no camera device is available"
         case .notAuthorized(let s): return "camera access is \(s.rawValue), not authorized"
+        case .deviceNotFound(let uid, let available):
+            let list = available.isEmpty ? "(none)" : available.joined(separator: ", ")
+            return "no camera with uid \(uid) — available: \(list)"
         case .deviceInputFailed(let e): return "failed to create a capture input for the camera device: \(e)"
         case .sessionRefusedInput: return "the capture session refused the camera input"
         case .writerFailed(let e): return "camera writer failed: \(String(describing: e))"
@@ -22,6 +31,7 @@ enum CameraError: Error, CustomStringConvertible {
         switch self {
         case .noDevice: return "camera-no-device"
         case .notAuthorized: return "camera-not-authorized"
+        case .deviceNotFound: return "camera-not-found"
         case .deviceInputFailed: return "camera-device-input-failed"
         case .sessionRefusedInput: return "camera-input-refused"
         case .writerFailed: return "camera-writer-failed"
@@ -101,10 +111,17 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     static let width = 1280
     static let height = 720
 
-    init(dir: URL, t0Ns: UInt64, pauseGate: PauseGate) {
+    /// STC-414: a `uniqueID` the app already showed the user in a picker, or
+    /// nil for "let `pickCamera` rank candidates" (unchanged behaviour). See
+    /// `Settings.cameraDeviceUid`'s own doc comment (app/src/settings.ts) for
+    /// why this nil means automatic where `MicCapture`'s nil means off.
+    private let deviceUid: String?
+
+    init(dir: URL, t0Ns: UInt64, pauseGate: PauseGate, deviceUid: String? = nil) {
         self.dir = dir
         self.t0Ns = t0Ns
         self.pauseGate = pauseGate
+        self.deviceUid = deviceUid
     }
 
     func start() -> Result<String, Error> {
@@ -114,26 +131,40 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
             mediaType: .video, position: .unspecified)
-        // NOT `.devices.first` — that is not a choice, it is whatever
-        // AVFoundation returned first, and on 2026-08-29 that was
-        // "Elgato Virtual Camera": ~1 fps with nothing behind it, so three
-        // takes recorded 12 frames in 11 s beside a good display track and the
-        // app reported success (STC-286). pickCamera ranks by transportType.
-        let candidates = discovery.devices.map { (name: $0.localizedName, transportType: $0.transportType) }
-        guard let choice = pickCamera(candidates),
-              let device = discovery.devices.first(where: { $0.localizedName == choice.name })
-        else { return .failure(CameraError.noDevice) }
-        if choice.isVirtual {
-            // Every candidate was virtual. Recording it beats refusing, but the
-            // user must not discover a 1 fps PiP after the fact.
-            // IO.send, not IO.stat: this must not be droppable. The lossy
-            // channel exists so stats cannot back-pressure capture, and a
-            // warning the user needs before they trust a take is not a stat.
-            IO.send("warning", ["code": "virtual-camera-only",
-                                "device": choice.name,
-                                "detail": "the only camera available is a virtual device, which "
-                                        + "may deliver very few frames; connect a physical camera "
-                                        + "for a usable picture-in-picture"])
+        let device: AVCaptureDevice
+        if let deviceUid {
+            // Exact uid match ONLY, the same rule MicCapture follows once a
+            // device has been explicitly named: no ranking, no "first" —
+            // the app already asked, and this is where that answer either
+            // matches something real or is refused (STC-414).
+            guard let d = discovery.devices.first(where: { $0.uniqueID == deviceUid }) else {
+                let available = discovery.devices.map { $0.uniqueID }
+                return .failure(CameraError.deviceNotFound(uid: deviceUid, available: available))
+            }
+            device = d
+        } else {
+            // NOT `.devices.first` — that is not a choice, it is whatever
+            // AVFoundation returned first, and on 2026-08-29 that was
+            // "Elgato Virtual Camera": ~1 fps with nothing behind it, so three
+            // takes recorded 12 frames in 11 s beside a good display track and the
+            // app reported success (STC-286). pickCamera ranks by transportType.
+            let candidates = discovery.devices.map { (name: $0.localizedName, transportType: $0.transportType) }
+            guard let choice = pickCamera(candidates),
+                  let picked = discovery.devices.first(where: { $0.localizedName == choice.name })
+            else { return .failure(CameraError.noDevice) }
+            device = picked
+            if choice.isVirtual {
+                // Every candidate was virtual. Recording it beats refusing, but the
+                // user must not discover a 1 fps PiP after the fact.
+                // IO.send, not IO.stat: this must not be droppable. The lossy
+                // channel exists so stats cannot back-pressure capture, and a
+                // warning the user needs before they trust a take is not a stat.
+                IO.send("warning", ["code": "virtual-camera-only",
+                                    "device": choice.name,
+                                    "detail": "the only camera available is a virtual device, which "
+                                            + "may deliver very few frames; connect a physical camera "
+                                            + "for a usable picture-in-picture"])
+            }
         }
         // Guarded by `lock`, same as the frame counters below: this runs on
         // the open queue (CaptureSession.startCameraAsync's background

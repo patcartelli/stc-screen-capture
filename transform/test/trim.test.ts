@@ -8,7 +8,9 @@ import type { Project } from "../src/types.js";
 import {
   availableFrames, clampTrim, defaultProject, estimateExportMs, exportWindow,
   isFullTake, minTrimNs, parseProject, projectForWrite, EXPORT_MS_PER_FRAME,
+  DEFAULT_SYSTEM_AUDIO_LEVEL, DEFAULT_NARRATION_CLEANUP, DEFAULT_MIC_LEVEL,
 } from "../src/trim.js";
+import { MIC_LEVEL_MAX } from "../src/audio-mix.js";
 
 const root = join(__dirname, "..", "..");
 const FPS = 60;
@@ -268,6 +270,250 @@ describe("project-8: bookmarks (STC-444 slice 4)", () => {
     expect(validate8(raw(["1"]))).toBe(false);
     expect(validate8(raw([NS]))).toBe(true);
     expect(validate8(raw([]))).toBe(true);
+  });
+});
+
+describe("project-9: system audio level (STC-418)", () => {
+  const Ajv = (AjvImport as any).default ?? AjvImport;
+  const schema = (n: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${n}.schema.json`), "utf8")));
+  const validate8 = schema(8);
+  const validate9 = schema(9);
+  const raw = (systemAudioLevel: unknown) => ({
+    version: 9, transform: { version: 1 }, output: { fps: 60, width: 640, height: 360 },
+    cursor: { style: "default", scale: 1 }, systemAudioLevel,
+  });
+
+  test("full level after a parse at every older version, and by default", () => {
+    expect(DEFAULT_SYSTEM_AUDIO_LEVEL).toBe(1);
+    for (const doc of [null, { version: 1 }, { version: 3 }, { version: 8 }, raw(undefined)]) {
+      expect(parseProject(doc, 640, 360, duration).systemAudioLevel).toBe(1);
+    }
+    expect(defaultProject(640, 360).systemAudioLevel).toBe(1);
+  });
+
+  test("0..1 is carried; anything else is no opinion, not a clamp", () => {
+    for (const ok of [0, 0.25, 1]) {
+      expect(parseProject(raw(ok), 640, 360, duration).systemAudioLevel).toBe(ok);
+    }
+    for (const bad of [-0.1, 1.4, "0.5", null, NaN]) {
+      expect(parseProject(raw(bad), 640, 360, duration).systemAudioLevel,
+        `level: ${JSON.stringify(bad)}`).toBe(1);
+    }
+  });
+
+  test("full level writes no systemAudioLevel key and stays at the version its other edits earned", () => {
+    const p: Project = { ...defaultProject(640, 360), bookmarks: [NS] };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(8);
+    expect(out.systemAudioLevel).toBeUndefined();
+    expect(validate8(out), JSON.stringify(validate8.errors, null, 2)).toBe(true);
+  });
+
+  test("a lowered level writes v9, and round-trips — 0 (muted) included", () => {
+    for (const level of [0, 0.5]) {
+      const p: Project = { ...defaultProject(640, 360), systemAudioLevel: level };
+      const out = projectForWrite(p, duration);
+      expect(out.version).toBe(9);
+      expect(out.systemAudioLevel).toBe(level);
+      expect(validate9(out), JSON.stringify(validate9.errors, null, 2)).toBe(true);
+      expect(parseProject(out, 640, 360, duration).systemAudioLevel).toBe(level);
+    }
+  });
+
+  test("V9 IS A SUPERSET OF V8 — promoting the version must not drop bookmarks or the slug", () => {
+    const p: Project = {
+      ...defaultProject(640, 360), slug: "network", bookmarks: [NS], systemAudioLevel: 0.5,
+    };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(9);
+    expect(out.slug).toBe("network");
+    expect(out.bookmarks).toEqual([NS]);
+    expect(validate9(out), JSON.stringify(validate9.errors, null, 2)).toBe(true);
+    const back = parseProject(out, 640, 360, duration);
+    expect(back.slug).toBe("network");
+    expect(back.bookmarks).toEqual([NS]);
+    expect(back.systemAudioLevel).toBe(0.5);
+  });
+
+  test("returning to full level returns the document to its old version", () => {
+    const p: Project = { ...defaultProject(640, 360), slug: "network", systemAudioLevel: 0.5 };
+    expect(projectForWrite(p, duration).version).toBe(9);
+    p.systemAudioLevel = 1;
+    expect(projectForWrite(p, duration).version).toBe(7);
+  });
+
+  test("project-9 refuses what the parser refuses; project-8 refuses the field", () => {
+    expect(validate9(raw(-0.1))).toBe(false);
+    expect(validate9(raw(1.4))).toBe(false);
+    expect(validate9(raw("0.5"))).toBe(false);
+    expect(validate9(raw(0))).toBe(true);
+    expect(validate9(raw(1))).toBe(true);
+    expect(validate8({ ...raw(0.5), version: 8 })).toBe(false);
+  });
+});
+
+describe("project-10: narration cleanup (STC-455)", () => {
+  const Ajv = (AjvImport as any).default ?? AjvImport;
+  const schema = (n: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${n}.schema.json`), "utf8")));
+  const validate9 = schema(9);
+  const validate10 = schema(10);
+  const raw = (narrationCleanup: unknown) => ({
+    version: 10, transform: { version: 1 }, output: { fps: 60, width: 640, height: 360 },
+    cursor: { style: "default", scale: 1 }, narrationCleanup,
+  });
+
+  test("off at 0.5 after a parse at every older version, and by default", () => {
+    expect(DEFAULT_NARRATION_CLEANUP).toEqual({ enabled: false, strength: 0.5 });
+    for (const doc of [null, { version: 1 }, { version: 3 }, { version: 9 }, raw(undefined)]) {
+      expect(parseProject(doc, 640, 360, duration).narrationCleanup).toEqual({ enabled: false, strength: 0.5 });
+    }
+    expect(defaultProject(640, 360).narrationCleanup).toEqual({ enabled: false, strength: 0.5 });
+  });
+
+  test("the default is a copy: editing one take's setting cannot move another's", () => {
+    const a = defaultProject(640, 360), b = defaultProject(640, 360);
+    a.narrationCleanup!.enabled = true;
+    expect(b.narrationCleanup!.enabled).toBe(false);
+    expect(DEFAULT_NARRATION_CLEANUP.enabled).toBe(false);
+  });
+
+  test("each field is read on its own terms: a bad strength does not undo a deliberate 'on'", () => {
+    expect(parseProject(raw({ enabled: true, strength: 0.3 }), 640, 360, duration).narrationCleanup)
+      .toEqual({ enabled: true, strength: 0.3 });
+    expect(parseProject(raw({ enabled: true, strength: 1.4 }), 640, 360, duration).narrationCleanup)
+      .toEqual({ enabled: true, strength: 0.5 });
+    expect(parseProject(raw({ enabled: "yes", strength: 0.2 }), 640, 360, duration).narrationCleanup)
+      .toEqual({ enabled: false, strength: 0.2 });
+    for (const bad of [null, "on", 1, []]) {
+      expect(parseProject(raw(bad), 640, 360, duration).narrationCleanup, JSON.stringify(bad))
+        .toEqual({ enabled: false, strength: 0.5 });
+    }
+  });
+
+  test("the default writes no key and stays at the version its other edits earned", () => {
+    const p: Project = { ...defaultProject(640, 360), systemAudioLevel: 0.5 };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(9);
+    expect(out.narrationCleanup).toBeUndefined();
+    expect(validate9(out), JSON.stringify(validate9.errors, null, 2)).toBe(true);
+  });
+
+  test("on — or off with a moved strength — writes v10 and round-trips", () => {
+    for (const n of [{ enabled: true, strength: 0.5 }, { enabled: false, strength: 0.8 }, { enabled: true, strength: 0 }]) {
+      const p: Project = { ...defaultProject(640, 360), narrationCleanup: n };
+      const out = projectForWrite(p, duration);
+      expect(out.version, JSON.stringify(n)).toBe(10);
+      expect(out.narrationCleanup).toEqual(n);
+      expect(validate10(out), JSON.stringify(validate10.errors, null, 2)).toBe(true);
+      expect(parseProject(out, 640, 360, duration).narrationCleanup).toEqual(n);
+    }
+  });
+
+  test("V10 IS A SUPERSET OF V9 — promoting the version must not drop the level, bookmarks or slug", () => {
+    const p: Project = {
+      ...defaultProject(640, 360), slug: "network", bookmarks: [NS], systemAudioLevel: 0.25,
+      narrationCleanup: { enabled: true, strength: 0.5 },
+    };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(10);
+    expect(out.slug).toBe("network");
+    expect(out.bookmarks).toEqual([NS]);
+    expect(out.systemAudioLevel).toBe(0.25);
+    expect(validate10(out), JSON.stringify(validate10.errors, null, 2)).toBe(true);
+    const back = parseProject(out, 640, 360, duration);
+    expect(back.systemAudioLevel).toBe(0.25);
+    expect(back.narrationCleanup).toEqual({ enabled: true, strength: 0.5 });
+  });
+
+  test("returning to the default returns the document to its old version", () => {
+    const p: Project = { ...defaultProject(640, 360), slug: "network", narrationCleanup: { enabled: true, strength: 0.5 } };
+    expect(projectForWrite(p, duration).version).toBe(10);
+    p.narrationCleanup = { enabled: false, strength: 0.5 };
+    expect(projectForWrite(p, duration).version).toBe(7);
+  });
+
+  test("project-10 refuses what the parser refuses; project-9 refuses the field", () => {
+    expect(validate10(raw({ enabled: true, strength: 1.4 }))).toBe(false);
+    expect(validate10(raw({ enabled: true, strength: -0.1 }))).toBe(false);
+    expect(validate10(raw({ enabled: "yes", strength: 0.5 }))).toBe(false);
+    expect(validate10(raw({ enabled: true }))).toBe(false);
+    expect(validate10(raw({ enabled: true, strength: 0.5, extra: 1 }))).toBe(false);
+    expect(validate10(raw({ enabled: true, strength: 0.5 }))).toBe(true);
+    expect(validate9({ ...raw({ enabled: true, strength: 0.5 }), version: 9 })).toBe(false);
+  });
+});
+
+describe("project-11: mic level (STC-454 part 2)", () => {
+  const Ajv = (AjvImport as any).default ?? AjvImport;
+  const schema = (n: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${n}.schema.json`), "utf8")));
+  const validate10 = schema(10);
+  const validate11 = schema(11);
+  const raw = (micLevel: unknown) => ({
+    version: 11, transform: { version: 1 }, output: { fps: 60, width: 640, height: 360 },
+    cursor: { style: "default", scale: 1 }, micLevel,
+  });
+
+  test("as recorded (1) after a parse at every older version, and by default", () => {
+    expect(DEFAULT_MIC_LEVEL).toBe(1);
+    for (const doc of [null, { version: 1 }, { version: 10 }, raw(undefined)]) {
+      expect(parseProject(doc, 640, 360, duration).micLevel).toBe(1);
+    }
+    expect(defaultProject(640, 360).micLevel).toBe(1);
+  });
+
+  test("0..+12 dB is carried, boost included; anything else is no opinion", () => {
+    for (const ok of [0, 0.5, 2, MIC_LEVEL_MAX]) {
+      expect(parseProject(raw(ok), 640, 360, duration).micLevel).toBe(ok);
+    }
+    for (const bad of [-0.1, 4.5, "2", null, NaN]) {
+      expect(parseProject(raw(bad), 640, 360, duration).micLevel, `level ${JSON.stringify(bad)}`).toBe(1);
+    }
+  });
+
+  test("the parser's ceiling and the schema's are the mixer's MIC_LEVEL_MAX", () => {
+    expect(parseProject(raw(MIC_LEVEL_MAX), 640, 360, duration).micLevel).toBe(MIC_LEVEL_MAX);
+    expect(validate11(raw(MIC_LEVEL_MAX))).toBe(true);
+    expect(parseProject(raw(MIC_LEVEL_MAX + 0.001), 640, 360, duration).micLevel).toBe(1);
+  });
+
+  test("1 writes no key; anything else writes v11 and round-trips — 0 and a boost included", () => {
+    const flat = projectForWrite({ ...defaultProject(640, 360), narrationCleanup: { enabled: true, strength: 0.5 } }, duration);
+    expect(flat.version).toBe(10);
+    expect(flat.micLevel).toBeUndefined();
+    for (const level of [0, 0.25, 2.5]) {
+      const out = projectForWrite({ ...defaultProject(640, 360), micLevel: level }, duration);
+      expect(out.version).toBe(11);
+      expect(out.micLevel).toBe(level);
+      expect(validate11(out), JSON.stringify(validate11.errors, null, 2)).toBe(true);
+      expect(parseProject(out, 640, 360, duration).micLevel).toBe(level);
+    }
+  });
+
+  test("V11 IS A SUPERSET OF V10 — promoting must not drop cleanup, the system level, bookmarks or slug", () => {
+    const p: Project = {
+      ...defaultProject(640, 360), slug: "network", bookmarks: [NS], systemAudioLevel: 0.25,
+      narrationCleanup: { enabled: true, strength: 0.3 }, micLevel: 2,
+    };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(11);
+    expect(validate11(out), JSON.stringify(validate11.errors, null, 2)).toBe(true);
+    const back = parseProject(out, 640, 360, duration);
+    expect(back.slug).toBe("network");
+    expect(back.bookmarks).toEqual([NS]);
+    expect(back.systemAudioLevel).toBe(0.25);
+    expect(back.narrationCleanup).toEqual({ enabled: true, strength: 0.3 });
+    expect(back.micLevel).toBe(2);
+  });
+
+  test("project-10 refuses the field; project-11 refuses what the parser refuses", () => {
+    expect(validate10({ ...raw(2), version: 10 })).toBe(false);
+    expect(validate11(raw(-0.1))).toBe(false);
+    expect(validate11(raw(4.5))).toBe(false);
+    expect(validate11(raw("2"))).toBe(false);
+    expect(validate11(raw(0))).toBe(true);
   });
 });
 

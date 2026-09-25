@@ -9,10 +9,15 @@ import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * The Settings sheet, end to end (STC-412): the sheet-opening button renamed
- * from "Profile" to "Settings", and Scope/Camera/Mic relocated out of the
- * main window's record row into a new "Profile" section inside the sheet,
- * ahead of the pre-existing "Preferences" section. Nothing about the sheet's
- * open/close mechanics changed — only what it contains and how it is opened.
+ * from "Profile" to "Settings", and Scope relocated out of the main window's
+ * record row into a new "Profile" section inside the sheet, ahead of the
+ * pre-existing "Preferences" section. Nothing about the sheet's open/close
+ * mechanics changed — only what it contains and how it is opened.
+ *
+ * Camera and Mic lived in that Profile section too, briefly — STC-414 moved
+ * them back out again, onto the #devicestate row's own pickers, so a narrated
+ * take (a per-recording choice, not a set-and-forget preference) no longer
+ * needs a trip through Settings at all.
  */
 const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
@@ -37,7 +42,7 @@ async function launch(opts: { userData: string; recordings: string }) {
 }
 
 describe("the settings sheet", () => {
-  test("the sheet holds Profile and Preferences as two sections, and Scope/Camera/Mic live there now", async () => {
+  test("the sheet holds Profile and Preferences as two sections, and the display picker lives there now", async () => {
     const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
     // Not directly clickable before the sheet opens — this is the ticket's own
     // acceptance property, and the negative check matters as much as the
@@ -47,7 +52,7 @@ describe("the settings sheet", () => {
     // box, which lands past the window's right edge until `.open` slides it
     // in.
     const viewportWidth = await win.evaluate(() => window.innerWidth);
-    const boxBeforeOpen = await win.locator("#scope").boundingBox();
+    const boxBeforeOpen = await win.locator("#display").boundingBox();
     expect(boxBeforeOpen).not.toBeNull();
     expect(boxBeforeOpen!.x).toBeGreaterThanOrEqual(viewportWidth);
     await win.click("#settings");
@@ -57,9 +62,17 @@ describe("the settings sheet", () => {
     // used to be, and the sheet read as four flat sections rather than two).
     const headings = await win.locator("#profilesheet h2").allTextContents();
     expect(headings).toEqual(["Profile", "Preferences"]);
-    expect(await win.isVisible("#scope")).toBe(true);
-    expect(await win.isVisible("#camera")).toBe(true);
-    expect(await win.isVisible("#mic")).toBe(true);
+    expect(await win.isVisible("#display")).toBe(true);
+    // STC-388: no Scope picker at all — scope is chosen fresh for every take in
+    // the Record flow's overlay, and nothing about it is remembered.
+    expect(await win.locator("#scope").count()).toBe(0);
+    // Camera and mic are NOT in here any more (STC-414) — #devicestate's own
+    // pickers, elsewhere in the page, are where they live now; this scopes
+    // the negative check to the sheet itself rather than the whole page,
+    // which the pickers would still pass even while correctly living outside
+    // it.
+    expect(await win.locator("#profilesheet #camera-picker").count()).toBe(0);
+    expect(await win.locator("#profilesheet #mic-picker").count()).toBe(0);
     expect(await win.locator("#stillcleardest").count()).toBe(0);
     expect(await win.locator("#diagnostics").isHidden()).toBe(true);
     await win.check("#showdiagnostics");

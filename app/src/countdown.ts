@@ -95,8 +95,7 @@ export const COUNTDOWN_OPTIONS: readonly { ms: number; label: string }[] = [
 export const MAX_COUNTDOWN_MS = 60_000;
 
 /** How often the window re-reads the clock. Roughly 60fps, so the sweep in
- * rule 5 is a sweep rather than a stepped dimming — the same reasoning and the
- * same number as `scope-indicator-window.ts`'s fade. */
+ * rule 5 is a sweep rather than a stepped dimming. */
 export const COUNTDOWN_TICK_MS = 16;
 
 /** Which of the two ways in this countdown is for. The countdown itself is one

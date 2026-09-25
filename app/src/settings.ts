@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  SHOT_ACTIONS, DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
+  BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
 } from "./hotkeys.js";
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import {
@@ -61,6 +61,40 @@ export interface Settings {
    */
   micDeviceUid: string | null;
   /**
+  /**
+   * Which camera to record (STC-414), as the helper's
+   * `AVCaptureDevice.uniqueID`, or null for "let the helper rank candidates
+   * itself" — `CameraCapture.pickCamera`'s existing transportType ranking
+   * (STC-286), unchanged.
+   *
+   * UNLIKE `micDeviceUid`, null here IS "automatic" — the same shape as
+   * `displayId`, not the mic's. The mic's null-is-off rule exists because
+   * there is no safe automatic mic (a wedged CoreAudio bug); the camera has
+   * had a safe automatic choice since STC-286 (rank real hardware over a
+   * virtual device) and this field only lets a user NAME one instead, it
+   * does not remove the existing fallback. Whether the camera is used at all
+   * stays the separate `camera` boolean above — this is "which one", not
+   * "whether". Sticky like the others: a picked camera stays picked across
+   * launches, and if it is gone at `start` the helper refuses that device
+   * (never silently substitutes another) the same way a stale `micDeviceUid`
+   * or `displayId` is refused.
+   */
+  cameraDeviceUid: string | null;
+  /**
+   * Record what the machine is PLAYING to system.m4a (STC-418). A boolean,
+   * not a device — there is one system output — and OFF by default: nobody
+   * records the machine's audio without having turned it on (Patrick,
+   * 2026-09-25). Sticky like the camera. Sent to the helper only when on;
+   * an absent field is "off" to `parseStartRequest`.
+   */
+  systemAudio: boolean;
+  /**
+   * Whether the editor's preview plays its sound (STC-454): the speaker
+   * button in the editor's header. An app preference, not part of any take —
+   * it never reaches project.json or an export. Off (sound on) by default.
+   */
+  previewMuted: boolean;
+  /**
    * The global capture shortcuts (STC-292), as Electron accelerators. `null`
    * for an action the user deliberately unbound — which is a preference like
    * any other, and must survive a restart rather than springing back to the
@@ -114,23 +148,6 @@ export interface Settings {
    */
   share: ShareSettings;
   /**
-   * What a RECORDING captures (STC-370's region/window capability, wired to
-   * the window's scope picker by STC-374): the whole display named by
-   * `displayId` above, a region of one, or a single window. Its own block
-   * rather than a fourth top-level field, because a region and a window each
-   * carry more than one value and "source stays a separate control from the
-   * profile" (the ticket's own words) still means scope and source are one
-   * idea together.
-   *
-   * Sticky, the same as `displayId`: a chosen window or area stays chosen
-   * across launches and across `kind` changes, so flipping the scope picker
-   * back and forth does not forget what was picked. `start` refuses rather
-   * than silently falling back to the whole display when `kind` asks for a
-   * region or window and nothing has been picked yet — the same rule STC-247
-   * already set for a stale `displayId`.
-   */
-  scope: ScopeSettings;
-  /**
    * Where recordings and stills are saved, or null for "not chosen yet" —
    * which resolves to the same default takesRoot() always computed
    * (env.STC_RECORDINGS_DIR || ~/Desktop/stc), so an untouched install
@@ -148,46 +165,25 @@ export interface Settings {
    */
   showDiagnostics: boolean;
   /**
+   * The take library's layout (STC-429): the original grid, or a row-based
+   * list. Sticky, the same as every other layout preference here — a chosen
+   * view stays chosen across launches.
+   */
+  libraryView: "grid" | "list";
+  /**
    * The optional recording profile (STC-447), as a `RecordingProfile.id`, or
    * null for "no preference" — the only behaviour that existed before this
    * field did: a fresh take's `project.json` opens at the capture's own
-   * size. Sticky, like `displayId`/`scope`: a chosen profile stays chosen
-   * across launches and across takes, until cleared from the bar's own
-   * picker. Never required to start a recording — `recorder:start` does not
-   * read this field at all; it is applied once, after the fact, by
-   * `main.ts`'s `recording-ended` handler seeding a fresh take's
-   * `project.json` from it, the same door `defaultProject` would otherwise
-   * open with the capture's own size.
+   * size. Sticky, like `displayId`: a chosen profile stays chosen across
+   * launches and across takes, until cleared from the bar's own picker.
+   * Never required to start a recording — `recorder:start` does not read
+   * this field at all; it is applied once, after the fact, by `main.ts`'s
+   * `recording-ended` handler seeding a fresh take's `project.json` from
+   * it, the same door `defaultProject` would otherwise open with the
+   * capture's own size.
    */
   recordingProfileId: string | null;
 }
-
-export interface ScopeRegion {
-  /** display-local points, resolved against THIS display — the same shape
-   * `capture-still`'s own crop carries, and the same reason: a region means
-   * nothing without knowing which display it is local to. */
-  displayId: number;
-  x: number; y: number; width: number; height: number;
-}
-
-export interface ScopeSettings {
-  kind: "display" | "region" | "window";
-  /** Set only when `kind` is "region". */
-  region: ScopeRegion | null;
-  /** Set only when `kind` is "window", as a CGWindowID. */
-  windowId: number | null;
-  /**
-   * Cosmetic only — never sent to the helper. A window can close or another
-   * app can retitle it between now and the next `start`; this is what the
-   * source control shows until the user re-picks, not a claim that the
-   * window still exists.
-   */
-  windowLabel: string | null;
-}
-
-export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
-  kind: "display", region: null, windowId: null, windowLabel: null,
-};
 
 export interface ShareSettings {
   /**
@@ -238,13 +234,14 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  camera: false, displayId: null, micDeviceUid: null, shortcuts: { ...DEFAULT_SHORTCUTS },
+  camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false,
+  previewMuted: false,
+  shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   still: { ...DEFAULT_STILL_SETTINGS },
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
   share: { ...DEFAULT_SHARE_SETTINGS },
-  scope: { ...DEFAULT_SCOPE_SETTINGS },
-  saveFolder: null, showDiagnostics: false,
+  saveFolder: null, showDiagnostics: false, libraryView: "grid",
   recordingProfileId: null,
 };
 
@@ -303,6 +300,11 @@ function cleanDisplayId(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
 }
 
+/** Anything but the literal "list" reads as "grid" — the original layout. */
+function cleanLibraryView(v: unknown): "grid" | "list" {
+  return v === "list" ? "list" : "grid";
+}
+
 /**
  * An absolute path is trusted; anything else (relative, missing, garbage)
  * is null — "not chosen" — never resolved against the process's cwd.
@@ -320,11 +322,6 @@ function cleanMicDeviceUid(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
-/** A CGWindowID is a non-negative integer. */
-function cleanWindowId(v: unknown): number | null {
-  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
-}
-
 /**
  * A stored id is trusted only as far as `profileById` still recognises it —
  * same rule as `cleanShortcuts`: a file written by an older or newer build
@@ -336,38 +333,13 @@ function cleanRecordingProfileId(v: unknown): string | null {
 }
 
 /**
- * A region needs a display to be local to AND four finite, positive-sized
- * numbers — same shape and same rule `parseRect` enforces on the helper side.
- * Any other shape is "nothing picked" rather than a half-trusted rectangle.
+ * Same validation as `cleanMicDeviceUid` — a non-empty string or nothing —
+ * but kept as its own function because the two nulls mean different things
+ * (see `Settings.cameraDeviceUid`'s own doc comment) and a shared helper
+ * would invite conflating them at a future call site.
  */
-function cleanScopeRegion(v: unknown): ScopeRegion | null {
-  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
-  const d = v as Record<string, unknown>;
-  const displayId = cleanDisplayId(d.displayId);
-  const { x, y, width, height } = d;
-  if (displayId == null) return null;
-  if (![x, y, width, height].every((n) => typeof n === "number" && Number.isFinite(n))) return null;
-  if ((width as number) <= 0 || (height as number) <= 0) return null;
-  return { displayId, x: x as number, y: y as number, width: width as number, height: height as number };
-}
-
-/**
- * Same rule as every other block here: an unknown shape falls back whole.
- *
- * `kind` is kept even when its target is not — "window scope, nothing picked
- * yet" is a real, showable state (the source control renders "Choose
- * window…"), not an error to paper over here. `recorder:start` is where a
- * scope with no target is refused, not this function.
- */
-function cleanScope(v: unknown): ScopeSettings {
-  const d = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
-  const kind = d.kind === "region" || d.kind === "window" ? d.kind : "display";
-  return {
-    kind,
-    region: cleanScopeRegion(d.region),
-    windowId: cleanWindowId(d.windowId),
-    windowLabel: typeof d.windowLabel === "string" ? d.windowLabel : null,
-  };
+function cleanCameraDeviceUid(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 /**
@@ -384,7 +356,10 @@ function cleanShortcuts(v: unknown): Shortcuts {
   const raw = (v && typeof v === "object" && !Array.isArray(v))
     ? v as Record<string, unknown> : {};
   const out = {} as Shortcuts;
-  for (const action of SHOT_ACTIONS) {
+  // BINDABLE_ACTIONS, not SHOT_ACTIONS: Record is bindable and is not a shot
+  // (STC-388), and a loop over the narrower list would leave `record`
+  // undefined in a Shortcuts that claims to be total.
+  for (const action of BINDABLE_ACTIONS) {
     const stored = raw[action];
     if (stored === null) { out[action] = null; continue; }
     const parsed = typeof stored === "string" ? parseAccelerator(stored) : undefined;
@@ -418,6 +393,9 @@ export function readSettings(dir: string): Settings {
     camera: typeof doc.camera === "boolean" ? doc.camera : DEFAULT_SETTINGS.camera,
     displayId: cleanDisplayId(doc.displayId),
     micDeviceUid: cleanMicDeviceUid(doc.micDeviceUid),
+    cameraDeviceUid: cleanCameraDeviceUid(doc.cameraDeviceUid),
+    systemAudio: doc.systemAudio === true,
+    previewMuted: doc.previewMuted === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
@@ -425,10 +403,10 @@ export function readSettings(dir: string): Settings {
     still: cleanStill(doc.still),
     thumbnail: cleanThumbnail(doc.thumbnail),
     share: cleanShare(doc.share),
-    scope: cleanScope(doc.scope),
     saveFolder: cleanSaveFolder(doc.saveFolder),
     showDiagnostics: typeof doc.showDiagnostics === "boolean"
       ? doc.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
+    libraryView: cleanLibraryView(doc.libraryView),
     recordingProfileId: cleanRecordingProfileId(doc.recordingProfileId),
   };
 }
@@ -452,17 +430,19 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     still: { ...current.still, ...(patch.still ?? {}) },
     thumbnail: { ...current.thumbnail, ...(patch.thumbnail ?? {}) },
     share: { ...current.share, ...(patch.share ?? {}) },
-    scope: { ...current.scope, ...(patch.scope ?? {}) },
   };
   const clean: Settings = {
     camera: merged.camera === true,
     displayId: cleanDisplayId(merged.displayId),
     micDeviceUid: cleanMicDeviceUid(merged.micDeviceUid),
+    cameraDeviceUid: cleanCameraDeviceUid(merged.cameraDeviceUid),
+    // `=== true`, the camera's rule: off unless explicitly on.
+    systemAudio: merged.systemAudio === true,
+    previewMuted: merged.previewMuted === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),
     share: cleanShare(merged.share),
-    scope: cleanScope(merged.scope),
     // Not `=== true`: the default is ON, so an absent or malformed value must
     // fall back to on rather than to silence. The camera's `=== true` is the
     // opposite case for the opposite reason — it defaults off because it turns
@@ -472,6 +452,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     saveFolder: cleanSaveFolder(merged.saveFolder),
     showDiagnostics: typeof merged.showDiagnostics === "boolean"
       ? merged.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
+    libraryView: cleanLibraryView(merged.libraryView),
     recordingProfileId: cleanRecordingProfileId(merged.recordingProfileId),
   };
   try {

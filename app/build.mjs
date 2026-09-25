@@ -21,6 +21,8 @@ await build({ ...common, entryPoints: ["app/src/thumbnail-renderer.ts"], outfile
 // thumbnail's are separate.
 await build({ ...common, entryPoints: ["app/src/editor-preload.ts"], outfile: "app/dist/editor-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/editor.ts"], outfile: "app/dist/editor.js", format: "iife", platform: "browser" });
+// STC-454: the preview's narration cleanup, off the editor's main thread.
+await build({ ...common, entryPoints: ["app/src/narration-worker.ts"], outfile: "app/dist/narration-worker.js", format: "iife", platform: "browser" });
 // The countdown (STC-391) — Record's countdown and Capture's self-timer are
 // one surface, in its own window with its own, narrowest bridge.
 await build({ ...common, entryPoints: ["app/src/countdown-preload.ts"], outfile: "app/dist/countdown-preload.cjs", format: "cjs" });

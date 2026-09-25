@@ -18,6 +18,21 @@
 
     body { margin: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px;
            background: var(--bg); color: var(--text); }
+    /* STC-432: `titleBarStyle: "hidden"` (main.ts) draws the native traffic
+       lights as an inset overlay rather than reserving a title-bar strip, so
+       nothing here was making room for them or letting the window be
+       dragged by anything — this row is the only fixed content at the very
+       top and takes both jobs. `--traffic-light-offset` is the lights' own
+       cluster width (three 12px dots, 8px apart = 52px) plus a 10px gap
+       before the heading starts, named rather than left as a bare number in
+       the rule below; `main.ts`'s `TRAFFIC_LIGHT_X_PX`/`_Y_PX` position the
+       actual lights using the matching numbers, so the two stay coordinated
+       rather than each guessing at the other's layout. `#title-row` holds
+       no controls today — if one is ever added it needs
+       `-webkit-app-region: no-drag`, or dragging the window would eat its
+       clicks. */
+    :root { --traffic-light-offset: 62px; }
+    #title-row { padding-left: var(--traffic-light-offset); -webkit-app-region: drag; }
     h1 { font-size: var(--type-title); font-weight: var(--type-title-weight); margin: 0; }
     /* STC-399: a model plate beside the title, not a control — quiet, and
        excluded from the collapsed pill for free (it is not #record-row). */
@@ -74,6 +89,41 @@
     table { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     td { padding: 2px 14px 2px 0; }
     td:first-child { color: var(--text-dim); font-family: var(--font-sans); }
+
+    /* ── mic/camera device pickers (STC-414) ────────────────────────────────
+       The trigger is the readout itself — #camera-state/#mic-state, unchanged
+       ids and textContent (renderer.ts's setCamera/setMic keep working as
+       before) — wrapped in a button rather than replaced by one, so the
+       always-visible "at-a-glance state" row (STC-412 final review, I2) is
+       also now where a device is picked, instead of a trip to Settings. */
+    .devicepicker-trigger {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 1px 6px; margin: -1px -6px; border: 1px solid transparent; border-radius: 4px;
+      background: none; color: var(--text); font: inherit; cursor: pointer;
+    }
+    .devicepicker-trigger:hover:not([disabled]) { background: var(--surface-hover); border-color: var(--border); }
+    .devicepicker-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .devicepicker-trigger[disabled] { opacity: .4; cursor: default; }
+    .devicepicker-trigger::after { content: "▾"; font-size: 9px; color: var(--text-dim); }
+    /* Fixed position, one shared panel for whichever picker is open
+       (decidePopoverToggle in device-picker.ts guarantees at most one) —
+       positioned by renderer.ts under whichever trigger was clicked. Fixed,
+       not part of document flow, so opening it never resizes or reflows the
+       window — the same constraint the ticket puts on the pill, carried over
+       to where this UI actually lives (see STC-414's Linear comment). */
+    #devicepopover {
+      position: fixed; z-index: 20; min-width: 190px;
+      background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 4px; font-family: var(--font-sans);
+    }
+    #devicepopover button {
+      display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 6px;
+      padding: 5px 8px; border: none; border-radius: 5px; background: none; text-align: left;
+      font-size: var(--type-body); color: var(--text); cursor: pointer;
+    }
+    #devicepopover button:hover { background: var(--surface-hover); }
+    #devicepopover button::before { content: ""; width: 12px; flex: none; }
+    #devicepopover button[aria-selected="true"]::before { content: "✓"; color: var(--accent); }
     h2 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); margin: 4px 0 0; color: var(--text-dim); }
     .take { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
             padding: 7px 0; border-top: 1px solid var(--border); }
@@ -81,50 +131,91 @@
     .take button { padding: 3px 10px; font-size: var(--type-body); }
     .broken { color: var(--warn); font-size: var(--type-body); padding: 6px 0; }
 
-    /* ── the library grid (STC-294) ─────────────────────────────────────── */
-    .libfilters { display: flex; gap: 6px; padding: 2px 0 10px; }
+    /* ── the library grid (STC-294), media-forward (STC-429) ─────────────── */
+    .libheader { display: flex; align-items: center; gap: 10px; padding: 2px 0 10px; flex-wrap: wrap; }
+    .libfilters { display: flex; gap: 6px; }
     .libfilters .chip { padding: 3px 12px; font-size: var(--type-body); border-radius: 999px; color: var(--text-dim);
                          border: 1px solid transparent; }
     .libfilters .chip.on { color: var(--text); font-weight: 600;
                            border-color: var(--border-strong);
                            background: var(--surface-hover); }
+    /* The grid/list switch (STC-429) — same chip idiom as the filters, pushed
+       to the row's trailing edge the way a secondary control always is here. */
+    .libviewtoggle { display: flex; gap: 4px; margin-left: auto; }
+    .libviewtoggle button { padding: 3px 12px; font-size: var(--type-body); border-radius: 999px;
+                            color: var(--text-dim); border: 1px solid transparent; }
+    .libviewtoggle button.on { color: var(--text); font-weight: 600;
+                              border-color: var(--border-strong); background: var(--surface-hover); }
     /* auto-fill, so a narrow window reflows rather than scrolling sideways. */
     .libgrid { display: grid; gap: 14px;
                grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
     .libtile { display: flex; flex-direction: column; gap: 7px;
-               border: 1px solid var(--border); border-radius: 9px; background: var(--surface);
+               border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
                padding: 9px; min-width: 0; }
+    /* The list layout (STC-429) — thumbnail at the leading edge, actions at
+       the trailing one, everything else the SAME building blocks the grid
+       tile uses (badge row, title, meta, actions) laid out in a row instead
+       of a column. */
+    .liblist { display: flex; flex-direction: column; gap: 8px; }
+    .librow { display: flex; flex-direction: row; align-items: center; gap: 14px;
+              border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+              padding: 9px; min-width: 0; }
+    .librow .libthumb { flex: 0 0 132px; }
+    .librow .libbody { flex: 1 1 auto; }
+    .librow .libactions { margin-top: 0; margin-left: auto; flex-shrink: 0; }
     /* A fixed aspect box, so the grid does not reflow as pictures land — 500
        tiles each nudging their neighbours is the jank the 60 fps criterion is
        about, and reserving the space costs nothing. */
-    .libthumb { aspect-ratio: 16 / 10; border-radius: 6px; overflow: hidden;
+    .libthumb { position: relative; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden;
                 background: var(--surface-hover); display: flex;
                 align-items: center; justify-content: center; }
     .libthumb img { max-width: 100%; max-height: 100%; display: block; }
-    /* The checkerboard reads as "transparent" rather than "white", which for a
-       window capture with real alpha is the difference between seeing the
-       shape and thinking the shot has a white background. */
-    .libthumb.empty { background-image:
-        linear-gradient(45deg, var(--border) 25%, transparent 25%),
-        linear-gradient(-45deg, var(--border) 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, var(--border) 75%),
-        linear-gradient(-45deg, transparent 75%, var(--border) 75%);
-      background-size: 14px 14px;
-      background-position: 0 0, 0 7px, 7px -7px, -7px 0; }
+    /* A recording has no picture yet (STC-294's deferred poster frame) — a
+       placeholder icon reads as "this is a video" rather than as a blank box
+       (STC-429). Distinct from a still's real, possibly-transparent picture,
+       which never gets this class at all. */
+    .libthumb.empty { background: linear-gradient(135deg, var(--surface-hover), var(--border)); }
+    .libthumb.empty::after {
+      content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-42%, -50%);
+      border-top: 11px solid transparent; border-bottom: 11px solid transparent;
+      border-left: 16px solid var(--text-faint);
+    }
+    /* The one fact a picture-less recording CAN still state (STC-429) — the
+       duration already sits in `summary` too, but a corner chip is what a
+       glance actually reads, the same idiom Finder/Photos use. */
+    .libdur { position: absolute; right: 6px; bottom: 6px; background: rgba(0, 0, 0, .68);
+              color: #fff; font-family: var(--font-mono); font-size: 10px;
+              padding: 2px 6px; border-radius: 4px; letter-spacing: .02em; }
+    /* A second door to "open" (STC-429) — see `wireOpenOnThumb`. */
+    .libthumb.clickable { cursor: pointer; }
+    .libthumb.clickable:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     .libbody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .libbadge { align-self: flex-start; font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
+    .libbadgerow { display: flex; align-items: center; gap: 6px; }
+    .libbadge { font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
                 text-transform: uppercase; padding: 1px 7px; border-radius: 999px;
                 background: var(--surface-hover); color: var(--text-dim); }
     /* Coloured from the badge's own TEXT, so this stylesheet is the only place
        that knows there are two kinds — and the view module still does not. */
     .libbadge[data-badge="Shot"] { background: var(--accent-soft); color: var(--accent); }
+    /* Stubbed (STC-429): `item.edited` is always false today, so this never
+       draws yet — see `library-items.ts`. */
+    .libedited { display: flex; align-items: center; gap: 4px; font-size: var(--type-label);
+                letter-spacing: var(--type-label-tracking); text-transform: uppercase; color: var(--text-dim); }
+    .libedited .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); }
     .libtitle { font-size: var(--type-body-strong); font-weight: var(--type-body-strong-weight); overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
-    .libtile .meta { color: var(--text-dim); font-size: var(--type-value-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    .libtile .meta, .librow .meta { color: var(--text-dim); font-size: var(--type-value-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
                      overflow: hidden; text-overflow: ellipsis; }
     .libactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; }
     .libactions button { padding: 2px 9px; font-size: var(--type-value-sm); }
+    /* The button hierarchy (STC-429): Edit/Share bold and accent-bordered —
+       the same treatment Record/Shot already use — Delete keeps its existing
+       de-emphasised colour, and Rename/Show/Duplicate are quieter still. One
+       flat row throughout; see `library-view.ts`'s `actionClass`. */
+    .libactions button.primary { font-weight: 600; border-color: var(--accent); color: var(--accent); }
+    .libactions button.primary:hover:not([disabled]) { background: var(--accent-soft); }
     .libactions button.delete { border-color: var(--rec); color: var(--rec); }
+    .libactions button.tertiary { border-color: var(--border); color: var(--text-dim); }
     .libempty { color: var(--text-faint); padding: 6px 0; }
     #empty { color: var(--text-faint); padding: 6px 0; }
     .stamp { color: var(--text-faint); font-size: var(--type-value-sm); margin-left: 6px; }
@@ -163,14 +254,6 @@
     #shortcutfoot button { padding: 3px 10px; font-size: var(--type-body); }
     #shortcuthint { font-size: var(--type-meta); color: var(--text-faint); }
 
-    /* ── capture scope (STC-370/STC-374) ─────────────────────────────────
-       The scope picker (Screen/Window/Area) and the "source" control beside
-       it — a display for Screen, a chosen window or area for the other two.
-       Exactly one of #display-label / #window-source / #region-source is
-       visible at a time; renderer.ts toggles `hidden` on the other two. */
-    .sourcelabel { color: var(--text-dim); font-size: var(--type-body); max-width: 220px;
-                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
     /* ── the profile sheet (STC-374) ──────────────────────────────────────
        A panel INSIDE this window, not a fourth window — slides in from the
        right over the take grid rather than opening as its own surface. Holds
@@ -190,7 +273,8 @@
     #profilesheet-head { justify-content: space-between; }
     #profileclose { padding: 3px 9px; font-size: var(--type-body); line-height: 1; }
     /* STC-430: the sheet has exactly two PEER sections — Profile (how a
-       recording is formatted: Scope/Source/Camera/Mic) and Preferences
+       recording is formatted: Scope/Source — Camera and Mic moved out to
+       #devicestate, STC-414) and Preferences
        (everything app-level, shortcuts included). "Countdown" and "Shot
        shortcuts" used to be their own <h2>, styled identically to Profile
        and Preferences, so the sheet read as four flat sections and the
@@ -228,12 +312,13 @@
        part of the visible page only under `.pill-collapsed`.
 
        Everything else in #record-row is hidden when collapsed — the still-
-       capture button, the camera checkbox, the Settings button (labelled
-       "Profile, preferences and shortcuts" — not #recprofile below, STC-447's
-       recording-profile selector, which is its own button), the state
-       readout — and every OTHER row in the body (profile sheet included, if
-       it happened to be open: a sliver of a slide-over panel in a 26px
-       window is its own kind of broken). */
+       capture button, STC-447's own #recprofile, the Settings button
+       (labelled "Profile, preferences and shortcuts" — not #recprofile,
+       which is its own button), the state readout — and every OTHER row in
+       the body (#devicestate and its pickers, STC-414's home for the camera
+       and mic controls now that neither lives in #record-row, and the
+       profile sheet, if it happened to be open: a sliver of a slide-over
+       panel in a 26px window is its own kind of broken). */
     body.pill-collapsed { background: #0b0b0c; overflow: hidden; padding: 0; margin: 0; }
     body.pill-collapsed > *:not(#record-row) { display: none; }
     body.pill-collapsed #record-row > *:not(#pill) { display: none; }
@@ -346,13 +431,29 @@
     Everything else that WAS in that table (pid, frames, dropped, events,
     cursor shapes, elapsed) really is developer instrumentation and stays
     behind the toggle, which is what Task 4 was for.
+
+    STC-414: each cell is now also the device picker's trigger — clicking it
+    opens #devicepopover (device-picker.ts builds its rows; renderer.ts wires
+    the click and positions it). The camera on/off toggle and the mic
+    `<select>` that used to live in the profile sheet's Profile section are
+    gone from there; this row is their only home now, matching the ticket's
+    "onto the controls that already show their feedback".
   -->
   <table id="devicestate">
     <tbody>
-      <tr><td>camera</td><td id="camera-state">—</td></tr>
-      <tr><td>mic</td><td id="mic-state">—</td></tr>
+      <tr><td>camera</td><td>
+        <button type="button" id="camera-picker" class="devicepicker-trigger" aria-haspopup="listbox">
+          <span id="camera-state">—</span>
+        </button>
+      </td></tr>
+      <tr><td>mic</td><td>
+        <button type="button" id="mic-picker" class="devicepicker-trigger" aria-haspopup="listbox">
+          <span id="mic-state">—</span>
+        </button>
+      </td></tr>
     </tbody>
   </table>
+  <div id="devicepopover" role="listbox" hidden></div>
 
   <table id="diagnostics" hidden>
     <tbody>
@@ -382,27 +483,12 @@
 
     <h2>Profile</h2>
     <div class="row">
-      <label>Scope <select id="scope">
-        <option value="display">Screen</option>
-        <option value="window">Window</option>
-        <option value="region">Area</option>
-      </select></label>
       <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
-      <span id="window-source" class="row" hidden>
-        <span id="window-source-label" class="sourcelabel">No window chosen</span>
-        <button id="pickwindow">Choose window…</button>
-        <button id="clearwindow" title="Forget the chosen window">Clear</button>
-      </span>
-      <span id="region-source" class="row" hidden>
-        <span id="region-source-label" class="sourcelabel">No area chosen</span>
-        <button id="pickregion">Choose area…</button>
-        <button id="clearregion" title="Forget the chosen area">Clear</button>
-      </span>
     </div>
-    <div class="row">
-      <label id="camera-label"><input type="checkbox" id="camera"> Camera</label>
-      <label id="mic-label">Mic <select id="mic"><option value="">Off</option></select></label>
-    </div>
+    <!-- Camera and mic used to be picked here (a checkbox and a <select>).
+         STC-414 moved both onto the always-visible #devicestate row — the
+         "controls that already show their feedback" — so Profile is Scope
+         and Source alone now. -->
 
     <h2>Preferences</h2>
     <!--

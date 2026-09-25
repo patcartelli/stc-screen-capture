@@ -1,0 +1,170 @@
+# STC-454 — preview audio: what to listen for on the Mac
+
+**Run this from the branch, not `master`, until it merges:**
+
+```
+git fetch origin claude/optimistic-ride-ed374b
+git checkout claude/optimistic-ride-ed374b && git pull
+npm install && npm run app:start
+```
+
+No helper rebuild is needed: nothing here touches capture.
+
+## What changed
+
+The editor's preview **plays sound now**. Before this, only an export could be
+heard. It plays the export's own mix (`audio-mix.ts`'s `mixBlock`), so what
+you hear in the editor is what the export will contain:
+
+- the mic, **cleaned** when "Clean up voice" is on (STC-455);
+- system audio at the level its slider sets (STC-418).
+
+Patrick's decisions (2026-09-25):
+
+| Question | Answer |
+|---|---|
+| When is there sound? | **At 1x only.** Reverse and 2/4/8x shuttle are silent. |
+| Dragging the playhead? | **Silent.** During playback, the sound comes back once the playhead has been still for 150 ms. |
+| How to silence it? | **The speaker button** in the header's right-hand group. It is an app setting, remembered across takes and restarts, and never saved into a take or an export. |
+| Cleanup in the preview? | **Cleaned, after a short wait.** A change to the switch or strength re-cleans in the background (~1 s per minute of audio). Until it finishes, the previous version keeps playing. |
+
+**How it stays in sync.** While sound plays, the picture follows the audio
+device's own clock instead of the system timer, so the two cannot drift
+apart over a long take. Sound is scheduled in 100 ms chunks, 0.4 s ahead. If
+a chunk would start late, its late part is dropped rather than played late.
+
+## §1 — sync, by ear and eye
+
+Use a take where you **clap on camera** (or tap the mic where the video shows
+it), with the camera PiP on.
+
+1. Open it in the editor and play from the start at 1x.
+2. Does the clap sound when the hands meet? Try again from the middle
+   (click the ruler, then play) and near the end.
+3. Let a 5+ minute take play through. Is it still in sync at the end? This is
+   the case the single clock exists for.
+
+Record whether any offset is visible, and roughly how much ("a frame or two
+late" is useful). The first sample is scheduled 60 ms after Play, and the
+picture holds on the first frame until that sample is heard.
+
+## §2 — the rules
+
+1. **1x only.** Press L while playing: the sound stops and the picture runs at
+   2x. Press K, then Space: sound again. J (reverse) is silent.
+2. **Dragging.** Drag the playhead while playing. It should be silent during
+   the drag, and the sound should resume shortly after you let go. Clicks,
+   pops or a stutter during the drag are findings.
+3. **Mute.** Click the speaker: it shows a cross, and the sound stops without
+   the picture pausing. Close the editor, quit, relaunch, and reopen a take:
+   the speaker should still be muted. Unmute it.
+4. **Levels live.** While playing a take that has system audio, move the
+   System audio slider. The change should be heard within about half a
+   second.
+5. **Cleanup live.** On a noisy take, turn "Clean up voice" on while it plays.
+   You hear the raw voice until the clean version is ready (hover the speaker:
+   its tooltip says "cleaning up the voice…"), then the cleaned one. Move the
+   strength and release: the same thing happens again.
+
+## §3 — what could go wrong
+
+| You hear / see | Likely cause |
+|---|---|
+| No sound at all, and the speaker isn't dimmed | The AudioContext is not running. Say so: the window's autoplay policy is meant to allow it. |
+| The speaker is dimmed with a strike, and its tooltip says unavailable | The audio did not decode. The export is unaffected. Send the tooltip text. |
+| Crackle or clicks at a steady ~10 per second | Chunk joins are not seamless. That is a bug, not tuning. |
+| The picture stutters at 1x but not at 2x | Following the audio clock is too coarse. Send which take and how often. |
+| The editor freezes briefly when cleanup turns on | The cleanup is running on the main thread instead of the worker. That is a bug. |
+| Memory climbs a lot on a long take | Decoded audio is held in memory: ~11 MB per minute of stereo 48 kHz system audio, plus the mic, plus a cleaned copy. Note the take length. |
+
+## What Linux verified
+
+- **Scheduling** (`transform/test/preview-audio.test.ts`), unit-tested:
+  - which chunks go when, and that sync is exact (`anchor + from / 48000`);
+  - that a late chunk loses only its late head, and a wholly late one is
+    dropped;
+  - that the clock never steps backwards;
+  - that chunks mixed one by one are the same samples as the window mixed at
+    once.
+- **The wired app** (`app/test/preview-audio.e2e.test.ts`, a real
+  AudioContext under Xvfb):
+  - there's no speaker for a take with no audio;
+  - with sound ready, 1x runs on the **audio** clock and 2x on the wall clock
+    (mutation-checked);
+  - a mic that will not decode leaves the picture playing on the wall clock,
+    with the speaker marked unavailable;
+  - mute survives a restart, and the button's click flips its state;
+  - the cleanup worker loads under the editor's CSP and cleans a track sent
+    to it.
+- **Nothing has been heard.** The fixtures' audio is placeholder AAC. §1–§3
+  are the first time anyone listens.
+
+**Result (2026-09-25, Patrick): everything worked.** Part 1 merged as #228.
+
+---
+
+# Part 2 — mic level, and the Audio popover
+
+**Run from `claude/optimistic-ride-ed374b` until it merges** (same commands as
+at the top).
+
+## What changed
+
+Patrick's decisions (2026-09-25):
+
+| Question | Answer |
+|---|---|
+| Can the mic be made louder? | **Yes, up to +12 dB.** Narration is usually recorded well below system audio. The hard limit that was already in the mix catches peaks. |
+| Where do the controls live? | **In an "Audio" popover** at the right end of the timecode row. It holds Mic, System audio and Clean up voice, with room for part 3's mutes. The row had filled up. |
+| Default? | **As recorded**, so existing takes and exports are unchanged. |
+
+- The **mic slider** marks "as recorded" (0 dB) at 75%. Below that it falls in
+  dB, and 0% mutes. Above it, it boosts up to +12 dB at 100%. The value is
+  saved as `micLevel` on the take (project-11), and it is heard live in the
+  preview and in the export.
+- **Both sliders show dB now**, so the panel speaks one unit: "0 dB",
+  "−24 dB", "+6 dB", "Muted". The System audio slider's positions and saved
+  values did not change; only its label did (it used to show %).
+- A mic-only take with a level other than 0 dB exports through the mixer, as
+  48 kHz stereo, the same as a cleaned one. At 0 dB it takes the old path,
+  unchanged.
+
+## §4 — the Audio popover
+
+1. Open a take with a mic. **Audio** appears at the right of the timecode row.
+   Click it: the panel shows Mic and Clean up voice. Escape, or a click
+   outside, closes it. A take with system audio also shows System audio. A
+   take with neither has no Audio button.
+2. Does the panel open in a sensible place (above the button, or below it if
+   there is no room)? Is it readable in light and dark mode?
+
+## §5 — the mic level, by ear
+
+1. On a take where your voice is quiet against system audio, play at 1x and
+   raise Mic. The voice should get louder in the preview within about half a
+   second.
+2. Push it to +12 dB on a loud passage. Harsh clipping at the peaks is the
+   hard limit doing its job; note how bad it sounds. If it is common at
+   +6 dB or so, a limiter that is softer than a hard clip is the follow-up.
+3. Export at +6 dB and at 0 dB. The first should be louder, and the second
+   should match an export from before this change.
+4. Close and reopen the take: Mic is where you left it.
+
+## In the app (Linux-verified, not heard)
+
+- `transform/test/audio-mix.test.ts`: the gain applies to the mic only,
+  boost is capped at +12 dB, a boosted peak is hard-limited, the taper sits
+  at 75% = 0 dB, every position round-trips, the dB labels, and the export
+  path choice.
+- `transform/test/trim.test.ts`: project-11 parses, writes and validates, v11
+  is a superset of v10, and the parser, the schema and the mixer agree on the
+  ceiling.
+- `app/test/mic-level.e2e.test.ts`:
+  - the button and rows appear per track, and the popover opens and closes
+    on Escape;
+  - a boost saves at v11, and returning to 0 dB drops the key;
+  - a reopened take shows the saved level;
+  - arrow keys on the focused slider change the level, not the playhead
+    (mutation-checked).
+- The existing voice-clean and system-audio e2e suites open the popover
+  first now; the system-audio suite also expects dB labels.

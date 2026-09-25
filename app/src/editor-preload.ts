@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld("editor", {
   // every still does.
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   getSettings: () => ipcRenderer.invoke("recorder:getSettings"),
+  // STC-454: the preview's mute button — the ONE setting this window writes,
+  // so it gets a one-field call rather than the whole setSettings channel.
+  setPreviewMuted: (muted: boolean) => ipcRenderer.invoke("recorder:setSettings", { previewMuted: muted === true }),
   publish: () => ipcRenderer.invoke("share:publish"),
   revealPublished: () => ipcRenderer.invoke("share:reveal"),
   // STC-399: the export manifest stamp's version half.
