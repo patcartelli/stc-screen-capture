@@ -68,6 +68,12 @@ export interface Settings {
    */
   systemAudio: boolean;
   /**
+   * Whether the editor's preview plays its sound (STC-454): the speaker
+   * button in the editor's header. An app preference, not part of any take —
+   * it never reaches project.json or an export. Off (sound on) by default.
+   */
+  previewMuted: boolean;
+  /**
    * The global capture shortcuts (STC-292), as Electron accelerators. `null`
    * for an action the user deliberately unbound — which is a preference like
    * any other, and must survive a restart rather than springing back to the
@@ -238,7 +244,7 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  camera: false, displayId: null, micDeviceUid: null, systemAudio: false,
+  camera: false, displayId: null, micDeviceUid: null, systemAudio: false, previewMuted: false,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   still: { ...DEFAULT_STILL_SETTINGS },
@@ -414,6 +420,7 @@ export function readSettings(dir: string): Settings {
     displayId: cleanDisplayId(doc.displayId),
     micDeviceUid: cleanMicDeviceUid(doc.micDeviceUid),
     systemAudio: doc.systemAudio === true,
+    previewMuted: doc.previewMuted === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
@@ -456,6 +463,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     micDeviceUid: cleanMicDeviceUid(merged.micDeviceUid),
     // `=== true`, the camera's rule: off unless explicitly on.
     systemAudio: merged.systemAudio === true,
+    previewMuted: merged.previewMuted === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),

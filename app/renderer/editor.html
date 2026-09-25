@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; worker-src 'self'">
   <title>Capture</title>
   <link rel="stylesheet" href="tokens.css">
   <style>
@@ -158,6 +158,14 @@
     .icon:active:not([disabled]) { background: var(--border); }
     .icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .icon.primary { color: var(--text); }
+    /* STC-454: the preview's sound. Speaker with waves, or with a cross when
+       muted; dimmed while the audio decodes, struck through if it cannot. */
+    #previewaudio[hidden] { display: none; }
+    #previewaudio .when-muted { display: none; }
+    #previewaudio[aria-pressed="true"] .when-muted { display: inline; }
+    #previewaudio[aria-pressed="true"] .when-sound { display: none; }
+    #previewaudio[data-state="loading"] svg { opacity: 0.45; }
+    #previewaudio[data-state="unavailable"] svg { opacity: 0.35; }
     #playpause .when-playing { display: none; }
     #playpause[data-playing] .when-playing { display: inline; }
     #playpause[data-playing] .when-paused { display: none; }
@@ -449,6 +457,16 @@
       </div>
       <div class="right">
         <span id="framestatus" role="status" hidden></span>
+        <!-- STC-454: the preview plays the export's own mix at 1x. Muting is
+             an app setting, never part of the take or its export. -->
+        <button type="button" class="icon" id="previewaudio" aria-label="Mute preview sound"
+                aria-pressed="false" data-state="none" data-cleaning="false" title="Mute preview sound" hidden>
+          <svg viewBox="0 0 16 16">
+            <path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/>
+            <path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4M12.4 4a5.5 5.5 0 0 1 0 8"/>
+            <path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/>
+          </svg>
+        </button>
         <button type="button" class="icon" id="framegrab" aria-label="Copy frame"
                 title="Copy frame (⌘⇧C) · ⌥-click to save (⌘⇧S) · right-click for both">
           <svg viewBox="0 0 16 16"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3"/><circle cx="8" cy="8" r="1.6"/></svg>
@@ -492,24 +510,23 @@
     <div class="timecoderow">
       <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
       <span id="shuttle" class="mono"></span>
-      <!-- STC-418 PR 3: how loud the recorded system audio is in the EXPORT.
-           The preview plays no audio at all yet (mic included), so this is
-           heard only in an exported file. Saved to the project
+      <!-- STC-418 PR 3: how loud the recorded system audio is in the export
+           and, since STC-454, in the preview's sound. Saved to the project
            (project-9's systemAudioLevel). -->
       <!-- STC-455: narration cleanup in the EXPORT — steady background noise
            (fan, hiss, room tone) and harsh "s" sounds, on the mic only. Off
            by default; the strength is kept while it is off. Saved to the
-           project (project-10's narrationCleanup). Heard only in an export,
-           like the level beside it. -->
+           project (project-10's narrationCleanup). Heard in the export and,
+           since STC-454, in the preview once the cleaned voice is ready. -->
       <span id="voiceclean" class="voiceclean" hidden
-            title="Cleans up your voice in the export: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds. The preview plays no audio yet.">
+            title="Cleans up your voice in the export: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds. Heard in the preview at 1x, and in the export.">
         <label><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
         <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
                aria-label="Voice cleanup strength" disabled>
         <span id="voicecleanvalue" class="mono">50%</span>
       </span>
       <label id="sysaudio" class="sysaudio" hidden
-             title="System audio level in the export — the preview plays no audio yet">
+             title="System audio level, in the preview at 1x and in the export">
         <span>System audio</span>
         <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
                aria-label="System audio level">

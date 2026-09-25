@@ -101,7 +101,8 @@ compared.
    with no mic.
 2. Export once with it off. Then turn it on, leave it at 50%, and export
    again. The first file is the old export; the second is the cleaned
-   narration. **The preview plays no audio**, so compare the exported files.
+   narration. Since STC-454 the preview plays the cleaned voice too, so you
+   can also compare them in the editor (see `docs/STC-454-RUNBOOK.md`).
 3. Move the strength to 30% and export, then 80% and export. Compare against
    §2's WAVs: the exported file at N% should sound like `clean-N.wav`.
 4. Turn it off. The slider dims and keeps its value. Close and reopen the
