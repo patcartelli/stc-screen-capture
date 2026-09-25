@@ -122,6 +122,20 @@
     .sysaudio[hidden] { display: none; }
     .sysaudio input { width: 96px; margin: 0; accent-color: var(--accent); }
     #sysaudiovalue { min-width: 4ch; text-align: right; color: var(--text); }
+    /* STC-455: narration cleanup, the same compact shape beside it — one
+       switch and one strength. The strength stays visible, dimmed, while the
+       switch is off, so turning it back on returns to the same setting.
+       Whichever of the two comes first takes the row's free space. */
+    .voiceclean { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+                  font-size: var(--type-label); color: var(--text-dim); }
+    .voiceclean[hidden] { display: none; }
+    .voiceclean:not([hidden]) ~ .sysaudio { margin-left: 14px; }
+    .voiceclean label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+    .voiceclean input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+    .voiceclean input[type="range"] { width: 96px; margin: 0; accent-color: var(--accent); }
+    .voiceclean input[type="range"]:disabled { opacity: 0.4; }
+    #voicecleanvalue { min-width: 4ch; text-align: right; color: var(--text); }
+    #voicecleanstrength:disabled + #voicecleanvalue { color: var(--text-dim); }
     /* Below this the duration goes and the current time stays. */
     @container (max-width: 680px) { .clock-dur { display: none; } }
     /* The right group's status line is the first thing to go: `justify-self:
@@ -482,6 +496,18 @@
            The preview plays no audio at all yet (mic included), so this is
            heard only in an exported file. Saved to the project
            (project-9's systemAudioLevel). -->
+      <!-- STC-455: narration cleanup in the EXPORT — steady background noise
+           (fan, hiss, room tone) and harsh "s" sounds, on the mic only. Off
+           by default; the strength is kept while it is off. Saved to the
+           project (project-10's narrationCleanup). Heard only in an export,
+           like the level beside it. -->
+      <span id="voiceclean" class="voiceclean" hidden
+            title="Cleans up your voice in the export: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds. The preview plays no audio yet.">
+        <label><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
+        <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
+               aria-label="Voice cleanup strength" disabled>
+        <span id="voicecleanvalue" class="mono">50%</span>
+      </span>
       <label id="sysaudio" class="sysaudio" hidden
              title="System audio level in the export — the preview plays no audio yet">
         <span>System audio</span>

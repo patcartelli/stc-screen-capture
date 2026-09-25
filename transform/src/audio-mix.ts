@@ -188,3 +188,29 @@ export function sliderPctFromLevel(level: number): number {
   const pct = Math.round((1 + (20 * Math.log10(level)) / -LEVEL_FLOOR_DB) * 100);
   return Math.min(100, Math.max(1, pct));
 }
+
+/**
+ * Which audio path an export takes (STC-418, STC-455) — the ONE place it is
+ * decided, so the rule "a take that never asked for cleanup or system audio
+ * exports exactly as before" is a tested function rather than a condition
+ * read by inspection in export.ts.
+ *
+ * - `mix`: through `mixBlock` — the take has system audio, or its mic is
+ *   being cleaned (`cleanMic`), mic-only takes included.
+ * - `mic`: the original mic-only passthrough, at the mic's own format.
+ * - `none`: nothing to encode, or not encoding at all.
+ *
+ * Cleanup on at strength 0 is an exact identity (narration-clean.ts), so it
+ * is treated as off: it must not move a take onto the mix path.
+ */
+export function exportAudioPlan(opts: {
+  encode: boolean;
+  hasMic: boolean;
+  hasSystem: boolean;
+  cleanup?: { enabled: boolean; strength: number };
+}): { path: "mix" | "mic" | "none"; cleanMic: boolean } {
+  if (!opts.encode) return { path: "none", cleanMic: false };
+  const cleanMic = opts.hasMic && !!opts.cleanup?.enabled && opts.cleanup.strength > 0;
+  if (opts.hasSystem || cleanMic) return { path: "mix", cleanMic };
+  return { path: opts.hasMic ? "mic" : "none", cleanMic: false };
+}

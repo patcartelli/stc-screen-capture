@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { makeSystemAudioTakeFolder } from "./_take-fixture.js";
+import { makeMicTakeFolder, makeSystemAudioTakeFolder } from "./_take-fixture.js";
 import { loadSession } from "../../transform/src/session.js";
 
 const buf = (p: string) => {
@@ -30,5 +30,23 @@ describe("makeSystemAudioTakeFolder", () => {
     expect(session.systemAudio!.sampleRate).toBe(48_000);
     expect(session.systemAudio!.numberOfChannels).toBe(2);
     expect(session.systemAudio!.framesNs[0]).toBe(anchors.system.firstFramePtsNs);
+  });
+});
+
+describe("makeMicTakeFolder (STC-455)", () => {
+  test("loads through loadSession with a mono mic track, rebased onto its anchors", async () => {
+    const { takeDir } = makeMicTakeFolder();
+    const anchors = JSON.parse(readFileSync(join(takeDir, "anchors.json"), "utf8"));
+    expect(anchors.version).toBe(4);
+    const session = await loadSession({
+      anchors,
+      events: JSON.parse(readFileSync(join(takeDir, "events.json"), "utf8")),
+      displayMp4: buf(join(takeDir, "display.mp4")),
+      micM4a: buf(join(takeDir, "mic.m4a")),
+    });
+    expect(session.micAudio).toBeDefined();
+    expect(session.micAudio!.numberOfChannels).toBe(1);
+    expect(session.micAudio!.framesNs[0]).toBe(anchors.mic.firstFramePtsNs);
+    expect(session.systemAudio).toBeUndefined();
   });
 });

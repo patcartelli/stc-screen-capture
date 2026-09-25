@@ -9,10 +9,11 @@ import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
 import { decodeAllAudio } from "./decode-audio.js";
 import {
-  MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks,
+  MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks, exportAudioPlan,
   type PcmChunk, type PcmTrack,
 } from "./audio-mix.js";
 import { tagMp4 } from "./media-tag.js";
+import { cleanNarration } from "./narration-clean.js";
 
 /**
  * The export sink. ONE implementation, called by both the CLI gates and the
@@ -148,12 +149,26 @@ export async function exportSession(
   // takes the mic-only path below unchanged. Two paths rather than one
   // because the mic-only path is verified on hardware and the mix is not
   // yet — a take that never asked for system audio must not pay for it.
-  const mixing = encode && !!session.systemAudio;
+  //
+  // STC-455: narration cleanup also takes the mix path, mic-only takes
+  // included — the cleaned mic is a PcmTrack, and the mixer is the one place
+  // that already turns a PcmTrack into encoder blocks (with `system` null it
+  // is the mic alone, upmixed to stereo 48 kHz). Cleanup off, or on at
+  // strength 0 (an exact identity), leaves the mic-only path untouched, so a
+  // take that never asked for cleanup exports byte-for-byte as before.
+  const cleanup = project.narrationCleanup;
+  const plan = exportAudioPlan({ encode, hasMic: !!micAudio, hasSystem: !!session.systemAudio, cleanup });
+  const cleaning = plan.cleanMic;
+  const mixing = plan.path === "mix";
   let mixMic: PcmTrack | null = null;
   let mixSystem: PcmTrack | null = null;
   if (mixing) {
-    mixSystem = pcmTrackOf(await decodeAllAudio(session.systemAudio!), "system.m4a");
+    mixSystem = session.systemAudio ? pcmTrackOf(await decodeAllAudio(session.systemAudio), "system.m4a") : null;
     mixMic = micAudio ? pcmTrackOf(await decodeAllAudio(micAudio), "mic.m4a") : null;
+    // The WHOLE track, before the window is cut, so the noise profile is
+    // learned from every pause in the take rather than only the clip's —
+    // and a trimmed export cleans exactly as the full one would.
+    if (mixMic && cleaning) mixMic = cleanNarration(mixMic, cleanup!.strength);
   }
   const decodedAudio = micAudio && encode && !mixing ? await decodeAllAudio(micAudio) : null;
 
@@ -392,7 +407,8 @@ export async function exportSession(
         const cause = e instanceof Error ? e.message : String(e);
         throw new Error(
           `${cause} — mixing mic${mixMic ? ` (${mixMic.channels.length}ch/${mixMic.sampleRate}Hz)` : " (none)"} ` +
-          `with system audio${mixSystem ? ` (${mixSystem.channels.length}ch/${mixSystem.sampleRate}Hz)` : " (none)"}; ` +
+          `with system audio${mixSystem ? ` (${mixSystem.channels.length}ch/${mixSystem.sampleRate}Hz)` : " (none)"}` +
+          `${cleaning ? `, narration cleanup at ${cleanup!.strength}` : ""}; ` +
           `${mixEncodedChunks} block(s) encoded before this`);
       }
     }

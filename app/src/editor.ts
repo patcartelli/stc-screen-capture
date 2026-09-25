@@ -54,10 +54,10 @@ import { loadSession, type LoadedSession } from "@transform/session";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
 import { levelFromSliderPct, sliderPctFromLevel } from "@transform/audio-mix";
-import type { Project, ZoomOverride } from "@transform/types";
+import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
 import {
   parseProject, projectForWrite, exportWindow, estimateExportMs,
-  clampTrim, isFullTake, minTrimNs,
+  clampTrim, isFullTake, minTrimNs, DEFAULT_NARRATION_CLEANUP,
 } from "@transform/trim";
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
 import type { Size } from "@transform/spaces";
@@ -1277,6 +1277,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   updateOutputSizeUI();
   updateLegibilityUI();
   updateSystemAudioUI();
+  updateVoiceCleanUI();
   applySpanTransform();
   redrawLanes();
 }
@@ -1298,6 +1299,7 @@ async function closeTake(): Promise<void> {
   openCapture = undefined;
   openDisplay = undefined;
   updateSystemAudioUI();
+  updateVoiceCleanUI();
   applyStageDisplay();
   await editor.closePreview();
 }
@@ -1394,6 +1396,48 @@ $("sysaudiolevel").addEventListener("change", () => {
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 
+// ---- narration cleanup (STC-455) ---------------------------------------
+//
+// Shown only for a take with a mic. One switch and one strength (Patrick,
+// 2026-09-25), saved to the project (project-10's narrationCleanup) and
+// applied by the export (narration-clean.ts, then the mix). The strength is
+// disabled, not reset, while the switch is off, so turning it back on returns
+// to the same setting. Same input/change split as the level above.
+
+function updateVoiceCleanUI(): void {
+  const row = $("voiceclean");
+  const has = !!openSession?.micAudio && !!openProject;
+  row.toggleAttribute("hidden", !has);
+  if (!has) return;
+  const n = openProject!.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP;
+  const pct = Math.round(n.strength * 100);
+  ($("voicecleanon") as HTMLInputElement).checked = n.enabled;
+  const strength = $("voicecleanstrength") as HTMLInputElement;
+  strength.value = String(pct);
+  strength.disabled = !n.enabled;
+  $("voicecleanvalue").textContent = `${pct}%`;
+}
+
+function currentCleanup(): NarrationCleanup {
+  return { ...(openProject?.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP) };
+}
+
+$("voicecleanon").addEventListener("change", () => {
+  if (!openProject) return;
+  openProject.narrationCleanup = { ...currentCleanup(), enabled: ($("voicecleanon") as HTMLInputElement).checked };
+  updateVoiceCleanUI();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+$("voicecleanstrength").addEventListener("input", () => {
+  if (!openProject) return;
+  const pct = Number(($("voicecleanstrength") as HTMLInputElement).value);
+  openProject.narrationCleanup = { ...currentCleanup(), strength: pct / 100 };
+  $("voicecleanvalue").textContent = `${pct}%`;
+});
+$("voicecleanstrength").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
 // ---- keyboard grammar (STC-338 rule 8) --------------------------------
 
 function isTextField(el: Element | null): boolean {
@@ -1417,6 +1461,11 @@ window.addEventListener("keydown", (e) => {
   // The level slider is the opposite case: its arrow keys adjust the LEVEL
   // and must not also step the playhead (STC-418 PR 3).
   if (e.target === $("sysaudiolevel") && RANGE_NATIVE_KEYS.has(e.key)) return;
+  if (e.target === $("voicecleanstrength") && RANGE_NATIVE_KEYS.has(e.key)) return;
+  // Space on the focused switch belongs to the SWITCH (STC-455). Without
+  // this the timeline takes it as play/pause and the switch never toggles —
+  // measured: the e2e's mutation check fails on exactly that.
+  if (e.target === $("voicecleanon") && (e.key === " " || e.key === "Enter")) return;
   const action = decideKey(
     {
       key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey,
