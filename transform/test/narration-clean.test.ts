@@ -13,7 +13,7 @@ import type { PcmTrack } from "../src/audio-mix.js";
  * real voice sounds natural afterwards — that is docs/STC-455-RUNBOOK.md.
  */
 const RATE = 48_000;
-const OFF = { highPass: false, noiseOversubtract: 0, reverbWeight: 0, deessMaxDb: 0 } as const;
+const OFF = { highPass: false, noiseOversubtract: 0, deessMaxDb: 0 } as const;
 
 /** Deterministic PRNG (mulberry32) so every run tests the same signal. */
 function rng(seed: number): () => number {
@@ -79,9 +79,7 @@ describe("the strength", () => {
   test("every stage moves together: more strength never cuts less", () => {
     const a = paramsForStrength(0.25), b = paramsForStrength(0.75);
     expect(b.noiseOversubtract).toBeGreaterThanOrEqual(a.noiseOversubtract);
-    expect(b.reverbWeight).toBeGreaterThan(a.reverbWeight);
     expect(b.maxReductionDb).toBeGreaterThan(a.maxReductionDb);
-    expect(b.reverbMaxDb).toBeGreaterThan(a.reverbMaxDb);
     expect(b.deessMaxDb).toBeGreaterThan(a.deessMaxDb);
   });
 });
@@ -98,8 +96,8 @@ describe("the STFT framing", () => {
 
   test("with every gain at 1, the spectral stage gives back its input, sample for sample, edges included", () => {
     const x = add(voiced(s(0.5)), whiteNoise(s(0.5), 0.05, 3));
-    // reverbWeight > 0 forces the spectral path; both floors at 0 dB pin every gain at 1.
-    const out = cleanNarration(mono(x), 1, { ...OFF, reverbWeight: 1, maxReductionDb: 0, reverbMaxDb: 0 }).channels[0]!;
+    // Noise reduction on forces the spectral path; a 0 dB floor pins every gain at 1.
+    const out = cleanNarration(mono(x), 1, { ...OFF, noiseOversubtract: 2, maxReductionDb: 0 }).channels[0]!;
     expect(out).toHaveLength(x.length);
     let worst = 0;
     for (let i = 0; i < x.length; i++) worst = Math.max(worst, Math.abs(out[i]! - x[i]!));
@@ -208,40 +206,6 @@ function pauseKurtosis(x: ArrayLike<number>, spans: [number, number][]): number 
   }
   return m4 / n / (m2 / n) ** 2;
 }
-
-describe("late-reverb suppression", () => {
-  /** Dry phrases through a room: the direct sound plus an exponentially decaying noise tail. */
-  function roomy() {
-    const { x: dry, spans } = phrases(voiced(s(6)), 0.5, 1.0);
-    const rt60 = 0.5, len = s(0.6);
-    const r = rng(5);
-    const ir = Float64Array.from({ length: len }, (_, i) =>
-      i === 0 ? 1 : (r() * 2 - 1) * 0.08 * Math.exp((-3 * Math.LN10 * i) / (rt60 * RATE)));
-    const wet = new Float64Array(dry.length);
-    for (let i = 0; i < dry.length; i++) {
-      const v = dry[i]!;
-      if (v === 0) continue;
-      for (let j = 0; j < len && i + j < wet.length; j++) wet[i + j]! += v * ir[j]!;
-    }
-    return { spans, wet };
-  }
-  const tail = (x: ArrayLike<number>, spans: [number, number][]) => {
-    const dbs = spans.slice(0, -1).map(([, end]) => rmsDb(x, end + s(0.1), end + s(0.3)));
-    return dbs.reduce((a, b) => a + b) / dbs.length;
-  };
-
-  // Deliberately GENTLE since the first listening pass (2026-09-25): at the
-  // old 1.5x weight the tail fell 6 dB and Patrick still "couldn't tell",
-  // while the voice took the damage. Now capped at reverbMaxDb (6 dB at 100%)
-  // as its own gain: measured 2.8 dB off the tail, 1.0 dB off a STEADY vowel
-  // (the worst case — its own past is always loud).
-  test("at full strength the tail after a phrase is cut ≥2.5 dB; the phrase loses <1.5 dB", () => {
-    const { spans, wet } = roomy();
-    const out = cleanNarration(mono(wet), 1, { ...OFF, reverbWeight: paramsForStrength(1).reverbWeight }).channels[0]!;
-    expect(tail(out, spans) - tail(wet, spans)).toBeLessThan(-2.5);
-    expect(Math.abs(phraseLevel(out, spans) - phraseLevel(wet, spans))).toBeLessThan(1.5);
-  });
-});
 
 describe("de-essing", () => {
   /** A dense 5–8.5 kHz hiss: what an "s" looks like to a spectrum. */

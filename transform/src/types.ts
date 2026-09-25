@@ -223,7 +223,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -294,6 +294,22 @@ export interface Project {
    * reasoning `textPt` follows.
    */
   systemAudioLevel?: number;
+  /**
+   * Narration cleanup at export (project-10, STC-455): one switch and one
+   * strength (0..1) for `narration-clean.ts`'s chain, applied to the mic
+   * before the mix — never at capture, so it is always undoable. The strength
+   * is kept while the switch is off. Always present after a parse, defaulted
+   * to `DEFAULT_NARRATION_CLEANUP`, the same reasoning `systemAudioLevel`
+   * follows.
+   */
+  narrationCleanup?: NarrationCleanup;
+}
+
+/** project-10's `narrationCleanup` (STC-455). */
+export interface NarrationCleanup {
+  enabled: boolean;
+  /** 0..1; 0 is an exact identity. */
+  strength: number;
 }
 
 /**

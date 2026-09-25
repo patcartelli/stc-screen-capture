@@ -2,8 +2,8 @@
  * STC-455's listening test: runs `transform/src/narration-clean.ts` over a
  * real take's mic and writes WAVs a person can A/B. The chain's tests prove
  * it does what it says to synthetic signals; only an ear can say whether a
- * real voice still sounds like a person afterwards, which is why this spike
- * ships before any project field, export wiring or editor switch does.
+ * real voice still sounds like a person afterwards. It tuned the chain before
+ * the app could use it, and is still the fastest way to compare strengths.
  *
  * Usage:
  *   node scripts/clean-narration-one.mjs <takeDir | mic.m4a | file.wav>
@@ -89,7 +89,7 @@ for (const s of strengths) {
   const p = paramsForStrength(s);
   console.log(
     `  ${name.padEnd(16)} noise floor ${noiseFloorDb(out.channels, sampleRate).toFixed(1)} dBFS  ` +
-    `(noise ≤${p.maxReductionDb} dB, echo ≤${p.reverbMaxDb} dB, de-ess ≤${p.deessMaxDb} dB; ${(ms / 1000).toFixed(1)} s)`);
+    `(noise ≤${p.maxReductionDb} dB, de-ess ≤${p.deessMaxDb} dB; ${(ms / 1000).toFixed(1)} s)`);
 }
 console.log(`\nwrote ${outDir}\nopen "${outDir}"`);
 

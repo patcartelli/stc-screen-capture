@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks,
-  LEVEL_FLOOR_DB, levelFromSliderPct, sliderPctFromLevel,
+  LEVEL_FLOOR_DB, levelFromSliderPct, sliderPctFromLevel, exportAudioPlan,
   type PcmChunk, type PcmTrack,
 } from "../src/audio-mix.js";
 
@@ -194,5 +194,37 @@ describe("the level slider's decibel taper", () => {
     expect(sliderPctFromLevel(NaN)).toBe(0);
     expect(sliderPctFromLevel(5)).toBe(100);
     expect(levelFromSliderPct(NaN)).toBe(0);
+  });
+});
+
+describe("exportAudioPlan: which path an export's audio takes", () => {
+  const on = { enabled: true, strength: 0.5 }, off = { enabled: false, strength: 0.5 };
+
+  test("a take that asked for neither cleanup nor system audio keeps the mic-only path", () => {
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false })).toEqual({ path: "mic", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: off })).toEqual({ path: "mic", cleanMic: false });
+  });
+
+  test("cleanup on moves a mic-only take onto the mix path, cleaned", () => {
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: on })).toEqual({ path: "mix", cleanMic: true });
+  });
+
+  test("cleanup on at strength 0 is off: an identity must not change the path", () => {
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: { enabled: true, strength: 0 } }))
+      .toEqual({ path: "mic", cleanMic: false });
+  });
+
+  test("system audio always mixes; cleanup decides only whether the mic is cleaned", () => {
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: off })).toEqual({ path: "mix", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: on })).toEqual({ path: "mix", cleanMic: true });
+  });
+
+  test("no mic: cleanup has nothing to clean", () => {
+    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: false, cleanup: on })).toEqual({ path: "none", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: true, cleanup: on })).toEqual({ path: "mix", cleanMic: false });
+  });
+
+  test("not encoding: no audio path at all", () => {
+    expect(exportAudioPlan({ encode: false, hasMic: true, hasSystem: true, cleanup: on })).toEqual({ path: "none", cleanMic: false });
   });
 });
