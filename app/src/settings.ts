@@ -13,7 +13,7 @@ import {
   type Corner,
 } from "./thumbnail.js";
 import {
-  DEFAULT_EMBED_TEMPLATE, DEFAULT_SLUG, slugIsValid,
+  DEFAULT_EMBED_TEMPLATE,
 } from "./share.js";
 
 /**
@@ -59,6 +59,14 @@ export interface Settings {
    * way a stale `displayId` is refused rather than silently swapped.
    */
   micDeviceUid: string | null;
+  /**
+   * Record what the machine is PLAYING to system.m4a (STC-418). A boolean,
+   * not a device — there is one system output — and OFF by default: nobody
+   * records the machine's audio without having turned it on (Patrick,
+   * 2026-09-25). Sticky like the camera. Sent to the helper only when on;
+   * an absent field is "off" to `parseStartRequest`.
+   */
+  systemAudio: boolean;
   /**
    * The global capture shortcuts (STC-292), as Electron accelerators. `null`
    * for an action the user deliberately unbound — which is a preference like
@@ -129,6 +137,12 @@ export interface Settings {
    * instrumentation, not something a normal user needs in view.
    */
   showDiagnostics: boolean;
+  /**
+   * The take library's layout (STC-429): the original grid, or a row-based
+   * list. Sticky, the same as every other layout preference here — a chosen
+   * view stays chosen across launches.
+   */
+  libraryView: "grid" | "list";
 }
 
 export interface ShareSettings {
@@ -141,14 +155,20 @@ export interface ShareSettings {
    * directory nobody asked about. `planPublish` refuses rather than defaulting.
    */
   destination: string | null;
-  /** The stable published name — see `DEFAULT_SLUG` for why it is not the take's. */
-  slug: string;
   /** The paste-able embed, as a template. Provisional; see `DEFAULT_EMBED_TEMPLATE`. */
   embedTemplate: string;
 }
 
+/**
+ * `slug` lived here until STC-444 slice 3 moved it onto each take's own
+ * project (`Project.slug`, `transform/src/types.ts`) — one global name could
+ * not serve more than one demo at a time. `cleanShare` below still accepts
+ * and drops an old stored `slug` rather than refusing the whole settings
+ * file over it, the same "a field this build does not have is not this
+ * build's problem" rule the rest of this parser follows.
+ */
 export const DEFAULT_SHARE_SETTINGS: ShareSettings = {
-  destination: null, slug: DEFAULT_SLUG, embedTemplate: DEFAULT_EMBED_TEMPLATE,
+  destination: null, embedTemplate: DEFAULT_EMBED_TEMPLATE,
 };
 
 export interface ThumbnailSettings {
@@ -174,12 +194,13 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  camera: false, displayId: null, micDeviceUid: null, shortcuts: { ...DEFAULT_SHORTCUTS },
+  camera: false, displayId: null, micDeviceUid: null, systemAudio: false,
+  shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   still: { ...DEFAULT_STILL_SETTINGS },
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
   share: { ...DEFAULT_SHARE_SETTINGS },
-  saveFolder: null, showDiagnostics: false,
+  saveFolder: null, showDiagnostics: false, libraryView: "grid",
 };
 
 /**
@@ -217,27 +238,29 @@ function cleanThumbnail(v: unknown): ThumbnailSettings {
 }
 
 /**
- * Same rule again — and the slug is validated rather than sanitised.
- *
- * A stored slug that no longer passes `slugIsValid` falls back to the default
- * instead of being repaired into something adjacent: silently turning
- * "My Demo" into "my-demo" would publish to a path the user never chose and
- * never saw, and the page embedding the old one would break without saying so.
- * Refuse and show the default; the user retypes it once.
+ * `slug` is read from `d` for nothing — see `DEFAULT_SHARE_SETTINGS`'s own
+ * comment. A document written before STC-444 slice 3 still has one sitting
+ * in `share.slug`; this simply does not carry it into `ShareSettings`, the
+ * same "a field this build does not have is not this build's problem" rule
+ * every other stray key in a settings file already follows.
  */
 function cleanShare(v: unknown): ShareSettings {
   const d = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
   const destination = typeof d.destination === "string" && d.destination.startsWith("/")
     ? d.destination : null;
-  const slug = typeof d.slug === "string" && slugIsValid(d.slug) ? d.slug : DEFAULT_SLUG;
   const embedTemplate = typeof d.embedTemplate === "string" && d.embedTemplate.trim()
     ? d.embedTemplate : DEFAULT_EMBED_TEMPLATE;
-  return { destination, slug, embedTemplate };
+  return { destination, embedTemplate };
 }
 
 /** A display id is a positive integer; anything else is "automatic". */
 function cleanDisplayId(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
+}
+
+/** Anything but the literal "list" reads as "grid" — the original layout. */
+function cleanLibraryView(v: unknown): "grid" | "list" {
+  return v === "list" ? "list" : "grid";
 }
 
 /**
@@ -308,6 +331,7 @@ export function readSettings(dir: string): Settings {
     camera: typeof doc.camera === "boolean" ? doc.camera : DEFAULT_SETTINGS.camera,
     displayId: cleanDisplayId(doc.displayId),
     micDeviceUid: cleanMicDeviceUid(doc.micDeviceUid),
+    systemAudio: doc.systemAudio === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
@@ -318,6 +342,7 @@ export function readSettings(dir: string): Settings {
     saveFolder: cleanSaveFolder(doc.saveFolder),
     showDiagnostics: typeof doc.showDiagnostics === "boolean"
       ? doc.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
+    libraryView: cleanLibraryView(doc.libraryView),
   };
 }
 
@@ -345,6 +370,8 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     camera: merged.camera === true,
     displayId: cleanDisplayId(merged.displayId),
     micDeviceUid: cleanMicDeviceUid(merged.micDeviceUid),
+    // `=== true`, the camera's rule: off unless explicitly on.
+    systemAudio: merged.systemAudio === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),
@@ -358,6 +385,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     saveFolder: cleanSaveFolder(merged.saveFolder),
     showDiagnostics: typeof merged.showDiagnostics === "boolean"
       ? merged.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
+    libraryView: cleanLibraryView(merged.libraryView),
   };
   try {
     writeFileSync(join(dir, FILE), JSON.stringify(clean, null, 2));

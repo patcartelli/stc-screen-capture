@@ -9,6 +9,7 @@ import { RAW_SUBDIR } from "../src/takes.js";
 import { hasWindow } from "./_windows.js";
 import { keptFileRequests } from "./_still-log.js";
 import { toastText } from "./_toast.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * The library grid, end to end (STC-294).
@@ -28,7 +29,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 interface Launched { win: Page; recordings: string; stillLog: string; errors: string[] }
 
@@ -204,10 +205,11 @@ describe("the library grid", () => {
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
     // Duplicate is a still's, and it is the ADAPTER that says so — the view
-    // rendered whatever list it was handed.
+    // rendered whatever list it was handed. "share" (STC-429) is
+    // recording-only — the still editor has no publish surface yet.
     expect(await actionsOf(win, 0)).toEqual(
       ["open", "rename", "duplicate", "reveal", "delete"]);
-    expect(await actionsOf(win, 1)).toEqual(["open", "rename", "reveal", "delete"]);
+    expect(await actionsOf(win, 1)).toEqual(["open", "share", "rename", "reveal", "delete"]);
   }, 60_000);
 });
 

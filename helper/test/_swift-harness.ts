@@ -90,21 +90,7 @@ export async function runSwiftHarness(opts: {
   // too close together, which is exactly STC-258 repeated: the outer bound must
   // stay clear of the inner one or the inner one is decorative.
   const { label, sources, compileMs = 45_000, runMs = HARNESS_RUN_MS, env, retryRun } = opts;
-  const bin = join(mkdtempSync(join(tmpdir(), `stc-${label}-`)), `${label}-test`);
-  // Fast, no child of its own, and a hang here would be a broken toolchain
-  // rather than the thing under test.
-  const sdk = execFileSync("xcrun", ["--show-sdk-path"], {
-    encoding: "utf8",
-    timeout: 60_000,
-  }).trim();
-
-  await runBounded(
-    "swiftc",
-    ["-sdk", sdk, "-target", "arm64-apple-macos13.0", "-o", bin,
-     ...sources.map((s) => join(root, s))],
-    `${label}: swiftc`,
-    compileMs,
-  );
+  const bin = await compiled(label, sources, compileMs);
 
   // Compiled once, above; only the run is retried.
   const attempts = retryRun?.attempts ?? 1;
@@ -130,6 +116,54 @@ export async function runSwiftHarness(opts: {
     }
   }
   throw last as Error;
+}
+
+/**
+ * One compile per source set per test FILE, not per call.
+ *
+ * writer-gate.test.ts calls `runSwiftHarness` six times over the same two
+ * sources and anchors.test.ts four times over the same four, and every call ran
+ * `swiftc` again: ~1 s each on CI when the machine is quiet (the deadline-refusal
+ * test is nothing BUT a compile and takes 1.0 s), up to 7.6 s when it is not.
+ * The binary is a pure function of its sources, and everything that varies
+ * between calls — the env, the deadline, the retries — belongs to the RUN.
+ *
+ * Module state, so it lives exactly as long as one file's worker: vitest
+ * isolates files, and a source edit between runs can never be served stale.
+ * The PROMISE is cached so two concurrent callers share one compile, and a
+ * failed compile is evicted rather than cached, so each caller still sees a
+ * compile failure of its own rather than an earlier caller's.
+ */
+const compiles = new Map<string, Promise<string>>();
+
+function compiled(label: string, sources: string[], compileMs: number): Promise<string> {
+  const key = sources.join("\0");
+  let bin = compiles.get(key);
+  if (!bin) {
+    bin = compile(label, sources, compileMs);
+    compiles.set(key, bin);
+    bin.catch(() => compiles.delete(key));
+  }
+  return bin;
+}
+
+async function compile(label: string, sources: string[], compileMs: number): Promise<string> {
+  const bin = join(mkdtempSync(join(tmpdir(), `stc-${label}-`)), `${label}-test`);
+  // Fast, no child of its own, and a hang here would be a broken toolchain
+  // rather than the thing under test.
+  const sdk = execFileSync("xcrun", ["--show-sdk-path"], {
+    encoding: "utf8",
+    timeout: 60_000,
+  }).trim();
+
+  await runBounded(
+    "swiftc",
+    ["-sdk", sdk, "-target", "arm64-apple-macos13.0", "-o", bin,
+     ...sources.map((s) => join(root, s))],
+    `${label}: swiftc`,
+    compileMs,
+  );
+  return bin;
 }
 
 /**

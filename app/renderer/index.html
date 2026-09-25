@@ -81,50 +81,91 @@
     .take button { padding: 3px 10px; font-size: var(--type-body); }
     .broken { color: var(--warn); font-size: var(--type-body); padding: 6px 0; }
 
-    /* ── the library grid (STC-294) ─────────────────────────────────────── */
-    .libfilters { display: flex; gap: 6px; padding: 2px 0 10px; }
+    /* ── the library grid (STC-294), media-forward (STC-429) ─────────────── */
+    .libheader { display: flex; align-items: center; gap: 10px; padding: 2px 0 10px; flex-wrap: wrap; }
+    .libfilters { display: flex; gap: 6px; }
     .libfilters .chip { padding: 3px 12px; font-size: var(--type-body); border-radius: 999px; color: var(--text-dim);
                          border: 1px solid transparent; }
     .libfilters .chip.on { color: var(--text); font-weight: 600;
                            border-color: var(--border-strong);
                            background: var(--surface-hover); }
+    /* The grid/list switch (STC-429) — same chip idiom as the filters, pushed
+       to the row's trailing edge the way a secondary control always is here. */
+    .libviewtoggle { display: flex; gap: 4px; margin-left: auto; }
+    .libviewtoggle button { padding: 3px 12px; font-size: var(--type-body); border-radius: 999px;
+                            color: var(--text-dim); border: 1px solid transparent; }
+    .libviewtoggle button.on { color: var(--text); font-weight: 600;
+                              border-color: var(--border-strong); background: var(--surface-hover); }
     /* auto-fill, so a narrow window reflows rather than scrolling sideways. */
     .libgrid { display: grid; gap: 14px;
                grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
     .libtile { display: flex; flex-direction: column; gap: 7px;
-               border: 1px solid var(--border); border-radius: 9px; background: var(--surface);
+               border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
                padding: 9px; min-width: 0; }
+    /* The list layout (STC-429) — thumbnail at the leading edge, actions at
+       the trailing one, everything else the SAME building blocks the grid
+       tile uses (badge row, title, meta, actions) laid out in a row instead
+       of a column. */
+    .liblist { display: flex; flex-direction: column; gap: 8px; }
+    .librow { display: flex; flex-direction: row; align-items: center; gap: 14px;
+              border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+              padding: 9px; min-width: 0; }
+    .librow .libthumb { flex: 0 0 132px; }
+    .librow .libbody { flex: 1 1 auto; }
+    .librow .libactions { margin-top: 0; margin-left: auto; flex-shrink: 0; }
     /* A fixed aspect box, so the grid does not reflow as pictures land — 500
        tiles each nudging their neighbours is the jank the 60 fps criterion is
        about, and reserving the space costs nothing. */
-    .libthumb { aspect-ratio: 16 / 10; border-radius: 6px; overflow: hidden;
+    .libthumb { position: relative; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden;
                 background: var(--surface-hover); display: flex;
                 align-items: center; justify-content: center; }
     .libthumb img { max-width: 100%; max-height: 100%; display: block; }
-    /* The checkerboard reads as "transparent" rather than "white", which for a
-       window capture with real alpha is the difference between seeing the
-       shape and thinking the shot has a white background. */
-    .libthumb.empty { background-image:
-        linear-gradient(45deg, var(--border) 25%, transparent 25%),
-        linear-gradient(-45deg, var(--border) 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, var(--border) 75%),
-        linear-gradient(-45deg, transparent 75%, var(--border) 75%);
-      background-size: 14px 14px;
-      background-position: 0 0, 0 7px, 7px -7px, -7px 0; }
+    /* A recording has no picture yet (STC-294's deferred poster frame) — a
+       placeholder icon reads as "this is a video" rather than as a blank box
+       (STC-429). Distinct from a still's real, possibly-transparent picture,
+       which never gets this class at all. */
+    .libthumb.empty { background: linear-gradient(135deg, var(--surface-hover), var(--border)); }
+    .libthumb.empty::after {
+      content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-42%, -50%);
+      border-top: 11px solid transparent; border-bottom: 11px solid transparent;
+      border-left: 16px solid var(--text-faint);
+    }
+    /* The one fact a picture-less recording CAN still state (STC-429) — the
+       duration already sits in `summary` too, but a corner chip is what a
+       glance actually reads, the same idiom Finder/Photos use. */
+    .libdur { position: absolute; right: 6px; bottom: 6px; background: rgba(0, 0, 0, .68);
+              color: #fff; font-family: var(--font-mono); font-size: 10px;
+              padding: 2px 6px; border-radius: 4px; letter-spacing: .02em; }
+    /* A second door to "open" (STC-429) — see `wireOpenOnThumb`. */
+    .libthumb.clickable { cursor: pointer; }
+    .libthumb.clickable:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     .libbody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .libbadge { align-self: flex-start; font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
+    .libbadgerow { display: flex; align-items: center; gap: 6px; }
+    .libbadge { font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
                 text-transform: uppercase; padding: 1px 7px; border-radius: 999px;
                 background: var(--surface-hover); color: var(--text-dim); }
     /* Coloured from the badge's own TEXT, so this stylesheet is the only place
        that knows there are two kinds — and the view module still does not. */
     .libbadge[data-badge="Shot"] { background: var(--accent-soft); color: var(--accent); }
+    /* Stubbed (STC-429): `item.edited` is always false today, so this never
+       draws yet — see `library-items.ts`. */
+    .libedited { display: flex; align-items: center; gap: 4px; font-size: var(--type-label);
+                letter-spacing: var(--type-label-tracking); text-transform: uppercase; color: var(--text-dim); }
+    .libedited .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); }
     .libtitle { font-size: var(--type-body-strong); font-weight: var(--type-body-strong-weight); overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
-    .libtile .meta { color: var(--text-dim); font-size: var(--type-value-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    .libtile .meta, .librow .meta { color: var(--text-dim); font-size: var(--type-value-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
                      overflow: hidden; text-overflow: ellipsis; }
     .libactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; }
     .libactions button { padding: 2px 9px; font-size: var(--type-value-sm); }
+    /* The button hierarchy (STC-429): Edit/Share bold and accent-bordered —
+       the same treatment Record/Shot already use — Delete keeps its existing
+       de-emphasised colour, and Rename/Show/Duplicate are quieter still. One
+       flat row throughout; see `library-view.ts`'s `actionClass`. */
+    .libactions button.primary { font-weight: 600; border-color: var(--accent); color: var(--accent); }
+    .libactions button.primary:hover:not([disabled]) { background: var(--accent-soft); }
     .libactions button.delete { border-color: var(--rec); color: var(--rec); }
+    .libactions button.tertiary { border-color: var(--border); color: var(--text-dim); }
     .libempty { color: var(--text-faint); padding: 6px 0; }
     #empty { color: var(--text-faint); padding: 6px 0; }
     .stamp { color: var(--text-faint); font-size: var(--type-value-sm); margin-left: 6px; }
@@ -148,7 +189,7 @@
                 font-size: var(--type-body); flex-wrap: wrap; }
     .stillrow label { display: flex; align-items: center; gap: 4px; }
     .stillrow button { padding: 3px 10px; font-size: var(--type-body); }
-    #stilldest { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
+    #stilldest, #sitedest { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
                  white-space: nowrap; max-width: 260px; direction: rtl; }
     .shortcut { display: flex; align-items: baseline; gap: 10px; padding: 5px 0;
                 border-top: 1px solid var(--border); }
@@ -372,6 +413,19 @@
       <span>Recordings and shots save to</span>
       <span id="stilldest">…</span>
       <button id="stillchoosedest">Change…</button>
+    </div>
+    <!--
+      The site folder (STC-444 slice 3), moved here from the editor window's
+      own sharebar — one folder for the whole app's shared demos, the same
+      reason `stilldest` above lives in Preferences and not per-take. Unlike
+      `stilldest`, `#sitedest` shows the RAW stored value, "Not set" and all
+      — `share.destination` has no resolved fallback to paper over a null
+      with (see `refreshSiteDestination`'s own comment in renderer.ts).
+    -->
+    <div class="stillrow">
+      <span>Shared demos publish to</span>
+      <span id="sitedest">…</span>
+      <button id="sitechoosedest">Change…</button>
     </div>
     <!--
       The post-capture floating thumbnail's own preferences (STC-296). The

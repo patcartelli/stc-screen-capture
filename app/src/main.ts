@@ -21,7 +21,7 @@ import { parseShot, shotForWrite } from "@transform/shot.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
-  DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
+  autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
   publicSrc, type PublishPlan,
 } from "./share.js";
 import { join, dirname, basename } from "node:path";
@@ -196,7 +196,7 @@ const TRASH_SWEEP_INTERVAL_MS = 1_000;
 // loaded from file://, and Chromium refuses cross-origin fetches from a file
 // origin to any non-http scheme. Serving the app itself over a custom scheme
 // would fix that, but IPC removes the origin question altogether.
-const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "project.json"]);
+const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a", "project.json"]);
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -796,9 +796,11 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
     // Same rule, same reason (STC-242): `share.destination` is a folder in the
     // user's own site repo, and a renderer that could name it could make this
     // process copy a file anywhere it liked. `share:chooseDestination` sets it
-    // from a native picker — a person choosing — and the slug and template,
-    // which decide only what the file is CALLED and what text is offered for
-    // pasting, stay settable from the preferences UI like any other field.
+    // from a native picker — a person choosing — and the embed template,
+    // which decides only what text is offered for pasting, stays settable
+    // from the preferences UI like any other field. (The slug moved off this
+    // object entirely in STC-444 slice 3 — it is per-take now, on the
+    // project — so there is nothing else here to guard.)
     const { destination: _mainsAlone, ...rest } = clean.share;
     clean.share = rest as Partial<Settings>["share"];
   }
@@ -903,8 +905,17 @@ async function recordFlowBody(
   writeSettings(app.getPath("userData"),
                 { camera: options.camera, micDeviceUid: options.micDeviceUid });
 
+  // THE start-param builder — the only place a Record's `start` request is
+  // assembled (spec §3). A new setting that reaches the helper (STC-420's
+  // show-clicks, say) is added HERE, in this one expression, never in a
+  // second builder beside it: two builders is two halves of one answer
+  // decided in two places.
   const startParams: Record<string, unknown> = { camera: options.camera };
   if (options.micDeviceUid != null) startParams.micDeviceUid = options.micDeviceUid;
+  // STC-418: from STORED settings, never from the bar or the renderer — the
+  // bar has no system-audio control (that is STC-459). Only when on; absent
+  // is "off" to the helper's parseStartRequest.
+  if (stored.systemAudio) startParams.systemAudio = true;
   let countdownDisplay: number | undefined;
   if (outcome.kind === "window") {
     startParams.windowId = outcome.windowId;
@@ -1687,12 +1698,12 @@ ipcMain.handle("preview:close", async (e) => { clearOpenTake(e); });
  * already is: the window that gets created is `editor-window.ts`'s concern,
  * not something the renderer reaches with its own `BrowserWindow`.
  */
-ipcMain.handle("editor:open", async (_e, dir: string, name: string) => {
+ipcMain.handle("editor:open", async (_e, dir: string, name: string, autoShare?: boolean) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
-  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer") });
+  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer"), autoShare });
   return true;
 });
 
@@ -2397,6 +2408,32 @@ ipcMain.handle("share:chooseDestination", async () => {
  * intended operation — a dialog on every republish would be friction charged
  * for doing what was asked.
  */
+/**
+ * The slug this take publishes under — its own `project.json` if it has
+ * written one, else `autoSlug(takeName)` (STC-444 slice 3).
+ *
+ * A raw read, not `parseProject`: this handler only ever needs the one
+ * field, and `parseProject` wants width/height/durationNs this call has no
+ * reason to compute. Permissive on purpose — an unreadable or pre-slice-3
+ * `project.json` is exactly the "never written one yet" case, not an error.
+ */
+async function readProjectSlug(dir: string, takeName: string): Promise<string> {
+  try {
+    const doc = JSON.parse(await readFile(join(dir, "project.json"), "utf8"));
+    if (typeof doc?.slug === "string" && doc.slug) return doc.slug;
+  } catch { /* no project.json, or not readable — fall through */ }
+  return autoSlug(takeName);
+}
+
+/**
+ * The last file this process actually published, for `share:reveal` below —
+ * never a renderer-supplied path (see that handler's own comment). `null`
+ * until the first successful publish of THIS session; deliberately not
+ * persisted, since a remembered path from a previous launch could point at
+ * a file since moved or deleted with nobody the wiser.
+ */
+let lastPublishedFile: string | null = null;
+
 ipcMain.handle("share:publish", async (e): Promise<{
   ok: boolean; plan: PublishPlan["kind"]; message?: string;
   file?: string; name?: string; replaced?: boolean; snippet?: string;
@@ -2423,10 +2460,15 @@ ipcMain.handle("share:publish", async (e): Promise<{
   const exportFile = (id ? files.find((f) => f.id === id)?.file : undefined)
     ?? await legacyExportIn(openTake, takeName)
     ?? null;
+  // STC-444 slice 3: per-take now, not a global setting — the editor writes
+  // its own choice to `project.json` before calling this, so a fresh read
+  // here sees whatever it just decided; a take opened straight to Share
+  // without ever touching the field still gets a sensible name.
+  const slug = await readProjectSlug(openTake, takeName);
   const plan = planPublish({
     exportFile,
     destination: share.destination,
-    slug: share.slug,
+    slug,
   });
   if (plan.kind !== "ready") {
     return { ok: false, plan: plan.kind, message: plan.message };
@@ -2434,6 +2476,7 @@ ipcMain.handle("share:publish", async (e): Promise<{
   // Read before the write, or the answer is always "yes, it exists".
   const replaced = existsSync(plan.to);
   await copyFile(plan.from, plan.to);
+  lastPublishedFile = plan.to;
   // The snippet's dimensions come from the MANIFEST the export wrote beside
   // the video (STC-308), not from the project as it stands now: the project is
   // editable after an export, so reading it here could describe the video as
@@ -2445,7 +2488,7 @@ ipcMain.handle("share:publish", async (e): Promise<{
   return {
     ok: true, plan: "ready", file: plan.to, name: plan.name, replaced,
     snippet: embedSnippet(share.embedTemplate ?? DEFAULT_EMBED_TEMPLATE, {
-      src: publicSrc(share.slug), slug: share.slug, ...size,
+      src: publicSrc(slug), slug, ...size,
     }),
   };
 });
@@ -2489,18 +2532,26 @@ async function exportedSize(dir: string, takeName: string):
  *
  * `recorder:reveal` shows a take DIRECTORY and refuses anything outside the
  * recordings root, which is right for a take and wrong here: the published
- * file is deliberately outside that root, in the user's own site repo. So this
- * is its own handler with its own rule — it reveals only the exact path the
- * stored destination and slug produce, never a path the renderer names, which
- * is what keeps "open anything you like" from being one IPC call away.
+ * file is deliberately outside that root, in the user's own site repo. So
+ * this is its own handler with its own rule — it reveals only
+ * `lastPublishedFile`, this process's own record of what it just copied,
+ * never a path the renderer names, which is what keeps "open anything you
+ * like" from being one IPC call away. (STC-444 slice 3: it used to
+ * re-derive `destination/slug.mp4` from settings, back when the slug lived
+ * there; now the slug is per-take, and re-deriving it here would mean a
+ * second copy of `readProjectSlug`'s own logic for a value `share:publish`
+ * already resolved once, correctly, moments before. `main.ts`'s own
+ * standing "Show published" button is what this replaces — STC-444 slice 3
+ * folds it into `share:publish`'s own success feedback instead, so a
+ * renderer that has not published anything THIS SESSION has nothing to
+ * reveal, on purpose: revealing a stale file from a previous launch would
+ * be showing the wrong thing confidently.)
  */
 ipcMain.handle("share:reveal", async () => {
-  const { share } = readSettings(app.getPath("userData"));
-  if (!share.destination) return { ok: false, message: "No site folder chosen yet." };
-  const file = join(share.destination, `${share.slug}.mp4`);
-  if (!existsSync(file)) return { ok: false, message: "Nothing published yet." };
-  shell.showItemInFolder(file);
-  return { ok: true, file };
+  if (!lastPublishedFile) return { ok: false, message: "Nothing published yet." };
+  if (!existsSync(lastPublishedFile)) return { ok: false, message: "Nothing published yet." };
+  shell.showItemInFolder(lastPublishedFile);
+  return { ok: true, file: lastPublishedFile };
 });
 
 ipcMain.handle("recorder:reveal", async (_e, dir: string) => {

@@ -13,6 +13,7 @@ import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
 import { captureDocForWrite, CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { renameCapture } from "../src/takes.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * The library's two-object delete (STC-413 Task 11): a capture is now a
@@ -67,7 +68,7 @@ beforeEach(async () => {
   app = launched.app;
   page = launched.win;
 });
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 /** Poll until the tile set stops changing — the render is a single synchronous
  *  DOM replace once the IPC round trip resolves, so this converges in at most
@@ -208,9 +209,11 @@ describe("a partial trash failure does not strand the other half (STC-413 review
    * it and letting the BUNDLE succeed is what makes the refresh DOM-visible:
    * `recordingItem`'s badge/summary/actions never depend on whether `file`
    * is set, but once the bundle is gone the survivor is re-scanned as an
-   * unmatched loose file, and `looseFileItem` WITHHOLDS "open" for one with
-   * no bundle (`library-items.ts`) — a drop from 4 action buttons to 3 that
-   * a stale, un-refreshed render could not produce.
+   * unmatched loose file, and `looseFileItem` WITHHOLDS "open" (and, with it,
+   * "share" — STC-429's action is recording-only and needs a bundle to open
+   * into an editor) for one with no bundle (`library-items.ts`) — a drop
+   * from 5 action buttons to 3 that a stale, un-refreshed render could not
+   * produce.
    *
    * Updated for Task 13: the survivor's action count used to drop to 2
    * (`looseFileItem` withheld "rename" too, for want of a bundle to write
@@ -224,7 +227,7 @@ describe("a partial trash failure does not strand the other half (STC-413 review
     if (!app) throw new Error("no app launched");
     await expect.poll(() => itemCount(page), { timeout: 20_000 }).toBe(1);
     const actionCount = () => page.locator(".libtile:first-child .libactions button").count();
-    expect(await actionCount()).toBe(4);   // open, rename, reveal, delete
+    expect(await actionCount()).toBe(5);   // open, share, rename, reveal, delete
 
     await app.evaluate(({ shell }) => {
       const real = shell.trashItem.bind(shell);

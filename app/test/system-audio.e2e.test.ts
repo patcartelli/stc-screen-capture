@@ -1,0 +1,104 @@
+import { describe, test, expect, afterEach } from "vitest";
+import { _electron as electron, type ElectronApplication } from "playwright";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { waitForStart } from "./_start-log.js";
+import { makeTakeFolder } from "./_take-fixture.js";
+import { withoutCountdown } from "./_countdown-fixture.js";
+import { startRecordFlow } from "./_record-flow.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+
+/**
+ * The system-audio preference reaching the helper (STC-418 PR 2).
+ *
+ * There is no control for it yet — the options bar's toggle is PR 4, blocked
+ * on STC-388 — so the preference is set through the SHIPPED
+ * `recorder:setSettings` channel, the same way `_countdown-fixture.ts` sets
+ * `countdownMs`. What this file pins is the one line in `main.ts` that turns
+ * the stored boolean into the start payload: everything else can be right
+ * while `systemAudio` never reaches the process that opens the stream, the
+ * same reason `mic-picker.e2e.test.ts` pins `micDeviceUid`.
+ *
+ * The helper stand-in records the start payload and captures nothing.
+ *
+ * STC-388: `#record` opens the overlay now, and only the options bar's own
+ * Record control starts a take, so every test here goes through
+ * `startRecordFlow` — the real Record flow — rather than clicking `#record`
+ * and waiting. That makes this file the pin for `recordFlowBody`'s start-param
+ * builder in `main.ts`: `systemAudio` is read from STORED settings there, never
+ * from the bar (which has no system-audio control until STC-459).
+ * Mutation-checked: dropping that builder's `systemAudio` line fails exactly
+ * "turned on, a take sends systemAudio: true" and nothing else in this file.
+ */
+const root = join(__dirname, "..", "..");
+const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
+
+let app: ElectronApplication | undefined;
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
+
+async function launch(opts: { userData: string; recordings: string; startLog: string }) {
+  app = await electron.launch({
+    args: [root, `--user-data-dir=${opts.userData}`],
+    cwd: root,
+    env: {
+      ...process.env,
+      STC_RECORDINGS_DIR: opts.recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+      STC_HELPER_BIN: FAKE_HELPER,
+      STC_FAKE_START_LOG: opts.startLog,
+      STC_OVERLAY_SYNTHETIC_INPUT: "1",
+    },
+  });
+  const win = await app.firstWindow();
+  await win.waitForLoadState("domcontentloaded");
+  await withoutCountdown(win);
+  return win;
+}
+
+function fresh() {
+  return {
+    userData: mkdtempSync(join(tmpdir(), "stc-ud-")),
+    recordings: makeTakeFolder().dir,
+    startLog: join(mkdtempSync(join(tmpdir(), "stc-startlog-")), "start.jsonl"),
+  };
+}
+
+describe("the system-audio preference", () => {
+  test("off by default: a take sends no systemAudio field at all", async () => {
+    const o = fresh();
+    const win = await launch(o);
+    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await startRecordFlow(app!, win);
+    const cmd = await waitForStart(o.startLog);
+    expect(cmd.cmd).toBe("start");
+    expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBeUndefined();
+  }, 180_000);
+
+  test("turned on, a take sends systemAudio: true to the helper", async () => {
+    const o = fresh();
+    const win = await launch(o);
+    await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: true }));
+    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await startRecordFlow(app!, win);
+    const cmd = await waitForStart(o.startLog);
+    expect(cmd.cmd).toBe("start");
+    expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
+  }, 180_000);
+
+  // Hardware report, 2026-09-25: "it still recorded with system audio even
+  // though I ran the command" to turn it off. This pins the code path: on,
+  // then off, then Record sends NO systemAudio field.
+  test("turned on and then off again, a take sends no systemAudio field", async () => {
+    const o = fresh();
+    const win = await launch(o);
+    await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: true }));
+    const saved = await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: false }));
+    expect(saved.systemAudio).toBe(false);
+    expect((await win.evaluate(() => (window as any).recorder.getSettings())).systemAudio).toBe(false);
+    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await startRecordFlow(app!, win);
+    const cmd = await waitForStart(o.startLog);
+    expect(cmd.cmd).toBe("start");
+    expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBeUndefined();
+  }, 180_000);
+});

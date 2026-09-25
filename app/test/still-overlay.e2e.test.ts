@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
-import { stubQuitDialog } from "./_quit-fixture.js";
+import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { windowCount, hasWindow } from "./_windows.js";
 import { toastText } from "./_toast.js";
 
@@ -28,7 +28,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

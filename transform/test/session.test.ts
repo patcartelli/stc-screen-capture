@@ -93,7 +93,7 @@ describe("loadSession", () => {
   });
 });
 
-describe("loader accepts v1 through v4 anchors", () => {
+describe("loader accepts v1 through v6 anchors", () => {
   // The helper does not emit v2 until increment 3, does not emit v3 until
   // STC-370 (only for a region/window take), and does not emit v4 until
   // STC-233 (only when a mic was requested). A loader that demanded the
@@ -168,16 +168,25 @@ describe("loader accepts v1 through v4 anchors", () => {
     expect((s.anchors as any).pauses).toEqual([{ startNs: 1_000_000_000, endNs: 2_000_000_000 }]);
   });
 
-  test("a version 6 anchors document is rejected by name", async () => {
-    // Widening must not become "accept anything". Version 6, not 5: STC-240
-    // made 5 a real, supported version (a paused take's `pauses` block), so
-    // it is no longer a stand-in for "unknown future version" — the same
-    // thing already happened to 3 (STC-370) and 4 (STC-233).
-    await expect(loadSession({
-      anchors: offsetAnchors({ version: 6 as any }),
+  test("a version 6 anchors document loads, a requested-but-empty system block included", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors({ version: 6, system: { present: false } } as any),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 6 is not supported/);
+    });
+    expect(s.systemAudio).toBeUndefined();
+  });
+
+  test("a version 7 anchors document is rejected by name", async () => {
+    // Widening must not become "accept anything". Version 7, not 6: STC-418
+    // made 6 a real, supported version (the `system` audio block), so it is
+    // no longer a stand-in for "unknown future version" — the same thing
+    // already happened to 3 (STC-370), 4 (STC-233) and 5 (STC-240).
+    await expect(loadSession({
+      anchors: offsetAnchors({ version: 7 as any }),
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/version 7 is not supported/);
   });
 
   test("a version 2 events document loads, cursor events included", async () => {
@@ -339,6 +348,54 @@ describe("loading a mic track", () => {
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
     });
+    expect(s.micAudio).toBeUndefined();
+  });
+});
+
+describe("loading a system-audio track (STC-418)", () => {
+  const systemAnchors = (over: any = {}) => offsetAnchors({
+    version: 6,
+    system: {
+      present: true, sampleRate: 48000, channels: 2,
+      firstFramePtsNs: 1_035_500_000, lastFramePtsNs: 3_024_500_000,
+    },
+    files: { display: "display.mp4", system: "system.m4a" },
+    ...over,
+  });
+
+  test("a session claiming system audio but given no system.m4a is refused", async () => {
+    await expect(loadSession({
+      anchors: systemAnchors(),
+      events: { version: 1, events: [] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/no system\.m4a was supplied/i);
+  });
+
+  test("a system.m4a supplied for a take that claims none is refused", async () => {
+    await expect(loadSession({
+      anchors: offsetAnchors({ version: 6, system: { present: false } } as any),
+      events: { version: 1, events: [] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+      systemM4a: mp4("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
+    })).rejects.toThrow(/a system\.m4a was supplied/i);
+  });
+
+  test("the two audio tracks are checked independently — a mic file does not stand in for system audio", async () => {
+    await expect(loadSession({
+      anchors: systemAnchors(),
+      events: { version: 1, events: [] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+      micM4a: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/a mic\.m4a was supplied/i);
+  });
+
+  test("a v6 session with no system audio still loads", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors({ version: 6, system: { present: false } } as any),
+      events: { version: 1, events: [] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    });
+    expect(s.systemAudio).toBeUndefined();
     expect(s.micAudio).toBeUndefined();
   });
 });

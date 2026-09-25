@@ -1,4 +1,4 @@
-import type { Pip, Project, Trim, Zoom, ZoomOverride } from "./types.js";
+import type { NarrationCleanup, Pip, Project, Trim, Zoom, ZoomOverride } from "./types.js";
 import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
 import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
@@ -68,6 +68,20 @@ export const DEFAULT_PIP: Pip = {
   enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32,
 };
 
+/**
+ * Full level (STC-418). system.m4a is recorded at full level and this is the
+ * gain preview and export apply to it; 1 is "nobody has said otherwise", so a
+ * take at 1 never needs project-9 to say so.
+ */
+export const DEFAULT_SYSTEM_AUDIO_LEVEL = 1;
+
+/**
+ * Narration cleanup's default (STC-455): OFF, at the strength Patrick chose
+ * by ear on 2026-09-25 (~50 of the round-2 chain). Off is what every take
+ * did before project-10 existed, so a take at this default needs no v10.
+ */
+export const DEFAULT_NARRATION_CLEANUP: Readonly<NarrationCleanup> = Object.freeze({ enabled: false, strength: 0.5 });
+
 export function defaultProject(
   width: number, height: number, trim?: Trim, hasCamera = false,
 ): Project {
@@ -88,6 +102,10 @@ export function defaultProject(
     // 'none' from 'older document'" reasoning `zoom` already follows
     // (STC-295 first stated it for `decoration.annotations`).
     overrides: [],
+    // Same reasoning again (project-8, STC-444 slice 4).
+    bookmarks: [],
+    systemAudioLevel: DEFAULT_SYSTEM_AUDIO_LEVEL,
+    narrationCleanup: { ...DEFAULT_NARRATION_CLEANUP },
   };
   // A recorded camera track is part of the take, so a take that has one shows
   // its PiP without needing an edit document to say so.
@@ -149,7 +167,53 @@ export function parseProject(
   project.textPt = typeof doc.textPt === "number" && doc.textPt > 0 && doc.textPt <= 144
     ? doc.textPt : DEFAULT_TEXT_PT;
   project.overrides = cleanOverrides(doc.overrides);
+  // project-7 (STC-444 slice 3): carried as-is when it is a non-empty string.
+  // NOT validated against share.ts's SLUG_PATTERN here — that module is in
+  // `app/src`, and this one has no business depending on it (the dependency
+  // runs the other way, transform -> nothing app-specific). A slug that
+  // fails validation is still carried through rather than dropped, the same
+  // "corrupt sidecar loses the recording, never invents a fix" rule every
+  // other field here follows; planPublish is where an unusable one is
+  // actually refused, at the moment it would matter.
+  if (typeof doc.slug === "string" && doc.slug.length > 0) project.slug = doc.slug;
+  // project-8 (STC-444 slice 4): each entry on its own terms, the same rule
+  // every other array field in this parser follows — one bad value must not
+  // cost every other bookmark. Clamped to the take (a document from a
+  // re-take, or hand-edited past the end, is not a crash) and de-duplicated
+  // + sorted so `scrubber.ts`'s ArrowUp/ArrowDown never has to.
+  project.bookmarks = cleanBookmarks(doc.bookmarks, durationNs);
+  // project-9 (STC-418). Out of range is "no opinion", not a clamp: a stored
+  // 1.4 is a document this build did not write, and guessing it meant 1 is
+  // the same guess the default already makes.
+  project.systemAudioLevel = typeof doc.systemAudioLevel === "number"
+    && doc.systemAudioLevel >= 0 && doc.systemAudioLevel <= 1
+    ? doc.systemAudioLevel : DEFAULT_SYSTEM_AUDIO_LEVEL;
+  // project-10 (STC-455). Each field on its own terms, like every other
+  // block here: a bad strength must not also turn a deliberate "on" off.
+  project.narrationCleanup = cleanNarrationCleanup(doc.narrationCleanup);
   return project;
+}
+
+function cleanNarrationCleanup(v: unknown): NarrationCleanup {
+  const out = { ...DEFAULT_NARRATION_CLEANUP };
+  if (!v || typeof v !== "object") return out;
+  const { enabled, strength } = v as Record<string, unknown>;
+  if (typeof enabled === "boolean") out.enabled = enabled;
+  if (typeof strength === "number" && strength >= 0 && strength <= 1) out.strength = strength;
+  return out;
+}
+
+function isDefaultNarrationCleanup(n: NarrationCleanup | undefined): boolean {
+  return !n || (n.enabled === DEFAULT_NARRATION_CLEANUP.enabled && n.strength === DEFAULT_NARRATION_CLEANUP.strength);
+}
+
+function cleanBookmarks(v: unknown, durationNs: number): number[] {
+  if (!Array.isArray(v)) return [];
+  const out = new Set<number>();
+  for (const raw of v) {
+    if (Number.isInteger(raw) && raw >= 0 && raw <= durationNs) out.add(raw as number);
+  }
+  return [...out].sort((a, b) => a - b);
 }
 
 /**
@@ -286,9 +350,13 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 {
-  // Highest first: a document needing v6 needs it whatever its zoom or
-  // textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 {
+  // Highest first: a document needing v10 needs it whatever its level,
+  // bookmarks, slug, overrides, zoom or textPt say.
+  if (!isDefaultNarrationCleanup(project.narrationCleanup)) return 10;
+  if (project.systemAudioLevel !== undefined && project.systemAudioLevel !== DEFAULT_SYSTEM_AUDIO_LEVEL) return 9;
+  if (project.bookmarks && project.bookmarks.length > 0) return 8;
+  if (project.slug !== undefined) return 7;
   if (project.overrides && project.overrides.length > 0) return 6;
   if (project.textPt !== undefined && project.textPt !== DEFAULT_TEXT_PT) return 5;
   const z = project.zoom;
@@ -313,12 +381,18 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (!isFullTake(project, durationNs) && project.trim) out.trim = project.trim;
   // Only when it says something v3 cannot: writing the default block into
   // every document would push every take to v4 for a setting nobody touched.
-  // v5 and v6 are each supersets of what came before: a document that needs
-  // v6 for its overrides must still carry a non-default zoom or a non-default
-  // textPt if it has one, or that setting is silently dropped by the very
-  // write that promoted the version.
+  // v5 through v8 are each supersets of what came before: a document that
+  // needs v8 for its bookmarks must still carry whatever slug, non-default
+  // overrides, zoom or textPt it has, or that setting is silently dropped by
+  // the very write that promoted the version — `>=`, not `===`, is the fix
+  // STC-444 slice 4 made to the slug line below for exactly this reason
+  // (found by this same lesson when v7 was minted for `overrides`).
   if (version >= 4 && project.zoom && !isDefaultZoom(project.zoom)) out.zoom = project.zoom;
   if (version >= 5) out.textPt = project.textPt;
-  if (version === 6) out.overrides = project.overrides;
+  if (version >= 6) out.overrides = project.overrides;
+  if (version >= 7) out.slug = project.slug;
+  if (version >= 8) out.bookmarks = project.bookmarks;
+  if (version >= 9) out.systemAudioLevel = project.systemAudioLevel;
+  if (version >= 10) out.narrationCleanup = { ...project.narrationCleanup! };
   return out;
 }

@@ -243,10 +243,12 @@ describe("the presentation each kind owns", () => {
     // is what keeps it out of the view as a branch.
     expect(still!.actions.map((a) => a.id)).toEqual(
       ["open", "rename", "duplicate", "reveal", "delete"]);
+    // "share" (STC-429) is recording-only — the still editor has no publish
+    // surface of its own yet.
     expect(recording!.actions.map((a) => a.id)).toEqual(
-      ["open", "rename", "reveal", "delete"]);
+      ["open", "share", "rename", "reveal", "delete"]);
     // Same action id, different word, decided by the adapter.
-    expect(still!.actions.find((a) => a.id === "open")!.label).toBe("Open");
+    expect(still!.actions.find((a) => a.id === "open")!.label).toBe("Edit");
     expect(recording!.actions.find((a) => a.id === "open")!.label).toBe("Preview");
   });
 

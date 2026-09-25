@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * The Settings sheet, end to end (STC-412): the sheet-opening button renamed
@@ -17,7 +18,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 async function launch(opts: { userData: string; recordings: string }) {
   app = await electron.launch({
@@ -139,6 +140,32 @@ describe("the settings sheet", () => {
     //    its own, since nothing in the page can know this directory's name.
     await expect.poll(() => win.textContent("#stilldest"), { timeout: 10_000 })
       .toBe(recordings);
+  });
+
+  /**
+   * STC-444 slice 3. The site folder used to be its own row under the
+   * editor window's timeline, with its own picker button — this pins it
+   * moved into the main window's Preferences instead, alongside the save
+   * location it mirrors, and that an unset one reads "Not set" rather than
+   * a resolved guess (there is no real default to resolve to — see
+   * `refreshSiteDestination`'s own comment in renderer.ts).
+   */
+  test("the site folder is a Preferences row, unset by default", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await win.click("#settings");
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+
+    const savedUnderPreferences = await win.evaluate(() => {
+      const dest = document.getElementById("sitedest")!;
+      const row = dest.closest("div")!;
+      let prev = row.previousElementSibling;
+      while (prev && prev.tagName !== "H2") prev = prev.previousElementSibling;
+      return prev?.textContent ?? null;
+    });
+    expect(savedUnderPreferences).toBe("Preferences");
+
+    await expect.poll(() => win.textContent("#sitedest"), { timeout: 10_000 })
+      .toBe("Not set");
   });
 
   /**

@@ -11,10 +11,55 @@
        ONE thing the shared base has no opinion on, so they extend it here
        rather than redefining anything tokens.css already declares. Constant
        across light/dark, same as before this ticket. */
-    :root { --clip: #6a8fd8; --zoom: #d88a3b; }
+    /* --zoom-fill (STC-444 slice 2): the Zoom lane's own dithered CURVE fill
+       only — picked blue in an HTML variant comparison to match Patrick's
+       Figma reference. --zoom itself (orange) is untouched and still owns
+       every other zoom-related accent (selection outline, the manual-window
+       dashed border) — only the fill changed, deliberately scoped there. */
+    /* --bookmark (STC-444 slice 4): a marker's own color, distinct from the
+       played bar / selection's --accent (blue) and the Zoom lane's --zoom
+       (orange) so a bookmark reads as its own kind of mark on the ruler. */
+    :root { --clip: #6a8fd8; --zoom: #d88a3b; --zoom-fill: #4f7fe0; --bookmark: #e0c14f; }
+    /* STC-444 (Figma pass, 2026-09-24): the editor is ALWAYS dark, per
+       Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
+       "follow the OS" default (the still editor was moved OFF forced dark
+       with his sign-off; this is the mirror-image decision for the video
+       editor, asked and confirmed before writing it). Every value but --bg
+       is tokens.css's own dark media block, duplicated rather than shared
+       because this window alone deviates — index.html and still-editor.html
+       still track prefers-color-scheme untouched. --bg alone goes darker
+       than that block's #131315: Patrick picked the near-black panel from
+       an HTML variant comparison (2026-09-24, variant "B") over the shared
+       dark tokens' own background — --surface and the rest stay put since
+       only --bg was compared. */
+    :root {
+      color-scheme: dark;
+      --bg: #0a0a0b;
+      --surface: #1c1c1f;
+      --surface-hover: #26262a;
+      --border: rgba(255, 255, 255, .12);
+      --border-strong: rgba(255, 255, 255, .26);
+      --text: #f1f1ee;
+      --text-dim: rgba(241, 241, 238, .64);
+      --text-faint: rgba(241, 241, 238, .42);
+      --accent: #7aa2ff;
+      --accent-soft: rgba(122, 162, 255, .18);
+      --rec: #ff6b6b;
+      --rec-soft: rgba(255, 107, 107, .16);
+      --warn: #e0925a;
+      --warn-soft: rgba(224, 146, 90, .16);
+      --focus: #7aa2ff;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
-           display: flex; flex-direction: column; gap: 10px; }
+    /* Full-bleed video (STC-444 Figma pass): no body padding, no gap between
+       the video and the panel below it. `.editorbody` carries the padding
+       everything BELOW the video needs instead. */
+    body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+           display: flex; flex-direction: column; }
+    #alert { margin: 12px 16px 0; }
+    .editorbody { container-type: inline-size; display: flex; flex-direction: column;
+                  gap: 10px; padding: 16px; }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
     button { font: inherit; padding: 6px 14px; border-radius: 7px;
              border: 1px solid var(--border); background: transparent; color: inherit;
              cursor: pointer; }
@@ -27,7 +72,9 @@
              background: rgba(200,80,60,.1); display: none; white-space: pre-wrap; }
     #alert.show { display: block; }
 
-    #stage { width: 100%; height: auto; background: #000; border-radius: 6px; display: block; }
+    /* Full-bleed (STC-444 Figma pass): no rounded corners — the video runs
+       edge to edge against the window's own top/left/right. */
+    #stage { width: 100%; height: auto; background: #000; border-radius: 0; display: block; }
     #stage[data-vieweye] { width: var(--vieweye-w); max-width: none; }
     #stagewrap { overflow-x: auto; position: relative; }
 
@@ -42,25 +89,186 @@
     #overridebox { position: absolute; border: 1.5px solid var(--zoom);
                    background: rgba(216,138,59,.12); pointer-events: none; }
 
-    .transport { display: flex; align-items: center; gap: 10px; }
-    #clock { min-width: 132px; font-size: var(--type-value); opacity: .75; }
-    #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 600; opacity: .85; }
+    /* ── the header row (STC-444, Figma pass): transport LEFT, output right
+       ────────────────────────────────────────────────────────────────────
+       Reverses the slice-1 decision (STC-444-RUNBOOK.md's own "does the
+       transport feel centred?" check) after Patrick picked variant "B" from
+       an HTML comparison, 2026-09-24: the transport anchors to the left
+       edge now, matching his Figma, rather than centring on the window —
+       `justify-content: space-between` is the whole layout, no longer a
+       3-column grid with an empty spacer column to keep one centred. The
+       timecode moved OUT of the header and now sits above the ruler instead
+       (the ticket's original "option C" put it here — Patrick's Figma
+       wins). The container is `.editorbody`, an ANCESTOR of both the header
+       and the new timecode row, because a container query asks an
+       ancestor, never the element it is written on — moving the timecode
+       out of `.headerwrap` is exactly why this container moved up a level
+       with it. */
+    .header { display: flex; align-items: center; justify-content: space-between;
+              gap: 12px; padding: 2px 0; }
+    .header .transport { display: flex; align-items: center; gap: 8px; }
+    .header .right { display: flex; align-items: center; gap: 8px; }
+    /* Above the ruler now, not in the header. */
+    .timecoderow { display: flex; align-items: baseline; gap: 10px; padding: 2px 0 4px; }
+    #clock { font-size: var(--type-value); color: var(--text-dim); }
+    #clock-cur { color: var(--text); }
+    #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
+    /* STC-418 PR 3: the system-audio level, compact and at the far end of
+       the timecode row. NOT a lane of its own: the 2026-09-24 hardware pass
+       found three stacked lanes cluttered, which is why Clip activity moved
+       onto the ruler. Hidden unless the take recorded system audio. */
+    .sysaudio { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+                font-size: var(--type-label); color: var(--text-dim); }
+    .sysaudio[hidden] { display: none; }
+    .sysaudio input { width: 96px; margin: 0; accent-color: var(--accent); }
+    #sysaudiovalue { min-width: 4ch; text-align: right; color: var(--text); }
+    /* STC-455: narration cleanup, the same compact shape beside it — one
+       switch and one strength. The strength stays visible, dimmed, while the
+       switch is off, so turning it back on returns to the same setting.
+       Whichever of the two comes first takes the row's free space. */
+    .voiceclean { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+                  font-size: var(--type-label); color: var(--text-dim); }
+    .voiceclean[hidden] { display: none; }
+    .voiceclean:not([hidden]) ~ .sysaudio { margin-left: 14px; }
+    .voiceclean label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+    .voiceclean input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+    .voiceclean input[type="range"] { width: 96px; margin: 0; accent-color: var(--accent); }
+    .voiceclean input[type="range"]:disabled { opacity: 0.4; }
+    #voicecleanvalue { min-width: 4ch; text-align: right; color: var(--text); }
+    #voicecleanstrength:disabled + #voicecleanvalue { color: var(--text-dim); }
+    /* Below this the duration goes and the current time stays. */
+    @container (max-width: 680px) { .clock-dur { display: none; } }
+    /* The right group's status line is the first thing to go: `justify-self:
+       end` on an overflowing item spills it LEFTWARD, over the transport. */
+    @container (max-width: 820px) { #framestatus { display: none; } }
+
+    /* Hairline icon buttons — the same states the still editor's toolbar
+       grew in STC-443: hover, active, focus-visible, disabled. Sized per
+       variant "B" of the STC-444 Figma-pass comparison (2026-09-24): bigger
+       than slice 1's 30px/16px pair, with a slightly thinner relative
+       stroke (1.15 vs 1.25) so the larger glyphs stay hairline rather than
+       reading heavier. */
+    .icon { width: 40px; height: 40px; padding: 0; border: none; border-radius: 8px;
+            display: inline-grid; place-items: center; color: var(--text-dim);
+            background: transparent; flex: none; }
+    .icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor;
+                stroke-width: 1.15; stroke-linecap: round; stroke-linejoin: round; }
+    .icon svg .solid { fill: currentColor; stroke: none; }
+    .icon:hover:not([disabled]) { color: var(--text); background: var(--surface-hover); }
+    .icon:active:not([disabled]) { background: var(--border); }
+    .icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .icon.primary { color: var(--text); }
+    #playpause .when-playing { display: none; }
+    #playpause[data-playing] .when-playing { display: inline; }
+    #playpause[data-playing] .when-paused { display: none; }
+    #framestatus { font-size: var(--type-meta); color: var(--text-faint); margin-right: 6px;
+                   max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                   transition: opacity .4s ease; }
+    #framestatus.stale { opacity: 0; }
+
+    /* The play glyph over the preview is the transport's own play button
+       drawn a second time, not a second control: #stage's click calls the
+       same toggle, and the glyph only shows while paused. */
+    #stageplay { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px;
+                 margin: -22px 0 0 -22px; pointer-events: none; color: #fff; }
+    /* A dark hairline rather than a CSS drop-shadow: a filter over a canvas
+       that repaints every frame re-rasterises with it. */
+    #stageplay path { stroke: rgba(0,0,0,.45); stroke-width: .6; paint-order: stroke; }
+    #stageplay[hidden] { display: none; }
+    #stage { cursor: pointer; }
+
+    /* Copy frame / Save frame, from the frame button's right-click or the
+       preview's. A plain positioned list rather than a native Menu: the
+       preload bridge exposes no menu channel, and this is a rough-in. */
+    #framemenu { position: fixed; z-index: 20; min-width: 170px; padding: 4px;
+                 background: var(--surface); border: 1px solid var(--border-strong);
+                 border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+                 display: flex; flex-direction: column; }
+    #framemenu[hidden] { display: none; }
+    #framemenu button { border: none; border-radius: 5px; text-align: left; padding: 5px 8px;
+                        display: flex; justify-content: space-between; gap: 16px; }
+    #framemenu button:hover, #framemenu button:focus-visible { background: var(--accent-soft); outline: none; }
+    #framemenu kbd { font-family: var(--font-mono); font-size: var(--type-meta); color: var(--text-faint); }
 
     /* ── the timeline: a ruler and two lanes over one shared [a, b] span ─── */
     .timelinewrap { display: flex; flex-direction: column; gap: 2px; }
     #ruler { position: relative; height: 18px; overflow: hidden; cursor: grab;
              border-bottom: 1px solid var(--border); }
     #ruler:active { cursor: grabbing; }
+    /* Clip activity, as a faint OPTIONAL backdrop on the ruler itself
+       (2026-09-24 hardware pass: three stacked lanes read as cluttered —
+       activity is a judgment aid, not a control, so it does not need a
+       lane of its own). Same LED-row drawing `drawClipLane` used to do,
+       now targeting this canvas via `drawRulerActivity`; off by default
+       (`#ruler[data-activity]` is the only thing that shows it), toggled
+       by #ruleractivitytoggle. Sits BEHIND #ruler-content in DOM order, so
+       the ticks and played line always read clearly on top of it — opacity
+       alone would not be enough once real activity gets dense, the
+       screenshot that prompted this is exactly that case. */
+    #ruler-activity-wrap { opacity: 0; transition: opacity .12s ease; }
+    #ruler[data-activity] #ruler-activity-wrap { opacity: .4; }
+    #ruler-activity { display: block; width: 100%; height: 100%; }
+    .rulertoggle { position: absolute; left: 2px; top: 1px; width: 16px; height: 16px;
+                   padding: 0; border: none; background: transparent; color: var(--text-faint);
+                   cursor: pointer; display: grid; place-items: center; z-index: 5; }
+    .rulertoggle svg { width: 12px; height: 12px; fill: none; stroke: currentColor;
+                       stroke-width: 1.4; stroke-linecap: round; }
+    .rulertoggle:hover { color: var(--text-dim); }
+    .rulertoggle[aria-pressed="true"] { color: var(--accent); }
+    .rulertoggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    /* Adaptive ticks + the played line (STC-444 slice 2), authored inside
+       #ruler-content so the shared pan/zoom transform (below) carries them
+       for free — the same trick .kept/.cut-head already use. Only the
+       WIDTH of a fixed-size mark (a tick, the playhead) needs to fight that
+       transform: scaleX() stretches the X axis, so editor.ts's
+       renderRulerTicks sets each one's authored width to 1/scale px, which
+       lands back at exactly 1 screen px however zoomed in the view is.
+       Heights need no such correction — scaleX() never touches Y. The
+       played bar's WIDTH is deliberately left alone: like .kept, it is a
+       time RANGE and is supposed to stretch with zoom. Ticks: kept at "keep
+       A" (thin off-white lines) from the STC-444 HTML variant comparison —
+       dots and glow were tried and dropped; the Zoom lane's dithered fill is
+       the only place that texture survived. */
+    #ruler-ticks { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; pointer-events: none; }
+    .ruler-tick { position: absolute; bottom: 0; height: 8px; background: rgba(241, 241, 238, .55); }
+    #ruler-played { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); pointer-events: none; }
+    #ruler-playhead { position: absolute; bottom: 0; height: 14px; margin-left: -1px; background: var(--text); pointer-events: none; }
+    /* Bookmarks (STC-444 slice 4): one marker per project.bookmarks entry,
+       positioned as a fraction of FULL duration exactly like a tick, so the
+       shared pan/zoom transform on #ruler-content carries it for free — its
+       WIDTH gets the same 1/scale correction editor.ts's renderRulerTicks
+       already applies to a tick's width, for the same reason (scaleX()
+       stretches the X axis a %-based left/width already lives on). A real
+       button, not a div: it seeks on click and removes on right-click, so it
+       needs to take pointer events and be focusable, unlike a tick — the
+       wrapper stays pointer-events:none (the "auto on the real target only"
+       idiom #override-blocks-dynamic already uses) so the empty ruler
+       between markers still passes clicks through to panning. */
+    #ruler-bookmarks { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+    .rulerbookmark { position: absolute; bottom: 0; height: 14px; margin: 0; padding: 0; border: none;
+                     border-radius: 1px; background: var(--bookmark); cursor: pointer; pointer-events: auto; }
+    .rulerbookmark:hover, .rulerbookmark:focus-visible { background: var(--text); outline: none; }
+    /* Trim dimming, shared by both lanes (STC-444 slice 2): a plain dim
+       rather than the Clip lane's old diagonal hatch, so a cut reads as ONE
+       cut through the whole timeline rather than a per-lane visual language
+       — the ticket's own "dimming across lanes". #cut-head/#cut-tail (Clip)
+       and #zoom-cut-head/#zoom-cut-tail (Zoom) all just place one of these;
+       editor.ts's updateTrimUI sets left/width on all four the same way. */
+    .lanedim { position: absolute; top: 0; height: 100%; background: rgba(0, 0, 0, .45); pointer-events: none; }
     .laneviewport { position: relative; overflow: hidden; height: 30px;
                     border-bottom: 1px solid var(--border); }
-    .laneviewport.zoom { height: 22px; }
+    /* 2026-09-24 hardware pass: a clear break before Zoom rather than the
+       uniform 2px `.timelinewrap` gap every row otherwise shares — Clip
+       (trim) and Zoom read as two different kinds of control, not two rows
+       of one list. */
+    .laneviewport.zoom { height: 22px; margin-top: 16px; }
     /* The FULL-DURATION content, transformed to show only the visible span
        (STC-373: "pan lives on the ruler, zoom anchors on the pointer"). Every
        frame<->px conversion in editor.ts reads getBoundingClientRect() of
        #timeline itself, which already reflects this transform — so the
        existing scrubber/trim arithmetic (app/src/scrubber.ts) needs no
        span-aware rewrite. */
-    #timeline, #ruler-content, #clip-canvas-wrap, #zoom-canvas-wrap, #override-blocks {
+    #timeline, #ruler-content, #ruler-activity-wrap, #zoom-canvas-wrap, #override-blocks {
       position: absolute; left: 0; top: 0; width: 100%; height: 100%;
       transform-origin: 0 0;
     }
@@ -126,16 +334,21 @@
                        -webkit-mask-image: linear-gradient(to bottom, #000 0 4px, transparent 4px);
                        mask-image: linear-gradient(to bottom, #000 0 4px, transparent 4px); }
     .timeline .ticks[hidden] { display: none; }
-    .timeline .cut { position: absolute; top: 10px; height: 8px; pointer-events: none;
-                     background: repeating-linear-gradient(-45deg,
-                       var(--border) 0 2px, transparent 2px 5px); }
+    /* Trim brackets (STC-444 slice 2, HTML variant comparison): `[`/`]`
+       glyphs at a 1px stroke, replacing the old filled rectangle — chosen
+       over a 2px stroke after looking at both at actual size and 4x
+       magnified. The button keeps its old box (10x20, margin-left:-5px):
+       editor.ts's onHandleMove writes that -5px base directly during the
+       rubber-band "held" state, so the geometry could not change along
+       with the visual. */
     .timeline .handle { position: absolute; top: 4px; width: 10px; height: 20px;
-                        margin-left: -5px; padding: 0; border-radius: 2px; z-index: 3;
-                        cursor: ew-resize; background: currentColor;
-                        transition: transform .12s ease, background-color .12s ease; }
-    .timeline .handle.in { border-radius: 2px 0 0 2px; }
-    .timeline .handle.out { border-radius: 0 2px 2px 0; }
-    .timeline .handle.held { background: var(--warn); transform: scaleX(1.6); }
+                        margin-left: -5px; padding: 0; border: none; border-radius: 2px; z-index: 3;
+                        cursor: ew-resize; color: var(--text); background: transparent;
+                        display: grid; place-items: center;
+                        transition: transform .12s ease, color .12s ease; }
+    .timeline .handle svg { width: 10px; height: 24px; fill: none; stroke: currentColor;
+                            stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+    .timeline .handle.held { color: var(--warn); transform: scaleX(1.6); }
     .timeline .handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .timeline #scrub { position: absolute; left: 0; right: 0; width: 100%; top: 0;
                        height: 30px; margin: 0; background: none; z-index: 2;
@@ -146,14 +359,13 @@
                        background: currentColor; }
     .timeline #scrub:active::-webkit-slider-thumb { height: 24px; margin-top: -10px; }
     .timeline #scrub:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    #clip-activity, #zoom-curve { display: block; width: 100%; height: 100%; }
+    #zoom-curve { display: block; width: 100%; height: 100%; }
     .lanelabel { position: absolute; left: 4px; top: 2px; font-size: var(--type-label);
                  text-transform: uppercase; letter-spacing: var(--type-label-tracking); opacity: .5;
                  pointer-events: none; z-index: 4; }
 
-    .trimbar, .framebar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
-    #triminfo, #framestatus { opacity: .7; }
-    #framestatus[hidden] { display: none; }
+    .trimbar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
+    #triminfo { opacity: .7; }
 
     /* The selected block's own controls (STC-330) — a preset picker and a
        clear action, shown only while a block is selected. Sits where the
@@ -185,7 +397,12 @@
     #exportstatus { font-size: var(--type-value); opacity: .75; min-width: 130px; }
     .dialogfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
-    .sharebar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
+    /* Share (STC-444 slice 3), folded into this dialog from its own former
+       row — see the markup's own comment for what moved and why. */
+    .dialogdivider { border: none; border-top: 1px solid var(--border); margin: 14px 0 0; }
+    #shareslug { width: 10em; }
+    #sitedestnote { opacity: .6; font-size: var(--type-meta); overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; }
     #sharestatus { opacity: .75; }
   </style>
 </head>
@@ -198,15 +415,57 @@
          rect always shows the UNZOOMED frame (see editor.ts) so a pointer
          pixel maps 1:1 to capture UV with no crop math to invert. -->
     <div id="rectoverlay" hidden><div id="overridebox" hidden></div></div>
+    <svg id="stageplay" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2 12.6 8 5 12.8Z" fill="currentColor"/></svg>
   </div>
 
-  <div class="transport">
-    <button id="playpause">Play</button>
-    <span id="clock" class="mono">0:00:00 / 0:00:00</span>
-    <span id="shuttle" class="mono"></span>
-    <button id="openexport">Export…</button>
-    <button id="closepreview">Close</button>
+  <div class="editorbody">
+  <!--
+    The header row (STC-444, Figma pass): transport | output, transport
+    anchored LEFT — see the CSS comment for why this replaced slice 1's
+    centred grid. Every button is an icon with an aria-label and a tooltip
+    naming its shortcut; there is no text label in this row by design.
+  -->
+  <div class="headerwrap">
+    <div class="header">
+      <div class="transport">
+        <button type="button" class="icon" id="toin" aria-label="Go to in point" title="Go to in point (Home)">
+          <svg viewBox="0 0 16 16"><path d="M3.5 3.5v9M11.5 4 7.5 8l4 4"/></svg>
+        </button>
+        <button type="button" class="icon" id="stepback" aria-label="Back one frame" title="Back one frame (← · ⇧← ten)">
+          <svg viewBox="0 0 16 16"><path d="M10.5 4v8L4.5 8Z"/><path d="M12.5 4v8"/></svg>
+        </button>
+        <button type="button" class="icon primary" id="playpause" aria-label="Play" title="Play (Space · K)">
+          <svg viewBox="0 0 16 16">
+            <path class="solid when-paused" d="M5 3.2 12.6 8 5 12.8Z"/>
+            <path class="solid when-playing" d="M4.5 3.5h2.2v9H4.5ZM9.3 3.5h2.2v9H9.3Z"/>
+          </svg>
+        </button>
+        <button type="button" class="icon" id="stepfwd" aria-label="Forward one frame" title="Forward one frame (→ · ⇧→ ten)">
+          <svg viewBox="0 0 16 16"><path d="M5.5 4v8l6-4Z"/><path d="M3.5 4v8"/></svg>
+        </button>
+        <button type="button" class="icon" id="toout" aria-label="Go to out point" title="Go to out point (End)">
+          <svg viewBox="0 0 16 16"><path d="M4.5 4l4 4-4 4M12.5 3.5v9"/></svg>
+        </button>
+      </div>
+      <div class="right">
+        <span id="framestatus" role="status" hidden></span>
+        <button type="button" class="icon" id="framegrab" aria-label="Copy frame"
+                title="Copy frame (⌘⇧C) · ⌥-click to save (⌘⇧S) · right-click for both">
+          <svg viewBox="0 0 16 16"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3"/><circle cx="8" cy="8" r="1.6"/></svg>
+        </button>
+        <button type="button" class="icon" id="openexport" aria-label="Export" title="Export…">
+          <svg viewBox="0 0 16 16"><path d="M8 2.5v7.5M4.8 6.8 8 10l3.2-3.2M3 13.5h10"/></svg>
+        </button>
+        <button type="button" class="icon" id="closepreview" aria-label="Close" title="Close">
+          <svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>
+        </button>
+      </div>
+    </div>
   </div>
+
+  <!-- STC-444 Figma pass: a hairline divider between the transport and the
+       timeline, matching the mockup. -->
+  <hr class="divider">
 
   <!--
     The timeline (STC-373): a ruler over two lanes sharing one [a, b] span.
@@ -226,17 +485,71 @@
     the Clip lane's drag.
   -->
   <div class="timelinewrap">
-    <div id="ruler"><div id="ruler-content"></div></div>
+    <!-- Figma pass: the timecode moved out of the header to sit here,
+         above the ruler. textContent stays "current / duration": every
+         test that reads #clock reads the whole string, and only the CSS
+         hides the tail. -->
+    <div class="timecoderow">
+      <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
+      <span id="shuttle" class="mono"></span>
+      <!-- STC-418 PR 3: how loud the recorded system audio is in the EXPORT.
+           The preview plays no audio at all yet (mic included), so this is
+           heard only in an exported file. Saved to the project
+           (project-9's systemAudioLevel). -->
+      <!-- STC-455: narration cleanup in the EXPORT — steady background noise
+           (fan, hiss, room tone) and harsh "s" sounds, on the mic only. Off
+           by default; the strength is kept while it is off. Saved to the
+           project (project-10's narrationCleanup). Heard only in an export,
+           like the level beside it. -->
+      <span id="voiceclean" class="voiceclean" hidden
+            title="Cleans up your voice in the export: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds. The preview plays no audio yet.">
+        <label><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
+        <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
+               aria-label="Voice cleanup strength" disabled>
+        <span id="voicecleanvalue" class="mono">50%</span>
+      </span>
+      <label id="sysaudio" class="sysaudio" hidden
+             title="System audio level in the export — the preview plays no audio yet">
+        <span>System audio</span>
+        <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
+               aria-label="System audio level">
+        <span id="sysaudiovalue" class="mono">100%</span>
+      </label>
+    </div>
+    <!-- STC-444 slice 2: adaptive ticks + the played line, drawn by
+         editor.ts's renderRulerTicks/updateRulerPlayhead. #ruler-ticks holds
+         one .ruler-tick per visible interval; #ruler-played is the blue
+         progress bar; #ruler-playhead is the bright boundary mark.
+         2026-09-24 declutter pass: Clip activity now draws HERE, faintly,
+         only while #ruleractivitytoggle is pressed — see the CSS comment
+         on #ruler-activity-wrap for why it moved off its own lane. -->
+    <div id="ruler">
+      <button type="button" class="rulertoggle" id="ruleractivitytoggle"
+              aria-label="Show clip activity on the ruler" aria-pressed="false"
+              title="Show clip activity on the ruler">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 11V6M8 11V3M13 11V8"/></svg>
+      </button>
+      <div id="ruler-activity-wrap"><canvas id="ruler-activity"></canvas></div>
+      <div id="ruler-content">
+        <div id="ruler-ticks"></div>
+        <div id="ruler-played"></div>
+        <div id="ruler-playhead"></div>
+        <div id="ruler-bookmarks"></div>
+      </div>
+    </div>
     <div class="laneviewport clip">
       <span class="lanelabel">Clip</span>
-      <div id="clip-canvas-wrap"><canvas id="clip-activity"></canvas></div>
       <div class="timeline" id="timeline">
         <div class="bar"><div class="kept" id="kept"></div></div>
-        <div class="cut" id="cut-head"></div>
-        <div class="cut" id="cut-tail"></div>
+        <div class="lanedim" id="cut-head"></div>
+        <div class="lanedim" id="cut-tail"></div>
         <div class="ticks" id="ticks" hidden></div>
-        <button type="button" class="handle in" id="trim-in" aria-label="In point"></button>
-        <button type="button" class="handle out" id="trim-out" aria-label="Out point"></button>
+        <button type="button" class="handle in" id="trim-in" aria-label="In point">
+          <svg viewBox="0 0 10 24" aria-hidden="true"><path d="M8 1H3a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h5"/></svg>
+        </button>
+        <button type="button" class="handle out" id="trim-out" aria-label="Out point">
+          <svg viewBox="0 0 10 24" aria-hidden="true"><path d="M2 1h5a2 2 0 0 1 2 2v18a2 2 0 0 1-2 2H2"/></svg>
+        </button>
         <!-- STC-338 rule 1: the value is an export frame index, not a time. -->
         <input id="scrub" type="range" min="0" max="0" value="0" step="1" aria-label="Playhead">
       </div>
@@ -245,6 +558,11 @@
       <span class="lanelabel">Zoom</span>
       <div id="zoom-canvas-wrap"><canvas id="zoom-curve"></canvas></div>
       <div id="override-blocks">
+        <!-- STC-444 slice 2: the SAME trim dimming as the Clip lane's, on
+             this lane's own share of the transform — "dimming across
+             lanes", not a second visual language. -->
+        <div class="lanedim" id="zoom-cut-head"></div>
+        <div class="lanedim" id="zoom-cut-tail"></div>
         <div id="override-blocks-dynamic"></div>
         <!-- STC-331/STC-329: the window currently being created or edited —
              a manual one being authored, or a DERIVED one under retime — see
@@ -262,15 +580,17 @@
     </div>
   </div>
 
-  <div class="framebar">
-    <button id="copyframe" title="Copy the current frame as an image (⌘⇧C)">Copy frame</button>
-    <button id="saveframe" title="Save the current frame as a PNG beside the recording (⌘⇧S)">Save frame</button>
-    <span id="framestatus" hidden></span>
+  <div id="framemenu" role="menu" aria-label="Frame" hidden>
+    <button type="button" role="menuitem" id="copyframe">Copy frame <kbd>⌘⇧C</kbd></button>
+    <button type="button" role="menuitem" id="saveframe">Save frame <kbd>⌘⇧S</kbd></button>
   </div>
   <div class="trimbar">
     <button id="markin">In</button>
     <button id="markout">Out</button>
     <button id="resettrim">Full take</button>
+    <!-- STC-444 slice 4: the same toggle M is — decideKey does not know add
+         from remove either, see scrubber.ts's own comment on the action. -->
+    <button id="togglebookmark" title="Bookmark this frame (M) — Up/Down jump between them">Bookmark</button>
     <span id="triminfo" class="mono"></span>
   </div>
 
@@ -294,12 +614,7 @@
     <button id="overridedone">Done</button>
   </div>
 
-  <div class="sharebar">
-    <button id="share" title="Copy this take's export into the site folder">Share to site</button>
-    <button id="sharedest">Site folder…</button>
-    <button id="revealshared" title="Show the published file in Finder">Show published</button>
-    <span id="sharestatus"></span>
-  </div>
+  </div><!-- /.editorbody -->
 
   <dialog id="exportdialog">
     <div class="dialogrow">
@@ -328,6 +643,25 @@
       <progress id="exportprogress" max="1000" value="0"></progress>
       <span id="exportstatus" class="mono"></span>
       <button id="cancelexport">Cancel</button>
+    </div>
+    <hr class="dialogdivider">
+    <!--
+      Share, folded in from its own former row (STC-444 slice 3). The site
+      folder itself is chosen from the main window's Preferences now — this
+      is a read-only reminder of it, not a second picker — and the slug is
+      per-take (Project.slug), prefilled from the take's own name until
+      something is actually published under a specific one.
+    -->
+    <div class="dialogrow">
+      <label for="shareslug">Publish as</label>
+      <input id="shareslug" type="text" pattern="[a-z0-9][a-z0-9-]*"
+             aria-label="Publish slug">
+      <span id="sitedestnote" class="mono"></span>
+    </div>
+    <div class="dialogrow">
+      <button id="share" title="Copy this take's export into the site folder">Share to site</button>
+      <span id="sharestatus"></span>
+      <button id="sharereveal" hidden>Show in Finder</button>
     </div>
     <div class="dialogfoot">
       <button id="export">Export</button>

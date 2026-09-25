@@ -26,7 +26,8 @@ contextBridge.exposeInMainWorld("recorder", {
   // rather than an in-page preview. `openPreview`/`closePreview`/`writeProject`
   // /`writeExport` and the rest of the old in-page player's channels moved to
   // `editor-preload.ts`, which is the only bridge that still calls them.
-  openEditor: (dir: string, name: string) => ipcRenderer.invoke("editor:open", dir, name),
+  openEditor: (dir: string, name: string, autoShare?: boolean) =>
+    ipcRenderer.invoke("editor:open", dir, name, autoShare),
   // `action` is STC-292's: the hotkey and the menu bar ask for a specific
   // capture mode, the button asks for none.
   captureStill: (action?: string) => ipcRenderer.invoke("still:capture", action),
@@ -41,6 +42,10 @@ contextBridge.exposeInMainWorld("recorder", {
   // frame grab goes through `still:export` like everything else now.
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   chooseStillDestination: () => ipcRenderer.invoke("still:chooseDestination"),
+  // The site folder (STC-444 slice 3, moved here from the editor window's
+  // own bridge) — same handler either way, `main.ts` does not care which
+  // window's sender asked.
+  chooseShareDestination: () => ipcRenderer.invoke("share:chooseDestination"),
   // Where recordings and shots actually land, resolved (STC-412 final
   // review, I1). Not derivable on this side: an unset `saveFolder` falls
   // through to `STC_RECORDINGS_DIR`/~/Desktop/stc inside `takes.ts`, and the

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { toastPage, toastText } from "./_toast.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * No helper binary at all — a fresh clone, or a build that failed and left
@@ -16,7 +17,7 @@ import { toastPage, toastText } from "./_toast.js";
  */
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 describe("a helper binary that does not exist", () => {
   test("shows a window and an alert instead of an uncaught exception", async () => {

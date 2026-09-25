@@ -112,7 +112,7 @@ import type { DecorationMode } from "@transform/shot.js";
 export type LibraryKind = "recording" | "still";
 
 /** What a tile can be told to do. The view dispatches on this, never on kind. */
-export type LibraryActionId = "open" | "rename" | "duplicate" | "reveal" | "delete";
+export type LibraryActionId = "open" | "share" | "rename" | "duplicate" | "reveal" | "delete";
 
 export interface LibraryAction {
   id: LibraryActionId;
@@ -175,6 +175,21 @@ export interface LibraryItem {
   notes: string[];
   thumbnail: LibraryThumbnail;
   actions: LibraryAction[];
+  /**
+   * Whether this capture has already been edited (STC-429) — a still
+   * re-decorated, a recording trimmed, and so on. Always `false` today: no
+   * sidecar or schema field tracks this yet, despite STC-413 naming it as
+   * the one library-only signal worth carrying. Widened here so the view can
+   * draw the indicator once real tracking lands, rather than the view
+   * inventing its own notion of "edited" the day it does.
+   */
+  edited: boolean;
+  /**
+   * A video's duration, pre-formatted, for the thumbnail's own overlay chip —
+   * distinct from `summary`, which already states it in prose. Undefined for
+   * a still, which has no duration to show.
+   */
+  durationLabel?: string;
 }
 
 /** A directory that looks like a take but is not usable, and why. */
@@ -232,7 +247,7 @@ export function applyFilter(items: readonly LibraryItem[], id: string): LibraryI
  * imports only node builtins, while the transform is bundled for the renderer.
  * `app/test/take-list.test.ts` pins them together instead.
  */
-export const SUPPORTED_ANCHORS_VERSIONS: readonly number[] = [1, 2, 3, 4, 5];
+export const SUPPORTED_ANCHORS_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6];
 
 /** The cached decorated thumbnail, beside the document it was rendered from. */
 export const THUMBNAIL_FILE = "thumb.png";
@@ -345,8 +360,13 @@ export function recordingItem(t: TakeInfo): LibraryItem {
            + `${t.events} events · ${fmtBytes(t.bytes)}`,
     notes,
     thumbnail: { source: "none" },
+    edited: false,
+    durationLabel: fmtDuration(t.durationMs),
     actions: [
       { id: "open", label: "Preview" },
+      // The take editor's own Share button (STC-242) is what this reaches —
+      // a still has none yet, so it is a recording-only action (STC-429).
+      { id: "share", label: "Share" },
       { id: "rename", label: "Rename" },
       { id: "reveal", label: "Show" },
       { id: "delete", label: "Delete" },
@@ -382,8 +402,11 @@ export function stillItem(s: StillInfo): LibraryItem {
     // cache lives in the take directory precisely so that deleting the take
     // deletes it too — an orphan is impossible rather than merely unlikely.
     thumbnail: s.cached ? { source: "file", file: THUMBNAIL_FILE } : { source: "render" },
+    edited: false,
     actions: [
-      { id: "open", label: "Open" },
+      // "Edit", not "Open" (STC-429) — same action id, a clearer word for
+      // what it actually does.
+      { id: "open", label: "Edit" },
       { id: "rename", label: "Rename" },
       { id: "duplicate", label: "Duplicate" },
       { id: "reveal", label: "Show" },
@@ -486,6 +509,8 @@ export function looseFileItem(f: FinishedFileInfo): LibraryItem {
     // `renderThumbnail` could read (that needs `shot.json` and `frame.file`,
     // exactly what "did not parse" means).
     thumbnail: { source: "none" },
+    edited: false,
+    durationLabel: f.isVideo && f.durationMs !== undefined ? fmtDuration(f.durationMs) : undefined,
     actions: [
       { id: "rename", label: "Rename" },
       { id: "reveal", label: "Show" },

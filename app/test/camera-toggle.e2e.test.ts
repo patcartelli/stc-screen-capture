@@ -9,6 +9,7 @@ import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { toastText } from "./_toast.js";
+import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
  * The camera toggle, end to end through the real app.
@@ -26,7 +27,7 @@ const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 
 let app: ElectronApplication | undefined;
-afterEach(async () => { await app?.close().catch(() => {}); app = undefined; });
+afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 async function launch(opts: {
   userData: string; recordings: string; startLog?: string; camera?: string;
