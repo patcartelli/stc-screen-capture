@@ -57,6 +57,11 @@ Plays `Glass.aiff` six times during a 10 s take through the test host with
 validity, 48 kHz/2 ch, session-relative first/last PTS, and that the file
 demuxes. Record: pass/fail, and `anchors.system` verbatim.
 
+**Run 2026-09-25 (Patrick): only 4 of the 6 Glass sounds were heard. That is
+the test's timing, not the capture:** a 2 s wait, then six plays of a ~1.6 s
+sound 0.5 s apart, is about 14.6 s of sound against a 10 s take, and the
+player is killed when the take ends. Pass/fail not yet reported.
+
 The PTS bounds are the one thing it checks that nothing else can: the code
 **assumes** SCK's audio timestamps are on the same mach host clock as
 `t0Ns`, as `MicCapture` assumes of AVCapture. If they are not, this fails on
@@ -132,6 +137,13 @@ firstFramePtsNs: 249916625, lastFramePtsNs: 13869916625}` against
 
 1. Record, pause for 5 s while audio plays, resume, stop. The paused span
    must be silent (absent) in `system.m4a`, not recorded.
+
+   **Cannot be run from the app (2026-09-25): there is no pause control.**
+   The pill has only Stop. Pause exists only in the helper (STC-240 PR A);
+   the UI is STC-240's unbuilt second half. This step was wrong to assume one.
+   `SystemAudioCapture` passes every sample through the same `PauseGate` the
+   mic uses, and that is still untested for either track until a pause
+   control exists.
 2. Stop a take and check Activity Monitor / Console: no second capture
    indicator lingering, no repeated `SCStream` errors after stop.
 3. Record twice in a row with system audio on: no `-3805` on the second
@@ -142,3 +154,82 @@ firstFramePtsNs: 249916625, lastFramePtsNs: 13869916625}` against
 Record a 60 s 4K take with system audio on and one with it off. Compare
 `framesDropped` in the stop stats. A 2×2/1 fps stream should cost nothing;
 if drops rise, that is a finding.
+
+**Result (2026-09-25): fine.** No cost noticed from the second stream.
+
+---
+
+# PR 3 — the export mix and the level slider
+
+**Run from the PR 3 branch until it merges** (same branch name, restarted
+from `master` after PR 2 merged):
+
+```
+git fetch origin claude/optimistic-ride-ed374b
+git checkout claude/optimistic-ride-ed374b && git pull
+helper/build.sh && npm run app:start
+```
+
+## What changed
+
+- **Export mixes.** A take with system audio exports ONE stereo 48 kHz AAC
+  track: `mic + system × level`, hard-limited at full scale
+  (`transform/src/audio-mix.ts`). A take WITHOUT system audio takes the old
+  mic-only path, unchanged.
+- **The level slider** sits at the right end of the editor's timecode row,
+  above the ruler. It is labelled "System audio", runs 0–100%, and appears only
+  for a take that recorded system audio. It is saved to `project.json`
+  (`systemAudioLevel`, project-9).
+- **The preview is still silent.** It has never played audio, mic included.
+  The slider is heard only in an exported file.
+- Linux verified the mixer's arithmetic (17 tests), the slider's wiring
+  (4 e2e tests, one mutation-checked), and that the fixture loads. **No mixed
+  export has been encoded anywhere yet**: Linux Chromium has no AAC encoder.
+
+## §7 — the mix, by ear
+
+1. Record ~15 s with system audio on, the mic on, and something playing
+   while you talk over it.
+2. Open it in the editor. The "System audio 100%" slider is at the top
+   right of the timeline. Export.
+3. Play the exported MP4 in QuickTime. **Both** your voice and the
+   machine's audio should be there, in one track, in sync with the picture.
+4. Set the slider to ~30% and export again. The system audio should be
+   clearly quieter and your voice unchanged. At 0%, only your voice remains.
+5. Close and reopen the take: the slider shows the level you left it at.
+
+Record: does each step hold, and does anything distort at 100% when both
+are loud? Distortion there is the hard limit working as decided: the fix is
+the slider, not a code change. Note it anyway.
+
+**First run (2026-09-25, Patrick):** both sources exported and in sync,
+but **system audio was still loud at 30%**. The level WAS applied (the
+editor exports a clone of the live project, and the mix multiplies by it).
+The slider was the problem: it was the linear gain, and a linear 0.3 is
+only -10.5 dB, which ears hear as about half as loud. On top of that,
+system audio is recorded near full scale while speech into a mic sits well
+below it. **Fixed:** the slider is now a decibel fader over -40..0 dB
+(`levelFromSliderPct` in audio-mix.ts): 50% is -20 dB, 30% is -28 dB, and 0%
+is a true mute. The project still stores the linear gain, so no schema
+changed. A take saved during the first run at the old linear 0.3 now reopens
+at about 74% on the new slider; that is expected. **Re-run §7 step 4 with
+this build.**
+
+## §8 — the take kinds that must NOT change
+
+- A take with the mic only (system audio off) exports exactly as before:
+  mono or stereo at the mic's own rate.
+- A take with neither exports with no audio track, as before.
+- A take with system audio but NO mic exports system audio alone.
+
+If a mic-only export changed in any way, that is a regression. The mix is
+only meant to run when `system.m4a` exists.
+
+**Result (2026-09-25, Patrick): CONFIRMED.** With system audio turned off,
+the take (`2026-09-25_09-29-35`) had no `system.m4a`, and `anchors.json` was
+at version 4 with no `system` block. The first reading, "still audio in the
+export", turned out to be the MIC picking up the speakers, not system audio.
+**Run the mix checks (§7) on headphones:** without them, playback reaches
+the export twice (through the system track and through the mic), and the
+level slider sounds weaker than it is. §7's re-listen with the dB taper is
+still to do, on headphones.

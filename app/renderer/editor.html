@@ -113,6 +113,15 @@
     #clock { font-size: var(--type-value); color: var(--text-dim); }
     #clock-cur { color: var(--text); }
     #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
+    /* STC-418 PR 3: the system-audio level, compact and at the far end of
+       the timecode row. NOT a lane of its own: the 2026-09-24 hardware pass
+       found three stacked lanes cluttered, which is why Clip activity moved
+       onto the ruler. Hidden unless the take recorded system audio. */
+    .sysaudio { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+                font-size: var(--type-label); color: var(--text-dim); }
+    .sysaudio[hidden] { display: none; }
+    .sysaudio input { width: 96px; margin: 0; accent-color: var(--accent); }
+    #sysaudiovalue { min-width: 4ch; text-align: right; color: var(--text); }
     /* Below this the duration goes and the current time stays. */
     @container (max-width: 680px) { .clock-dur { display: none; } }
     /* The right group's status line is the first thing to go: `justify-self:
@@ -469,6 +478,17 @@
     <div class="timecoderow">
       <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
       <span id="shuttle" class="mono"></span>
+      <!-- STC-418 PR 3: how loud the recorded system audio is in the EXPORT.
+           The preview plays no audio at all yet (mic included), so this is
+           heard only in an exported file. Saved to the project
+           (project-9's systemAudioLevel). -->
+      <label id="sysaudio" class="sysaudio" hidden
+             title="System audio level in the export — the preview plays no audio yet">
+        <span>System audio</span>
+        <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
+               aria-label="System audio level">
+        <span id="sysaudiovalue" class="mono">100%</span>
+      </label>
     </div>
     <!-- STC-444 slice 2: adaptive ticks + the played line, drawn by
          editor.ts's renderRulerTicks/updateRulerPlayhead. #ruler-ticks holds
