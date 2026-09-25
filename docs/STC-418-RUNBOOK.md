@@ -224,3 +224,12 @@ this build.**
 
 If a mic-only export changed in any way, that is a regression. The mix is
 only meant to run when `system.m4a` exists.
+
+**Result (2026-09-25, Patrick): CONFIRMED.** With system audio turned off,
+the take (`2026-09-25_09-29-35`) had no `system.m4a`, and `anchors.json` was
+at version 4 with no `system` block. The first reading, "still audio in the
+export", turned out to be the MIC picking up the speakers, not system audio.
+**Run the mix checks (§7) on headphones:** without them, playback reaches
+the export twice (through the system track and through the mic), and the
+level slider sounds weaker than it is. §7's re-listen with the dB taper is
+still to do, on headphones.
