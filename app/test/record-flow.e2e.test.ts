@@ -426,11 +426,14 @@ async function fireTrayRecord(): Promise<void> {
   await app!.evaluate(() => (globalThis as any).__stcTrayOnSelect("action:record"));
 }
 
+// STC-414 replaced the camera checkbox and mic <select> with the
+// #devicestate row's picker triggers. `lockSettings` (renderer.ts) disables
+// those instead, so they are what "locked" means now.
 const pickersLocked = (win: Page): Promise<boolean> =>
   win.evaluate(() => {
-    const camera = document.getElementById("camera") as HTMLInputElement;
+    const camera = document.getElementById("camera-picker") as HTMLButtonElement;
     const display = document.getElementById("display") as HTMLSelectElement;
-    const mic = document.getElementById("mic") as HTMLSelectElement;
+    const mic = document.getElementById("mic-picker") as HTMLButtonElement;
     return camera.disabled && display.disabled && mic.disabled;
   });
 

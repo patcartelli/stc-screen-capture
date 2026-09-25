@@ -912,6 +912,12 @@ async function recordFlowBody(
   // decided in two places.
   const startParams: Record<string, unknown> = { camera: options.camera };
   if (options.micDeviceUid != null) startParams.micDeviceUid = options.micDeviceUid;
+  // STC-414: from STORED settings — the bar has no camera-device control,
+  // only the camera on/off above. An absent field means "the helper's own
+  // pickCamera ranking", not "no camera" (that is `camera`'s job), so it is
+  // sent even when the camera is off; the helper only consults it once it
+  // has decided to open a camera at all.
+  if (stored.cameraDeviceUid != null) startParams.cameraDeviceUid = stored.cameraDeviceUid;
   // STC-418: from STORED settings, never from the bar or the renderer — the
   // bar has no system-audio control (that is STC-459). Only when on; absent
   // is "off" to the helper's parseStartRequest.

@@ -11,7 +11,7 @@ helper/build.sh && npm run app:start
 
 The flow was hardware-passed on 2026-09-18. Since then, master has been merged
 in (system audio, STC-418; the library, STC-413/429; STC-444 slice 3; the
-STC-449 teardown). Nothing here re-tests the design. These checks only confirm
+STC-449 teardown; STC-414 device pickers). Nothing here re-tests the design. These checks only confirm
 that the merge didn't break a path no Linux test can see. The flow is fresh
 scope, then the options bar on the marquee, then Record, then the countdown.
 The spec is `docs/superpowers/specs/2026-09-16-stc-388-record-flow-design.md`.
@@ -69,6 +69,15 @@ Behind this: `recordFlowBody`'s start-param builder in `app/src/main.ts` is
 the only place a Record's `start` request is built. It reads `systemAudio`
 from stored settings. `app/test/system-audio.e2e.test.ts` pins the payload
 and this check pins the file.
+
+### 3b. A named camera through the Record flow (STC-414)
+
+STC-414's device pickers landed on master after this branch, and its
+camera-device choice now goes through the same builder. On the main
+window's `#devicestate` row, pick a specific camera (not Automatic). Then
+make a Record-flow take with the camera on. The PiP is **that** camera. The
+bar's camera toggle only switches the camera on or off; it never changes
+which device is used.
 
 ## 4. The three doors
 
