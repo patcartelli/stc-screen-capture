@@ -8,8 +8,9 @@ import type { Project } from "../src/types.js";
 import {
   availableFrames, clampTrim, defaultProject, estimateExportMs, exportWindow,
   isFullTake, minTrimNs, parseProject, projectForWrite, EXPORT_MS_PER_FRAME,
-  DEFAULT_SYSTEM_AUDIO_LEVEL, DEFAULT_NARRATION_CLEANUP,
+  DEFAULT_SYSTEM_AUDIO_LEVEL, DEFAULT_NARRATION_CLEANUP, DEFAULT_MIC_LEVEL,
 } from "../src/trim.js";
+import { MIC_LEVEL_MAX } from "../src/audio-mix.js";
 
 const root = join(__dirname, "..", "..");
 const FPS = 60;
@@ -441,6 +442,78 @@ describe("project-10: narration cleanup (STC-455)", () => {
     expect(validate10(raw({ enabled: true, strength: 0.5, extra: 1 }))).toBe(false);
     expect(validate10(raw({ enabled: true, strength: 0.5 }))).toBe(true);
     expect(validate9({ ...raw({ enabled: true, strength: 0.5 }), version: 9 })).toBe(false);
+  });
+});
+
+describe("project-11: mic level (STC-454 part 2)", () => {
+  const Ajv = (AjvImport as any).default ?? AjvImport;
+  const schema = (n: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${n}.schema.json`), "utf8")));
+  const validate10 = schema(10);
+  const validate11 = schema(11);
+  const raw = (micLevel: unknown) => ({
+    version: 11, transform: { version: 1 }, output: { fps: 60, width: 640, height: 360 },
+    cursor: { style: "default", scale: 1 }, micLevel,
+  });
+
+  test("as recorded (1) after a parse at every older version, and by default", () => {
+    expect(DEFAULT_MIC_LEVEL).toBe(1);
+    for (const doc of [null, { version: 1 }, { version: 10 }, raw(undefined)]) {
+      expect(parseProject(doc, 640, 360, duration).micLevel).toBe(1);
+    }
+    expect(defaultProject(640, 360).micLevel).toBe(1);
+  });
+
+  test("0..+12 dB is carried, boost included; anything else is no opinion", () => {
+    for (const ok of [0, 0.5, 2, MIC_LEVEL_MAX]) {
+      expect(parseProject(raw(ok), 640, 360, duration).micLevel).toBe(ok);
+    }
+    for (const bad of [-0.1, 4.5, "2", null, NaN]) {
+      expect(parseProject(raw(bad), 640, 360, duration).micLevel, `level ${JSON.stringify(bad)}`).toBe(1);
+    }
+  });
+
+  test("the parser's ceiling and the schema's are the mixer's MIC_LEVEL_MAX", () => {
+    expect(parseProject(raw(MIC_LEVEL_MAX), 640, 360, duration).micLevel).toBe(MIC_LEVEL_MAX);
+    expect(validate11(raw(MIC_LEVEL_MAX))).toBe(true);
+    expect(parseProject(raw(MIC_LEVEL_MAX + 0.001), 640, 360, duration).micLevel).toBe(1);
+  });
+
+  test("1 writes no key; anything else writes v11 and round-trips — 0 and a boost included", () => {
+    const flat = projectForWrite({ ...defaultProject(640, 360), narrationCleanup: { enabled: true, strength: 0.5 } }, duration);
+    expect(flat.version).toBe(10);
+    expect(flat.micLevel).toBeUndefined();
+    for (const level of [0, 0.25, 2.5]) {
+      const out = projectForWrite({ ...defaultProject(640, 360), micLevel: level }, duration);
+      expect(out.version).toBe(11);
+      expect(out.micLevel).toBe(level);
+      expect(validate11(out), JSON.stringify(validate11.errors, null, 2)).toBe(true);
+      expect(parseProject(out, 640, 360, duration).micLevel).toBe(level);
+    }
+  });
+
+  test("V11 IS A SUPERSET OF V10 — promoting must not drop cleanup, the system level, bookmarks or slug", () => {
+    const p: Project = {
+      ...defaultProject(640, 360), slug: "network", bookmarks: [NS], systemAudioLevel: 0.25,
+      narrationCleanup: { enabled: true, strength: 0.3 }, micLevel: 2,
+    };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(11);
+    expect(validate11(out), JSON.stringify(validate11.errors, null, 2)).toBe(true);
+    const back = parseProject(out, 640, 360, duration);
+    expect(back.slug).toBe("network");
+    expect(back.bookmarks).toEqual([NS]);
+    expect(back.systemAudioLevel).toBe(0.25);
+    expect(back.narrationCleanup).toEqual({ enabled: true, strength: 0.3 });
+    expect(back.micLevel).toBe(2);
+  });
+
+  test("project-10 refuses the field; project-11 refuses what the parser refuses", () => {
+    expect(validate10({ ...raw(2), version: 10 })).toBe(false);
+    expect(validate11(raw(-0.1))).toBe(false);
+    expect(validate11(raw(4.5))).toBe(false);
+    expect(validate11(raw("2"))).toBe(false);
+    expect(validate11(raw(0))).toBe(true);
   });
 });
 
