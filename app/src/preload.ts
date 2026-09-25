@@ -90,6 +90,15 @@ contextBridge.exposeInMainWorld("recorder", {
                       // its own window shrank — `pill-window.ts` drives the
                       // resize from main, not from anything in this page.
                       "pill:state",
+                      // STC-433: `recorder:start` resolved a stale mic on
+                      // this window's behalf (turned it off) — the mic
+                      // popover's own stored state is now stale too, and
+                      // nothing else would refresh it until the next
+                      // `helper:ready` or a real unplug. There is no
+                      // display-picker equivalent under STC-388's fresh,
+                      // never-persisted scope pick: a vanished display just
+                      // refuses the take, and Record is pressed again.
+                      "settings:changed",
                       // STC-388 review, Finding 2: a take started or stopped
                       // by the hotkey or the tray, reaching the window that
                       // did not ask for it. `main.ts`'s `reconcileWindowRecording`

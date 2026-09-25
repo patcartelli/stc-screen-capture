@@ -202,6 +202,23 @@ function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+/**
+ * STC-432: with no `trafficLightPosition`, macOS draws the inset lights
+ * roughly where `index.html`'s `body { padding: 20px }` also starts
+ * `#title-row` — the two were never coordinated and landed on top of each
+ * other. These numbers are the SAME ones `index.html`'s own
+ * `--traffic-light-offset` uses to push the heading clear (cluster width +
+ * a gap); a change to one is a change to both, and they're named here
+ * rather than left as bare numbers in the BrowserWindow options.
+ *
+ * `X_PX` matches the body's own left padding, so the cluster's left edge is
+ * flush with where every other row's content starts. `Y_PX` centres the
+ * 12px dot cluster inside `#title-row`'s own ~20px height (the 15px/1.3
+ * line-height of its `h1`), offset by that same 20px top padding.
+ */
+const TRAFFIC_LIGHT_X_PX = 20;
+const TRAFFIC_LIGHT_Y_PX = 24;
+
 function createWindow(): void {
   setDockVisible(true);
   win = new BrowserWindow({
@@ -211,6 +228,12 @@ function createWindow(): void {
     // native traffic lights as an inset overlay (no drawn title strip), which
     // is what lets Record collapse the window to a 26px pill at all.
     titleBarStyle: "hidden",
+    // STC-432: aligned to `#title-row` rather than left at the OS default —
+    // see the constants above. Only `collapsePill`/`restorePill`
+    // (pill-window.ts) ever change VISIBILITY of the lights afterward; the
+    // position set here is untouched by collapse/restore, which is exactly
+    // what "come back in the same position" requires.
+    trafficLightPosition: { x: TRAFFIC_LIGHT_X_PX, y: TRAFFIC_LIGHT_Y_PX },
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(join(here, "..", "renderer", "index.html"));
@@ -818,6 +841,61 @@ ipcMain.handle("recorder:status", async () => ({
   pid: sup?.pid,
 }));
 
+/**
+ * STC-433: what to do about a display or mic `runRecordFlow` finds is no
+ * longer connected once the overlay has closed and its pick is about to be
+ * used. Under STC-388 scope is chosen FRESH from a live list every time, so
+ * this is a narrower race than the old sticky-`displayId` design it
+ * replaces (the gap between the overlay closing and `startRecording`,
+ * mostly spent in the countdown) — but real hardware can still be unplugged
+ * in that gap, and a take silently recording with no audio (the old mic
+ * behaviour) or crashing on a `display-not-found` from the helper is still
+ * wrong either way.
+ *
+ * A native dialog rather than a toast (`alertUser`, renderer.ts) because
+ * this is a decision, not a notice — the same reason `recoverUnsavedTakes`
+ * above uses `dialog.showMessageBox` rather than a passive message for
+ * "these takes never made it to your library."
+ *
+ * There is no "choose a different one" branch here, unlike the picker this
+ * replaced: scope is no longer a sticky setting a profile-sheet control
+ * points at, so there is nothing to focus — the equivalent action is
+ * pressing Record again, which opens the overlay fresh against the current
+ * device list. `canFallBack` is false for a CROPPED region: its `region` is
+ * pixel coordinates on the vanished display, so there is no automatic
+ * display to fall back to that would still make sense of it — that case is
+ * a plain refusal. A missing MIC always has a fallback ("Turn Mic Off," the
+ * settled STC-233 decision against ever silently picking another mic).
+ */
+type DeviceFallback = "automatic" | "off" | "cancel";
+
+async function resolveDeviceNotFound(kind: "display" | "mic", canFallBack: boolean): Promise<DeviceFallback> {
+  if (!win || win.isDestroyed()) return "cancel";
+  const noun = kind === "display" ? "display" : "microphone";
+  if (!canFallBack) {
+    await dialog.showMessageBox(win, {
+      type: "warning",
+      buttons: ["OK"],
+      message: `The selected ${noun} is no longer connected`,
+      detail: "Press Record again to choose from what's available now.",
+    });
+    return "cancel";
+  }
+  const primaryLabel = kind === "display" ? "Use Automatic" : "Turn Mic Off";
+  const { response } = await dialog.showMessageBox(win, {
+    type: "warning",
+    buttons: [primaryLabel, "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `The selected ${noun} is no longer connected`,
+    detail: kind === "display"
+      ? "Record using whichever display is available instead."
+      : "Record with no microphone instead. Capture never picks a microphone automatically.",
+  });
+  if (response === 0) return kind === "display" ? "automatic" : "off";
+  return "cancel";
+}
+
 type RecordSource = "window" | "menu-bar" | "hotkey";
 type RecordResult =
   | { ok: true; dir: string; info: unknown }
@@ -932,6 +1010,52 @@ async function recordFlowBody(
     // whole screen takes the helper's crop path instead of its full-display
     // one. One expression, so the two paths cannot be chosen by two rules.
     if (!options.fullDisplay) startParams.region = { ...outcome.crop };
+  }
+
+  // STC-433: check the overlay's own pick against the helper's current
+  // enumeration before the countdown, not after a doomed `start` — same
+  // "don't count down to a refusal" reasoning STC-391 already applies below.
+  // Only asked for when there is something to go stale in the first
+  // place — a window pick isn't checked (STC-247/STC-370 already refuse an
+  // unknown `windowId` at `start`, and the overlay's own window list was
+  // just enumerated), and this is an extra IPC round trip on Record's
+  // critical path that the common case shouldn't pay for.
+  const checkingDisplay = outcome.kind !== "window";
+  const checkingMic = options.micDeviceUid != null;
+  const known = (checkingDisplay || checkingMic) ? await sup!.devices().catch(() => null) : null;
+  if (known) {
+    const knownDisplays = Array.isArray((known as any).displays) ? (known as any).displays as { id: number }[] : [];
+    const knownMics = Array.isArray((known as any).mics) ? (known as any).mics as { uid: string }[] : [];
+    // A stalled CoreAudio enumeration means "unknown," never "gone" — forcing
+    // the mic off on a stall would be worse than today's behaviour, not
+    // better. The existing mic-not-found live warning stays the backstop for
+    // a mic that really is missing while enumeration itself can't say so.
+    const micEnumerationStalled = Boolean((known as any).stalled);
+
+    if (checkingDisplay && !knownDisplays.some((d) => d.id === outcome.displayId)) {
+      const choice = await resolveDeviceNotFound("display", options.fullDisplay === true);
+      if (choice === "automatic") {
+        delete startParams.displayId;
+        delete startParams.region;
+        countdownDisplay = undefined;
+      } else {
+        return { ok: false, cancelled: true };
+      }
+    }
+
+    if (checkingMic && !micEnumerationStalled && !knownMics.some((m) => m.uid === options.micDeviceUid)) {
+      const choice = await resolveDeviceNotFound("mic", true);
+      if (choice === "off") {
+        delete startParams.micDeviceUid;
+        // The sticky mic preference was just written above with this now-
+        // vanished uid — correct it so the popover doesn't keep offering a
+        // device that isn't there.
+        writeSettings(app.getPath("userData"), { micDeviceUid: null });
+        send("settings:changed", undefined);
+      } else {
+        return { ok: false, cancelled: true };
+      }
+    }
   }
 
   // Record ALWAYS counts down (STC-391) — it is what makes Record feel weightier

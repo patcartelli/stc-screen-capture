@@ -740,6 +740,23 @@ recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The 
 recorder.on("pill:state", (s: { collapsed: boolean }) => {
   document.body.classList.toggle("pill-collapsed", s.collapsed);
 });
+
+/**
+ * STC-433: Record's own flow (`runRecordFlow` in main.ts) turned the mic off
+ * on this window's behalf, when its overlay pick vanished before the take
+ * actually started. The mic popover's `storedMicUid` is now stale too, and
+ * nothing else would refresh it until the next `helper:ready` or a real
+ * unplug. There is no display equivalent under STC-388's fresh, never-
+ * persisted scope pick — a vanished display just refuses the take.
+ */
+recorder.on("settings:changed", () => {
+  void (async () => {
+    const s = await recorder.getSettings();
+    storedMicUid = s.micDeviceUid;
+    await refreshDevices();
+  })();
+});
+
 /**
  * Camera failures the user must actually see. Every one of these was already
  * being emitted and silently dropped: the handler below matched exactly one

@@ -18,6 +18,21 @@
 
     body { margin: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px;
            background: var(--bg); color: var(--text); }
+    /* STC-432: `titleBarStyle: "hidden"` (main.ts) draws the native traffic
+       lights as an inset overlay rather than reserving a title-bar strip, so
+       nothing here was making room for them or letting the window be
+       dragged by anything — this row is the only fixed content at the very
+       top and takes both jobs. `--traffic-light-offset` is the lights' own
+       cluster width (three 12px dots, 8px apart = 52px) plus a 10px gap
+       before the heading starts, named rather than left as a bare number in
+       the rule below; `main.ts`'s `TRAFFIC_LIGHT_X_PX`/`_Y_PX` position the
+       actual lights using the matching numbers, so the two stay coordinated
+       rather than each guessing at the other's layout. `#title-row` holds
+       no controls today — if one is ever added it needs
+       `-webkit-app-region: no-drag`, or dragging the window would eat its
+       clicks. */
+    :root { --traffic-light-offset: 62px; }
+    #title-row { padding-left: var(--traffic-light-offset); -webkit-app-region: drag; }
     h1 { font-size: var(--type-title); font-weight: var(--type-title-weight); margin: 0; }
     /* STC-399: a model plate beside the title, not a control — quiet, and
        excluded from the collapsed pill for free (it is not #record-row). */
