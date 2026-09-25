@@ -9,10 +9,17 @@ helper/build.sh && tools/test-host/build.sh
 ```
 
 Written on a Linux session with no `swiftc` and no ScreenCaptureKit. The
-Swift is compiled by CI (`macos-15`), so "it builds" is checked there, but
-**none of it has recorded a sample of real audio.** Every claim below about
-what ScreenCaptureKit actually does is a prediction until a section here
-records a result under it — the way docs/STC-370-RUNBOOK.md kept its own.
+Swift is compiled by CI (`macos-15`), so "it builds" is checked there.
+**§§2-4 are now RUN AND CONFIRMED on Patrick's Mac (2026-09-24, real takes
+from the app, not the grant test)**; results are recorded under each section.
+§1 (the grant test itself), §5 and §6 have not been run.
+
+**One false start worth keeping:** the first attempt produced no
+`system.m4a` at all. The cause was a stale build, not the code:
+`npm run app:start` rebuilds the Electron app but NOT the Swift helper, so
+an old helper silently ignored `systemAudio: true` and the take looked
+normal. Rebuilding with `helper/build.sh` fixed it. When a new helper flag
+"does nothing", check the helper binary's age first.
 
 ## What changed
 
@@ -55,6 +62,15 @@ The PTS bounds are the one thing it checks that nothing else can: the code
 `t0Ns`, as `MicCapture` assumes of AVCapture. If they are not, this fails on
 `firstFramePtsNs >= 0` or `lastFramePtsNs <= stop.t`.
 
+**Result (2026-09-24): the test itself was NOT run, but a real app take
+answered its main question.** `2026-09-24_22-00-29` (camera + mic + system
+audio together, whole screen, audio playing): anchors version 6,
+`system: {present: true, sampleRate: 48000, channels: 2,
+firstFramePtsNs: 385072125, lastFramePtsNs: 13245072125}`, all of
+`files.camera/mic/system` present. First sample 0.385 s into the take, last
+inside it: **the host-clock assumption holds.** `system.m4a` was 314 KB for
+12.86 s, which is 192 kbps continuous: no gaps.
+
 ## §2 — listen to it, and check sync
 
 1. Turn the setting on (above), open a YouTube video with a visible clock
@@ -66,6 +82,10 @@ The PTS bounds are the one thing it checks that nothing else can: the code
    system-audio offset of tens of ms is worth writing down before PR 3 mixes
    it.
 
+**Result (2026-09-24): "sounds great."** Clean, right level. Sync: no offset
+noticed by ear. That is NOT a measurement; if PR 3's mix sounds early or late,
+this is the number to go and measure properly.
+
 ## §3 — window scope gets the WHOLE machine
 
 The reason the dedicated stream exists. Record a **window** scope take of,
@@ -74,6 +94,12 @@ say, a Finder window while a browser in ANOTHER window plays audio.
 down. It also confirms the per-app filtering belief was worth designing
 around, or shows it was harmless either way. If it does NOT, the whole-display filter is not
 doing what `SystemAudioCapture`'s header says, and that is a finding.
+
+**Result (2026-09-24): CONFIRMED.** A window-scope take captures the whole
+machine's audio. What this does NOT show: that the video stream's own window
+filter would have MISSED other apps. That alternative was never built, so the
+per-app belief is still untested. It no longer matters, because the design that
+shipped does the right thing either way.
 
 ## §4 — silence: buffers, or nothing?
 
@@ -86,6 +112,21 @@ and look at `anchors.system`:
 - `present: false` → SCK delivers nothing while silent. Then a silent take
   is indistinguishable from a broken stream, and the watchdog must stay out.
   PR 3 must also treat `present:false` as "silent", not as an error.
+
+**Result (2026-09-24): SCK delivers silence AS BUFFERS.**
+`2026-09-24_22-04-58`, nothing playing: `system: {present: true,
+firstFramePtsNs: 249916625, lastFramePtsNs: 13869916625}` against
+`stop.t: 14004145208`. The track spans the whole take. So:
+
+- A no-samples watchdog WOULD be safe to add: a healthy stream delivers even
+  when the machine is quiet. v1 still ships without one (Patrick's call);
+  this only says a later one would not false-alarm.
+- PR 3 reads a quiet take's track as ordinary audio. `present:false` means
+  the stream genuinely failed.
+- **Do not judge silence by file size.** That take's `system.m4a` is 9 KB for
+  13.6 s: AAC encodes digital silence to ~14 bytes a frame (~640 frames).
+  Tiny, and still continuous. This runbook's first draft said to use size as
+  the tell, and was wrong.
 
 ## §5 — pause, stop, and nothing left running
 
