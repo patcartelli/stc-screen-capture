@@ -784,15 +784,15 @@ const CAMERA_FAULTS: Record<string, string> = {
  * otherwise be silently dropped by the generic handler below.
  */
 const MIC_FAULTS: Record<string, string> = {
-  "mic-not-found": "The chosen microphone is no longer available, so this take has no audio.",
-  "mic-not-authorized": "Microphone access is not authorized, so this take has no audio.",
-  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no audio.",
-  "mic-device-input-failed": "The microphone could not be opened, so this take has no audio.",
-  "mic-input-refused": "The microphone could not be opened, so this take has no audio.",
-  "mic-writer-failed": "Recording the microphone failed, so this take has no audio.",
+  "mic-not-found": "The chosen microphone is no longer available, so this take has no microphone audio.",
+  "mic-not-authorized": "Microphone access is not authorized, so this take has no microphone audio.",
+  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no microphone audio.",
+  "mic-device-input-failed": "The microphone could not be opened, so this take has no microphone audio.",
+  "mic-input-refused": "The microphone could not be opened, so this take has no microphone audio.",
+  "mic-writer-failed": "Recording the microphone failed, so this take has no microphone audio.",
   "mic-no-frames":
     "The microphone opened but is not sending any audio, so this take will have no " +
-    "sound. Another app holding the device is the usual cause.",
+    "microphone audio. Another app holding the device is the usual cause.",
 };
 
 /**
