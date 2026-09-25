@@ -223,7 +223,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -311,6 +311,15 @@ export interface Project {
    * a parse, defaulted to 1 (as recorded).
    */
   micLevel?: number;
+  /**
+   * Per-track mutes (project-12, STC-454 part 3): a muted track is silent in
+   * the preview and LEFT OUT of the export, while its level is kept, so
+   * un-muting brings back exactly what was set. Per take only, never a
+   * sticky app setting (Patrick, 2026-09-25). Always present after a parse,
+   * defaulted to false.
+   */
+  micMuted?: boolean;
+  systemAudioMuted?: boolean;
 }
 
 /** project-10's `narrationCleanup` (STC-455). */

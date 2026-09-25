@@ -1409,6 +1409,7 @@ function updateSystemAudioUI(): void {
   const level = openProject!.systemAudioLevel ?? 1;
   ($("sysaudiolevel") as HTMLInputElement).value = String(sliderPctFromLevel(level));
   $("sysaudiovalue").textContent = formatLevelDb(level);
+  showMute("sysmute", row, !!openProject!.systemAudioMuted, "system audio");
 }
 
 $("sysaudiolevel").addEventListener("input", () => {
@@ -1444,6 +1445,7 @@ function updateMicUI(): void {
   const level = openProject!.micLevel ?? 1;
   ($("miclevel") as HTMLInputElement).value = String(sliderPctFromMicLevel(level));
   $("miclevelvalue").textContent = formatLevelDb(level);
+  showMute("micmute", $("micaudio"), !!openProject!.micMuted, "mic");
 }
 
 $("miclevel").addEventListener("input", () => {
@@ -1452,6 +1454,37 @@ $("miclevel").addEventListener("input", () => {
   $("miclevelvalue").textContent = formatLevelDb(openProject.micLevel);
 });
 $("miclevel").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- per-track mute (STC-454 part 3) -----------------------------------
+//
+// A speaker before each track's name (Patrick, 2026-09-25). Muting is its
+// OWN field (project-12's micMuted/systemAudioMuted), never level 0, so the
+// slider keeps its position — dimmed — and un-muting returns to exactly the
+// level that was set. The preview hears it at once (the levels callback
+// reads the mute per chunk); the export leaves a muted track out entirely,
+// and with every track muted writes no audio track at all.
+
+function showMute(id: string, row: HTMLElement, muted: boolean, what: string): void {
+  const btn = $(id) as HTMLButtonElement;
+  btn.setAttribute("aria-pressed", String(muted));
+  const label = `${muted ? "Unmute" : "Mute"} ${what}`;
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+  row.toggleAttribute("data-muted", muted);
+}
+
+$("micmute").addEventListener("click", () => {
+  if (!openProject) return;
+  openProject.micMuted = !openProject.micMuted;
+  updateMicUI();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+$("sysmute").addEventListener("click", () => {
+  if (!openProject) return;
+  openProject.systemAudioMuted = !openProject.systemAudioMuted;
+  updateSystemAudioUI();
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 
@@ -1562,9 +1595,11 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
     ]);
     if (gen !== audioGen || !player) return;
     rawMic = mic;
+    // A muted track plays at 0 (STC-454 part 3): the sound keeps being
+    // scheduled, so the clock the picture follows never changes under a mute.
     previewAudio = new PreviewAudio({ mic, system }, () => ({
-      system: openProject?.systemAudioLevel ?? 1,
-      mic: openProject?.micLevel ?? 1,
+      system: openProject?.systemAudioMuted ? 0 : openProject?.systemAudioLevel ?? 1,
+      mic: openProject?.micMuted ? 0 : openProject?.micLevel ?? 1,
     }));
     previewAudio.setMuted(previewMuted);
     player.attachAudio(previewAudio);
@@ -1674,6 +1709,8 @@ window.addEventListener("keydown", (e) => {
   // this the timeline takes it as play/pause and the switch never toggles —
   // measured: the e2e's mutation check fails on exactly that.
   if (e.target === $("voicecleanon") && (e.key === " " || e.key === "Enter")) return;
+  // The same for the per-track mutes (STC-454 part 3).
+  if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
   const action = decideKey(
     {
       key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey,
