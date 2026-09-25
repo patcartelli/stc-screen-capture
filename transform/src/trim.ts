@@ -80,6 +80,11 @@ export const DEFAULT_SYSTEM_AUDIO_LEVEL = 1;
  * by ear on 2026-09-25 (~50 of the round-2 chain). Off is what every take
  * did before project-10 existed, so a take at this default needs no v10.
  */
+/** The mic as recorded (STC-454 part 2): a take at 1 never needs project-11. */
+export const DEFAULT_MIC_LEVEL = 1;
+/** +12 dB — `audio-mix.ts`'s `MIC_LEVEL_MAX`, restated because this file must not import the mixer. */
+const MIC_LEVEL_LIMIT = 10 ** (12 / 20);
+
 export const DEFAULT_NARRATION_CLEANUP: Readonly<NarrationCleanup> = Object.freeze({ enabled: false, strength: 0.5 });
 
 export function defaultProject(
@@ -106,6 +111,7 @@ export function defaultProject(
     bookmarks: [],
     systemAudioLevel: DEFAULT_SYSTEM_AUDIO_LEVEL,
     narrationCleanup: { ...DEFAULT_NARRATION_CLEANUP },
+    micLevel: DEFAULT_MIC_LEVEL,
   };
   // A recorded camera track is part of the take, so a take that has one shows
   // its PiP without needing an edit document to say so.
@@ -191,6 +197,11 @@ export function parseProject(
   // project-10 (STC-455). Each field on its own terms, like every other
   // block here: a bad strength must not also turn a deliberate "on" off.
   project.narrationCleanup = cleanNarrationCleanup(doc.narrationCleanup);
+  // project-11 (STC-454 part 2). Out of range is "no opinion", the same rule
+  // systemAudioLevel follows: a stored 9 is a document this build did not write.
+  project.micLevel = typeof doc.micLevel === "number"
+    && doc.micLevel >= 0 && doc.micLevel <= MIC_LEVEL_LIMIT
+    ? doc.micLevel : DEFAULT_MIC_LEVEL;
   return project;
 }
 
@@ -350,9 +361,10 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 {
-  // Highest first: a document needing v10 needs it whatever its level,
-  // bookmarks, slug, overrides, zoom or textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 {
+  // Highest first: a document needing v11 needs it whatever its cleanup,
+  // levels, bookmarks, slug, overrides, zoom or textPt say.
+  if (project.micLevel !== undefined && project.micLevel !== DEFAULT_MIC_LEVEL) return 11;
   if (!isDefaultNarrationCleanup(project.narrationCleanup)) return 10;
   if (project.systemAudioLevel !== undefined && project.systemAudioLevel !== DEFAULT_SYSTEM_AUDIO_LEVEL) return 9;
   if (project.bookmarks && project.bookmarks.length > 0) return 8;
@@ -394,5 +406,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (version >= 8) out.bookmarks = project.bookmarks;
   if (version >= 9) out.systemAudioLevel = project.systemAudioLevel;
   if (version >= 10) out.narrationCleanup = { ...project.narrationCleanup! };
+  if (version >= 11) out.micLevel = project.micLevel;
   return out;
 }

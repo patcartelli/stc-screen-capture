@@ -36,6 +36,14 @@ async function setStrength(win: Page, pct: number): Promise<void> {
   }, pct);
 }
 
+/** The controls live in the Audio popover (STC-454 part 2): open it before clicking or focusing one. */
+async function openAudio(win: Page): Promise<void> {
+  const open = () => win.evaluate(() => document.getElementById("audiopanel")!.matches(":popover-open"));
+  if (await open()) return;
+  await win.click("#audiobtn");
+  await expect.poll(open).toBe(true);
+}
+
 const projectOf = (takeDir: string) => {
   const p = join(takeDir, "project.json");
   return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null;
@@ -54,6 +62,7 @@ describe("narration cleanup", () => {
     const { dir, takeDir } = makeMicTakeFolder();
     const win = await openEditor(dir);
     await expect.poll(() => win.getAttribute("#voiceclean", "hidden"), { timeout: 20_000 }).toBeNull();
+    await openAudio(win);
     expect(await win.isChecked("#voicecleanon")).toBe(false);
     expect(await win.inputValue("#voicecleanstrength")).toBe("50");
     expect(await win.isDisabled("#voicecleanstrength")).toBe(true);
@@ -92,6 +101,7 @@ describe("narration cleanup", () => {
     const { dir } = makeMicTakeFolder();
     let win = await openEditor(dir);
     await expect.poll(() => win.getAttribute("#voiceclean", "hidden"), { timeout: 20_000 }).toBeNull();
+    await openAudio(win);
     await win.click("#voicecleanon");
     await setStrength(win, 70);
     await expect.poll(() => win.textContent("#voicecleanvalue")).toBe("70%");
@@ -109,6 +119,7 @@ describe("narration cleanup", () => {
     const { dir, takeDir } = makeMicTakeFolder();
     const win = await openEditor(dir);
     await expect.poll(() => win.getAttribute("#voiceclean", "hidden"), { timeout: 20_000 }).toBeNull();
+    await openAudio(win);
     const clockBefore = await win.textContent("#clock-cur");
 
     // Space toggles the switch and must not also start playback.

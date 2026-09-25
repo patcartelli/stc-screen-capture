@@ -223,7 +223,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -303,6 +303,14 @@ export interface Project {
    * follows.
    */
   narrationCleanup?: NarrationCleanup;
+  /**
+   * The recorded mic's level (project-11, STC-454 part 2): a linear gain,
+   * 0..`MIC_LEVEL_MAX` (+12 dB) — unlike `systemAudioLevel` it may BOOST,
+   * because narration is usually recorded well below system audio. Applied
+   * by the mix in export and preview, never at capture. Always present after
+   * a parse, defaulted to 1 (as recorded).
+   */
+  micLevel?: number;
 }
 
 /** project-10's `narrationCleanup` (STC-455). */
