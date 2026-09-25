@@ -831,14 +831,16 @@ recorder.on("settings:changed", () => {
     storedDisplayId = s.displayId;
     storedMicUid = s.micDeviceUid;
     await refreshDisplays();
-    await refreshMics();
+    await refreshDevices();
   })();
 });
 // The choice was "pick a different one" rather than "use the fallback" —
-// open the profile sheet and hand focus straight to the control that needs
-// it, rather than leaving the user to find it themselves.
+// open the control that needs it rather than leaving the user to find it
+// themselves. The display picker is still in the profile sheet; the mic
+// picker moved to the always-visible device popover (STC-414), so it opens
+// that instead of the sheet.
 recorder.on("settings:openDisplayPicker", () => { setProfileOpen(true); displaySel.focus(); });
-recorder.on("settings:openMicPicker", () => { setProfileOpen(true); micSel.focus(); });
+recorder.on("settings:openMicPicker", () => { toggleDevicePopover("mic"); micTrigger.focus(); });
 
 /**
  * Camera failures the user must actually see. Every one of these was already
