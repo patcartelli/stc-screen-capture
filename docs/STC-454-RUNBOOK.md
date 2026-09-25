@@ -240,7 +240,7 @@ Patrick's decisions (2026-09-25):
 # Part 4 — the waveform on the ruler
 
 **Merged, but §6 (part 3) and §7 (part 4) have NOT been fully run on
-hardware yet.** Run both from `master`.
+hardware yet (STC-463).** Run both from `master`.
 
 ## What changed
 
