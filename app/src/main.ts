@@ -186,7 +186,7 @@ const TRASH_SWEEP_INTERVAL_MS = 1_000;
 // loaded from file://, and Chromium refuses cross-origin fetches from a file
 // origin to any non-http scheme. Serving the app itself over a custom scheme
 // would fix that, but IPC removes the origin question altogether.
-const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "project.json"]);
+const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a", "project.json"]);
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -769,7 +769,7 @@ ipcMain.handle("recorder:start", async () => {
   // already owns these settings, and a renderer-supplied value would be a
   // second source of truth for what turns on a physical camera and what the
   // helper is told to point at.
-  const { camera, displayId, micDeviceUid, cameraDeviceUid, scope, countdownMs } =
+  const { camera, displayId, micDeviceUid, cameraDeviceUid, systemAudio, scope, countdownMs } =
     readSettings(app.getPath("userData"));
   const startParams: Record<string, unknown> = { camera };
   // Only when a device is actually picked (STC-233) — an absent field is
@@ -781,6 +781,8 @@ ipcMain.handle("recorder:start", async () => {
   // boolean's job). Sent even when `camera` is false; the helper only
   // consults it once it has decided to open a camera at all.
   if (cameraDeviceUid != null) startParams.cameraDeviceUid = cameraDeviceUid;
+  // STC-418: only when on — absent is "off" to parseStartRequest.
+  if (systemAudio) startParams.systemAudio = true;
   if (scope.kind === "region" && scope.region) {
     const { displayId: regionDisplayId, x, y, width, height } = scope.region;
     startParams.displayId = regionDisplayId;
@@ -1595,12 +1597,12 @@ ipcMain.handle("preview:close", async (e) => { clearOpenTake(e); });
  * already is: the window that gets created is `editor-window.ts`'s concern,
  * not something the renderer reaches with its own `BrowserWindow`.
  */
-ipcMain.handle("editor:open", async (_e, dir: string, name: string) => {
+ipcMain.handle("editor:open", async (_e, dir: string, name: string, autoShare?: boolean) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideTakesRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to open a path outside the recordings folder");
   }
-  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer") });
+  openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer"), autoShare });
   return true;
 });
 

@@ -370,6 +370,11 @@ struct StartRequest: Equatable {
     /// app already showed the user in a picker (STC-414), carried forward
     /// unexamined the same way `micDeviceUid` is.
     let cameraDeviceUid: String?
+    /// STC-418: record what the machine is playing to system.m4a. A boolean,
+    /// not a device: there is one system output. Anything but a literal
+    /// `true` is "off" — the same latitude `camera` gets, and the setting's
+    /// own default (off) in the app.
+    let systemAudio: Bool
 }
 
 enum StartRequestError: Error, Equatable, CustomStringConvertible {
@@ -448,9 +453,10 @@ func parseStartRequest(_ cmd: [String: Any]) -> Result<StartRequest, StartReques
     // fallback is pickCamera's ranking, not "no camera".
     let cameraRaw = cmd["cameraDeviceUid"] as? String
     let cameraDeviceUid = (cameraRaw?.isEmpty == false) ? cameraRaw : nil
+    let systemAudio = cmd["systemAudio"] as? Bool ?? false
     return .success(StartRequest(dir: dir, displayId: displayId, region: region,
                                  windowId: windowId, camera: camera, micDeviceUid: micDeviceUid,
-                                 cameraDeviceUid: cameraDeviceUid))
+                                 cameraDeviceUid: cameraDeviceUid, systemAudio: systemAudio))
 }
 
 

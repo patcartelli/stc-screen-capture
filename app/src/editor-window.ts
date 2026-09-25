@@ -29,13 +29,21 @@ export interface EditorOptions {
   dist: string;
   /** Where editor.html lives. */
   rendererDir: string;
+  /**
+   * Run the Share flow as soon as the take is open (STC-429) — a library
+   * tile's "Share" action, which has no publish surface of its own and routes
+   * through the editor's existing one instead. Absent for every other caller.
+   */
+  autoShare?: boolean;
 }
 
 let win: BrowserWindow | undefined;
 
 function load(opts: EditorOptions): void {
   win!.loadFile(join(opts.rendererDir, "editor.html"), {
-    query: { dir: opts.dir, name: opts.name },
+    query: opts.autoShare
+      ? { dir: opts.dir, name: opts.name, autoShare: "1" }
+      : { dir: opts.dir, name: opts.name },
   });
 }
 

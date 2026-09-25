@@ -63,6 +63,14 @@ export interface MicTrack {
   lastFramePtsNs: number;
 }
 
+/**
+ * Mirrors the optional `system` block in schema/anchors-6.schema.json
+ * (STC-418): what the machine was PLAYING, a second audio track independent
+ * of the mic. `MicTrack` minus `device` — there is one system output, and it
+ * is the whole machine's whatever the take's scope.
+ */
+export type SystemAudioTrack = Omit<MicTrack, "device">;
+
 /** Mirrors the optional `pip` block in schema/project-2.schema.json. */
 export interface Pip {
   enabled: boolean;
@@ -92,9 +100,9 @@ export type CaptureScope =
       };
     };
 
-/** Mirrors schema/anchors-1.schema.json through anchors-4.schema.json. */
+/** Mirrors schema/anchors-1.schema.json through anchors-6.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4;
+  version: 1 | 2 | 3 | 4 | 5 | 6;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {
@@ -111,9 +119,11 @@ export interface Anchors {
   camera?: CameraTrack;
   /** STC-233. Absent means no mic was requested, the same as v1-v3. */
   mic?: MicTrack;
+  /** STC-418. Absent means system audio was not requested, the same as v1-v5. */
+  system?: SystemAudioTrack;
   /** STC-370. Absent means the whole display, the same as v1/v2. */
   scope?: CaptureScope;
-  files: { display: string; camera?: string; mic?: string };
+  files: { display: string; camera?: string; mic?: string; system?: string };
   /**
    * `reason` is a plain string, not a union, ON PURPOSE (STC-311).
    *
@@ -213,7 +223,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -275,6 +285,15 @@ export interface Project {
    * never a reader's.
    */
   bookmarks?: number[];
+  /**
+   * The recorded system audio's level (project-9, STC-418): a linear gain,
+   * 0..1, applied by preview and export when they sum system.m4a with the
+   * mic — never at capture, so a bad setting is always undoable. Attenuate
+   * only: a boost could clip, and nothing asked for one. Always present
+   * after a parse, defaulted to `DEFAULT_SYSTEM_AUDIO_LEVEL`, the same
+   * reasoning `textPt` follows.
+   */
+  systemAudioLevel?: number;
 }
 
 /**

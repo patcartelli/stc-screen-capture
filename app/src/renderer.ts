@@ -33,6 +33,8 @@ interface AppSettings {
   micDeviceUid: string | null;
   /** STC-414. null means automatic (the helper's own ranking) — unlike micDeviceUid. */
   cameraDeviceUid: string | null;
+  /** STC-418. Off by default; no control until the options bar (PR 4). */
+  systemAudio: boolean;
   /** STC-292. */
   shutterSound: boolean;
   /** STC-391: how long Record and the self-timer count down, ms. */
@@ -47,6 +49,8 @@ interface AppSettings {
   saveFolder: string | null;
   /** STC-412: show diagnostics table. */
   showDiagnostics: boolean;
+  /** STC-429: the take library's layout. */
+  libraryView: "grid" | "list";
   /** STC-444 slice 3: the site folder, moved here from the editor window's
    *  own sharebar — one setting for the whole app, not a per-take one. */
   share: { destination: string | null };
@@ -86,7 +90,9 @@ declare const recorder: {
   // channel the old in-page player used (`openPreview`, `writeExport`,
   // `publish`, and the rest) moved to `editor-preload.ts`, the only bridge
   // that still calls them.
-  openEditor(dir: string, name: string): Promise<boolean>;
+  // `autoShare` (STC-429) asks the editor to run its own Share flow as soon
+  // as the take is open, rather than duplicating share.ts's plumbing here.
+  openEditor(dir: string, name: string, autoShare?: boolean): Promise<boolean>;
   captureStill(action?: ShotAction): Promise<StillResult>;
   getShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   setShortcut(action: ShotAction, accelerator: string | null):
@@ -845,15 +851,15 @@ const CAMERA_FAULTS: Record<string, string> = {
  * otherwise be silently dropped by the generic handler below.
  */
 const MIC_FAULTS: Record<string, string> = {
-  "mic-not-found": "The chosen microphone is no longer available, so this take has no audio.",
-  "mic-not-authorized": "Microphone access is not authorized, so this take has no audio.",
-  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no audio.",
-  "mic-device-input-failed": "The microphone could not be opened, so this take has no audio.",
-  "mic-input-refused": "The microphone could not be opened, so this take has no audio.",
-  "mic-writer-failed": "Recording the microphone failed, so this take has no audio.",
+  "mic-not-found": "The chosen microphone is no longer available, so this take has no microphone audio.",
+  "mic-not-authorized": "Microphone access is not authorized, so this take has no microphone audio.",
+  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no microphone audio.",
+  "mic-device-input-failed": "The microphone could not be opened, so this take has no microphone audio.",
+  "mic-input-refused": "The microphone could not be opened, so this take has no microphone audio.",
+  "mic-writer-failed": "Recording the microphone failed, so this take has no microphone audio.",
   "mic-no-frames":
     "The microphone opened but is not sending any audio, so this take will have no " +
-    "sound. Another app holding the device is the usual cause.",
+    "microphone audio. Another app holding the device is the usual cause.",
 };
 
 /**
@@ -1055,6 +1061,9 @@ countdownSel.addEventListener("change", () => {
 /** Which kind filter is showing. The adapter validates it; this only remembers it. */
 let libraryFilter = "all";
 
+/** Which layout the library draws in (STC-429) — read from settings at boot, below. */
+let libraryViewMode: "grid" | "list" = "grid";
+
 /**
  * The longest edge a cached library thumbnail is rendered at.
  *
@@ -1143,6 +1152,18 @@ const libraryCallbacks: LibraryCallbacks = {
       // criterion. Which actions an item offers was decided by the adapter, so
       // an id that cannot apply to this item never reaches here.
       if (id === "open") await openItem(item);
+      else if (id === "share") {
+        // Recording-only (the adapter never offers "share" for a still — the
+        // still editor has no publish surface yet, STC-429): open the take
+        // editor and let IT run the Share flow, rather than a second one here.
+        const dir = item.dir;
+        if (!dir) throw new Error("share needs a bundle directory");
+        try {
+          await recorder.openEditor(dir, item.id, true);
+        } catch (e: any) {
+          alertUser(`Could not open "${item.label ?? item.id}" to share it.\n${e?.message ?? e}`);
+        }
+      }
       else if (id === "duplicate") {
         // Bundle-only, same reason "open" is: the adapter never offers this
         // id for an item with no `dir` (rule: an action needing a bundle
@@ -1206,6 +1227,11 @@ const libraryCallbacks: LibraryCallbacks = {
     } catch (e: any) { alertUser(String(e?.message ?? e)); }
   },
   async setFilter(id) { libraryFilter = id; await refreshTakes(); },
+  async setView(mode) {
+    libraryViewMode = mode;
+    await recorder.setSettings({ libraryView: mode });
+    await refreshTakes();
+  },
   async paintThumbnail(item, img) {
     if (item.thumbnail.source === "file") {
       await showCachedThumbnail(item, img, item.thumbnail.file);
@@ -1251,7 +1277,7 @@ async function openItem(item: LibraryItem): Promise<void> {
 async function refreshTakes(): Promise<void> {
   const list = await recorder.library(libraryFilter);
   libraryFilter = list.filter;
-  renderLibrary($("takes"), list, libraryCallbacks);
+  renderLibrary($("takes"), list, libraryCallbacks, libraryViewMode);
 }
 
 
@@ -1267,7 +1293,13 @@ recorder.status().then((s) => {
     alertUser("The recorder keeps failing to start. Restart the app.");
   }
 });
-refreshTakes();
+// The layout preference (STC-429) has to be known before the first render —
+// a bare `refreshTakes()` here would draw the grid once, then again in
+// whatever view the user actually chose, a visible flash on every launch.
+void (async () => {
+  libraryViewMode = (await recorder.getSettings()).libraryView;
+  await refreshTakes();
+})();
 
 // ---- capture shortcuts (STC-292) ------------------------------------------
 //

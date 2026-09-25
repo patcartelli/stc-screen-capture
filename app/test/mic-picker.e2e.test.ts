@@ -198,6 +198,6 @@ describe("the mic says what it is doing", () => {
       .toBe(true);
 
     await expect.poll(() => toastText(app!), { timeout: 20_000 })
-      .toContain("no sound");
+      .toContain("no microphone audio");
   }, 60_000);
 });

@@ -53,6 +53,7 @@ declare const editor: {
 import { loadSession, type LoadedSession } from "@transform/session";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
+import { levelFromSliderPct, sliderPctFromLevel } from "@transform/audio-mix";
 import type { Project, ZoomOverride } from "@transform/types";
 import {
   parseProject, projectForWrite, exportWindow, estimateExportMs,
@@ -97,6 +98,10 @@ const fmtEstimate = (ms: number) => {
 const params = new URLSearchParams(location.search);
 const takeDir = params.get("dir") ?? "";
 const takeName = params.get("name") ?? "";
+// STC-429: the library's "Share" tile action opens the take here and asks
+// for its own Share flow to run immediately, rather than duplicating
+// share.ts's plumbing in the grid.
+const autoShare = params.get("autoShare") === "1";
 
 // ---- state ------------------------------------------------------------------
 
@@ -1241,7 +1246,9 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   const cameraMp4 = anchors.files?.camera ? await readVideo(anchors.files.camera) : undefined;
   // STC-233: same reasoning as cameraMp4 above, one track over.
   const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
-  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a });
+  // STC-418: and again for system audio — loadSession refuses a claimed track that was not supplied.
+  const systemM4a = anchors.files?.system ? await readVideo(anchors.files.system) : undefined;
+  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a, systemM4a });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
@@ -1269,6 +1276,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   updateTrimUI();
   updateOutputSizeUI();
   updateLegibilityUI();
+  updateSystemAudioUI();
   applySpanTransform();
   redrawLanes();
 }
@@ -1289,6 +1297,7 @@ async function closeTake(): Promise<void> {
   openProject = undefined;
   openCapture = undefined;
   openDisplay = undefined;
+  updateSystemAudioUI();
   applyStageDisplay();
   await editor.closePreview();
 }
@@ -1354,6 +1363,37 @@ $("scrub").addEventListener("input", () => {
   void player.seek(frameToNs(Number(($("scrub") as HTMLInputElement).value), player.durationNs));
 });
 
+// ---- system-audio level (STC-418 PR 3) --------------------------------
+//
+// Shown only for a take that recorded system audio. The level lives on the
+// project (project-9's systemAudioLevel, 0..1) and is applied by the export's
+// mix (audio-mix.ts); it changes nothing the preview draws or plays. `input`
+// updates the value live; `change` (release, or a key) is what persists, the
+// same drag-then-settle split the trim handles use.
+//
+// The slider is a DECIBEL fader, not the gain itself (audio-mix.ts's
+// levelFromSliderPct): a linear 30% still sounded loud on hardware.
+
+function updateSystemAudioUI(): void {
+  const row = $("sysaudio");
+  const has = !!openSession?.systemAudio && !!openProject;
+  row.toggleAttribute("hidden", !has);
+  if (!has) return;
+  const pct = sliderPctFromLevel(openProject!.systemAudioLevel ?? 1);
+  ($("sysaudiolevel") as HTMLInputElement).value = String(pct);
+  $("sysaudiovalue").textContent = `${pct}%`;
+}
+
+$("sysaudiolevel").addEventListener("input", () => {
+  if (!openProject) return;
+  const pct = Number(($("sysaudiolevel") as HTMLInputElement).value);
+  openProject.systemAudioLevel = levelFromSliderPct(pct);
+  $("sysaudiovalue").textContent = `${pct}%`;
+});
+$("sysaudiolevel").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
 // ---- keyboard grammar (STC-338 rule 8) --------------------------------
 
 function isTextField(el: Element | null): boolean {
@@ -1374,6 +1414,9 @@ const RANGE_NATIVE_KEYS = new Set([
 window.addEventListener("keydown", (e) => {
   if (!player || !openProject) return;
   if (e.target === $("scrub") && RANGE_NATIVE_KEYS.has(e.key)) e.preventDefault();
+  // The level slider is the opposite case: its arrow keys adjust the LEVEL
+  // and must not also step the playhead (STC-418 PR 3).
+  if (e.target === $("sysaudiolevel") && RANGE_NATIVE_KEYS.has(e.key)) return;
   const action = decideKey(
     {
       key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey,
@@ -1567,6 +1610,8 @@ async function runExport(): Promise<void> {
       encodedBytes: result.encodedBytes,
       micEncodedChunks: result.micEncodedChunks,
       audioOutputChunks: result.audioOutputChunks,
+      // STC-418: nonzero only when the take had system audio and was mixed.
+      mixEncodedChunks: result.mixEncodedChunks,
       output: exporting.output,
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {
@@ -1755,6 +1800,15 @@ void (async () => {
   }
   try {
     await openTakeOrThrow(takeDir);
+    // Share now lives inside the export dialog (STC-444 slice 3) — open it
+    // the same way `#openexport`'s own click does, so the slug field and
+    // site-folder note are populated before `publish()` reads them, and so
+    // the person can actually see the status line while it runs.
+    if (autoShare) {
+      if (!exportDialog.open) exportDialog.showModal();
+      await refreshShareRow();
+      void publish();
+    }
   } catch (e: any) {
     alertUser(`Could not open "${takeName || takeDir}".\n${e?.message ?? e}`);
   }

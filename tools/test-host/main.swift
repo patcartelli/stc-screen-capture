@@ -122,7 +122,8 @@ func runMicRequest() {
 /// Drives the helper through start -> record -> stop and records everything it
 /// said. Assertions live in the test suite, not here: this writes a transcript,
 /// it does not decide whether the transcript is good.
-func runSession(helper: String, dir: String, recordMs: Int, camera: Bool, mic: String?) {
+func runSession(helper: String, dir: String, recordMs: Int, camera: Bool, mic: String?,
+                systemAudio: Bool = false) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: helper)
     // No fd3: Process cannot hand a child an arbitrary descriptor without
@@ -183,6 +184,9 @@ func runSession(helper: String, dir: String, recordMs: Int, camera: Bool, mic: S
     var startCmd: [String: Any] = ["cmd": "start", "dir": dir, "seq": 1]
     if camera { startCmd["camera"] = true }
     if let mic { startCmd["micDeviceUid"] = mic }
+    // STC-418: the helper's own dedicated audio stream; needs nothing beyond
+    // the Screen Recording grant this host already carries.
+    if systemAudio { startCmd["systemAudio"] = true }
     send(startCmd)
     let startOutcome = waitFor("start", { ($0["seq"] as? Int) == 1 }, timeout: 30)
 
@@ -409,7 +413,8 @@ DispatchQueue.main.async {
     }
     DispatchQueue.global().async {
         runSession(helper: helper, dir: dir, recordMs: Int(arg("--ms") ?? "3000") ?? 3000,
-                   camera: args.contains("--camera"), mic: arg("--mic"))
+                   camera: args.contains("--camera"), mic: arg("--mic"),
+                   systemAudio: args.contains("--system-audio"))
     }
 }
 app.run()

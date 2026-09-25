@@ -242,6 +242,69 @@ do {
     printJSON(d, marker: "JSON-VERSION-4-EVERYTHING:")
 }
 
+// 13. STC-418: system audio requested but yielding no track. Same rule as
+//     the mic's block 10: present:false, no invented measurements, no
+//     files.system — and systemAudioRequested raises the floor to 6.
+do {
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            systemAudio: nil, systemAudioRequested: true,
+                            pauses: [],
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 6, "a system-audio-requested take must write version 6")
+    let sys = d["system"] as? [String: Any]
+    check(sys != nil, "requested system audio must always write a system block")
+    check(sys?["present"] as? Bool == false, "requested system audio with no track must record present:false")
+    check(sys?["sampleRate"] == nil, "system audio with no track must not invent measurements")
+    check(d["mic"] == nil, "system audio alone must not write a mic block")
+    let files = d["files"] as? [String: Any]
+    check(files?["system"] == nil, "files.system must be absent when system audio produced no track")
+    printJSON(d, marker: "JSON-SYSTEM-REQUESTED-NO-SAMPLES:")
+}
+
+// 14. Present system audio beside a present mic, on a window scope — two
+//     independent audio tracks, and the version is the MAX of every floor
+//     (window 3, mic 4, system 6), never whichever was computed last.
+do {
+    let micTrack = MicTrack(present: true, device: "Fixture Mic", sampleRate: 48000, channels: 1,
+                            firstFramePtsNs: 12_000_000, lastFramePtsNs: 19_500_000_000)
+    let sysTrack = SystemAudioTrack(present: true, sampleRate: 48000, channels: 2,
+                                    firstFramePtsNs: 30_000_000, lastFramePtsNs: 19_900_000_000)
+    let win = StillWindowInfo(id: 42, app: "Finder", title: "Documents",
+                              bounds: StillRect(x: 10, y: 20, width: 800, height: 600))
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            mic: micTrack, micRequested: true,
+                            systemAudio: sysTrack, systemAudioRequested: true,
+                            scope: CaptureScopeDoc(kind: .window, region: nil, window: win),
+                            pauses: [],
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 6, "window + mic + system audio must write version 6")
+    let sys = d["system"] as? [String: Any]
+    check(sys?["present"] as? Bool == true, "present system audio must record present:true")
+    check(sys?["device"] == nil, "system audio has no device")
+    check(sys?["sampleRate"] as? Int == 48000, "system sample rate")
+    check(sys?["channels"] as? Int == 2, "system channels")
+    check(sys?["firstFramePtsNs"] as? Int == 30_000_000, "system first sample pts")
+    check(sys?["lastFramePtsNs"] as? Int == 19_900_000_000, "system last sample pts")
+    check((d["mic"] as? [String: Any])?["device"] as? String == "Fixture Mic", "the mic block is untouched by system audio")
+    let files = d["files"] as? [String: Any]
+    check(files?["system"] as? String == "system.m4a", "files.system must name the file")
+    check(files?["mic"] as? String == "mic.m4a", "files.mic must still name its own file")
+    printJSON(d, marker: "JSON-WITH-SYSTEM-AND-MIC:")
+}
+
+// 15. Not requested: no block, no file, no version bump — a take that never
+//     asked for system audio is byte-for-byte what it was before STC-418.
+do {
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            pauses: [],
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 2, "no system audio requested stays v2")
+    check(d["system"] == nil, "no system audio requested writes no system block")
+}
+
 // ── pauses (STC-240) ────────────────────────────────────────────────────────
 // Minimum-version emission: a take that was never paused is byte-for-byte the
 // document it is today, at whatever version its other blocks demand.

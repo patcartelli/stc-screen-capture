@@ -8,6 +8,7 @@ import type { Project } from "../src/types.js";
 import {
   availableFrames, clampTrim, defaultProject, estimateExportMs, exportWindow,
   isFullTake, minTrimNs, parseProject, projectForWrite, EXPORT_MS_PER_FRAME,
+  DEFAULT_SYSTEM_AUDIO_LEVEL,
 } from "../src/trim.js";
 
 const root = join(__dirname, "..", "..");
@@ -268,6 +269,86 @@ describe("project-8: bookmarks (STC-444 slice 4)", () => {
     expect(validate8(raw(["1"]))).toBe(false);
     expect(validate8(raw([NS]))).toBe(true);
     expect(validate8(raw([]))).toBe(true);
+  });
+});
+
+describe("project-9: system audio level (STC-418)", () => {
+  const Ajv = (AjvImport as any).default ?? AjvImport;
+  const schema = (n: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${n}.schema.json`), "utf8")));
+  const validate8 = schema(8);
+  const validate9 = schema(9);
+  const raw = (systemAudioLevel: unknown) => ({
+    version: 9, transform: { version: 1 }, output: { fps: 60, width: 640, height: 360 },
+    cursor: { style: "default", scale: 1 }, systemAudioLevel,
+  });
+
+  test("full level after a parse at every older version, and by default", () => {
+    expect(DEFAULT_SYSTEM_AUDIO_LEVEL).toBe(1);
+    for (const doc of [null, { version: 1 }, { version: 3 }, { version: 8 }, raw(undefined)]) {
+      expect(parseProject(doc, 640, 360, duration).systemAudioLevel).toBe(1);
+    }
+    expect(defaultProject(640, 360).systemAudioLevel).toBe(1);
+  });
+
+  test("0..1 is carried; anything else is no opinion, not a clamp", () => {
+    for (const ok of [0, 0.25, 1]) {
+      expect(parseProject(raw(ok), 640, 360, duration).systemAudioLevel).toBe(ok);
+    }
+    for (const bad of [-0.1, 1.4, "0.5", null, NaN]) {
+      expect(parseProject(raw(bad), 640, 360, duration).systemAudioLevel,
+        `level: ${JSON.stringify(bad)}`).toBe(1);
+    }
+  });
+
+  test("full level writes no systemAudioLevel key and stays at the version its other edits earned", () => {
+    const p: Project = { ...defaultProject(640, 360), bookmarks: [NS] };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(8);
+    expect(out.systemAudioLevel).toBeUndefined();
+    expect(validate8(out), JSON.stringify(validate8.errors, null, 2)).toBe(true);
+  });
+
+  test("a lowered level writes v9, and round-trips — 0 (muted) included", () => {
+    for (const level of [0, 0.5]) {
+      const p: Project = { ...defaultProject(640, 360), systemAudioLevel: level };
+      const out = projectForWrite(p, duration);
+      expect(out.version).toBe(9);
+      expect(out.systemAudioLevel).toBe(level);
+      expect(validate9(out), JSON.stringify(validate9.errors, null, 2)).toBe(true);
+      expect(parseProject(out, 640, 360, duration).systemAudioLevel).toBe(level);
+    }
+  });
+
+  test("V9 IS A SUPERSET OF V8 — promoting the version must not drop bookmarks or the slug", () => {
+    const p: Project = {
+      ...defaultProject(640, 360), slug: "network", bookmarks: [NS], systemAudioLevel: 0.5,
+    };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(9);
+    expect(out.slug).toBe("network");
+    expect(out.bookmarks).toEqual([NS]);
+    expect(validate9(out), JSON.stringify(validate9.errors, null, 2)).toBe(true);
+    const back = parseProject(out, 640, 360, duration);
+    expect(back.slug).toBe("network");
+    expect(back.bookmarks).toEqual([NS]);
+    expect(back.systemAudioLevel).toBe(0.5);
+  });
+
+  test("returning to full level returns the document to its old version", () => {
+    const p: Project = { ...defaultProject(640, 360), slug: "network", systemAudioLevel: 0.5 };
+    expect(projectForWrite(p, duration).version).toBe(9);
+    p.systemAudioLevel = 1;
+    expect(projectForWrite(p, duration).version).toBe(7);
+  });
+
+  test("project-9 refuses what the parser refuses; project-8 refuses the field", () => {
+    expect(validate9(raw(-0.1))).toBe(false);
+    expect(validate9(raw(1.4))).toBe(false);
+    expect(validate9(raw("0.5"))).toBe(false);
+    expect(validate9(raw(0))).toBe(true);
+    expect(validate9(raw(1))).toBe(true);
+    expect(validate8({ ...raw(0.5), version: 8 })).toBe(false);
   });
 });
 
