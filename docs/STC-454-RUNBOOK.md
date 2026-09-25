@@ -1,10 +1,9 @@
 # STC-454 — preview audio: what to listen for on the Mac
 
-**Run this from the branch, not `master`, until it merges:**
+**All four parts are merged: run this from `master`.**
 
 ```
-git fetch origin claude/optimistic-ride-ed374b
-git checkout claude/optimistic-ride-ed374b && git pull
+git checkout master && git pull
 npm install && npm run app:start
 ```
 
@@ -237,3 +236,72 @@ Patrick's decisions (2026-09-25):
   - with every track muted the exported MP4 has no `mp4a` or `soun`. With
     the mute not passed to the export plan (mutation-checked), the same export
     fails trying to encode the placeholder mic.
+
+# Part 4 — the waveform on the ruler
+
+**Merged, but §6 (part 3) and §7 (part 4) have NOT been fully run on
+hardware yet (STC-463).** Run both from `master`.
+
+## What changed
+
+Patrick's decisions (2026-09-25):
+
+| Question | Answer |
+|---|---|
+| Where does it go? | **On the ruler**, like Clip activity: no new lane (STC-444 found three lanes cluttered). |
+| What does it show? | **The export's mix**: the mic (cleaned when cleanup is on) plus system audio at their levels, a muted track contributing nothing, hard-limited. |
+
+- A second toggle sits on the ruler's left edge, beside Clip activity's. It
+  shows only for a take with audio, starts **off** each time the editor opens,
+  and is never saved (the same rule Clip activity follows). Pressed, it
+  turns green.
+- The waveform is drawn mirrored about the ruler's middle on a **linear**
+  scale: full height is full scale, where the mix's hard limit clips. So a
+  -12 dB move shrinks it to a quarter of its height.
+- It is computed from `mixBlock`, the same function the export encodes and
+  the preview plays (`transform/src/waveform.ts`). A level, a mute or a
+  finished voice cleanup redraws it. The work runs in 8 ms slices, taking
+  about 1.5 s per 10 minutes of two-track audio (measured in Node). Until
+  the new drawing lands, the old one stays up.
+
+## §7 — the waveform, by eye
+
+1. Open a take with narration. Turn the waveform on. Do the shapes line up
+   with the voice: a word starting where the waveform rises, a pause lying
+   flat? Play at 1x and watch the playhead cross a loud word as you hear it.
+2. Open **Audio** and drag the Mic slider down to about -20 dB, then release.
+   The waveform should shrink. Mute the mic: on a mic-only take it goes flat;
+   with system audio, only the system audio's shape stays.
+3. Push the Mic to +12 dB on a loud take. Peaks that hit the top and bottom
+   edges are where the export clips. Is that useful, or does it just read as
+   "the waveform got taller"?
+4. Turn Clip activity on as well. Can the two still be told apart, or is it
+   one or the other?
+5. Zoom the timeline right in (scroll on the ruler). The waveform
+   has 1024 points across the whole take, so on a long take zoomed far in it
+   turns blocky. Is it still useful there?
+6. Open a 10-minute take. Does the waveform appear within a few seconds of
+   the picture, and does playback stay smooth while it computes?
+7. Light and dark mode: is the green legible against the ruler, and does it
+   stay out of the way of the ticks and playhead?
+
+## In the app (Linux-verified, not seen)
+
+The fixtures' audio decodes to silence, and there is no AAC encoder here, so
+no waveform with any height has been drawn anywhere.
+
+- `transform/test/waveform.test.ts`:
+  - agrees with `mixBlock`'s own output, sample for sample, over a whole
+    timeline with two offset tracks, both levels and an odd block size;
+  - buckets by session time, and catches a single-sample spike;
+  - applies levels and the hard limit; a level-0 (muted) track contributes
+    nothing;
+  - yields once per block.
+- `app/test/waveform.e2e.test.ts`:
+  - no toggle without audio;
+  - the toggle starts off; the peaks are computed once the audio decodes;
+    pressing it shows the overlay;
+  - muting the mic recomputes the peaks (mutation-checked: without the
+    recompute, the test fails);
+  - Space on the focused toggle flips it without starting playback
+    (mutation-checked).
