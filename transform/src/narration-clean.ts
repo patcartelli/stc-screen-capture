@@ -34,27 +34,42 @@
  *
  * 1. **High-pass**, 2nd-order Butterworth at 80 Hz. Rumble, desk thumps and
  *    HVAC boom sit below any voice's fundamental.
- * 2. **Noise reduction** by power spectral subtraction against a noise
- *    PROFILE learned from the take itself: the quietest `NOISE_PERCENTILE` of
- *    frames (the pauses between phrases) averaged per bin. It assumes the
- *    noise is steady — a fan, hiss, room tone — which is exactly the named
- *    complaint. A dog barking is not steady and is not removed.
+ * 2. **Noise reduction** by a decision-directed Wiener gain (Ephraim &
+ *    Malah, 1984) against a noise PROFILE learned from the take itself: the
+ *    quietest `NOISE_PERCENTILE` of frames (the pauses between phrases)
+ *    averaged per bin. It assumes the noise is steady — a fan, hiss, room
+ *    tone — which is exactly the named complaint. A dog barking is not steady
+ *    and is not removed.
  * 3. **Late-reverb suppression** (Lebart, Boucher & Denbigh, 2001): the room's
  *    tail at time t is estimated as the signal's own power `REVERB_DELAY_S`
- *    earlier, decayed by an ASSUMED reverberation time, and subtracted like
- *    noise. It shortens the tail after a word; it cannot remove the early
- *    reflections inside one. That is the honest limit of a classical method,
- *    and the ticket said to be honest about it.
+ *    earlier, decayed by an ASSUMED reverberation time, and cut by its OWN,
+ *    shallower gain (at most `reverbMaxDb`). It shortens the tail after a
+ *    word; it cannot remove the early reflections inside one. That is the
+ *    honest limit of a classical method, and the ticket said to be honest.
  * 4. **De-essing**: when a frame's energy is dominated by the 4.5–9 kHz band
  *    (an "s", a "t"), that band is compressed toward `DEESS_THRESHOLD`. A
  *    vowel never trips it; only frames that ARE sibilance are touched.
  *
- * Musical noise — the watery chirping crude spectral subtraction is known for
- * — is held down three ways: the power estimate is smoothed over time before
- * the gain is computed, the gain is smoothed across neighbouring bins, and
- * the gain moves over time constants (`GAIN_ATTACK_S` rising,
- * `GAIN_RELEASE_S` falling) rather than snapping frame to frame. The gain never falls below the strength's floor, so the residual
- * noise is quieter, never gated to a dead silence that pumps.
+ * ## What the first listening pass changed (Patrick, 2026-09-25)
+ *
+ * The first cut used POWER SPECTRAL SUBTRACTION, and every strength had "a
+ * sort of digital bubbling in the background" — musical noise: the pauses'
+ * residual was isolated spectral peaks flickering in and out, not quieter
+ * hiss. Smoothing the power and the gain did not cure it. The fix is the
+ * estimator: the decision-directed prior leans 98% on the previous frame's
+ * CLEAN estimate, so a lone frame where the noise peaks cannot open a bin.
+ * `narration-clean.test.ts` measures it as the pauses' spectral kurtosis
+ * (after vs before): 1.2–2.9 with subtraction, 0.04–0.12 now.
+ *
+ * Two more findings from the same pass. 75% and 100% "affect the voice the
+ * most" while 50% removed about the right amount of noise — so the strength
+ * was RESCALED: 100% now is roughly the old 50%. And the reverb estimate
+ * must stay OUT of the Wiener estimator: it grows with the voice itself,
+ * which traps the decision-directed prior low and crushed steady vowels by
+ * 17 dB in a measurement. It has its own gain, capped and smoothed.
+ *
+ * The noise gain never falls below the strength's floor, so the residual is
+ * quieter, never gated to a dead silence that pumps.
  *
  * ## Determinism and blocks
  *
@@ -98,7 +113,9 @@ export const DEESS_THRESHOLD = 0.3;
 /** Time constant of the power estimate's smoothing. */
 const POWER_SMOOTH_S = 0.01;
 /**
- * Time constants of a RISING and a FALLING gain. The attack is about one hop:
+ * Time constants of a RISING and a FALLING gain, for the reverb and de-ess
+ * gains (the noise gain is smoothed by its estimator instead). The attack is
+ * about one hop:
  * fast enough to keep a consonant's onset, slow enough that one frame where
  * the noise happens to peak above its profile does not open the gain — an
  * instant attack with a slow release turns every such peak into 40 ms of
@@ -106,18 +123,22 @@ const POWER_SMOOTH_S = 0.01;
  */
 export const GAIN_ATTACK_S = 0.005;
 export const GAIN_RELEASE_S = 0.04;
+/** Decision-directed smoothing of the a-priori SNR (Ephraim & Malah's 0.98). */
+const DD_WEIGHT = 0.98;
 /** The de-esser's compression: the band's excess share is raised to this. */
 const DEESS_EXPONENT = 0.4;
 
 /** Everything one strength value turns into. */
 export interface CleanupParams {
   highPass: boolean;
-  /** Over-subtraction of the noise profile; 0 disables noise reduction. */
+  /** How much the noise profile is over-estimated; 0 disables noise reduction. */
   noiseOversubtract: number;
   /** Weight of the late-reverb estimate; 0 disables it. */
   reverbWeight: number;
-  /** Deepest cut any bin can take from noise + reverb, in dB (positive). */
+  /** Deepest cut noise reduction can make to any bin, in dB (positive). */
   maxReductionDb: number;
+  /** Deepest cut the reverb stage can make to any bin, in dB (positive). */
+  reverbMaxDb: number;
   /** Deepest cut the de-esser can make, in dB (positive); 0 disables it. */
   deessMaxDb: number;
 }
@@ -131,17 +152,20 @@ export interface CleanupParams {
 export function paramsForStrength(strength: number): CleanupParams {
   const s = Number.isFinite(strength) ? Math.min(1, Math.max(0, strength)) : 0;
   if (s === 0) {
-    return { highPass: false, noiseOversubtract: 0, reverbWeight: 0, maxReductionDb: 0, deessMaxDb: 0 };
+    return { highPass: false, noiseOversubtract: 0, reverbWeight: 0, maxReductionDb: 0, reverbMaxDb: 0, deessMaxDb: 0 };
   }
+  // Rescaled after the first listening pass (2026-09-25): the old 50% was
+  // "about right" for noise and 75/100% audibly damaged the voice, so 100%
+  // here is roughly the old 50%, and every stage is gentler below it.
   return {
     highPass: true,
-    noiseOversubtract: 1.5 + 2 * s,
-    // Over-estimating the tail by 1.5x at full strength is what buys ~6 dB off a
-    // 0.5 s room's tail; it costs ~1.7 dB of a STEADY vowel (the worst case —
-    // real speech changes every syllable, and the estimate is of the past).
-    reverbWeight: 1.5 * s,
-    maxReductionDb: 8 + 16 * s,
-    deessMaxDb: 3 + 7 * s,
+    // Fixed, not scaled: at 2x the pauses sit on the floor as a steady hiss
+    // (measured: least bubbling of 1.5/2/2.5x), and the FLOOR sets how deep.
+    noiseOversubtract: 2,
+    reverbWeight: s,
+    maxReductionDb: 6 + 10 * s,
+    reverbMaxDb: 3 + 3 * s,
+    deessMaxDb: 2 + 4 * s,
   };
 }
 
@@ -205,6 +229,7 @@ function spectralStage(input: Float64Array[], rate: number, p: CleanupParams): F
 
   const noise = p.noiseOversubtract > 0 ? noiseProfile(padded, frames, win, fft) : null;
   const floor = 10 ** (-p.maxReductionDb / 20);
+  const reverbFloor = 10 ** (-p.reverbMaxDb / 20);
   const deessFloor = 10 ** (-p.deessMaxDb / 20);
   const hopS = HOP / rate;
   const powerKeep = Math.exp(-hopS / POWER_SMOOTH_S);
@@ -228,7 +253,9 @@ function spectralStage(input: Float64Array[], rate: number, p: CleanupParams): F
   const smoothed = new Float64Array(BINS);
   const history = Array.from({ length: delayFrames }, () => new Float64Array(BINS));
   const gain = new Float64Array(BINS).fill(1);
-  const raw = new Float64Array(BINS);
+  const noiseGain = new Float64Array(BINS).fill(1);
+  const reverbGain = new Float64Array(BINS).fill(1);
+  const lastClean = new Float64Array(BINS); // the previous frame's estimated clean power, per bin
   let deessGain = 1;
 
   for (let f = 0; f < frames; f++) {
@@ -244,18 +271,34 @@ function spectralStage(input: Float64Array[], rate: number, p: CleanupParams): F
     const past = history[f % delayFrames]!; // the smoothed power delayFrames ago
     for (let k = 0; k < BINS; k++) smoothed[k] = powerKeep * smoothed[k]! + (1 - powerKeep) * power[k]!;
 
-    // Noise + late reverb, one subtraction per bin.
+    // Noise: a decision-directed Wiener gain per bin (Ephraim & Malah, 1984).
+    // The a-priori SNR leans on the previous frame's CLEAN estimate, so a lone
+    // frame where the noise happens to peak cannot open the gain. That is what
+    // removes the "digital bubbling" (musical noise) the first cut had: power
+    // subtraction left isolated spectral peaks in the pauses.
+    for (let k = 0; k < BINS; k++) {
+      const n = noise ? p.noiseOversubtract * noise[k]! : 0;
+      if (!(n > 0)) { noiseGain[k] = 1; continue; }
+      const posterior = power[k]! / n;
+      const prior = DD_WEIGHT * (lastClean[k]! / n) + (1 - DD_WEIGHT) * Math.max(0, posterior - 1);
+      const g = Math.max(floor, prior / (1 + prior));
+      noiseGain[k] = g;
+      lastClean[k] = g * g * power[k]!;
+    }
+    // Late reverb: a SEPARATE, shallower gain. Folding the tail estimate into
+    // the Wiener estimator above crushed steady vowels — the estimate grows
+    // with the voice itself, which traps the decision-directed prior low.
     for (let k = 0; k < BINS; k++) {
       const pw = smoothed[k]!;
-      const unwanted = (noise ? p.noiseOversubtract * noise[k]! : 0) + p.reverbWeight * reverbDecay * past[k]!;
-      const g2 = pw > 0 ? 1 - unwanted / pw : 1;
-      raw[k] = Math.max(floor, Math.sqrt(Math.max(0, g2)));
+      const tail = p.reverbWeight * reverbDecay * past[k]!;
+      const target = tail > 0 && pw > 0 ? Math.max(reverbFloor, Math.sqrt(Math.max(0, 1 - tail / pw))) : 1;
+      const keep = target >= reverbGain[k]! ? attack : release;
+      reverbGain[k] = keep * reverbGain[k]! + (1 - keep) * target;
     }
     past.set(smoothed); // becomes "delayFrames ago" when this slot comes round again
     for (let k = 0; k < BINS; k++) {
-      const g = 0.25 * raw[Math.max(0, k - 1)]! + 0.5 * raw[k]! + 0.25 * raw[Math.min(BINS - 1, k + 1)]!;
-      const keep = g >= gain[k]! ? attack : release;
-      gain[k] = keep * gain[k]! + (1 - keep) * g;
+      const smoothedNoise = 0.25 * noiseGain[Math.max(0, k - 1)]! + 0.5 * noiseGain[k]! + 0.25 * noiseGain[Math.min(BINS - 1, k + 1)]!;
+      gain[k] = smoothedNoise * reverbGain[k]!;
     }
 
     // De-essing: is this frame an "s"?

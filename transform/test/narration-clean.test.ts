@@ -78,9 +78,10 @@ describe("the strength", () => {
 
   test("every stage moves together: more strength never cuts less", () => {
     const a = paramsForStrength(0.25), b = paramsForStrength(0.75);
-    expect(b.noiseOversubtract).toBeGreaterThan(a.noiseOversubtract);
+    expect(b.noiseOversubtract).toBeGreaterThanOrEqual(a.noiseOversubtract);
     expect(b.reverbWeight).toBeGreaterThan(a.reverbWeight);
     expect(b.maxReductionDb).toBeGreaterThan(a.maxReductionDb);
+    expect(b.reverbMaxDb).toBeGreaterThan(a.reverbMaxDb);
     expect(b.deessMaxDb).toBeGreaterThan(a.deessMaxDb);
   });
 });
@@ -97,8 +98,8 @@ describe("the STFT framing", () => {
 
   test("with every gain at 1, the spectral stage gives back its input, sample for sample, edges included", () => {
     const x = add(voiced(s(0.5)), whiteNoise(s(0.5), 0.05, 3));
-    // reverbWeight > 0 forces the spectral path; maxReductionDb 0 pins every gain at 1.
-    const out = cleanNarration(mono(x), 1, { ...OFF, reverbWeight: 1, maxReductionDb: 0 }).channels[0]!;
+    // reverbWeight > 0 forces the spectral path; both floors at 0 dB pin every gain at 1.
+    const out = cleanNarration(mono(x), 1, { ...OFF, reverbWeight: 1, maxReductionDb: 0, reverbMaxDb: 0 }).channels[0]!;
     expect(out).toHaveLength(x.length);
     let worst = 0;
     for (let i = 0; i < x.length; i++) worst = Math.max(worst, Math.abs(out[i]! - x[i]!));
@@ -140,11 +141,12 @@ function phraseLevel(x: ArrayLike<number>, spans: [number, number][]): number {
 }
 
 describe("noise reduction", () => {
-  test("steady hiss in the pauses drops by the strength's floor; the voice keeps its level", () => {
+  test("steady hiss in the pauses drops to the strength's floor; the voice keeps its level", () => {
     const { clean, spans, noisy } = noisyNarration(0.003);
-    const out = cleanNarration(mono(noisy), 0.5, { ...OFF, noiseOversubtract: paramsForStrength(0.5).noiseOversubtract }).channels[0]!;
+    const p = paramsForStrength(0.5);
+    const out = cleanNarration(mono(noisy), 0.5, { ...OFF, noiseOversubtract: p.noiseOversubtract, maxReductionDb: p.maxReductionDb }).channels[0]!;
     const before = gapLevel(noisy, spans), after = gapLevel(out, spans);
-    expect(after - before).toBeLessThan(-12);
+    expect(after - before).toBeLessThan(-(p.maxReductionDb - 1));
     expect(Math.abs(phraseLevel(out, spans) - phraseLevel(clean, spans))).toBeLessThan(1);
   });
 
@@ -162,9 +164,50 @@ describe("noise reduction", () => {
     x.set(noisy, lead);
     const out = cleanNarration(mono(x), 0.5).channels[0]!;
     const shifted = spans.map(([a, b]) => [a + lead, b + lead] as [number, number]);
-    expect(gapLevel(out, shifted) - gapLevel(x, shifted)).toBeLessThan(-12);
+    expect(gapLevel(out, shifted) - gapLevel(x, shifted)).toBeLessThan(-(paramsForStrength(0.5).maxReductionDb - 1));
+  });
+
+  // Patrick's first listening pass (2026-09-25): "a sort of digital bubbling
+  // in the background" at EVERY strength — musical noise, the isolated
+  // spectral peaks power subtraction leaves in the pauses. Its standard
+  // measure is the kurtosis of the pauses' power spectrum, after vs before
+  // (Uemura et al., 2009): peaks standing alone make the distribution
+  // heavy-tailed. The log ratio is ~0 for a residual that is just quieter
+  // noise. The power-subtraction chain measured 1.2 (25%) to 2.9 (100%) here;
+  // the decision-directed gain measures 0.04 to 0.12.
+  test("no digital bubbling: the pauses' residual is quieter noise, not isolated peaks", () => {
+    const { spans, noisy } = noisyNarration(0.003);
+    const before = pauseKurtosis(noisy, spans);
+    for (const st of [0.25, 0.5, 1]) {
+      const out = cleanNarration(mono(noisy), st).channels[0]!;
+      expect(Math.log(pauseKurtosis(out, spans) / before), `strength ${st}`).toBeLessThan(0.3);
+    }
   });
 });
+
+/**
+ * Kurtosis of the power spectrum in the middle of each pause, 300 Hz–8 kHz,
+ * each bin normalised by its own mean so a quieter bin weighs the same.
+ */
+function pauseKurtosis(x: ArrayLike<number>, spans: [number, number][]): number {
+  const fft = makeFft(FFT_SIZE);
+  const binHz = RATE / FFT_SIZE, lo = Math.round(300 / binHz), hi = Math.round(8000 / binHz);
+  const perBin: number[][] = Array.from({ length: hi - lo }, () => []);
+  for (let g = 0; g < spans.length - 1; g++) {
+    for (let at = spans[g]![1] + s(0.25); at + FFT_SIZE < spans[g + 1]![0] - s(0.05); at += FFT_SIZE / 2) {
+      const re = new Float64Array(FFT_SIZE), im = new Float64Array(FFT_SIZE);
+      for (let i = 0; i < FFT_SIZE; i++) re[i] = x[at + i]! * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / FFT_SIZE));
+      fft(re, im, false);
+      for (let k = lo; k < hi; k++) perBin[k - lo]!.push(re[k]! ** 2 + im[k]! ** 2);
+    }
+  }
+  let m2 = 0, m4 = 0, n = 0;
+  for (const b of perBin) {
+    const mean = b.reduce((a, v) => a + v, 0) / b.length || 1;
+    for (const v of b) { const z = v / mean; m2 += z * z; m4 += z ** 4; n++; }
+  }
+  return m4 / n / (m2 / n) ** 2;
+}
 
 describe("late-reverb suppression", () => {
   /** Dry phrases through a room: the direct sound plus an exponentially decaying noise tail. */
@@ -187,14 +230,16 @@ describe("late-reverb suppression", () => {
     return dbs.reduce((a, b) => a + b) / dbs.length;
   };
 
-  // Measured on this signal (2026-09-25): weight 1 cut the tail 3.5 dB and a
-  // steady vowel 1.0 dB; 1.5 → 6.0/1.7; 2 → 9.1/2.4; 3 → 15.9/4.5. The steady
-  // vowel is the worst case for the phrase — its own past is always loud.
-  test("at full strength the tail after a phrase is cut ≥5 dB; the phrase loses <2 dB", () => {
+  // Deliberately GENTLE since the first listening pass (2026-09-25): at the
+  // old 1.5x weight the tail fell 6 dB and Patrick still "couldn't tell",
+  // while the voice took the damage. Now capped at reverbMaxDb (6 dB at 100%)
+  // as its own gain: measured 2.8 dB off the tail, 1.0 dB off a STEADY vowel
+  // (the worst case — its own past is always loud).
+  test("at full strength the tail after a phrase is cut ≥2.5 dB; the phrase loses <1.5 dB", () => {
     const { spans, wet } = roomy();
     const out = cleanNarration(mono(wet), 1, { ...OFF, reverbWeight: paramsForStrength(1).reverbWeight }).channels[0]!;
-    expect(tail(out, spans) - tail(wet, spans)).toBeLessThan(-5);
-    expect(Math.abs(phraseLevel(out, spans) - phraseLevel(wet, spans))).toBeLessThan(2);
+    expect(tail(out, spans) - tail(wet, spans)).toBeLessThan(-2.5);
+    expect(Math.abs(phraseLevel(out, spans) - phraseLevel(wet, spans))).toBeLessThan(1.5);
   });
 });
 

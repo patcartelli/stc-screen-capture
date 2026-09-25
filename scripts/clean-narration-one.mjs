@@ -89,7 +89,7 @@ for (const s of strengths) {
   const p = paramsForStrength(s);
   console.log(
     `  ${name.padEnd(16)} noise floor ${noiseFloorDb(out.channels, sampleRate).toFixed(1)} dBFS  ` +
-    `(max cut ${p.maxReductionDb} dB, de-ess ≤${p.deessMaxDb} dB; ${(ms / 1000).toFixed(1)} s)`);
+    `(noise ≤${p.maxReductionDb} dB, echo ≤${p.reverbMaxDb} dB, de-ess ≤${p.deessMaxDb} dB; ${(ms / 1000).toFixed(1)} s)`);
 }
 console.log(`\nwrote ${outDir}\nopen "${outDir}"`);
 
