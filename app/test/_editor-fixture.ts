@@ -21,12 +21,17 @@ const root = join(__dirname, "..", "..");
  * the take" is the ASSERTED default these tests rely on, not an accident of
  * what a fresh profile happens to produce.
  */
-export async function launchApp(dir: string, env: Record<string, string> = {}):
+export async function launchApp(dir: string, env: Record<string, string> = {},
+    opts: { userData?: string } = {}):
     Promise<{ app: ElectronApplication; win: Page }> {
-  const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-  writeFileSync(join(userData, "settings.json"), JSON.stringify({
-    saveFolder: null,
-  }));
+  // `opts.userData` reuses a profile a previous launch in the same test made
+  // (STC-454: a setting that must survive a restart); seeded only when new.
+  const userData = opts.userData ?? mkdtempSync(join(tmpdir(), "stc-ud-"));
+  if (!opts.userData) {
+    writeFileSync(join(userData, "settings.json"), JSON.stringify({
+      saveFolder: null,
+    }));
+  }
   const app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`], cwd: root,
     env: {

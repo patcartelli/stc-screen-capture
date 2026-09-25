@@ -1,4 +1,4 @@
-import type { Pip, Project, Trim, Zoom, ZoomOverride } from "./types.js";
+import type { NarrationCleanup, Pip, Project, Trim, Zoom, ZoomOverride } from "./types.js";
 import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
 import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
@@ -75,6 +75,13 @@ export const DEFAULT_PIP: Pip = {
  */
 export const DEFAULT_SYSTEM_AUDIO_LEVEL = 1;
 
+/**
+ * Narration cleanup's default (STC-455): OFF, at the strength Patrick chose
+ * by ear on 2026-09-25 (~50 of the round-2 chain). Off is what every take
+ * did before project-10 existed, so a take at this default needs no v10.
+ */
+export const DEFAULT_NARRATION_CLEANUP: Readonly<NarrationCleanup> = Object.freeze({ enabled: false, strength: 0.5 });
+
 export function defaultProject(
   width: number, height: number, trim?: Trim, hasCamera = false,
 ): Project {
@@ -98,6 +105,7 @@ export function defaultProject(
     // Same reasoning again (project-8, STC-444 slice 4).
     bookmarks: [],
     systemAudioLevel: DEFAULT_SYSTEM_AUDIO_LEVEL,
+    narrationCleanup: { ...DEFAULT_NARRATION_CLEANUP },
   };
   // A recorded camera track is part of the take, so a take that has one shows
   // its PiP without needing an edit document to say so.
@@ -180,7 +188,23 @@ export function parseProject(
   project.systemAudioLevel = typeof doc.systemAudioLevel === "number"
     && doc.systemAudioLevel >= 0 && doc.systemAudioLevel <= 1
     ? doc.systemAudioLevel : DEFAULT_SYSTEM_AUDIO_LEVEL;
+  // project-10 (STC-455). Each field on its own terms, like every other
+  // block here: a bad strength must not also turn a deliberate "on" off.
+  project.narrationCleanup = cleanNarrationCleanup(doc.narrationCleanup);
   return project;
+}
+
+function cleanNarrationCleanup(v: unknown): NarrationCleanup {
+  const out = { ...DEFAULT_NARRATION_CLEANUP };
+  if (!v || typeof v !== "object") return out;
+  const { enabled, strength } = v as Record<string, unknown>;
+  if (typeof enabled === "boolean") out.enabled = enabled;
+  if (typeof strength === "number" && strength >= 0 && strength <= 1) out.strength = strength;
+  return out;
+}
+
+function isDefaultNarrationCleanup(n: NarrationCleanup | undefined): boolean {
+  return !n || (n.enabled === DEFAULT_NARRATION_CLEANUP.enabled && n.strength === DEFAULT_NARRATION_CLEANUP.strength);
 }
 
 function cleanBookmarks(v: unknown, durationNs: number): number[] {
@@ -326,9 +350,10 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 {
-  // Highest first: a document needing v9 needs it whatever its bookmarks,
-  // slug, overrides, zoom or textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 {
+  // Highest first: a document needing v10 needs it whatever its level,
+  // bookmarks, slug, overrides, zoom or textPt say.
+  if (!isDefaultNarrationCleanup(project.narrationCleanup)) return 10;
   if (project.systemAudioLevel !== undefined && project.systemAudioLevel !== DEFAULT_SYSTEM_AUDIO_LEVEL) return 9;
   if (project.bookmarks && project.bookmarks.length > 0) return 8;
   if (project.slug !== undefined) return 7;
@@ -368,5 +393,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (version >= 7) out.slug = project.slug;
   if (version >= 8) out.bookmarks = project.bookmarks;
   if (version >= 9) out.systemAudioLevel = project.systemAudioLevel;
+  if (version >= 10) out.narrationCleanup = { ...project.narrationCleanup! };
   return out;
 }

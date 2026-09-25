@@ -7,8 +7,13 @@ import type { Project } from "./types.js";
 import { exportWindow, availableFrames } from "./trim.js";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
-import { decodeAllAudio } from "./decode-audio.js";
+import { decodeAllAudio, pcmTrackOf } from "./decode-audio.js";
+import {
+  MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, exportAudioPlan,
+  type PcmTrack,
+} from "./audio-mix.js";
 import { tagMp4 } from "./media-tag.js";
+import { cleanNarration } from "./narration-clean.js";
 
 /**
  * The export sink. ONE implementation, called by both the CLI gates and the
@@ -65,6 +70,12 @@ export interface ExportResult {
    * no written sample" — two different bugs with the identical symptom.
    */
   audioOutputChunks: number;
+  /**
+   * STC-418. Blocks of the mic + system-audio mix handed to the encoder; 0
+   * for a take with no system audio, which still takes the mic-only path
+   * above (`micEncodedChunks`) exactly as it did before system audio existed.
+   */
+  mixEncodedChunks: number;
   durationMs: number;
   cancelled: boolean;
 }
@@ -133,7 +144,33 @@ export async function exportSession(
   // the decoded `AudioData` closes that gap by construction: whatever the
   // encoder is configured with is what it will actually receive.
   const encode = opts.encode ?? true;
-  const decodedAudio = micAudio && encode ? await decodeAllAudio(micAudio) : null;
+  // STC-418: a take WITH system audio exports one mixed stereo track
+  // (audio-mix.ts: mic + system × level, hard-limited); a take without it
+  // takes the mic-only path below unchanged. Two paths rather than one
+  // because the mic-only path is verified on hardware and the mix is not
+  // yet — a take that never asked for system audio must not pay for it.
+  //
+  // STC-455: narration cleanup also takes the mix path, mic-only takes
+  // included — the cleaned mic is a PcmTrack, and the mixer is the one place
+  // that already turns a PcmTrack into encoder blocks (with `system` null it
+  // is the mic alone, upmixed to stereo 48 kHz). Cleanup off, or on at
+  // strength 0 (an exact identity), leaves the mic-only path untouched, so a
+  // take that never asked for cleanup exports byte-for-byte as before.
+  const cleanup = project.narrationCleanup;
+  const plan = exportAudioPlan({ encode, hasMic: !!micAudio, hasSystem: !!session.systemAudio, cleanup });
+  const cleaning = plan.cleanMic;
+  const mixing = plan.path === "mix";
+  let mixMic: PcmTrack | null = null;
+  let mixSystem: PcmTrack | null = null;
+  if (mixing) {
+    mixSystem = session.systemAudio ? pcmTrackOf(await decodeAllAudio(session.systemAudio), "system.m4a") : null;
+    mixMic = micAudio ? pcmTrackOf(await decodeAllAudio(micAudio), "mic.m4a") : null;
+    // The WHOLE track, before the window is cut, so the noise profile is
+    // learned from every pause in the take rather than only the clip's —
+    // and a trimmed export cleans exactly as the full one would.
+    if (mixMic && cleaning) mixMic = cleanNarration(mixMic, cleanup!.strength);
+  }
+  const decodedAudio = micAudio && encode && !mixing ? await decodeAllAudio(micAudio) : null;
 
   let muxer: Muxer<ArrayBufferTarget> | undefined;
   let encoder: VideoEncoder | undefined;
@@ -143,9 +180,11 @@ export async function exportSession(
   let audioOutputChunks = 0;
   // A track with no samples has nothing to encode and nothing to trust for
   // its own real parameters — treated the same as no mic track at all.
-  const audioParams = decodedAudio && decodedAudio.length > 0
-    ? { sampleRate: decodedAudio[0]!.sampleRate, numberOfChannels: decodedAudio[0]!.numberOfChannels }
-    : null;
+  const audioParams = mixing
+    ? (mixMic || mixSystem ? { sampleRate: MIX_SAMPLE_RATE, numberOfChannels: MIX_CHANNELS } : null)
+    : decodedAudio && decodedAudio.length > 0
+      ? { sampleRate: decodedAudio[0]!.sampleRate, numberOfChannels: decodedAudio[0]!.numberOfChannels }
+      : null;
   // Configuring from chunk 0 assumes the decoded track is UNIFORM — observed
   // on real hardware NOT always to be: mic.m4a can decode with a DIFFERENT
   // channel count or sample rate partway through than its own first chunk
@@ -229,7 +268,9 @@ export async function exportSession(
       // about here either (every export frame is its own VideoFrame).
       audioEncoder.configure({
         codec: "mp4a.40.2", sampleRate: audioParams.sampleRate,
-        numberOfChannels: audioParams.numberOfChannels, bitrate: 128_000,
+        // The mix is always stereo; 192k matches what SystemAudioCapture
+        // records at. The mic-only path keeps its own 128k.
+        numberOfChannels: audioParams.numberOfChannels, bitrate: mixing ? 192_000 : 128_000,
       });
     }
   }
@@ -337,6 +378,41 @@ export async function exportSession(
       }
     }
 
+    let mixEncodedChunks = 0;
+    if (audioEncoder && mixing && audioParams && !cancelled) {
+      try {
+        if (audioEncoderError) throw audioEncoderError;
+        // The same window the video covers, [originNs, endNs), on the mix's
+        // own 48 kHz grid — every output sample exists, silence included, so
+        // the audio track is exactly as long as the clip.
+        const endNs = exportFrameTimeNs(from + total);
+        const frames = mixFrameCount(originNs, endNs);
+        const level = project.systemAudioLevel ?? 1;
+        for (let at = 0; at < frames && !audioEncoderError; at += MIX_BLOCK_FRAMES) {
+          const n = Math.min(MIX_BLOCK_FRAMES, frames - at);
+          const planes = mixBlock({ mic: mixMic, system: mixSystem, systemLevel: level, originNs, from: at, frames: n });
+          const data = new Float32Array(n * MIX_CHANNELS);
+          for (let ch = 0; ch < MIX_CHANNELS; ch++) data.set(planes[ch]!, ch * n);
+          const ad = new AudioData({
+            format: "f32-planar", sampleRate: MIX_SAMPLE_RATE, numberOfFrames: n,
+            numberOfChannels: MIX_CHANNELS, timestamp: Math.round((at * 1e6) / MIX_SAMPLE_RATE), data,
+          });
+          audioEncoder.encode(ad);
+          ad.close();
+          mixEncodedChunks++;
+        }
+        if (audioEncoderError) throw audioEncoderError;
+        await withTimeout(audioEncoder.flush(), 60_000, "audio encoder flush at end of export (mix)");
+      } catch (e) {
+        const cause = e instanceof Error ? e.message : String(e);
+        throw new Error(
+          `${cause} — mixing mic${mixMic ? ` (${mixMic.channels.length}ch/${mixMic.sampleRate}Hz)` : " (none)"} ` +
+          `with system audio${mixSystem ? ` (${mixSystem.channels.length}ch/${mixSystem.sampleRate}Hz)` : " (none)"}` +
+          `${cleaning ? `, narration cleanup at ${cleanup!.strength}` : ""}; ` +
+          `${mixEncodedChunks} block(s) encoded before this`);
+      }
+    }
+
     let encodedBytes = 0;
     let encoded: Uint8Array | undefined;
     if (encoderError) throw encoderError;
@@ -383,6 +459,7 @@ export async function exportSession(
       cameraDecodedFrames: cameraSource?.decodedCount ?? 0,
       micEncodedChunks: cancelled ? 0 : micEncodedChunks,
       audioOutputChunks: cancelled ? 0 : audioOutputChunks,
+      mixEncodedChunks: cancelled ? 0 : mixEncodedChunks,
       durationMs: Math.round(performance.now() - t0),
       cancelled,
     };
@@ -394,6 +471,13 @@ export async function exportSession(
     if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();
   }
 }
+
+/**
+ * Frames per mixed `AudioData` handed to the encoder — one AAC frame's worth,
+ * so the encoder is fed on its own natural boundary.
+ */
+const MIX_BLOCK_FRAMES = 1024;
+
 
 /**
  * A copy of `data` with a different `timestamp`, same samples. There is no

@@ -21,7 +21,8 @@ const dir = () => mkdtempSync(join(tmpdir(), "stc-settings-"));
 describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
-      .toEqual({ camera: false, displayId: null, micDeviceUid: null, systemAudio: false,
+      .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
+                 systemAudio: false, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -62,7 +63,8 @@ describe("the camera preference", () => {
     const d = dir();
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
-      .toEqual({ camera: true, displayId: null, micDeviceUid: null, systemAudio: false,
+      .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
+                 systemAudio: false, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -118,13 +120,52 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { displayId: 2 });
     writeSettings(d, { camera: true });
     expect(readSettings(d))
-      .toEqual({ camera: true, displayId: 2, micDeviceUid: null, systemAudio: false,
+      .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
+                 systemAudio: false, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
                  scope: DEFAULT_SCOPE_SETTINGS, saveFolder: null, showDiagnostics: false,
                  libraryView: "grid" });
+  });
+});
+
+describe("the camera device preference (STC-414)", () => {
+  test("defaults to automatic — null, which start() sends no cameraDeviceUid at all", () => {
+    expect(readSettings(dir()).cameraDeviceUid).toBeNull();
+    expect(DEFAULT_SETTINGS.cameraDeviceUid).toBeNull();
+  });
+
+  test("round-trips a uid and clears back to automatic", () => {
+    const d = dir();
+    writeSettings(d, { cameraDeviceUid: "FaceTime HD Camera" });
+    expect(readSettings(d).cameraDeviceUid).toBe("FaceTime HD Camera");
+    writeSettings(d, { cameraDeviceUid: null });
+    expect(readSettings(d).cameraDeviceUid).toBeNull();
+  });
+
+  // Same validation as micDeviceUid: a non-empty string or nothing.
+  test("a non-string or empty value reads as automatic, never as a fallback device", () => {
+    const d = dir();
+    for (const bad of ["", 1, true, {}, []]) {
+      writeFileSync(join(d, "settings.json"), JSON.stringify({ camera: true, cameraDeviceUid: bad }));
+      expect(readSettings(d).cameraDeviceUid, `cameraDeviceUid ${JSON.stringify(bad)}`).toBeNull();
+    }
+  });
+
+  test("a partial update leaves the camera device choice alone", () => {
+    const d = dir();
+    writeSettings(d, { cameraDeviceUid: "abc-123" });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).cameraDeviceUid).toBe("abc-123");
+  });
+
+  test("changing the camera device does not flip the camera on/off preference", () => {
+    const d = dir();
+    writeSettings(d, { camera: false });
+    writeSettings(d, { cameraDeviceUid: "abc-123" });
+    expect(readSettings(d).camera).toBe(false);
   });
 });
 
@@ -162,6 +203,29 @@ describe("the system-audio preference (STC-418)", () => {
     writeSettings(d, { systemAudio: true });
     writeSettings(d, { camera: true });
     expect(readSettings(d).systemAudio).toBe(true);
+  });
+});
+
+describe("the preview mute (STC-454)", () => {
+  test("defaults to sound ON; persists when muted and back", () => {
+    expect(readSettings(dir()).previewMuted).toBe(false);
+    expect(DEFAULT_SETTINGS.previewMuted).toBe(false);
+    const d = dir();
+    expect(writeSettings(d, { previewMuted: true }).previewMuted).toBe(true);
+    expect(readSettings(d).previewMuted).toBe(true);
+    expect(writeSettings(d, { previewMuted: false }).previewMuted).toBe(false);
+  });
+
+  test("anything but a literal true is unmuted; an unrelated write keeps it", () => {
+    for (const bad of ["true", 1, null, {}]) {
+      const d = dir();
+      writeFileSync(join(d, "settings.json"), JSON.stringify({ previewMuted: bad }));
+      expect(readSettings(d).previewMuted, `stored ${JSON.stringify(bad)}`).toBe(false);
+    }
+    const d = dir();
+    writeSettings(d, { previewMuted: true });
+    writeSettings(d, { systemAudio: true });
+    expect(readSettings(d).previewMuted).toBe(true);
   });
 });
 

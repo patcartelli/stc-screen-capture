@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; worker-src 'self'">
   <title>Capture</title>
   <link rel="stylesheet" href="tokens.css">
   <style>
@@ -113,6 +113,29 @@
     #clock { font-size: var(--type-value); color: var(--text-dim); }
     #clock-cur { color: var(--text); }
     #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
+    /* STC-418 PR 3: the system-audio level, compact and at the far end of
+       the timecode row. NOT a lane of its own: the 2026-09-24 hardware pass
+       found three stacked lanes cluttered, which is why Clip activity moved
+       onto the ruler. Hidden unless the take recorded system audio. */
+    .sysaudio { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+                font-size: var(--type-label); color: var(--text-dim); }
+    .sysaudio[hidden] { display: none; }
+    .sysaudio input { width: 96px; margin: 0; accent-color: var(--accent); }
+    #sysaudiovalue { min-width: 4ch; text-align: right; color: var(--text); }
+    /* STC-455: narration cleanup, the same compact shape beside it — one
+       switch and one strength. The strength stays visible, dimmed, while the
+       switch is off, so turning it back on returns to the same setting.
+       Whichever of the two comes first takes the row's free space. */
+    .voiceclean { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+                  font-size: var(--type-label); color: var(--text-dim); }
+    .voiceclean[hidden] { display: none; }
+    .voiceclean:not([hidden]) ~ .sysaudio { margin-left: 14px; }
+    .voiceclean label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+    .voiceclean input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+    .voiceclean input[type="range"] { width: 96px; margin: 0; accent-color: var(--accent); }
+    .voiceclean input[type="range"]:disabled { opacity: 0.4; }
+    #voicecleanvalue { min-width: 4ch; text-align: right; color: var(--text); }
+    #voicecleanstrength:disabled + #voicecleanvalue { color: var(--text-dim); }
     /* Below this the duration goes and the current time stays. */
     @container (max-width: 680px) { .clock-dur { display: none; } }
     /* The right group's status line is the first thing to go: `justify-self:
@@ -135,6 +158,14 @@
     .icon:active:not([disabled]) { background: var(--border); }
     .icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .icon.primary { color: var(--text); }
+    /* STC-454: the preview's sound. Speaker with waves, or with a cross when
+       muted; dimmed while the audio decodes, struck through if it cannot. */
+    #previewaudio[hidden] { display: none; }
+    #previewaudio .when-muted { display: none; }
+    #previewaudio[aria-pressed="true"] .when-muted { display: inline; }
+    #previewaudio[aria-pressed="true"] .when-sound { display: none; }
+    #previewaudio[data-state="loading"] svg { opacity: 0.45; }
+    #previewaudio[data-state="unavailable"] svg { opacity: 0.35; }
     #playpause .when-playing { display: none; }
     #playpause[data-playing] .when-playing { display: inline; }
     #playpause[data-playing] .when-paused { display: none; }
@@ -426,6 +457,16 @@
       </div>
       <div class="right">
         <span id="framestatus" role="status" hidden></span>
+        <!-- STC-454: the preview plays the export's own mix at 1x. Muting is
+             an app setting, never part of the take or its export. -->
+        <button type="button" class="icon" id="previewaudio" aria-label="Mute preview sound"
+                aria-pressed="false" data-state="none" data-cleaning="false" title="Mute preview sound" hidden>
+          <svg viewBox="0 0 16 16">
+            <path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/>
+            <path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4M12.4 4a5.5 5.5 0 0 1 0 8"/>
+            <path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/>
+          </svg>
+        </button>
         <button type="button" class="icon" id="framegrab" aria-label="Copy frame"
                 title="Copy frame (⌘⇧C) · ⌥-click to save (⌘⇧S) · right-click for both">
           <svg viewBox="0 0 16 16"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3"/><circle cx="8" cy="8" r="1.6"/></svg>
@@ -469,6 +510,28 @@
     <div class="timecoderow">
       <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
       <span id="shuttle" class="mono"></span>
+      <!-- STC-418 PR 3: how loud the recorded system audio is in the export
+           and, since STC-454, in the preview's sound. Saved to the project
+           (project-9's systemAudioLevel). -->
+      <!-- STC-455: narration cleanup in the EXPORT — steady background noise
+           (fan, hiss, room tone) and harsh "s" sounds, on the mic only. Off
+           by default; the strength is kept while it is off. Saved to the
+           project (project-10's narrationCleanup). Heard in the export and,
+           since STC-454, in the preview once the cleaned voice is ready. -->
+      <span id="voiceclean" class="voiceclean" hidden
+            title="Cleans up your voice in the export: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds. Heard in the preview at 1x, and in the export.">
+        <label><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
+        <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
+               aria-label="Voice cleanup strength" disabled>
+        <span id="voicecleanvalue" class="mono">50%</span>
+      </span>
+      <label id="sysaudio" class="sysaudio" hidden
+             title="System audio level, in the preview at 1x and in the export">
+        <span>System audio</span>
+        <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
+               aria-label="System audio level">
+        <span id="sysaudiovalue" class="mono">100%</span>
+      </label>
     </div>
     <!-- STC-444 slice 2: adaptive ticks + the played line, drawn by
          editor.ts's renderRulerTicks/updateRulerPlayhead. #ruler-ticks holds

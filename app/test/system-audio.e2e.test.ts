@@ -73,4 +73,21 @@ describe("the system-audio preference", () => {
     expect(cmd.cmd).toBe("start");
     expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
   }, 180_000);
+
+  // Hardware report, 2026-09-25: "it still recorded with system audio even
+  // though I ran the command" to turn it off. This pins the code path: on,
+  // then off, then Record sends NO systemAudio field.
+  test("turned on and then off again, a take sends no systemAudio field", async () => {
+    const o = fresh();
+    const win = await launch(o);
+    await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: true }));
+    const saved = await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: false }));
+    expect(saved.systemAudio).toBe(false);
+    expect((await win.evaluate(() => (window as any).recorder.getSettings())).systemAudio).toBe(false);
+    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await win.click("#record");
+    const cmd = await waitForStart(o.startLog);
+    expect(cmd.cmd).toBe("start");
+    expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBeUndefined();
+  }, 180_000);
 });

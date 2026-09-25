@@ -61,6 +61,11 @@ export function openEditor(opts: EditorOptions): void {
     webPreferences: {
       preload: join(opts.dist, "editor-preload.cjs"),
       contextIsolation: true, nodeIntegration: false,
+      // STC-454: the preview's sound. The take's audio finishes decoding a
+      // moment after it opens — often mid-playback, outside any click — and
+      // under the default policy an AudioContext made then starts SUSPENDED,
+      // so the first play after opening would be silent.
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
   win.on("closed", () => { win = undefined; });

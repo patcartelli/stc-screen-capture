@@ -834,13 +834,18 @@ ipcMain.handle("recorder:start", async () => {
   // helper is told to point at. `let`, not `const`, on displayId/micDeviceUid:
   // STC-433's device-fallback check below may clear either one before
   // `startParams` is built.
-  let { camera, displayId, micDeviceUid, systemAudio, scope, countdownMs } =
+  let { camera, displayId, micDeviceUid, cameraDeviceUid, systemAudio, scope, countdownMs } =
     readSettings(app.getPath("userData"));
   const startParams: Record<string, unknown> = { camera };
   // Only when a device is actually picked (STC-233) — an absent field is
   // "no mic" to the helper's own parseStartRequest, and there is no
   // automatic mic the way there is an automatic display.
   if (micDeviceUid != null) startParams.micDeviceUid = micDeviceUid;
+  // STC-414: same latitude as displayId — an absent field means "the
+  // helper's own pickCamera ranking", not "no camera" (that's the `camera`
+  // boolean's job). Sent even when `camera` is false; the helper only
+  // consults it once it has decided to open a camera at all.
+  if (cameraDeviceUid != null) startParams.cameraDeviceUid = cameraDeviceUid;
   // STC-418: only when on — absent is "off" to parseStartRequest.
   if (systemAudio) startParams.systemAudio = true;
   if (scope.kind === "region" && scope.region) {
