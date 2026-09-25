@@ -239,8 +239,8 @@ Patrick's decisions (2026-09-25):
 
 # Part 4 — the waveform on the ruler
 
-**Confirmed on hardware by Patrick (2026-09-25) and merged**, together with
-part 3's §6. Run from `master`.
+**Merged, but §6 (part 3) and §7 (part 4) have NOT been fully run on
+hardware yet.** Run both from `master`.
 
 ## What changed
 
