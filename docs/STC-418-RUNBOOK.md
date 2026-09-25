@@ -57,6 +57,11 @@ Plays `Glass.aiff` six times during a 10 s take through the test host with
 validity, 48 kHz/2 ch, session-relative first/last PTS, and that the file
 demuxes. Record: pass/fail, and `anchors.system` verbatim.
 
+**Run 2026-09-25 (Patrick): only 4 of the 6 Glass sounds were heard. That is
+the test's timing, not the capture:** a 2 s wait, then six plays of a ~1.6 s
+sound 0.5 s apart, is about 14.6 s of sound against a 10 s take, and the
+player is killed when the take ends. Pass/fail not yet reported.
+
 The PTS bounds are the one thing it checks that nothing else can: the code
 **assumes** SCK's audio timestamps are on the same mach host clock as
 `t0Ns`, as `MicCapture` assumes of AVCapture. If they are not, this fails on
@@ -132,6 +137,13 @@ firstFramePtsNs: 249916625, lastFramePtsNs: 13869916625}` against
 
 1. Record, pause for 5 s while audio plays, resume, stop. The paused span
    must be silent (absent) in `system.m4a`, not recorded.
+
+   **Cannot be run from the app (2026-09-25): there is no pause control.**
+   The pill has only Stop. Pause exists only in the helper (STC-240 PR A);
+   the UI is STC-240's unbuilt second half. This step was wrong to assume one.
+   `SystemAudioCapture` passes every sample through the same `PauseGate` the
+   mic uses, and that is still untested for either track until a pause
+   control exists.
 2. Stop a take and check Activity Monitor / Console: no second capture
    indicator lingering, no repeated `SCStream` errors after stop.
 3. Record twice in a row with system audio on: no `-3805` on the second
@@ -142,6 +154,8 @@ firstFramePtsNs: 249916625, lastFramePtsNs: 13869916625}` against
 Record a 60 s 4K take with system audio on and one with it off. Compare
 `framesDropped` in the stop stats. A 2×2/1 fps stream should cost nothing;
 if drops rise, that is a finding.
+
+**Result (2026-09-25): fine.** No cost noticed from the second stream.
 
 ---
 
