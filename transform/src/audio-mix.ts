@@ -196,16 +196,22 @@ export function sliderPctFromLevel(level: number): number {
 }
 
 /**
- * Which audio path an export takes (STC-418, STC-455) — the ONE place it is
- * decided, so the rule "a take that never asked for cleanup or system audio
- * exports exactly as before" is a tested function rather than a condition
- * read by inspection in export.ts.
+ * Which audio path an export takes (STC-418, STC-455, STC-454) — the ONE
+ * place it is decided, so the rule "a take that never asked for cleanup or
+ * system audio exports exactly as before" is a tested function rather than a
+ * condition read by inspection in export.ts.
  *
- * - `mix`: through `mixBlock` — the take has system audio, or its mic is
- *   being cleaned (`cleanMic`) or has a level other than as-recorded,
+ * - `mix`: through `mixBlock` — the take has (audible) system audio, or its
+ *   mic is being cleaned (`cleanMic`) or has a level other than as-recorded,
  *   mic-only takes included.
  * - `mic`: the original mic-only passthrough, at the mic's own format.
  * - `none`: nothing to encode, or not encoding at all.
+ *
+ * `mic`/`system` say which tracks go INTO the export. A MUTED track (STC-454
+ * part 3) is left out exactly as if the take had never recorded it — not
+ * mixed in at gain 0 — so a take whose only other track is untouched still
+ * takes the untouched path, and a take with every track muted has no audio
+ * track at all (Patrick, 2026-09-25: "no audio track", not a silent one).
  *
  * Cleanup on at strength 0 is an exact identity (narration-clean.ts), so it
  * is treated as off: it must not move a take onto the mix path.
@@ -217,12 +223,17 @@ export function exportAudioPlan(opts: {
   cleanup?: { enabled: boolean; strength: number };
   /** STC-454 part 2: any level but 1 needs the mixer, which is where gain is applied. */
   micLevel?: number;
-}): { path: "mix" | "mic" | "none"; cleanMic: boolean } {
-  if (!opts.encode) return { path: "none", cleanMic: false };
-  const cleanMic = opts.hasMic && !!opts.cleanup?.enabled && opts.cleanup.strength > 0;
-  const levelMic = opts.hasMic && opts.micLevel !== undefined && opts.micLevel !== 1;
-  if (opts.hasSystem || cleanMic || levelMic) return { path: "mix", cleanMic };
-  return { path: opts.hasMic ? "mic" : "none", cleanMic: false };
+  /** STC-454 part 3: a muted track is left out of the export. */
+  micMuted?: boolean;
+  systemMuted?: boolean;
+}): { path: "mix" | "mic" | "none"; cleanMic: boolean; mic: boolean; system: boolean } {
+  const mic = opts.encode && opts.hasMic && !opts.micMuted;
+  const system = opts.encode && opts.hasSystem && !opts.systemMuted;
+  if (!mic && !system) return { path: "none", cleanMic: false, mic: false, system: false };
+  const cleanMic = mic && !!opts.cleanup?.enabled && opts.cleanup.strength > 0;
+  const levelMic = mic && opts.micLevel !== undefined && opts.micLevel !== 1;
+  if (system || cleanMic || levelMic) return { path: "mix", cleanMic, mic, system };
+  return { path: "mic", cleanMic: false, mic, system };
 }
 
 /**

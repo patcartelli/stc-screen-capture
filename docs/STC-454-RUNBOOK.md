@@ -168,3 +168,72 @@ Patrick's decisions (2026-09-25):
     (mutation-checked).
 - The existing voice-clean and system-audio e2e suites open the popover
   first now; the system-audio suite also expects dB labels.
+
+**Result (2026-09-25, Patrick): "looks good".** Part 2 merged as #229. The
+Audio pane's look and feel is its own follow-up, STC-460.
+
+---
+
+# Part 3 — mute per track
+
+**Run from `claude/optimistic-ride-ed374b` until it merges** (same commands as
+at the top).
+
+## What changed
+
+Patrick's decisions (2026-09-25):
+
+| Question | Answer |
+|---|---|
+| How is a mute stored? | **As its own field** (project-12 `micMuted` / `systemAudioMuted`), not as level 0. Un-muting brings back exactly the level you had. |
+| Per take, or a default for new takes? | **Per take only.** Every new take starts un-muted. |
+| Every track muted? | **No audio track** in the export, the same as a take recorded without sound. Not a silent track. |
+| The control? | **A speaker before each track's name** in the Audio popover. It shows a cross when muted; the slider and its dB value dim but stay where they were. |
+
+- A muted track is **left out of the export**, not mixed in at zero. A take
+  whose other track is untouched therefore exports exactly as it would have
+  without the muted track: a mic-only take with system audio muted takes the
+  same path as a take that never recorded system audio.
+- The **preview** hears a mute at once. The muted track plays at zero, so the
+  picture's audio clock does not change under a mute.
+- The header's speaker (part 1) is still the **app-wide** preview mute. It
+  never touches the take or the export. The per-track speakers do both.
+
+## §6 — the mutes, by ear
+
+1. Open a take with a mic and system audio. Open **Audio**: each track has a
+   speaker before its name. Play at 1x and mute System audio. It should go
+   silent within about half a second, with the voice carrying on and the
+   picture not stuttering. Un-mute it: it returns at the level the slider
+   shows.
+2. Move the Mic slider to +6 dB, mute the Mic, and close and reopen the take.
+   The speaker should still be crossed, with the slider still at +6 dB.
+   Un-mute: +6 dB is back.
+3. Export with **System audio muted**, and play the file. It should hold only
+   the voice.
+4. Export with **both muted**, and open the file in QuickTime and Finder's
+   Get Info. There should be no audio track at all: no volume control in the
+   player, and only "H.264" under Codecs.
+5. Is the speaker easy to hit, and does the crossed state read as "muted" at a
+   glance, in light and in dark mode?
+
+## In the app (Linux-verified, not heard)
+
+- `transform/test/audio-mix.test.ts`:
+  - a muted system track sends the mic down the untouched path, unless the
+    mic itself asks for the mixer;
+  - a muted mic is neither cleaned nor leveled;
+  - everything muted means no audio at all;
+  - muting a track the take doesn't have changes nothing.
+- `transform/test/trim.test.ts`:
+  - project-12 parses, writes and validates, and only a real `true` mutes;
+  - a mute keeps both levels and everything else v11 carries.
+- `app/test/mic-level.e2e.test.ts`:
+  - muting saves at v12 with the slider unmoved, and un-muting drops the key;
+  - system audio has its own mute;
+  - a reopened take shows its mute;
+  - Space on the focused speaker toggles it without starting playback
+    (mutation-checked);
+  - with every track muted the exported MP4 has no `mp4a` or `soun`. With
+    the mute not passed to the export plan (mutation-checked), the same export
+    fails trying to encode the placeholder mic.

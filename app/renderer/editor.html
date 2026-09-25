@@ -135,7 +135,7 @@
                   background: var(--surface, var(--bg)); color: var(--text);
                   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
                   font-size: var(--type-label); }
-    #audiopanel .audiorows { display: grid; grid-template-columns: auto 120px 6ch; gap: 8px 10px;
+    #audiopanel .audiorows { display: grid; grid-template-columns: 22px auto 120px 6ch; gap: 8px 10px;
                              align-items: center; }
     #audiopanel .audiorow { display: contents; color: var(--text-dim); }
     #audiopanel .audiorow[hidden] { display: none; }
@@ -145,6 +145,20 @@
     #audiopanel input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
     #audiopanel .value { text-align: right; color: var(--text); }
     #voicecleanstrength:disabled + #voicecleanvalue { color: var(--text-dim); }
+    /* STC-454 part 3: a speaker per track. Muted keeps the slider where it
+       was, dimmed, so un-muting visibly returns to the same level. */
+    .trackmute { width: 22px; height: 22px; padding: 0; border: none; border-radius: 5px;
+                 display: inline-grid; place-items: center; background: transparent;
+                 color: var(--text-dim); cursor: pointer; }
+    .trackmute svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+                     stroke-width: 1.15; stroke-linecap: round; stroke-linejoin: round; }
+    .trackmute:hover { color: var(--text); background: var(--surface-hover); }
+    .trackmute:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .trackmute .when-muted { display: none; }
+    .trackmute[aria-pressed="true"] .when-muted { display: inline; }
+    .trackmute[aria-pressed="true"] .when-sound { display: none; }
+    .audiorow[data-muted] input[type="range"] { opacity: 0.4; }
+    .audiorow[data-muted] .value { color: var(--text-dim); text-decoration: line-through; }
     /* Below this the duration goes and the current time stays. */
     @container (max-width: 680px) { .clock-dur { display: none; } }
     /* The right group's status line is the first thing to go: `justify-self:
@@ -523,16 +537,20 @@
            All of it is saved to the project and heard in the preview at 1x
            and in the export; nothing here is ever baked in at capture. -->
       <button type="button" id="audiobtn" class="audiobtn" popovertarget="audiopanel" hidden
-              title="Mic level, system audio level and voice cleanup">
+              title="Mic and system audio: level, mute, and voice cleanup">
         <svg viewBox="0 0 16 16"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path d="M10.6 5.8a3 3 0 0 1 0 4.4"/></svg>
         <span>Audio</span>
       </button>
       <div id="audiopanel" popover="auto" aria-label="Audio">
         <div class="audiorows">
           <!-- STC-454 part 2: the mic's level. 75% is as recorded (0 dB);
-               above it boosts, up to +12 dB. project-11's micLevel. -->
+               above it boosts, up to +12 dB. project-11's micLevel. Part 3:
+               the speaker mutes the track and keeps the level (project-12's
+               micMuted); a muted track is left out of the export. -->
           <div id="micaudio" class="audiorow" hidden
                title="Your voice's level: the middle-right mark is as recorded; above it boosts up to +12 dB">
+            <button type="button" id="micmute" class="trackmute" aria-pressed="false"
+                    aria-label="Mute mic" title="Mute mic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4"/><path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/></svg></button>
             <label class="name" for="miclevel">Mic</label>
             <input id="miclevel" type="range" min="0" max="100" step="1" value="75" aria-label="Mic level">
             <span id="miclevelvalue" class="value mono">0 dB</span>
@@ -541,6 +559,8 @@
                systemAudioLevel), a decibel fader, attenuate only. -->
           <div id="sysaudio" class="audiorow" hidden
                title="System audio level, in the preview at 1x and in the export">
+            <button type="button" id="sysmute" class="trackmute" aria-pressed="false"
+                    aria-label="Mute system audio" title="Mute system audio"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4"/><path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/></svg></button>
             <label class="name" for="sysaudiolevel">System audio</label>
             <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
                    aria-label="System audio level">
@@ -551,6 +571,7 @@
                kept while it is off. project-10's narrationCleanup. -->
           <div id="voiceclean" class="audiorow" hidden
                title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
+            <span aria-hidden="true"></span>
             <label class="name"><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
             <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
                    aria-label="Voice cleanup strength" disabled>

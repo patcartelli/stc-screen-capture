@@ -157,22 +157,27 @@ export async function exportSession(
   // strength 0 (an exact identity), leaves the mic-only path untouched, so a
   // take that never asked for cleanup exports byte-for-byte as before.
   const cleanup = project.narrationCleanup;
+  //
+  // STC-454 part 3: a MUTED track is not decoded at all — `plan.mic` and
+  // `plan.system` say which tracks go in, and with neither the export has no
+  // audio track, exactly like a take recorded without sound.
   const plan = exportAudioPlan({
     encode, hasMic: !!micAudio, hasSystem: !!session.systemAudio, cleanup, micLevel: project.micLevel,
+    micMuted: project.micMuted, systemMuted: project.systemAudioMuted,
   });
   const cleaning = plan.cleanMic;
   const mixing = plan.path === "mix";
   let mixMic: PcmTrack | null = null;
   let mixSystem: PcmTrack | null = null;
   if (mixing) {
-    mixSystem = session.systemAudio ? pcmTrackOf(await decodeAllAudio(session.systemAudio), "system.m4a") : null;
-    mixMic = micAudio ? pcmTrackOf(await decodeAllAudio(micAudio), "mic.m4a") : null;
+    mixSystem = plan.system && session.systemAudio ? pcmTrackOf(await decodeAllAudio(session.systemAudio), "system.m4a") : null;
+    mixMic = plan.mic && micAudio ? pcmTrackOf(await decodeAllAudio(micAudio), "mic.m4a") : null;
     // The WHOLE track, before the window is cut, so the noise profile is
     // learned from every pause in the take rather than only the clip's —
     // and a trimmed export cleans exactly as the full one would.
     if (mixMic && cleaning) mixMic = cleanNarration(mixMic, cleanup!.strength);
   }
-  const decodedAudio = micAudio && encode && !mixing ? await decodeAllAudio(micAudio) : null;
+  const decodedAudio = micAudio && plan.path === "mic" ? await decodeAllAudio(micAudio) : null;
 
   let muxer: Muxer<ArrayBufferTarget> | undefined;
   let encoder: VideoEncoder | undefined;

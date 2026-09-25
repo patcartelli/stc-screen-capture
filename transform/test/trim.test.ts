@@ -517,6 +517,78 @@ describe("project-11: mic level (STC-454 part 2)", () => {
   });
 });
 
+describe("project-12: per-track mute (STC-454 part 3)", () => {
+  const Ajv = (AjvImport as any).default ?? AjvImport;
+  const schema = (n: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${n}.schema.json`), "utf8")));
+  const validate11 = schema(11);
+  const validate12 = schema(12);
+  const raw = (mutes: Record<string, unknown>) => ({
+    version: 12, transform: { version: 1 }, output: { fps: 60, width: 640, height: 360 },
+    cursor: { style: "default", scale: 1 }, ...mutes,
+  });
+
+  test("nothing muted after a parse at every older version, and by default", () => {
+    for (const doc of [null, { version: 1 }, { version: 11 }, raw({})]) {
+      const p = parseProject(doc, 640, 360, duration);
+      expect(p.micMuted).toBe(false);
+      expect(p.systemAudioMuted).toBe(false);
+    }
+    expect(defaultProject(640, 360).micMuted).toBe(false);
+    expect(defaultProject(640, 360).systemAudioMuted).toBe(false);
+  });
+
+  test("only a real true mutes; anything else is no opinion", () => {
+    expect(parseProject(raw({ micMuted: true }), 640, 360, duration).micMuted).toBe(true);
+    expect(parseProject(raw({ systemAudioMuted: true }), 640, 360, duration).systemAudioMuted).toBe(true);
+    for (const bad of ["true", 1, null, {}]) {
+      const p = parseProject(raw({ micMuted: bad, systemAudioMuted: bad }), 640, 360, duration);
+      expect(p.micMuted, JSON.stringify(bad)).toBe(false);
+      expect(p.systemAudioMuted, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  test("nothing muted writes no key; either mute writes v12 and round-trips", () => {
+    const flat = projectForWrite({ ...defaultProject(640, 360), micLevel: 2 }, duration);
+    expect(flat.version).toBe(11);
+    expect(flat.micMuted).toBeUndefined();
+    expect(flat.systemAudioMuted).toBeUndefined();
+    for (const [mic, sys] of [[true, false], [false, true], [true, true]] as const) {
+      const out = projectForWrite({ ...defaultProject(640, 360), micMuted: mic, systemAudioMuted: sys }, duration);
+      expect(out.version).toBe(12);
+      expect(validate12(out), JSON.stringify(validate12.errors, null, 2)).toBe(true);
+      const back = parseProject(out, 640, 360, duration);
+      expect(back.micMuted).toBe(mic);
+      expect(back.systemAudioMuted).toBe(sys);
+    }
+  });
+
+  test("A MUTE KEEPS THE LEVEL — v12 is a superset of v11, levels included", () => {
+    const p: Project = {
+      ...defaultProject(640, 360), slug: "network", bookmarks: [NS], systemAudioLevel: 0.25,
+      narrationCleanup: { enabled: true, strength: 0.3 }, micLevel: 2, micMuted: true, systemAudioMuted: true,
+    };
+    const out = projectForWrite(p, duration);
+    expect(out.version).toBe(12);
+    expect(validate12(out), JSON.stringify(validate12.errors, null, 2)).toBe(true);
+    const back = parseProject(out, 640, 360, duration);
+    expect(back.slug).toBe("network");
+    expect(back.bookmarks).toEqual([NS]);
+    expect(back.systemAudioLevel).toBe(0.25);
+    expect(back.narrationCleanup).toEqual({ enabled: true, strength: 0.3 });
+    expect(back.micLevel).toBe(2);
+    expect(back.micMuted).toBe(true);
+    expect(back.systemAudioMuted).toBe(true);
+  });
+
+  test("project-11 refuses the fields; project-12 refuses a non-boolean", () => {
+    expect(validate11({ ...raw({ micMuted: true }), version: 11 })).toBe(false);
+    expect(validate12(raw({ micMuted: "true" }))).toBe(false);
+    expect(validate12(raw({ systemAudioMuted: 1 }))).toBe(false);
+    expect(validate12(raw({ micMuted: false, systemAudioMuted: true }))).toBe(true);
+  });
+});
+
 describe("estimateExportMs", () => {
   test("is the measured 11 ms/frame", () => {
     expect(estimateExportMs(60)).toBe(60 * EXPORT_MS_PER_FRAME);
