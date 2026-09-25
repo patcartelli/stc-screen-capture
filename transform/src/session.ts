@@ -24,6 +24,8 @@ export interface SessionInput {
   cameraMp4?: ArrayBuffer;
   /** STC-233. mic.m4a, when anchors.mic.present is true. */
   micM4a?: ArrayBuffer;
+  /** STC-418. system.m4a, when anchors.system.present is true. */
+  systemM4a?: ArrayBuffer;
   /** already-parsed (parseChanges), same as anchors/events — this loader reads data, not paths. Absent on every take today (STC-322's browser pass has never run on a real recording). */
   changes?: Changes;
 }
@@ -33,6 +35,8 @@ export interface LoadedSession extends Session {
   cameraVideo?: DemuxedVideo;
   /** STC-233. Present only when anchors.mic.present is true and micM4a was supplied. */
   micAudio?: DemuxedAudio;
+  /** STC-418. Present only when anchors.system.present is true and systemM4a was supplied. */
+  systemAudio?: DemuxedAudio;
 }
 
 /**
@@ -126,11 +130,15 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // it lands, a paused take degrades to "recorded through the pause" rather
   // than failing to load, which is the documented, deliberate PR A behaviour
   // (see docs/STC-240-DESIGN.md and docs/STC-240-PLAN-A.md).
+  //
+  // v6's `system` block (STC-418) is a second audio track, loaded below on
+  // exactly the mic's terms. Nothing downstream consumes `systemAudio` yet —
+  // export's weighted sum with the mic is a later PR of the same ticket.
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
-    anchors?.version !== 4 && anchors?.version !== 5
+    anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4 or 5)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5 or 6)`);
   }
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.
@@ -172,6 +180,21 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     );
   }
 
+  // STC-418: the same check again, for the system-audio track.
+  const claimsSystem = anchors.system?.present === true;
+  if (claimsSystem && !input.systemM4a) {
+    throw new SessionLoadError(
+      "anchors.system.present is true but no system.m4a was supplied for this take. " +
+      "Refusing to silently drop the audio.",
+    );
+  }
+  if (input.systemM4a && !claimsSystem) {
+    throw new SessionLoadError(
+      "a system.m4a was supplied but anchors.system.present is not true — the anchors and " +
+      "the file disagree about whether this take has a system-audio track.",
+    );
+  }
+
   const video = await demuxTrack(input.displayMp4, "display.mp4");
   if (video.framesNs.length === 0) {
     throw new SessionLoadError("display.mp4 contains no frames");
@@ -197,6 +220,17 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     micAudio = rebaseMicAudio(rawMicAudio, anchors.mic!.firstFramePtsNs);
   }
 
+  // STC-418. Written by the same real-time AAC AVAssetWriter path as the mic,
+  // so it carries no edit list either, and is rebased on the same terms.
+  let systemAudio: DemuxedAudio | undefined;
+  if (claimsSystem && input.systemM4a) {
+    const rawSystemAudio = await demuxAudioTrack(input.systemM4a, "system.m4a");
+    if (rawSystemAudio.framesNs.length === 0) {
+      throw new SessionLoadError("system.m4a contains no samples");
+    }
+    systemAudio = rebaseMicAudio(rawSystemAudio, anchors.system!.firstFramePtsNs);
+  }
+
   return {
     anchors,
     events: [...events.events].sort((a, b) => a.t - b.t),
@@ -206,5 +240,6 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     video,
     cameraVideo,
     micAudio,
+    systemAudio,
   };
 }

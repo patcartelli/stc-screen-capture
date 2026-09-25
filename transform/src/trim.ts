@@ -68,6 +68,13 @@ export const DEFAULT_PIP: Pip = {
   enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32,
 };
 
+/**
+ * Full level (STC-418). system.m4a is recorded at full level and this is the
+ * gain preview and export apply to it; 1 is "nobody has said otherwise", so a
+ * take at 1 never needs project-9 to say so.
+ */
+export const DEFAULT_SYSTEM_AUDIO_LEVEL = 1;
+
 export function defaultProject(
   width: number, height: number, trim?: Trim, hasCamera = false,
 ): Project {
@@ -90,6 +97,7 @@ export function defaultProject(
     overrides: [],
     // Same reasoning again (project-8, STC-444 slice 4).
     bookmarks: [],
+    systemAudioLevel: DEFAULT_SYSTEM_AUDIO_LEVEL,
   };
   // A recorded camera track is part of the take, so a take that has one shows
   // its PiP without needing an edit document to say so.
@@ -166,6 +174,12 @@ export function parseProject(
   // re-take, or hand-edited past the end, is not a crash) and de-duplicated
   // + sorted so `scrubber.ts`'s ArrowUp/ArrowDown never has to.
   project.bookmarks = cleanBookmarks(doc.bookmarks, durationNs);
+  // project-9 (STC-418). Out of range is "no opinion", not a clamp: a stored
+  // 1.4 is a document this build did not write, and guessing it meant 1 is
+  // the same guess the default already makes.
+  project.systemAudioLevel = typeof doc.systemAudioLevel === "number"
+    && doc.systemAudioLevel >= 0 && doc.systemAudioLevel <= 1
+    ? doc.systemAudioLevel : DEFAULT_SYSTEM_AUDIO_LEVEL;
   return project;
 }
 
@@ -312,9 +326,10 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 {
-  // Highest first: a document needing v8 needs it whatever its slug,
-  // overrides, zoom or textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 {
+  // Highest first: a document needing v9 needs it whatever its bookmarks,
+  // slug, overrides, zoom or textPt say.
+  if (project.systemAudioLevel !== undefined && project.systemAudioLevel !== DEFAULT_SYSTEM_AUDIO_LEVEL) return 9;
   if (project.bookmarks && project.bookmarks.length > 0) return 8;
   if (project.slug !== undefined) return 7;
   if (project.overrides && project.overrides.length > 0) return 6;
@@ -352,5 +367,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (version >= 6) out.overrides = project.overrides;
   if (version >= 7) out.slug = project.slug;
   if (version >= 8) out.bookmarks = project.bookmarks;
+  if (version >= 9) out.systemAudioLevel = project.systemAudioLevel;
   return out;
 }

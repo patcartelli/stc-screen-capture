@@ -32,7 +32,7 @@ const server = await createServer({
     configureServer(s) {
       s.middlewares.use("/session", (req, res, next) => {
         const name = (req.url || "").split("?")[0].replace(/^\//, "");
-        if (!["anchors.json", "events.json", "project.json", "display.mp4", "camera.mp4", "mic.m4a"].includes(name)) return next();
+        if (!["anchors.json", "events.json", "project.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a"].includes(name)) return next();
         res.setHeader("content-type", name.endsWith(".json") ? "application/json" : "video/mp4");
         res.end(readFileSync(join(sessionDir, name)));
       });

@@ -43,8 +43,12 @@ applyDecoderPreference();
   const micM4a = anchors.files?.mic
     ? await fetch(`${dir}/${anchors.files.mic}`).then((r) => r.arrayBuffer())
     : undefined;
+  // STC-418: same again for system audio.
+  const systemM4a = anchors.files?.system
+    ? await fetch(`${dir}/${anchors.files.system}`).then((r) => r.arrayBuffer())
+    : undefined;
   mark("export: loadSession (demux + VideoDecoder.configure)");
-  const session = await loadSession({ anchors, events, displayMp4, cameraMp4, micM4a });
+  const session = await loadSession({ anchors, events, displayMp4, cameraMp4, micM4a, systemM4a });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project: Project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
