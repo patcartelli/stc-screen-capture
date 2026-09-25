@@ -12,11 +12,11 @@
 
 import { PRODUCT_NAME } from "./product.js";
 import {
-  ACTION_LABELS, SHOT_ACTIONS,
-  type ShotAction, type Shortcuts,
+  ACTION_LABELS, BINDABLE_ACTIONS,
+  type BindableAction, type Shortcuts,
 } from "./hotkeys.js";
 
-export type TrayItemId = `capture:${ShotAction}` | "library" | "quit" | "separator";
+export type TrayItemId = `action:${BindableAction}` | "library" | "quit" | "separator";
 
 export interface TrayItem {
   id: TrayItemId;
@@ -36,28 +36,42 @@ export interface TrayItem {
 
 export interface TrayContext {
   shortcuts: Shortcuts;
-  /** A capture is already in flight (the overlay is up). Pressing another one
+  /** A shot is already in flight (the overlay is up). Pressing another one
    * would be refused as `overlay-open`, so it is shown as unavailable instead
    * of offered and then declined. */
   busy?: boolean;
+  /** A take is running. Record stays live so it can stop it (STC-388). */
+  recording?: boolean;
 }
+
+/** What the Record item reads mid-take. Exported so the test and the menu
+ * cannot hold two different spellings of it. */
+export const STOP_RECORDING_LABEL = "Stop Recording";
 
 export const TRAY_TOOLTIP = PRODUCT_NAME;
 
 /**
- * The three captures, then the way back to a window, then quit.
+ * Every bindable action, then the way back to a window, then quit.
+ *
+ * `BINDABLE_ACTIONS`, not `SHOT_ACTIONS` (STC-388): Record belongs on this menu
+ * beside the shots, and it is the only item whose label and enablement depend
+ * on whether a take is running — because it is the only one that toggles.
  *
  * Quit is not optional decoration: with the Dock icon hidden while no window
  * is open, this menu is the only way to end the app, and an app a user cannot
  * quit is worse than one with no menu-bar item at all.
  */
 export function trayTemplate(ctx: TrayContext): TrayItem[] {
-  const items: TrayItem[] = SHOT_ACTIONS.map((action) => {
+  const items: TrayItem[] = BINDABLE_ACTIONS.map((action) => {
     const accelerator = ctx.shortcuts[action];
+    const stopping = action === "record" && ctx.recording === true;
     return {
-      id: `capture:${action}` as TrayItemId,
-      label: ACTION_LABELS[action],
-      enabled: !ctx.busy,
+      id: `action:${action}` as TrayItemId,
+      label: stopping ? STOP_RECORDING_LABEL : ACTION_LABELS[action],
+      // Mid-take Record is the STOP control, so `busy` must not grey it out —
+      // that would leave the menu bar as the one entry point that can start a
+      // recording and not end it.
+      enabled: stopping ? true : !ctx.busy,
       // Only when there is one: an item showing "—" where a shortcut would be
       // reads as a broken binding rather than as one nobody has set.
       ...(accelerator ? { accelerator } : {}),

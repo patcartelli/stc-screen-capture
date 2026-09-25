@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks,
   LEVEL_FLOOR_DB, levelFromSliderPct, sliderPctFromLevel, exportAudioPlan,
+  MIC_BOOST_DB, MIC_LEVEL_MAX, MIC_UNITY_PCT, micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
   type PcmChunk, type PcmTrack,
 } from "../src/audio-mix.js";
 
@@ -226,5 +227,67 @@ describe("exportAudioPlan: which path an export's audio takes", () => {
 
   test("not encoding: no audio path at all", () => {
     expect(exportAudioPlan({ encode: false, hasMic: true, hasSystem: true, cleanup: on })).toEqual({ path: "none", cleanMic: false });
+  });
+});
+
+describe("the mic level (STC-454 part 2)", () => {
+  const db = (g: number) => 20 * Math.log10(g);
+
+  test("mixBlock applies it to the mic only, and absent is as recorded", () => {
+    const mic = track(0, f32(0.1));
+    const sys = track(0, f32(0.2), f32(0.2));
+    const base = { mic, system: sys, systemLevel: 1, originNs: 0, from: 0, frames: 1 };
+    expect(mixBlock(base)[0]![0]).toBeCloseTo(0.3, 6);
+    expect(mixBlock({ ...base, micLevel: 2 })[0]![0]).toBeCloseTo(0.4, 6);
+    expect(mixBlock({ ...base, micLevel: 0 })[0]![0]).toBeCloseTo(0.2, 6);
+  });
+
+  test("it may BOOST, up to +12 dB and no further; nonsense is as recorded", () => {
+    const mic = track(0, f32(0.1));
+    const at = (micLevel: number) => mixBlock({ mic, system: null, systemLevel: 1, micLevel, originNs: 0, from: 0, frames: 1 })[0]![0]!;
+    expect(at(MIC_LEVEL_MAX)).toBeCloseTo(0.1 * MIC_LEVEL_MAX, 5);
+    expect(at(50)).toBeCloseTo(0.1 * MIC_LEVEL_MAX, 5);
+    expect(at(-1)).toBe(0);
+    expect(at(NaN)).toBeCloseTo(0.1, 6);
+  });
+
+  test("a boosted peak is caught by the hard limit, not wrapped", () => {
+    const mic = track(0, f32(0.5, -0.5));
+    const out = mixBlock({ mic, system: null, systemLevel: 1, micLevel: MIC_LEVEL_MAX, originNs: 0, from: 0, frames: 2 });
+    expect(out[0]![0]).toBe(1);
+    expect(out[0]![1]).toBe(-1);
+  });
+
+  test("the taper: 0% mutes, 75% is as recorded, 100% is +12 dB, and it is in dB either side", () => {
+    expect(micLevelFromSliderPct(0)).toBe(0);
+    expect(micLevelFromSliderPct(MIC_UNITY_PCT)).toBe(1);
+    expect(db(micLevelFromSliderPct(100))).toBeCloseTo(MIC_BOOST_DB, 6);
+    expect(db(micLevelFromSliderPct(87.5))).toBeCloseTo(MIC_BOOST_DB / 2, 6);
+    expect(db(micLevelFromSliderPct(37.5))).toBeCloseTo(LEVEL_FLOOR_DB / 2, 6);
+  });
+
+  test("monotonic, and every slider position reopens where it was saved", () => {
+    for (let p = 1; p <= 100; p++) {
+      expect(micLevelFromSliderPct(p)).toBeGreaterThan(micLevelFromSliderPct(p - 1));
+      expect(sliderPctFromMicLevel(micLevelFromSliderPct(p)), `pct ${p}`).toBe(p);
+    }
+    expect(sliderPctFromMicLevel(0)).toBe(0);
+    expect(sliderPctFromMicLevel(1e-6)).toBe(1);
+    expect(sliderPctFromMicLevel(99)).toBe(100);
+  });
+
+  test("formatLevelDb speaks one unit for both sliders", () => {
+    expect(formatLevelDb(0)).toBe("Muted");
+    expect(formatLevelDb(1)).toBe("0 dB");
+    expect(formatLevelDb(MIC_LEVEL_MAX)).toBe("+12 dB");
+    expect(formatLevelDb(levelFromSliderPct(40))).toBe("\u221224 dB");
+    expect(formatLevelDb(NaN)).toBe("Muted");
+  });
+
+  test("the export plan: a mic level other than 1 takes the mix path, mic-only takes included", () => {
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 1 })).toEqual({ path: "mic", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 2 })).toEqual({ path: "mix", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 0 })).toEqual({ path: "mix", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: false, micLevel: 2 })).toEqual({ path: "none", cleanMic: false });
   });
 });

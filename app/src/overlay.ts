@@ -3,6 +3,11 @@ import type {
 } from "./selection.js";
 import { pixelSize, rectContains } from "./selection.js";
 import { HANDLES, handleAt, handlePoint } from "./overlay-hittest.js";
+import {
+  controlAt, controlEnabled, micItemAt, sizeLabel,
+  type BarLayout, type ControlId, type MicMenuLayout, type OptionsState,
+} from "./record-options.js";
+import { micLabel } from "./mic-devices.js";
 
 /**
  * The overlay's view (STC-290). It draws state and reports input; it decides
@@ -32,15 +37,33 @@ interface OverlayPayload {
   state: SelectionState;
   /** What would be captured right now, so the readout can show the truth. */
   preview?: SelectionOutcome;
+  /** STC-388 — absent on a shot overlay, which never leaves "select". */
+  phase?: "select" | "options";
+  options?: OptionsState;
+  bar?: BarLayout;
+  micMenu?: MicMenuLayout;
+  /**
+   * STC-388 — the bar's anchor rect, in GLOBAL points: the marquee in region
+   * mode, the picked window's own bounds in window mode (`anchorRectFor`,
+   * overlay-session.ts). The size readout reads THIS, never `state.rect`
+   * directly — that is undefined for a window pick, which was the bug.
+   */
+  anchor?: Rect;
 }
 
 const $ = (id: string) => document.getElementById(id)!;
 const marquee = $("marquee"), highlight = $("highlight");
 const sizeChip = $("size"), titleChip = $("title"), legend = $("legend");
+const bar = $("bar"), micmenu = $("micmenu");
+const ctl = (id: ControlId) => $(`ctl-${id}`);
 
 /** Where this window's display sits in the global space. Set on first state. */
 let origin: Point = { x: 0, y: 0 };
 let current: OverlayPayload | undefined;
+/** The active window-to-display expansion, if any. A new draw invalidates an
+ * older animation so a late animation frame cannot put the marquee back where
+ * it was. */
+let expandAnimation = 0;
 const handles = new Map<Handle, HTMLElement>();
 
 for (const h of HANDLES) {
@@ -68,6 +91,35 @@ function place(el: HTMLElement, r: Rect): void {
 }
 
 /**
+ * Make the one discontinuous selection change legible: Expand changes a
+ * picked window into its containing display, and an instant replacement made
+ * it look as though the control had done nothing. Ordinary marquee updates
+ * remain direct; only this explicit window-to-display action animates.
+ */
+function expandMarquee(from: Rect, to: Rect): void {
+  const id = ++expandAnimation;
+  marquee.classList.remove("expand-transition");
+  place(marquee, from);
+  // Commit the start rectangle before enabling the transition. Without this
+  // layout read Chromium is allowed to coalesce both placements into one
+  // paint, which is precisely the invisible state change this is for.
+  void marquee.offsetWidth;
+  marquee.classList.add("expand-transition");
+  requestAnimationFrame(() => {
+    if (id === expandAnimation) place(marquee, to);
+  });
+  window.setTimeout(() => {
+    if (id === expandAnimation) marquee.classList.remove("expand-transition");
+  }, 220);
+}
+
+function placeMarquee(rect: Rect): void {
+  expandAnimation += 1;
+  marquee.classList.remove("expand-transition");
+  place(marquee, rect);
+}
+
+/**
  * Keep a chip on screen. A readout that runs off the edge of the display is
  * the one case where the number the user is trying to read is the number they
  * cannot see, so it flips to the inside near an edge rather than being clipped.
@@ -88,18 +140,70 @@ function hide(...els: HTMLElement[]): void {
   for (const el of els) el.style.display = "none";
 }
 
-function renderLegend(mode: string): void {
-  legend.innerHTML = mode === "window"
-    ? `<kbd>Click</kbd> capture window <span class="sep">·</span>` +
-      `<kbd>Space</kbd> region <span class="sep">·</span><kbd>Esc</kbd> cancel`
-    : `<kbd>Drag</kbd> region <span class="sep">·</span>` +
-      `<kbd>Space</kbd> window <span class="sep">·</span>` +
-      `<kbd>↵</kbd> capture <span class="sep">·</span><kbd>Esc</kbd> cancel`;
+function renderLegend(mode: string, phase: OverlayPayload["phase"]): void {
+  if (phase === "options") {
+    legend.innerHTML = `Adjust selection <span class="sep">·</span>` +
+      `Click <b>Record</b> <span class="sep">·</span><kbd>Esc</kbd> cancel`;
+  } else {
+    legend.innerHTML = mode === "window"
+      ? `<kbd>Click</kbd> select window <span class="sep">·</span>` +
+        `<kbd>Space</kbd> region <span class="sep">·</span><kbd>Esc</kbd> cancel`
+      : `<kbd>Drag</kbd> region <span class="sep">·</span>` +
+        `<kbd>Space</kbd> window <span class="sep">·</span><kbd>Esc</kbd> cancel`;
+  }
   legend.style.bottom = "48px";
   legend.style.display = "block";
 }
 
+/**
+ * Draw the options bar (STC-388). Every rect comes from the payload already
+ * decided by `record-options.ts`; this converts global points to this window's
+ * local space and sets text, and does no geometry of its own.
+ */
+function renderBar(p: OverlayPayload): void {
+  if (p.phase !== "options" || !p.bar || !p.options || !p.display) {
+    bar.hidden = true; micmenu.hidden = true; return;
+  }
+  const l = toLocal(p.bar.rect);
+  bar.hidden = false;
+  bar.style.left = `${l.x}px`; bar.style.top = `${l.y}px`;
+  bar.style.width = `${l.width}px`; bar.style.height = `${l.height}px`;
+  for (const c of p.bar.controls) {
+    const el = ctl(c.id), r = toLocal(c.rect);
+    el.style.width = `${r.width}px`; el.style.height = `${r.height}px`;
+    el.dataset.enabled = controlEnabled(c.id, p.options) ? "1" : "0";
+  }
+  // The anchor, not `p.state.rect` — the latter is undefined for a window
+  // pick (selection.ts never sets one), which used to leave this reading "—"
+  // for every window take. `p.anchor` is the SAME rect `barLayout` above was
+  // built from (overlay-session.ts's `push`), so the readout cannot disagree
+  // with the bar it is drawn inside of.
+  const sel = p.anchor;
+  ctl("size").textContent = sel ? sizeLabel(sel, p.display) : "—";
+  ctl("expand").dataset.on = p.options.fullDisplay ? "1" : "0";
+  ctl("camera").dataset.on = p.options.camera ? "1" : "0";
+  const mic = p.options.mics.find((m) => m.uid === p.options!.micDeviceUid);
+  // micLabel, not a second spelling — see mic-devices.ts.
+  ctl("mic").textContent = `🔊 ${mic ? micLabel(mic) : "Off"}`;
+  ctl("mic").setAttribute("aria-label", `Input: ${mic ? micLabel(mic) : "Off"}`);
+
+  if (!p.micMenu) { micmenu.hidden = true; return; }
+  const m = toLocal(p.micMenu.rect);
+  micmenu.hidden = false;
+  micmenu.style.left = `${m.x}px`; micmenu.style.top = `${m.y}px`;
+  micmenu.style.width = `${m.width}px`; micmenu.style.height = `${m.height}px`;
+  micmenu.replaceChildren(...p.micMenu.items.map((it) => {
+    const row = document.createElement("div");
+    row.className = "item";
+    row.style.height = `${it.rect.height}px`;
+    row.textContent = it.label;
+    row.dataset.on = it.uid === p.options!.micDeviceUid ? "1" : "0";
+    return row;
+  }));
+}
+
 function render(p: OverlayPayload): void {
+  const previous = current;
   current = p;
   // The last state this window was told to draw, for a failing test to report.
   // A selection that cannot be confirmed makes Return a no-op and the overlay
@@ -116,7 +220,8 @@ function render(p: OverlayPayload): void {
   const { state } = p;
   document.body.classList.toggle("window-mode", state.mode === "window");
   document.body.classList.toggle("has-selection", state.rect !== undefined);
-  renderLegend(state.mode);
+  renderLegend(state.mode, p.phase);
+  renderBar(p);
 
   if (state.mode === "window") {
     hide(marquee, sizeChip, ...handles.values());
@@ -147,7 +252,15 @@ function render(p: OverlayPayload): void {
   if (!state.rect) { hide(marquee, sizeChip, ...handles.values()); return; }
 
   const local = toLocal(state.rect);
-  place(marquee, local);
+  // Only the display that owns both bars performs this animation. Other
+  // overlay windows receive the shared state too, but have no visible source
+  // window to expand from.
+  const animateWindowExpand = p.phase === "options" && p.options?.fullDisplay
+    && p.bar !== undefined && previous?.phase === "options"
+    && previous.state.mode === "window" && previous.anchor !== undefined
+    && previous.bar !== undefined;
+  if (animateWindowExpand) expandMarquee(toLocal(previous.anchor!), local);
+  else placeMarquee(local);
   for (const h of HANDLES) {
     const el = handles.get(h)!;
     // Handles only while the gesture is over: they are for adjusting a
@@ -205,6 +318,21 @@ if (!SYNTHETIC_INPUT) installRealInput();
 
 function installRealInput(): void {
 window.addEventListener("pointerdown", (e) => {
+  // The bar sits over the scrim, so a press on it must not also start a new
+  // marquee underneath. First refusal, then the selection as before.
+  if (current?.phase === "options" && current.bar) {
+    const g = toGlobal(e);
+    if (current.micMenu) {
+      const item = micItemAt(g, current.micMenu);
+      if (item) { send({ t: "micPick", uid: item.uid }); return; }
+    }
+    const hit = controlAt(g, current.bar);
+    if (hit) {
+      if (controlEnabled(hit, current.options!)) send({ t: "control", id: hit });
+      return;
+    }
+    if (current.micMenu) { send({ t: "micPick", uid: current.options!.micDeviceUid }); return; }
+  }
   const state = current?.state;
   const at = toGlobal(e);
   let handle: Handle | undefined;

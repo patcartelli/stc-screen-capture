@@ -7,6 +7,7 @@ import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
 import { waitForStart } from "./_start-log.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
+import { startRecordFlow } from "./_record-flow.js";
 import { toastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
@@ -40,6 +41,10 @@ async function launch(opts: {
       ...process.env,
       STC_RECORDINGS_DIR: opts.recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_HELPER_BIN: FAKE_HELPER,
+      // Record now opens the real overlay (STC-388) — same reason
+      // `still-overlay.e2e.test.ts` sets this: without it the overlay's real
+      // DOM listeners install and race this file's own synthetic input.
+      STC_OVERLAY_SYNTHETIC_INPUT: "1",
       ...(opts.startLog ? { STC_FAKE_START_LOG: opts.startLog } : {}),
       ...(opts.camera ? { STC_FAKE_CAMERA: opts.camera } : {}),
     },
@@ -96,7 +101,7 @@ describe("the camera toggle", () => {
     await turnCameraOn(win);
     await expect.poll(() => win.textContent("#camera-state")).toBe("automatic");
 
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
@@ -112,9 +117,46 @@ describe("the camera toggle", () => {
 
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.camera).toBe(false);
+  }, 180_000);
+
+  // STC-414 through STC-388's Record flow. The options bar has a camera
+  // on/off but no camera DEVICE control, so the named camera has to come from
+  // stored settings in `recordFlowBody`'s one start-param builder (main.ts).
+  // STC-414 added it to the old `recorder:start` body the Record flow replaced,
+  // and nothing else here sends a uid, so without this test that line could
+  // disappear with the suite still green. Set through the shipped
+  // `recorder:setSettings` channel, the same as `system-audio.e2e.test.ts`,
+  // because the stand-in's device list has no cameras for the popover to offer.
+  test("a named camera reaches the helper as cameraDeviceUid (STC-414)", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+    const { dir: recordings } = makeTakeFolder();
+    const startLog = join(mkdtempSync(join(tmpdir(), "stc-startlog-")), "start.jsonl");
+
+    const win = await launch({ userData, recordings, startLog });
+    await win.evaluate(() => (window as any).recorder.setSettings(
+      { camera: true, cameraDeviceUid: "fixture-cam-1" }));
+    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await startRecordFlow(app!, win);
+    const cmd = await waitForStart(startLog);
+    expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
+    expect(cmd.cameraDeviceUid, `start payload was ${JSON.stringify(cmd)}`).toBe("fixture-cam-1");
+  }, 180_000);
+
+  test("Automatic sends no cameraDeviceUid at all (STC-414)", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+    const { dir: recordings } = makeTakeFolder();
+    const startLog = join(mkdtempSync(join(tmpdir(), "stc-startlog-")), "start.jsonl");
+
+    const win = await launch({ userData, recordings, startLog });
+    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await turnCameraOn(win);
+    await startRecordFlow(app!, win);
+    const cmd = await waitForStart(startLog);
+    expect(cmd.camera).toBe(true);
+    expect(cmd.cameraDeviceUid, `start payload was ${JSON.stringify(cmd)}`).toBeUndefined();
   }, 180_000);
 
   // Task 1 through the app, and it needs a POSITIVE discriminator.
@@ -216,7 +258,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     const win = await launch({ ...dirs(), camera: "FaceTime HD Camera" });
     await win.waitForSelector("#camera-picker");
     await turnCameraOn(win);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
       .toContain("FaceTime HD Camera");
   }, 60_000);
@@ -227,7 +269,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     const win = await launch({ ...dirs(), camera: "fail" });
     await win.waitForSelector("#camera-picker");
     await turnCameraOn(win);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
       .toContain("failed");
     await expect.poll(() => toastText(app!), { timeout: 20_000 })
@@ -258,7 +300,7 @@ describe("the camera says what it is doing (STC-287)", () => {
     await turnCameraOn(win);
     await observeTextSequence(win, "camera-state");
 
-    await win.click("#record");
+    await startRecordFlow(app!, win);
 
     await expect.poll(
       async () => (await textSequence(win, "camera-state")).some((s) => s.includes("no frames")),

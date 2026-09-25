@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withCountdown } from "./_countdown-fixture.js";
+import { startRecordFlow } from "./_record-flow.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { toastPage } from "./_toast.js";
 
@@ -23,13 +24,12 @@ import { toastPage } from "./_toast.js";
  * and a skipped one has to fill them long before its own clock would have.
  * So the cancel tests use a countdown far longer than the test, and a start
  * arriving at all would fail them on its own — they do not rely on asserting
- * before a timer that was going to fire anyway (the trap
- * `scope-indicator.e2e.test.ts` records one ticket over).
+ * before a timer that was going to fire anyway.
  *
  * ## What this CANNOT check here
  *
- * The same limit `pill.e2e.test.ts` and `scope-indicator.e2e.test.ts` already
- * document: Xvfb has no window manager, so nothing here asserts where the
+ * The same limit `pill.e2e.test.ts` already documents: Xvfb has no window
+ * manager, so nothing here asserts where the
  * panel actually sits on screen, whether the sweep looks smooth, or whether
  * three seconds is the right number. `docs/STC-391-RUNBOOK.md` owns all of
  * that.
@@ -113,6 +113,35 @@ function hasCountdownWindow(): Promise<boolean> {
     BrowserWindow.getAllWindows().some((w) => w.webContents.getURL().includes("countdown.html")));
 }
 
+/**
+ * Leave the app IDLE before `afterEach` quits it (STC-388 follow-up).
+ *
+ * The two tests below end with a Record flow parked in a countdown. Quitting
+ * with that panel alive means `runQuitTeardown`'s `cancelCountdown()` has to
+ * tear it down. Under `STC_COUNTDOWN_FAULT` that teardown throws before
+ * `destroy()`, so `app.quit()` is left to close a live panel. On the macOS
+ * runner that quit printed `[quit] teardown … helper=8ms` and then did not
+ * exit within 72 s (run 36163869597, re-run job 108173025132).
+ *
+ * This destroys every countdown panel, then waits until no overlay is left
+ * and the flow has settled (`#record` back to "Record" and enabled), the
+ * idle state every other e2e file quits from. What each test ASSERTS is
+ * unchanged; this only runs after.
+ */
+async function settleToIdle(win: Page): Promise<void> {
+  await app!.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.webContents.getURL().includes("countdown.html")) w.destroy();
+    }
+  });
+  await expect.poll(hasCountdownWindow, { timeout: 10_000 }).toBe(false);
+  await expect.poll(() => app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some((w) => w.webContents.getURL().includes("overlay.html"))),
+  { timeout: 10_000 }).toBe(false);
+  await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+  await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
+}
+
 async function overlayPage(ms = 15_000): Promise<Page> {
   const started = Date.now();
   for (;;) {
@@ -122,8 +151,8 @@ async function overlayPage(ms = 15_000): Promise<Page> {
   }
 }
 
-/** Drags out an area in the overlay and confirms it — the self-timer's own
- * scope step, which the ticket makes a SEPARATE step before the countdown. */
+/** Drags out an area in the overlay — release is the self-timer's scope step,
+ * which remains SEPARATE from the countdown. */
 async function pickAnArea(): Promise<void> {
   const overlay = await overlayPage();
   const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
@@ -133,15 +162,13 @@ async function pickAnArea(): Promise<void> {
   await send({ t: "pointerdown", at: from });
   await send({ t: "pointermove", at: to });
   await send({ t: "pointerup", at: to });
-  await expect.poll(() => overlay.textContent("#size"), { timeout: 15_000 }).toBeTruthy();
-  await send({ t: "key", key: "Enter" });
 }
 
 describe("Record always counts down", () => {
   test("the helper is not told to start until the countdown ends", async () => {
     const { win, startLog } = await launch();
     await withCountdown(win, SHORT_MS);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
 
     // The panel is up and the take has NOT begun: this is the whole of "the
     // countdown is what makes Record feel weightier than Capture".
@@ -160,7 +187,7 @@ describe("Record always counts down", () => {
     // Far longer than this test — so a start appearing could only mean the
     // cancel did not take, never that the clock ran out.
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
 
     const page = await countdownPage();
     await page.keyboard.press("Escape");
@@ -181,7 +208,7 @@ describe("Record always counts down", () => {
   test("Skip starts it now", async () => {
     const { win, startLog } = await launch();
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
 
     const page = await countdownPage();
     await page.click("#skip");
@@ -192,7 +219,7 @@ describe("Record always counts down", () => {
   test("Return is Skip's keyboard equivalent", async () => {
     const { win, startLog } = await launch();
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
 
     const page = await countdownPage();
     await page.keyboard.press("Enter");
@@ -202,7 +229,7 @@ describe("Record always counts down", () => {
   test("a countdown of zero is off, and Record behaves as it always did", async () => {
     const { win, startLog } = await launch();
     await withCountdown(win, 0);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await expect.poll(() => lines(startLog).length, { timeout: 15_000 }).toBe(1);
     expect(await hasCountdownWindow()).toBe(false);
   }, 120_000);
@@ -212,7 +239,7 @@ describe("the panel itself", () => {
   test("counts down, and honours prefers-reduced-motion without ceasing to count", async () => {
     const { win } = await launch();
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const page = await countdownPage();
 
     // Moving by default: the sweep is drawn and the body says so.
@@ -240,7 +267,7 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     // could not capture OR record again for the rest of the session.
     const { win, startLog } = await launch({ STC_COUNTDOWN_FAULT: "teardown-throws" });
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const page = await countdownPage();
     await page.keyboard.press("Escape");
 
@@ -249,17 +276,40 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Record");
     expect(lines(startLog)).toHaveLength(0);
 
+    // The fault is the throw BEFORE `hide()`/`destroy()`, so this first panel
+    // is still alive even though its session settled. It has to go before
+    // the second Record, or `countdownPage()` below returns THIS stale panel
+    // at once and never sees whether a second countdown opened at all. That
+    // is how it read before: the second flow's real panel opened only after
+    // the cleanup at the end of the test, survived into `afterEach`, and hit
+    // the fault branch again at quit. On the macOS runner that quit hung
+    // past 72 s (run 36163869597).
+    await app!.evaluate(({ BrowserWindow }) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (w.webContents.getURL().includes("countdown.html")) w.destroy();
+      }
+    });
+    await expect.poll(hasCountdownWindow, { timeout: 10_000 }).toBe(false);
+
     // The part that matters: not wedged. A second Record has to reach a
     // countdown again rather than be refused for a capture that has ended.
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await countdownPage();
     expect(await toastPage(app!)).toBeUndefined();
+
+    // STC_COUNTDOWN_FAULT stays set for the whole process, so this second
+    // countdown's own `finish()` would ALSO throw before it destroys its
+    // panel if anything cancelled it normally, quit included. `settleToIdle`
+    // destroys it directly instead. `finish()` checks `isDestroyed()` before
+    // the throw, so a panel that is already gone never reaches the fault,
+    // and the flow settles before `afterEach` quits.
+    await settleToIdle(win);
   }, 120_000);
 
   test("destroying the panel mid-countdown still settles, and Record works after", async () => {
     const { win, startLog } = await launch();
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await countdownPage();
 
     // Destroy the panel out from under the session — the shape of the real
@@ -284,9 +334,10 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     // must reach the countdown again rather than being refused for a capture
     // that is no longer in flight.
     await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await countdownPage();
     expect(await toastPage(app!)).toBeUndefined();
+    await settleToIdle(win);
   }, 120_000);
 });
 
@@ -306,7 +357,7 @@ describe("the countdown duration is choosable (STC-391, from hardware)", () => {
     // default: no start within a window that 3s would comfortably have cleared.
     await win.selectOption("#countdownms", "10000");
     await win.click("#profileclose");
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     await countdownPage();
     await sleep(4_000);
     expect(lines(startLog)).toHaveLength(0);

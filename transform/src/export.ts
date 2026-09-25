@@ -157,7 +157,9 @@ export async function exportSession(
   // strength 0 (an exact identity), leaves the mic-only path untouched, so a
   // take that never asked for cleanup exports byte-for-byte as before.
   const cleanup = project.narrationCleanup;
-  const plan = exportAudioPlan({ encode, hasMic: !!micAudio, hasSystem: !!session.systemAudio, cleanup });
+  const plan = exportAudioPlan({
+    encode, hasMic: !!micAudio, hasSystem: !!session.systemAudio, cleanup, micLevel: project.micLevel,
+  });
   const cleaning = plan.cleanMic;
   const mixing = plan.path === "mix";
   let mixMic: PcmTrack | null = null;
@@ -390,7 +392,10 @@ export async function exportSession(
         const level = project.systemAudioLevel ?? 1;
         for (let at = 0; at < frames && !audioEncoderError; at += MIX_BLOCK_FRAMES) {
           const n = Math.min(MIX_BLOCK_FRAMES, frames - at);
-          const planes = mixBlock({ mic: mixMic, system: mixSystem, systemLevel: level, originNs, from: at, frames: n });
+          const planes = mixBlock({
+            mic: mixMic, system: mixSystem, systemLevel: level, micLevel: project.micLevel ?? 1,
+            originNs, from: at, frames: n,
+          });
           const data = new Float32Array(n * MIX_CHANNELS);
           for (let ch = 0; ch < MIX_CHANNELS; ch++) data.set(planes[ch]!, ch * n);
           const ad = new AudioData({

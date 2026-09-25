@@ -113,28 +113,37 @@
     #clock { font-size: var(--type-value); color: var(--text-dim); }
     #clock-cur { color: var(--text); }
     #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
-    /* STC-418 PR 3: the system-audio level, compact and at the far end of
-       the timecode row. NOT a lane of its own: the 2026-09-24 hardware pass
-       found three stacked lanes cluttered, which is why Clip activity moved
-       onto the ruler. Hidden unless the take recorded system audio. */
-    .sysaudio { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
-                font-size: var(--type-label); color: var(--text-dim); }
-    .sysaudio[hidden] { display: none; }
-    .sysaudio input { width: 96px; margin: 0; accent-color: var(--accent); }
-    #sysaudiovalue { min-width: 4ch; text-align: right; color: var(--text); }
-    /* STC-455: narration cleanup, the same compact shape beside it — one
-       switch and one strength. The strength stays visible, dimmed, while the
-       switch is off, so turning it back on returns to the same setting.
-       Whichever of the two comes first takes the row's free space. */
-    .voiceclean { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
-                  font-size: var(--type-label); color: var(--text-dim); }
-    .voiceclean[hidden] { display: none; }
-    .voiceclean:not([hidden]) ~ .sysaudio { margin-left: 14px; }
-    .voiceclean label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
-    .voiceclean input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
-    .voiceclean input[type="range"] { width: 96px; margin: 0; accent-color: var(--accent); }
-    .voiceclean input[type="range"]:disabled { opacity: 0.4; }
-    #voicecleanvalue { min-width: 4ch; text-align: right; color: var(--text); }
+    /* STC-454 part 2: the take's audio controls live in ONE popover behind an
+       "Audio" button at the far end of the timecode row — mic level, system
+       level, narration cleanup (and part 3's mutes). The row had filled up
+       with three inline controls; the 2026-09-24 hardware pass had already
+       found stacked lanes cluttered for the same reason. Native popover:
+       Escape and a click outside close it. Anchored above the button, and
+       flipped below it if there is no room. */
+    .audiobtn { margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+                padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px;
+                background: none; color: var(--text-dim); font: inherit; font-size: var(--type-label);
+                cursor: pointer; anchor-name: --audiobtn; }
+    .audiobtn[hidden] { display: none; }
+    .audiobtn:hover { color: var(--text); background: var(--surface-hover); }
+    .audiobtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
+                    stroke-linecap: round; stroke-linejoin: round; }
+    #audiopanel { position-anchor: --audiobtn; position-area: top span-left; margin: 0 0 6px;
+                  position-try-fallbacks: flip-block; inset: auto;
+                  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+                  background: var(--surface, var(--bg)); color: var(--text);
+                  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+                  font-size: var(--type-label); }
+    #audiopanel .audiorows { display: grid; grid-template-columns: auto 120px 6ch; gap: 8px 10px;
+                             align-items: center; }
+    #audiopanel .audiorow { display: contents; color: var(--text-dim); }
+    #audiopanel .audiorow[hidden] { display: none; }
+    #audiopanel label.name { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+    #audiopanel input[type="range"] { width: 120px; margin: 0; accent-color: var(--accent); }
+    #audiopanel input[type="range"]:disabled { opacity: 0.4; }
+    #audiopanel input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+    #audiopanel .value { text-align: right; color: var(--text); }
     #voicecleanstrength:disabled + #voicecleanvalue { color: var(--text-dim); }
     /* Below this the duration goes and the current time stays. */
     @container (max-width: 680px) { .clock-dur { display: none; } }
@@ -510,28 +519,45 @@
     <div class="timecoderow">
       <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
       <span id="shuttle" class="mono"></span>
-      <!-- STC-418 PR 3: how loud the recorded system audio is in the export
-           and, since STC-454, in the preview's sound. Saved to the project
-           (project-9's systemAudioLevel). -->
-      <!-- STC-455: narration cleanup in the EXPORT — steady background noise
-           (fan, hiss, room tone) and harsh "s" sounds, on the mic only. Off
-           by default; the strength is kept while it is off. Saved to the
-           project (project-10's narrationCleanup). Heard in the export and,
-           since STC-454, in the preview once the cleaned voice is ready. -->
-      <span id="voiceclean" class="voiceclean" hidden
-            title="Cleans up your voice in the export: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds. Heard in the preview at 1x, and in the export.">
-        <label><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
-        <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
-               aria-label="Voice cleanup strength" disabled>
-        <span id="voicecleanvalue" class="mono">50%</span>
-      </span>
-      <label id="sysaudio" class="sysaudio" hidden
-             title="System audio level, in the preview at 1x and in the export">
-        <span>System audio</span>
-        <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
-               aria-label="System audio level">
-        <span id="sysaudiovalue" class="mono">100%</span>
-      </label>
+      <!-- STC-454 part 2: every audio control for the take, in one popover.
+           All of it is saved to the project and heard in the preview at 1x
+           and in the export; nothing here is ever baked in at capture. -->
+      <button type="button" id="audiobtn" class="audiobtn" popovertarget="audiopanel" hidden
+              title="Mic level, system audio level and voice cleanup">
+        <svg viewBox="0 0 16 16"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path d="M10.6 5.8a3 3 0 0 1 0 4.4"/></svg>
+        <span>Audio</span>
+      </button>
+      <div id="audiopanel" popover="auto" aria-label="Audio">
+        <div class="audiorows">
+          <!-- STC-454 part 2: the mic's level. 75% is as recorded (0 dB);
+               above it boosts, up to +12 dB. project-11's micLevel. -->
+          <div id="micaudio" class="audiorow" hidden
+               title="Your voice's level: the middle-right mark is as recorded; above it boosts up to +12 dB">
+            <label class="name" for="miclevel">Mic</label>
+            <input id="miclevel" type="range" min="0" max="100" step="1" value="75" aria-label="Mic level">
+            <span id="miclevelvalue" class="value mono">0 dB</span>
+          </div>
+          <!-- STC-418 PR 3: the recorded system audio's level (project-9's
+               systemAudioLevel), a decibel fader, attenuate only. -->
+          <div id="sysaudio" class="audiorow" hidden
+               title="System audio level, in the preview at 1x and in the export">
+            <label class="name" for="sysaudiolevel">System audio</label>
+            <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
+                   aria-label="System audio level">
+            <span id="sysaudiovalue" class="value mono">0 dB</span>
+          </div>
+          <!-- STC-455: narration cleanup — steady background noise and harsh
+               "s" sounds, on the mic only. Off by default; the strength is
+               kept while it is off. project-10's narrationCleanup. -->
+          <div id="voiceclean" class="audiorow" hidden
+               title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
+            <label class="name"><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
+            <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
+                   aria-label="Voice cleanup strength" disabled>
+            <span id="voicecleanvalue" class="value mono">50%</span>
+          </div>
+        </div>
+      </div>
     </div>
     <!-- STC-444 slice 2: adaptive ticks + the played line, drawn by
          editor.ts's renderRulerTicks/updateRulerPlayhead. #ruler-ticks holds

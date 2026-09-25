@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
 import { makeTakeFolder, makeSystemAudioTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
-import { levelFromSliderPct } from "../../transform/src/audio-mix.js";
+import { levelFromSliderPct, formatLevelDb } from "../../transform/src/audio-mix.js";
 
 /**
  * The editor's system-audio level (STC-418 PR 3): a compact slider in the
@@ -37,6 +37,14 @@ async function setLevel(win: Page, pct: number): Promise<void> {
   }, pct);
 }
 
+/** The controls live in the Audio popover (STC-454 part 2): open it before clicking or focusing one. */
+async function openAudio(win: Page): Promise<void> {
+  const open = () => win.evaluate(() => document.getElementById("audiopanel")!.matches(":popover-open"));
+  if (await open()) return;
+  await win.click("#audiobtn");
+  await expect.poll(open).toBe(true);
+}
+
 const projectOf = (takeDir: string) => {
   const p = join(takeDir, "project.json");
   return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null;
@@ -57,10 +65,11 @@ describe("the system-audio level", () => {
     const win = await openEditor(dir);
     await expect.poll(() => win.getAttribute("#sysaudio", "hidden"), { timeout: 20_000 }).toBeNull();
     expect(await win.inputValue("#sysaudiolevel")).toBe("100");
-    expect(await win.textContent("#sysaudiovalue")).toBe("100%");
+    // The Audio panel speaks dB (STC-454 part 2): full level is "0 dB".
+    expect(await win.textContent("#sysaudiovalue")).toBe("0 dB");
 
     await setLevel(win, 40);
-    expect(await win.textContent("#sysaudiovalue")).toBe("40%");
+    expect(await win.textContent("#sysaudiovalue")).toBe(formatLevelDb(levelFromSliderPct(40)));
     // The slider is a decibel fader: 40% saves -24 dB of gain, not a linear 0.4.
     await expect.poll(() => projectOf(takeDir)?.systemAudioLevel, { timeout: 20_000 })
       .toBe(levelFromSliderPct(40));
@@ -79,14 +88,14 @@ describe("the system-audio level", () => {
     let win = await openEditor(dir);
     await expect.poll(() => win.getAttribute("#sysaudio", "hidden"), { timeout: 20_000 }).toBeNull();
     await setLevel(win, 25);
-    await expect.poll(() => win.textContent("#sysaudiovalue")).toBe("25%");
+    await expect.poll(() => win.textContent("#sysaudiovalue")).toBe(formatLevelDb(levelFromSliderPct(25)));
     // Let the write land before the app goes away.
     await new Promise((r) => setTimeout(r, 500));
     const a = app; app = undefined; await closeApp(a);
 
     win = await openEditor(dir);
     await expect.poll(() => win.inputValue("#sysaudiolevel"), { timeout: 20_000 }).toBe("25");
-    expect(await win.textContent("#sysaudiovalue")).toBe("25%");
+    expect(await win.textContent("#sysaudiovalue")).toBe(formatLevelDb(levelFromSliderPct(25)));
   }, 180_000);
 
   test("arrow keys on the focused slider change the level, not the playhead", async () => {
@@ -94,6 +103,7 @@ describe("the system-audio level", () => {
     const win = await openEditor(dir);
     await expect.poll(() => win.getAttribute("#sysaudio", "hidden"), { timeout: 20_000 }).toBeNull();
     const clockBefore = await win.textContent("#clock-cur");
+    await openAudio(win);
     await win.focus("#sysaudiolevel");
     await win.keyboard.press("ArrowLeft");
     await win.keyboard.press("ArrowLeft");

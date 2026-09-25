@@ -133,18 +133,24 @@ export function mixBlock(opts: {
   mic: PcmTrack | null;
   system: PcmTrack | null;
   systemLevel: number;
+  /** The mic's gain (STC-454 part 2): 0..MIC_LEVEL_MAX, absent = 1 (as recorded). */
+  micLevel?: number;
   originNs: number;
   from: number;
   frames: number;
 }): Float32Array[] {
   const level = Math.min(1, Math.max(0, Number.isFinite(opts.systemLevel) ? opts.systemLevel : 1));
+  // The mic may BOOST (Patrick, 2026-09-25): narration sits well below
+  // system audio. Clamped to +12 dB; the hard limit below catches peaks.
+  const rawMic = opts.micLevel ?? 1;
+  const micGain = Math.min(MIC_LEVEL_MAX, Math.max(0, Number.isFinite(rawMic) ? rawMic : 1));
   const out = Array.from({ length: MIX_CHANNELS }, () => new Float32Array(opts.frames));
   for (let ch = 0; ch < MIX_CHANNELS; ch++) {
     const dst = out[ch]!;
     for (let j = 0; j < opts.frames; j++) {
       const i = opts.from + j;
       let v = 0;
-      if (opts.mic) v += sampleAt(opts.mic, ch, i, opts.originNs);
+      if (opts.mic && micGain > 0) v += micGain * sampleAt(opts.mic, ch, i, opts.originNs);
       if (opts.system && level > 0) v += level * sampleAt(opts.system, ch, i, opts.originNs);
       dst[j] = v > 1 ? 1 : v < -1 ? -1 : v;
     }
@@ -196,7 +202,8 @@ export function sliderPctFromLevel(level: number): number {
  * read by inspection in export.ts.
  *
  * - `mix`: through `mixBlock` — the take has system audio, or its mic is
- *   being cleaned (`cleanMic`), mic-only takes included.
+ *   being cleaned (`cleanMic`) or has a level other than as-recorded,
+ *   mic-only takes included.
  * - `mic`: the original mic-only passthrough, at the mic's own format.
  * - `none`: nothing to encode, or not encoding at all.
  *
@@ -208,9 +215,58 @@ export function exportAudioPlan(opts: {
   hasMic: boolean;
   hasSystem: boolean;
   cleanup?: { enabled: boolean; strength: number };
+  /** STC-454 part 2: any level but 1 needs the mixer, which is where gain is applied. */
+  micLevel?: number;
 }): { path: "mix" | "mic" | "none"; cleanMic: boolean } {
   if (!opts.encode) return { path: "none", cleanMic: false };
   const cleanMic = opts.hasMic && !!opts.cleanup?.enabled && opts.cleanup.strength > 0;
-  if (opts.hasSystem || cleanMic) return { path: "mix", cleanMic };
+  const levelMic = opts.hasMic && opts.micLevel !== undefined && opts.micLevel !== 1;
+  if (opts.hasSystem || cleanMic || levelMic) return { path: "mix", cleanMic };
   return { path: opts.hasMic ? "mic" : "none", cleanMic: false };
+}
+
+/**
+ * The MIC level's taper (STC-454 part 2, Patrick 2026-09-25): like the
+ * system-audio fader it moves in decibels, but it can BOOST — narration is
+ * usually recorded well below the machine's own audio. The slider's
+ * `MIC_UNITY_PCT` (75%) is 0 dB, "as recorded"; below it falls linearly in
+ * dB to `LEVEL_FLOOR_DB` at 1% and a true mute at 0%; above it rises to
+ * `MIC_BOOST_DB` at 100%. Stored, like the system level, as a linear gain.
+ */
+export const MIC_BOOST_DB = 12;
+export const MIC_LEVEL_MAX = 10 ** (MIC_BOOST_DB / 20);
+export const MIC_UNITY_PCT = 75;
+
+/** Mic slider position (0..100) → linear gain (0..MIC_LEVEL_MAX). */
+export function micLevelFromSliderPct(pct: number): number {
+  if (!Number.isFinite(pct) || pct <= 0) return 0;
+  if (pct >= 100) return MIC_LEVEL_MAX;
+  if (pct === MIC_UNITY_PCT) return 1;
+  const db = pct < MIC_UNITY_PCT
+    ? LEVEL_FLOOR_DB * (1 - pct / MIC_UNITY_PCT)
+    : MIC_BOOST_DB * ((pct - MIC_UNITY_PCT) / (100 - MIC_UNITY_PCT));
+  return 10 ** (db / 20);
+}
+
+/** Linear gain → the nearest mic slider position; a quiet-but-not-silent gain is 1%, never mute. */
+export function sliderPctFromMicLevel(level: number): number {
+  if (!Number.isFinite(level) || level <= 0) return 0;
+  if (level >= MIC_LEVEL_MAX) return 100;
+  const db = 20 * Math.log10(level);
+  const pct = db <= 0
+    ? MIC_UNITY_PCT * (1 + db / -LEVEL_FLOOR_DB)
+    : MIC_UNITY_PCT + (100 - MIC_UNITY_PCT) * (db / MIC_BOOST_DB);
+  return Math.min(100, Math.max(1, Math.round(pct)));
+}
+
+/**
+ * A level for a person to read: "Muted", "0 dB", "−24 dB", "+6 dB". Both
+ * sliders in the editor's Audio panel show this, so the panel speaks one
+ * unit — the mic's range crosses zero and a percentage above 100 reads badly.
+ */
+export function formatLevelDb(level: number): string {
+  if (!Number.isFinite(level) || level <= 0) return "Muted";
+  const db = Math.round(20 * Math.log10(level));
+  if (db === 0) return "0 dB";
+  return db > 0 ? `+${db} dB` : `\u2212${-db} dB`;
 }

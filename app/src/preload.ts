@@ -67,11 +67,6 @@ contextBridge.exposeInMainWorld("recorder", {
   reopenStill: (dir: string) => ipcRenderer.invoke("still:reopen", dir),
   duplicateStill: (dir: string) => ipcRenderer.invoke("still:duplicate", dir),
   start: () => ipcRenderer.invoke("recorder:start"),
-  // STC-374: choose what a recording scopes to — a region or a window — via
-  // the same overlay `captureStill` uses. Persisted main-side; this only asks
-  // for the pick and reports what was stored.
-  pickCaptureTarget: (kind: "region" | "window") =>
-    ipcRenderer.invoke("recorder:pickCaptureTarget", kind),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),
   // STC-375: fire-and-forget, not invoke — nothing awaits an answer, and the
@@ -95,14 +90,21 @@ contextBridge.exposeInMainWorld("recorder", {
                       // its own window shrank — `pill-window.ts` drives the
                       // resize from main, not from anything in this page.
                       "pill:state",
-                      // STC-433: `recorder:start` resolved a stale display
-                      // or mic on this window's behalf. `settings:changed`
-                      // says the stored value moved out from under the
-                      // picker (an automatic display, a mic turned off);
-                      // the `open*Picker` pair instead asks this window to
-                      // open the profile sheet and focus the control that
-                      // needs a new choice.
-                      "settings:changed", "settings:openDisplayPicker", "settings:openMicPicker"];
+                      // STC-433: `recorder:start` resolved a stale mic on
+                      // this window's behalf (turned it off) — the mic
+                      // popover's own stored state is now stale too, and
+                      // nothing else would refresh it until the next
+                      // `helper:ready` or a real unplug. There is no
+                      // display-picker equivalent under STC-388's fresh,
+                      // never-persisted scope pick: a vanished display just
+                      // refuses the take, and Record is pressed again.
+                      "settings:changed",
+                      // STC-388 review, Finding 2: a take started or stopped
+                      // by the hotkey or the tray, reaching the window that
+                      // did not ask for it. `main.ts`'s `reconcileWindowRecording`
+                      // is the one place this is ever sent, off the same
+                      // `sup.state` authority the tray already reconciles from.
+                      "recorder:recording-state"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);

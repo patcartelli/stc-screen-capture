@@ -56,7 +56,10 @@ declare const editor: {
 import { loadSession, type LoadedSession } from "@transform/session";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
-import { levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack } from "@transform/audio-mix";
+import {
+  levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack,
+  micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
+} from "@transform/audio-mix";
 import { decodeAllAudio, pcmTrackOf } from "@transform/decode-audio";
 import { PreviewAudio } from "@transform/preview-audio";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
@@ -1398,22 +1401,57 @@ $("scrub").addEventListener("input", () => {
 // levelFromSliderPct): a linear 30% still sounded loud on hardware.
 
 function updateSystemAudioUI(): void {
+  updateAudioButton();
   const row = $("sysaudio");
   const has = !!openSession?.systemAudio && !!openProject;
   row.toggleAttribute("hidden", !has);
   if (!has) return;
-  const pct = sliderPctFromLevel(openProject!.systemAudioLevel ?? 1);
-  ($("sysaudiolevel") as HTMLInputElement).value = String(pct);
-  $("sysaudiovalue").textContent = `${pct}%`;
+  const level = openProject!.systemAudioLevel ?? 1;
+  ($("sysaudiolevel") as HTMLInputElement).value = String(sliderPctFromLevel(level));
+  $("sysaudiovalue").textContent = formatLevelDb(level);
 }
 
 $("sysaudiolevel").addEventListener("input", () => {
   if (!openProject) return;
   const pct = Number(($("sysaudiolevel") as HTMLInputElement).value);
   openProject.systemAudioLevel = levelFromSliderPct(pct);
-  $("sysaudiovalue").textContent = `${pct}%`;
+  $("sysaudiovalue").textContent = formatLevelDb(openProject.systemAudioLevel);
 });
 $("sysaudiolevel").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- the Audio popover and the mic level (STC-454 part 2) ---------------
+//
+// Every audio control for the take lives in one popover behind the "Audio"
+// button (Patrick, 2026-09-25: the timecode row had filled up). The button
+// shows only for a take with audio; each row only for the track it acts on.
+// The mic level can BOOST (+12 dB at 100%, as recorded at 75%) and is saved
+// as project-11's `micLevel`; the preview reads it per chunk, so a move is
+// heard while playing. Same input/change split as the other sliders.
+
+function updateAudioButton(): void {
+  const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);
+  $("audiobtn").toggleAttribute("hidden", !has);
+  if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
+}
+
+function updateMicUI(): void {
+  updateAudioButton();
+  const has = !!openSession?.micAudio && !!openProject;
+  $("micaudio").toggleAttribute("hidden", !has);
+  if (!has) return;
+  const level = openProject!.micLevel ?? 1;
+  ($("miclevel") as HTMLInputElement).value = String(sliderPctFromMicLevel(level));
+  $("miclevelvalue").textContent = formatLevelDb(level);
+}
+
+$("miclevel").addEventListener("input", () => {
+  if (!openProject) return;
+  openProject.micLevel = micLevelFromSliderPct(Number(($("miclevel") as HTMLInputElement).value));
+  $("miclevelvalue").textContent = formatLevelDb(openProject.micLevel);
+});
+$("miclevel").addEventListener("change", () => {
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 
@@ -1426,6 +1464,7 @@ $("sysaudiolevel").addEventListener("change", () => {
 // to the same setting. Same input/change split as the level above.
 
 function updateVoiceCleanUI(): void {
+  updateMicUI();
   const row = $("voiceclean");
   const has = !!openSession?.micAudio && !!openProject;
   row.toggleAttribute("hidden", !has);
@@ -1523,7 +1562,10 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
     ]);
     if (gen !== audioGen || !player) return;
     rawMic = mic;
-    previewAudio = new PreviewAudio({ mic, system }, () => openProject?.systemAudioLevel ?? 1);
+    previewAudio = new PreviewAudio({ mic, system }, () => ({
+      system: openProject?.systemAudioLevel ?? 1,
+      mic: openProject?.micLevel ?? 1,
+    }));
     previewAudio.setMuted(previewMuted);
     player.attachAudio(previewAudio);
     setPreviewAudioState(previewAudio.hasSound ? "ready" : "none");
@@ -1627,6 +1669,7 @@ window.addEventListener("keydown", (e) => {
   // and must not also step the playhead (STC-418 PR 3).
   if (e.target === $("sysaudiolevel") && RANGE_NATIVE_KEYS.has(e.key)) return;
   if (e.target === $("voicecleanstrength") && RANGE_NATIVE_KEYS.has(e.key)) return;
+  if (e.target === $("miclevel") && RANGE_NATIVE_KEYS.has(e.key)) return;
   // Space on the focused switch belongs to the SWITCH (STC-455). Without
   // this the timeline takes it as play/pause and the switch never toggles —
   // measured: the e2e's mutation check fails on exactly that.

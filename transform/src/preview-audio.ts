@@ -25,8 +25,8 @@
  * AudioContext with live drift and export mixes sample-accurately, A/V sync
  * differs between paths". `mixBlock` is random-access (any window, any
  * start), so the preview asks it for 100 ms at a time from wherever the
- * playhead is, and the system-audio level is read per chunk, so moving the
- * slider is heard within `PREVIEW_HORIZON_S`.
+ * playhead is, and the mic and system-audio levels are read per chunk, so
+ * moving a slider is heard within `PREVIEW_HORIZON_S`.
  *
  * ## One clock
  *
@@ -152,8 +152,9 @@ export class PreviewAudio {
   private mic: PcmTrack | null;
   private readonly system: PcmTrack | null;
 
+  /** `levels` is read per chunk, so a slider moved during playback is heard within the horizon. */
   constructor(tracks: { mic: PcmTrack | null; system: PcmTrack | null },
-              private readonly systemLevel: () => number) {
+              private readonly levels: () => { system: number; mic: number }) {
     this.mic = tracks.mic;
     this.system = tracks.system;
   }
@@ -233,10 +234,10 @@ export class PreviewAudio {
     if (!ctx || !gain) return;
     const plan = planChunks({ anchorCtxS: this.anchorCtxS, nextFrame: this.nextFrame, nowCtxS: ctx.currentTime });
     this.nextFrame = plan.nextFrame;
-    const level = this.systemLevel();
+    const { system: systemLevel, mic: micLevel } = this.levels();
     for (const c of plan.chunks) {
       const planes = mixBlock({
-        mic: this.mic, system: this.system, systemLevel: level,
+        mic: this.mic, system: this.system, systemLevel, micLevel,
         originNs: this.anchorNs, from: c.from, frames: c.frames,
       });
       const buffer = ctx.createBuffer(MIX_CHANNELS, c.frames, MIX_SAMPLE_RATE);

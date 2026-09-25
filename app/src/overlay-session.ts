@@ -2,10 +2,14 @@ import { app, BrowserWindow, ipcMain, screen } from "electron";
 import { join } from "node:path";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import {
-  reduce, confirm, initialState,
-  type DisplayInfo, type Mode, type SelectionContext, type SelectionEvent,
+  reduce, confirm, dominantDisplay, initialState,
+  type DisplayInfo, type Mode, type Rect, type SelectionContext, type SelectionEvent,
   type SelectionOutcome, type SelectionState, type WindowInfo,
 } from "./selection.js";
+import {
+  barLayout, expandedSelection, micMenuLayout,
+  type ControlId, type OptionsState,
+} from "./record-options.js";
 
 /**
  * The selection overlay's windows and lifecycle (STC-290).
@@ -41,6 +45,155 @@ export interface OverlayResult {
    * already happened and the exclusion is the second belt.
    */
   excludeWindowIds: number[];
+  /** Present only when `purpose` was `"record"`. */
+  options?: OptionsState;
+}
+
+export type OverlayPurpose = "shot" | "record";
+export type OverlayPhase = "select" | "options";
+
+/** Events the overlay window can send. The selection ones are `selection.ts`'s
+ * own and are reduced by it; the rest belong to the options bar and are handled
+ * here, which is what keeps `selection.ts` unchanged by STC-388. */
+export type OverlayEvent =
+  | SelectionEvent
+  | { t: "control"; id: ControlId }
+  | { t: "micPick"; uid: string | null };
+
+/**
+ * What an outcome means, given what the overlay was opened for.
+ *
+ * Pure and exported so `app/test/overlay-options.test.ts` can settle the phase
+ * rule without an Electron window — the session below does no reasoning of its
+ * own about it, it just does what this says.
+ */
+export function nextPhase(purpose: OverlayPurpose, phase: OverlayPhase,
+                          outcome: SelectionOutcome):
+  { act: "finish" | "options"; outcome: SelectionOutcome } {
+  // Cancelled always ends it: the caller's cleanup is the same either way, and
+  // a cancel that only backed out of the options bar would strand the user in
+  // a selection they have already said no to.
+  if (outcome.kind === "cancelled") return { act: "finish", outcome };
+  if (purpose === "shot") return { act: "finish", outcome };
+  // Both phases land here: the first outcome opens the bar, and a later one
+  // (the marquee stays live) replaces what would be recorded.
+  return { act: "options", outcome };
+}
+
+/**
+ * Releasing a valid region is the user's selection gesture — no extra Enter
+ * is needed. `selection.ts` deliberately leaves that policy to its caller so
+ * the same pure reducer can still support a live, adjustable marquee here.
+ *
+ * In a record flow this enters (or refreshes) options; for a still it finishes
+ * immediately. A pointer-up that did not finish a region drag, or is still
+ * mid-drag, remains a no-op.
+ */
+export function outcomeOnRelease(ev: SelectionEvent, state: SelectionState,
+                                 ctx: SelectionContext): SelectionOutcome | undefined {
+  if (ev.t !== "pointerup" || state.mode !== "region" || state.drag) return undefined;
+  return confirm(state, ctx);
+}
+
+/**
+ * The bar's anchor rect, in GLOBAL points — ONE notion of "the thing being
+ * recorded" (STC-388), used for the bar's layout, the mic menu's layout, the
+ * size readout, and `expand`'s choice of display. Pure and exported, same
+ * reason as `nextPhase`/`fullDisplayFor`: `app/test/overlay-options.test.ts`
+ * settles it with no Electron window.
+ *
+ * Region mode's own live marquee (`stateRect`), unchanged from before this
+ * ticket. Window mode never sets a rect at all — `selection.ts`'s pointerdown
+ * and Enter paths attach only a bare `windowId` to a window outcome, and every
+ * `rect` assignment in that file is on the region-mode path — so falling back
+ * to `stateRect` there is undefined, which was the bug: no anchor, no bar, no
+ * Record control, Escape the only way out. In window mode, this therefore
+ * looks the PENDING outcome's window up in the list: it is a real clicked
+ * target, unlike `hoveredWindowId`. In region mode, it follows the live
+ * marquee, which is exactly what `confirm(state)` will commit. Keeping a
+ * pending window after Space switched back to region mode was wrong: the bar
+ * named that window while Record captured the new marquee.
+ */
+export function anchorRectFor(mode: Mode, pending: SelectionOutcome | undefined,
+                              stateRect: Rect | undefined,
+                              windows: WindowInfo[]): Rect | undefined {
+  // A picked window only remains the bar's target while the live interaction
+  // is still in window mode. Space is available after the options bar opens:
+  // switching back to region mode and drawing a marquee must move the bar and
+  // its readout to that marquee, because Record commits `confirm(state)` in
+  // region mode. Retaining the old pending window here made the UI name one
+  // target while Record captured another.
+  if (mode === "window" && pending?.kind === "window") {
+    return windows.find((w) => w.id === pending.windowId)?.bounds;
+  }
+  return stateRect;
+}
+
+/**
+ * Whether the options bar (and the mic menu drawn from it) belong on the
+ * display with `displayId` (STC-388 review, Finding 5).
+ *
+ * `push()` runs once per overlay window — one per display — and every other
+ * drawn element is positioned by a bare `toLocal(...)` (overlay.ts), which
+ * lands off-screen on a display that does not contain the anchor. `barLayout`
+ * and `micMenuLayout` do not have that property: they CLAMP their result into
+ * the RECEIVING display's own bounds, so calling them unconditionally for
+ * every window put a fully visible, fully live (same hit-testing) copy of the
+ * bar on every OTHER display too. `dominantDisplay` is the same rule
+ * `displayForSelection` already uses for `expand` — one answer to "which
+ * display is this", not a second one this file could disagree with.
+ *
+ * Pure and exported, same reason as `anchorRectFor`/`fullDisplayFor`:
+ * `app/test/overlay-options.test.ts` settles it with two synthetic displays,
+ * which is the only way this can be tested at all — a real second display is
+ * unobservable both here and on CI (`docs/STC-388-RUNBOOK.md` is where a
+ * human has to look).
+ */
+export function barBelongsOn(anchor: Rect | undefined, displayId: number,
+                             displays: DisplayInfo[]): boolean {
+  if (!anchor) return false;
+  return dominantDisplay(anchor, displays)?.id === displayId;
+}
+
+/**
+ * Whether a `reduce` call actually moved the marquee, not merely re-sent it.
+ *
+ * A value comparison, not a geometry inference: it asks "is this the same
+ * rect as before", never "what does this rect equal now" — the latter is what
+ * `OptionsState.fullDisplay`'s doc forbids. A duplicate pointermove landing on
+ * an unchanged position must not read as a redraw.
+ */
+function rectChanged(a: Rect | undefined, b: Rect | undefined): boolean {
+  if (a === b) return false;
+  if (!a || !b) return true;
+  return a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height;
+}
+
+/**
+ * How `OptionsState.fullDisplay` evolves as the marquee changes (STC-388).
+ *
+ * Pure and exported, same reason as `nextPhase`: `app/test/overlay-options.test.ts`
+ * settles it without an Electron window, and the session calls this after
+ * every `reduce` (and after `expand`) rather than reasoning about the flag
+ * itself.
+ *
+ * `didExpand` is the ONLY way this returns `true` — an explicit assertion from
+ * the one control that means "the whole display", never re-derived from a
+ * rect's numbers, because "does this rect equal the display bounds" would be
+ * a second rule for the same answer and would misfire for anyone who happened
+ * to drag to the edges (record-options.ts). But an assertion made once does
+ * not survive the user redrawing the marquee afterwards: once `current` is
+ * `true`, this clears it the moment the rect actually changes. That is a
+ * before-versus-after comparison of the SAME rect across time — never a
+ * comparison of the new rect against anything — so it is the narrower, true
+ * statement that a manual adjustment invalidates an earlier claim, not the
+ * inference this flag exists to avoid.
+ */
+export function fullDisplayFor(current: boolean, didExpand: boolean,
+                               prevRect: Rect | undefined, nextRect: Rect | undefined): boolean {
+  if (didExpand) return true;
+  if (!current) return false;
+  return !rectChanged(prevRect, nextRect);
 }
 
 /**
@@ -96,6 +249,16 @@ export interface OpenOptions {
   /** Where the overlay's HTML and preload live. Injected so tests can point elsewhere. */
   dist: string;
   renderer: string;
+  /**
+   * What the overlay is being opened for (STC-388).
+   *
+   * A released region (or a clicked window) finishes a `"shot"` immediately.
+   * `"record"` adds a second phase — the options bar, with the marquee still
+   * live — and resolves only when Record is pressed.
+   */
+  purpose?: OverlayPurpose;
+  /** The sticky options the bar opens with, and the devices it can offer. */
+  initialOptions?: Pick<OptionsState, "micDeviceUid" | "camera" | "mics">;
 }
 
 /**
@@ -103,6 +266,13 @@ export interface OpenOptions {
  * cancelled. Never rejects: a failure to build the windows resolves as a
  * cancellation, because a selection that cannot be made is indistinguishable
  * from one the user declined to make, and the caller's cleanup is the same.
+ *
+ * DELIBERATELY UNBOUNDED, in both phases. Every other wait in this app carries
+ * a `withTimeout` and a reason, because mp4box, VideoDecoder and SCStream all
+ * signal trouble by never calling back. This one waits on a PERSON: a bound
+ * would mean tearing an overlay off the screen mid-drag, or starting a take the
+ * user had not committed to. Escape and ⌃⌥⇧⌘4 are the ways out, and quit calls
+ * `closeOverlay`, so it is bounded by the user rather than by a clock.
  */
 export async function openOverlay(opts: OpenOptions): Promise<OverlayResult> {
   // One at a time. A second hotkey press while the overlay is up must not
@@ -137,11 +307,21 @@ class OverlaySession {
   private settle!: (r: OverlayResult) => void;
   readonly promise: Promise<OverlayResult>;
   private done = false;
+  private phase: OverlayPhase = "select";
+  private pending: SelectionOutcome | undefined;
+  private options: OptionsState;
 
   constructor(private readonly opts: OpenOptions) {
     this.state = initialState(opts.mode ?? "region");
     this.ctx = { displays: screen.getAllDisplays().map(toDisplayInfo), windows: opts.windows };
     this.promise = new Promise<OverlayResult>((res) => { this.settle = res; });
+    this.options = {
+      micDeviceUid: opts.initialOptions?.micDeviceUid ?? null,
+      camera: opts.initialOptions?.camera ?? false,
+      mics: opts.initialOptions?.mics ?? [],
+      fullDisplay: false,
+      micMenuOpen: false,
+    };
   }
 
   /**
@@ -250,28 +430,211 @@ class OverlaySession {
     return w;
   }
 
+  /** The bar's anchor rect right now — see `anchorRectFor`'s own doc. */
+  private anchorRect(): Rect | undefined {
+    return anchorRectFor(this.state.mode, this.pending, this.state.rect, this.ctx.windows);
+  }
+
+  /**
+   * The ONLY place `this.pending` is ever assigned (STC-388 review, Finding 1;
+   * folds in deferred minor #5).
+   *
+   * Before this choke point, a window outcome riding in with `fullDisplay:
+   * true` still set was prevented at exactly one of the two call sites that
+   * assign `pending` — correct only because the OTHER call site (`expand`)
+   * happens to always force `state.mode` to `"region"` before it confirms, so
+   * it can never actually produce a window outcome; nothing stopped a THIRD
+   * call site from reintroducing the stale-pair bug 5850e4f already fixed
+   * once (a flag surviving past the rect it no longer describes). Enforcing it
+   * here instead means every future assignment gets it for free.
+   */
+  private setPending(outcome: SelectionOutcome | undefined): void {
+    this.pending = outcome;
+    if (outcome?.kind === "window" && this.options.fullDisplay) {
+      this.options = { ...this.options, fullDisplay: false };
+    }
+  }
+
   /** Hand one window everything it needs to draw the current state. */
   private push(w: BrowserWindow): void {
     if (w.isDestroyed()) return;
     const d = this.ctx.displays.find((x) => x.id === this.displayOf.get(w));
+    const anchor = this.phase === "options" ? this.anchorRect() : undefined;
+    // FINDING 5 (STC-388 review, MEDIUM) — see `barBelongsOn`'s own doc.
+    const layout = d && anchor && barBelongsOn(anchor, d.id, this.ctx.displays)
+      ? barLayout(anchor, d) : undefined;
     w.webContents.send("overlay:state", {
       display: d,
       displays: this.ctx.displays,
       windows: this.ctx.windows,
       state: this.state,
       preview: confirm(this.state, this.ctx),
+      phase: this.phase,
+      options: this.phase === "options" ? this.options : undefined,
+      bar: layout,
+      micMenu: layout && d ? micMenuLayout(layout, this.options, d) : undefined,
+      // The same anchor the layout above was built from — never `state.rect`
+      // a second time, which is undefined in window mode (the readout would
+      // silently go back to reading a value that does not exist there).
+      anchor,
     });
   }
 
   private broadcast(): void { for (const w of this.windows) this.push(w); }
 
-  private onEvent = (_e: unknown, ev: SelectionEvent): void => {
+  private onEvent = (_e: unknown, ev: OverlayEvent): void => {
     if (this.done) return;
+    if (ev.t === "control") return this.onControl(ev.id);
+    if (ev.t === "micPick") {
+      this.options = { ...this.options, micDeviceUid: ev.uid, micMenuOpen: false };
+      return this.broadcast();
+    }
+    const prevRect = this.state.rect;
     const r = reduce(this.state, ev, this.ctx);
     this.state = r.state;
+    const fullDisplay = fullDisplayFor(this.options.fullDisplay, false, prevRect, this.state.rect);
+    if (fullDisplay !== this.options.fullDisplay) {
+      this.options = { ...this.options, fullDisplay };
+    }
+    // A region's pointer-up is its confirmation. This lives above the shared
+    // reducer, rather than changing `selection.ts`, because a still resolves
+    // here while a recording moves into its adjustable options phase.
+    const outcome = r.outcome ?? outcomeOnRelease(ev, this.state, this.ctx);
+    if (outcome) {
+      const next = nextPhase(this.opts.purpose ?? "shot", this.phase, outcome);
+      if (next.act === "finish") { this.broadcast(); void this.finish(next.outcome); return; }
+      this.phase = "options";
+      // A fresh WINDOW pick can arrive with the rect unchanged from before it
+      // (window-mode reduce never touches `state.rect`), so the `rectChanged`
+      // comparison above would not have cleared `fullDisplay` here — and a
+      // window outcome can never BE the full display, so it must never carry
+      // that flag. `setPending` is what enforces this now (STC-388 review,
+      // Finding 1) rather than a second geometry inference at this call site.
+      this.setPending(next.outcome);
+    }
     this.broadcast();
-    if (r.outcome) void this.finish(r.outcome);
   };
+
+  /**
+   * A press on the options bar. Only reachable in the options phase, which only
+   * a `"record"` overlay ever enters.
+   */
+  private onControl(id: ControlId): void {
+    if (this.phase !== "options") return;
+    switch (id) {
+      case "size":
+        return;                       // a readout, not a button
+      case "expand": {
+        const d = this.displayForSelection();
+        if (!d) return;
+        const prevRect = this.state.rect;
+        // STC-388: what expand means when a WINDOW is picked. `confirm`
+        // chooses its path from `state.mode` alone (selection.ts) — a window
+        // outcome carries no rect at all, so leaving mode at "window" here
+        // would set a full-display RECT that `confirm` never looks at, and
+        // then go on confirming the windowId it was hovering. That is
+        // `fullDisplay: true` riding along with a `{kind:"window"}` outcome,
+        // exactly the stale-pair bug 5850e4f already fixed once (a marquee
+        // change surviving past a flag that no longer described it). There is
+        // no separate "expand this window" meaning to preserve — a window and
+        // the display it sits on are never the same rect — so expand always
+        // means "the whole display, as a region" and switches mode to match,
+        // regardless of what mode it was pressed from. The FLAG and the rect
+        // move together, in one place: a rect covering the display without
+        // the flag would take the helper's crop path instead of its
+        // full-display one (record-options.ts). `fullDisplayFor` with
+        // `didExpand: true` is what actually sets it — a literal here would
+        // duplicate that rule as a second copy of the same answer.
+        this.state = { ...this.state, mode: "region", rect: expandedSelection(d) };
+        this.options = {
+          ...this.options,
+          fullDisplay: fullDisplayFor(this.options.fullDisplay, true, prevRect, this.state.rect),
+          micMenuOpen: false,
+        };
+        const outcome = confirm(this.state, this.ctx);
+        if (outcome) this.setPending(outcome);
+        return this.broadcast();
+      }
+      case "mic":
+        if (this.options.mics.length === 0) return;
+        this.options = { ...this.options, micMenuOpen: !this.options.micMenuOpen };
+        return this.broadcast();
+      case "camera":
+        this.options = { ...this.options, camera: !this.options.camera, micMenuOpen: false };
+        return this.broadcast();
+      case "record": {
+        // FINDING 1 (STC-388 review, CRITICAL). `pending` used to be commit-
+        // time truth unconditionally, but region mode's `reduce` (selection.ts)
+        // emits an outcome only on Enter — a handle drag, a move gesture and
+        // the arrow-key nudges all adjust `state.rect` with NO outcome, so
+        // `pending` went stale the instant the marquee was touched after
+        // Enter. The bar's own readout (`push()`'s `anchor`, and the `#size`
+        // chip drawn from it) already tracks `state.rect` live for a region —
+        // see `anchorRectFor` — so Record has to commit what the readout
+        // shows, not what was last confirmed.
+        //
+        // Keyed on `this.state.mode`, not on `pending`'s kind (STC-388
+        // RE-REVIEW, regression fix over the Finding 1 patch above). The
+        // hazard is "don't commit a mere HOVER", and a hover is a property of
+        // the LIVE state the user is in right now, not of what was last
+        // committed — `pending` records the latter, `state.mode` the former,
+        // and Space can move the two out of sync with no new outcome at all
+        // (selection.ts's " " handler only sets `mode`/`hoveredWindowId`,
+        // forwarded in any phase — `overlay.ts` has no phase gate on it).
+        // Keying on `pending?.kind === "window"` missed exactly this: drag a
+        // region, Enter (`pending` = region, `mode` = "region"), press Space
+        // (`mode` flips to "window", `pending` untouched) — `pending.kind`
+        // was still `"region"`, so the old guard took the `confirm()` branch
+        // WHILE `state.mode` was `"window"`, confirming whatever the pointer
+        // happened to be hovering (or silently doing nothing, if nothing
+        // `fullyVisible` was under it) — a hover the user never clicked.
+        //
+        // In window mode this ALWAYS uses `pending`, never `confirm()` — even
+        // when something IS validly hovered. Only a CLICK produces a window
+        // outcome (`reduce`'s `pointerdown` branch is the sole place one is
+        // created, and it is what calls `setPending`); a hover is never a
+        // commit, in EITHER direction — Record must not upgrade one into a
+        // commit just because the pointer happens to be sitting on something
+        // capturable. This is exactly what `anchorRectFor` already does for
+        // the readout, which is what makes them agree: it never reads
+        // `state.mode` either, just `pending`'s kind and the kept `state.rect`.
+        //
+        // DECIDED: hovering nothing falls back to `pending` (the last real
+        // commit — almost always the region from before Space was pressed)
+        // rather than a silent no-op. `confirm()` returns `undefined` in
+        // window mode when nothing `fullyVisible` is under the pointer, and
+        // the alternative to falling back — doing nothing at all — is the
+        // worst of the three options on a button whose entire job is to
+        // commit: no capture starts and nothing tells the user why. Falling
+        // back to `pending` is also the only one of the three that matches
+        // what the bar is ALREADY showing (`anchorRectFor`'s own answer for
+        // this exact state), so it is not a new rule, just this call site
+        // finally agreeing with the readout the way region mode already does.
+        const outcome = this.state.mode === "window" ? this.pending : confirm(this.state, this.ctx);
+        // No outcome means the marquee has been dragged to nothing since the
+        // bar opened (region mode), or nothing has ever been committed yet
+        // (window mode, `pending` still undefined — not reachable once the
+        // options phase is entered, since that transition itself requires an
+        // outcome, but checked rather than assumed). Ignored rather than
+        // finished: starting a take with no target is the failure
+        // `no-capture-target` used to report, and the user is one
+        // drag/click away from a valid one.
+        if (!outcome) return;
+        return void this.finish(outcome);
+      }
+    }
+  }
+
+  /** Which display the current anchor belongs to, for `expand` — the SAME
+   * anchor the bar and the readout use, so a window pick expands to the
+   * display the window is actually on rather than falling back to
+   * `displays[0]`, which `state.rect` alone (undefined in window mode) would
+   * have forced. */
+  private displayForSelection(): DisplayInfo | undefined {
+    const r = this.anchorRect();
+    if (!r) return this.ctx.displays[0];
+    return dominantDisplay(r, this.ctx.displays) ?? this.ctx.displays[0];
+  }
 
   async cancel(): Promise<void> { await this.finish({ kind: "cancelled" }); }
 
@@ -301,6 +664,9 @@ class OverlaySession {
     for (const w of this.windows) if (!w.isDestroyed()) w.destroy();
     this.windows.length = 0;
     this.displayOf.clear();
-    this.settle({ outcome, excludeWindowIds });
+    this.settle({
+      outcome, excludeWindowIds,
+      ...(this.opts.purpose === "record" ? { options: this.options } : {}),
+    });
   }
 }
