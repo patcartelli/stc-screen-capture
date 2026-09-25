@@ -202,6 +202,19 @@ Record: does each step hold, and does anything distort at 100% when both
 are loud? Distortion there is the hard limit working as decided: the fix is
 the slider, not a code change. Note it anyway.
 
+**First run (2026-09-25, Patrick):** both sources exported and in sync,
+but **system audio was still loud at 30%**. The level WAS applied (the
+editor exports a clone of the live project, and the mix multiplies by it).
+The slider was the problem: it was the linear gain, and a linear 0.3 is
+only -10.5 dB, which ears hear as about half as loud. On top of that,
+system audio is recorded near full scale while speech into a mic sits well
+below it. **Fixed:** the slider is now a decibel fader over -40..0 dB
+(`levelFromSliderPct` in audio-mix.ts): 50% is -20 dB, 30% is -28 dB, and 0%
+is a true mute. The project still stores the linear gain, so no schema
+changed. A take saved during the first run at the old linear 0.3 now reopens
+at about 74% on the new slider; that is expected. **Re-run §7 step 4 with
+this build.**
+
 ## §8 — the take kinds that must NOT change
 
 - A take with the mic only (system audio off) exports exactly as before:

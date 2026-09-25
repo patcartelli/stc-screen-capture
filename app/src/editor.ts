@@ -53,6 +53,7 @@ declare const editor: {
 import { loadSession, type LoadedSession } from "@transform/session";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
+import { levelFromSliderPct, sliderPctFromLevel } from "@transform/audio-mix";
 import type { Project, ZoomOverride } from "@transform/types";
 import {
   parseProject, projectForWrite, exportWindow, estimateExportMs,
@@ -1369,13 +1370,16 @@ $("scrub").addEventListener("input", () => {
 // mix (audio-mix.ts); it changes nothing the preview draws or plays. `input`
 // updates the value live; `change` (release, or a key) is what persists, the
 // same drag-then-settle split the trim handles use.
+//
+// The slider is a DECIBEL fader, not the gain itself (audio-mix.ts's
+// levelFromSliderPct): a linear 30% still sounded loud on hardware.
 
 function updateSystemAudioUI(): void {
   const row = $("sysaudio");
   const has = !!openSession?.systemAudio && !!openProject;
   row.toggleAttribute("hidden", !has);
   if (!has) return;
-  const pct = Math.round((openProject!.systemAudioLevel ?? 1) * 100);
+  const pct = sliderPctFromLevel(openProject!.systemAudioLevel ?? 1);
   ($("sysaudiolevel") as HTMLInputElement).value = String(pct);
   $("sysaudiovalue").textContent = `${pct}%`;
 }
@@ -1383,7 +1387,7 @@ function updateSystemAudioUI(): void {
 $("sysaudiolevel").addEventListener("input", () => {
   if (!openProject) return;
   const pct = Number(($("sysaudiolevel") as HTMLInputElement).value);
-  openProject.systemAudioLevel = Math.min(1, Math.max(0, pct / 100));
+  openProject.systemAudioLevel = levelFromSliderPct(pct);
   $("sysaudiovalue").textContent = `${pct}%`;
 });
 $("sysaudiolevel").addEventListener("change", () => {

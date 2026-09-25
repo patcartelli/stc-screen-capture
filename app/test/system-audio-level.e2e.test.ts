@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
 import { makeTakeFolder, makeSystemAudioTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { levelFromSliderPct } from "../../transform/src/audio-mix.js";
 
 /**
  * The editor's system-audio level (STC-418 PR 3): a compact slider in the
@@ -60,7 +61,10 @@ describe("the system-audio level", () => {
 
     await setLevel(win, 40);
     expect(await win.textContent("#sysaudiovalue")).toBe("40%");
-    await expect.poll(() => projectOf(takeDir)?.systemAudioLevel, { timeout: 20_000 }).toBe(0.4);
+    // The slider is a decibel fader: 40% saves -24 dB of gain, not a linear 0.4.
+    await expect.poll(() => projectOf(takeDir)?.systemAudioLevel, { timeout: 20_000 })
+      .toBe(levelFromSliderPct(40));
+    expect(projectOf(takeDir).systemAudioLevel).toBeLessThan(0.1);
     expect(projectOf(takeDir).version).toBe(9);
 
     // Back to full level: the key is dropped and the document returns to the

@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks,
+  LEVEL_FLOOR_DB, levelFromSliderPct, sliderPctFromLevel,
   type PcmChunk, type PcmTrack,
 } from "../src/audio-mix.js";
 
@@ -157,5 +158,41 @@ describe("mixBlock", () => {
     for (const i of [0, 1, 4800, 24_000, 47_000]) {
       expect(out[0]![i]).toBeCloseTo(i / MIX_SAMPLE_RATE, 4);
     }
+  });
+});
+
+describe("the level slider's decibel taper", () => {
+  test("the ends: 0% is a true mute, 100% is untouched", () => {
+    expect(levelFromSliderPct(0)).toBe(0);
+    expect(levelFromSliderPct(100)).toBe(1);
+  });
+
+  test("the middle is in decibels, not linear: 50% is -20 dB, 30% is -28 dB", () => {
+    const db = (g: number) => 20 * Math.log10(g);
+    expect(db(levelFromSliderPct(50))).toBeCloseTo(-20, 6);
+    expect(db(levelFromSliderPct(30))).toBeCloseTo(-28, 6);
+    expect(db(levelFromSliderPct(1))).toBeCloseTo(LEVEL_FLOOR_DB * 0.99, 6);
+    // The hardware complaint, pinned: 30% must be far quieter than the old
+    // linear 0.3 (-10.5 dB) that still sounded loud.
+    expect(levelFromSliderPct(30)).toBeLessThan(0.3 / 5);
+  });
+
+  test("monotonic: every step up the slider is louder", () => {
+    for (let p = 1; p <= 100; p++) {
+      expect(levelFromSliderPct(p)).toBeGreaterThan(levelFromSliderPct(p - 1));
+    }
+  });
+
+  test("round trip: every slider position reopens where it was saved", () => {
+    for (let p = 0; p <= 100; p++) expect(sliderPctFromLevel(levelFromSliderPct(p))).toBe(p);
+  });
+
+  test("a quiet-but-not-silent gain sits at 1%, never at mute; nonsense is mute or full", () => {
+    expect(sliderPctFromLevel(1e-6)).toBe(1);
+    expect(sliderPctFromLevel(0)).toBe(0);
+    expect(sliderPctFromLevel(-1)).toBe(0);
+    expect(sliderPctFromLevel(NaN)).toBe(0);
+    expect(sliderPctFromLevel(5)).toBe(100);
+    expect(levelFromSliderPct(NaN)).toBe(0);
   });
 });

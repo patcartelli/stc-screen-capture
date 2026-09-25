@@ -151,3 +151,40 @@ export function mixBlock(opts: {
   }
   return out;
 }
+
+/**
+ * The level slider's TAPER (STC-418 PR 3, after Patrick's 2026-09-25
+ * hardware pass: "the system audio is loud even when I exported at 30%").
+ *
+ * The slider used to BE the linear gain, and 30% of the signal is only
+ * ~10 dB down — which ears hear as roughly half as loud, not a third. A
+ * fader has to move in decibels to feel proportional. So the slider position
+ * maps linearly onto `[LEVEL_FLOOR_DB, 0]` dB: 100% is 0 dB (untouched),
+ * 50% is -20 dB, 30% is -28 dB, 1% is -39.6 dB — and 0% is a TRUE mute, a
+ * special case, since -40 dB is quiet but not silent.
+ *
+ * Only the UI's mapping changed. The project still stores the LINEAR gain
+ * (project-9's `systemAudioLevel`, 0..1), which is what `mixBlock` applies —
+ * so no schema moved, and a stored value means the same thing it always did.
+ */
+export const LEVEL_FLOOR_DB = -40;
+
+/** Slider position (0..100) → linear gain (0..1). */
+export function levelFromSliderPct(pct: number): number {
+  if (!Number.isFinite(pct) || pct <= 0) return 0;
+  if (pct >= 100) return 1;
+  return 10 ** ((LEVEL_FLOOR_DB * (1 - pct / 100)) / 20);
+}
+
+/**
+ * Linear gain (0..1) → the nearest slider position (0..100) — the inverse
+ * of `levelFromSliderPct`, so a saved level reopens at the position that
+ * saved it. A gain quieter than the floor but not silent sits at 1%, never
+ * at 0%: 0% means muted, and a quiet track is not a muted one.
+ */
+export function sliderPctFromLevel(level: number): number {
+  if (!Number.isFinite(level) || level <= 0) return 0;
+  if (level >= 1) return 100;
+  const pct = Math.round((1 + (20 * Math.log10(level)) / -LEVEL_FLOOR_DB) * 100);
+  return Math.min(100, Math.max(1, pct));
+}
