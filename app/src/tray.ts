@@ -70,12 +70,19 @@ export function installTray(
   // and never a source of state: the menu itself is still built from the pure
   // template above.
   (globalThis as Record<string, unknown>).__stcTray = tray;
+  // Same reason, one step further (STC-388 review, Finding 2): there is no
+  // synthetic click either, so an E2E that wants to drive a REAL tray
+  // selection — not the mechanism one layer below it — has no seam without
+  // this. `onSelect` IS what a click on any item calls; exposing it directly
+  // is exposing the click, not a second guess at what it does.
+  (globalThis as Record<string, unknown>).__stcTrayOnSelect = onSelect;
 
   return {
     update: (c) => { if (!tray.isDestroyed()) build(c); },
     destroy: () => {
       if (!tray.isDestroyed()) tray.destroy();
       delete (globalThis as Record<string, unknown>).__stcTray;
+      delete (globalThis as Record<string, unknown>).__stcTrayOnSelect;
     },
   };
 }

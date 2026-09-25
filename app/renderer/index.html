@@ -239,14 +239,6 @@
     #shortcutfoot button { padding: 3px 10px; font-size: var(--type-body); }
     #shortcuthint { font-size: var(--type-meta); color: var(--text-faint); }
 
-    /* ── capture scope (STC-370/STC-374) ─────────────────────────────────
-       The scope picker (Screen/Window/Area) and the "source" control beside
-       it — a display for Screen, a chosen window or area for the other two.
-       Exactly one of #display-label / #window-source / #region-source is
-       visible at a time; renderer.ts toggles `hidden` on the other two. */
-    .sourcelabel { color: var(--text-dim); font-size: var(--type-body); max-width: 220px;
-                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
     /* ── the profile sheet (STC-374) ──────────────────────────────────────
        A panel INSIDE this window, not a fourth window — slides in from the
        right over the take grid rather than opening as its own surface. Holds
@@ -441,22 +433,7 @@
 
     <h2>Profile</h2>
     <div class="row">
-      <label>Scope <select id="scope">
-        <option value="display">Screen</option>
-        <option value="window">Window</option>
-        <option value="region">Area</option>
-      </select></label>
       <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
-      <span id="window-source" class="row" hidden>
-        <span id="window-source-label" class="sourcelabel">No window chosen</span>
-        <button id="pickwindow">Choose window…</button>
-        <button id="clearwindow" title="Forget the chosen window">Clear</button>
-      </span>
-      <span id="region-source" class="row" hidden>
-        <span id="region-source-label" class="sourcelabel">No area chosen</span>
-        <button id="pickregion">Choose area…</button>
-        <button id="clearregion" title="Forget the chosen area">Clear</button>
-      </span>
     </div>
     <!-- Camera and mic used to be picked here (a checkbox and a <select>).
          STC-414 moved both onto the always-visible #devicestate row — the

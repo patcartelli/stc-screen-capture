@@ -7,6 +7,7 @@ import { withoutCountdown } from "./_countdown-fixture.js";
 import { toastPage, toastText } from "./_toast.js";
 import { MESSAGE_TOAST_MIN_MS } from "../src/toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { startRecordFlow } from "./_record-flow.js";
 
 /**
  * A warning the helper sends on its reliable channel reaches the user, and a
@@ -38,7 +39,7 @@ async function launchAndPressRecord(env: Record<string, string>) {
   app = await electron.launch({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER, ...env },
+    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER, STC_OVERLAY_SYNTHETIC_INPUT: "1", ...env },
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
@@ -47,7 +48,8 @@ async function launchAndPressRecord(env: Record<string, string>) {
   // out three real seconds on every take.
   await withoutCountdown(win);
   await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-  await win.click("#record");
+  // STC-388: `#record` opens the overlay; the bar's own Record starts the take.
+  await startRecordFlow(app, win);
   return { win, recordings };
 }
 

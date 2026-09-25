@@ -7,6 +7,7 @@ import { withoutCountdown } from "./_countdown-fixture.js";
 import { PRODUCT_NAME } from "../src/product.js";
 import { toastPage } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { startRecordFlow } from "./_record-flow.js";
 
 const root = join(__dirname, "..", "..");
 
@@ -24,6 +25,7 @@ async function launch() {
     env: {
       ...process.env, STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")),
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+      STC_OVERLAY_SYNTHETIC_INPUT: "1",
     },
   });
   const win = await app.firstWindow();
@@ -55,7 +57,8 @@ describe("Electron shell", () => {
   test("the record button reports a missing grant in actionable terms", async () => {
     const win = await launch();
     await expect.poll(() => win.textContent("#pid"), { timeout: 20_000 }).toMatch(/^\d+$/);
-    await win.click("#record");
+    // STC-388: `#record` opens the overlay; the bar's own Record starts the take.
+    await startRecordFlow(app!, win);
     // Either it records (granted) or it explains itself (not granted) —
     // what it must never do is fail silently or hang the button.
     await expect.poll(async () =>

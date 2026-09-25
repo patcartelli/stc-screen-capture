@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { waitForStart } from "./_start-log.js";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
+import { startRecordFlow } from "./_record-flow.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
@@ -20,6 +21,15 @@ import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
  * same reason `mic-picker.e2e.test.ts` pins `micDeviceUid`.
  *
  * The helper stand-in records the start payload and captures nothing.
+ *
+ * STC-388: `#record` opens the overlay now, and only the options bar's own
+ * Record control starts a take, so every test here goes through
+ * `startRecordFlow` — the real Record flow — rather than clicking `#record`
+ * and waiting. That makes this file the pin for `recordFlowBody`'s start-param
+ * builder in `main.ts`: `systemAudio` is read from STORED settings there, never
+ * from the bar (which has no system-audio control until STC-459).
+ * Mutation-checked: dropping that builder's `systemAudio` line fails exactly
+ * "turned on, a take sends systemAudio: true" and nothing else in this file.
  */
 const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
@@ -36,6 +46,7 @@ async function launch(opts: { userData: string; recordings: string; startLog: st
       STC_RECORDINGS_DIR: opts.recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_HELPER_BIN: FAKE_HELPER,
       STC_FAKE_START_LOG: opts.startLog,
+      STC_OVERLAY_SYNTHETIC_INPUT: "1",
     },
   });
   const win = await app.firstWindow();
@@ -57,7 +68,7 @@ describe("the system-audio preference", () => {
     const o = fresh();
     const win = await launch(o);
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const cmd = await waitForStart(o.startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBeUndefined();
@@ -68,7 +79,7 @@ describe("the system-audio preference", () => {
     const win = await launch(o);
     await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: true }));
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const cmd = await waitForStart(o.startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
@@ -85,7 +96,7 @@ describe("the system-audio preference", () => {
     expect(saved.systemAudio).toBe(false);
     expect((await win.evaluate(() => (window as any).recorder.getSettings())).systemAudio).toBe(false);
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.click("#record");
+    await startRecordFlow(app!, win);
     const cmd = await waitForStart(o.startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBeUndefined();
