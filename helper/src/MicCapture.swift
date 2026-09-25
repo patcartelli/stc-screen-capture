@@ -230,7 +230,11 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     /// standard way to shift a whole buffer's timeline by a constant amount:
     /// CoreMedia derives every later sample's presentation time from the
     /// first one plus its duration.
-    private static func retimed(_ sb: CMSampleBuffer, toNs relNs: Int64) -> CMSampleBuffer? {
+    ///
+    /// Internal, not private: `SystemAudioCapture` (STC-418) appends its own
+    /// audio buffers under exactly this rule, and a second copy would be the
+    /// "one value, two copies" defect this repo keeps finding.
+    static func retimed(_ sb: CMSampleBuffer, toNs relNs: Int64) -> CMSampleBuffer? {
         var timing = CMSampleTimingInfo(duration: CMSampleBufferGetDuration(sb),
                                         presentationTimeStamp: CMTime(value: relNs, timescale: 1_000_000_000),
                                         decodeTimeStamp: .invalid)

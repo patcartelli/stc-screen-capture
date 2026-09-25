@@ -21,7 +21,8 @@ const dir = () => mkdtempSync(join(tmpdir(), "stc-settings-"));
 describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
-      .toEqual({ camera: false, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
+      .toEqual({ camera: false, displayId: null, micDeviceUid: null, systemAudio: false,
+                 shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
@@ -61,7 +62,8 @@ describe("the camera preference", () => {
     const d = dir();
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
-      .toEqual({ camera: true, displayId: null, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
+      .toEqual({ camera: true, displayId: null, micDeviceUid: null, systemAudio: false,
+                 shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
@@ -116,7 +118,8 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { displayId: 2 });
     writeSettings(d, { camera: true });
     expect(readSettings(d))
-      .toEqual({ camera: true, displayId: 2, micDeviceUid: null, shortcuts: DEFAULT_SHORTCUTS,
+      .toEqual({ camera: true, displayId: 2, micDeviceUid: null, systemAudio: false,
+                 shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
@@ -131,6 +134,37 @@ describe("the display preference (STC-247)", () => {
  * no other feedback at all. Which is why every fallback here goes to ON, the
  * mirror of the camera's `=== true`.
  */
+describe("the system-audio preference (STC-418)", () => {
+  test("defaults to off — nobody records the machine's audio without turning it on", () => {
+    expect(readSettings(dir()).systemAudio).toBe(false);
+    expect(DEFAULT_SETTINGS.systemAudio).toBe(false);
+  });
+
+  test("persists when turned on, and back off", () => {
+    const d = dir();
+    expect(writeSettings(d, { systemAudio: true }).systemAudio).toBe(true);
+    expect(readSettings(d).systemAudio).toBe(true);
+    expect(writeSettings(d, { systemAudio: false }).systemAudio).toBe(false);
+    expect(readSettings(d).systemAudio).toBe(false);
+  });
+
+  test("anything but a literal true is off, on read and on write", () => {
+    for (const bad of ["true", 1, null, {}]) {
+      const d = dir();
+      writeFileSync(join(d, "settings.json"), JSON.stringify({ systemAudio: bad }));
+      expect(readSettings(d).systemAudio, `stored ${JSON.stringify(bad)}`).toBe(false);
+      expect(writeSettings(d, { systemAudio: bad as never }).systemAudio).toBe(false);
+    }
+  });
+
+  test("an unrelated write does not turn it off", () => {
+    const d = dir();
+    writeSettings(d, { systemAudio: true });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).systemAudio).toBe(true);
+  });
+});
+
 describe("the shutter sound preference", () => {
   test("defaults to on", () => {
     expect(readSettings(dir()).shutterSound).toBe(true);

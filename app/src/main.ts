@@ -769,13 +769,15 @@ ipcMain.handle("recorder:start", async () => {
   // already owns these settings, and a renderer-supplied value would be a
   // second source of truth for what turns on a physical camera and what the
   // helper is told to point at.
-  const { camera, displayId, micDeviceUid, scope, countdownMs } =
+  const { camera, displayId, micDeviceUid, systemAudio, scope, countdownMs } =
     readSettings(app.getPath("userData"));
   const startParams: Record<string, unknown> = { camera };
   // Only when a device is actually picked (STC-233) — an absent field is
   // "no mic" to the helper's own parseStartRequest, and there is no
   // automatic mic the way there is an automatic display.
   if (micDeviceUid != null) startParams.micDeviceUid = micDeviceUid;
+  // STC-418: only when on — absent is "off" to parseStartRequest.
+  if (systemAudio) startParams.systemAudio = true;
   if (scope.kind === "region" && scope.region) {
     const { displayId: regionDisplayId, x, y, width, height } = scope.region;
     startParams.displayId = regionDisplayId;

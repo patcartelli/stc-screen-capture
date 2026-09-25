@@ -56,6 +56,16 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// same way it reads `wantCamera`: to tell "never asked" from "asked, got
     /// nothing" in anchors.json's `mic` block.
     private var wantMicUid: String?
+    /// The system-audio subsystem (STC-418): its own SCStream, see
+    /// `SystemAudioCapture`'s header. Guarded by `lock` for the same HIGH-1
+    /// reason as `camera`/`mic` — a `stop()` must see it or it must never
+    /// start.
+    private var systemAudio: SystemAudioCapture?
+    private var systemAudioTrack: SystemAudioTrack?
+    /// Set once, in `begin`, from the request. Tells "never asked" from
+    /// "asked, got nothing" in anchors.json's `system` block, as
+    /// `wantCamera`/`wantMicUid` do for theirs.
+    private var wantSystemAudio = false
     private var stoppingBegan = false
     /// Guards RE-ENTRY into `stop()` itself (STC-305). `App.start`'s success
     /// handler can call `stop()` a second time on a session whose teardown is
@@ -264,7 +274,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             case .failure(let e):
                 self.finishStart(.failure(e))
             case .success(let target):
-                self.begin(target: target, camera: request.camera, micDeviceUid: request.micDeviceUid)
+                self.begin(target: target, camera: request.camera, micDeviceUid: request.micDeviceUid,
+                           systemAudio: request.systemAudio)
             }
         }
     }
@@ -275,6 +286,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// own bounds already are the region, the way `Still.swift`'s does.
     private struct CaptureTarget {
         let filter: SCContentFilter
+        /// The display whose whole-display filter the system-audio stream
+        /// uses (STC-418) — the take's own display for every scope, a
+        /// window's included, since audio is filtered by app and a window
+        /// filter would carry only its owner's.
+        let audioDisplay: SCDisplay
         let geometry: DisplayGeometry
         let sourceRect: CGRect?
         let pixelSize: (width: Int, height: Int)
@@ -308,8 +324,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                                        title: win.title, bounds: bounds)
             let filter = SCContentFilter(desktopIndependentWindow: win)
             let pixelSize = framePixelSize(points: bounds, backingScale: geometry.backingScale)
-            return .success(CaptureTarget(filter: filter, geometry: geometry, sourceRect: nil,
-                                          pixelSize: pixelSize,
+            return .success(CaptureTarget(filter: filter, audioDisplay: display, geometry: geometry,
+                                          sourceRect: nil, pixelSize: pixelSize,
                                           scope: CaptureScopeDoc(kind: .window, region: nil, window: info)))
         }
 
@@ -326,7 +342,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             let geometry = displayGeometry(id: display.displayID, pointWidth: display.width, pointHeight: display.height)
             let filter = SCContentFilter(display: display, excludingWindows: [])
             guard let region = request.region else {
-                return .success(CaptureTarget(filter: filter, geometry: geometry, sourceRect: nil,
+                return .success(CaptureTarget(filter: filter, audioDisplay: display, geometry: geometry,
+                                              sourceRect: nil,
                                               pixelSize: (geometry.pixelWidth, geometry.pixelHeight),
                                               scope: .display))
             }
@@ -335,8 +352,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 return .failure(.cropOutsideDisplay)
             }
             let pixelSize = framePixelSize(points: resolved, backingScale: geometry.backingScale)
-            return .success(CaptureTarget(filter: filter, geometry: geometry, sourceRect: resolved.cgRect,
-                                          pixelSize: pixelSize,
+            return .success(CaptureTarget(filter: filter, audioDisplay: display, geometry: geometry,
+                                          sourceRect: resolved.cgRect, pixelSize: pixelSize,
                                           scope: CaptureScopeDoc(kind: .region, region: resolved, window: nil)))
         }
     }
@@ -344,12 +361,14 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Takes no completion: `start` owns it and every path below answers through
     /// `finishStart`, which is call-once. Handing this a second reference to the
     /// same completion is how a request gets answered twice.
-    private func begin(target: CaptureTarget, camera wantCamera: Bool, micDeviceUid: String?) {
+    private func begin(target: CaptureTarget, camera wantCamera: Bool, micDeviceUid: String?,
+                       systemAudio wantSystemAudio: Bool) {
         // Recorded before anything can fail below: writeSidecars must know
         // whether a camera was ever asked for, independent of whether this
         // particular start succeeds at opening one.
         self.wantCamera = wantCamera
         self.wantMicUid = micDeviceUid
+        self.wantSystemAudio = wantSystemAudio
 
         // CaptureDecisions.swift hardcodes this so it can be compiled without
         // ScreenCaptureKit. If the framework ever renumbers, refuse to start
@@ -434,6 +453,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // a slow mic must not delay `started`.
                     if let uid = self.wantMicUid {
                         self.startMicAsync(deviceUid: uid)
+                    }
+                    // STC-418: not on the critical path either — its own
+                    // stream's start is callback-driven and never waited on.
+                    if wantSystemAudio {
+                        self.startSystemAudio(display: target.audioDisplay)
                     }
                     // STC-370: a window-scope take polls its own window, since
                     // SCK has no delegate for "this window resized/closed" the
@@ -673,6 +697,40 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     IO.send("warning", ["code": me?.code ?? "mic-failed",
                                         "detail": me.map { $0.description } ?? "\(e)"])
                 }
+            }
+        }
+    }
+
+    /// Starts the system-audio stream (STC-418). Unlike the mic, nothing here
+    /// blocks — `SCStream.startCapture` answers through a callback — so there
+    /// is no background hop; but the same race with `stop()` is closed the
+    /// other way round: the instance is STORED before it starts, under the
+    /// lock that `stop()` sets `stoppingBegan` under, so a stop either
+    /// prevents it from existing or finds it and tears it down (including
+    /// one whose start is still in flight — `SystemAudioCapture.stop`
+    /// handles that). A failed start leaves it stored: its stop then just
+    /// finalises an empty writer and reports no track, which is
+    /// `present:false` — requested, got nothing.
+    private func startSystemAudio(display: SCDisplay) {
+        lock.lock()
+        if stoppingBegan { lock.unlock(); return }
+        let a = SystemAudioCapture(dir: dir, t0Ns: t0Ns, pauseGate: pauseGate)
+        systemAudio = a
+        lock.unlock()
+
+        a.onStreamDied = { err in
+            IO.send("warning", ["code": "system-audio-stopped",
+                                "detail": "system audio stopped mid-take (\(err)); the rest of this "
+                                        + "take has no system audio"])
+        }
+        a.start(display: display) { err in
+            if let err {
+                let e = err as? SystemAudioError
+                IO.send("warning", ["code": e?.code ?? "system-audio-failed",
+                                    "detail": e.map { $0.description } ?? "\(err)"])
+            } else {
+                IO.send("system-audio-started", ["sampleRate": SystemAudioCapture.sampleRate,
+                                                 "channels": SystemAudioCapture.channelCount])
             }
         }
     }
@@ -1205,6 +1263,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         stoppingBegan = true
         let cam = camera
         let m = mic
+        let sysAudio = systemAudio
         let cursorRL = cursorRunLoop
         let winWatcher = windowWatcher
         windowWatcher = nil
@@ -1303,6 +1362,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
 
+        if let sysAudio {
+            group.enter()
+            sysAudio.stop { [weak self] track in
+                self?.lock.lock()
+                self?.systemAudioTrack = track
+                self?.systemAudio = nil
+                self?.lock.unlock()
+                group.leave()
+            }
+        }
+
         group.enter()
         if let stream {
             stream.stopCapture { [weak self] _ in
@@ -1327,6 +1397,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let evs = events
         let camTrack = cameraTrack
         let micT = micTrack
+        let sysT = systemAudioTrack
         lock.unlock()
 
         // events-2 since STC-309: v1 plus `{t, kind: "cursor", shape}`. The
@@ -1353,6 +1424,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             requested: wantCamera,
             mic: micT,
             micRequested: wantMicUid != nil,
+            systemAudio: sysT,
+            systemAudioRequested: wantSystemAudio,
             scope: captureScope,
             pauses: pauses,
             stopReason: reason,

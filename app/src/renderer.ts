@@ -27,6 +27,8 @@ interface AppSettings {
   displayId: number | null;
   /** STC-233. null means no mic — never "automatic". */
   micDeviceUid: string | null;
+  /** STC-418. Off by default; no control until the options bar (PR 4). */
+  systemAudio: boolean;
   /** STC-292. */
   shutterSound: boolean;
   /** STC-391: how long Record and the self-timer count down, ms. */
@@ -782,15 +784,15 @@ const CAMERA_FAULTS: Record<string, string> = {
  * otherwise be silently dropped by the generic handler below.
  */
 const MIC_FAULTS: Record<string, string> = {
-  "mic-not-found": "The chosen microphone is no longer available, so this take has no audio.",
-  "mic-not-authorized": "Microphone access is not authorized, so this take has no audio.",
-  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no audio.",
-  "mic-device-input-failed": "The microphone could not be opened, so this take has no audio.",
-  "mic-input-refused": "The microphone could not be opened, so this take has no audio.",
-  "mic-writer-failed": "Recording the microphone failed, so this take has no audio.",
+  "mic-not-found": "The chosen microphone is no longer available, so this take has no microphone audio.",
+  "mic-not-authorized": "Microphone access is not authorized, so this take has no microphone audio.",
+  "mic-format-unavailable": "The chosen microphone reported no usable audio format, so this take has no microphone audio.",
+  "mic-device-input-failed": "The microphone could not be opened, so this take has no microphone audio.",
+  "mic-input-refused": "The microphone could not be opened, so this take has no microphone audio.",
+  "mic-writer-failed": "Recording the microphone failed, so this take has no microphone audio.",
   "mic-no-frames":
     "The microphone opened but is not sending any audio, so this take will have no " +
-    "sound. Another app holding the device is the usual cause.",
+    "microphone audio. Another app holding the device is the usual cause.",
 };
 
 /**

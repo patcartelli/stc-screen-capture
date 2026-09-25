@@ -192,4 +192,39 @@ describe("anchors document", () => {
     );
     expect(validate4(paused), "anchors-4 must refuse a v5, pause-bearing document").toBe(false);
   });
+
+  // STC-418: minimum-version emission for system audio, same shape as the
+  // mic's anchors-4 test above.
+  test("system-audio documents validate against anchors-6; anchors-5 refuses them", async () => {
+    const out = await runSwiftHarness({
+      label: "anchors",
+      sources: [
+        "helper/src/StillDecisions.swift",
+        "helper/src/PauseDecisions.swift",
+        "helper/src/AnchorsDoc.swift",
+        "helper/test/anchors/main.swift",
+      ],
+    });
+    expect(out, out).toContain("ALL PASS");
+
+    const ajv6 = new Ajv({ allErrors: true, strict: true });
+    const validate6 = ajv6.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-6.schema.json"), "utf8")),
+    );
+    const requestedNoSamples = extractJSON(out, "JSON-SYSTEM-REQUESTED-NO-SAMPLES:");
+    expect(validate6(requestedNoSamples), JSON.stringify(validate6.errors, null, 2)).toBe(true);
+    expect((requestedNoSamples as { version: number }).version).toBe(6);
+
+    const both = extractJSON(out, "JSON-WITH-SYSTEM-AND-MIC:");
+    expect(validate6(both), JSON.stringify(validate6.errors, null, 2)).toBe(true);
+    expect((both as { system?: unknown }).system).toBeDefined();
+    expect((both as { mic?: unknown }).mic).toBeDefined();
+    expect((both as { scope?: unknown }).scope).toBeDefined();
+
+    const ajv5 = new Ajv({ allErrors: true, strict: true });
+    const validate5 = ajv5.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-5.schema.json"), "utf8")),
+    );
+    expect(validate5(both), "anchors-5 must refuse a v6, system-audio-bearing document").toBe(false);
+  });
 }, 60_000);
