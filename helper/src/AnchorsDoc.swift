@@ -84,6 +84,17 @@ struct MicTrack {
     let lastFramePtsNs: Int
 }
 
+/// What the system-audio track turned out to be (STC-418). `nil` means no
+/// system audio on this take. `MicTrack` minus `device`: there is one system
+/// output, and it is the whole machine's whatever the take's scope
+/// (schema/anchors-6.schema.json).
+struct SystemAudioTrack {
+    let present: Bool
+    let sampleRate: Int, channels: Int
+    let firstFramePtsNs: Int
+    let lastFramePtsNs: Int
+}
+
 /// Builds anchors.json.
 ///
 /// Pure on purpose: the shape of this document is a contract with the transform,
@@ -114,6 +125,12 @@ struct MicTrack {
 /// it cannot express. A take with no mic requested writes whatever version
 /// its scope already implies, unchanged.
 ///
+/// `systemAudioRequested` raises the floor to version 6 (STC-418), exactly
+/// the way `micRequested` raises it to 4: the `system` block and
+/// `files.system` are new to anchors-6, and a take that never asked for
+/// system audio writes neither and keeps whatever version its other blocks
+/// demand.
+///
 /// `pauses` raises the floor to version 5 (STC-240) when non-empty, the same
 /// way `micRequested` raises it to 4 and `scope` to 3. A take that was never
 /// paused writes no `pauses` key and keeps whatever version its other blocks
@@ -127,6 +144,8 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                      requested: Bool,
                      mic: MicTrack? = nil,
                      micRequested: Bool = false,
+                     systemAudio: SystemAudioTrack? = nil,
+                     systemAudioRequested: Bool = false,
                      scope: CaptureScopeDoc = .display,
                      pauses: [PauseInterval],
                      stopReason: String,
@@ -163,9 +182,24 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
             ]
         }
     }
+    var systemBlock: [String: Any]?
+    if systemAudioRequested {
+        systemBlock = ["present": false]
+        if let a = systemAudio, a.present {
+            files["system"] = "system.m4a"
+            systemBlock = [
+                "present": true,
+                "sampleRate": a.sampleRate,
+                "channels": a.channels,
+                "firstFramePtsNs": a.firstFramePtsNs,
+                "lastFramePtsNs": a.lastFramePtsNs,
+            ]
+        }
+    }
     var version = scope.kind == .display ? 2 : 3
     if micRequested { version = max(version, 4) }
     if !pauses.isEmpty { version = max(version, 5) }
+    if systemAudioRequested { version = max(version, 6) }
     var doc: [String: Any] = [
         "version": version,
         "timebase": ["numer": timebase.numer, "denom": timebase.denom],
@@ -187,6 +221,9 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     }
     if let micBlock {
         doc["mic"] = micBlock
+    }
+    if let systemBlock {
+        doc["system"] = systemBlock
     }
     if !pauses.isEmpty {
         doc["pauses"] = pauses.map { $0.json }

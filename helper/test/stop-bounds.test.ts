@@ -45,6 +45,7 @@ describe("the stop chain (STC-259 step 3)", () => {
   // rather than as the named assertion that caught it.
   const cameraMs = () => swiftConstant("helper/src/CameraCapture.swift", "stopTimeoutSeconds");
   const micMs = () => swiftConstant("helper/src/MicCapture.swift", "stopTimeoutSeconds");
+  const systemAudioMs = () => swiftConstant("helper/src/SystemAudioCapture.swift", "stopTimeoutSeconds");
   const displayMs = () => swiftConstant("helper/src/Capture.swift", "stopTimeoutSeconds");
   const shutdownMarginMs = () => swiftConstant("helper/src/main.swift", "shutdownBackstopMarginSeconds");
 
@@ -63,6 +64,14 @@ describe("the stop chain (STC-259 step 3)", () => {
   test("the mic teardown answers before the display teardown gives up", () => {
     expect(micMs()).toBeGreaterThan(0);
     expect(micMs()).toBeLessThan(displayMs());
+  });
+
+  // STC-418: system audio is a third optional subsystem in the same
+  // DispatchGroup — its own SCStream, so stopCapture as well as
+  // finishWriting sit inside its bound — and needs the same property.
+  test("the system-audio teardown answers before the display teardown gives up", () => {
+    expect(systemAudioMs()).toBeGreaterThan(0);
+    expect(systemAudioMs()).toBeLessThan(displayMs());
   });
 
   // The outermost link. Every wait here is bounded and each answers exactly

@@ -363,6 +363,11 @@ struct StartRequest: Equatable {
     /// no longer in the way) — it only carries the caller's own choice
     /// forward unexamined, the same latitude `region`/`windowId` get here.
     let micDeviceUid: String?
+    /// STC-418: record what the machine is playing to system.m4a. A boolean,
+    /// not a device: there is one system output. Anything but a literal
+    /// `true` is "off" — the same latitude `camera` gets, and the setting's
+    /// own default (off) in the app.
+    let systemAudio: Bool
 }
 
 enum StartRequestError: Error, Equatable, CustomStringConvertible {
@@ -436,8 +441,10 @@ func parseStartRequest(_ cmd: [String: Any]) -> Result<StartRequest, StartReques
     // whole take.
     let micRaw = cmd["micDeviceUid"] as? String
     let micDeviceUid = (micRaw?.isEmpty == false) ? micRaw : nil
+    let systemAudio = cmd["systemAudio"] as? Bool ?? false
     return .success(StartRequest(dir: dir, displayId: displayId, region: region,
-                                 windowId: windowId, camera: camera, micDeviceUid: micDeviceUid))
+                                 windowId: windowId, camera: camera, micDeviceUid: micDeviceUid,
+                                 systemAudio: systemAudio))
 }
 
 

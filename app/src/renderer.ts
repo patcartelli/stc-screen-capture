@@ -27,6 +27,8 @@ interface AppSettings {
   displayId: number | null;
   /** STC-233. null means no mic — never "automatic". */
   micDeviceUid: string | null;
+  /** STC-418. Off by default; no control until the options bar (PR 4). */
+  systemAudio: boolean;
   /** STC-292. */
   shutterSound: boolean;
   /** STC-391: how long Record and the self-timer count down, ms. */

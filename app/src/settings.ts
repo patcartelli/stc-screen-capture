@@ -60,6 +60,14 @@ export interface Settings {
    */
   micDeviceUid: string | null;
   /**
+   * Record what the machine is PLAYING to system.m4a (STC-418). A boolean,
+   * not a device — there is one system output — and OFF by default: nobody
+   * records the machine's audio without having turned it on (Patrick,
+   * 2026-09-25). Sticky like the camera. Sent to the helper only when on;
+   * an absent field is "off" to `parseStartRequest`.
+   */
+  systemAudio: boolean;
+  /**
    * The global capture shortcuts (STC-292), as Electron accelerators. `null`
    * for an action the user deliberately unbound — which is a preference like
    * any other, and must survive a restart rather than springing back to the
@@ -230,7 +238,8 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  camera: false, displayId: null, micDeviceUid: null, shortcuts: { ...DEFAULT_SHORTCUTS },
+  camera: false, displayId: null, micDeviceUid: null, systemAudio: false,
+  shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   still: { ...DEFAULT_STILL_SETTINGS },
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
@@ -404,6 +413,7 @@ export function readSettings(dir: string): Settings {
     camera: typeof doc.camera === "boolean" ? doc.camera : DEFAULT_SETTINGS.camera,
     displayId: cleanDisplayId(doc.displayId),
     micDeviceUid: cleanMicDeviceUid(doc.micDeviceUid),
+    systemAudio: doc.systemAudio === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
@@ -444,6 +454,8 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     camera: merged.camera === true,
     displayId: cleanDisplayId(merged.displayId),
     micDeviceUid: cleanMicDeviceUid(merged.micDeviceUid),
+    // `=== true`, the camera's rule: off unless explicitly on.
+    systemAudio: merged.systemAudio === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),
