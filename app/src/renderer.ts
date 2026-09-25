@@ -8,6 +8,10 @@ interface DisplayInfo {
 interface MicInfo {
   name: string; uid: string; bluetooth: boolean;
 }
+/** STC-414. Mirrors Watchers.enumerateDevices's own "cameras" shape — name and uid only, no bluetooth. */
+interface CameraInfo {
+  name: string; uid: string;
+}
 interface StillSettingsView {
   format: string; quality: number; scale: string;
   stripMetadata: boolean; template: string;
@@ -27,6 +31,8 @@ interface AppSettings {
   displayId: number | null;
   /** STC-233. null means no mic — never "automatic". */
   micDeviceUid: string | null;
+  /** STC-414. null means automatic (the helper's own ranking) — unlike micDeviceUid. */
+  cameraDeviceUid: string | null;
   /** STC-418. Off by default; no control until the options bar (PR 4). */
   systemAudio: boolean;
   /** STC-292. */
@@ -62,7 +68,10 @@ interface StillResult {
 declare const recorder: {
   getSettings: () => Promise<AppSettings>;
   setSettings: (p: Partial<AppSettings>) => Promise<AppSettings>;
-  devices(): Promise<{ displays?: DisplayInfo[]; mics?: MicInfo[]; stalled?: boolean; detail?: string }>;
+  devices(): Promise<{
+    displays?: DisplayInfo[]; mics?: MicInfo[]; cameras?: CameraInfo[];
+    stalled?: boolean; detail?: string;
+  }>;
   status(): Promise<{ state: string; pid?: number }>;
   takes(): Promise<{ takes: Take[]; invalid: { name: string; reason: string }[] }>;
   library(filter?: string): Promise<LibraryList>;
@@ -121,11 +130,14 @@ import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
 import { MODEL_CODE } from "./product.js";
+import {
+  deviceRows, decidePopoverToggle,
+  type DeviceLike, type DeviceChoice, type PopoverId,
+} from "./device-picker.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
 const stillBtn = $("capturestill") as HTMLButtonElement;
-const cameraBox = $("camera") as HTMLInputElement;
 let recording = false;
 
 // STC-399: the strip's own model plate — the bare code, no version (that is
@@ -150,32 +162,6 @@ pillBtn.addEventListener("click", () => recordBtn.click());
 new ResizeObserver(() => {
   recorder.reportPillWidth(Math.ceil(pillBtn.getBoundingClientRect().width));
 }).observe(pillBtn);
-
-/**
- * Opt-in, default off, sticky. The stored preference is the authority — main
- * reads it again at `start`, so this control only proposes changes.
- *
- * Disabled while recording: the helper opens the device at start and closes it
- * at stop, so a mid-take flip would misdescribe what is being recorded.
- */
-void (async () => {
-  try {
-    cameraBox.checked = (await recorder.getSettings()).camera;
-  } catch {
-    cameraBox.checked = false;
-  }
-})();
-
-cameraBox.addEventListener("change", async () => {
-  try {
-    const saved = await recorder.setSettings({ camera: cameraBox.checked });
-    // Show what was actually stored, not what was clicked.
-    cameraBox.checked = saved.camera;
-  } catch (e) {
-    cameraBox.checked = !cameraBox.checked;
-    alertUser(`Could not save the camera setting: ${String(e)}`);
-  }
-});
 
 /**
  * Which display to record (STC-247). "Automatic" is the phase-1 behaviour —
@@ -243,69 +229,143 @@ displaySel.addEventListener("change", async () => {
 });
 
 /**
- * Which microphone to record (STC-233). "Off" is the default AND the only
- * automatic choice — unlike the display picker's "Automatic", there is no
- * safe "whichever mic is default": the settled decision (phase 0) forbids
- * taking one without the user naming it explicitly, because auto-grabbing a
- * Bluetooth mic once stalled capture and wedged CoreAudio system-wide. A
- * stored uid whose device is gone is shown as such, the same "(not
- * connected)" treatment the display picker already gives a missing display —
- * `start` would refuse that device (mic-not-found) rather than silently
- * recording another one, and the picker should not hide that before Record
- * is even pressed.
+ * Mic and camera device selection (STC-414), sharing one popover — see
+ * device-picker.ts's header for why one implementation serves both.
+ *
+ * The mic keeps STC-233's own rule: "Off" is the only automatic choice,
+ * because there is no safe default mic (auto-grabbing a Bluetooth mic once
+ * wedged CoreAudio system-wide). The camera keeps its existing on/off
+ * checkbox's behaviour as one of its rows, and ALSO offers "Automatic" —
+ * `CameraCapture`'s own transportType ranking (STC-286), which is what
+ * `camera: true` alone has always meant — alongside naming a device
+ * explicitly. Both give a stored uid that is no longer connected its own
+ * "(not connected)" row, the same treatment the display picker already
+ * gives a missing display: `start` refuses that device rather than
+ * silently recording another one, and the picker should not hide that
+ * before Record is even pressed.
  */
-const micSel = $("mic") as HTMLSelectElement;
+const cameraTrigger = $("camera-picker") as HTMLButtonElement;
+const micTrigger = $("mic-picker") as HTMLButtonElement;
+const devicePopover = $("devicepopover") as HTMLDivElement;
+
+let storedCamera = false;
+let storedCameraUid: string | null = null;
 let storedMicUid: string | null = null;
+let knownMics: DeviceLike[] = [];
+let knownCameras: DeviceLike[] = [];
+let openPopover: PopoverId | null = null;
 
 function micLabel(m: MicInfo): string {
   return m.bluetooth ? `${m.name} (Bluetooth)` : m.name;
 }
 
-async function refreshMics(): Promise<void> {
-  let mics: MicInfo[] = [];
+function cameraChoice(): DeviceChoice {
+  if (!storedCamera) return { kind: "off" };
+  return storedCameraUid != null ? { kind: "device", uid: storedCameraUid } : { kind: "auto" };
+}
+function micChoice(): DeviceChoice {
+  return storedMicUid != null ? { kind: "device", uid: storedMicUid } : { kind: "off" };
+}
+
+/**
+ * The trigger's own label at rest — what is CONFIGURED, not what a take is
+ * currently doing. `setCamera`/`setMic` (below) overwrite this with live
+ * status the moment a take actually opens the device; this only runs again
+ * once that take is over and something is picked anew, so it never fights
+ * "opening…" or a fault text mid-recording.
+ */
+function deviceStatusLabel(choice: DeviceChoice, devices: DeviceLike[]): string {
+  if (choice.kind === "off") return "off";
+  if (choice.kind === "auto") return "automatic";
+  return devices.find((d) => d.uid === choice.uid)?.name ?? "not connected";
+}
+function renderIdleStatus(): void {
+  if (recording) return;
+  setCamera(deviceStatusLabel(cameraChoice(), knownCameras));
+  setMic(deviceStatusLabel(micChoice(), knownMics));
+}
+
+async function refreshDevices(): Promise<void> {
   try {
     const r = await recorder.devices();
-    mics = Array.isArray(r.mics) ? r.mics : [];
+    knownMics = Array.isArray(r.mics) ? r.mics.map((m) => ({ name: micLabel(m), uid: m.uid })) : [];
+    knownCameras = Array.isArray(r.cameras) ? r.cameras : [];
   } catch {
-    mics = [];
+    knownMics = [];
+    knownCameras = [];
   }
-  const wanted = storedMicUid;
-  micSel.replaceChildren();
-  const off = document.createElement("option");
-  off.value = ""; off.textContent = "Off";
-  micSel.append(off);
-  for (const m of mics) {
-    const o = document.createElement("option");
-    o.value = m.uid; o.textContent = micLabel(m);
-    micSel.append(o);
-  }
-  if (wanted != null && !mics.some((m) => m.uid === wanted)) {
-    const o = document.createElement("option");
-    o.value = wanted; o.textContent = "Mic (not connected)";
-    micSel.append(o);
-  }
-  micSel.value = wanted ?? "";
+  renderIdleStatus();
 }
+
+function closePopover(): void {
+  if (openPopover == null) return;
+  openPopover = null;
+  devicePopover.hidden = true;
+  devicePopover.replaceChildren();
+}
+
+function renderPopover(): void {
+  if (openPopover == null) { devicePopover.hidden = true; return; }
+  const isMic = openPopover === "mic";
+  const rows = deviceRows(isMic
+    ? { devices: knownMics, current: micChoice(), offLabel: "Off", staleLabel: "Mic (not connected)" }
+    : { devices: knownCameras, current: cameraChoice(), offLabel: "Off", autoLabel: "Automatic",
+       staleLabel: "Camera (not connected)" });
+  devicePopover.replaceChildren();
+  for (const row of rows) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = row.label;
+    b.setAttribute("role", "option");
+    b.setAttribute("aria-selected", String(row.selected));
+    b.addEventListener("click", () => void pickDevice(isMic, row.choice));
+    devicePopover.append(b);
+  }
+  const trigger = isMic ? micTrigger : cameraTrigger;
+  const r = trigger.getBoundingClientRect();
+  devicePopover.hidden = false;
+  devicePopover.style.left = `${Math.round(r.left)}px`;
+  devicePopover.style.top = `${Math.round(r.bottom + 4)}px`;
+}
+
+async function pickDevice(isMic: boolean, choice: DeviceChoice): Promise<void> {
+  try {
+    const saved = isMic
+      ? await recorder.setSettings({ micDeviceUid: choice.kind === "device" ? choice.uid : null })
+      : await recorder.setSettings(
+          choice.kind === "off" ? { camera: false }
+          : choice.kind === "auto" ? { camera: true, cameraDeviceUid: null }
+          : { camera: true, cameraDeviceUid: choice.uid });
+    if (isMic) storedMicUid = saved.micDeviceUid;
+    else { storedCamera = saved.camera; storedCameraUid = saved.cameraDeviceUid; }
+  } catch (e) {
+    alertUser(`Could not save the ${isMic ? "mic" : "camera"} setting: ${String(e)}`);
+  }
+  closePopover();
+  renderIdleStatus();
+}
+
+function toggleDevicePopover(id: PopoverId): void {
+  openPopover = decidePopoverToggle(openPopover, id);
+  renderPopover();
+}
+cameraTrigger.addEventListener("click", (e) => { e.stopPropagation(); toggleDevicePopover("camera"); });
+micTrigger.addEventListener("click", (e) => { e.stopPropagation(); toggleDevicePopover("mic"); });
+// Outside click closes it — the popover itself and its own triggers stop
+// propagation above, so this only ever sees a click elsewhere.
+document.addEventListener("click", () => closePopover());
 
 void (async () => {
   try {
-    storedMicUid = (await recorder.getSettings()).micDeviceUid;
+    const s = await recorder.getSettings();
+    storedCamera = s.camera;
+    storedCameraUid = s.cameraDeviceUid;
+    storedMicUid = s.micDeviceUid;
   } catch {
-    storedMicUid = null;
+    storedCamera = false; storedCameraUid = null; storedMicUid = null;
   }
-  await refreshMics();
+  await refreshDevices();
 })();
-
-micSel.addEventListener("change", async () => {
-  const chosen = micSel.value === "" ? null : micSel.value;
-  try {
-    const saved = await recorder.setSettings({ micDeviceUid: chosen });
-    storedMicUid = saved.micDeviceUid;
-  } catch (e) {
-    alertUser(`Could not save the mic setting: ${String(e)}`);
-  }
-  await refreshMics();
-});
 
 /**
  * What a recording captures (STC-370's region/window capability, wired to the
@@ -423,12 +483,15 @@ void (async () => {
 /** The camera, display and scope are fixed at start and released at stop, so
  * none may look changeable mid-take. */
 function lockSettings(locked: boolean): void {
-  cameraBox.disabled = locked;
+  cameraTrigger.disabled = locked;
   displaySel.disabled = locked;
-  micSel.disabled = locked;
+  micTrigger.disabled = locked;
   scopeSel.disabled = locked;
   pickWindowBtn.disabled = locked;
   pickRegionBtn.disabled = locked;
+  // A disabled trigger cannot be the reason the popover stays open — close it
+  // outright rather than leaving it floating over a now-unclickable button.
+  if (locked) closePopover();
   // Locked, these stay disabled outright; unlocked, renderScope() puts them
   // back to whatever "is there something to clear" actually says.
   if (locked) { clearWindowBtn.disabled = true; clearRegionBtn.disabled = true; }
@@ -452,7 +515,7 @@ function setProfileOpen(open: boolean): void {
 profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
 profileCloseBtn.addEventListener("click", () => setProfileOpen(false));
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Escape") setProfileOpen(false);
+  if (e.code === "Escape") { setProfileOpen(false); closePopover(); }
 });
 
 let currentDir: string | undefined;
@@ -622,7 +685,7 @@ recordBtn.addEventListener("click", async () => {
         // Reset per take, and say "opening…" rather than "—": the camera opens
         // off the critical path, so there IS a window where it is neither
         // absent nor live, and that window is the whole complaint (STC-287).
-        setCamera(cameraBox.checked ? "opening…" : "off");
+        setCamera(storedCamera ? "opening…" : "off");
         setMic(storedMicUid != null ? "opening…" : "off");
       // The device is opened at start and closed at stop, so the setting must
       // not appear changeable mid-take — it would misdescribe the recording.
@@ -651,7 +714,7 @@ recorder.on("helper:ready", (l) => {
   // A (re)started helper can enumerate; a respawned one may see a different
   // set of displays (or mics) than the last one did.
   void refreshDisplays();
-  void refreshMics();
+  void refreshDevices();
   if (!recording) setState("idle");
   // Not unconditionally `false`: a window or area scope with nothing picked
   // yet must stay disabled through a helper respawn, the same as it is on
@@ -776,6 +839,10 @@ const CAMERA_FAULTS: Record<string, string> = {
     "The camera opened but is not sending any frames, so this take will have no " +
     "picture-in-picture. A closed laptop lid, a covered lens, or another app using " +
     "the camera all look like this.",
+  // STC-414: the picker showed a real device at some point, and it is gone by the
+  // time the take actually opens it — the same shape as mic-not-found, and the
+  // same rule (refuse that device, never silently substitute another).
+  "camera-not-found": "The chosen camera is no longer available, so this take has no picture-in-picture.",
 };
 
 /**

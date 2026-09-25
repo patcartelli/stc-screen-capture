@@ -50,12 +50,20 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
-  // STC-412: Camera lives inside the Settings sheet now, which sits off-screen
-  // at translateX(100%) until opened — Playwright reads it as visible but
-  // cannot scroll a fixed element into view, so every click here would fail
-  // with "element is outside of the viewport". Open it once, as a user does.
-  await win.click("#settings");
+  // STC-414: the camera picker lives on the always-visible #devicestate row
+  // now, not behind Settings — no sheet to open first.
   return win;
+}
+
+// STC-414: turns the camera on via the #devicestate popover, picking
+// "Automatic" — CameraCapture's own ranking (STC-286), which is what the old
+// checkbox's `camera: true` alone has always meant. The fake helper keys its
+// canned responses off STC_FAKE_CAMERA, not off which uid was actually sent,
+// so "Automatic" exercises exactly what these tests need: camera true, no
+// device named.
+async function turnCameraOn(win: any): Promise<void> {
+  await win.click("#camera-picker");
+  await win.click('#devicepopover >> text="Automatic"');
 }
 
 describe("the camera toggle", () => {
@@ -65,14 +73,14 @@ describe("the camera toggle", () => {
 
     let win = await launch({ userData, recordings });
     // Opt-in: a camera must never be on because nobody said otherwise.
-    await expect.poll(() => win.isChecked("#camera"), { timeout: 20_000 }).toBe(false);
-    await win.check("#camera");
-    await expect.poll(() => win.isChecked("#camera")).toBe(true);
+    await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("off");
+    await turnCameraOn(win);
+    await expect.poll(() => win.textContent("#camera-state")).toBe("automatic");
     await app!.close();
     app = undefined;
 
     win = await launch({ userData, recordings });
-    await expect.poll(() => win.isChecked("#camera"), { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("automatic");
   }, 180_000);
 
   // THE assertion for this increment. Everything else can be right while the
@@ -85,8 +93,8 @@ describe("the camera toggle", () => {
 
     const win = await launch({ userData, recordings, startLog });
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.check("#camera");
-    await expect.poll(() => win.isChecked("#camera")).toBe(true);
+    await turnCameraOn(win);
+    await expect.poll(() => win.textContent("#camera-state")).toBe("automatic");
 
     await win.click("#record");
     const cmd = await waitForStart(startLog);
@@ -94,7 +102,7 @@ describe("the camera toggle", () => {
     expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
     // While a take is running the setting must not look changeable: the device
     // is opened at start and closed at stop.
-    await expect.poll(() => win.isDisabled("#camera"), { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => win.isDisabled("#camera-picker"), { timeout: 20_000 }).toBe(true);
   }, 180_000);
 
   test("recording with the toggle off sends camera: false", async () => {
@@ -206,8 +214,8 @@ describe("the camera says what it is doing (STC-287)", () => {
 
   test("a camera that opens is named, once it actually opens", async () => {
     const win = await launch({ ...dirs(), camera: "FaceTime HD Camera" });
-    await win.waitForSelector("#camera");
-    if (!(await win.isChecked("#camera"))) await win.click("#camera");
+    await win.waitForSelector("#camera-picker");
+    await turnCameraOn(win);
     await win.click("#record");
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
       .toContain("FaceTime HD Camera");
@@ -217,8 +225,8 @@ describe("the camera says what it is doing (STC-287)", () => {
   // the UI — the user's only clue was a take with no picture-in-picture.
   test("a camera that fails to open says so instead of failing silently", async () => {
     const win = await launch({ ...dirs(), camera: "fail" });
-    await win.waitForSelector("#camera");
-    if (!(await win.isChecked("#camera"))) await win.click("#camera");
+    await win.waitForSelector("#camera-picker");
+    await turnCameraOn(win);
     await win.click("#record");
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
       .toContain("failed");
@@ -246,8 +254,8 @@ describe("the camera says what it is doing (STC-287)", () => {
   // than by out-running the runner's own scheduling jitter.
   test("a camera that opens and then sends nothing stops claiming it works", async () => {
     const win = await launch({ ...dirs(), camera: "noframes" });
-    await win.waitForSelector("#camera");
-    if (!(await win.isChecked("#camera"))) await win.click("#camera");
+    await win.waitForSelector("#camera-picker");
+    await turnCameraOn(win);
     await observeTextSequence(win, "camera-state");
 
     await win.click("#record");
