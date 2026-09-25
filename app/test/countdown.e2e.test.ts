@@ -113,6 +113,35 @@ function hasCountdownWindow(): Promise<boolean> {
     BrowserWindow.getAllWindows().some((w) => w.webContents.getURL().includes("countdown.html")));
 }
 
+/**
+ * Leave the app IDLE before `afterEach` quits it (STC-388 follow-up).
+ *
+ * The two tests below end with a Record flow parked in a countdown. Quitting
+ * with that panel alive means `runQuitTeardown`'s `cancelCountdown()` has to
+ * tear it down. Under `STC_COUNTDOWN_FAULT` that teardown throws before
+ * `destroy()`, so `app.quit()` is left to close a live panel. On the macOS
+ * runner that quit printed `[quit] teardown … helper=8ms` and then did not
+ * exit within 72 s (run 36163869597, re-run job 108173025132).
+ *
+ * This destroys every countdown panel, then waits until no overlay is left
+ * and the flow has settled (`#record` back to "Record" and enabled), the
+ * idle state every other e2e file quits from. What each test ASSERTS is
+ * unchanged; this only runs after.
+ */
+async function settleToIdle(win: Page): Promise<void> {
+  await app!.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.webContents.getURL().includes("countdown.html")) w.destroy();
+    }
+  });
+  await expect.poll(hasCountdownWindow, { timeout: 10_000 }).toBe(false);
+  await expect.poll(() => app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some((w) => w.webContents.getURL().includes("overlay.html"))),
+  { timeout: 10_000 }).toBe(false);
+  await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+  await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
+}
+
 async function overlayPage(ms = 15_000): Promise<Page> {
   const started = Date.now();
   for (;;) {
@@ -247,29 +276,34 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Record");
     expect(lines(startLog)).toHaveLength(0);
 
+    // The fault is the throw BEFORE `hide()`/`destroy()`, so this first panel
+    // is still alive even though its session settled. It has to go before
+    // the second Record, or `countdownPage()` below returns THIS stale panel
+    // at once and never sees whether a second countdown opened at all. That
+    // is how it read before: the second flow's real panel opened only after
+    // the cleanup at the end of the test, survived into `afterEach`, and hit
+    // the fault branch again at quit. On the macOS runner that quit hung
+    // past 72 s (run 36163869597).
+    await app!.evaluate(({ BrowserWindow }) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (w.webContents.getURL().includes("countdown.html")) w.destroy();
+      }
+    });
+    await expect.poll(hasCountdownWindow, { timeout: 10_000 }).toBe(false);
+
     // The part that matters: not wedged. A second Record has to reach a
     // countdown again rather than be refused for a capture that has ended.
     await startRecordFlow(app!, win);
     await countdownPage();
     expect(await toastPage(app!)).toBeUndefined();
 
-    // Found migrating this test onto the real overlay flow (STC-388, task
-    // 6b): STC_COUNTDOWN_FAULT stays set for the whole process, not one shot,
-    // so THIS countdown's own `finish()` would ALSO throw before it ever
-    // calls `hide()`/`destroy()` — the fault branch in `countdown-window.ts`
-    // is unconditional on the flag. Left running into `afterEach`, that
-    // BrowserWindow is still alive and undestroyed when `app.close()` has to
-    // tear it down as part of quitting, which was intermittently slow enough
-    // to trip the default 10s hook timeout. Destroying it directly here,
-    // the same technique the sibling test below already uses, sidesteps
-    // `finish()`'s fault branch entirely — it checks `isDestroyed()` before
-    // the throw, so a window already gone by the time `finish` runs never
-    // reaches it.
-    await app!.evaluate(({ BrowserWindow }) => {
-      for (const w of BrowserWindow.getAllWindows()) {
-        if (w.webContents.getURL().includes("countdown.html")) w.destroy();
-      }
-    });
+    // STC_COUNTDOWN_FAULT stays set for the whole process, so this second
+    // countdown's own `finish()` would ALSO throw before it destroys its
+    // panel if anything cancelled it normally, quit included. `settleToIdle`
+    // destroys it directly instead. `finish()` checks `isDestroyed()` before
+    // the throw, so a panel that is already gone never reaches the fault,
+    // and the flow settles before `afterEach` quits.
+    await settleToIdle(win);
   }, 120_000);
 
   test("destroying the panel mid-countdown still settles, and Record works after", async () => {
@@ -303,6 +337,7 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     await startRecordFlow(app!, win);
     await countdownPage();
     expect(await toastPage(app!)).toBeUndefined();
+    await settleToIdle(win);
   }, 120_000);
 });
 
