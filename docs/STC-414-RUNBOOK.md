@@ -1,5 +1,22 @@
 # STC-414 — mic/camera device pickers: what to run on the Mac
 
+**Verified on real macOS hardware 2026-09-25 (PR #224, `8b2ceb0`).** §0
+compiled clean and signed on the first real `swiftc` pass — the
+`MicCapture.swift` mirror held. §1 passed in full: persistence across a
+relaunch, one-popover-at-a-time, outside-click/Escape closing. §2's core
+claim is CONFIRMED — an explicitly-picked external camera's feed is what
+ends up in the recorded PiP, not the built-in's (its ~1-1.4s open delay is
+pre-existing STC-287 behaviour, not new). The specific `camera-not-found`
+refusal (a picked device gone *before* the take starts) was not exercised —
+mid-take disconnect was tested instead, which is the pre-existing
+`device-disconnected` warning, a different and already-covered path. §3
+confirmed: both triggers lock for the whole take. §4: functionally correct
+(no clipping seen), but visually rough — filed as follow-ups rather than
+fixed blind a second time: **STC-456** (the popover itself, "unstyled, small
+fonts") and **STC-457** (the `camera-not-found`/`mic-not-found` toast, which
+turned out to be a pre-existing, app-wide toast-styling gap STC-443 never
+reached, not specific to this ticket).
+
 Written on a Linux session with no Xcode/swiftc at all (CLAUDE.md's own
 Toolchain note). `helper/src/CameraCapture.swift`, `CaptureDecisions.swift`
 and `Capture.swift` were only **typechecked by eye against the existing
@@ -97,6 +114,10 @@ This is the part with no automated coverage at all on this machine — the
    reads "The chosen camera is no longer available…" (`CAMERA_FAULTS`'s new
    `camera-not-found` entry) — the camera's own version of the existing
    mic-not-found behaviour, not a silent fallback to some other device.
+   **Still open as of 2026-09-25** — disconnecting mid-take was tried
+   instead, which exercises the pre-existing `device-disconnected` warning
+   (`Watchers.swift`), a different path. This specific pre-record refusal
+   has not been seen fire on real hardware yet.
 
 ## §3 — read-only during a take
 
@@ -116,3 +137,11 @@ This is the part with no automated coverage at all on this machine — the
   viewport — if it clips, that is a real gap to fix, not a design call.
 - Light and dark mode both (the popover reads `--surface`/`--border-strong`/
   `--accent` from `tokens.css`'s existing tokens — nothing new was added).
+
+**2026-09-25 verdict**: no clipping seen, but the panel reads as unstyled
+with small fonts — filed as **STC-456** rather than guessed at blind a
+second time. The `camera-not-found` toast from §2 step 5 has the same
+"needs a design pass" complaint, but turned out to be `toast.html`'s own
+pre-existing, app-wide styling gap (never brought into STC-443's
+`tokens.css`) rather than anything STC-414 introduced — filed separately as
+**STC-457**.
