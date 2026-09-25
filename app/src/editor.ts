@@ -1275,6 +1275,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   updateTrimUI();
   updateOutputSizeUI();
   updateLegibilityUI();
+  updateSystemAudioUI();
   applySpanTransform();
   redrawLanes();
 }
@@ -1295,6 +1296,7 @@ async function closeTake(): Promise<void> {
   openProject = undefined;
   openCapture = undefined;
   openDisplay = undefined;
+  updateSystemAudioUI();
   applyStageDisplay();
   await editor.closePreview();
 }
@@ -1360,6 +1362,34 @@ $("scrub").addEventListener("input", () => {
   void player.seek(frameToNs(Number(($("scrub") as HTMLInputElement).value), player.durationNs));
 });
 
+// ---- system-audio level (STC-418 PR 3) --------------------------------
+//
+// Shown only for a take that recorded system audio. The level lives on the
+// project (project-9's systemAudioLevel, 0..1) and is applied by the export's
+// mix (audio-mix.ts); it changes nothing the preview draws or plays. `input`
+// updates the value live; `change` (release, or a key) is what persists, the
+// same drag-then-settle split the trim handles use.
+
+function updateSystemAudioUI(): void {
+  const row = $("sysaudio");
+  const has = !!openSession?.systemAudio && !!openProject;
+  row.toggleAttribute("hidden", !has);
+  if (!has) return;
+  const pct = Math.round((openProject!.systemAudioLevel ?? 1) * 100);
+  ($("sysaudiolevel") as HTMLInputElement).value = String(pct);
+  $("sysaudiovalue").textContent = `${pct}%`;
+}
+
+$("sysaudiolevel").addEventListener("input", () => {
+  if (!openProject) return;
+  const pct = Number(($("sysaudiolevel") as HTMLInputElement).value);
+  openProject.systemAudioLevel = Math.min(1, Math.max(0, pct / 100));
+  $("sysaudiovalue").textContent = `${pct}%`;
+});
+$("sysaudiolevel").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
 // ---- keyboard grammar (STC-338 rule 8) --------------------------------
 
 function isTextField(el: Element | null): boolean {
@@ -1380,6 +1410,9 @@ const RANGE_NATIVE_KEYS = new Set([
 window.addEventListener("keydown", (e) => {
   if (!player || !openProject) return;
   if (e.target === $("scrub") && RANGE_NATIVE_KEYS.has(e.key)) e.preventDefault();
+  // The level slider is the opposite case: its arrow keys adjust the LEVEL
+  // and must not also step the playhead (STC-418 PR 3).
+  if (e.target === $("sysaudiolevel") && RANGE_NATIVE_KEYS.has(e.key)) return;
   const action = decideKey(
     {
       key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey,
@@ -1573,6 +1606,8 @@ async function runExport(): Promise<void> {
       encodedBytes: result.encodedBytes,
       micEncodedChunks: result.micEncodedChunks,
       audioOutputChunks: result.audioOutputChunks,
+      // STC-418: nonzero only when the take had system audio and was mixed.
+      mixEncodedChunks: result.mixEncodedChunks,
       output: exporting.output,
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {

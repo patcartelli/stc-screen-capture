@@ -142,3 +142,58 @@ firstFramePtsNs: 249916625, lastFramePtsNs: 13869916625}` against
 Record a 60 s 4K take with system audio on and one with it off. Compare
 `framesDropped` in the stop stats. A 2×2/1 fps stream should cost nothing;
 if drops rise, that is a finding.
+
+---
+
+# PR 3 — the export mix and the level slider
+
+**Run from the PR 3 branch until it merges** (same branch name, restarted
+from `master` after PR 2 merged):
+
+```
+git fetch origin claude/optimistic-ride-ed374b
+git checkout claude/optimistic-ride-ed374b && git pull
+helper/build.sh && npm run app:start
+```
+
+## What changed
+
+- **Export mixes.** A take with system audio exports ONE stereo 48 kHz AAC
+  track: `mic + system × level`, hard-limited at full scale
+  (`transform/src/audio-mix.ts`). A take WITHOUT system audio takes the old
+  mic-only path, unchanged.
+- **The level slider** sits at the right end of the editor's timecode row,
+  above the ruler. It is labelled "System audio", runs 0–100%, and appears only
+  for a take that recorded system audio. It is saved to `project.json`
+  (`systemAudioLevel`, project-9).
+- **The preview is still silent.** It has never played audio, mic included.
+  The slider is heard only in an exported file.
+- Linux verified the mixer's arithmetic (17 tests), the slider's wiring
+  (4 e2e tests, one mutation-checked), and that the fixture loads. **No mixed
+  export has been encoded anywhere yet**: Linux Chromium has no AAC encoder.
+
+## §7 — the mix, by ear
+
+1. Record ~15 s with system audio on, the mic on, and something playing
+   while you talk over it.
+2. Open it in the editor. The "System audio 100%" slider is at the top
+   right of the timeline. Export.
+3. Play the exported MP4 in QuickTime. **Both** your voice and the
+   machine's audio should be there, in one track, in sync with the picture.
+4. Set the slider to ~30% and export again. The system audio should be
+   clearly quieter and your voice unchanged. At 0%, only your voice remains.
+5. Close and reopen the take: the slider shows the level you left it at.
+
+Record: does each step hold, and does anything distort at 100% when both
+are loud? Distortion there is the hard limit working as decided: the fix is
+the slider, not a code change. Note it anyway.
+
+## §8 — the take kinds that must NOT change
+
+- A take with the mic only (system audio off) exports exactly as before:
+  mono or stereo at the mic's own rate.
+- A take with neither exports with no audio track, as before.
+- A take with system audio but NO mic exports system audio alone.
+
+If a mic-only export changed in any way, that is a regression. The mix is
+only meant to run when `system.m4a` exists.

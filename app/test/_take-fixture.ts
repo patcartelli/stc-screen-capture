@@ -1,6 +1,7 @@
 import { mkdtempSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 
 const root = join(__dirname, "..", "..");
 
@@ -50,6 +51,51 @@ export function makePipTakeFolder(
   // the realistic case, not the exotic one.
   if (opts.withProject !== false) files.push("project.json");
   for (const f of files) cpSync(join(root, "fixtures", "pip", f), join(takeDir, f));
+  return { dir, takeDir };
+}
+
+/**
+ * A take WITH a system-audio track (STC-418 PR 3), built on `fixtures/basic`.
+ *
+ * No committed `system.m4a` exists (making a real one needs a Mac, the same
+ * gap the mic has), so one is MUXED here at test time with the repo's own
+ * mp4-muxer: a real AAC-LC 48 kHz stereo sample entry (its esds carries the
+ * two-byte AudioSpecificConfig below) over placeholder sample bytes. That is
+ * enough for everything that happens when a take is OPENED — `loadSession`
+ * demuxes and rebases the track, it never decodes it — and deliberately NOT
+ * enough to export: only the export decodes audio, and a test that exported
+ * this file would be testing the placeholder, not the mix.
+ */
+export function makeSystemAudioTakeFolder(
+  takeName = "2026-09-25_10-00-00-sys",
+): { dir: string; takeDir: string } {
+  const { dir, takeDir } = makeTakeFolder(takeName);
+  // AudioSpecificConfig: object type 2 (AAC-LC), frequency index 3 (48 kHz),
+  // channel configuration 2 (stereo) -> 00010 0011 0010 000 -> 0x11 0x90.
+  const asc = new Uint8Array([0x11, 0x90]);
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(),
+    audio: { codec: "aac", numberOfChannels: 2, sampleRate: 48_000 },
+    fastStart: "in-memory",
+  });
+  const frameUs = (1024 * 1e6) / 48_000;
+  const frames = Math.floor(4.5e6 / frameUs);
+  for (let i = 0; i < frames; i++) {
+    muxer.addAudioChunkRaw(new Uint8Array([0x21, 0x10, 0x04, 0x60, 0x8c, 0x1c]), "key",
+      Math.round(i * frameUs), Math.round(frameUs),
+      i === 0 ? { decoderConfig: { codec: "mp4a.40.2", sampleRate: 48_000, numberOfChannels: 2, description: asc } } : undefined);
+  }
+  muxer.finalize();
+  writeFileSync(join(takeDir, "system.m4a"), new Uint8Array(muxer.target.buffer));
+
+  const anchors = JSON.parse(readFileSync(join(takeDir, "anchors.json"), "utf8"));
+  anchors.version = 6;
+  anchors.files = { ...anchors.files, system: "system.m4a" };
+  anchors.system = {
+    present: true, sampleRate: 48_000, channels: 2,
+    firstFramePtsNs: 100_000_000, lastFramePtsNs: 100_000_000 + Math.round((frames - 1) * frameUs * 1000),
+  };
+  writeFileSync(join(takeDir, "anchors.json"), JSON.stringify(anchors, null, 2));
   return { dir, takeDir };
 }
 
