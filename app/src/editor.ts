@@ -97,6 +97,10 @@ const fmtEstimate = (ms: number) => {
 const params = new URLSearchParams(location.search);
 const takeDir = params.get("dir") ?? "";
 const takeName = params.get("name") ?? "";
+// STC-429: the library's "Share" tile action opens the take here and asks
+// for its own Share flow to run immediately, rather than duplicating
+// share.ts's plumbing in the grid.
+const autoShare = params.get("autoShare") === "1";
 
 // ---- state ------------------------------------------------------------------
 
@@ -1241,7 +1245,9 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   const cameraMp4 = anchors.files?.camera ? await readVideo(anchors.files.camera) : undefined;
   // STC-233: same reasoning as cameraMp4 above, one track over.
   const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
-  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a });
+  // STC-418: and again for system audio — loadSession refuses a claimed track that was not supplied.
+  const systemM4a = anchors.files?.system ? await readVideo(anchors.files.system) : undefined;
+  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a, systemM4a });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
@@ -1755,6 +1761,15 @@ void (async () => {
   }
   try {
     await openTakeOrThrow(takeDir);
+    // Share now lives inside the export dialog (STC-444 slice 3) — open it
+    // the same way `#openexport`'s own click does, so the slug field and
+    // site-folder note are populated before `publish()` reads them, and so
+    // the person can actually see the status line while it runs.
+    if (autoShare) {
+      if (!exportDialog.open) exportDialog.showModal();
+      await refreshShareRow();
+      void publish();
+    }
   } catch (e: any) {
     alertUser(`Could not open "${takeName || takeDir}".\n${e?.message ?? e}`);
   }

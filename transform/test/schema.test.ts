@@ -273,3 +273,66 @@ describe("v4 schema carries the mic track (STC-233)", () => {
     expect(validate(load("fixtures/pip/anchors.json"))).toBe(false);
   });
 });
+
+describe("v6 schema carries the system-audio track (STC-418)", () => {
+  // Same approach as the v4 mic block above: no committed system.m4a exists
+  // (needs a Mac), so a v6 document is built by hand from the v2 pip fixture.
+  const v6 = (over: Record<string, unknown> = {}) => ({
+    ...clone(load("fixtures/pip/anchors.json")),
+    version: 6,
+    system: { present: false },
+    ...over,
+  });
+  const presentSystem = {
+    present: true, sampleRate: 48000, channels: 2,
+    firstFramePtsNs: 0, lastFramePtsNs: 1_000_000_000,
+  };
+
+  test("requested with no track validates as present:false, no measurements fabricated", () => {
+    const validate = compile("schema/anchors-6.schema.json");
+    expect(validate(v6()), JSON.stringify(validate.errors, null, 2)).toBe(true);
+  });
+
+  test("present:true requires every measurement field", () => {
+    const validate = compile("schema/anchors-6.schema.json");
+    const doc = v6({
+      system: presentSystem,
+      files: { display: "display.mp4", camera: "camera.mp4", system: "system.m4a" },
+    });
+    expect(validate(doc), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    for (const field of ["sampleRate", "channels", "firstFramePtsNs", "lastFramePtsNs"]) {
+      const missing = clone(doc);
+      delete missing.system[field];
+      expect(validate(missing), field).toBe(false);
+    }
+  });
+
+  test("system has no device — there is one system output, not a picker", () => {
+    const validate = compile("schema/anchors-6.schema.json");
+    expect(validate(v6({ system: { ...presentSystem, device: "Speakers" } }))).toBe(false);
+  });
+
+  test("system and mic coexist as two independent tracks", () => {
+    const validate = compile("schema/anchors-6.schema.json");
+    const doc = v6({
+      mic: {
+        present: true, device: "Fixture Mic", sampleRate: 48000, channels: 1,
+        firstFramePtsNs: 0, lastFramePtsNs: 1_000_000_000,
+      },
+      system: presentSystem,
+      files: { display: "display.mp4", camera: "camera.mp4", mic: "mic.m4a", system: "system.m4a" },
+    });
+    expect(validate(doc), JSON.stringify(validate.errors, null, 2)).toBe(true);
+  });
+
+  test("a system block needs v6: anchors-5 refuses it", () => {
+    const doc = v6({ version: 5 });
+    expect(compile("schema/anchors-5.schema.json")(doc)).toBe(false);
+  });
+
+  test("a v5 document is not a v6 document", () => {
+    const doc = { ...clone(load("fixtures/pip/anchors.json")), version: 5 };
+    expect(compile("schema/anchors-5.schema.json")(doc)).toBe(true);
+    expect(compile("schema/anchors-6.schema.json")(doc)).toBe(false);
+  });
+});
