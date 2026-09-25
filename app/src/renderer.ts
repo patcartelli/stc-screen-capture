@@ -799,6 +799,15 @@ const MIC_FAULTS: Record<string, string> = {
   "mic-no-frames":
     "The microphone opened but is not sending any audio, so this take will have no " +
     "microphone audio. Another app holding the device is the usual cause.",
+  // Found 2026-09-25: a mid-take mic unplug had no dedicated reaction at all
+  // (the helper's own CaptureSession.handleMicDisconnected fixes that) — the
+  // recording continues on video, with the mic track finalised at the point
+  // of disconnect rather than ending the whole take, unlike a display change
+  // (which must stop cleanly — AVAssetWriter cannot resize mid-file; losing
+  // an audio-only track has no such constraint).
+  "mic-disconnected":
+    "The microphone disconnected, so the rest of this take has no microphone audio. " +
+    "The recording itself continues.",
 };
 
 /**
@@ -840,6 +849,15 @@ recorder.on("helper:warning", (l) => {
     alertUser("Display configuration changed — the recording was stopped.");
     return;
   }
+  // `device-disconnected` fires for EITHER a camera or a mic, from the
+  // generic AVCaptureDevice watcher — before `mic-disconnected` existed it
+  // was the only signal a mic unplug got, mislabeled as a camera fault
+  // (CAMERA_FAULTS' own entry below). Now that the helper also sends the
+  // specific code, a mic's own uid is skipped here rather than shown twice
+  // under the wrong label; a camera unplug still falls through unchanged.
+  if (code === "device-disconnected" && l.uid != null && l.uid === storedMicUid) {
+    return;
+  }
   if (INFORMATIONAL_WARNINGS.has(code)) {
     // An idle display change is not an alert, but it is a new list of
     // displays; the picker must not go on offering one that was unplugged.
@@ -864,7 +882,7 @@ recorder.on("helper:warning", (l) => {
   }
   const mic = MIC_FAULTS[code];
   if (mic) {
-    setMic(code === "mic-no-frames" ? "no frames" : `failed — ${code}`);
+    setMic(code === "mic-no-frames" ? "no frames" : code === "mic-disconnected" ? "disconnected" : `failed — ${code}`);
     alertUser(l.detail ? `${mic}\n\n${l.detail}` : mic);
     return;
   }

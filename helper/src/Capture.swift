@@ -696,6 +696,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             case .store:
                 if case .success(let name) = result {
                     IO.send("mic-started", ["device": name])
+                    self.armMicDisconnectFault(deviceUid: deviceUid)
                 }
             case .closeImmediately:
                 m.stop { _ in }
@@ -706,6 +707,63 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                                         "detail": me.map { $0.description } ?? "\(e)"])
                 }
             }
+        }
+    }
+
+    /// `STC_CAPTURE_FAULT=mic-disconnected`: shortly after a successful mic
+    /// open, this calls the SAME reaction a real `.AVCaptureDeviceWasDisconnected`
+    /// notification drives (`handleMicDisconnected`, wired from `Watchers` in
+    /// main.swift) — so the fix below is watched firing rather than reasoned
+    /// about, the same idiom `armStreamDeathFault` uses for the display side.
+    /// The real `AVCaptureSession` is left running; the subject under test is
+    /// the reaction (mic torn down cleanly, `mic-disconnected` warning,
+    /// `micTrack` finalised with what was captured so far), not the fault
+    /// delivery mechanism itself.
+    static let micDisconnectFaultDelaySeconds: Double = 0.5
+    private func armMicDisconnectFault(deviceUid: String) {
+        guard ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "mic-disconnected" else { return }
+        IO.log("STC_CAPTURE_FAULT=mic-disconnected: the mic will report itself gone in \(Self.micDisconnectFaultDelaySeconds) s")
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.micDisconnectFaultDelaySeconds) { [weak self] in
+            self?.handleMicDisconnected(uid: deviceUid)
+        }
+    }
+
+    /// A mic that disconnects mid-recording used to have no dedicated
+    /// teardown at all: `Watchers.onDeviceChange` fired but was never wired
+    /// to anything (found 2026-09-25, chasing a report that a mid-take mic
+    /// unplug was ending the WHOLE recording, video included — the exact
+    /// class of failure `MicCapture.setupWriter`'s own `mediaTimeScale`
+    /// comment already documents happening once from an uncaught exception
+    /// deep in AVFoundation, though the specific cause there was fixed).
+    ///
+    /// This tears down ONLY the mic subsystem — the same `m.stop()` call
+    /// `stop(reason:)` makes for its own mic branch, just reached from a
+    /// live disconnect instead of an end-of-take teardown — and leaves
+    /// video (and camera, system audio) running untouched. A DISPLAY
+    /// disconnecting mid-take is a full, intentional stop
+    /// (`AVAssetWriter` cannot change output dimensions mid-file, wired in
+    /// main.swift's `onDisplayChange`); losing an AUDIO-only track has no
+    /// such constraint, so ending the whole take over it would be strictly
+    /// worse than a take with a shorter mic track.
+    ///
+    /// `!stoppingBegan` is the same HIGH-1 guard `startMicAsync`/
+    /// `startCameraAsync` already use: if the whole-take `stop(reason:)` has
+    /// already claimed `mic` (even if its own `m.stop()` hasn't finished
+    /// yet), this backs off rather than calling `MicCapture.stop()` a second
+    /// time on the same instance — `AVAssetWriter.finishWriting` is
+    /// documented as a once-only call.
+    func handleMicDisconnected(uid: String) {
+        lock.lock()
+        guard !stoppingBegan, wantMicUid == uid, let m = mic else { lock.unlock(); return }
+        mic = nil
+        lock.unlock()
+        IO.send("warning", ["code": "mic-disconnected", "uid": uid,
+                            "detail": "the microphone disconnected mid-recording; the take continues "
+                                    + "with no mic track from this point on"])
+        m.stop { [weak self] track in
+            self?.lock.lock()
+            self?.micTrack = track
+            self?.lock.unlock()
         }
     }
 
