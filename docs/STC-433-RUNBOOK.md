@@ -1,66 +1,195 @@
 # STC-433 — display/mic fallback: what to run on the Mac
 
-Written on a Linux session with no macOS, no Xcode, no `swiftc` — typechecked
-and bundled clean, but the actual dialog has never been shown on screen, and
-none of the existing e2e picker tests exercise this path (checked by hand:
-neither `display-picker.e2e.test.ts` nor `mic-picker.e2e.test.ts` presses
-Record with a selection that's missing from the fake device list).
+Rewritten 2026-09-25. The original version of this runbook (and of the
+feature) predates two events that changed the actual behavior underneath it:
 
-## What changed
+1. **PR #221's merge** ported STC-433 onto STC-388's Record-flow rewrite,
+   which landed on `master` in between. Scope (display/window/region) is no
+   longer a sticky setting read from disk — it's picked fresh from a live
+   overlay every time `runRecordFlow`/`recordFlowBody` run. That removed the
+   "Choose a Different…" dialog option entirely (there's no sticky picker
+   control left to focus — pressing Record again already shows a live
+   device list) and split the display fallback in two: **Use Automatic**
+   only when the pick was a full display, a plain refusal for a cropped
+   region (its `region` coordinates belong to the display that's gone).
+2. **A second bug found on hardware** while testing this ticket
+   (2026-09-25): disconnecting the mic **mid-recording** (not before
+   Record was pressed) was ending the whole take, video included.
+   Investigation found no code ever wired a mic-disconnect notification to
+   anything — `Watchers.onDeviceChange` fired but nothing was assigned to
+   it. Fixed in `CaptureSession.handleMicDisconnected`
+   (`helper/src/Capture.swift`) and wired from `main.swift`'s `boot()`: it
+   tears down ONLY the mic subsystem and leaves video running, unlike a
+   display change mid-take (a full, intentional stop — `AVAssetWriter`
+   cannot resize mid-file). **This fix is unverified — root cause was
+   inferred from static reading, not a crash log, since this session has no
+   Mac.** If the take still ends after this lands, the next step is a real
+   crash log from Console.app or the Xcode debugger, not another
+   speculative patch.
+3. **The camera has the identical latent gap, fixed the same way**
+   (found while this pass was still open, 2026-09-25): nothing tore down
+   just the camera subsystem on its own mid-recording disconnect either.
+   `CaptureSession.handleCameraDisconnected` (`helper/src/Capture.swift`)
+   mirrors `handleMicDisconnected`, wired from the same `onDeviceChange`
+   callback — each handler no-ops on a uid that isn't its own subsystem's.
+   The uid check itself can't be the same shape: the mic is always
+   requested by exact uid (STC-233), but the camera's common "automatic"
+   pick (STC-414) carries no uid in the request at all, so
+   `CameraCapture` now tracks the uid of the device it actually resolved
+   to (`currentDeviceUid()`) and that is what a disconnect is matched
+   against — matching the request would silently no-op for most cameras.
+   **Also unverified on hardware for the same reason as the mic fix.**
 
-`recorder:start` (`app/src/main.ts`) now checks the stored `displayId` and
-`micDeviceUid` against `sup.devices()`'s own current enumeration, before the
-countdown runs:
+Typechecked/bundled clean. `helper/build.sh` also compiled and signed cleanly
+in a later session that had `swiftc` (6.4, via swiftly) — the helper starts,
+answers `status`, and shuts down cleanly on a bare `{"cmd":"status"}` smoke
+test — but **none of what follows has actually been watched on a Mac with a
+real device to unplug.** A binary that builds and answers its own protocol is
+not the same claim as a disconnect actually being handled correctly.
 
-- **Missing display** (previously: `start` refused outright with a raw
-  `display-not-found` string) — a native dialog: **Use Automatic** (falls
-  back to the existing, safe "whichever the helper lists first" mode) /
-  **Choose a Different Display…** (opens the profile sheet and focuses the
-  display picker) / **Cancel**.
-- **Missing mic** (previously: `start` proceeded anyway with no audio and
-  said so only afterwards, via `mic-not-found` in `MIC_FAULTS`) — a native
-  dialog: **Turn Mic Off** (the same state picking "Off" reaches) / **Choose
-  a Different Microphone…** / **Cancel**. Never an automatic pick — the
-  existing STC-233 decision against silently grabbing a mic stands.
+## What changed (current behavior)
 
-A CoreAudio enumeration reported as `stalled` skips the mic check entirely
-(unknown is not the same as gone) — the existing `mic-not-found` live warning
-stays the backstop for that case.
+### Before Record starts (the original ticket)
 
-## §1 — the display fallback
+`recordFlowBody` (`app/src/main.ts`) checks the overlay's own fresh
+display/mic pick against `sup.devices()`'s current enumeration, right
+before the countdown:
 
-1. `npm run app:start`, pick a specific (non-Automatic) display in Settings.
-2. Disconnect that display (or, on a one-display Mac, there's no way to
-   trigger this by hand — skip to §3's fake-helper alternative instead).
-3. Press Record. **Expect**: a native dialog naming the display as no longer
-   connected, with "Use Automatic" as the highlighted default button.
-4. Click **Use Automatic**. **Expect**: the countdown starts immediately
-   (no second click needed), the take records on whichever display is
-   available, and the Settings picker now reads "Automatic" once reopened.
-5. Repeat, this time clicking **Choose a Different Display…**. **Expect**:
-   the profile sheet opens with the display `<select>` focused, and nothing
-   recorded.
-6. Repeat, clicking **Cancel** (or pressing Escape). **Expect**: back to
-   idle, nothing recorded, no error toast.
+- **Missing display, full-display pick**: a dialog — **Use Automatic**
+  (drops the specific display, records on whichever the helper lists
+  first) / **Cancel**.
+- **Missing display, cropped-region pick**: a dialog with **OK** only —
+  a plain refusal. Press Record again to re-pick from the live list.
+- **Missing mic**: a dialog — **Turn Mic Off** (the same state picking
+  "Off" reaches — never an automatic pick of another mic, the standing
+  STC-233 decision) / **Cancel**.
+- A CoreAudio enumeration reported as `stalled` skips the mic check
+  entirely (unknown is not the same as gone) — the existing
+  `mic-not-found` live warning stays the backstop for that case.
 
-## §2 — the mic fallback
+### During an active recording (found 2026-09-25, this pass)
 
-Same shape as §1, but with a microphone (unplug a USB/Bluetooth mic that was
-selected, or use a mic that was removed since it was last picked):
+- **Display disconnects mid-take**: unchanged, pre-existing, intentional —
+  the recording stops cleanly (`display-reconfigured`, already covered by
+  `docs/STC-247-RUNBOOK.md` and settled architecture: AVAssetWriter cannot
+  change output dimensions mid-file). Not this ticket's bug.
+- **Mic disconnects mid-take**: previously ended the WHOLE recording with
+  no dedicated reaction. Now: the recording continues on video, the mic
+  track is finalised at the point of disconnect (`mic.m4a` covers up to
+  that moment, `present: true` if any audio was captured before it), and
+  the app shows a `mic-disconnected` warning (distinct from the ambiguous,
+  camera-labeled `device-disconnected` toast this used to show instead).
+- **Camera disconnects mid-take**: same previous failure, same fix shape.
+  The recording continues, `camera.mp4` is finalised at the point of
+  disconnect (`present: true` if any frames were captured before it), and
+  the app shows a `camera-disconnected` warning. The old, generic
+  `device-disconnected` toast is suppressed for this too, but only when a
+  specific camera was picked (STC-414) — the common "automatic" pick has
+  no uid the app itself can compare against, so that case still shows both
+  toasts (both accurate, just redundant).
 
-1. Press Record with a since-disconnected mic selected.
-   **Expect**: a native dialog with **Turn Mic Off** as the default button
-   — never an automatic pick of another mic.
-2. **Turn Mic Off** → recording starts with no audio, Settings now shows
-   "Off".
-3. **Choose a Different Microphone…** → profile sheet opens, mic `<select>`
-   focused, nothing recorded.
-4. **Cancel** → back to idle.
+## §1 — the display fallback (pre-start)
 
-## §3 — a CoreAudio stall still doesn't force the mic off
+1. `npm run app:start`. Press Record — the overlay opens.
+2. Pick a specific display (not a region crop), then disconnect that
+   display before the countdown finishes (or before pressing Record on a
+   multi-display Mac — the overlay only ever lists what's live, so this is
+   a narrow timing window rather than a sticky, easy-to-hit state; a
+   one-display Mac has no way to trigger this by hand at all).
+3. **Expect**: a dialog naming the display as no longer connected, **Use
+   Automatic** as the default button.
+4. Click it. **Expect**: the countdown starts immediately, the take
+   records on whichever display is available.
+5. Repeat, picking a cropped region instead of a full display, and
+   disconnect that display in the same window. **Expect**: a dialog with
+   only an OK button — no automatic fallback offered — and no recording
+   starts. Press Record again and confirm the overlay now shows the
+   remaining display(s) only.
+6. Cancel (or Escape) on the full-display case. **Expect**: back to idle,
+   nothing recorded, no error toast.
+
+## §2 — the mic fallback (pre-start)
+
+Same shape, with a microphone (unplug a USB/Bluetooth mic between picking
+it in the overlay's bar and the countdown finishing):
+
+1. **Expect**: a dialog with **Turn Mic Off** as the default button —
+   never an automatic pick of another mic.
+2. Click it. **Expect**: recording starts with no audio; the device
+   popover (`#mic-picker`) now reads "off" once reopened.
+3. Cancel. **Expect**: back to idle.
+
+## §3 — a CoreAudio stall still doesn't force the mic off (pre-start)
 
 Hardest to trigger by hand; if `docs/STC-233-RUNBOOK.md` already has a
-reliable way to make `devices()` report `stalled: true`, use that. Press
-Record with a mic selected while stalled. **Expect**: no dialog for the mic
-(a stall means "unknown," not "gone") — recording proceeds with the mic as
-configured, same as before this ticket.
+reliable way to make `devices()` report `stalled: true`, use that. Pick a
+mic in the overlay while stalled, then let it proceed to Record.
+**Expect**: no dialog for the mic (a stall means "unknown," not "gone") —
+recording proceeds with the mic as configured.
+
+## §4 — mic disconnect DURING an active recording (new, 2026-09-25)
+
+The check this pass exists for:
+
+1. Start a recording with a mic selected. Let it run long enough to be
+   unambiguously past the countdown and actually capturing (a few seconds
+   of real audio).
+2. Physically disconnect that mic (unplug the USB/Bluetooth device).
+3. **Expect**: the recording keeps running — the pill/window still shows
+   `recording`, the display capture is unaffected, and a `mic-disconnected`
+   warning appears (not the old, mislabeled "A capture device was
+   disconnected" camera toast — that specific toast should no longer show
+   for a mic uid). **This is the behavior that was broken before this fix;
+   if the whole take still ends here, the fix did not work and needs a
+   crash log, not another guess.**
+4. Stop the recording normally. **Expect**: `mic.m4a` exists and is
+   non-empty, `anchors.json`'s `mic` block has `present: true` with
+   `lastFramePtsNs` at roughly the moment of disconnect (well before
+   `stop.t`), and `display.mp4` covers the FULL take duration, not just
+   the portion before the mic dropped.
+5. For contrast, repeat with a DISPLAY disconnect mid-take instead (or
+   just recall `docs/STC-247-RUNBOOK.md`'s own trial) — confirm that one
+   still stops the whole recording. The two should now behave differently
+   on purpose: audio loss is a track ending early, video loss is the take
+   ending.
+
+`STC_CAPTURE_FAULT=mic-disconnected` reproduces step 2-3 deterministically
+(the mic reports itself gone 0.5s after opening, same idiom
+`STC_CAPTURE_FAULT=stream-died` already uses for the display side) if a
+real unplug is inconvenient to arrange — set it as an environment variable
+on the helper process before `start`ing a recording with a mic. No grant
+test yet exercises this via the fault (see the Next section) — it has to be
+run by hand for now.
+
+## §5 — camera disconnect DURING an active recording (new, 2026-09-25)
+
+Same shape as §4, with a camera instead of a mic:
+
+1. Start a recording with a camera selected (either a specific device via
+   the picker, or automatic — try both; they exercise different code paths
+   in `handleCameraDisconnected`'s uid match, see the intro). Let it run
+   long enough to be unambiguously capturing PiP frames.
+2. Physically disconnect that camera.
+3. **Expect**: the recording keeps running, and a `camera-disconnected`
+   warning appears. With an explicitly-picked camera, the old generic
+   "A capture device was disconnected" toast should NOT also show; with
+   automatic, it may show alongside the specific one (documented,
+   acceptable). **This is the behavior that was broken before this fix; if
+   the whole take still ends here, the fix did not work and needs a crash
+   log, not another guess.**
+4. Stop the recording normally. **Expect**: `camera.mp4` exists and is
+   non-empty, `anchors.json`'s `camera` block has `present: true`, and
+   `display.mp4` covers the FULL take duration.
+5. `STC_CAPTURE_FAULT=camera-disconnected` reproduces steps 2-3
+   deterministically (same idiom, same 0.5s delay) if a real unplug is
+   inconvenient to arrange.
+
+## Next
+
+- No automated test exists for §4 or §5 yet. A grant test mirroring
+  `helper/test/stream-died.grant.test.ts`'s shape would need
+  `tools/test-host` to forward `STC_CAPTURE_FAULT` into the helper
+  subprocess it spawns (it doesn't today — `Process()` there inherits the
+  test-host app's own environment, not whatever a Node test sets via
+  `execFileSync`'s `env` option, since `open -W` doesn't propagate that).
+  Skipped in this pass rather than half-built.

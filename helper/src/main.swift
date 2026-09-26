@@ -59,6 +59,27 @@ final class App {
                                 "detail": "stopping cleanly — mid-stream rebuild is a phase 2 concern"])
             self.stop(reason: "display-reconfigured")
         }
+        // Found 2026-09-25 chasing a report that a mid-take mic unplug ended
+        // the WHOLE recording: this callback existed and fired, but was never
+        // assigned, so a mic disconnect had no reaction at all beyond the
+        // generic, ambiguous `device-disconnected` IPC warning `Watchers`
+        // itself already sends. `CaptureSession.handleMicDisconnected` is the
+        // real fix — it tears down ONLY the mic subsystem and leaves video
+        // running — this closure just routes a live disconnect to it, the
+        // same shape `onDisplayChange` above already has for its own
+        // subsystem. The camera got the identical fix the same day
+        // (`handleCameraDisconnected`), once the mic one was found to have
+        // no camera counterpart at all: this callback fires for EITHER
+        // device, and each handler no-ops on a uid that isn't its own
+        // subsystem's — `handleMicDisconnected` against `wantMicUid`,
+        // `handleCameraDisconnected` against the camera's own
+        // `currentDeviceUid()` (see that method's comment for why those two
+        // checks can't be the same shape).
+        Watchers.shared.onDeviceChange = { [weak self] action, uid, _ in
+            guard let self = self, action == "disconnected", self.state == .recording else { return }
+            self.capture?.handleMicDisconnected(uid: uid)
+            self.capture?.handleCameraDisconnected(uid: uid)
+        }
         IO.send("ready", ["pid": ProcessInfo.processInfo.processIdentifier,
                           "timebase": Clock.describe,
                           "protocol": 1])
