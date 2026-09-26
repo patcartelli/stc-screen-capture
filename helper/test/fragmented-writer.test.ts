@@ -131,6 +131,32 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
     const bytes = await new ChunkReader(video.chunks, video.bytes, "crashed.mp4").read(0, video.chunks.length);
     bytes.forEach((b, i) => expect(Buffer.from(b).equals(Buffer.from(oracle.chunks[i]!.data)), `chunk ${i}`).toBe(true));
 
+    // The kill above never meets the suffix-drop path: the file ends on the
+    // writer's IN-FLIGHT mdat, whose header says size 0 ("to end of file"),
+    // so the walk reads it as complete (measured: `truncated: null`, a
+    // 495-byte final mdat with no moof after it). Cutting that one changes
+    // nothing either — size 0 still means "to EOF". A crash can land inside
+    // a FINISHED mdat just as well, so cut the last one that declares its own
+    // size, and hold the lazy demux to the oracle there too.
+    const { walkTopLevelBoxes } = await import("../../transform/src/mp4-boxes.js");
+    const whole = readAb(out);
+    const walk = await walkTopLevelBoxes(memorySource(whole, "crashed.mp4"), "crashed.mp4");
+    expect(walk.truncated, "as measured: the kill leaves no truncated box").toBeNull();
+    const lastMdat = [...walk.boxes].reverse()
+      .find((b) => b.type === "mdat" && b.offset + b.size < whole.byteLength)!;
+    expect(lastMdat, "the crashed file has a finished mdat to cut into").toBeDefined();
+    const cutAt = lastMdat.offset + lastMdat.headerSize + Math.floor((lastMdat.size - lastMdat.headerSize) / 2);
+    const cut = whole.slice(0, cutAt);
+    const cutWalk = await walkTopLevelBoxes(memorySource(cut, "cut.mp4"), "cut.mp4");
+    expect(cutWalk.truncated, "the cut must leave a truncated last box").not.toBeNull();
+    expect(cutWalk.truncated!.type).toBe("mdat");
+    const cutVideo = await demuxTrack(memorySource(cut, "cut.mp4"), "cut.mp4");
+    const cutOracle = await demuxTrackOracle(cut, "cut.mp4");
+    expect(cutVideo.framesNs.length).toBeGreaterThan(0);
+    expect(cutVideo.framesNs).toEqual(cutOracle.framesNs);
+    const cutBytes = await new ChunkReader(cutVideo.chunks, cutVideo.bytes, "cut.mp4").read(0, cutVideo.chunks.length);
+    cutBytes.forEach((b, i) => expect(Buffer.from(b).equals(Buffer.from(cutOracle.chunks[i]!.data)), `cut chunk ${i}`).toBe(true));
+
     // "Plays up to within one fragment interval of the kill" (the ticket's
     // own words) — not exactly `crashAfter` frames (the in-flight fragment at
     // the moment of the kill is lost, not partially recovered), and

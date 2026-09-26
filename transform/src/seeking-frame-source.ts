@@ -156,14 +156,19 @@ export class SeekingFrameSource {
         throw this.failure;
       }
       // The await is a window a newer seek can use. It cannot touch this
-      // decoder — the chain serialises seeks — but it has asked for a
-      // different frame, and feeding ones nobody wants only delays it. Feed
-      // nothing and let seek() see the new ticket and resolve null.
+      // decoder — the chain serialises seeks, so it is still queued behind
+      // this one — but it has asked for a different frame, and feeding ones
+      // nobody wants only delays it. Feed nothing and let seek() see the new
+      // ticket and resolve null.
       if (mine !== this.ticket) return true;
       // The await is also a window for close() (the preview closing a take
-      // mid-scrub) or a newer seek that already replaced the decoder via
-      // restartAt. Either way `d` is no longer live: feeding it would throw
-      // InvalidStateError. Feed nothing and let seek() unwind instead.
+      // mid-scrub), and close() is the ONLY thing that can reach `d` here:
+      // it does not go through the chain. Feeding a closed decoder would
+      // throw InvalidStateError, so feed nothing and let seek() unwind. The
+      // `this.decoder !== d` half is defensive — by the argument above no
+      // restartAt can run in this window — kept so that a future path which
+      // replaces the decoder off the chain fails safe rather than feeding a
+      // dead one.
       if (this.decoder !== d || d.state === "closed") return false;
       datas.forEach((data, k) => {
         const c = this.video.chunks[from + k]!;

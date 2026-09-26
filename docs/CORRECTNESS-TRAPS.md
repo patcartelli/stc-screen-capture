@@ -139,8 +139,8 @@ configuration. Don't re-discover these.
   renderer RSS (chunked; it was +862 MB read in one message). Roughly 1.2x the file, so a
   ~15-minute 4K take was the practical ceiling before the renderer was in trouble. STC-236
   (2026-09-26) made the editor read `display.mp4`/`camera.mp4` by range — a sample index at open,
-  then one keyframe group at a time (`transform/src/chunk-reader.ts`) — instead of decoding the
-  whole file. On a short (~12 s, 46 MB display + 11 MB camera) real take, measured growth dropped
+  then one keyframe group at a time (`transform/src/chunk-reader.ts`) — instead of reading the
+  whole file into memory up front (the old path held every byte; it never decoded it whole). On a short (~12 s, 46 MB display + 11 MB camera) real take, measured growth dropped
   from +222 MB (master) to +143 MB (this branch); `docs/STC-236-RUNBOOK.md` has the numbers and
   what only a long take on a Mac can confirm. Audio (`mic.m4a`/`system.m4a`) is still decoded
   whole — that is now the larger unbounded cost on a long take, tracked as its own follow-up.

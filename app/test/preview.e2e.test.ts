@@ -150,6 +150,9 @@ describe("preview player in the editor window (STC-373)", () => {
     const r = await editorWin.evaluate(() =>
       (window as unknown as { __stcVideoBytesRead: () => { display: number; displaySize: number } }).__stcVideoBytesRead());
     expect(r.display).toBeGreaterThan(0);
-    expect(r.display).toBeLessThan(r.displaySize);
+    // Measured 39,042 of 83,894 bytes (46.5%): the index plus the first of two
+    // groups. 0.6 means "one group", not merely "less than the file" — reading
+    // both groups would land near 100%.
+    expect(r.display).toBeLessThan(r.displaySize * 0.6);
   }, 120_000);
 });

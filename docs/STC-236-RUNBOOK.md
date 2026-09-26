@@ -39,5 +39,11 @@ baseline run here.
    drags. Pass: no worse than a short take. Fail: a visible lag on crossing keyframes (each group
    is one IPC read).
 3. **Export time.** Export the long take. Pass: within ~10% of the same take on master.
+   That take sits at master's old memory ceiling, so master may not open it at all. If it
+   cannot, write that down as the result — master failing to open a take this branch opens is
+   itself the evidence §1 is after — and compare export time on the longest take BOTH can open
+   instead, recording its length beside the two times.
 4. **A file removed while open.** Open a take, move its folder to the Trash in Finder, then
-   scrub. Pass: a visible error. Fail: a frozen frame with no message.
+   scrub. Pass: a visible error ("The preview stopped: …", naming the file) and the transport
+   paused. Fail: a frozen frame with no message. Deleting the take from the library while the
+   editor has it open reaches the same path ("no take is open").
