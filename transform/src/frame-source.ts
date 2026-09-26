@@ -99,6 +99,12 @@ export class ForwardFrameSource {
         this.decoder.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: data as BufferSource }));
       });
       this.nextChunk = upto;
+      // Start reading the NEXT group while this one decodes (STC-236). Over
+      // IPC a group is one round trip, and export would otherwise stall on it
+      // at every keyframe. ChunkReader holds two groups, so this is the most
+      // that can ever be ahead.
+      const g = this.reader.groupOf(upto - 1);
+      if (g.end < this.video.chunks.length) this.reader.prefetch(g.end);
     }
 
     if (this.pending.length > 0) return true;

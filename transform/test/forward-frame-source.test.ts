@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { installFakeWebCodecs, type FakeWebCodecs } from "./_fake-webcodecs.js";
 import { syntheticVideo, gated } from "./_synthetic-track.js";
+import { memorySource, type ByteSource } from "../src/chunk-reader.js";
 import { ForwardFrameSource } from "../src/frame-source.js";
 
 let wc: FakeWebCodecs;
@@ -37,5 +38,18 @@ describe("ForwardFrameSource over a ByteSource (STC-236)", () => {
     g.release();
     await expect(p).resolves.toBeNull();
     expect(wc.fed.length).toBe(0);
+  });
+
+  test("while group g decodes, group g+1's bytes are already being read", async () => {
+    const reads: number[] = [];
+    const video = syntheticVideo((buf) => {
+      const inner = memorySource(buf, "synthetic.mp4");
+      return { size: inner.size, read: (o, l) => { reads.push(o); return inner.read(o, l); } } as ByteSource;
+    });
+    const s = new ForwardFrameSource(video);
+    await s.frameAt(0);                                   // group 0 is being fed
+    expect(reads).toContain(video.chunks[10]!.offset);    // group 1 already requested
+    expect(reads).not.toContain(video.chunks[20]!.offset);   // but not group 2: at most two groups held
+    s.close();
   });
 });
