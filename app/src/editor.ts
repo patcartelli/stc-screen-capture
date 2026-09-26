@@ -1393,7 +1393,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
       .catch(() => null),
   ]);
   const cameraSrc = anchors.files?.camera ? await ipcSource(anchors.files.camera) : undefined;
-  // STC-233: same reasoning as cameraMp4 above, one track over.
+  // STC-233: same reasoning as cameraSrc above (only when the anchors claim the track), one track over.
   const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
   // STC-418: and again for system audio — loadSession refuses a claimed track that was not supplied.
   const systemM4a = anchors.files?.system ? await readVideo(anchors.files.system) : undefined;
@@ -1423,6 +1423,14 @@ async function openTakeOrThrow(dir: string): Promise<void> {
     ($("stage") as HTMLCanvasElement).dataset.clock = player!.clock;
     if (!scrubbing) scrub.value = String(frame);
     updateRulerPlayhead(tNs);
+  };
+  // STC-236: a frame read or decode failed (the take deleted from the library
+  // while open here, say). The player has already paused and reports once;
+  // the error's own message names the file. Without this the picture froze
+  // with the playhead still running and the cause only in the console.
+  player.onError = (e) => {
+    setPlayState(false);
+    alertUser(`The preview stopped: ${e.message}`);
   };
   await player.seek(player.firstRenderableNs);
   resetSpan();
