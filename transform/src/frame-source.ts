@@ -1,6 +1,7 @@
 import type { DemuxedVideo } from "./demux.js";
 import { withTimeout } from "./timeout.js";
 import { decoderPreference } from "./decoder-preference.js";
+import { ChunkReader } from "./chunk-reader.js";
 
 /**
  * Forward-only streaming frame source for export.
@@ -30,8 +31,10 @@ export class ForwardFrameSource {
 
   /** Chunks kept in flight. Enough to keep the decoder busy, small enough to bound memory. */
   private static readonly QUEUE_TARGET = 8;
+  private readonly reader: ChunkReader;
 
   constructor(private readonly video: DemuxedVideo) {
+    this.reader = new ChunkReader(video.chunks, video.bytes, "video");
     this.decoder = new VideoDecoder({
       output: (frame) => {
         this.pending.push(frame);
@@ -75,12 +78,16 @@ export class ForwardFrameSource {
 
   /** Feeds the decoder and waits for at least one output. False when exhausted. */
   private async pump(): Promise<boolean> {
-    while (this.nextChunk < this.video.chunks.length &&
-           this.decoder.decodeQueueSize < ForwardFrameSource.QUEUE_TARGET) {
-      const c = this.video.chunks[this.nextChunk++]!;
-      this.decoder.decode(new EncodedVideoChunk({
-        type: c.type, timestamp: c.timestampUs, data: c.data as BufferSource,
-      }));
+    const upto = Math.min(this.video.chunks.length,
+                          this.nextChunk + Math.max(0, ForwardFrameSource.QUEUE_TARGET - this.decoder.decodeQueueSize));
+    if (upto > this.nextChunk) {
+      const from = this.nextChunk;
+      const datas = await this.reader.read(from, upto - from);
+      datas.forEach((data, k) => {
+        const c = this.video.chunks[from + k]!;
+        this.decoder.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: data as BufferSource }));
+      });
+      this.nextChunk = upto;
     }
 
     if (this.pending.length > 0) return true;

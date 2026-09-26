@@ -2,6 +2,7 @@ import { render, FULL_FRAME_UV } from "@transform/render";
 import { tickTimeNs, frameIndexAt } from "@transform/time";
 import { mark } from "./mark.js";
 import { loadSession } from "@transform/session";
+import { memorySource } from "@transform/chunk-reader";
 import { ForwardFrameSource } from "@transform/frame-source";
 import { SeekingFrameSource } from "@transform/seeking-frame-source";
 import { composite } from "@transform/compositor";
@@ -52,7 +53,7 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       : undefined;
 
     mark("identity: loadSession (demux + VideoDecoder.configure)");
-    const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a, systemM4a });
+    const session = await loadSession({ anchors, events, displayMp4: memorySource(mp4, "display.mp4"), cameraMp4: cameraMp4 && memorySource(cameraMp4, "camera.mp4"), micM4a, systemM4a });
 
     // The take's OWN document, passed THROUGH parseProject — never used
     // verbatim, and never replaced by a literal assembled here.

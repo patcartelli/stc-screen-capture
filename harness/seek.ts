@@ -1,4 +1,5 @@
 import { demuxTrack } from "@transform/demux";
+import { memorySource } from "@transform/chunk-reader";
 import { mark } from "./mark.js";
 import { SeekingFrameSource } from "@transform/seeking-frame-source";
 import { applyDecoderPreference } from "./decoder.js";
@@ -37,7 +38,7 @@ function readFrameIndex(ctx: OffscreenCanvasRenderingContext2D): number {
 
 const gateBody = async (mp4Url: string) => {
   const buf = await fetch(mp4Url).then((r) => r.arrayBuffer());
-  const video = await demuxTrack(buf, mp4Url);
+  const video = await demuxTrack(memorySource(buf, mp4Url), mp4Url);
   mark("seek: new SeekingFrameSource (VideoDecoder.configure is synchronous)");
   const source = new SeekingFrameSource(video);
   const n = video.chunks.length;

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeMicTakeFolder, makeSystemAudioTakeFolder } from "./_take-fixture.js";
 import { loadSession } from "../../transform/src/session.js";
+import { memorySource } from "../../transform/src/chunk-reader.js";
 
 const buf = (p: string) => {
   const b = readFileSync(p);
@@ -23,7 +24,7 @@ describe("makeSystemAudioTakeFolder", () => {
     const session = await loadSession({
       anchors,
       events: JSON.parse(readFileSync(join(takeDir, "events.json"), "utf8")),
-      displayMp4: buf(join(takeDir, "display.mp4")),
+      displayMp4: memorySource(buf(join(takeDir, "display.mp4")), "display.mp4"),
       systemM4a: buf(join(takeDir, "system.m4a")),
     });
     expect(session.systemAudio).toBeDefined();
@@ -41,7 +42,7 @@ describe("makeMicTakeFolder (STC-455)", () => {
     const session = await loadSession({
       anchors,
       events: JSON.parse(readFileSync(join(takeDir, "events.json"), "utf8")),
-      displayMp4: buf(join(takeDir, "display.mp4")),
+      displayMp4: memorySource(buf(join(takeDir, "display.mp4")), "display.mp4"),
       micM4a: buf(join(takeDir, "mic.m4a")),
     });
     expect(session.micAudio).toBeDefined();

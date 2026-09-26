@@ -1,6 +1,7 @@
 import type { DemuxedVideo } from "./demux.js";
 import { withTimeout } from "./timeout.js";
 import { decoderPreference } from "./decoder-preference.js";
+import { ChunkReader } from "./chunk-reader.js";
 
 /**
  * Random-access frame source for the preview sink.
@@ -39,12 +40,14 @@ export class SeekingFrameSource {
   private needsKeyframe = false;
 
   private static readonly FEED_AHEAD = 8;
+  private readonly reader: ChunkReader;
 
   constructor(private readonly video: DemuxedVideo) {
     this.keyIndices = video.chunks
       .map((c, i) => (c.type === "key" ? i : -1))
       .filter((i) => i >= 0);
     if (this.keyIndices.length === 0) throw new Error("no keyframes: cannot seek");
+    this.reader = new ChunkReader(video.chunks, video.bytes, "video");
   }
 
   /**
@@ -139,13 +142,16 @@ export class SeekingFrameSource {
     // not by nextOutIndex matters: before the first output, nextOutIndex has
     // not moved, so an output-based bound cannot limit anything.
     const feedLimit = target + SeekingFrameSource.FEED_AHEAD;
-    while (this.nextFeed < this.video.chunks.length &&
-           this.nextFeed <= feedLimit &&
-           d.decodeQueueSize < SeekingFrameSource.FEED_AHEAD) {
-      const c = this.video.chunks[this.nextFeed++]!;
-      d.decode(new EncodedVideoChunk({
-        type: c.type, timestamp: c.timestampUs, data: c.data as BufferSource,
-      }));
+    const upto = Math.min(this.video.chunks.length, feedLimit + 1,
+                          this.nextFeed + Math.max(0, SeekingFrameSource.FEED_AHEAD - d.decodeQueueSize));
+    if (upto > this.nextFeed) {
+      const from = this.nextFeed;
+      const datas = await this.reader.read(from, upto - from);
+      datas.forEach((data, k) => {
+        const c = this.video.chunks[from + k]!;
+        d.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: data as BufferSource }));
+      });
+      this.nextFeed = upto;
     }
     if (this.pending.length > 0) return true;
 

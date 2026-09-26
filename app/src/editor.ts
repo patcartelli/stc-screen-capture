@@ -54,6 +54,7 @@ declare const editor: {
 };
 
 import { loadSession, type LoadedSession } from "@transform/session";
+import { memorySource } from "@transform/chunk-reader";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
 import {
@@ -1354,7 +1355,12 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
   // STC-418: and again for system audio — loadSession refuses a claimed track that was not supplied.
   const systemM4a = anchors.files?.system ? await readVideo(anchors.files.system) : undefined;
-  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a, systemM4a });
+  const session = await loadSession({
+    anchors, events,
+    displayMp4: memorySource(mp4, "display.mp4"),
+    cameraMp4: cameraMp4 && memorySource(cameraMp4, anchors.files.camera),
+    micM4a, systemM4a,
+  });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
