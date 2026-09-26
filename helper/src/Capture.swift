@@ -649,6 +649,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // discards precisely under the load this most needs to
                     // survive; IO.send never drops.
                     IO.send("camera-started", ["device": name])
+                    self.armCameraDisconnectFault(deviceUid: cam.currentDeviceUid())
                 }
             case .closeImmediately:
                 // stop() already ran and found no camera to close, because
@@ -763,6 +764,50 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         m.stop { [weak self] track in
             self?.lock.lock()
             self?.micTrack = track
+            self?.lock.unlock()
+        }
+    }
+
+    /// `STC_CAPTURE_FAULT=camera-disconnected`: the camera counterpart of
+    /// `armMicDisconnectFault` above, same idiom and same reason.
+    static let cameraDisconnectFaultDelaySeconds: Double = 0.5
+    private func armCameraDisconnectFault(deviceUid: String) {
+        guard ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "camera-disconnected" else { return }
+        IO.log("STC_CAPTURE_FAULT=camera-disconnected: the camera will report itself gone in \(Self.cameraDisconnectFaultDelaySeconds) s")
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.cameraDisconnectFaultDelaySeconds) { [weak self] in
+            self?.handleCameraDisconnected(uid: deviceUid)
+        }
+    }
+
+    /// The camera's counterpart to `handleMicDisconnected` above — same latent
+    /// gap (found alongside it, 2026-09-25: `Watchers.onDeviceChange` fires
+    /// for either subsystem, but until now only the mic had a reaction),
+    /// same fix shape: tear down ONLY the camera subsystem, the same `cam.stop()`
+    /// call `stop(reason:)` makes for its own camera branch, and leave video
+    /// (and mic, system audio) running.
+    ///
+    /// The uid check is NOT `wantCameraDeviceUid == uid` — unlike the mic,
+    /// which is always requested by exact uid (STC-233), `wantCameraDeviceUid`
+    /// is nil for the common "automatic" pick (STC-414's `pickCamera` ranking),
+    /// so that comparison would silently no-op for most cameras. This compares
+    /// against `currentDeviceUid()`, the device the session actually resolved
+    /// to, which is set unconditionally either way.
+    ///
+    /// `!stoppingBegan` is the same HIGH-1 guard `handleMicDisconnected` uses,
+    /// for the same reason: if the whole-take `stop(reason:)` has already
+    /// claimed `camera`, this backs off rather than calling
+    /// `CameraCapture.stop()` a second time on the same instance.
+    func handleCameraDisconnected(uid: String) {
+        lock.lock()
+        guard !stoppingBegan, let cam = camera, cam.currentDeviceUid() == uid else { lock.unlock(); return }
+        camera = nil
+        lock.unlock()
+        IO.send("warning", ["code": "camera-disconnected", "uid": uid,
+                            "detail": "the camera disconnected mid-recording; the take continues "
+                                    + "with no picture-in-picture from this point on"])
+        cam.stop { [weak self] track in
+            self?.lock.lock()
+            self?.cameraTrack = track
             self?.lock.unlock()
         }
     }

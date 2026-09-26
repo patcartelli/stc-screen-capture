@@ -782,6 +782,15 @@ const CAMERA_FAULTS: Record<string, string> = {
   // time the take actually opens it — the same shape as mic-not-found, and the
   // same rule (refuse that device, never silently substitute another).
   "camera-not-found": "The chosen camera is no longer available, so this take has no picture-in-picture.",
+  // Found 2026-09-25 alongside mic-disconnected's own entry below: a mid-take
+  // camera unplug had the identical gap (no dedicated reaction, only the
+  // generic `device-disconnected` above). Video (and mic) keep recording —
+  // an audio/PiP-only track has no `AVAssetWriter` dimension constraint, so
+  // ending the whole take over it would be strictly worse than a take with a
+  // shorter camera track.
+  "camera-disconnected":
+    "The camera disconnected, so the rest of this take has no picture-in-picture. " +
+    "The recording itself continues.",
 };
 
 /**
@@ -854,8 +863,17 @@ recorder.on("helper:warning", (l) => {
   // was the only signal a mic unplug got, mislabeled as a camera fault
   // (CAMERA_FAULTS' own entry below). Now that the helper also sends the
   // specific code, a mic's own uid is skipped here rather than shown twice
-  // under the wrong label; a camera unplug still falls through unchanged.
+  // under the wrong label.
   if (code === "device-disconnected" && l.uid != null && l.uid === storedMicUid) {
+    return;
+  }
+  // Same dedup for a camera unplug's own specific code — but only catches it
+  // when a device was explicitly picked. `storedCameraUid` is the REQUEST
+  // (null for the common "automatic" pick, STC-414), not the device the
+  // helper actually resolved to (which only `CameraCapture.currentDeviceUid`,
+  // helper-side, knows) — so an automatic camera's disconnect still shows
+  // both toasts. Both are accurate; this only removes the redundant one.
+  if (code === "device-disconnected" && l.uid != null && l.uid === storedCameraUid) {
     return;
   }
   if (INFORMATIONAL_WARNINGS.has(code)) {
@@ -876,7 +894,7 @@ recorder.on("helper:warning", (l) => {
     // row has to be always-visible (STC-412 final review, I2): the alert is a
     // toast that dismisses itself, so the row is the ONLY thing that still
     // says "this take had no camera" a minute later.
-    setCamera(code === "camera-no-frames" ? "no frames" : `failed — ${code}`);
+    setCamera(code === "camera-no-frames" ? "no frames" : code === "camera-disconnected" ? "disconnected" : `failed — ${code}`);
     alertUser(l.detail ? `${camera}\n\n${l.detail}` : camera);
     return;
   }

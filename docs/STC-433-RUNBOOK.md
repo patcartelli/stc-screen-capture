@@ -26,9 +26,26 @@ feature) predates two events that changed the actual behavior underneath it:
    Mac.** If the take still ends after this lands, the next step is a real
    crash log from Console.app or the Xcode debugger, not another
    speculative patch.
+3. **The camera has the identical latent gap, fixed the same way**
+   (found while this pass was still open, 2026-09-25): nothing tore down
+   just the camera subsystem on its own mid-recording disconnect either.
+   `CaptureSession.handleCameraDisconnected` (`helper/src/Capture.swift`)
+   mirrors `handleMicDisconnected`, wired from the same `onDeviceChange`
+   callback — each handler no-ops on a uid that isn't its own subsystem's.
+   The uid check itself can't be the same shape: the mic is always
+   requested by exact uid (STC-233), but the camera's common "automatic"
+   pick (STC-414) carries no uid in the request at all, so
+   `CameraCapture` now tracks the uid of the device it actually resolved
+   to (`currentDeviceUid()`) and that is what a disconnect is matched
+   against — matching the request would silently no-op for most cameras.
+   **Also unverified on hardware for the same reason as the mic fix.**
 
-Still typechecked/bundled only (no Xcode/swiftc in this session) — **none
-of what follows has been watched.**
+Typechecked/bundled clean. `helper/build.sh` also compiled and signed cleanly
+in a later session that had `swiftc` (6.4, via swiftly) — the helper starts,
+answers `status`, and shuts down cleanly on a bare `{"cmd":"status"}` smoke
+test — but **none of what follows has actually been watched on a Mac with a
+real device to unplug.** A binary that builds and answers its own protocol is
+not the same claim as a disconnect actually being handled correctly.
 
 ## What changed (current behavior)
 
@@ -62,6 +79,14 @@ before the countdown:
   that moment, `present: true` if any audio was captured before it), and
   the app shows a `mic-disconnected` warning (distinct from the ambiguous,
   camera-labeled `device-disconnected` toast this used to show instead).
+- **Camera disconnects mid-take**: same previous failure, same fix shape.
+  The recording continues, `camera.mp4` is finalised at the point of
+  disconnect (`present: true` if any frames were captured before it), and
+  the app shows a `camera-disconnected` warning. The old, generic
+  `device-disconnected` toast is suppressed for this too, but only when a
+  specific camera was picked (STC-414) — the common "automatic" pick has
+  no uid the app itself can compare against, so that case still shows both
+  toasts (both accurate, just redundant).
 
 ## §1 — the display fallback (pre-start)
 
@@ -136,17 +161,35 @@ on the helper process before `start`ing a recording with a mic. No grant
 test yet exercises this via the fault (see the Next section) — it has to be
 run by hand for now.
 
+## §5 — camera disconnect DURING an active recording (new, 2026-09-25)
+
+Same shape as §4, with a camera instead of a mic:
+
+1. Start a recording with a camera selected (either a specific device via
+   the picker, or automatic — try both; they exercise different code paths
+   in `handleCameraDisconnected`'s uid match, see the intro). Let it run
+   long enough to be unambiguously capturing PiP frames.
+2. Physically disconnect that camera.
+3. **Expect**: the recording keeps running, and a `camera-disconnected`
+   warning appears. With an explicitly-picked camera, the old generic
+   "A capture device was disconnected" toast should NOT also show; with
+   automatic, it may show alongside the specific one (documented,
+   acceptable). **This is the behavior that was broken before this fix; if
+   the whole take still ends here, the fix did not work and needs a crash
+   log, not another guess.**
+4. Stop the recording normally. **Expect**: `camera.mp4` exists and is
+   non-empty, `anchors.json`'s `camera` block has `present: true`, and
+   `display.mp4` covers the FULL take duration.
+5. `STC_CAPTURE_FAULT=camera-disconnected` reproduces steps 2-3
+   deterministically (same idiom, same 0.5s delay) if a real unplug is
+   inconvenient to arrange.
+
 ## Next
 
-- No automated test exists for §4 yet. A grant test mirroring
+- No automated test exists for §4 or §5 yet. A grant test mirroring
   `helper/test/stream-died.grant.test.ts`'s shape would need
   `tools/test-host` to forward `STC_CAPTURE_FAULT` into the helper
   subprocess it spawns (it doesn't today — `Process()` there inherits the
   test-host app's own environment, not whatever a Node test sets via
   `execFileSync`'s `env` option, since `open -W` doesn't propagate that).
   Skipped in this pass rather than half-built.
-- The camera has the identical latent gap (`Watchers.onDeviceChange` fires
-  for a camera disconnect too, and nothing tears down just the camera
-  subsystem either) — not fixed here, since nobody has reported it and this
-  pass was scoped to the mic report. Worth its own ticket if it turns out
-  to matter.
