@@ -1,25 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { installFakeWebCodecs, type FakeWebCodecs } from "./_fake-webcodecs.js";
-import { syntheticVideo } from "./_synthetic-track.js";
-import { memorySource, type ByteSource } from "../src/chunk-reader.js";
+import { syntheticVideo, gated } from "./_synthetic-track.js";
 import { SeekingFrameSource } from "../src/seeking-frame-source.js";
 
 let wc: FakeWebCodecs;
 beforeEach(() => { wc = installFakeWebCodecs(); });
 afterEach(() => wc.restore());
-
-/** A source whose reads wait until `release()` — an IPC round trip we control. */
-function gated(buf: ArrayBuffer): { src: ByteSource; started(): number; release(): void } {
-  const inner = memorySource(buf, "synthetic.mp4");
-  let open!: () => void;
-  let started = 0;
-  const gate = new Promise<void>((r) => { open = r; });
-  return {
-    src: { size: inner.size, read: async (o, l) => { started++; await gate; return inner.read(o, l); } },
-    started: () => started,
-    release: () => open(),
-  };
-}
 
 describe("SeekingFrameSource over a ByteSource (STC-236)", () => {
   test("returns the requested frame, fed with that chunk's own bytes", async () => {
