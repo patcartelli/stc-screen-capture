@@ -20,6 +20,11 @@ import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite } from "@transform/shot.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { withTimeout } from "@transform/timeout.js";
+import { profileById, outputSizeForProfile, PROFILE_HINT_FILE } from "@transform/recording-profile.js";
+import type { Size } from "@transform/spaces.js";
+import {
+  buildRecordingProfileMenu, type RecordingProfileMenuId,
+} from "./recording-profile-menu.js";
 import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
   publicSrc, type PublishPlan,
@@ -196,7 +201,13 @@ const TRASH_SWEEP_INTERVAL_MS = 1_000;
 // loaded from file://, and Chromium refuses cross-origin fetches from a file
 // origin to any non-http scheme. Serving the app itself over a custom scheme
 // would fix that, but IPC removes the origin question altogether.
-const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a", "project.json"]);
+const TAKE_FILES = new Set([
+  "anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a", "project.json",
+  // STC-447: the recording-profile hint, present only on a take recorded
+  // with a profile selected, and only until its first open (see
+  // `writeRecordingProfileHint`/`PROFILE_HINT_FILE`).
+  PROFILE_HINT_FILE,
+]);
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -284,6 +295,38 @@ function openLibrary(): void {
   app.focus({ steal: true });
 }
 
+/**
+ * Applies the sticky recording profile (STC-447) to a take that just
+ * finished, by leaving it a small hint (`PROFILE_HINT_FILE`) before anything
+ * else opens it — never a `project.json` itself. See that constant's own
+ * doc comment (`recording-profile.ts`) for why: building a real `Project`
+ * needs `trim.ts`'s `defaultProject`, and importing that into `main.ts`
+ * fails `tsconfig.node.json`'s no-DOM pass (`cursor-art.ts`'s Canvas types,
+ * reached through `transform-version.ts`). `editor.ts` reads this hint on a
+ * take's first open and calls `defaultProject` itself, from a pass that
+ * already has DOM — the one and only place a `Project` gets built either way.
+ *
+ * No profile selected: does nothing, so an untouched take behaves exactly as
+ * it did before this ticket. Every failure here — a missing/unreadable
+ * anchors.json, a write that fails — is swallowed: a recording that already
+ * completed must never be reported as broken because of a preference on top
+ * of it.
+ */
+async function writeRecordingProfileHint(dir: string | undefined): Promise<void> {
+  if (!dir) return;
+  const profile = profileById(readSettings(app.getPath("userData")).recordingProfileId);
+  if (!profile) return;
+  try {
+    const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"));
+    const capture = { width: anchors.capture?.width, height: anchors.capture?.height };
+    if (!Number.isInteger(capture.width) || !Number.isInteger(capture.height)) return;
+    const size = outputSizeForProfile(profile, capture as Size);
+    await writeFile(join(dir, PROFILE_HINT_FILE), JSON.stringify(size));
+  } catch {
+    /* a seeded default is a convenience, not a guarantee — never cost the take */
+  }
+}
+
 function startSupervisor(): void {
   sup = HelperSupervisor.start(HELPER, {
     statsIntervalMs: 500,
@@ -303,7 +346,12 @@ function startSupervisor(): void {
   // Already promoted out of temp storage by the time this fires (STC-393):
   // `HelperSupervisor.endRecording` does that before emitting, so a grid
   // refresh triggered by this event finds the take where it now lives.
-  sup.on("recording-ended", (i) => send("helper:recording-ended", i));
+  sup.on("recording-ended", (i) => {
+    send("helper:recording-ended", i);
+    // STC-447: a side effect, never a gate — the event above has already
+    // gone out with the take's real info by the time this settles.
+    void writeRecordingProfileHint(i?.dir);
+  });
   // A promotion that failed (STC-393) — the take is still a real recording,
   // just stuck in temp storage rather than the library. Surfaced as a
   // warning rather than folded into `recording-lost`: the file is intact,
@@ -829,6 +877,29 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
   }
   const saved = writeSettings(app.getPath("userData"), clean);
   return saved;
+});
+
+/**
+ * The recording-profile picker's menu (STC-447) — pops up under the bar's
+ * own button, same pattern as `thumbnail:menu`: `buildRecordingProfileMenu`
+ * decides the contents where a test can read them, this turns that into the
+ * one thing no test can, a real `Menu`, and answers with the chosen id or
+ * `null` on dismissal. The renderer, not this handler, turns "none" into a
+ * `recordingProfileId: null` patch through the existing `recorder:setSettings`
+ * channel — one door writes this preference, not two.
+ */
+ipcMain.handle("recorder:profileMenu", async (e) => {
+  const owner = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+  const current = readSettings(app.getPath("userData")).recordingProfileId;
+  return await new Promise<RecordingProfileMenuId | null>((resolve) => {
+    let answered = false;
+    const answer = (id: RecordingProfileMenuId | null) => { if (!answered) { answered = true; resolve(id); } };
+    const menu = Menu.buildFromTemplate(buildRecordingProfileMenu(current).map((item) => ({
+      label: item.label, type: "radio" as const, checked: item.checked,
+      click: () => answer(item.id),
+    })));
+    menu.popup({ ...(owner ? { window: owner } : {}), callback: () => answer(null) });
+  });
 });
 
 ipcMain.handle("recorder:devices", async () => {

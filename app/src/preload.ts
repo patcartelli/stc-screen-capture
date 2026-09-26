@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("recorder", {
   devices: () => ipcRenderer.invoke("recorder:devices"),
   getSettings: () => ipcRenderer.invoke("recorder:getSettings"),
   setSettings: (patch: Record<string, unknown>) => ipcRenderer.invoke("recorder:setSettings", patch),
+  // STC-447: pops the recording-profile menu and resolves with the chosen
+  // id ("none" for the clear-it entry, or null if dismissed with no pick).
+  profileMenu: () => ipcRenderer.invoke("recorder:profileMenu"),
   takes: () => ipcRenderer.invoke("recorder:takes"),
   // STC-413: the file IS the name now. `file` wins when present (a real
   // rename on disk); `dir` alone is the one remaining fallback, for a bundle

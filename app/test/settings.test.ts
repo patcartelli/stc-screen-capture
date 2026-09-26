@@ -27,7 +27,8 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid",
+                 recordingProfileId: null });
     expect(DEFAULT_SETTINGS.camera).toBe(false);
   });
 
@@ -68,7 +69,8 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid",
+                 recordingProfileId: null });
   });
 
   test("an unwritable directory does not throw — the preference is not worth a crash", () => {
@@ -124,7 +126,8 @@ describe("the display preference (STC-247)", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid",
+                 recordingProfileId: null });
   });
 });
 
@@ -517,6 +520,47 @@ describe("the diagnostics toggle (STC-412)", () => {
     writeSettings(d, { showDiagnostics: true });
     writeSettings(d, { camera: true });
     expect(readSettings(d).showDiagnostics).toBe(true);
+  });
+});
+
+describe("the recording profile (STC-447)", () => {
+  test("defaults to null — no preference, the capture's own size", () => {
+    expect(readSettings(dir()).recordingProfileId).toBeNull();
+    expect(DEFAULT_SETTINGS.recordingProfileId).toBeNull();
+  });
+
+  test("round-trips a known profile id", () => {
+    const d = dir();
+    writeSettings(d, { recordingProfileId: "instagram" });
+    expect(readSettings(d).recordingProfileId).toBe("instagram");
+    writeSettings(d, { recordingProfileId: "case-study" });
+    expect(readSettings(d).recordingProfileId).toBe("case-study");
+  });
+
+  test("clearing back to null round-trips too", () => {
+    const d = dir();
+    writeSettings(d, { recordingProfileId: "instagram" });
+    writeSettings(d, { recordingProfileId: null });
+    expect(readSettings(d).recordingProfileId).toBeNull();
+  });
+
+  test("an id no profile recognises falls back to null, not to a half-trusted string", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ recordingProfileId: "not-a-real-id" }));
+    expect(readSettings(d).recordingProfileId).toBeNull();
+  });
+
+  test("a non-string value falls back to null", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ recordingProfileId: 7 }));
+    expect(readSettings(d).recordingProfileId).toBeNull();
+  });
+
+  test("a partial update leaves it alone", () => {
+    const d = dir();
+    writeSettings(d, { recordingProfileId: "case-study" });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).recordingProfileId).toBe("case-study");
   });
 });
 

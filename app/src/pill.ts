@@ -160,4 +160,18 @@ export const PILL_THEME = {
   dotLive: "#ff3b30",
   dotPaused: "#f5f5f5",
   meterHatch: "#3a3a3c",
+  /**
+   * STC-447's answer to the STC-375 runbook's own open question — "is the
+   * whole pill legible against whatever is likely to be behind it (light
+   * desktop backgrounds especially)". A dark pill on a light desktop had no
+   * edge of its own to be seen by; a faint light ring gives it one on any
+   * background, dark included, where it reads as a slightly brighter hairline
+   * rather than a second color. Not `--border`/etc.: this surface still does
+   * not read the app's light/dark tokens (see the header above), so its ring
+   * is a fixed value the same way its background and text are.
+   */
+  ring: "rgba(255, 255, 255, 0.14)",
+  /** Same reasoning: a floating surface with no shadow reads as pasted flat
+   * onto whatever is behind it rather than sitting above it. */
+  shadow: "rgba(0, 0, 0, 0.35)",
 } as const;
