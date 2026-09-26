@@ -34,7 +34,9 @@ import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, re
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
   purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
+  markOfferedForRecovery, type TempTakeInfo,
 } from "./temp-takes.js";
+import { recordRefusalText, stillNoticeText } from "./refusals.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
@@ -96,11 +98,22 @@ ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
 ipcMain.on("toast:dismiss", () => hideToast());
 ipcMain.on("toast:message", (_e, text: unknown) => {
   if (typeof text !== "string" || !text) return;
+  showNotice(text);
+});
+
+/**
+ * The message toast, from MAIN — what the window's `alertUser` reaches over
+ * `toast:message`, callable with no window at all. The menu-bar item and the
+ * global hotkeys have no renderer waiting on their answer (STC-465 review),
+ * and this is how their refusals reach the user instead of `console.error`.
+ */
+function showNotice(text: string | undefined): void {
+  if (!text) return;
   showMessageToast(text, {
     corner: readSettings(app.getPath("userData")).thumbnail.corner,
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
-});
+}
 /**
  * The take each WINDOW may currently read, set only by preview:open.
  *
@@ -393,25 +406,51 @@ function reconcileWindowRecording(): void {
  * Nothing can be "claimed" yet at the point this runs — no capture has
  * started this session — so every survivor is, by definition, something a
  * PREVIOUS run left behind with no panel and no clean stop to claim it.
+ *
+ * ## The count is what Review delivers (STC-465 review)
+ *
+ * "N unsaved takes recovered" used to count every temp take, while Review
+ * only had a path for stills and recordings: an `unknown` take — a
+ * directory with a surviving `display.mp4` and no `anchors.json`, the exact
+ * shape a helper crash mid-take leaves — was counted, then `console.error`ed
+ * and left in temp storage for the purge. So the number said more than the
+ * user was then shown, and the take most likely to matter (the one that was
+ * running when things died) was the one silently skipped. Now every counted
+ * take has a way in front of the user, and an `empty` directory — nothing
+ * with a byte in it — is removed before counting rather than counted as a
+ * take nobody can be shown.
  */
 async function recoverUnsavedTakes(): Promise<void> {
   await purgeStaleTempTakes(process.env).catch((e) => {
     console.error("[temp-takes] purge failed:", e);
     return [];
   });
-  const orphaned = await listTempTakes(process.env).catch((e) => {
+  const found = await listTempTakes(process.env).catch((e) => {
     console.error("[temp-takes] could not list temp storage:", e);
-    return [];
+    return [] as TempTakeInfo[];
   });
+  // A directory the helper made and died before writing a byte into. There
+  // is nothing in it to offer, so it is neither counted nor kept.
+  for (const t of found) {
+    if (t.kind === "empty") await rm(t.dir, { recursive: true, force: true }).catch(() => {});
+  }
+  const orphaned = found.filter((t) => t.kind !== "empty");
   if (orphaned.length === 0) return;
 
+  const unfinished = orphaned.filter((t) => t.kind === "unknown").length;
   const { response } = await dialog.showMessageBox({
     type: "info",
     buttons: ["Review", "Discard all"],
     defaultId: 0,
     cancelId: 0,
     message: orphaned.length === 1 ? "1 unsaved take recovered" : `${orphaned.length} unsaved takes recovered`,
-    detail: "The app didn't shut down cleanly last time — these takes never made it to your library.",
+    detail: "The app didn't shut down cleanly last time — these takes never made it to your library."
+      + (unfinished === 0 ? ""
+        : unfinished === 1 && orphaned.length === 1
+        ? "\n\nIt stopped before it finished writing, so it can't be opened here. Review shows what survived in Finder."
+        : unfinished === 1
+        ? "\n\n1 of them stopped before it finished writing, so it can't be opened here. Review shows what survived in Finder."
+        : `\n\n${unfinished} of them stopped before they finished writing, so they can't be opened here. Review shows what survived in Finder.`),
   });
 
   if (response === 1) {
@@ -426,10 +465,46 @@ async function recoverUnsavedTakes(): Promise<void> {
   // focusing now; see thumbnail-window.ts).
   const ordered = [...orphaned].reverse();
   const { thumbnail, saveFolder } = readSettings(app.getPath("userData"));
+  let failed = 0;
+  /**
+   * The way in for anything the app cannot open itself: moved out of temp
+   * storage into the same `raw/` a recording is promoted into — the user's
+   * own folder, where it is KEPT rather than purged — and revealed there in
+   * Finder. Reconstructing a take document from a bare, possibly unfinalised
+   * video is deliberately not attempted; the files are handed over as they are.
+   */
+  const reveal = async (t: TempTakeInfo): Promise<void> => {
+    try {
+      shell.showItemInFolder(await promoteTake(process.env, saveFolder, t.dir));
+    } catch (e) {
+      console.error("[recovery] could not move a recovered take out of temp storage:", t.dir, e);
+      failed++;
+    }
+  };
   for (const t of ordered) {
     if (t.kind === "still") {
+      let shot: unknown;
       try {
-        const shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
+        shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
+      } catch (e) {
+        // A still whose document cannot be read is revealed rather than
+        // re-offered: left in temp storage it would be counted on every
+        // launch and shown on none of them.
+        console.error("[recovery] could not read a recovered still — revealing it instead:", t.dir, e);
+        await reveal(t);
+        continue;
+      }
+      // Offered: the purge's clock starts HERE, never before (temp-takes.ts,
+      // `purgeStaleTempTakes`). A still whose panel is now ignored again stays
+      // in temp storage, is offered again on the next launch, and goes a week
+      // after this FIRST offer. Marked BEFORE the panel exists, so a Save
+      // pressed on it at once cannot race this write into a directory that
+      // has just moved. Best-effort: a marker that could not be written only
+      // means the take is kept longer, never lost sooner.
+      await markOfferedForRecovery(t.dir).catch((e) => {
+        console.error("[recovery] could not mark a still as offered:", t.dir, e);
+      });
+      try {
         presentThumbnail({
           dir: t.dir, shot, corner: thumbnail.corner,
           // A recovered temp take has never been decided on — nobody has
@@ -439,6 +514,7 @@ async function recoverUnsavedTakes(): Promise<void> {
         });
       } catch (e) {
         console.error("[recovery] could not reopen a recovered still:", t.dir, e);
+        failed++;
       }
     } else if (t.kind === "recording") {
       // No STC-392 panel exists yet for a recording, so there is nothing to
@@ -450,10 +526,26 @@ async function recoverUnsavedTakes(): Promise<void> {
         openLibrary();
       } catch (e) {
         console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
+        failed++;
       }
     } else {
-      console.error("[recovery] unrecognised temp take, leaving it in place:", t.dir);
+      // `unknown`: something survived — usually a `display.mp4` whose take
+      // never reached the clean stop that writes `anchors.json` — but no
+      // document the library can open, and a `raw/` child with neither
+      // document is not a bundle to its scan (nor an orphan to
+      // `sweepOrphanedBundles`, which needs `capture.json`). So Finder is
+      // where it can be seen.
+      await reveal(t);
     }
+  }
+  // A take Review could not deliver is still in temp storage, NOT marked as
+  // offered, so the purge leaves it alone and the next launch asks again —
+  // which is exactly what this says, rather than a count that silently
+  // overstated what was shown.
+  if (failed > 0) {
+    showNotice(failed === 1
+      ? "1 recovered take couldn't be opened. It's still kept, and will be offered again the next time you open the app."
+      : `${failed} recovered takes couldn't be opened. They're still kept, and will be offered again the next time you open the app.`);
   }
 }
 
@@ -589,10 +681,13 @@ app.whenReady().then(async () => {
     if (!action) return;
     if (action === "record") {
       if (sup?.state === "recording") { void onRecordHotkey(); return; }
-      void runRecordFlow("menu-bar");
+      void recordAndAnnounce("menu-bar");
       return;
     }
-    if (isShotAction(action)) void captureStill(action, "menu-bar");
+    // Through `captureAndAnnounce`, like the hotkey: a menu-bar shot used to
+    // call `captureStill` bare, so its refusal was dropped AND an open window
+    // never heard about the shot at all (STC-465 review).
+    if (isShotAction(action)) void captureAndAnnounce(action, "menu-bar");
   });
   applyShortcuts(shortcuts);
   createWindow();
@@ -932,7 +1027,14 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
   // `sup.startRecording()` with different temp dirs, the second answered
   // `bad-state` for a take that DID start. Checking the flag here closes
   // that: a second call inside the gap now sees it already true.
-  if (capturing || overlayIsOpen() || countdownIsOpen() || recordFlowActive) {
+  //
+  // `recordFlowActive` answers its OWN code (STC-465 review): what is on
+  // screen then is this same Record's overlay or countdown, not a shot, and
+  // `capture-in-flight`'s sentence ("A shot is already in progress") would be
+  // wrong about it. `refusals.ts` says nothing for it at all — the flow in
+  // front of the user is the answer to a second press.
+  if (recordFlowActive) return { ok: false, code: "record-in-flight" };
+  if (capturing || overlayIsOpen() || countdownIsOpen()) {
     return { ok: false, code: "capture-in-flight" };
   }
   if (sup.state === "recording") return { ok: false, code: "already-recording" };
@@ -1372,12 +1474,33 @@ function excludeAlso(params: CaptureParams, ids: number[]): void {
 /**
  * A hotkey or menu-bar capture has no renderer waiting on a reply, so its
  * outcome is announced instead. A window that happens to be open updates its
- * take list and says what happened; one that is not open misses nothing,
- * because the shot is already on disk.
+ * take list; one that is not open misses nothing, because the shot is already
+ * on disk.
+ *
+ * A refusal (or a warning) is said HERE, not left to that window (STC-465
+ * review): it used to reach the user only through `still:captured`, which is
+ * a no-op with no main window — and in a menu-bar-first app that is the
+ * normal case. The window's own listener stays quiet for the same reason
+ * (`reportStill(r, false)`), so an open window does not say it twice.
  */
 async function captureAndAnnounce(action: ShotAction, source: CaptureSource): Promise<void> {
   const r = await captureStill(action, source);
+  showNotice(stillNoticeText(r));
   send("still:captured", r);
+}
+
+/**
+ * The Record answer for the doors with no renderer waiting on it — the
+ * menu-bar item and ⌃⌥⇧⌘4. The window's button reads `runRecordFlow`'s
+ * answer itself (`recorder:start`) and says it through `refusals.ts` too;
+ * these two used to discard it (the menu bar) or only `console.error` it (the
+ * hotkey), so a Record that counted down and was then refused — no grant,
+ * say — showed nothing at all (STC-465 review).
+ */
+async function recordAndAnnounce(source: Exclude<RecordSource, "window">): Promise<void> {
+  const r = await runRecordFlow(source);
+  if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
+  showNotice(recordRefusalText(r));
 }
 
 ipcMain.handle("still:capture", async (_e, action?: ShotAction) =>
@@ -1438,8 +1561,7 @@ async function onRecordHotkey(): Promise<void> {
     await closeOverlay().catch(() => {});
     return;
   }
-  const r = await runRecordFlow("hotkey");
-  if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
+  await recordAndAnnounce("hotkey");
 }
 
 ipcMain.handle("shortcuts:get", async () => ({ shortcuts, report: shortcutReport }));

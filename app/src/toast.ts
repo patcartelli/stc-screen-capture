@@ -19,7 +19,8 @@ import type { Size } from "./thumbnail.js";
  * 240x68 since STC-392. The message toast inherited that size and should not
  * have: it carries the main window's WARNINGS now (STC-412 Task 6 removed the
  * inline `#alert` banner), and those are multi-paragraph instructions —
- * `renderer.ts`'s `event-tap-unavailable` refusal is 572 characters across
+ * the `event-tap-unavailable` refusal (`refusals.ts`, `renderer.ts`'s until
+ * the STC-465 review moved it so main could say it too) is 572 characters across
  * four paragraphs, the longest string this app can put in front of anyone.
  * At 240x68 about a fifth of it was on screen and the rest was clipped by
  * `#card`'s `overflow: hidden`, silently: nothing about the window said there
@@ -40,7 +41,7 @@ import type { Size } from "./thumbnail.js";
  */
 export const UNDO_TOAST_SIZE: Size = { width: 240, height: 68 };
 
-/** See the header: sized to hold `renderer.ts`'s longest warning unscrolled. */
+/** See the header: sized to hold the app's longest warning (`refusals.ts`) unscrolled. */
 export const MESSAGE_TOAST_SIZE: Size = { width: 400, height: 300 };
 
 /**

@@ -53,12 +53,19 @@ feels like a flood or a reasonable recovery.
 
 ## §4 — the 7-day purge, for real
 
-Not practically testable by waiting — `purgeStaleTempTakes` reads the
-directory's OWN timestamp name, not mtime, so the fastest real check is: seed
-a fake old directory by hand (`mkdir` one named `2020-01-01_00-00-00` under
-the temp root) and relaunch. It should vanish silently, with no dialog (this
-IS covered by `crash-recovery.e2e.test.ts`'s "purged silently" case, so this
-step is optional — mentioned for completeness, not because it is unverified).
+**Changed by the STC-465 review's data-loss fixes.** The purge no longer reads
+the directory's own timestamp name: it deletes only a take crash recovery
+OFFERED more than 7 days ago (the `.recovery-offered-at` marker Review writes
+into a still it re-presents), and never one that has not been offered, however
+old — a relaunch after day 7 used to delete a stranded take before the prompt
+that promised to offer it could run. So the old hand check (`mkdir
+2020-01-01_00-00-00` and relaunch) no longer shows a purge: a bare empty
+directory is now simply removed as having nothing in it, and one with a file
+in it (copy a real temp still's contents in) is OFFERED, by design. To see a
+silent purge by hand, also write an old marker into that one —
+`echo $(( ($(date +%s) - 8*86400) * 1000 )) > <dir>/.recovery-offered-at` —
+and relaunch: it should vanish with no dialog. Both cases are covered by
+`crash-recovery.e2e.test.ts`, so this step is optional.
 
 ## What is deliberately not here
 
