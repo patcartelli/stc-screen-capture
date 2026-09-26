@@ -99,7 +99,7 @@ export class SeekingFrameSource {
         this.currentIndex = this.nextOutIndex - this.pending.length - 1;
         continue;
       }
-      if (!(await this.pump(index))) break;
+      if (!(await this.pump(index, mine))) break;
     }
     return this.current;
   }
@@ -136,7 +136,7 @@ export class SeekingFrameSource {
     this.currentIndex = key - 1;
   }
 
-  private async pump(target: number): Promise<boolean> {
+  private async pump(target: number, mine: number): Promise<boolean> {
     const d = this.decoder!;
     // Feed up to a bounded distance PAST the target. Bounding by nextFeed and
     // not by nextOutIndex matters: before the first output, nextOutIndex has
@@ -146,7 +146,25 @@ export class SeekingFrameSource {
                           this.nextFeed + Math.max(0, SeekingFrameSource.FEED_AHEAD - d.decodeQueueSize));
     if (upto > this.nextFeed) {
       const from = this.nextFeed;
-      const datas = await this.reader.read(from, upto - from);
+      let datas: Uint8Array[];
+      try {
+        datas = await this.reader.read(from, upto - from);
+      } catch (e) {
+        // A read failure is as fatal as a decoder error and surfaces the same
+        // way: every later request throws it too, rather than a frozen frame.
+        this.failure = e instanceof Error ? e : new Error(String(e));
+        throw this.failure;
+      }
+      // The await is a window a newer seek can use. It cannot touch this
+      // decoder — the chain serialises seeks — but it has asked for a
+      // different frame, and feeding ones nobody wants only delays it. Feed
+      // nothing and let seek() see the new ticket and resolve null.
+      if (mine !== this.ticket) return true;
+      // The await is also a window for close() (the preview closing a take
+      // mid-scrub) or a newer seek that already replaced the decoder via
+      // restartAt. Either way `d` is no longer live: feeding it would throw
+      // InvalidStateError. Feed nothing and let seek() unwind instead.
+      if (this.decoder !== d || d.state === "closed") return false;
       datas.forEach((data, k) => {
         const c = this.video.chunks[from + k]!;
         d.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: data as BufferSource }));

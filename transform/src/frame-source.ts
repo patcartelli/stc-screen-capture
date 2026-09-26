@@ -82,7 +82,18 @@ export class ForwardFrameSource {
                           this.nextChunk + Math.max(0, ForwardFrameSource.QUEUE_TARGET - this.decoder.decodeQueueSize));
     if (upto > this.nextChunk) {
       const from = this.nextChunk;
-      const datas = await this.reader.read(from, upto - from);
+      let datas: Uint8Array[];
+      try {
+        datas = await this.reader.read(from, upto - from);
+      } catch (e) {
+        this.failure = e instanceof Error ? e : new Error(String(e));
+        throw this.failure;
+      }
+      // The await is a window close() can use (the export aborting mid-read).
+      // The decoder is closed there and feeding it would throw
+      // InvalidStateError; feed nothing instead — the stream reads as over
+      // and frameAt holds the last frame (null if there was none).
+      if (this.decoder.state === "closed") return false;
       datas.forEach((data, k) => {
         const c = this.video.chunks[from + k]!;
         this.decoder.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: data as BufferSource }));
