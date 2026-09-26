@@ -82,20 +82,16 @@ async function measure(withCamera) {
     // the URL rather than taking the first "window" event: on a machine with
     // no helper permissions the supervisor can pop a toast window (e.g. "the
     // recorder keeps failing to start") that races the editor window and
-    // would otherwise be mistaken for it.
-    const editorWin = await new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("editor window did not open within 60s")),
-        60_000,
-      );
-      app.on("window", function onWindow(page) {
-        if (!page.url().includes("editor.html")) return;
-        clearTimeout(timer);
-        app.off("window", onWindow);
-        resolve(page);
-      });
-      win.click("#takes >> text=Preview").catch(reject);
-    });
+    // would otherwise be mistaken for it. The predicate must pick out the
+    // VIDEO editor specifically — a bare `includes("editor.html")` would also
+    // match `still-editor.html`.
+    const [editorWin] = await Promise.all([
+      app.waitForEvent("window", {
+        predicate: (p) => /\/editor\.html(\?|#|$)/.test(p.url()),
+        timeout: 60_000,
+      }),
+      win.click("#takes >> text=Preview"),
+    ]);
     await editorWin.waitForLoadState("domcontentloaded");
     // Wait for real pixels: RSS read before decoding starts measures nothing.
     await editorWin.waitForFunction(() => {
