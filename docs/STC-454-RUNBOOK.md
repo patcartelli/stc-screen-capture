@@ -1,10 +1,9 @@
 # STC-454 — preview audio: what to listen for on the Mac
 
-**Run this from the branch, not `master`, until it merges:**
+**All four parts are merged: run this from `master`.**
 
 ```
-git fetch origin claude/optimistic-ride-ed374b
-git checkout claude/optimistic-ride-ed374b && git pull
+git checkout master && git pull
 npm install && npm run app:start
 ```
 
@@ -240,14 +239,8 @@ Patrick's decisions (2026-09-25):
 
 # Part 4 — the waveform on the ruler
 
-**Stacked on part 3.** Until #230 merges, run this from
-`claude/magical-cori-9p47kd`, not `claude/optimistic-ride-ed374b`:
-
-```
-git fetch origin claude/magical-cori-9p47kd
-git checkout claude/magical-cori-9p47kd && git pull
-npm install && npm run app:start
-```
+**Merged, but §6 (part 3) and §7 (part 4) have NOT been fully run on
+hardware yet (STC-463).** Run both from `master`.
 
 ## What changed
 
