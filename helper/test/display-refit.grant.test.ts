@@ -50,8 +50,8 @@ function collect(stream: Readable, sink: Line[]): void {
   stream.resume();
 }
 
-function spawnHelper(env: Record<string, string> = {}) {
-  const proc = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
+function spawnHelper(env: Record<string, string> = {}, args: string[] = []) {
+  const proc = spawn(BIN, args, { stdio: ["pipe", "pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
   live.push(proc);
   const out: Line[] = [], fd3: Line[] = [];
   collect(proc.stdout!, out);
@@ -82,6 +82,24 @@ async function waitFor<T>(fn: () => T | undefined | false, ms = 15_000, what = "
 }
 const find = (ls: Line[], ev: string) => ls.find((l) => l.ev === ev);
 const session = () => mkdtempSync(join(tmpdir(), "stc-display-refit-"));
+
+/**
+ * The pause cases need to know how many frames were WRITTEN, and `started`
+ * cannot say: it is answered when `startCapture` completes, before any frame
+ * exists. The heartbeat can — `stats` on stdout carries `frames`
+ * (`CaptureSession.stats()`'s `framesAppended`), so these cases run the
+ * heartbeat at 50 ms instead of the default 2 s.
+ */
+const FAST_HEARTBEAT = ["--stats-interval-ms", "50"];
+/**
+ * The pause cases' fault delay (`STC_DISPLAY_FAULT_DELAY_MS`,
+ * `armDisplayFault`), instead of the default 0.5 s: "pause after the first
+ * written frame, but before the refit" needs a margin that does not depend on
+ * how fast this machine delivers its first frame. The refit itself runs
+ * `DISPLAY_CHANGE_SETTLE_MS` (250 ms) after this, which is extra margin.
+ */
+const PAUSE_FAULT_DELAY_MS = 2000;
+const lastStats = (ls: Line[], from = 0) => ls.slice(from).filter((l) => l.ev === "stats").at(-1);
 
 const validate7 = new Ajv({ allErrors: true, strict: true })
   .compile(JSON.parse(readFileSync(join(root, "schema/anchors-7.schema.json"), "utf8")));
@@ -175,17 +193,28 @@ describe("display hot-swap refit (STC-235)", () => {
   }, 60_000);
 
   test("refit while paused (Review Focus 5): the geometry lands only after resume", async () => {
-    const h = spawnHelper({ STC_CAPTURE_FAULT: "display-refit" });
+    const h = spawnHelper({ STC_CAPTURE_FAULT: "display-refit",
+                            STC_DISPLAY_FAULT_DELAY_MS: String(PAUSE_FAULT_DELAY_MS) }, FAST_HEARTBEAT);
     await waitFor(() => find(h.fd3, "ready"));
     const dir = session();
     await startOrExplain(h, { dir }, "refit-while-paused (STC-235)");
+    const startedAt = Date.now();
 
-    // Paused immediately; the fault still fires ~0.5 s after START, so the
-    // refit itself runs entirely inside the pause.
+    // Pause only once a frame has been WRITTEN. Pausing on `started` alone
+    // put the take's first frame inside the pause, and a take whose first
+    // written frame already carries a letterboxing refit is the documented
+    // "geometry unrepresentable" STOP (the case below) — not the refit this
+    // case is about.
+    await waitFor(() => h.out.some((l) => l.ev === "stats" && l.frames > 0), PAUSE_FAULT_DELAY_MS,
+      "a written frame on the heartbeat, before the fault fires");
     const paused = await h.request({ cmd: "pause" }, 10_000);
     expect(paused.ev).toBe("paused");
+    // ...and still before the fault: otherwise the refit landed un-paused and
+    // this case would pass without testing anything about a pause.
+    expect(Date.now() - startedAt, "the pause landed after the fault fired").toBeLessThan(PAUSE_FAULT_DELAY_MS);
 
-    await sleep(1500);
+    // Past the fault, its debounce, and the refit.
+    await sleep(PAUSE_FAULT_DELAY_MS + 1000);
     const resumed = await h.request({ cmd: "resume" }, 10_000);
     expect(resumed.ev).toBe("resumed");
 
@@ -197,11 +226,75 @@ describe("display hot-swap refit (STC-235)", () => {
     expect(anchors.geometry).toHaveLength(2);
     expect(anchors.pauses).toHaveLength(1);
     const [span] = anchors.pauses;
+    // The precondition, from the file itself: entry 0 (the first written
+    // frame) predates the pause.
+    expect(anchors.geometry[0].startNs).toBeLessThan(span.startNs);
     // The refit's geometry entry is recorded only from a WRITTEN frame
     // (Task 10, deviation 4/9) — no frame in the file was captured while
     // paused, so the entry cannot predate the pause's own end.
     expect(anchors.geometry[1].startNs).toBeGreaterThanOrEqual(span.endNs);
   }, 60_000);
+
+  // The other side of the case above: paused BEFORE the first frame is
+  // written, a letterboxing refit lands inside the pause, and the first frame
+  // after resume would have to be geometry entry 0 — which anchors-7 requires
+  // to be the full capture frame. The take is refused rather than recorded
+  // with the wrong mapping (Task 10, deviation 9): `display-reconfigured`,
+  // no geometry.
+  //
+  // Not deterministic in one shot: `started` precedes the first frame by an
+  // unknown margin, and a frame that lands before the pause turns this into
+  // the refit case above. So the precondition is MEASURED, not assumed (the
+  // heartbeat's written-frame count, read after the pause has settled), and
+  // an attempt that misses it is discarded and retried — never counted as a
+  // pass. If every attempt misses, the test FAILS saying so rather than
+  // skipping: a skip here would read as covered.
+  test("paused from the start through a letterboxing refit: the take stops, geometry unrepresentable", async () => {
+    const ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+      const h = spawnHelper({ STC_CAPTURE_FAULT: "display-refit", STC_DISPLAY_FAULT_DELAY_MS: "1000" }, FAST_HEARTBEAT);
+      await waitFor(() => find(h.fd3, "ready"));
+      const dir = session();
+      await startOrExplain(h, { dir }, "paused-from-start refit (STC-235)");
+      const paused = await h.request({ cmd: "pause" }, 10_000);
+      expect(paused.ev).toBe("paused");
+
+      // A frame whose PTS predates the pause can still be delivered (and
+      // written) just after the reply, so the count is read from a heartbeat
+      // sent a little later, not the first one after the reply.
+      await sleep(200);
+      const mark = h.out.length;
+      const beat = await waitFor(() => lastStats(h.out, mark), 2_000, "a heartbeat after the pause settled");
+      if (beat.frames > 0) {
+        h.kill();
+        continue;       // precondition missed: a frame beat the pause; try again
+      }
+
+      // Past the fault (1 s), its debounce and the refit — all inside the pause.
+      await sleep(2000);
+      const resumed = await h.request({ cmd: "resume" }, 10_000);
+      expect(resumed.ev).toBe("resumed");
+
+      // Unsolicited: the first frame after resume is refused and the take ends.
+      const stopped = await waitFor(
+        () => h.fd3.find((l) => l.ev === "stopped" && typeof l.seq !== "number"),
+        15_000, "an unsolicited `stopped` after resume");
+      expect(stopped.reason).toBe("display-reconfigured");
+      expect(stopped.frames, "a frame was written under an unrepresentable geometry").toBe(0);
+
+      const anchors = loadRawAnchors(dir);
+      expect(anchors.geometry).toBeUndefined();
+      expect(anchors.stop?.reason).toBe("display-reconfigured");
+      const validate = validateAny.compile(
+        JSON.parse(readFileSync(join(root, `schema/anchors-${anchors.version}.schema.json`), "utf8")));
+      expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
+      return;
+    }
+    throw new Error(
+      `in ${ATTEMPTS} attempts a frame was always written before the pause took effect, so the ` +
+      "paused-from-start precondition was never met and nothing was tested. This is a test-harness " +
+      "outcome, not a helper failure: the machine delivers its first frame faster than a pause round trip.");
+  }, 120_000);
 
   test("display-gone: the captured display disappearing stops the take, not a refit", async () => {
     const h = spawnHelper({ STC_CAPTURE_FAULT: "display-gone" });

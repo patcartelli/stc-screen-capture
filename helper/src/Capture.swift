@@ -633,7 +633,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    /// `STC_CAPTURE_FAULT=display-refit` / `=display-gone` (STC-235): 0.5 s in,
+    /// `STC_CAPTURE_FAULT=display-refit` / `=display-gone` (STC-235): 0.5 s in
+    /// (by default),
     /// the display-change path runs as though CG had called back — the
     /// debounced refit against the SAME display, with `apply` forcing a
     /// 3/4-width pillarbox so the grant test sees a real second geometry and
@@ -642,11 +643,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `armWindowFault`, which only a window take can use): the grant test
     /// drives it on a whole-display take. Driven by
     /// helper/test/display-refit.grant.test.ts.
+    ///
+    /// `STC_DISPLAY_FAULT_DELAY_MS` overrides the 0.5 s, for the grant test
+    /// that must PAUSE after the take's first written frame and still before
+    /// the fault fires — a margin a fixed 0.5 s leaves to the machine.
     private func armDisplayFault() {
         guard let fault = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"],
               fault == "display-refit" || fault == "display-gone" else { return }
-        IO.log("STC_CAPTURE_FAULT=\(fault): the display-change path runs in \(Self.windowFaultDelaySeconds) s")
-        DispatchQueue.global().asyncAfter(deadline: .now() + Self.windowFaultDelaySeconds) { [weak self] in
+        let delay = ProcessInfo.processInfo.environment["STC_DISPLAY_FAULT_DELAY_MS"]
+            .flatMap { Int($0) }.map { Double(max(0, $0)) / 1000 } ?? Self.windowFaultDelaySeconds
+        IO.log("STC_CAPTURE_FAULT=\(fault): the display-change path runs in \(delay) s")
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
             if fault == "display-gone" {
                 // Through the classifier itself, as the real path would reach
