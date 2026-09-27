@@ -51,12 +51,31 @@ export async function launchApp(dir: string, env: Record<string, string> = {},
 }
 
 /**
+ * The video editor's page, by url. The `/` before the name is load-bearing:
+ * without it this would also match `still-editor.html`.
+ */
+export const EDITOR_URL = /\/editor\.html(\?|#|$)/;
+
+/**
  * Click a take's "Preview" action in the library and hand back the EDITOR
  * window it opens (STC-373) — a new `BrowserWindow`, not an in-page player.
+ *
+ * The wait is for the first window whose url is the EDITOR, never the first
+ * window: on a machine whose helper has no Screen Recording grant, the
+ * "recorder keeps failing to start" toast can open in the same moment and
+ * win an unfiltered race, handing every test built on this the toast's page
+ * (STC-236 hit exactly this in `scripts/measure-preview-memory.mjs`). The
+ * predicate reads `p.url()` AT the event, which is only sound because the
+ * editor's url has already committed when its page attaches (`_windows.ts`'s
+ * table: a loaded window attaches 78-147 ms after creation). Measured
+ * 2026-09-27: 5 of 5 launches reported the full `editor.html?dir=…` url at the
+ * event, none about:blank. If that ever stops holding, this times out rather
+ * than returning the wrong page — the predicate is never re-run.
  */
-export async function openEditorFromLibrary(app: ElectronApplication, win: Page): Promise<Page> {
+export async function openEditorFromLibrary(app: ElectronApplication, win: Page,
+    timeout = 60_000): Promise<Page> {
   const [editorWin] = await Promise.all([
-    app.waitForEvent("window"),
+    app.waitForEvent("window", { predicate: (p) => EDITOR_URL.test(p.url()), timeout }),
     win.click("#takes >> text=Preview"),
   ]);
   await editorWin.waitForLoadState("domcontentloaded");
