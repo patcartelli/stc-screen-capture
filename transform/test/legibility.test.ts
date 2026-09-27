@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, LEGIBILITY_WARN_PX, legibility,
-  legibilitySentence, zoomFactorForCrop,
+  legibilitySentence, zoomFactorForCrop, effectivePointWidth,
 } from "../src/legibility.js";
 import { EMBED_CSS_WIDTH } from "../src/output-size.js";
 import { displayToOutput } from "../src/spaces.js";
@@ -178,5 +178,35 @@ describe("the sentence and the targets", () => {
 
   test("the default text size is the ticket's", () => {
     expect(DEFAULT_TEXT_PT).toBe(13);
+  });
+});
+
+describe("effectivePointWidth — the worst geometry (STC-235)", () => {
+  test("no geometry: the display's own point width", () => {
+    expect(effectivePointWidth({ display: { pointWidth: 1728 } as any, capture: { width: 3340, height: 2160 } as any }))
+      .toBe(1728);
+  });
+  test("a refit that downscales into a narrower contentRect warns for its smallest text", () => {
+    const a = {
+      display: { pointWidth: 1728 } as any,
+      capture: { width: 3340, height: 2160 } as any,
+      geometry: [
+        { startNs: 0, display: { pointWidth: 1728 } as any, contentRect: { x: 0, y: 0, width: 3340, height: 2160 } },
+        { startNs: 1, display: { pointWidth: 2560 } as any, contentRect: { x: 0, y: 118, width: 3340, height: 1924 } },
+      ],
+    };
+    // entry 1: 2560 points squeezed into the full width => 2560 effective.
+    expect(effectivePointWidth(a)).toBe(2560);
+  });
+  test("a pillarboxed entry counts its reduced width", () => {
+    const a = {
+      display: { pointWidth: 1920 } as any, capture: { width: 3840, height: 2160 } as any,
+      geometry: [
+        { startNs: 0, display: { pointWidth: 1920 } as any, contentRect: { x: 0, y: 0, width: 3840, height: 2160 } },
+        { startNs: 1, display: { pointWidth: 1440 } as any, contentRect: { x: 480, y: 0, width: 2880, height: 2160 } },
+      ],
+    };
+    // 1440 * 3840 / 2880 = 1920 — equal to entry 0, so 1920.
+    expect(effectivePointWidth(a)).toBe(1920);
   });
 });

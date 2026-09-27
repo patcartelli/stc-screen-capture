@@ -72,7 +72,7 @@ import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from 
 import type { Size } from "@transform/spaces";
 import { render } from "@transform/render";
 import {
-  DEFAULT_TEXT_PT, EMBED_TARGETS, legibility, legibilitySentence, zoomFactorForCrop,
+  DEFAULT_TEXT_PT, EMBED_TARGETS, effectivePointWidth, legibility, legibilitySentence, zoomFactorForCrop,
 } from "@transform/legibility";
 import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
@@ -1364,7 +1364,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   openSession = session;
   openProject = project;
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
-  openDisplay = { pointWidth: anchors.display.pointWidth };
+  openDisplay = { pointWidth: effectivePointWidth(anchors) };
   player = new PreviewPlayer($("stage") as HTMLCanvasElement, session, project);
   const scrub = $("scrub") as HTMLInputElement;
   scrub.max = String(lastFrame(player.durationNs));

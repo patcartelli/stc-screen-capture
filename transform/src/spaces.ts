@@ -450,6 +450,24 @@ export function unmapPoint(m: DisplayToOutput, p: Point): Point {
   return { x: (p.x - m.ox) / m.sx + m.originX, y: (p.y - m.oy) / m.sy + m.originY };
 }
 
+/**
+ * The effective point width to judge legibility by, when geometry refits are
+ * in play (STC-235). A refit can stretch more display points into the same
+ * capture width, or squeeze them into less (pillarboxing). Text is smallest
+ * in the geometry that scales the most — the MAXIMUM effective width.
+ *
+ * No refit returns the display's own point width untouched.
+ */
+export function effectivePointWidthFromGeometry(
+  displayPointWidth: number,
+  captureWidth: number,
+  geometry?: readonly { display: { pointWidth: number }; contentRect: { width: number } }[],
+): number {
+  if (!geometry) return displayPointWidth;
+  return Math.max(...geometry.map(
+    (g) => g.display.pointWidth * captureWidth / g.contentRect.width));
+}
+
 // ---------------------------------------------------------------------------
 // the PiP, as a crop in UV
 // ---------------------------------------------------------------------------
