@@ -134,11 +134,17 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // v6's `system` block (STC-418) is a second audio track, loaded below on
   // exactly the mic's terms. Nothing downstream consumes `systemAudio` yet —
   // export's weighted sum with the mic is a later PR of the same ticket.
+  //
+  // v7's `geometry` timeline (STC-235) is ACCEPTED AND IGNORED here — this is
+  // PR 1 of STC-235, the schema and version gate only. Nothing emits a v7
+  // document yet, and nothing downstream consults `geometry`; a later PR of
+  // this ticket is what makes render() refit the picture at each entry.
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
-    anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6
+    anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
+    anchors?.version !== 7
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5 or 6)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6 or 7)`);
   }
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.
