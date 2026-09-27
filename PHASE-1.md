@@ -55,7 +55,7 @@ signed bundle the user recognises.
 | risk | approach |
 |---|---|
 | **Thermal throttle / frame drops** | emit periodic `stats` (frames, drops, queue depth, encoder fps) on the lossy non-blocking channel so throttling is *observable*, not inferred. Thermal fade was already visible in phase 0: 18.7 → 12.1 fps across a longer benchmark |
-| **Display hot-swap** | `CGDisplayRegisterReconfigurationCallback`; on change, emit a `display-reconfigured` event and **stop the recording cleanly**. Rebuild-and-continue is a phase 2 concern — `AVAssetWriter` cannot change output dimensions mid-file without corruption |
+| **Display hot-swap** | `CGDisplayRegisterReconfigurationCallback`; a display change refits the stream into the same file at the take's fixed size (STC-235); only a lost display or an out-of-bounds region stops |
 
 **Deferred to phase 2:** mid-recording display rebuild, camera/mic capture, system audio
 (`capturesAudio`), N-minute segmentation, device-loss recovery, and the fault-injection soak harness.

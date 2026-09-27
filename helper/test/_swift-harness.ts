@@ -83,13 +83,20 @@ export async function runSwiftHarness(opts: {
    * died by signal would retry away the exact regression it exists to catch.
    */
   retryRun?: { attempts: number; when: (message: string) => boolean };
+  /**
+   * Argv passed to the compiled binary itself (never to `swiftc`). Added for
+   * STC-235's frame probe, which takes `<mp4> <tSeconds> <x> <y> <w> <h>` on
+   * the command line rather than reading fixed input — every existing caller
+   * omits this and gets the previous no-argv behaviour unchanged.
+   */
+  args?: string[];
 }): Promise<string> {
   // Deliberately BELOW the callers' vitest testTimeout (120 s). They were equal,
   // so vitest always fired first and our message — the one that names WHICH
   // step hung and prints the output tail — never got the chance. Two bounds set
   // too close together, which is exactly STC-258 repeated: the outer bound must
   // stay clear of the inner one or the inner one is decorative.
-  const { label, sources, compileMs = 45_000, runMs = HARNESS_RUN_MS, env, retryRun } = opts;
+  const { label, sources, compileMs = 45_000, runMs = HARNESS_RUN_MS, env, retryRun, args = [] } = opts;
   const bin = await compiled(label, sources, compileMs);
 
   // Compiled once, above; only the run is retried.
@@ -97,7 +104,7 @@ export async function runSwiftHarness(opts: {
   let last: Error | undefined;
   for (let i = 1; i <= attempts; i++) {
     try {
-      return await runBounded(bin, [], `${label}: harness`, runMs, {
+      return await runBounded(bin, args, `${label}: harness`, runMs, {
         // Handed down, not guessed at by the harness: a bound a process picks
         // for itself is a bound nobody compares against the one that will
         // actually kill it. Derived from the runMs in force so an override of
