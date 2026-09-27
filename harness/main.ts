@@ -2,6 +2,7 @@ import { mark } from "./mark.js";
 import { render } from "@transform/render";
 import { tickTimeNs } from "@transform/time";
 import { demuxTrack, type DemuxedVideo } from "@transform/demux";
+import { memorySource } from "@transform/chunk-reader";
 import { decodeAll } from "@transform/decode";
 import { composite } from "@transform/compositor";
 import type { Project, Session } from "@transform/types";
@@ -129,7 +130,7 @@ async function main() {
   // what made every camera take render without a PiP. A fixture that later
   // gains a camera must not have to rediscover that.
   const projectRaw = await fetch("/basic/project.json").then((r) => r.json());
-  const video = await demuxTrack(mp4, "display.mp4");
+  const video = await demuxTrack(memorySource(mp4, "display.mp4"), "display.mp4");
   const project: Project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height,
     video.framesNs[video.framesNs.length - 1] ?? 0,

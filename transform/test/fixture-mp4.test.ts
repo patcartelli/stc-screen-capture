@@ -69,9 +69,10 @@ describe("demux honours the edit list", () => {
       readFileSync(join(root, "fixtures", "offset", "frames.json"), "utf8"),
     );
     const { demuxTrack } = await import("../src/demux.js");
+    const { memorySource } = await import("../src/chunk-reader.js");
     const buf = readFileSync(join(root, "fixtures", "offset", "display.mp4"));
     const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
-    const video = await demuxTrack(ab, "display.mp4");
+    const video = await demuxTrack(memorySource(ab, "display.mp4"), "display.mp4");
     expect(video.framesNs[0]).toBe(250_000_000);
     expect(video.framesNs).toEqual(framesNs);
   });
@@ -83,8 +84,9 @@ describe("demux refuses unreadable input instead of hanging", () => {
   // mp4box calls neither onReady nor onError for a file with no valid boxes.
   const settles = async (buf: ArrayBuffer) => {
     const { demuxTrack } = await import("../src/demux.js");
+    const { memorySource } = await import("../src/chunk-reader.js");
     return Promise.race([
-      demuxTrack(buf, "display.mp4").then(() => "resolved", (e) => `rejected: ${e.message}`),
+      demuxTrack(memorySource(buf, "display.mp4"), "display.mp4").then(() => "resolved", (e) => `rejected: ${e.message}`),
       new Promise<string>((r) => setTimeout(() => r("HUNG"), 4000)),
     ]);
   };
@@ -117,9 +119,10 @@ describe("the camera fixture carries its warm-up as an empty edit", () => {
   // display track risks.
   test("demuxed camera PTS match camera-frames.json exactly", async () => {
     const { demuxTrack } = await import("../src/demux.js");
+    const { memorySource } = await import("../src/chunk-reader.js");
     const buf = readFileSync(join(root, "fixtures", "pip", "camera.mp4"));
     const video = await demuxTrack(
-      buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+      memorySource(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, "camera.mp4"),
       "camera.mp4",
     );
     const expected = JSON.parse(
@@ -129,9 +132,10 @@ describe("the camera fixture carries its warm-up as an empty edit", () => {
 
   test("the fixture's first frame is the warm-up gap, not zero", async () => {
     const { demuxTrack } = await import("../src/demux.js");
+    const { memorySource } = await import("../src/chunk-reader.js");
     const buf = readFileSync(join(root, "fixtures", "pip", "camera.mp4"));
     const video = await demuxTrack(
-      buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+      memorySource(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, "camera.mp4"),
       "camera.mp4",
     );
     // If this comes back 0 the empty edit was ignored and every PiP would sit

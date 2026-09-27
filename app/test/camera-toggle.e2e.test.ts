@@ -10,6 +10,7 @@ import { observeTextSequence, textSequence, occursBefore } from "./_state-sequen
 import { startRecordFlow } from "./_record-flow.js";
 import { toastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { openEditorFromLibrary } from "./_editor-fixture.js";
 
 /**
  * The camera toggle, end to end through the real app.
@@ -179,11 +180,7 @@ describe("the camera toggle", () => {
     // is taken from THAT window's stage, not the library window's.
     const sampleAt = async (mainWin: any) => {
       await expect.poll(() => mainWin.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-26");
-      const [win] = await Promise.all([
-        app!.waitForEvent("window"),
-        mainWin.click("#takes >> text=Preview"),
-      ]);
-      await win.waitForLoadState("domcontentloaded");
+      const win = await openEditorFromLibrary(app!, mainWin);
       await win.fill("#scrub", "120");
       await win.dispatchEvent("#scrub", "input");
       await expect.poll(() => win.textContent("#clock"), { timeout: 30_000 }).toMatch(/^0:02:00 /);
