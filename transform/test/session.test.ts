@@ -93,7 +93,7 @@ describe("loadSession", () => {
   });
 });
 
-describe("loader accepts v1 through v6 anchors", () => {
+describe("loader accepts v1 through v7 anchors", () => {
   // The helper does not emit v2 until increment 3, does not emit v3 until
   // STC-370 (only for a region/window take), and does not emit v4 until
   // STC-233 (only when a mic was requested). A loader that demanded the
@@ -177,16 +177,36 @@ describe("loader accepts v1 through v6 anchors", () => {
     expect(s.systemAudio).toBeUndefined();
   });
 
-  test("a version 7 anchors document is rejected by name", async () => {
-    // Widening must not become "accept anything". Version 7, not 6: STC-418
-    // made 6 a real, supported version (the `system` audio block), so it is
+  test("a version 8 anchors document is rejected by name", async () => {
+    // Widening must not become "accept anything". Version 8, not 7: STC-235
+    // made 7 a real, supported version (the `geometry` timeline), so it is
     // no longer a stand-in for "unknown future version" — the same thing
-    // already happened to 3 (STC-370), 4 (STC-233) and 5 (STC-240).
+    // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240) and 6 (STC-418).
     await expect(loadSession({
-      anchors: offsetAnchors({ version: 7 as any }),
+      anchors: offsetAnchors({ version: 8 as any }),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 7 is not supported/);
+    })).rejects.toThrow(/version 8 is not supported/);
+  });
+
+  // STC-235: a v7 document with malformed geometry is refused, never silently
+  // accepted — checkGeometry (display-geometry.ts) is wired into the loader.
+  test("a version 7 anchors document with malformed geometry is refused", async () => {
+    const display = { id: 1, pointWidth: 640, pointHeight: 360, pixelWidth: 640, pixelHeight: 360,
+                       backingScale: 1, originX: 0, originY: 0 };
+    await expect(loadSession({
+      anchors: offsetAnchors({
+        version: 7,
+        geometry: [
+          // entry 0's contentRect is not the full capture frame (y != 0) —
+          // checkGeometry must refuse rather than default.
+          { startNs: 250_000_000, display, contentRect: { x: 0, y: 2, width: 640, height: 358 } },
+          { startNs: 1_000_000_000, display, contentRect: { x: 0, y: 0, width: 640, height: 360 } },
+        ],
+      } as any),
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(SessionLoadError);
   });
 
   test("a version 2 events document loads, cursor events included", async () => {

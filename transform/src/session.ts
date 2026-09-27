@@ -2,6 +2,8 @@ import { demuxTrack, type DemuxedVideo } from "./demux.js";
 import { demuxAudioTrack, type DemuxedAudio } from "./demux-audio.js";
 import type { Anchors, Session, SessionEvent } from "./types.js";
 import type { Changes } from "./changes.js";
+import { checkGeometry } from "./display-geometry.js";
+import { SessionLoadError } from "./session-error.js";
 
 /**
  * Turns a recorded session on disk into the Session the transform consumes.
@@ -10,12 +12,10 @@ import type { Changes } from "./changes.js";
  * paths, so the same code serves Node tests and the browser export sink.
  */
 
-export class SessionLoadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionLoadError";
-  }
-}
+// Re-exported so every existing `from "./session.js"` import keeps working —
+// the class itself lives in session-error.ts to avoid a circular import with
+// display-geometry.ts (checkGeometry throws it; session.ts calls checkGeometry).
+export { SessionLoadError };
 
 export interface SessionInput {
   anchors: Anchors;
@@ -135,10 +135,8 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // exactly the mic's terms. Nothing downstream consumes `systemAudio` yet —
   // export's weighted sum with the mic is a later PR of the same ticket.
   //
-  // v7's `geometry` timeline (STC-235) is ACCEPTED AND IGNORED here — this is
-  // PR 1 of STC-235, the schema and version gate only. Nothing emits a v7
-  // document yet, and nothing downstream consults `geometry`; a later PR of
-  // this ticket is what makes render() refit the picture at each entry.
+  // v7's `geometry` (STC-235) is validated here and read by render() through
+  // display-geometry.ts's geometryAt.
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
@@ -146,6 +144,7 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   ) {
     throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6 or 7)`);
   }
+  checkGeometry(anchors);
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.
   if (events?.version !== 1 && events?.version !== 2) {
@@ -205,7 +204,7 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   if (video.framesNs.length === 0) {
     throw new SessionLoadError("display.mp4 contains no frames");
   }
-  checkFrameOffset("display.mp4", (anchors.capture as { firstFrameNs?: number }).firstFrameNs, video.framesNs[0]!);
+  checkFrameOffset("display.mp4", anchors.capture.firstFrameNs, video.framesNs[0]!);
 
   let cameraVideo: DemuxedVideo | undefined;
   if (claimsCamera && input.cameraMp4) {
