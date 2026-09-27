@@ -42,6 +42,17 @@ struct CaptureGeometryDoc {
     let width: Int, height: Int, firstFrameNs: Int
 }
 
+/// One entry of the refit timeline (STC-235): which display geometry and
+/// where in the fixed capture frame (`FitRect`, CaptureGeometry.swift)
+/// applied from `startNs` onward. Entry 0 is always the take's start — the
+/// top-level `display` and the full capture frame — so a reader never has to
+/// treat "before the first entry" as a separate case.
+struct GeometryEntryDoc {
+    let startNs: Int
+    let display: DisplayGeometry
+    let contentRect: FitRect
+}
+
 /// The recording's capture scope (STC-370): the whole display (phase-1
 /// behaviour), a region of one, or one window. Mirrors `StillKind` /
 /// `StillWindowInfo` (StillDecisions.swift) deliberately — a shot and a take
@@ -136,6 +147,12 @@ struct SystemAudioTrack {
 /// paused writes no `pauses` key and keeps whatever version its other blocks
 /// demand — so nothing about an ordinary take changes, and an older build can
 /// still read it.
+///
+/// `geometry` forces version 7 (STC-235) when it has 2 or more entries — a
+/// single entry (or none) is written as no `geometry` key at all and no
+/// version bump, the same minimum-version rule every other block above
+/// follows. Nothing calls this with a real refit timeline yet; that is
+/// Task 10's wiring.
 func anchorsDocument(timebase: (numer: Int, denom: Int),
                      t0Ns: UInt64,
                      display: DisplayGeometry,
@@ -147,6 +164,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                      systemAudio: SystemAudioTrack? = nil,
                      systemAudioRequested: Bool = false,
                      scope: CaptureScopeDoc = .display,
+                     geometry: [GeometryEntryDoc] = [],
                      pauses: [PauseInterval],
                      stopReason: String,
                      stopTNs: Int) -> [String: Any] {
@@ -200,17 +218,14 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     if micRequested { version = max(version, 4) }
     if !pauses.isEmpty { version = max(version, 5) }
     if systemAudioRequested { version = max(version, 6) }
+    if geometry.count >= 2 { version = max(version, 7) }
     var doc: [String: Any] = [
         "version": version,
         "timebase": ["numer": timebase.numer, "denom": timebase.denom],
         // String on purpose: boot-relative ns crosses 2^53 at ~104 days of
         // uptime, and a JSON number would round.
         "t0Ns": String(t0Ns),
-        "display": ["id": display.id,
-                    "pointWidth": display.pointWidth, "pointHeight": display.pointHeight,
-                    "pixelWidth": display.pixelWidth, "pixelHeight": display.pixelHeight,
-                    "backingScale": display.backingScale,
-                    "originX": display.originX, "originY": display.originY] as [String: Any],
+        "display": displayJSON(display),
         "capture": ["width": capture.width, "height": capture.height, "codec": "h264",
                     "firstFrameNs": max(0, capture.firstFrameNs)] as [String: Any],
         "files": files,
@@ -228,6 +243,16 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     if !pauses.isEmpty {
         doc["pauses"] = pauses.map { $0.json }
     }
+    if geometry.count >= 2 {
+        // STC-235: the refit timeline. Written only once there IS a refit, so
+        // every take the display never changed under stays v2–v6 byte for byte.
+        doc["geometry"] = geometry.map { g in [
+            "startNs": g.startNs,
+            "display": displayJSON(g.display),
+            "contentRect": ["x": g.contentRect.x, "y": g.contentRect.y,
+                            "width": g.contentRect.width, "height": g.contentRect.height],
+        ] as [String: Any] }
+    }
     if scope.kind != .display {
         var scopeBlock: [String: Any] = ["kind": scope.kind.rawValue]
         if let r = scope.region { scopeBlock["region"] = r.json }
@@ -240,4 +265,18 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
         doc["scope"] = scopeBlock
     }
     return doc
+}
+
+/// The `display` block's JSON, shared by the top-level `display` and every
+/// `geometry` entry's own `display` (STC-235) — the loader
+/// (transform/src/display-geometry.ts's `checkGeometry`) deep-compares
+/// `geometry[0].display` to the top-level one, so the two must be built from
+/// exactly one place or they could drift apart under a future edit to either
+/// call site.
+private func displayJSON(_ d: DisplayGeometry) -> [String: Any] {
+    return ["id": d.id,
+           "pointWidth": d.pointWidth, "pointHeight": d.pointHeight,
+           "pixelWidth": d.pixelWidth, "pixelHeight": d.pixelHeight,
+           "backingScale": d.backingScale,
+           "originX": d.originX, "originY": d.originY]
 }

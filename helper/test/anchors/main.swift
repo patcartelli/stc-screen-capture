@@ -335,5 +335,55 @@ do {
     printJSON(paused, marker: "JSON-WITH-PAUSE:")
 }
 
+// ── geometry (STC-235) ──────────────────────────────────────────────────────
+// A refit timeline forces version 7 once there are >=2 entries. Entry 0 is
+// the take's start: the top-level display, the full capture frame, startNs
+// == capture.firstFrameNs — the loader (transform/src/display-geometry.ts's
+// checkGeometry) deep-compares entry 0's display to the top-level display,
+// which is exactly why both are built from the same displayJSON helper.
+do {
+    let otherDisplay = DisplayGeometry(id: 2, pointWidth: 1440, pointHeight: 900,
+                                       pixelWidth: 2880, pixelHeight: 1800,
+                                       originX: 3840, originY: 0)
+    let geometry = [
+        GeometryEntryDoc(startNs: capture.firstFrameNs,
+                         display: display,
+                         contentRect: FitRect(x: 0, y: 0, width: capture.width, height: capture.height)),
+        GeometryEntryDoc(startNs: 5_000_000_000,
+                         display: otherDisplay,
+                         contentRect: FitRect(x: 480, y: 0, width: 2880, height: 2160)),
+    ]
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            geometry: geometry,
+                            pauses: [],
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 7, "a >=2-entry geometry timeline must write version 7")
+    let geo = d["geometry"] as? [[String: Any]]
+    check(geo?.count == 2, "geometry must carry both entries")
+    printJSON(d, marker: "JSON-REFIT:")
+}
+
+// A single geometry entry does not force v7 — the document is exactly what
+// it would be with no geometry at all: no `geometry` key, no version bump.
+// (A one-entry timeline never happens in practice — Task 10 always writes at
+// least the start entry plus one refit — but the >=2 rule must not be
+// satisfied by "non-empty" alone.)
+do {
+    let geometry = [
+        GeometryEntryDoc(startNs: capture.firstFrameNs,
+                         display: display,
+                         contentRect: FitRect(x: 0, y: 0, width: capture.width, height: capture.height)),
+    ]
+    let d = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                            capture: capture, camera: nil, requested: false,
+                            geometry: geometry,
+                            pauses: [],
+                            stopReason: "user", stopTNs: 20_000_000_000)
+    check(d["version"] as? Int == 2, "a one-entry geometry must not bump the version")
+    check(d["geometry"] == nil, "a one-entry geometry must not be written at all")
+    printJSON(d, marker: "JSON-ONE-ENTRY:")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

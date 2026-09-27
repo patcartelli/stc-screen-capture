@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import AjvImport from "ajv";
 import { runSwiftHarness } from "./_swift-harness.js";
+import { checkGeometry } from "../../transform/src/display-geometry.js";
+import type { Anchors } from "../../transform/src/types.js";
 
 // CJS/ESM interop: ajv v8 ships CJS; vitest may or may not unwrap the default.
 const Ajv = (AjvImport as any).default ?? AjvImport;
@@ -24,6 +26,7 @@ describe("anchors document", () => {
         // reuses their types rather than a second copy.
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
+        "helper/src/CaptureGeometry.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -77,6 +80,7 @@ describe("anchors document", () => {
       sources: [
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
+        "helper/src/CaptureGeometry.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -117,6 +121,7 @@ describe("anchors document", () => {
       sources: [
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
+        "helper/src/CaptureGeometry.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -160,6 +165,7 @@ describe("anchors document", () => {
       sources: [
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
+        "helper/src/CaptureGeometry.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -201,6 +207,7 @@ describe("anchors document", () => {
       sources: [
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
+        "helper/src/CaptureGeometry.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -226,5 +233,56 @@ describe("anchors document", () => {
       JSON.parse(readFileSync(join(root, "schema/anchors-5.schema.json"), "utf8")),
     );
     expect(validate5(both), "anchors-5 must refuse a v6, system-audio-bearing document").toBe(false);
+  });
+
+  // STC-235, Task 9: a >=2-entry `geometry` timeline forces version 7. A
+  // single entry does not — it is written as no `geometry` key at all, the
+  // same minimum-version rule every earlier block follows.
+  test("a >=2-entry geometry timeline validates against anchors-7; one entry writes no geometry at all", async () => {
+    const out = await runSwiftHarness({
+      label: "anchors",
+      sources: [
+        "helper/src/StillDecisions.swift",
+        "helper/src/PauseDecisions.swift",
+        "helper/src/CaptureGeometry.swift",
+        "helper/src/AnchorsDoc.swift",
+        "helper/test/anchors/main.swift",
+      ],
+    });
+    expect(out, out).toContain("ALL PASS");
+
+    const ajv7 = new Ajv({ allErrors: true, strict: true });
+    const validate7 = ajv7.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-7.schema.json"), "utf8")),
+    );
+    const refit = extractJSON(out, "JSON-REFIT:");
+    expect(validate7(refit), JSON.stringify(validate7.errors, null, 2)).toBe(true);
+    expect((refit as { version: number }).version).toBe(7);
+    expect((refit as { geometry?: unknown[] }).geometry).toHaveLength(2);
+
+    // The schema alone cannot express the loader's cross-field rules
+    // (geometry[0].display deep-equals the top-level display,
+    // geometry[0].contentRect is the full capture frame,
+    // geometry[0].startNs === capture.firstFrameNs) — checkGeometry is the
+    // one place those are enforced, so run the real emitted document
+    // through it rather than re-deriving the rules here.
+    expect(() => checkGeometry(refit as Anchors)).not.toThrow();
+
+    // A v7-shaped document must still refuse anchors-6 — the version bump is
+    // not a widening that now accepts everything the old schema did too.
+    const ajv6 = new Ajv({ allErrors: true, strict: true });
+    const validate6 = ajv6.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-6.schema.json"), "utf8")),
+    );
+    expect(validate6(refit), "anchors-6 must refuse a v7, geometry-bearing document").toBe(false);
+
+    const oneEntry = extractJSON(out, "JSON-ONE-ENTRY:");
+    const ajv2 = new Ajv({ allErrors: true, strict: true });
+    const validate2 = ajv2.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-2.schema.json"), "utf8")),
+    );
+    expect(validate2(oneEntry), JSON.stringify(validate2.errors, null, 2)).toBe(true);
+    expect((oneEntry as { version: number }).version).toBe(2);
+    expect((oneEntry as { geometry?: unknown }).geometry).toBeUndefined();
   });
 }, 60_000);

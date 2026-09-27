@@ -14,6 +14,7 @@ describe("display change decisions", () => {
         // though this harness never calls either, the same reason
         // still-decisions.test.ts carries them.
         "helper/src/PauseDecisions.swift",
+        "helper/src/CaptureGeometry.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/src/DisplayChangeDecisions.swift",
         "helper/test/display-change/main.swift",
