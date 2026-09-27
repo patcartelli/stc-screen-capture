@@ -1,5 +1,6 @@
 import { mark } from "./mark.js";
 import { loadSession } from "@transform/session";
+import { memorySource } from "@transform/chunk-reader";
 import { exportSession as runExport, type ExportOptions } from "@transform/export";
 import { parseProject } from "@transform/trim";
 import type { Project } from "@transform/types";
@@ -48,7 +49,7 @@ applyDecoderPreference();
     ? await fetch(`${dir}/${anchors.files.system}`).then((r) => r.arrayBuffer())
     : undefined;
   mark("export: loadSession (demux + VideoDecoder.configure)");
-  const session = await loadSession({ anchors, events, displayMp4, cameraMp4, micM4a, systemM4a });
+  const session = await loadSession({ anchors, events, displayMp4: memorySource(displayMp4, "display.mp4"), cameraMp4: cameraMp4 && memorySource(cameraMp4, "camera.mp4"), micM4a, systemM4a });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project: Project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,

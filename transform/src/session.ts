@@ -2,6 +2,7 @@ import { demuxTrack, type DemuxedVideo } from "./demux.js";
 import { demuxAudioTrack, type DemuxedAudio } from "./demux-audio.js";
 import type { Anchors, Session, SessionEvent } from "./types.js";
 import type { Changes } from "./changes.js";
+import type { ByteSource } from "./chunk-reader.js";
 import { checkGeometry } from "./display-geometry.js";
 import { SessionLoadError } from "./session-error.js";
 
@@ -20,8 +21,8 @@ export { SessionLoadError };
 export interface SessionInput {
   anchors: Anchors;
   events: { version: number; events: SessionEvent[] };
-  displayMp4: ArrayBuffer;
-  cameraMp4?: ArrayBuffer;
+  displayMp4: ByteSource;
+  cameraMp4?: ByteSource;
   /** STC-233. mic.m4a, when anchors.mic.present is true. */
   micM4a?: ArrayBuffer;
   /** STC-418. system.m4a, when anchors.system.present is true. */

@@ -4,13 +4,15 @@ import { join } from "node:path";
 import { loadSession, rebaseMicAudio, SessionLoadError } from "../src/session.js";
 import type { Anchors } from "../src/types.js";
 import type { DemuxedAudio } from "../src/demux-audio.js";
+import { memorySource } from "../src/chunk-reader.js";
 
 const root = join(__dirname, "..", "..");
 const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
-const mp4 = (p: string) => {
+const rawBuf = (p: string) => {
   const b = readFileSync(join(root, p));
   return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 };
+const mp4 = (p: string) => memorySource(rawBuf(p), p);
 
 /** anchors describing the offset fixture: frames begin 250 ms in */
 function offsetAnchors(over: Partial<Anchors> = {}): any {
@@ -358,7 +360,7 @@ describe("loading a mic track", () => {
       anchors: offsetAnchors({ version: 4, mic: { present: false } } as any),
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-      micM4a: mp4("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
+      micM4a: rawBuf("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
     })).rejects.toThrow(/a mic\.m4a was supplied/i);
   });
 
@@ -396,7 +398,7 @@ describe("loading a system-audio track (STC-418)", () => {
       anchors: offsetAnchors({ version: 6, system: { present: false } } as any),
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-      systemM4a: mp4("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
+      systemM4a: rawBuf("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
     })).rejects.toThrow(/a system\.m4a was supplied/i);
   });
 
@@ -405,7 +407,7 @@ describe("loading a system-audio track (STC-418)", () => {
       anchors: systemAnchors(),
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-      micM4a: mp4("fixtures/offset/display.mp4"),
+      micM4a: rawBuf("fixtures/offset/display.mp4"),
     })).rejects.toThrow(/a mic\.m4a was supplied/i);
   });
 

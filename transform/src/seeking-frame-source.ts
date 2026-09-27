@@ -1,6 +1,7 @@
 import type { DemuxedVideo } from "./demux.js";
 import { withTimeout } from "./timeout.js";
 import { decoderPreference } from "./decoder-preference.js";
+import { ChunkReader } from "./chunk-reader.js";
 
 /**
  * Random-access frame source for the preview sink.
@@ -39,12 +40,14 @@ export class SeekingFrameSource {
   private needsKeyframe = false;
 
   private static readonly FEED_AHEAD = 8;
+  private readonly reader: ChunkReader;
 
   constructor(private readonly video: DemuxedVideo) {
     this.keyIndices = video.chunks
       .map((c, i) => (c.type === "key" ? i : -1))
       .filter((i) => i >= 0);
     if (this.keyIndices.length === 0) throw new Error("no keyframes: cannot seek");
+    this.reader = new ChunkReader(video.chunks, video.bytes, "video");
   }
 
   /**
@@ -96,7 +99,7 @@ export class SeekingFrameSource {
         this.currentIndex = this.nextOutIndex - this.pending.length - 1;
         continue;
       }
-      if (!(await this.pump(index))) break;
+      if (!(await this.pump(index, mine))) break;
     }
     return this.current;
   }
@@ -133,19 +136,45 @@ export class SeekingFrameSource {
     this.currentIndex = key - 1;
   }
 
-  private async pump(target: number): Promise<boolean> {
+  private async pump(target: number, mine: number): Promise<boolean> {
     const d = this.decoder!;
     // Feed up to a bounded distance PAST the target. Bounding by nextFeed and
     // not by nextOutIndex matters: before the first output, nextOutIndex has
     // not moved, so an output-based bound cannot limit anything.
     const feedLimit = target + SeekingFrameSource.FEED_AHEAD;
-    while (this.nextFeed < this.video.chunks.length &&
-           this.nextFeed <= feedLimit &&
-           d.decodeQueueSize < SeekingFrameSource.FEED_AHEAD) {
-      const c = this.video.chunks[this.nextFeed++]!;
-      d.decode(new EncodedVideoChunk({
-        type: c.type, timestamp: c.timestampUs, data: c.data as BufferSource,
-      }));
+    const upto = Math.min(this.video.chunks.length, feedLimit + 1,
+                          this.nextFeed + Math.max(0, SeekingFrameSource.FEED_AHEAD - d.decodeQueueSize));
+    if (upto > this.nextFeed) {
+      const from = this.nextFeed;
+      let datas: Uint8Array[];
+      try {
+        datas = await this.reader.read(from, upto - from);
+      } catch (e) {
+        // A read failure is as fatal as a decoder error and surfaces the same
+        // way: every later request throws it too, rather than a frozen frame.
+        this.failure = e instanceof Error ? e : new Error(String(e));
+        throw this.failure;
+      }
+      // The await is a window a newer seek can use. It cannot touch this
+      // decoder — the chain serialises seeks, so it is still queued behind
+      // this one — but it has asked for a different frame, and feeding ones
+      // nobody wants only delays it. Feed nothing and let seek() see the new
+      // ticket and resolve null.
+      if (mine !== this.ticket) return true;
+      // The await is also a window for close() (the preview closing a take
+      // mid-scrub), and close() is the ONLY thing that can reach `d` here:
+      // it does not go through the chain. Feeding a closed decoder would
+      // throw InvalidStateError, so feed nothing and let seek() unwind. The
+      // `this.decoder !== d` half is defensive — by the argument above no
+      // restartAt can run in this window — kept so that a future path which
+      // replaces the decoder off the chain fails safe rather than feeding a
+      // dead one.
+      if (this.decoder !== d || d.state === "closed") return false;
+      datas.forEach((data, k) => {
+        const c = this.video.chunks[from + k]!;
+        d.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: data as BufferSource }));
+      });
+      this.nextFeed = upto;
     }
     if (this.pending.length > 0) return true;
 
