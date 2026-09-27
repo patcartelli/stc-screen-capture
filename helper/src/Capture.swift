@@ -149,8 +149,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// frame, so such a take cannot be described and is stopped instead of
     /// being recorded wrongly. Guarded by `lock`. See the frame path.
     private var geometryUnrepresentable = false
-    /// True while a restart has stopped the old display stream and not yet
-    /// installed the new one, i.e. while `stream` is deliberately nil under a
+    /// True while a restart has stopped the old display stream and the new
+    /// one has not yet successfully STARTED (it is published only from
+    /// `startCapture`'s completion), i.e. while `stream` is deliberately nil under a
     /// live writer. `stop()` finalises the writer directly in that window
     /// instead of treating a nil stream as "never started". Guarded by `lock`.
     private var restarting = false
@@ -978,6 +979,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// forbids one. Called by the debounce timer and by `finishRefit`.
     private func refitIfDue() {
         guard debounce.due(nowMs: Self.nowMs()), !refitInFlight, !refitFailed, !isStopping() else { return }
+        // A restarted stream's first frames can confirm its refit (and so
+        // clear `refitInFlight`) before its `startCapture` completion has
+        // published it. A refit started in that gap would find `stream` nil
+        // and end a healthy take; it waits instead, and the completion calls
+        // this again once the stream is published.
+        lock.lock(); let betweenStreams = restarting; lock.unlock()
+        if betweenStreams { return }
         debounce.fire()
         refitInFlight = true
         refitGen += 1
@@ -1106,11 +1114,19 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// not touched — the one file carries on, with a PTS gap at the seam.
     ///
     /// `stream` is nil (and `restarting` true) from the moment the old stream
-    /// is let go until the new one is installed, so neither `stop()` nor the
-    /// delegate can mistake the old stream for the live one: `stop()`
-    /// finalises the writer itself in that window, and the old stream's own
-    /// `didStopWithError` (if SCK sends one for a deliberate stop) fails the
-    /// identity check and is ignored.
+    /// is let go until the new one has SUCCESSFULLY STARTED, so neither
+    /// `stop()` nor the delegate can mistake a stream for the live one before
+    /// it is: `stop()` finalises the writer itself in that whole window, and
+    /// a replaced (or not yet published) stream's `didStopWithError` fails
+    /// the identity check and is ignored.
+    ///
+    /// Why publication waits for `startCapture`'s completion: published
+    /// before it, a `stop()` in between would call `stopCapture` on a stream
+    /// that was never started. SCK need not answer that promptly, and if it
+    /// never does the 20 s backstop answers with an unfinalised mp4 — a lost
+    /// take. Unpublished, that same `stop()` takes the `restarting` branch
+    /// and finalises the writer at once; the completion below then sees
+    /// `stoppingBegan`, does not publish, and stops the new stream itself.
     private func restartStream(_ target: CaptureTarget, _ cfg: SCStreamConfiguration, _ next: RefitShape, gen: Int) {
         lock.lock()
         if stoppingBegan { lock.unlock(); refitInFlight = false; return }
@@ -1129,29 +1145,45 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 } catch {
                     return self.failRefit("display-reconfigured")
                 }
-                // Installed under the same lock stop() reads it under, with
-                // `stoppingBegan` as the tie-break: either stop() finds THIS
-                // stream and stops it, or this sees the stop and never starts.
-                self.lock.lock()
-                if self.stoppingBegan { self.lock.unlock(); self.refitInFlight = false; return }
-                self.stream = s
-                self.restarting = false
-                self.lock.unlock()
+                // Everything this stream will deliver is the NEW geometry by
+                // construction, so the landing is armed BEFORE it starts: its
+                // very first frame, even one delivered ahead of the completion
+                // below, records it. Armed under `lock` with `stoppingBegan`
+                // as the tie-break (false = a stop began; nothing armed, and
+                // this stream is never started). `failRefit` clears the
+                // pending geometry again if the start fails.
+                guard self.armRefitLanding(next, path: "restart", gen: gen) else { return }
                 s.startCapture { err in
+                    // Published HERE, under `lock`, and only if nothing has
+                    // begun stopping the take — see the doc comment above.
+                    // Deliberately not gated on `live(gen)`: a stream that
+                    // STARTED must have an owner, and a still-running take's
+                    // stop() is that owner even if this refit has since timed
+                    // out and asked App to end the take.
+                    self.lock.lock()
+                    let stopping = self.stoppingBegan
+                    if err == nil, !stopping {
+                        self.stream = s
+                        self.restarting = false
+                    }
+                    self.lock.unlock()
+                    // stop() has already finalised the writer through its
+                    // `restarting` branch, so this stream's only owner is
+                    // here; its frames meet a closed gate meanwhile.
+                    if err == nil, stopping { s.stopCapture { _ in } }
                     self.refitQueue.async {
-                        // A stop() that read THIS stream may have asked it to
-                        // stop before this start had even been called; if it
-                        // has started anyway, stop it here, or it would run
-                        // unowned for the life of the process. Its frames meet
-                        // a closed gate either way. A second stopCapture is a
-                        // harmless error.
-                        if err == nil, self.isStopping() { s.stopCapture { _ in } }
+                        if err == nil, !stopping {
+                            // A display change that settled while this
+                            // stream was unpublished was held back by
+                            // `refitIfDue` (it must not find `stream` nil);
+                            // it may run now.
+                            self.refitIfDue()
+                        }
                         guard self.live(gen) else { return }
                         if let err {
                             IO.log("refit: restarted stream failed to start (\(err))")
                             return self.failRefit("display-reconfigured")
                         }
-                        self.armRefitLanding(next, path: "restart", gen: gen)
                     }
                 }
             }
@@ -1819,9 +1851,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         windowWatcher = nil
         // STC-235: read under the lock a refit's restart swaps it under. Nil
         // with `restarting` set means a restart is between streams: the old
-        // one is already being stopped by the restart, and the new one will
-        // see `stoppingBegan` and never start — so the writer is finalised
-        // here directly rather than skipped as "never started".
+        // one is already being stopped by the restart, and the new one either
+        // sees `stoppingBegan` and never starts, or is mid-`startCapture` and
+        // its completion sees `stoppingBegan`, is never published, and stops
+        // itself — so the writer is finalised here directly rather than
+        // skipped as "never started".
         let displayStream = stream
         let midRestart = restarting
         lock.unlock()
