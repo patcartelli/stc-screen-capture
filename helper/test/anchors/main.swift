@@ -366,9 +366,9 @@ do {
 
 // A single geometry entry does not force v7 — the document is exactly what
 // it would be with no geometry at all: no `geometry` key, no version bump.
-// (A one-entry timeline never happens in practice — Task 10 always writes at
-// least the start entry plus one refit — but the >=2 rule must not be
-// satisfied by "non-empty" alone.)
+// (A one-entry timeline is EVERY take nothing refitted: CaptureSession
+// records entry 0 from the first frame and hands the list over regardless,
+// so the >=2 rule — not "non-empty" — is what keeps those takes unchanged.)
 do {
     let geometry = [
         GeometryEntryDoc(startNs: capture.firstFrameNs,

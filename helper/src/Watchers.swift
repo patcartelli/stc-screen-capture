@@ -7,7 +7,11 @@ import AppKit
 /// Every change is surfaced as an event rather than being allowed to silently corrupt a take.
 final class Watchers {
     static let shared = Watchers()
-    /// Set by the recorder so it can rebuild its stream when the display config moves.
+    /// Set by App: while recording, every callback goes to the session's
+    /// `displayChanged()`, which debounces the burst and refits the stream
+    /// into the same file or stops the take (STC-235). Called once per CG
+    /// callback that survives the filter below — often several per physical
+    /// change; the debounce, not this, is what makes it one decision.
     var onDisplayChange: ((CGDirectDisplayID, [String]) -> Void)?
     var onDeviceChange: ((String, String, String) -> Void)?   // (action, uniqueID, name)
 

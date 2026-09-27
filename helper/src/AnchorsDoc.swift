@@ -151,8 +151,9 @@ struct SystemAudioTrack {
 /// `geometry` forces version 7 (STC-235) when it has 2 or more entries — a
 /// single entry (or none) is written as no `geometry` key at all and no
 /// version bump, the same minimum-version rule every other block above
-/// follows. Nothing calls this with a real refit timeline yet; that is
-/// Task 10's wiring.
+/// follows. `CaptureSession` passes its timeline for EVERY take — entry 0 is
+/// recorded by the first frame — so the one-entry case is the ordinary,
+/// never-refitted take, and must stay v2–v6 byte for byte.
 func anchorsDocument(timebase: (numer: Int, denom: Int),
                      t0Ns: UInt64,
                      display: DisplayGeometry,

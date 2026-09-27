@@ -30,8 +30,14 @@ import AjvImport from "ajv";
 const Ajv = (AjvImport as any).default ?? AjvImport;
 const root = join(__dirname, "..", "..");
 
-/** The files that can name a stop reason. */
-const SOURCES = ["helper/src/main.swift", "helper/src/Protocol.swift", "helper/src/Capture.swift"];
+/**
+ * The files that can name a stop reason. DisplayChangeDecisions.swift since
+ * STC-235: the classifier DECIDES `display-reconfigured`/`region-out-of-bounds`
+ * as `.stop("…")`, and Capture.swift relays them (and its own refit
+ * failures) through `failRefit("…")` -> `onRefitFailed` -> App.stop(reason:).
+ */
+const SOURCES = ["helper/src/main.swift", "helper/src/Protocol.swift", "helper/src/Capture.swift",
+                 "helper/src/DisplayChangeDecisions.swift"];
 
 /**
  * Signals the helper installs a graceful handler for (main.swift's
@@ -91,6 +97,13 @@ function reasonsInSwift(): string[] {
       // than at the generic App.stop(reason: reason) call site that relays
       // whichever one arrives.
       ...src.matchAll(/onWindowChanged\?\(\s*"([^"]*)"\s*\)/g),
+      // STC-235: a display change that cannot be refitted reaches
+      // App.stop(reason:) the same relayed way, through `onRefitFailed`. The
+      // literals live where they are decided: the classifier's
+      // `.stop("…")` (DisplayChangeDecisions.swift) and CaptureSession's own
+      // `failRefit("…")` for a refit that failed or never produced a frame.
+      ...src.matchAll(/\.stop\(\s*"([^"]*)"\s*\)/g),
+      ...src.matchAll(/failRefit\(\s*"([^"]*)"\s*\)/g),
     ].map((m) => m[1]!);
     for (const lit of lits) {
       if (!lit.includes("\\(")) { out.add(lit); continue; }
@@ -107,6 +120,9 @@ function reasonsInSwift(): string[] {
   return [...out].sort();
 }
 
+// anchors-7 since STC-235: its enum is anchors-3's plus
+// "region-out-of-bounds" (and its -timeout), reachable only from a region
+// take whose refit no longer fits — a superset again, never a rewrite.
 // anchors-3, not anchors-2: STC-370 added "window-resized"/"window-closed",
 // reachable only from a window-scope take, which always writes version 3
 // (anchorsDocument emits the MINIMUM version that can express the document —
@@ -116,12 +132,12 @@ function reasonsInSwift(): string[] {
 // claim this file always made, extended rather than duplicated. A reason
 // from BEFORE STC-370 still validates identically against either schema.
 const validateReason = (() => {
-  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-3.schema.json"), "utf8"));
+  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-7.schema.json"), "utf8"));
   const ajv = new Ajv({ allErrors: true, strict: true });
   return ajv.compile(schema.properties.stop.properties.reason);
 })();
 
-describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by STC-370)", () => {
+describe("stop.reason — the helper and anchors-7 agree (STC-311, extended by STC-370 and STC-235)", () => {
   test("every reason the Swift can write is accepted by the schema", () => {
     const reasons = reasonsInSwift();
     // A guard on the guard: if the regexes stopped matching, this test would
@@ -131,11 +147,12 @@ describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by S
     expect(reasons).toEqual(expect.arrayContaining([
       "user", "quit", "stdin-closed", "stopped-during-start", "signal-15",
       "window-resized", "window-closed",
+      "display-reconfigured", "region-out-of-bounds",
     ]));
     expect(reasons.length).toBeGreaterThanOrEqual(9);
 
     for (const r of reasons) {
-      expect(validateReason(r), `the helper can write stop.reason "${r}", which anchors-3 refuses`).toBe(true);
+      expect(validateReason(r), `the helper can write stop.reason "${r}", which anchors-7 refuses`).toBe(true);
     }
   });
 
@@ -144,7 +161,7 @@ describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by S
     // was given, so the suffix is not a fixed list of five: a shutdown whose
     // writer wedges writes `quit-timeout` or `signal-15-timeout`.
     for (const r of reasonsInSwift()) {
-      expect(validateReason(`${r}-timeout`), `"${r}-timeout" is reachable but anchors-3 refuses it`).toBe(true);
+      expect(validateReason(`${r}-timeout`), `"${r}-timeout" is reachable but anchors-7 refuses it`).toBe(true);
     }
   });
 
@@ -153,7 +170,7 @@ describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by S
     // cannot produce must still be refused, or this file proves nothing.
     for (const bad of ["banana", "", "signal", "signal-", "signal-abc", "signal-15-timeou",
                        "user-timeout-timeout", "USER", " user"]) {
-      expect(validateReason(bad), `anchors-3 accepts "${bad}", which the helper never writes`).toBe(false);
+      expect(validateReason(bad), `anchors-7 accepts "${bad}", which the helper never writes`).toBe(false);
     }
   });
 });
