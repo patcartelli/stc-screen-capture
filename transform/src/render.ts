@@ -12,6 +12,7 @@ import {
   type CombinedZoomWindow,
 } from "./zoom-override.js";
 import { deriveZoomCrop } from "./zoom-change.js";
+import { geometryAt } from "./display-geometry.js";
 import { DEFAULT_ZOOM } from "./trim.js";
 import { createCursorSim, type CursorSim } from "./cursor.js";
 
@@ -216,9 +217,12 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   const frameIndex = frameIndexAt(session.frames, tNs);
   const s = sim.stateAt(tick);
 
-  // global points → display-local points → output pixels. spaces.ts owns the
-  // rule; this stays the only event-space conversion in the transform.
-  const m = displayToOutput(session.anchors.display, project.output);
+  // global points → display-local points → capture contentRect → output
+  // pixels. spaces.ts owns the rule; this stays the only event-space
+  // conversion in the transform. The geometry is the one the SHOWN frame was
+  // captured under (STC-235) — display-geometry.ts's header says why.
+  const g = geometryAt(session.anchors, frameIndex === null ? null : session.frames[frameIndex]!);
+  const m = displayToOutput(g.display, project.output, g.contentRect, session.anchors.capture);
   const full = mapPoint(m, s);
   // A velocity is a DIFFERENCE of global points, so it scales without
   // translating — hence the second call rather than a flag.

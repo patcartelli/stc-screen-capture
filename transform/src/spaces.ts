@@ -63,6 +63,14 @@
  * `helper/src/CaptureGeometry.swift` owns that clamp). `pxPerPoint` is the
  * ratio into this space from display-local points.
  *
+ * **capture contentRect** — capture pixels, the part of the frame the
+ * display's content occupies after a refit (STC-235). Defaults to the whole
+ * capture frame (every take before STC-235 and every take with no refit), in
+ * which case it drops out of `displayToOutput`'s arithmetic entirely and the
+ * result is bit-identical to the pre-refit map — see that function's own
+ * comment for why the ratio is a separate factor rather than folded in.
+ *
+
  * **output pixels** — the exported canvas or the decorated still's canvas,
  * origin top-left. The capture is not necessarily drawn at the canvas origin:
  * a decorated still centres it inside padding, so a capture pixel becomes an
@@ -355,7 +363,8 @@ export interface DisplayGeometry {
 
 /**
  * The affine map from global points to output pixels for a capture that
- * covers a whole display.
+ * covers a whole display — and, since STC-235, for one whose content occupies
+ * only `contentRect` of the capture frame after a refit.
  *
  * `sx`/`sy` are `pxPerPoint` on each axis — the display-to-output ratio,
  * which is the effective scale at any `backingScale` and at any export size,
@@ -363,21 +372,44 @@ export interface DisplayGeometry {
  * than collapsed to one number: an export whose aspect ratio differs from
  * the display's stretches the picture, and a cursor drawn with a single
  * scale would drift away from the content it is pointing at.
+ *
+ * `ox`/`oy` are `contentRect`'s origin, scaled into output pixels: a
+ * pillarboxed display's content does not start at the capture's top-left, so
+ * a point mapped into capture pixels needs the same shift the compositor
+ * already gives the picture.
  */
-export interface DisplayToOutput { originX: number; originY: number; sx: number; sy: number }
+export interface DisplayToOutput { originX: number; originY: number; sx: number; sy: number; ox: number; oy: number }
 
-export function displayToOutput(display: DisplayGeometry, output: Size): DisplayToOutput {
+/**
+ * global points -> display-local points -> capture contentRect -> output.
+ *
+ * `contentRect` defaults to the full capture (every take before STC-235 and
+ * every take with no refit). The ratio `contentRect.width / capture.width` is
+ * EXACTLY 1 in that case and `ox`/`oy` exactly 0, so the result is
+ * bit-identical to the old `output.width / display.pointWidth` — which is why
+ * the ratio is applied as a separate factor rather than folded into one
+ * division (folding changes the last bit of `sx`, and the golden test sees
+ * it).
+ */
+export function displayToOutput(
+  display: DisplayGeometry, output: Size, contentRect?: Rect, capture?: Size,
+): DisplayToOutput {
+  const cap = capture ?? output;
+  const r = contentRect ?? { x: 0, y: 0, width: cap.width, height: cap.height };
+  const kx = output.width / cap.width, ky = output.height / cap.height;
   return {
     originX: display.originX,
     originY: display.originY,
-    sx: output.width / display.pointWidth,
-    sy: output.height / display.pointHeight,
+    sx: (output.width / display.pointWidth) * (r.width / cap.width),
+    sy: (output.height / display.pointHeight) * (r.height / cap.height),
+    ox: r.x * kx,
+    oy: r.y * ky,
   };
 }
 
-/** A global point in output pixels. Translates, then scales. */
+/** A global point in output pixels. Translates, scales, then shifts by `contentRect`'s origin. */
 export function mapPoint(m: DisplayToOutput, p: Point): Point {
-  return { x: (p.x - m.originX) * m.sx, y: (p.y - m.originY) * m.sy };
+  return { x: (p.x - m.originX) * m.sx + m.ox, y: (p.y - m.originY) * m.sy + m.oy };
 }
 
 /**
@@ -395,7 +427,7 @@ export function mapVector(m: DisplayToOutput, v: Point): Point {
 
 /** The inverse of `mapPoint`: an output pixel back in global points. */
 export function unmapPoint(m: DisplayToOutput, p: Point): Point {
-  return { x: p.x / m.sx + m.originX, y: p.y / m.sy + m.originY };
+  return { x: (p.x - m.ox) / m.sx + m.originX, y: (p.y - m.oy) / m.sy + m.originY };
 }
 
 // ---------------------------------------------------------------------------

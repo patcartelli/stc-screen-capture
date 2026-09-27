@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { render } from "../src/render.js";
 import { defaultProject } from "../src/trim.js";
+import { geometryAt, checkGeometry } from "../src/display-geometry.js";
 import type { Anchors, Project, Session } from "../src/types.js";
 
 const root = join(__dirname, "..", "..");
@@ -67,5 +68,44 @@ describe("every take before STC-235 renders byte-identically", () => {
       writeFileSync(golden, JSON.stringify(trace));
     }
     expect(JSON.stringify(trace)).toBe(readFileSync(golden, "utf8"));
+  });
+});
+
+describe("a refitted take maps the cursor into contentRect", () => {
+  const s = session("fixtures/refit");
+  const project: Project = load("fixtures/refit/project.json");
+  const refitNs = s.anchors.geometry![1]!.startNs;
+
+  test("fixtures/refit passes checkGeometry", () => {
+    expect(() => checkGeometry(s.anchors)).not.toThrow();
+  });
+
+  test("after the refit, the display's top-left global point lands on contentRect's top-left", () => {
+    // The cursor is a SPRING (120 Hz, OMEGA 30), not the raw event position:
+    // put the only move right after the refit and read it ~2 s later, when the
+    // spring has long settled, at the last frame of the fixture.
+    const e = { ...s, events: [{ t: refitNs + 1, kind: "move", x: 100, y: 0 }] as Session["events"] };
+    const tRead = s.frames.at(-1)!;
+    expect(tRead - refitNs).toBeGreaterThan(1_500_000_000);   // the fixture's midpoint refit leaves room
+    const f = render(project, e, tRead);
+    const sx = project.output.width / s.anchors.capture.width;
+    expect(f.cursor.x).toBeCloseTo(80 * sx, 6);
+    expect(f.cursor.y).toBeCloseTo(0, 6);
+  });
+
+  test("pxPerPoint follows the new scale", () => {
+    const f = render(project, s, refitNs + 100_000_000);
+    const expected = project.cursor.scale * (480 / 480) * (project.output.width / 640);
+    expect(f.cursor.pxPerPoint).toBeCloseTo(expected, 9);
+  });
+
+  test("a t inside the seam uses the HELD frame's geometry, not the next one", () => {
+    const iRefit = s.frames.indexOf(refitNs);
+    const tSeam = refitNs - 1;                    // the frame shown is frames[iRefit-1]
+    expect(geometryAt(s.anchors, s.frames[iRefit - 1]!).contentRect.x).toBe(0);
+    const f = render(project, s, tSeam);
+    expect(f.framePtsNs).toBe(s.frames[iRefit - 1]);
+    const g0 = render(project, { ...s, anchors: { ...s.anchors, version: 6, geometry: undefined } }, tSeam);
+    expect(f.cursor.x).toBe(g0.cursor.x);          // identical to the pre-refit mapping
   });
 });

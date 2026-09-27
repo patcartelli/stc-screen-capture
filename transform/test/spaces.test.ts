@@ -205,6 +205,30 @@ describe("global points → output pixels — the one event-space conversion", (
   });
 });
 
+describe("displayToOutput — a whole-capture contentRect is bit-identical to no contentRect (STC-235)", () => {
+  const d = { originX: 0, originY: 0, pointWidth: 1728, pointHeight: 1117 };
+  const out = { width: 1920, height: 1080 };
+  const cap = { width: 3340, height: 2160 };
+
+  test("sx/sy match ===-exactly whether contentRect is omitted or given as the full capture frame", () => {
+    const bare = displayToOutput(d, out);
+    const full = displayToOutput(d, out, { x: 0, y: 0, width: cap.width, height: cap.height }, cap);
+    expect(full.sx).toBe(bare.sx);
+    expect(full.sy).toBe(bare.sy);
+    expect(full.ox).toBe(0);
+    expect(full.oy).toBe(0);
+  });
+
+  test("unmapPoint(mapPoint(p)) round-trips through a pillarboxed contentRect", () => {
+    const m = displayToOutput(d, out, { x: 96, y: 0, width: 1728, height: 2160 }, cap);
+    for (const p of [{ x: 0, y: 0 }, { x: 864, y: 500 }, { x: 1728, y: 1117 }]) {
+      const back = unmapPoint(m, mapPoint(m, p));
+      expect(back.x).toBeCloseTo(p.x, 9);
+      expect(back.y).toBeCloseTo(p.y, 9);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The PiP, as a crop in UV
 // ---------------------------------------------------------------------------
