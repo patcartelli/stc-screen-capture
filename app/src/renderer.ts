@@ -653,6 +653,9 @@ const ENDED_BY_HELPER: Record<string, string> = {
   // STC-306: SCStream reported itself dead under a live take. The helper
   // stops cleanly rather than sitting in "recording" with no frames arriving.
   "stream-stopped": "The display capture stopped unexpectedly, so the recording was stopped.",
+  // STC-235: a region take whose region no longer fits the changed display.
+  // Clamping would silently record a different area, so the helper stops.
+  "region-out-of-bounds": "The display changed and the recorded area no longer fits on it, so the recording was stopped.",
 };
 
 recorder.on("helper:recording-ended", (i) => {
@@ -828,14 +831,16 @@ const RECORDING_FAULTS: Record<string, string> = {
 
 /**
  * Emitted by the helper's watchers whenever ANY display changes, recording or
- * not. While recording it is accompanied by display-change-during-recording,
- * which is the one that says what happened to the take; alone it is an idle
- * machine's monitor being plugged in, and not worth an alert.
+ * not — alone it is not worth an alert. A take the display change ENDS says so
+ * through `helper:recording-ended`; one it survives (STC-235) sends
+ * `display-refit`, which is news, not a problem: the recording continues.
  */
-const INFORMATIONAL_WARNINGS = new Set(["display-reconfigured"]);
+const INFORMATIONAL_WARNINGS = new Set(["display-reconfigured", "display-refit", "display-refit-rect-mismatch"]);
 
 recorder.on("helper:warning", (l) => {
   const code = String(l.code);
+  // STC-235: the helper stops sending this once Task 10 lands (a stop still
+  // reaches the user through `ENDED_BY_HELPER`); left in place until then.
   if (code === "display-change-during-recording") {
     alertUser("Display configuration changed — the recording was stopped.");
     return;
@@ -843,7 +848,8 @@ recorder.on("helper:warning", (l) => {
   if (INFORMATIONAL_WARNINGS.has(code)) {
     // An idle display change is not an alert, but it is a new list of
     // displays; the picker must not go on offering one that was unplugged.
-    if (code === "display-reconfigured") void refreshDisplays();
+    // A survived refit (STC-235) changes the same list, for the same reason.
+    if (code === "display-reconfigured" || code === "display-refit") void refreshDisplays();
     return;
   }
   const camera = CAMERA_FAULTS[code];
