@@ -154,6 +154,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// live writer. `stop()` finalises the writer directly in that window
     /// instead of treating a nil stream as "never started". Guarded by `lock`.
     private var restarting = false
+    /// What the display stream is configured for right now, as far as a
+    /// refit can change it (`RefitShape`, DisplayChangeDecisions.swift): set
+    /// in `begin()` and moved by every armed refit. `apply` compares a
+    /// settled change against it so a change that touches nothing this take
+    /// depends on touches neither SCK nor the anchors version. Guarded by
+    /// `lock`.
+    private var currentShape: RefitShape?
     private var debounce = SettleDebounce()
     private var refitInFlight = false
     /// Sticky: once a refit has asked for the take to end, no later display
@@ -467,6 +474,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.unlock()
         captureScope = target.scope
         (captureW, captureH) = captureSize(target.pixelSize.width, target.pixelSize.height)
+        lock.lock()
+        currentShape = RefitShape(geometry: target.geometry,
+                                  sourcePixelWidth: target.pixelSize.width, sourcePixelHeight: target.pixelSize.height,
+                                  sourceRect: target.scope.region,
+                                  rect: FitRect(x: 0, y: 0, width: captureW, height: captureH))
+        lock.unlock()
 
         // No backstop is armed here: start() armed one covering this whole
         // request before it called SCShareableContent (STC-258). Arming a
@@ -1018,6 +1031,37 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             src = (captureW * 3 / 4 / 2 * 2, captureH)
         }
         let rect = fitRect(sourceWidth: src.w, sourceHeight: src.h, intoWidth: captureW, intoHeight: captureH)
+        let next = RefitShape(geometry: target.geometry,
+                              sourcePixelWidth: target.pixelSize.width, sourcePixelHeight: target.pixelSize.height,
+                              sourceRect: target.scope.region, rect: rect)
+
+        // CG calls back for EVERY display, so most settled changes are some
+        // other display's. Only what THIS take's stream reads or writes may
+        // reach SCK, and only a real change of geometry may reach anchors.json.
+        lock.lock(); let current = currentShape; lock.unlock()
+        let kind = current.map { refitNeeded(current: $0, next: next, followsWindow: target.scope.kind == .window) }
+            ?? .reconfigure
+        switch kind {
+        case .none:
+            // No SCK call, no geometry entry, no timeout armed. `finishRefit`
+            // clears `refitInFlight`, which is what retires this generation:
+            // `live(gen)` is false for every later check of it.
+            IO.log("refit: nothing this take depends on changed; stream and anchors left alone")
+            return finishRefit()
+        case .recordOnly:
+            // The description moved (the origin, typically) and the stream's
+            // configuration did not: record the new geometry through the
+            // ordinary landing path — so its `startNs` is still the next
+            // accepted frame's PTS — and leave the stream alone. No timeout:
+            // there is no updated stream whose liveness is in question, and
+            // a stream that dies on its own is `didStopWithError`'s job.
+            IO.log("refit: the display moved but the stream did not need to; recording the new geometry only")
+            armRefitLanding(next, path: "record", gen: gen)
+            return finishRefit()
+        case .reconfigure:
+            break
+        }
+
         let cfg = streamConfiguration(sourceRect: target.sourceRect, destination: rect)
 
         // Every wait needs a bound, and this one covers the updates, a
@@ -1040,16 +1084,16 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 guard self.live(gen) else { return }
                 if let err {
                     IO.log("refit: updateContentFilter failed (\(err)); restarting the display stream")
-                    return self.restartStream(target, cfg, rect, gen: gen)
+                    return self.restartStream(target, cfg, next, gen: gen)
                 }
                 s.updateConfiguration(cfg) { err in
                     self.refitQueue.async {
                         guard self.live(gen) else { return }
                         if let err {
                             IO.log("refit: updateConfiguration failed (\(err)); restarting the display stream")
-                            return self.restartStream(target, cfg, rect, gen: gen)
+                            return self.restartStream(target, cfg, next, gen: gen)
                         }
-                        self.armRefitLanding(target.geometry, rect, path: "update", gen: gen)
+                        self.armRefitLanding(next, path: "update", gen: gen)
                     }
                 }
             }
@@ -1067,7 +1111,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// finalises the writer itself in that window, and the old stream's own
     /// `didStopWithError` (if SCK sends one for a deliberate stop) fails the
     /// identity check and is ignored.
-    private func restartStream(_ target: CaptureTarget, _ cfg: SCStreamConfiguration, _ rect: FitRect, gen: Int) {
+    private func restartStream(_ target: CaptureTarget, _ cfg: SCStreamConfiguration, _ next: RefitShape, gen: Int) {
         lock.lock()
         if stoppingBegan { lock.unlock(); refitInFlight = false; return }
         let old = stream
@@ -1107,7 +1151,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                             IO.log("refit: restarted stream failed to start (\(err))")
                             return self.failRefit("display-reconfigured")
                         }
-                        self.armRefitLanding(target.geometry, rect, path: "restart", gen: gen)
+                        self.armRefitLanding(next, path: "restart", gen: gen)
                     }
                 }
             }
@@ -1121,14 +1165,23 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// callback (spec, Refit step 4). Plan deviation 2: that frame is the
     /// first one accepted after the update's completion handler, not one
     /// gated on SCK's `contentRect` attachment.
-    private func armRefitLanding(_ g: DisplayGeometry, _ rect: FitRect, path: String, gen: Int) {
+    ///
+    /// `path` is how the stream came to carry it: "update", "restart", or
+    /// "record" — the stream was left alone because only the display's
+    /// description moved (`RefitKind.recordOnly`). Returns false, having
+    /// armed nothing, when the take has begun stopping.
+    @discardableResult
+    private func armRefitLanding(_ next: RefitShape, path: String, gen: Int) -> Bool {
         lock.lock()
-        if stoppingBegan { lock.unlock(); refitInFlight = false; return }
+        if stoppingBegan { lock.unlock(); refitInFlight = false; return false }
         // A pending geometry that was never written (the take is paused) is
         // simply replaced: no frame in the file was captured under it.
-        pendingGeometry = PendingGeometry(display: g, rect: rect, path: path, gen: gen, confirmed: false)
-        setCurrentDisplay(g)
+        pendingGeometry = PendingGeometry(display: next.geometry, rect: next.rect, path: path, gen: gen,
+                                          confirmed: false)
+        setCurrentDisplay(next.geometry)
+        currentShape = next
         lock.unlock()
+        return true
     }
 
     /// On `refitQueue`, dispatched by the frame path when a frame confirms

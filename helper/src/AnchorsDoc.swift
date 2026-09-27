@@ -4,7 +4,7 @@ import CoreGraphics
 /// Display geometry as the anchors document records it — and, since STC-289,
 /// as shot.json records it: the two formats share this one block so a still
 /// and a recording of the same display cannot disagree about it.
-struct DisplayGeometry {
+struct DisplayGeometry: Equatable {
     let id: Int, pointWidth: Int, pointHeight: Int
     let pixelWidth: Int, pixelHeight: Int
     let originX: Double, originY: Double
