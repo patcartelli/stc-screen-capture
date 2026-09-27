@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { PRIMARY_DISPLAY_ENV } from "./app/test/_fake-displays.mjs";
 
 /**
  * Build the helper AND the app bundle ONCE for the whole run. Previously each
@@ -42,5 +43,16 @@ export default function setup() {
   execFileSync("node", [fileURLToPath(new URL("./app/build.mjs", import.meta.url))], {
     cwd: fileURLToPath(new URL(".", import.meta.url)), stdio: "pipe",
   });
-  createRequire(import.meta.url)("electron");
+  const electron: string = createRequire(import.meta.url)("electron");
+  // STC-464: the helper stand-in must list the display the overlay really
+  // picks, or STC-433's pre-countdown check opens a dialog no test answers
+  // (app/test/_fake-displays.mjs). Measured once here and inherited through
+  // the environment by every worker, every app launch and every stand-in. A
+  // failure must throw: the fallback id is the one that hid this on CI.
+  const { ELECTRON_RUN_AS_NODE: _, ...env } = process.env;
+  const id = execFileSync(electron, [fileURLToPath(new URL("./scripts/primary-display-id.cjs", import.meta.url))], {
+    env, encoding: "utf8", timeout: 30_000,
+  }).trim();
+  if (!/^\d+$/.test(id)) throw new Error(`primary-display-id.cjs printed ${JSON.stringify(id)}, not a display id`);
+  process.env[PRIMARY_DISPLAY_ENV] = id;
 }
