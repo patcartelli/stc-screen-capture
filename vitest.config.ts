@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
+import { SCREENCAPTUREKIT_FILES } from "./vitest.screencapturekit-files.js";
 
 /**
  * Two projects, because the E2E files need a different concurrency rule than
@@ -50,7 +51,23 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["transform/test/**/*.test.ts", "helper/test/**/*.test.ts", "app/test/**/*.test.ts"],
-          exclude: [...EXCLUDE, "**/*.e2e.test.ts"],
+          exclude: [...EXCLUDE, "**/*.e2e.test.ts", ...SCREENCAPTUREKIT_FILES],
+          testTimeout: 15_000,
+        },
+      },
+      {
+        // The real helper's ScreenCaptureKit calls, never two at once
+        // (STC-470, vitest.screencapturekit-files.ts says why). With
+        // `fileParallelism: false` and no `sequence.groupOrder`, vitest puts
+        // these files in the SAME sequential group as the e2e project below,
+        // run after the parallel group — so they overlap neither each other,
+        // the unit files, nor shell.e2e's real-helper take.
+        resolve,
+        test: {
+          name: "screencapturekit",
+          include: SCREENCAPTUREKIT_FILES,
+          exclude: EXCLUDE,
+          fileParallelism: false,
           testTimeout: 15_000,
         },
       },
