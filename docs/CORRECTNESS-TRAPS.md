@@ -135,9 +135,15 @@ configuration. Don't re-discover these.
 - **`performance.memory.usedJSHeapSize` does not count ArrayBuffers** — they live outside V8's
   heap, so a 458 MB buffer can read as "0 MB heap growth". Measure renderer RSS via
   `app.getAppMetrics()` instead; anything else quietly measures nothing.
-- **Preview holds the whole video in memory** — measured 458 MB file → +548 MB renderer RSS
-  (chunked; it was +862 MB read in one message). Roughly 1.2x the file, so a ~15-minute 4K take is
-  the practical ceiling before the renderer is in trouble.
+- **Preview held the whole video in memory, until STC-236** — measured 458 MB file → +548 MB
+  renderer RSS (chunked; it was +862 MB read in one message). Roughly 1.2x the file, so a
+  ~15-minute 4K take was the practical ceiling before the renderer was in trouble. STC-236
+  (2026-09-26) made the editor read `display.mp4`/`camera.mp4` by range — a sample index at open,
+  then one keyframe group at a time (`transform/src/chunk-reader.ts`) — instead of reading the
+  whole file into memory up front (the old path held every byte; it never decoded it whole). On a short (~12 s, 46 MB display + 11 MB camera) real take, measured growth dropped
+  from +222 MB (master) to +143 MB (this branch); `docs/STC-236-RUNBOOK.md` has the numbers and
+  what only a long take on a Mac can confirm. Audio (`mic.m4a`/`system.m4a`) is still decoded
+  whole — that is now the larger unbounded cost on a long take, tracked as its own follow-up.
 - **Tests must not depend on `~/Desktop/stc`** — four E2E files used to reach for "whatever real
   recording is there". That broke the moment those takes were deleted and CI could never have run
   them. `app/test/_take-fixture.ts` copies the committed `fixtures/basic` session instead; the

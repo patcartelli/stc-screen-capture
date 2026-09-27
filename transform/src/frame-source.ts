@@ -1,6 +1,7 @@
 import type { DemuxedVideo } from "./demux.js";
 import { withTimeout } from "./timeout.js";
 import { decoderPreference } from "./decoder-preference.js";
+import { ChunkReader } from "./chunk-reader.js";
 
 /**
  * Forward-only streaming frame source for export.
@@ -30,8 +31,10 @@ export class ForwardFrameSource {
 
   /** Chunks kept in flight. Enough to keep the decoder busy, small enough to bound memory. */
   private static readonly QUEUE_TARGET = 8;
+  private readonly reader: ChunkReader;
 
   constructor(private readonly video: DemuxedVideo) {
+    this.reader = new ChunkReader(video.chunks, video.bytes, "video");
     this.decoder = new VideoDecoder({
       output: (frame) => {
         this.pending.push(frame);
@@ -75,12 +78,33 @@ export class ForwardFrameSource {
 
   /** Feeds the decoder and waits for at least one output. False when exhausted. */
   private async pump(): Promise<boolean> {
-    while (this.nextChunk < this.video.chunks.length &&
-           this.decoder.decodeQueueSize < ForwardFrameSource.QUEUE_TARGET) {
-      const c = this.video.chunks[this.nextChunk++]!;
-      this.decoder.decode(new EncodedVideoChunk({
-        type: c.type, timestamp: c.timestampUs, data: c.data as BufferSource,
-      }));
+    const upto = Math.min(this.video.chunks.length,
+                          this.nextChunk + Math.max(0, ForwardFrameSource.QUEUE_TARGET - this.decoder.decodeQueueSize));
+    if (upto > this.nextChunk) {
+      const from = this.nextChunk;
+      let datas: Uint8Array[];
+      try {
+        datas = await this.reader.read(from, upto - from);
+      } catch (e) {
+        this.failure = e instanceof Error ? e : new Error(String(e));
+        throw this.failure;
+      }
+      // The await is a window close() can use (the export aborting mid-read).
+      // The decoder is closed there and feeding it would throw
+      // InvalidStateError; feed nothing instead — the stream reads as over
+      // and frameAt holds the last frame (null if there was none).
+      if (this.decoder.state === "closed") return false;
+      datas.forEach((data, k) => {
+        const c = this.video.chunks[from + k]!;
+        this.decoder.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: data as BufferSource }));
+      });
+      this.nextChunk = upto;
+      // Start reading the NEXT group while this one decodes (STC-236). Over
+      // IPC a group is one round trip, and export would otherwise stall on it
+      // at every keyframe. ChunkReader holds two groups, so this is the most
+      // that can ever be ahead.
+      const g = this.reader.groupOf(upto - 1);
+      if (g.end < this.video.chunks.length) this.reader.prefetch(g.end);
     }
 
     if (this.pending.length > 0) return true;

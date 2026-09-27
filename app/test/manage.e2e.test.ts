@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { openEditorFromLibrary } from "./_editor-fixture.js";
 
 const root = join(__dirname, "..", "..");
 let app: ElectronApplication | undefined;
@@ -134,11 +135,7 @@ describe("opening a take that cannot be read", () => {
     // Opening now means the editor window (STC-373); it opens regardless of
     // whether the take turns out to be readable, since main has no way to
     // know that before the renderer tries.
-    const [editorWin] = await Promise.all([
-      app!.waitForEvent("window"),
-      win.click("#takes >> text=Preview"),
-    ]);
-    await editorWin.waitForLoadState("domcontentloaded");
+    const editorWin = await openEditorFromLibrary(app!, win);
 
     // loadSession writes careful error messages; they must reach the user
     // rather than becoming an unhandled rejection nobody sees.

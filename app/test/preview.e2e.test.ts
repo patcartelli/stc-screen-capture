@@ -138,4 +138,21 @@ describe("preview player in the editor window (STC-373)", () => {
     await editorWin2.click("#resettrim");
     await expect.poll(() => editorWin2.textContent("#triminfo"), { timeout: 10_000 }).toMatch(/Full take/);
   }, 120_000);
+
+  // STC-236. The preview used to read display.mp4 whole before showing
+  // anything; now it reads the sample index plus the keyframe group it needs.
+  // fixtures/basic has two groups, so showing frame 0 must read strictly less
+  // than the file. Counted by the editor's own ByteSource, not inferred.
+  test("opening a take reads the index and one keyframe group, not the whole video", async () => {
+    const { app: a, editorWin } = await launchWithTakeInEditor();
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    const r = await editorWin.evaluate(() =>
+      (window as unknown as { __stcVideoBytesRead: () => { display: number; displaySize: number } }).__stcVideoBytesRead());
+    expect(r.display).toBeGreaterThan(0);
+    // Measured 39,042 of 83,894 bytes (46.5%): the index plus the first of two
+    // groups. 0.6 means "one group", not merely "less than the file" — reading
+    // both groups would land near 100%.
+    expect(r.display).toBeLessThan(r.displaySize * 0.6);
+  }, 120_000);
 });
