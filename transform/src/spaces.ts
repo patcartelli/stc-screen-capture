@@ -70,7 +70,6 @@
  * result is bit-identical to the pre-refit map — see that function's own
  * comment for why the ratio is a separate factor rather than folded in.
  *
-
  * **output pixels** — the exported canvas or the decorated still's canvas,
  * origin top-left. The capture is not necessarily drawn at the canvas origin:
  * a decorated still centres it inside padding, so a capture pixel becomes an
