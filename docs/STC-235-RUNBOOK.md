@@ -46,8 +46,13 @@ Then:
 npm run test:capture -- helper/test/display-refit.grant.test.ts
 ```
 
-Expected with both grants: **4 passed** — `refit`, `refit while paused`,
-`display-gone`, and the no-fault `control`. Without the grant(s), every test
+Expected with both grants: **5 passed** — `refit`, `refit while paused`,
+`paused from the start` (the geometry-unrepresentable stop), `display-gone`,
+and the no-fault `control`. The paused-from-start case measures its own
+precondition (no frame written before the pause) from the 50 ms heartbeat and
+retries up to 3 times if a frame beats the pause; if all 3 miss it FAILS with
+a message saying the precondition was never met — that is a harness outcome
+on a fast machine, not a helper bug, and worth reporting as such. Without the grant(s), every test
 throws `SKIP-GRANT` (Screen Recording) or the Input Monitoring variant of the
 same message, naming which one — that is what this session's own run showed
 (`code: "no-displays"`, `-3801`), and it is not a code finding, only an
@@ -132,18 +137,54 @@ picture on either side of the seam, a letterbox that does not match
 `contentRect`, a visible corruption at the seam, or the take stopping instead
 of continuing.
 
+**Also watch the seam itself, frame by frame** (scrub the export across
+`geometry[1].startNs`). Two things nothing off-hardware can answer:
+
+- **(a) Does SCK deliver frames in the NEW mode through the OLD
+  configuration during the seam?** Between the physical change and the
+  refit landing there is roughly 0.3–0.5 s: the 250 ms debounce, the
+  `SCShareableContent` fetch, then the `updateConfiguration` round trip. If
+  SCK keeps delivering in that gap, those frames are the new mode's pixels
+  squeezed through the old config — they are recorded under `geometry[0]`,
+  and would show as a squashed or wrongly-letterboxed picture with a
+  misplaced cursor for a few frames right before the seam. Note how many
+  frames, and whether it is visible at normal playback speed. A few frames
+  may be acceptable; a visible jolt is worth its own ticket.
+- **(b) Does `SCShareableContent`, fetched 250 ms after the last CG
+  callback, still report the OLD `SCDisplay` size?** If it does, the refit
+  fits the old size and the letterbox is wrong for the whole rest of the
+  take. Check: `geometry[1].display`'s `pointWidth`/`pointHeight`/
+  `pixelWidth`/`pixelHeight` in `anchors.json` against the mode you actually
+  selected in System Settings. If they are the old mode's numbers, it sends
+  this back: the settle delay is too short, or the refit needs to re-fetch
+  until the size changes.
+
+**Deviation from the spec: there is no quiet "Display changed — recording
+continues" note.** The spec asked for one; it was not built (Ruling 12). The
+pill still showing the take running is the only sign the take survived.
+Do not report its absence as a bug.
+
 ## 4. Unplug an UNRELATED display mid-take
 
 With two displays connected, record the one you are NOT about to unplug,
 then physically disconnect (or use System Settings to turn off mirroring
-for) the other one. Expect: the take continues; `stop.reason` never fires;
-if the captured display's own origin shifts (macOS can reflow display
-arrangement when one disappears), a `geometry` entry records the origin
-shift — Task 10's departure 4 notes this can be recorded late on a very
+for) the other one. Expect: the take continues; `stop.reason` never fires.
+CG calls back for every display, so the refit path DOES run — but
+`refitNeeded` (`DisplayChangeDecisions.swift`) compares the result with what
+the stream is already configured for:
+- if nothing about the captured display changed, nothing happens at all:
+  no SCK call, no `display-refit` warning, and `anchors.json` stays at its
+  usual version (≤ 6) with no `geometry` key. stderr logs `refit: nothing
+  this take depends on changed`.
+- if the captured display's own origin shifts (macOS can reflow display
+  arrangement when one disappears), the stream is still left alone, but a
+  `geometry` entry records the new origin (the cursor needs it), with a
+  `display-refit` warning whose `path` is `"record"` — Task 10's departure 4 notes this can be recorded late on a very
 static screen, since an idle SCK sample (no pixel buffer) satisfies the
 refit's liveness check but the geometry entry itself waits for the next
 COMPLETE, non-paused frame. **What sends this back:** the take stopping for
-an unplug that never touched the captured display at all.
+an unplug that never touched the captured display at all, or a `"update"`/
+`"restart"` refit (a reconfigured stream) for one that only moved it.
 
 ## 5. Unplug the CAPTURED display
 
@@ -221,7 +262,8 @@ since it would mean the diagnostic can never fire true and is dead code.
   original spec's outcome table does not list (Task 10 departure 9) — expect
   it, do not "fix" it as a bug. Reachable only by pausing immediately at
   start and triggering a refit before ever resuming; ordinary use (recording
-  running, then paused later, §… above) does not hit it.
+  running, then paused later) does not hit it. The grant test's
+  `paused from the start` case drives it (§0).
 - **CHECK: does a real display-mode change make SCK report
   `didStopWithError` on the CURRENT stream, before the 250 ms refit debounce
   (`DISPLAY_CHANGE_SETTLE_MS`) ever gets to run `refit()`?** If SCK treats a
@@ -243,6 +285,6 @@ since it would mean the diagnostic can never fire true and is dead code.
 
 Everything above, until it is actually run on a Mac holding both grants.
 This session confirmed only: the Swift compiles and runs (frame probe, §0's
-mechanism check); `helper/build.sh` signs cleanly; the grant test's four
+mechanism check); `helper/build.sh` signs cleanly; the grant test's five
 cases fail with a classified `SKIP-GRANT`, not a crash or a hang, which is
 the expected shape of "no grant" rather than a code finding.
