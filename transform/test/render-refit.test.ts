@@ -94,12 +94,34 @@ describe("a refitted take maps the cursor into contentRect", () => {
   });
 
   test("pxPerPoint follows the new scale", () => {
-    const f = render(project, s, refitNs + 100_000_000);
-    const expected = project.cursor.scale * (480 / 480) * (project.output.width / 640);
-    expect(f.cursor.pxPerPoint).toBeCloseTo(expected, 9);
+    // The fixture's post-refit display is 960x720 points (2x backing) rather
+    // than 640x360 — a display whose point size ALSO doubles the capture's,
+    // so sx is 1 before and after the refit and this test cannot fail on
+    // geometry-ignoring code (a controller ruling caught the original
+    // fixture's flaw: 640/640 pre-refit and (640/480)*(480/640) post-refit
+    // are both 1). With 960x720, sx changes from 1 to 0.5, so a render that
+    // ignores geometry produces the SAME pxPerPoint before and after, and
+    // this test catches that directly via the not-equal assertion below.
+    const preRefit = render(project, s, refitNs - 100_000_000).cursor.pxPerPoint;
+    const postRefit = render(project, s, refitNs + 100_000_000).cursor.pxPerPoint;
+    const expectedPre = project.cursor.scale * (project.output.width / 640);
+    const expectedPost = project.cursor.scale * (project.output.width / 960) * (480 / 640);
+    expect(preRefit).toBeCloseTo(expectedPre, 9);
+    expect(postRefit).toBeCloseTo(expectedPost, 9);
+    // Proves the refit actually changed the scale — the assertion a
+    // geometry-ignoring render() would fail, since it would report the same
+    // pxPerPoint on both sides of the refit.
+    expect(postRefit).not.toBeCloseTo(preRefit, 6);
   });
 
-  test("a t inside the seam uses the HELD frame's geometry, not the next one", () => {
+  test("a t inside the seam is rendered with the HELD frame's geometry, equal to the no-geometry mapping", () => {
+    // Keying geometry by the SHOWN frame's PTS rather than by t makes no
+    // difference for any t >= frames[0], since every geometry entry's
+    // startNs is itself a frame PTS and frameIndexAt/geometryAt agree on
+    // which one is held. What this test actually checks: a t just before the
+    // refit's frame renders with the frame BEFORE it (never the refit's own
+    // frame arriving early), and that render is byte-identical to a v6
+    // document with no geometry at all — i.e. the pre-refit mapping, exactly.
     const iRefit = s.frames.indexOf(refitNs);
     const tSeam = refitNs - 1;                    // the frame shown is frames[iRefit-1]
     expect(geometryAt(s.anchors, s.frames[iRefit - 1]!).contentRect.x).toBe(0);
@@ -107,5 +129,18 @@ describe("a refitted take maps the cursor into contentRect", () => {
     expect(f.framePtsNs).toBe(s.frames[iRefit - 1]);
     const g0 = render(project, { ...s, anchors: { ...s.anchors, version: 6, geometry: undefined } }, tSeam);
     expect(f.cursor.x).toBe(g0.cursor.x);          // identical to the pre-refit mapping
+
+    // Before the first frame (framePtsNs null), geometryAt falls back to
+    // entry 0 / the top-level display. `fixtures/refit`'s own frames[0] is 0
+    // (render() does not accept negative t — the cursor spring has no state
+    // before tick 0), so this drops the fixture's first frame to get a t < a
+    // frame[0] that is still >= 0.
+    const shifted: Session = { ...s, frames: s.frames.slice(1) };
+    const tBeforeFirstFrame = 0;
+    expect(tBeforeFirstFrame).toBeLessThan(shifted.frames[0]!);
+    const fBefore = render(project, shifted, tBeforeFirstFrame);
+    expect(fBefore.framePtsNs).toBeNull();
+    const g0Before = render(project, { ...shifted, anchors: { ...shifted.anchors, version: 6, geometry: undefined } }, tBeforeFirstFrame);
+    expect(fBefore.cursor.x).toBe(g0Before.cursor.x);
   });
 });

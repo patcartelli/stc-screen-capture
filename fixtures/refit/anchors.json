@@ -52,11 +52,11 @@
       "startNs": 3000000006,
       "display": {
         "id": 1,
-        "pointWidth": 480,
-        "pointHeight": 360,
-        "pixelWidth": 480,
-        "pixelHeight": 360,
-        "backingScale": 1,
+        "pointWidth": 960,
+        "pointHeight": 720,
+        "pixelWidth": 1920,
+        "pixelHeight": 1440,
+        "backingScale": 2,
         "originX": 100,
         "originY": 0
       },
