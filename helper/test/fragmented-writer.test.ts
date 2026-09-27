@@ -97,8 +97,9 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
     expect(statSync(baselineOut).size).toBeGreaterThan(0);
 
     const { demuxTrack } = await import("../../transform/src/demux.js");
-    const baseline = await demuxTrack(readAb(baselineOut), "baseline.mp4");
-    const frag = await demuxTrack(readAb(fragOut), "frag.mp4");
+    const { memorySource } = await import("../../transform/src/chunk-reader.js");
+    const baseline = await demuxTrack(memorySource(readAb(baselineOut), "baseline.mp4"), "baseline.mp4");
+    const frag = await demuxTrack(memorySource(readAb(fragOut), "frag.mp4"), "frag.mp4");
 
     expect(frag.framesNs.length).toBe(FRAMES);
     expect(frag.framesNs).toEqual(baseline.framesNs);
@@ -118,7 +119,43 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
     expect(statSync(out).size).toBeGreaterThan(0);
 
     const { demuxTrack } = await import("../../transform/src/demux.js");
-    const video = await demuxTrack(readAb(out), "crashed.mp4");
+    const { memorySource } = await import("../../transform/src/chunk-reader.js");
+    const video = await demuxTrack(memorySource(readAb(out), "crashed.mp4"), "crashed.mp4");
+
+    // STC-236: the lazy demux (index from boxes, a truncated last fragment
+    // dropped as a suffix) must recover exactly what the whole-file demux did.
+    const { demuxTrackOracle } = await import("../../transform/test/_demux-oracle.js");
+    const { ChunkReader } = await import("../../transform/src/chunk-reader.js");
+    const oracle = await demuxTrackOracle(readAb(out), "crashed.mp4");
+    expect(video.framesNs).toEqual(oracle.framesNs);
+    const bytes = await new ChunkReader(video.chunks, video.bytes, "crashed.mp4").read(0, video.chunks.length);
+    bytes.forEach((b, i) => expect(Buffer.from(b).equals(Buffer.from(oracle.chunks[i]!.data)), `chunk ${i}`).toBe(true));
+
+    // The kill above never meets the suffix-drop path: the file ends on the
+    // writer's IN-FLIGHT mdat, whose header says size 0 ("to end of file"),
+    // so the walk reads it as complete (measured: `truncated: null`, a
+    // 495-byte final mdat with no moof after it). Cutting that one changes
+    // nothing either — size 0 still means "to EOF". A crash can land inside
+    // a FINISHED mdat just as well, so cut the last one that declares its own
+    // size, and hold the lazy demux to the oracle there too.
+    const { walkTopLevelBoxes } = await import("../../transform/src/mp4-boxes.js");
+    const whole = readAb(out);
+    const walk = await walkTopLevelBoxes(memorySource(whole, "crashed.mp4"), "crashed.mp4");
+    expect(walk.truncated, "as measured: the kill leaves no truncated box").toBeNull();
+    const lastMdat = [...walk.boxes].reverse()
+      .find((b) => b.type === "mdat" && b.offset + b.size < whole.byteLength)!;
+    expect(lastMdat, "the crashed file has a finished mdat to cut into").toBeDefined();
+    const cutAt = lastMdat.offset + lastMdat.headerSize + Math.floor((lastMdat.size - lastMdat.headerSize) / 2);
+    const cut = whole.slice(0, cutAt);
+    const cutWalk = await walkTopLevelBoxes(memorySource(cut, "cut.mp4"), "cut.mp4");
+    expect(cutWalk.truncated, "the cut must leave a truncated last box").not.toBeNull();
+    expect(cutWalk.truncated!.type).toBe("mdat");
+    const cutVideo = await demuxTrack(memorySource(cut, "cut.mp4"), "cut.mp4");
+    const cutOracle = await demuxTrackOracle(cut, "cut.mp4");
+    expect(cutVideo.framesNs.length).toBeGreaterThan(0);
+    expect(cutVideo.framesNs).toEqual(cutOracle.framesNs);
+    const cutBytes = await new ChunkReader(cutVideo.chunks, cutVideo.bytes, "cut.mp4").read(0, cutVideo.chunks.length);
+    cutBytes.forEach((b, i) => expect(Buffer.from(b).equals(Buffer.from(cutOracle.chunks[i]!.data)), `cut chunk ${i}`).toBe(true));
 
     // "Plays up to within one fragment interval of the kill" (the ticket's
     // own words) — not exactly `crashAfter` frames (the in-flight fragment at
@@ -144,7 +181,8 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
 
     expect(statSync(out).size).toBeGreaterThan(0);
     const { demuxTrack } = await import("../../transform/src/demux.js");
-    await expect(demuxTrack(readAb(out), "crashed-unfragmented.mp4")).rejects.toThrow();
+    const { memorySource } = await import("../../transform/src/chunk-reader.js");
+    await expect(demuxTrack(memorySource(readAb(out), "crashed-unfragmented.mp4"), "crashed-unfragmented.mp4")).rejects.toThrow();
   }, 120_000);
 
   // STC-408: an ordinary, UNCRASHED take can still sit idle for seconds —
@@ -186,7 +224,8 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
       return m ? `append failed at frame ${m[1]}` : `harness failed: ${String(e).split("\n")[0]}`;
     }
     const { demuxTrack } = await import("../../transform/src/demux.js");
-    const video = await demuxTrack(readAb(out), c.name);
+    const { memorySource } = await import("../../transform/src/chunk-reader.js");
+    const video = await demuxTrack(memorySource(readAb(out), c.name), c.name);
     const ptsStepNs = Math.trunc(1_000_000_000 / FPS);
     const gapNs = Math.round(c.gapSec * 1_000_000_000);
     if (video.framesNs.length !== FRAMES) return `demuxed ${video.framesNs.length} of ${FRAMES} frames`;

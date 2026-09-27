@@ -1,5 +1,6 @@
 import { mark } from "./mark.js";
 import { demuxTrack } from "@transform/demux";
+import { memorySource } from "@transform/chunk-reader";
 import { computeChangesForVideo, type ComputeChangesOptions } from "@transform/change-track";
 import { changesForWrite } from "@transform/changes";
 import { applyDecoderPreference } from "./decoder.js";
@@ -21,7 +22,7 @@ applyDecoderPreference();
 (window as any).computeChanges = async (dir: string, opts: ComputeChangesOptions = {}) => {
   const displayMp4 = await fetch(`${dir}/display.mp4`).then((r) => r.arrayBuffer());
   mark("change-track: demuxTrack");
-  const video = await demuxTrack(displayMp4, "display.mp4");
+  const video = await demuxTrack(memorySource(displayMp4, "display.mp4"), "display.mp4");
   mark(`change-track: computeChangesForVideo (${video.chunks.length} frames)`);
   const start = performance.now();
   const changes = await computeChangesForVideo(video, opts);

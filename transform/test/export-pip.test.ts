@@ -2,12 +2,13 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadSession } from "../src/session.js";
+import { memorySource } from "../src/chunk-reader.js";
 
 const root = join(__dirname, "..", "..");
 const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
 const mp4 = (p: string) => {
   const b = readFileSync(join(root, p));
-  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+  return memorySource(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer, p);
 };
 
 /**
