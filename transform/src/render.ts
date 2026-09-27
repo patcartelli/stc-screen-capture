@@ -169,7 +169,7 @@ function derivedCropFor(session: Session, window: ZoomWindow): Rect | null {
   if (!byWindow) { byWindow = new Map(); derivedCropCache.set(session, byWindow); }
   const key = `${windowId(window)}:${window.startNs}:${window.endNs}`;
   if (!byWindow.has(key)) {
-    byWindow.set(key, deriveZoomCrop(window, session.changes, session.anchors.display));
+    byWindow.set(key, deriveZoomCrop(window, session.changes, session.anchors, session.frames));
   }
   return byWindow.get(key)!;
 }

@@ -303,6 +303,27 @@ export function toDisplayLocal(p: Point, displayOrigin: Point): Point {
   return { x: p.x - displayOrigin.x, y: p.y - displayOrigin.y };
 }
 
+/**
+ * A global point in capture UV (0..1 over the capture frame), through the
+ * refit contentRect (STC-235). With a full-frame rect this is exactly the old
+ * display-local / pointSize — UV is scale-invariant over the display.
+ */
+export function globalToCaptureUv(p: Point, display: DisplayGeometry, contentRect: Rect, capture: Size): Point {
+  const lx = (p.x - display.originX) / display.pointWidth;
+  const ly = (p.y - display.originY) / display.pointHeight;
+  // Fast path for bit-identity with pre-STC-235 derivations, not for speed:
+  // `(0 + lx * W) / W` is not always `=== lx` in floating point, and every
+  // take with no refit (every take before STC-235) must map exactly as it
+  // did before.
+  if (contentRect.x === 0 && contentRect.y === 0 && contentRect.width === capture.width && contentRect.height === capture.height) {
+    return { x: lx, y: ly };
+  }
+  return {
+    x: (contentRect.x + lx * contentRect.width) / capture.width,
+    y: (contentRect.y + ly * contentRect.height) / capture.height,
+  };
+}
+
 /** A global rectangle in display-local points. Units are unchanged, so the size is. */
 export function rectToDisplayLocal(r: Rect, displayOrigin: Point): Rect {
   const { x, y } = toDisplayLocal(r, displayOrigin);
