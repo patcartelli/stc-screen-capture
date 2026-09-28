@@ -9,6 +9,7 @@ import { startRecordFlow } from "./_record-flow.js";
 import { HIDE_SETTLE_MS } from "../src/overlay-session.js";
 import { toastPage } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { hasWindow, pageWithUrl } from "./_windows.js";
 
 /**
  * The whole Record flow, in a real app (STC-388).
@@ -33,7 +34,7 @@ afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, AP
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-interface Launched { win: Page; startLog: string; tempTakes: string }
+interface Launched { win: Page; startLog: string; tempTakes: string; ud: string }
 
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
@@ -49,7 +50,12 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#record");
-  return { win, startLog, tempTakes };
+  return { win, startLog, tempTakes, ud };
+}
+
+/** `settings.json`'s current contents, for the fields STC-456 writes back. */
+function readWrittenSettings(ud: string): any {
+  return JSON.parse(readFileSync(join(ud, "settings.json"), "utf8"));
 }
 
 const readLines = (file: string): any[] =>
@@ -212,13 +218,25 @@ describe("Escape writes nothing, at either phase", () => {
   }, 120_000);
 
   test("Escape in the options phase — the newly reachable state", async () => {
-    const { win, startLog, tempTakes } = await launch();
+    const { win, startLog, tempTakes, ud } = await launch();
     const before = readdirSync(tempTakes).length;
+    // Not for the countdown (Escape happens before Record either way) — this
+    // is what guarantees settings.json exists on disk, so the systemAudio
+    // read below is a real "still false" rather than a missing file.
+    await withoutCountdown(win);
     await win.click("#record");
     const overlay = await overlayWindow();
     await dragARegion(overlay);
     await send(overlay, { t: "key", key: "Enter" });
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+
+    // A bar toggle made before Escape (fix round 2): `options` is present on
+    // a plain Escape exactly as it is on Settings, and this suite's own
+    // contract — "Escape at each step writes nothing" — has to hold even so.
+    // Only the SETTINGS branch and the Record path are allowed to persist a
+    // toggle; a cancel must not.
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
 
     // Before this ticket there was no state between a selection and a take —
     // Escape here is reachable for the first time.
@@ -230,6 +248,11 @@ describe("Escape writes nothing, at either phase", () => {
     expect(readLines(startLog)).toEqual([]);
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
     expect(await toastPage(app!)).toBeUndefined();
+    // The toggle above must not have reached disk — unchanged from the
+    // default `false`, not merely absent (settings.json may not exist at
+    // all yet, which `readWrittenSettings` would throw on reading; the file
+    // written on launch/withoutCountdown already guarantees it exists here).
+    expect(readWrittenSettings(ud).systemAudio).toBe(false);
   }, 120_000);
 });
 
@@ -248,7 +271,7 @@ describe("the marquee stays adjustable with the bar up", () => {
     await send(overlay, { t: "key", key: "Enter" });
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
 
-    const before = (await overlay.textContent("#ctl-size"))?.trim();
+    const before = (await overlay.getAttribute("#ctl-size", "data-label"))?.trim();
     expect(before).toBeTruthy();
 
     // `reduce` (selection.ts) trusts the `handle` field on the event
@@ -260,7 +283,7 @@ describe("the marquee stays adjustable with the bar up", () => {
     await send(overlay, { t: "pointermove", at: { x: to.x + 80, y: to.y + 80 } });
     await send(overlay, { t: "pointerup", at: { x: to.x + 80, y: to.y + 80 } });
 
-    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).not.toBe(before);
+    await expect.poll(() => overlay.getAttribute("#ctl-size", "data-label"), { timeout: 10_000 }).not.toBe(before);
     // And the bar itself never left — this is the property that justifies it
     // living in the overlay window at all, not a side effect of the resize.
     expect(await overlay.getAttribute("#bar", "hidden")).toBeNull();
@@ -287,7 +310,7 @@ describe("the marquee stays adjustable with the bar up", () => {
     await awaitConfirmable(overlay);
     await send(overlay, { t: "key", key: "Enter" }); // pending = R1 (200x100 pts)
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
-    const beforeReadout = (await overlay.textContent("#ctl-size"))?.trim();
+    const beforeReadout = (await overlay.getAttribute("#ctl-size", "data-label"))?.trim();
     expect(beforeReadout).toBe(`${Math.round(200 * scaleFactor)} × ${Math.round(100 * scaleFactor)}`);
 
     // Adjust the marquee AFTER Enter — no new outcome, so pre-fix `pending`
@@ -296,8 +319,8 @@ describe("the marquee stays adjustable with the bar up", () => {
     await send(overlay, { t: "pointerdown", at: to, handle: "se" });
     await send(overlay, { t: "pointermove", at: adjustedTo });
     await send(overlay, { t: "pointerup", at: adjustedTo });
-    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).not.toBe(beforeReadout);
-    const afterReadout = (await overlay.textContent("#ctl-size"))?.trim();
+    await expect.poll(() => overlay.getAttribute("#ctl-size", "data-label"), { timeout: 10_000 }).not.toBe(beforeReadout);
+    const afterReadout = (await overlay.getAttribute("#ctl-size", "data-label"))?.trim();
     expect(afterReadout).toBe(`${Math.round(280 * scaleFactor)} × ${Math.round(180 * scaleFactor)}`);
 
     await send(overlay, { t: "control", id: "record" });
@@ -678,7 +701,7 @@ describe("switching a picked window back to an area keeps the bar honest", () =>
     await awaitConfirmable(overlay);
 
     const expectedReadout = `${Math.round(200 * scaleFactor)} × ${Math.round(100 * scaleFactor)}`;
-    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).toBe(expectedReadout);
+    await expect.poll(() => overlay.getAttribute("#ctl-size", "data-label"), { timeout: 10_000 }).toBe(expectedReadout);
 
     await send(overlay, { t: "control", id: "record" });
     await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
@@ -687,5 +710,153 @@ describe("switching a picked window back to an area keeps the bar honest", () =>
     expect(cmd.region).toBeDefined();
     expect(`${Math.round(cmd.region.width * scaleFactor)} × ${Math.round(cmd.region.height * scaleFactor)}`)
       .toBe(expectedReadout);
+  }, 120_000);
+});
+
+describe("system audio and the camera device reach start (STC-456, absorbs STC-459)", () => {
+  /** Drag a region and confirm it, up to the bar being live — the shared
+   * prefix every test below needs before it can press a control of its own. */
+  async function toOptionsPhase(win: Page): Promise<Page> {
+    await win.click("#record");
+    const overlay = await overlayWindow();
+    await dragARegion(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+    return overlay;
+  }
+
+  test("Include System Audio on → start carries systemAudio: true, and it is written back", async () => {
+    const { win, startLog, ud } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
+    await send(overlay, { t: "control", id: "record" });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
+    await expect.poll(() => readWrittenSettings(ud).systemAudio, { timeout: 10_000 }).toBe(true);
+  }, 120_000);
+
+  test("off → the key is ABSENT, not false (the existing pin)", async () => {
+    const { win, startLog, ud } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    // No toggle pressed — System Audio stays off, exactly as it started.
+    await send(overlay, { t: "control", id: "record" });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect("systemAudio" in cmd, `start payload was ${JSON.stringify(cmd)}`).toBe(false);
+    expect(readWrittenSettings(ud).systemAudio).toBe(false);
+  }, 120_000);
+
+  test("a camera picked on the bar → start carries camera: true and that cameraDeviceUid", async () => {
+    const { win, startLog, ud } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "control", id: "camera" });
+    await send(overlay, {
+      t: "menuPick",
+      pick: { kind: "choice", menu: "camera", choice: { kind: "device", uid: "fixture-cam-9" } },
+    });
+    await send(overlay, { t: "control", id: "record" });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
+    expect(cmd.cameraDeviceUid).toBe("fixture-cam-9");
+    await expect.poll(() => readWrittenSettings(ud).cameraDeviceUid, { timeout: 10_000 }).toBe("fixture-cam-9");
+  }, 120_000);
+
+  test("a typed size does NOT start a take (Review Focus 1)", async () => {
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "size", width: 800, height: 600 });
+    await expect.poll(() => overlay.getAttribute("#ctl-size", "data-label"), { timeout: 10_000 }).toBe("800 × 600");
+
+    // Give an errant start a moment it would need, then prove none happened.
+    await sleep(300);
+    expect(readLines(startLog)).toEqual([]);
+  }, 120_000);
+
+  test("Settings closes the overlay without a take, opens the sheet, and KEEPS a choice made first (fix round 1, controller ruling)", async () => {
+    const { win, startLog, ud } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    // A choice made on the bar BEFORE Settings is pressed — the case the
+    // ruling says must survive, the same way a cancelled countdown already
+    // keeps a mic the user just chose.
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
+    // Also pick the one mic the fake helper offers (STC-456 fix round,
+    // Finding 2's own regression): this is a SECOND bar choice, a device
+    // pick rather than a toggle, and it closes the bar's own menu.
+    await send(overlay, {
+      t: "menuPick",
+      pick: { kind: "choice", menu: "mic", choice: { kind: "device", uid: "fixture-mic-1" } },
+    });
+
+    await send(overlay, { t: "control", id: "settings" });
+
+    await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
+    expect(readLines(startLog)).toEqual([]);
+    await expect.poll(() => win.getAttribute("#profilesheet", "class"), { timeout: 10_000 }).toMatch(/open/);
+    await expect.poll(() => readWrittenSettings(ud).systemAudio, { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => readWrittenSettings(ud).micDeviceUid, { timeout: 10_000 }).toBe("fixture-mic-1");
+    // Finding 2's actual bug: `writeBarOptions` never told the main window
+    // its settings had changed, so `#mic-state` (and the popover's own
+    // checked row) kept showing whatever was true before the overlay opened.
+    // `settings:changed` (main.ts) -> the renderer's handler re-reading all
+    // four stored fields is what this proves.
+    await expect.poll(() => win.textContent("#mic-state"), { timeout: 10_000 }).toBe("Fixture USB Mic");
+  }, 120_000);
+
+  test("Settings from the tray, with NO main window open, still opens the sheet once it is created (fix round 1, CRITICAL)", async () => {
+    // `openLibrary` -> `createWindow` calls `win.loadFile(...)` without
+    // awaiting it; before the fix, `ui:open-settings` was sent synchronously
+    // right after, before the fresh window's preload/renderer had installed
+    // its listener, and Electron does not queue an unheard `send`. Reachable
+    // only when the main window is closed and Record starts from the tray or
+    // a hotkey — `win.click("#record")` always has a window already, so this
+    // path needs the tray's own callback (`fireTrayRecord`, defined below)
+    // against a window count of zero, the same starting condition
+    // `hotkeys.e2e.test.ts`'s "with the last window closed" test uses.
+    //
+    // macOS only, like that test: `window-all-closed` quits on every other
+    // platform, so there is no "closed but still running" state to reach
+    // there. This suite runs on macOS.
+    if (process.platform !== "darwin") {
+      process.stderr.write("SKIP: menu-bar-first (no window, still running) is macOS-only behaviour\n");
+      return;
+    }
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    await win.close();
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+                      { timeout: 10_000 }).toBe(0);
+
+    await fireTrayRecord();
+    const overlay = await overlayWindow();
+    await dragARegion(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+    await send(overlay, { t: "control", id: "settings" });
+
+    await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
+    expect(readLines(startLog)).toEqual([]);
+
+    // The window `openSettingsSheet` -> `openLibrary` -> `createWindow` just
+    // made, picked up fresh rather than reusing the CLOSED `win` above (a
+    // destroyed Page is not this new window).
+    const newWin = await pageWithUrl(app!, "index.html");
+    await expect.poll(() => newWin.getAttribute("#profilesheet", "class"), { timeout: 15_000 }).toMatch(/open/);
   }, 120_000);
 });
