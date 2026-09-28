@@ -20,6 +20,7 @@ import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite } from "@transform/shot.js";
 import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
+import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
@@ -581,7 +582,18 @@ app.whenReady().then(async () => {
   app.on("web-contents-created", (_event, contents) => {
     contents.on("will-navigate", (navEvent) => navEvent.preventDefault());
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
-    contents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    // Not a bare deny-all: the editor's Publish flow (share.ts/editor.ts) copies
+    // the embed snippet via `navigator.clipboard.writeText`, which Chromium
+    // gates behind the `clipboard-sanitized-write` permission — the ONE web
+    // permission this app's own renderers actually use. Denying it here would
+    // regress that copy silently (it already falls back to a "could not copy"
+    // message, so nothing would visibly crash, making it easy to miss).
+    // Everything else (camera, mic, geolocation, notifications, ...) is
+    // genuinely unused — capture goes through the Swift helper, never through
+    // an Electron/Chromium permission — so those stay denied.
+    contents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+      callback(permission === "clipboard-sanitized-write");
+    });
   });
 
   // FIRST, before anything reads settings or looks for unsaved takes — both
@@ -652,7 +664,15 @@ app.whenReady().then(async () => {
     if (!action) return;
     if (action === "record") {
       if (sup?.state === "recording") { void onRecordHotkey(); return; }
-      void runRecordFlow("menu-bar");
+      // runRecordFlow no longer throws (its own catch-all above turns any
+      // failure into a returned RecordResult) — so this bare `void` no longer
+      // risks an unhandled rejection, but it also means a failure here is
+      // reachable only by inspecting the result. Log it the same way
+      // `onRecordHotkey` already logs its own `runRecordFlow("hotkey")` call,
+      // or a menu-bar-triggered failure is invisible everywhere.
+      void runRecordFlow("menu-bar").then((r) => {
+        if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
+      });
       return;
     }
     if (isShotAction(action)) void captureStill(action, "menu-bar");
@@ -1992,9 +2012,13 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
   const isPlainObject = (v: unknown): v is Record<string, any> =>
     typeof v === "object" && v !== null && !Array.isArray(v);
 
+  const inRange = (v: number, min: number, max: number) => v >= min && v <= max;
+
   if (doc.output !== undefined) {
-    if (!isPlainObject(doc.output) || !isFiniteNum(doc.output.width) || !isFiniteNum(doc.output.height)) {
-      throw new Error("project.json: output.width/height must be numbers");
+    const o = doc.output;
+    if (!isPlainObject(o) || !Number.isInteger(o.width) || !Number.isInteger(o.height)
+        || !inRange(o.width, 1, 3840) || !inRange(o.height, 1, 2160) || o.fps !== 60) {
+      throw new Error("project.json: output must be {width: 1..3840, height: 1..2160, fps: 60}");
     }
   }
   if (doc.cursor !== undefined) {
@@ -2002,14 +2026,16 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
     if (doc.cursor.style !== undefined && doc.cursor.style !== "default" && doc.cursor.style !== "circle") {
       throw new Error("project.json: cursor.style is invalid");
     }
-    if (doc.cursor.scale !== undefined && (!isFiniteNum(doc.cursor.scale) || doc.cursor.scale <= 0)) {
-      throw new Error("project.json: cursor.scale must be a positive number");
+    if (doc.cursor.scale !== undefined
+        && (!isFiniteNum(doc.cursor.scale) || doc.cursor.scale <= 0 || doc.cursor.scale > 8)) {
+      throw new Error("project.json: cursor.scale must be in (0, 8]");
     }
   }
   if (doc.trim !== undefined) {
-    if (!isPlainObject(doc.trim) || !Number.isInteger(doc.trim.startNs) || !Number.isInteger(doc.trim.endNs)
-        || doc.trim.startNs < 0 || doc.trim.endNs < 0) {
-      throw new Error("project.json: trim.startNs/endNs must be non-negative integers");
+    const t = doc.trim;
+    if (!isPlainObject(t) || !Number.isInteger(t.startNs) || !Number.isInteger(t.endNs)
+        || t.startNs < 0 || t.endNs < 0 || t.endNs <= t.startNs) {
+      throw new Error("project.json: trim.startNs/endNs must be non-negative integers with endNs > startNs");
     }
   }
   if (doc.zoom !== undefined) {
@@ -2017,21 +2043,83 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
     if (doc.zoom.enabled !== undefined && typeof doc.zoom.enabled !== "boolean") {
       throw new Error("project.json: zoom.enabled must be a boolean");
     }
-    if (doc.zoom.intensity !== undefined && !isFiniteNum(doc.zoom.intensity)) {
-      throw new Error("project.json: zoom.intensity must be a number");
+    if (doc.zoom.intensity !== undefined
+        && (!isFiniteNum(doc.zoom.intensity) || !inRange(doc.zoom.intensity, 0, 1))) {
+      throw new Error("project.json: zoom.intensity must be a number in 0..1");
     }
-    if (doc.zoom.preset !== undefined && typeof doc.zoom.preset !== "string") {
-      throw new Error("project.json: zoom.preset must be a string");
+    if (doc.zoom.preset !== undefined && !ZOOM_PRESET_NAMES.includes(doc.zoom.preset)) {
+      throw new Error("project.json: zoom.preset is invalid");
+    }
+  }
+  // STC-330/STC-331/STC-329: a discriminated union, kept in sync with
+  // schema/project-12.schema.json's own `overrides` union by hand — the same
+  // "narrower guard, not the full parser" tradeoff this function's own header
+  // already applies everywhere else. The rect's x+width/y+height<=1 sum
+  // constraint is deliberately NOT checked here either, matching the schema's
+  // own note that it is `cleanOverrides`' job at load time, not a write-time
+  // refusal.
+  if (doc.overrides !== undefined) {
+    if (!Array.isArray(doc.overrides)) throw new Error("project.json: overrides must be an array");
+    const isEasing = (v: unknown) => v === "calm" || v === "standard" || v === "snappy";
+    const isRect = (v: unknown): v is Record<string, any> =>
+      isPlainObject(v) && ["x", "y", "width", "height"].every((k) => isFiniteNum(v[k]) && inRange(v[k], 0, 1));
+    for (const entry of doc.overrides) {
+      if (!isPlainObject(entry)) throw new Error("project.json: overrides entry is not an object");
+      if (entry.kind === "geometry") {
+        if (typeof entry.windowId !== "string" || !entry.windowId || !isRect(entry.rect)
+            || (entry.easing !== undefined && !isEasing(entry.easing))) {
+          throw new Error("project.json: malformed geometry override");
+        }
+      } else if (entry.kind === "manual") {
+        if (typeof entry.id !== "string" || !entry.id || !Number.isInteger(entry.startNs) || entry.startNs < 0
+            || !Number.isInteger(entry.endNs) || entry.endNs < 0 || !isRect(entry.rect) || !isEasing(entry.easing)) {
+          throw new Error("project.json: malformed manual override");
+        }
+      } else if (entry.kind === "removed") {
+        if (typeof entry.windowId !== "string" || !entry.windowId) {
+          throw new Error("project.json: malformed removed override");
+        }
+      } else if (entry.kind === "retime") {
+        if (typeof entry.windowId !== "string" || !entry.windowId
+            || (entry.startNs === undefined && entry.endNs === undefined)
+            || (entry.startNs !== undefined && (!Number.isInteger(entry.startNs) || entry.startNs < 0))
+            || (entry.endNs !== undefined && (!Number.isInteger(entry.endNs) || entry.endNs < 0))) {
+          throw new Error("project.json: malformed retime override");
+        }
+      } else {
+        throw new Error(`project.json: overrides entry has unknown kind "${entry.kind}"`);
+      }
+    }
+  }
+  if (doc.pip !== undefined) {
+    const p = doc.pip;
+    if (!isPlainObject(p) || typeof p.enabled !== "boolean" || p.corner !== "bottom-right"
+        || !isFiniteNum(p.widthPct) || p.widthPct <= 0 || p.widthPct > 1
+        || !Number.isInteger(p.marginPx) || p.marginPx < 0) {
+      throw new Error("project.json: malformed pip");
+    }
+  }
+  if (doc.transform !== undefined) {
+    if (!isPlainObject(doc.transform) || !Number.isInteger(doc.transform.version) || doc.transform.version < 1) {
+      throw new Error("project.json: transform.version must be a positive integer");
+    }
+  }
+  if (doc.narrationCleanup !== undefined) {
+    const n = doc.narrationCleanup;
+    if (!isPlainObject(n) || typeof n.enabled !== "boolean"
+        || !isFiniteNum(n.strength) || !inRange(n.strength, 0, 1)) {
+      throw new Error("project.json: malformed narrationCleanup");
     }
   }
   if (doc.textPt !== undefined && (!isFiniteNum(doc.textPt) || doc.textPt <= 0)) {
     throw new Error("project.json: textPt must be a positive number");
   }
-  if (doc.micLevel !== undefined && !isFiniteNum(doc.micLevel)) {
-    throw new Error("project.json: micLevel must be a number");
+  if (doc.micLevel !== undefined && (!isFiniteNum(doc.micLevel) || !inRange(doc.micLevel, 0, 3.9811))) {
+    throw new Error("project.json: micLevel must be a number in 0..3.9811");
   }
-  if (doc.systemAudioLevel !== undefined && !isFiniteNum(doc.systemAudioLevel)) {
-    throw new Error("project.json: systemAudioLevel must be a number");
+  if (doc.systemAudioLevel !== undefined
+      && (!isFiniteNum(doc.systemAudioLevel) || !inRange(doc.systemAudioLevel, 0, 1))) {
+    throw new Error("project.json: systemAudioLevel must be a number in 0..1");
   }
   if (doc.micMuted !== undefined && typeof doc.micMuted !== "boolean") {
     throw new Error("project.json: micMuted must be a boolean");
