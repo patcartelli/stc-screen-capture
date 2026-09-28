@@ -1,5 +1,6 @@
 import { MIN_SELECTION_POINTS, pixelSize, rectContains, type DisplayInfo, type Point, type Rect } from "./selection.js";
 import type { MicInfo } from "./mic-devices.js";
+import type { DeviceLike, DeviceSelection } from "./device-picker.js";
 
 /**
  * The options bar's decisions (STC-388, then STC-456's two-row pane), with no
@@ -25,13 +26,11 @@ export const CONTROL_IDS: readonly ControlId[] =
 
 export type MenuId = "mic" | "camera";
 
-export interface OptionsState {
-  /** Sticky (`Settings.micDeviceUid`); null is "no mic", never "the default". */
-  micDeviceUid: string | null;
-  /** Sticky (`Settings.camera`). */
-  camera: boolean;
-  /** What the mic menu can offer. Empty disables the control outright. */
+export interface OptionsState extends DeviceSelection {
+  /** What the mic menu can offer. Empty disables the mic control outright. */
   mics: readonly MicInfo[];
+  /** What the camera menu can offer. Empty still offers No Camera / Automatic. */
+  cameras: readonly DeviceLike[];
   /**
    * Set by the `expand` control, NEVER inferred from the marquee's geometry.
    *
@@ -44,7 +43,7 @@ export interface OptionsState {
    * happened to drag to the edges.
    */
   fullDisplay: boolean;
-  /** Which of the pane's dropdown menus is open, or none (STC-456). */
+  /** Which menu is open, if any. One at a time. */
   openMenu: MenuId | null;
 }
 

@@ -1,7 +1,10 @@
 import { describe, test, expect } from "vitest";
-import { nextPhase, outcomeOnRelease, fullDisplayFor, anchorRectFor, barBelongsOn } from "../src/overlay-session.js";
+import {
+  nextPhase, outcomeOnRelease, fullDisplayFor, anchorRectFor, barBelongsOn,
+  sizedState, croppedState, toggleMenu,
+} from "../src/overlay-session.js";
 import { barLayout, CONTROL_IDS, expandedSelection, sizeLabel } from "../src/record-options.js";
-import { confirm } from "../src/selection.js";
+import { confirm, initialState } from "../src/selection.js";
 import type {
   DisplayInfo, Rect, SelectionContext, SelectionOutcome, SelectionState, WindowInfo,
 } from "../src/selection.js";
@@ -224,5 +227,35 @@ describe("the bar belongs on ONE display, not every window's own (Finding 5, STC
 
   test("no anchor (select phase) belongs nowhere", () => {
     expect(barBelongsOn(undefined, displayA.id, [displayA, displayB])).toBe(false);
+  });
+});
+
+describe("the bar's own events (STC-456)", () => {
+  const display = { id: 1, bounds: { x: 0, y: 0, width: 1600, height: 1000 }, scaleFactor: 2 };
+
+  test("a typed size in region mode resizes the marquee and stays in region mode", () => {
+    const s = { ...initialState("region"), rect: { x: 400, y: 300, width: 400, height: 200 } };
+    const out = sizedState(s, s.rect!, display, 1000, 600);
+    expect(out.mode).toBe("region");
+    expect(out.rect).toEqual({ x: 350, y: 250, width: 500, height: 300 });
+  });
+  test("a typed size with a WINDOW picked becomes a region of that size, centred on the window", () => {
+    const s = { ...initialState("window"), hoveredWindowId: 7 };
+    const win = { x: 100, y: 100, width: 600, height: 400 };
+    const out = sizedState(s, win, display, 400, 400);
+    expect(out.mode).toBe("region");
+    expect(out.rect).toEqual({ x: 300, y: 200, width: 200, height: 200 });
+  });
+  test("crop clears the marquee and returns to region drawing", () => {
+    const s = { ...initialState("window"), rect: { x: 1, y: 1, width: 10, height: 10 } };
+    const out = croppedState(s);
+    expect(out.mode).toBe("region");
+    expect(out.rect).toBeUndefined();
+    expect(out.drag).toBeUndefined();
+  });
+  test("one menu at a time: the other trigger switches, the same one closes", () => {
+    expect(toggleMenu(null, "mic")).toBe("mic");
+    expect(toggleMenu("mic", "mic")).toBeNull();
+    expect(toggleMenu("mic", "camera")).toBe("camera");
   });
 });

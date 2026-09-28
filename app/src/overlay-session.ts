@@ -7,9 +7,13 @@ import {
   type SelectionOutcome, type SelectionState, type WindowInfo,
 } from "./selection.js";
 import {
-  barLayout, expandedSelection,
-  type ControlId, type OptionsState,
+  barLayout, expandedSelection, menuAnchor, resizeToPixels,
+  type ControlId, type MenuId, type OptionsState,
 } from "./record-options.js";
+import {
+  decidePopoverToggle, applyMenuPick, micMenuRows, cameraMenuRows, type MenuPick,
+} from "./device-picker.js";
+import { micLabel } from "./mic-devices.js";
 
 /**
  * The selection overlay's windows and lifecycle (STC-290).
@@ -47,6 +51,9 @@ export interface OverlayResult {
   excludeWindowIds: number[];
   /** Present only when `purpose` was `"record"`. */
   options?: OptionsState;
+  /** Set when the `settings` control closed the overlay to open the profile
+   * sheet instead of starting a take (STC-456). */
+  afterClose?: "settings";
 }
 
 export type OverlayPurpose = "shot" | "record";
@@ -58,7 +65,9 @@ export type OverlayPhase = "select" | "options";
 export type OverlayEvent =
   | SelectionEvent
   | { t: "control"; id: ControlId }
-  | { t: "micPick"; uid: string | null };
+  | { t: "menuPick"; pick: MenuPick }
+  | { t: "menuClose" }
+  | { t: "size"; width: number; height: number };
 
 /**
  * What an outcome means, given what the overlay was opened for.
@@ -196,6 +205,33 @@ export function fullDisplayFor(current: boolean, didExpand: boolean,
   return !rectChanged(prevRect, nextRect);
 }
 
+/** Which menu (if any) should be open after `clicked`'s trigger is pressed —
+ * `decidePopoverToggle`, under the bar's own name for it (STC-456). */
+export const toggleMenu = (open: MenuId | null, clicked: MenuId): MenuId | null =>
+  decidePopoverToggle(open, clicked);
+
+/**
+ * The marquee after a size is typed into the bar (STC-456), in global points.
+ * `anchor` is the same rect the bar itself is anchored to — the live marquee
+ * in region mode, the picked window's own bounds in window mode
+ * (`anchorRectFor`) — so typing a size with a window picked produces a region
+ * of that size centred on the window, exactly as `expand` turns a window pick
+ * into a region. `resizeToPixels` (record-options.ts) does the conversion;
+ * this only applies it to the state, clearing any in-flight drag the way a
+ * handle drag's own release does.
+ */
+export function sizedState(state: SelectionState, anchor: Rect, display: DisplayInfo,
+                           w: number, h: number): SelectionState {
+  return { ...state, mode: "region", rect: resizeToPixels(anchor, display, w, h), drag: undefined };
+}
+
+/** `crop` clears the marquee and drops back to drawing a fresh region — the
+ * options phase ends with it (`onControl`'s `"crop"` case moves `phase` back
+ * to `"select"`); this only resets the shared reducer's own state. */
+export function croppedState(state: SelectionState): SelectionState {
+  return { ...state, mode: "region", rect: undefined, drag: undefined };
+}
+
 /**
  * How long to let the window server settle after hiding the overlay.
  *
@@ -257,8 +293,16 @@ export interface OpenOptions {
    * live — and resolves only when Record is pressed.
    */
   purpose?: OverlayPurpose;
-  /** The sticky options the bar opens with, and the devices it can offer. */
-  initialOptions?: Pick<OptionsState, "micDeviceUid" | "camera" | "mics">;
+  /**
+   * The sticky options the bar opens with, and the devices it can offer.
+   *
+   * `systemAudio`/`cameraDeviceUid`/`cameras` are optional here (STC-456 Task
+   * 4 ruling) so a caller that has not yet been wired for them (STC-456 Task
+   * 5 does `main.ts`'s side of that) still typechecks; the constructor below
+   * defaults each to its "off"/"none" value.
+   */
+  initialOptions?: Pick<OptionsState, "micDeviceUid" | "camera" | "mics">
+    & Partial<Pick<OptionsState, "systemAudio" | "cameraDeviceUid" | "cameras">>;
 }
 
 /**
@@ -310,6 +354,10 @@ class OverlaySession {
   private phase: OverlayPhase = "select";
   private pending: SelectionOutcome | undefined;
   private options: OptionsState;
+  /** Set by the `settings` control (STC-456): the overlay closes as a
+   * cancellation, but the caller should open the profile sheet rather than
+   * treat it as a plain Escape. */
+  private afterClose: "settings" | undefined;
 
   constructor(private readonly opts: OpenOptions) {
     this.state = initialState(opts.mode ?? "region");
@@ -318,9 +366,11 @@ class OverlaySession {
     this.options = {
       micDeviceUid: opts.initialOptions?.micDeviceUid ?? null,
       camera: opts.initialOptions?.camera ?? false,
+      systemAudio: opts.initialOptions?.systemAudio ?? false,
+      cameraDeviceUid: opts.initialOptions?.cameraDeviceUid ?? null,
       mics: opts.initialOptions?.mics ?? [],
+      cameras: opts.initialOptions?.cameras ?? [],
       fullDisplay: false,
-      // STC-456 interim — Task 6 replaces this.
       openMenu: null,
     };
   }
@@ -477,6 +527,16 @@ class OverlaySession {
       // a second time, which is undefined in window mode (the readout would
       // silently go back to reading a value that does not exist there).
       anchor,
+      // STC-456: the open menu's rows and where it anchors, built from the ONE
+      // row model (device-picker.ts) both this bar and the main window's
+      // popover share. Undefined whenever no menu is open, or there is no
+      // layout/display to anchor it against.
+      menu: layout && d && this.options.openMenu ? {
+        anchor: menuAnchor(layout, this.options.openMenu, d),
+        rows: this.options.openMenu === "mic"
+          ? micMenuRows(this.options.mics.map((m) => ({ name: micLabel(m), uid: m.uid })), this.options)
+          : cameraMenuRows([...this.options.cameras], this.options),
+      } : undefined,
     });
   }
 
@@ -485,11 +545,17 @@ class OverlaySession {
   private onEvent = (_e: unknown, ev: OverlayEvent): void => {
     if (this.done) return;
     if (ev.t === "control") return this.onControl(ev.id);
-    if (ev.t === "micPick") {
-      // STC-456 interim — Task 6 replaces this.
-      this.options = { ...this.options, micDeviceUid: ev.uid, openMenu: null };
+    if (ev.t === "menuPick") {
+      const next = applyMenuPick(this.options, ev.pick);
+      const closes = ev.pick.kind !== "toggle-system-audio";
+      this.options = { ...this.options, ...next, openMenu: closes ? null : this.options.openMenu };
       return this.broadcast();
     }
+    if (ev.t === "menuClose") {
+      this.options = { ...this.options, openMenu: null };
+      return this.broadcast();
+    }
+    if (ev.t === "size") return this.onSize(ev.width, ev.height);
     const prevRect = this.state.rect;
     const r = reduce(this.state, ev, this.ctx);
     this.state = r.state;
@@ -515,6 +581,24 @@ class OverlaySession {
     }
     this.broadcast();
   };
+
+  /** A size typed into the bar (STC-456). The field sends pixels; `sizedState`
+   * turns them into a region. It is a marquee change like a handle drag, so
+   * it clears `fullDisplay` through the same `fullDisplayFor` rule and
+   * re-confirms `pending` the way `expand` does. */
+  private onSize(width: number, height: number): void {
+    if (this.phase !== "options") return;
+    const anchor = this.anchorRect();
+    const d = this.displayForSelection();
+    if (!anchor || !d) return;
+    const prevRect = this.state.rect;
+    this.state = sizedState(this.state, anchor, d, width, height);
+    this.options = { ...this.options,
+      fullDisplay: fullDisplayFor(this.options.fullDisplay, false, prevRect, this.state.rect) };
+    const outcome = confirm(this.state, this.ctx);
+    if (outcome) this.setPending(outcome);
+    this.broadcast();
+  }
 
   /**
    * A press on the options bar. Only reachable in the options phase, which only
@@ -550,22 +634,33 @@ class OverlaySession {
         this.options = {
           ...this.options,
           fullDisplay: fullDisplayFor(this.options.fullDisplay, true, prevRect, this.state.rect),
-          // STC-456 interim — Task 6 replaces this.
           openMenu: null,
         };
         const outcome = confirm(this.state, this.ctx);
         if (outcome) this.setPending(outcome);
         return this.broadcast();
       }
+      case "crop":
+        // Back to drawing a region. The options phase ends with it: a fresh
+        // release re-enters it through nextPhase, exactly as the first one did.
+        this.state = croppedState(this.state);
+        this.phase = "select";
+        this.setPending(undefined);
+        this.options = { ...this.options, fullDisplay: false, openMenu: null };
+        return this.broadcast();
+      case "settings":
+        this.afterClose = "settings";
+        return void this.finish({ kind: "cancelled" });
       case "mic":
         if (this.options.mics.length === 0) return;
-        // STC-456 interim — Task 6 replaces this.
-        this.options = { ...this.options, openMenu: this.options.openMenu === "mic" ? null : "mic" };
+        this.options = { ...this.options, openMenu: toggleMenu(this.options.openMenu, "mic") };
         return this.broadcast();
       case "camera":
-        // STC-456 interim — Task 6 replaces this.
-        this.options = { ...this.options, camera: !this.options.camera, openMenu: null };
+        this.options = { ...this.options, openMenu: toggleMenu(this.options.openMenu, "camera") };
         return this.broadcast();
+      case "keys":
+      case "clicks":
+        return;   // disabled slots, STC-419 / STC-420
       case "record": {
         // FINDING 1 (STC-388 review, CRITICAL). `pending` used to be commit-
         // time truth unconditionally, but region mode's `reduce` (selection.ts)
@@ -671,6 +766,7 @@ class OverlaySession {
     this.settle({
       outcome, excludeWindowIds,
       ...(this.opts.purpose === "record" ? { options: this.options } : {}),
+      ...(this.afterClose ? { afterClose: this.afterClose } : {}),
     });
   }
 }
