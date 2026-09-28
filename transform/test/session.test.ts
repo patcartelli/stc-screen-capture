@@ -5,6 +5,7 @@ import { loadSession, rebaseMicAudio, SessionLoadError } from "../src/session.js
 import type { Anchors } from "../src/types.js";
 import type { DemuxedAudio } from "../src/demux-audio.js";
 import { memorySource } from "../src/chunk-reader.js";
+import { geometryAt } from "../src/display-geometry.js";
 
 const root = join(__dirname, "..", "..");
 const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
@@ -209,6 +210,69 @@ describe("loader accepts v1 through v7 anchors", () => {
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
     })).rejects.toThrow(SessionLoadError);
+  });
+
+  // STC-235, found on the first hardware run: display.mp4 stores the
+  // session-start gap as an empty edit at a 90 kHz movie timescale, so every
+  // demuxed PTS sits a sub-tick amount (-10583 ns on that take) off the
+  // helper's clock. A refit's startNs is in the helper's clock; the frame it
+  // names demuxes slightly EARLIER, and geometryAt (comparing startNs to the
+  // demuxed PTS) used to pick the OLD geometry for the first refitted frame.
+  describe("v7 geometry startNs snapped onto the demuxed frame grid", () => {
+    const display = { id: 1, pointWidth: 640, pointHeight: 360, pixelWidth: 640, pixelHeight: 360,
+                      backingScale: 1, originX: 0, originY: 0 };
+    const full = { x: 0, y: 0, width: 640, height: 360 };
+    const pillar = { x: 80, y: 0, width: 480, height: 360 };
+    const frames: number[] = load("fixtures/offset/frames.json");
+    const v7 = (startNs1: number) => offsetAnchors({
+      version: 7,
+      geometry: [
+        { startNs: 250_000_000, display, contentRect: full },
+        { startNs: startNs1, display, contentRect: pillar },
+      ],
+    } as any);
+    const open = (anchors: any) => loadSession({
+      anchors,
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    });
+
+    test("a refit startNs one empty-edit quantum AFTER a frame's demuxed PTS snaps to that frame", async () => {
+      const f = frames[5]!;
+      const anchors = v7(f + 10_583);
+      const s = await open(anchors);
+      expect(s.anchors.geometry![1]!.startNs).toBe(f);
+      expect(s.frames).toContain(s.anchors.geometry![1]!.startNs);
+      // the frame at that PTS now selects the refitted geometry, not entry 0
+      expect(geometryAt(s.anchors, f).contentRect).toEqual(pillar);
+      // and the frame before it still selects the old one
+      expect(geometryAt(s.anchors, frames[4]!).contentRect).toEqual(full);
+      // entry 0 is untouched, and the caller's document is not mutated
+      expect(s.anchors.geometry![0]!.startNs).toBe(250_000_000);
+      expect(anchors.geometry[1].startNs).toBe(f + 10_583);
+    });
+
+    test("a refit startNs past the last frame is left unchanged and the take still loads", async () => {
+      const past = frames[frames.length - 1]! + 1_000_000;
+      const s = await open(v7(past));
+      expect(s.anchors.geometry![1]!.startNs).toBe(past);
+      expect(geometryAt(s.anchors, frames[frames.length - 1]!).contentRect).toEqual(full);
+    });
+
+    test("two refits landing on the same frame collapse to the LATER one", async () => {
+      const f = frames[5]!;
+      const late = { x: 160, y: 0, width: 320, height: 360 };
+      const s = await open(offsetAnchors({
+        version: 7,
+        geometry: [
+          { startNs: 250_000_000, display, contentRect: full },
+          { startNs: frames[4]! + 100_000, display, contentRect: pillar },
+          { startNs: f + 10_583, display, contentRect: late },
+        ],
+      } as any));
+      expect(s.anchors.geometry!.map((e) => e.startNs)).toEqual([250_000_000, f]);
+      expect(geometryAt(s.anchors, f).contentRect).toEqual(late);
+    });
   });
 
   test("a version 2 events document loads, cursor events included", async () => {

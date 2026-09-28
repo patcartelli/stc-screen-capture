@@ -157,36 +157,44 @@ describe("display hot-swap refit (STC-235)", () => {
     expect(anchors.geometry[0].startNs).toBe(anchors.capture.firstFrameNs ?? 0);
     expect(anchors.geometry[1].contentRect.width).toBeLessThan(anchors.capture.width);
 
-    // The recorded startNs must be a REAL frame's PTS, not merely a plausible
-    // number — the shared demux is what `render()` itself uses to find frames.
+    // The warning that reports the landing — CLAUDE.md's own record of what
+    // shipped: sent from refitQueue, never the capture callback. Compared
+    // against the RAW document: both are the helper's own number.
+    const rawStartNs: number = anchors.geometry[1].startNs;
+    const warning = h.fd3.find((l) => l.ev === "warning" && l.code === "display-refit");
+    expect(warning, "no display-refit warning arrived").toBeDefined();
+    expect(warning!.startNs).toBe(rawStartNs);
+
+    // loadSession must accept the take end to end — and the entry must name a
+    // REAL frame, read the way `render()` reads it. Not the raw startNs
+    // against the demuxed PTS: display.mp4 stores the session-start gap as a
+    // 90 kHz empty edit, so every demuxed PTS sits a sub-tick amount off the
+    // helper's clock (-10583 ns on the first hardware run) and the raw number
+    // is never exactly a frame. loadSession snaps each entry onto the file's
+    // clock (session.ts's snapGeometryToFrames); the loaded entry must be a
+    // frame, and within the same 50 us tolerance checkFrameOffset allows.
     const mp4Path = join(dir, "display.mp4");
     const buf = readFileSync(mp4Path);
     const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
-    const { demuxTrack } = await import("../../transform/src/demux.js");
     const { memorySource } = await import("../../transform/src/chunk-reader.js");
-    const video = await demuxTrack(memorySource(ab, "display.mp4"), "display.mp4");
-    expect(video.framesNs).toContain(anchors.geometry[1].startNs);
-
-    // The warning that reports the landing — CLAUDE.md's own record of what
-    // shipped: sent from refitQueue, never the capture callback.
-    const warning = h.fd3.find((l) => l.ev === "warning" && l.code === "display-refit");
-    expect(warning, "no display-refit warning arrived").toBeDefined();
-    expect(warning!.startNs).toBe(anchors.geometry[1].startNs);
-
-    // loadSession must accept the take end to end.
     const { loadSession } = await import("../../transform/src/session.js");
     const events = JSON.parse(readFileSync(join(dir, "events.json"), "utf8"));
-    await loadSession({
+    const loaded = await loadSession({
       anchors,
       events,
       displayMp4: memorySource(ab, "display.mp4"),
     });
+    const loadedStartNs = loaded.anchors.geometry![1]!.startNs;
+    expect(loaded.frames).toContain(loadedStartNs);
+    expect(Math.abs(rawStartNs - loadedStartNs), `raw ${rawStartNs} vs frame ${loadedStartNs}`)
+      .toBeLessThanOrEqual(50_000);
 
     // The pixels: half a second after the refit lands, the computed
     // contentRect should show real content, and outside it should be the
-    // forced pillarbox's black bars.
+    // forced pillarbox's black bars. Timed off the loaded (file-clock) start,
+    // since the probe seeks the file.
     const rect = anchors.geometry[1].contentRect;
-    const tSeconds = (anchors.geometry[1].startNs + 0.5e9) / 1e9;
+    const tSeconds = (loadedStartNs + 0.5e9) / 1e9;
     const { outside, inside } = await probeLuma(mp4Path, tSeconds, rect);
     expect(outside, `LUMA_OUTSIDE=${outside} — expected near-black bars`).toBeLessThan(8);
     expect(inside, `LUMA_INSIDE=${inside} should read brighter than the bars (${outside})`).toBeGreaterThan(outside);
