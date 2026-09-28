@@ -516,6 +516,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
         do {
             try setupWriter()
+            armStartPausedFault()
             try startStream(filter: target.filter, sourceRect: target.sourceRect) { [weak self] err in
                 guard let self else { return }
                 if let err {
@@ -668,6 +669,32 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.displayChanged()
             }
         }
+    }
+
+    /// `STC_CAPTURE_START_PAUSED=1` (STC-235): the take is PAUSED from its
+    /// first instant — engaged in `begin()` after the writer exists and before
+    /// `startStream` is even called, so no stream exists yet and no frame can
+    /// be accepted ahead of it; the event tap is created but not yet on a run
+    /// loop and the cursor sampler has not started, so no event can precede it
+    /// either. It goes through `pause()` itself — the method the `pause`
+    /// command reaches through `main.swift`'s `setPaused` — so `anchors.pauses`,
+    /// the synthetic held-button releases and every writer's pause gate behave
+    /// exactly as a real pause a few milliseconds after t0 would. Nothing new
+    /// happens on a capture callback: this runs on the `SCShareableContent`
+    /// callback thread that `begin()` already runs on, before the stream that
+    /// owns `screenQueue` exists. A later `resume` command ends it as usual.
+    ///
+    /// A variable of its own, not an `STC_CAPTURE_FAULT` value, so it combines
+    /// with one: the grant test pairs it with `=display-refit` for "paused from
+    /// the start through a letterboxing refit", a precondition a `pause`
+    /// COMMAND could not reach — on real hardware the first frame was always
+    /// written before the command's round trip landed. Driven by
+    /// helper/test/display-refit.grant.test.ts.
+    private func armStartPausedFault() {
+        guard let v = ProcessInfo.processInfo.environment["STC_CAPTURE_START_PAUSED"],
+              !v.isEmpty, v != "0" else { return }
+        let engaged = pause()
+        IO.log("STC_CAPTURE_START_PAUSED=\(v): the take is paused from the start (engaged: \(engaged))")
     }
 
     /// The window's current bounds, in points, via Quartz Window Services
@@ -1220,6 +1247,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         setCurrentDisplay(next.geometry)
         currentShape = next
         lock.unlock()
+        // The one observable moment a refit's geometry becomes pending — the
+        // `display-refit` warning only fires once a frame is WRITTEN, which a
+        // paused take never does. The grant test's paused-from-start case
+        // waits on this line before it resumes. On refitQueue, never the
+        // capture callback.
+        IO.log("refit: geometry armed (path: \(path), rect: \(next.rect.x),\(next.rect.y) \(next.rect.width)x\(next.rect.height)); lands on the next written frame")
         return true
     }
 

@@ -48,11 +48,12 @@ npm run test:capture -- helper/test/display-refit.grant.test.ts
 
 Expected with both grants: **5 passed** — `refit`, `refit while paused`,
 `paused from the start` (the geometry-unrepresentable stop), `display-gone`,
-and the no-fault `control`. The paused-from-start case measures its own
-precondition (no frame written before the pause) from the 50 ms heartbeat and
-retries up to 3 times if a frame beats the pause; if all 3 miss it FAILS with
-a message saying the precondition was never met — that is a harness outcome
-on a fast machine, not a helper bug, and worth reporting as such. Without the grant(s), every test
+and the no-fault `control`. The paused-from-start case starts the helper with
+`STC_CAPTURE_START_PAUSED=1`, which engages the take's own `pause()` before the
+stream exists, so no frame can beat it — the first hardware run showed a
+`pause` COMMAND never could (the first frame was always written first), so the
+old measure-and-retry version never tested anything. It waits for the helper's
+`refit: geometry armed` stderr line before resuming. Without the grant(s), every test
 throws `SKIP-GRANT` (Screen Recording) or the Input Monitoring variant of the
 same message, naming which one — that is what this session's own run showed
 (`code: "no-displays"`, `-3801`), and it is not a code finding, only an

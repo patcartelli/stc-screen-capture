@@ -56,10 +56,19 @@ function spawnHelper(env: Record<string, string> = {}, args: string[] = []) {
   const out: Line[] = [], fd3: Line[] = [];
   collect(proc.stdout!, out);
   collect(proc.stdio[3] as Readable, fd3);
+  // stderr is `IO.log`'s plain-text diagnostics; kept (never left to back up)
+  // so a case can wait on a line nothing on fd3 reports.
+  const err: string[] = [];
+  let errBuf = "";
+  proc.stderr!.on("data", (c: Buffer) => {
+    errBuf += c.toString("utf8");
+    let i: number;
+    while ((i = errBuf.indexOf("\n")) >= 0) { err.push(errBuf.slice(0, i)); errBuf = errBuf.slice(i + 1); }
+  });
   proc.stderr!.resume();
   let seq = 100;
   return {
-    out, fd3,
+    out, fd3, err,
     send: (c: object) => proc.stdin!.write(JSON.stringify(c) + "\n"),
     request: async (c: object, ms = 15_000): Promise<Line> => {
       const s = ++seq;
@@ -250,59 +259,53 @@ describe("display hot-swap refit (STC-235)", () => {
   // with the wrong mapping (Task 10, deviation 9): `display-reconfigured`,
   // no geometry.
   //
-  // Not deterministic in one shot: `started` precedes the first frame by an
-  // unknown margin, and a frame that lands before the pause turns this into
-  // the refit case above. So the precondition is MEASURED, not assumed (the
-  // heartbeat's written-frame count, read after the pause has settled), and
-  // an attempt that misses it is discarded and retried — never counted as a
-  // pass. If every attempt misses, the test FAILS saying so rather than
-  // skipping: a skip here would read as covered.
+  // The precondition is ENGAGED, not raced for: `STC_CAPTURE_START_PAUSED=1`
+  // runs the take's own `pause()` inside `begin()`, before the stream exists
+  // (Capture.swift's `armStartPausedFault`). The first hardware run showed a
+  // `pause` COMMAND could never reach it — the first frame was always written
+  // before the round trip landed, and the old measure-and-retry version of
+  // this case threw on all three attempts without testing anything.
   test("paused from the start through a letterboxing refit: the take stops, geometry unrepresentable", async () => {
-    const ATTEMPTS = 3;
-    for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-      const h = spawnHelper({ STC_CAPTURE_FAULT: "display-refit", STC_DISPLAY_FAULT_DELAY_MS: "1000" }, FAST_HEARTBEAT);
-      await waitFor(() => find(h.fd3, "ready"));
-      const dir = session();
-      await startOrExplain(h, { dir }, "paused-from-start refit (STC-235)");
-      const paused = await h.request({ cmd: "pause" }, 10_000);
-      expect(paused.ev).toBe("paused");
+    const FAULT_DELAY_MS = 1000;
+    const h = spawnHelper({ STC_CAPTURE_FAULT: "display-refit",
+                            STC_DISPLAY_FAULT_DELAY_MS: String(FAULT_DELAY_MS),
+                            STC_CAPTURE_START_PAUSED: "1" }, FAST_HEARTBEAT);
+    await waitFor(() => find(h.fd3, "ready"));
+    const dir = session();
+    await startOrExplain(h, { dir }, "paused-from-start refit (STC-235)");
+    expect(h.err.some((l) => l.includes("STC_CAPTURE_START_PAUSED=1") && l.includes("engaged: true")),
+      `the helper never reported the start pause:\n${h.err.join("\n")}`).toBe(true);
 
-      // A frame whose PTS predates the pause can still be delivered (and
-      // written) just after the reply, so the count is read from a heartbeat
-      // sent a little later, not the first one after the reply.
-      await sleep(200);
-      const mark = h.out.length;
-      const beat = await waitFor(() => lastStats(h.out, mark), 2_000, "a heartbeat after the pause settled");
-      if (beat.frames > 0) {
-        h.kill();
-        continue;       // precondition missed: a frame beat the pause; try again
-      }
+    // The refit's geometry is ARMED while paused — the helper's own stderr
+    // line, since the fd3 `display-refit` warning fires only once a frame is
+    // written. Bounded: the fault delay, the 250 ms debounce, the SCK update.
+    await waitFor(() => h.err.some((l) => l.includes("refit: geometry armed")), FAULT_DELAY_MS + 10_000,
+      "the refit's geometry to be armed while paused");
+    // Still paused, and still nothing written: the precondition, checked on
+    // a heartbeat sent after the refit was armed.
+    const mark = h.out.length;
+    const beat = await waitFor(() => lastStats(h.out, mark), 2_000, "a heartbeat after the refit was armed");
+    expect(beat.paused, "the take is not paused").toBe(true);
+    expect(beat.frames, "a frame was written before resume — the pause did not hold from the start").toBe(0);
 
-      // Past the fault (1 s), its debounce and the refit — all inside the pause.
-      await sleep(2000);
-      const resumed = await h.request({ cmd: "resume" }, 10_000);
-      expect(resumed.ev).toBe("resumed");
+    const resumed = await h.request({ cmd: "resume" }, 10_000);
+    expect(resumed.ev).toBe("resumed");
+    expect(resumed.changed).toBe(true);
 
-      // Unsolicited: the first frame after resume is refused and the take ends.
-      const stopped = await waitFor(
-        () => h.fd3.find((l) => l.ev === "stopped" && typeof l.seq !== "number"),
-        15_000, "an unsolicited `stopped` after resume");
-      expect(stopped.reason).toBe("display-reconfigured");
-      expect(stopped.frames, "a frame was written under an unrepresentable geometry").toBe(0);
+    // Unsolicited: the first frame after resume is refused and the take ends.
+    const stopped = await waitFor(
+      () => h.fd3.find((l) => l.ev === "stopped" && typeof l.seq !== "number"),
+      15_000, "an unsolicited `stopped` after resume");
+    expect(stopped.reason).toBe("display-reconfigured");
+    expect(stopped.frames, "a frame was written under an unrepresentable geometry").toBe(0);
 
-      const anchors = loadRawAnchors(dir);
-      expect(anchors.geometry).toBeUndefined();
-      expect(anchors.stop?.reason).toBe("display-reconfigured");
-      const validate = validateAny.compile(
-        JSON.parse(readFileSync(join(root, `schema/anchors-${anchors.version}.schema.json`), "utf8")));
-      expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
-      return;
-    }
-    throw new Error(
-      `in ${ATTEMPTS} attempts a frame was always written before the pause took effect, so the ` +
-      "paused-from-start precondition was never met and nothing was tested. This is a test-harness " +
-      "outcome, not a helper failure: the machine delivers its first frame faster than a pause round trip.");
-  }, 120_000);
+    const anchors = loadRawAnchors(dir);
+    expect(anchors.geometry).toBeUndefined();
+    expect(anchors.stop?.reason).toBe("display-reconfigured");
+    const validate = validateAny.compile(
+      JSON.parse(readFileSync(join(root, `schema/anchors-${anchors.version}.schema.json`), "utf8")));
+    expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
+  }, 60_000);
 
   test("display-gone: the captured display disappearing stops the take, not a refit", async () => {
     const h = spawnHelper({ STC_CAPTURE_FAULT: "display-gone" });
