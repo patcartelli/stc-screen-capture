@@ -8,6 +8,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { fakeDisplayIds } from "./_fake-displays.mjs";
 
 /**
  * The display picker (STC-247), end to end through the real app: the real IPC
@@ -51,6 +52,12 @@ async function launch(opts: { userData: string; recordings: string; startLog?: s
   return win;
 }
 
+// The stand-in's display ids follow the machine's real primary display
+// (STC-464), so they are read, never written as "1" and "2".
+const IDS = fakeDisplayIds();
+const BUILT_IN = String(IDS.builtIn);
+const EXTERNAL = String(IDS.external);
+
 const optionValues = (win: any) =>
   win.$$eval("#display option", (os: HTMLOptionElement[]) => os.map((o) => o.value));
 const optionTexts = (win: any) =>
@@ -62,7 +69,7 @@ describe("the display picker", () => {
     const { dir: recordings } = makeTakeFolder();
     const win = await launch({ userData, recordings });
 
-    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", "1", "2"]);
+    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", BUILT_IN, EXTERNAL]);
     const texts = await optionTexts(win);
     expect(texts[0]).toBe("Automatic");
     expect(texts[1]).toContain("Built-in Display");
@@ -77,14 +84,14 @@ describe("the display picker", () => {
     const { dir: recordings } = makeTakeFolder();
 
     let win = await launch({ userData, recordings });
-    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", "1", "2"]);
-    await win.selectOption("#display", "2");
-    await expect.poll(() => win.inputValue("#display")).toBe("2");
+    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", BUILT_IN, EXTERNAL]);
+    await win.selectOption("#display", EXTERNAL);
+    await expect.poll(() => win.inputValue("#display")).toBe(EXTERNAL);
     await app!.close();
     app = undefined;
 
     win = await launch({ userData, recordings });
-    await expect.poll(() => win.inputValue("#display"), { timeout: 20_000 }).toBe("2");
+    await expect.poll(() => win.inputValue("#display"), { timeout: 20_000 }).toBe(EXTERNAL);
   }, 180_000);
 
   // STC-388 found this test asserting the OLD contract and it is restated
@@ -172,17 +179,17 @@ describe("the display picker", () => {
     const { dir: recordings } = makeTakeFolder();
 
     let win = await launch({ userData, recordings });
-    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", "1", "2"]);
-    await win.selectOption("#display", "2");
-    await expect.poll(() => win.inputValue("#display")).toBe("2");
+    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", BUILT_IN, EXTERNAL]);
+    await win.selectOption("#display", EXTERNAL);
+    await expect.poll(() => win.inputValue("#display")).toBe(EXTERNAL);
     await app!.close();
     app = undefined;
 
-    const onlyMain = JSON.stringify([{ id: 1, main: true, name: "Built-in Display", pointW: 1800, pointH: 1169,
+    const onlyMain = JSON.stringify([{ id: IDS.builtIn, main: true, name: "Built-in Display", pointW: 1800, pointH: 1169,
                                        pixelW: 3600, pixelH: 2338, originX: 0, originY: 0 }]);
     win = await launch({ userData, recordings, displays: onlyMain });
-    await expect.poll(() => win.inputValue("#display"), { timeout: 20_000 }).toBe("2");
+    await expect.poll(() => win.inputValue("#display"), { timeout: 20_000 }).toBe(EXTERNAL);
     const texts = await optionTexts(win);
-    expect(texts.at(-1)).toBe("Display 2 (not connected)");
+    expect(texts.at(-1)).toBe(`Display ${EXTERNAL} (not connected)`);
   }, 180_000);
 });
