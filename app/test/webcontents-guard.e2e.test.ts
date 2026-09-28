@@ -49,4 +49,23 @@ describe("web-contents-created guard (STC-466)", () => {
     expect(win.url()).toBe(before);
     expect(win.isClosed()).toBe(false);
   }, 60_000);
+
+  // STC-466 review follow-up: the guard's first cut denied every permission
+  // request unconditionally, which would have silently broken the editor's
+  // Publish flow (`editor.ts`'s `navigator.clipboard.writeText`) — the one
+  // Electron permission this app's renderers actually use. This drives the
+  // real web API through the real permission-request handler rather than
+  // asserting on the handler's source, since the whole point is to catch a
+  // regression a static read of the code could miss.
+  test("allows a clipboard write from the renderer — the guard is not a bare deny-all", async () => {
+    const { dir } = makeTakeFolder();
+    const { app: a, win } = await launchApp(dir);
+    app = a;
+
+    const wrote = await win.evaluate(async () => {
+      try { await navigator.clipboard.writeText("stc-466 clipboard probe"); return true; }
+      catch { return false; }
+    });
+    expect(wrote).toBe(true);
+  }, 60_000);
 });
