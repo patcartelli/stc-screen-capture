@@ -273,8 +273,9 @@ describe("display hot-swap refit (STC-235)", () => {
     await waitFor(() => find(h.fd3, "ready"));
     const dir = session();
     await startOrExplain(h, { dir }, "paused-from-start refit (STC-235)");
-    expect(h.err.some((l) => l.includes("STC_CAPTURE_START_PAUSED=1") && l.includes("engaged: true")),
-      `the helper never reported the start pause:\n${h.err.join("\n")}`).toBe(true);
+    // stderr and fd3 are separate pipes: the log line can arrive after `started`.
+    await waitFor(() => h.err.some((l) => l.includes("STC_CAPTURE_START_PAUSED=1") && l.includes("engaged: true")),
+      2_000, `the helper to report the start pause (stderr so far:\n${h.err.join("\n")})`);
 
     // The refit's geometry is ARMED while paused — the helper's own stderr
     // line, since the fd3 `display-refit` warning fires only once a frame is
@@ -289,6 +290,17 @@ describe("display hot-swap refit (STC-235)", () => {
     expect(beat.frames, "a frame was written before resume — the pause did not hold from the start").toBe(0);
 
     const resumed = await h.request({ cmd: "resume" }, 10_000);
+    if (resumed.ev === "error") {
+      // The take had already ended before resume: most likely the refit's
+      // confirmation timeout (REFIT_FRAME_TIMEOUT_MS) fired while paused from
+      // t0 — a different outcome from the documented one, and worth naming.
+      const early = h.fd3.find((l) => l.ev === "stopped" && typeof l.seq !== "number");
+      throw new Error(
+        "resume was refused — the take had already stopped while paused from t0 (likely the refit's " +
+        "confirmation timeout, REFIT_FRAME_TIMEOUT_MS, expiring with no confirming frame). " +
+        `resume said: ${JSON.stringify(resumed)}; unsolicited stopped: ` +
+        (early ? `reason ${JSON.stringify(early.reason)} (${JSON.stringify(early)})` : "none seen"));
+    }
     expect(resumed.ev).toBe("resumed");
     expect(resumed.changed).toBe(true);
 
