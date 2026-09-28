@@ -15,6 +15,10 @@
  * mic's). Passing or omitting `autoLabel` is a type-level fork, not a
  * runtime flag, so a call site cannot forget which kind of picker it is
  * building.
+ *
+ * STC-456 made this the ONE row model for the bar's menus AND the main
+ * window's popover: `MenuRow`, `micMenuRows`, `cameraMenuRows` and
+ * `applyMenuPick` handle both surfaces, so UI changes land in one place.
  */
 
 export interface DeviceLike {
@@ -89,4 +93,68 @@ export type PopoverId = "mic" | "camera";
  */
 export function decidePopoverToggle(current: PopoverId | null, clicked: PopoverId): PopoverId | null {
   return current === clicked ? null : clicked;
+}
+
+export const MENU_LABELS = {
+  systemAudio: "Include System Audio",
+  muteExternal: "Mute External",
+  noCamera: "No Camera",
+  autoCamera: "Automatic",
+  stale: "(not connected)",
+} as const;
+
+export type MenuIcon = "system-audio" | "mic" | "mic-off" | "camera" | "camera-off";
+export type MenuPick =
+  | { kind: "toggle-system-audio" }
+  | { kind: "choice"; menu: "mic" | "camera"; choice: DeviceChoice };
+export interface MenuRow {
+  /** Stable and unique within one menu: what the DOM row carries as data-key. */
+  key: string;
+  pick: MenuPick;
+  label: string;
+  icon: MenuIcon;
+  checked: boolean;
+  /** A toggle keeps the menu open; a choice closes it. */
+  closesMenu: boolean;
+}
+export interface DeviceSelection {
+  micDeviceUid: string | null;
+  systemAudio: boolean;
+  camera: boolean;
+  cameraDeviceUid: string | null;
+}
+
+const keyOf = (c: DeviceChoice): string => (c.kind === "device" ? `device:${c.uid}` : c.kind);
+
+export function micMenuRows(mics: DeviceLike[], s: DeviceSelection): MenuRow[] {
+  const current: DeviceChoice = s.micDeviceUid == null ? { kind: "off" } : { kind: "device", uid: s.micDeviceUid };
+  const choices = deviceRows({ devices: mics, current, offLabel: MENU_LABELS.muteExternal, staleLabel: MENU_LABELS.stale });
+  return [
+    { key: "system-audio", pick: { kind: "toggle-system-audio" }, label: MENU_LABELS.systemAudio,
+      icon: "system-audio", checked: s.systemAudio, closesMenu: false },
+    ...choices.map((r): MenuRow => ({
+      key: keyOf(r.choice), pick: { kind: "choice", menu: "mic", choice: r.choice }, label: r.label,
+      icon: r.choice.kind === "off" ? "mic-off" : "mic", checked: r.selected, closesMenu: true,
+    })),
+  ];
+}
+
+export function cameraMenuRows(cameras: DeviceLike[], s: DeviceSelection): MenuRow[] {
+  const current: DeviceChoice = !s.camera ? { kind: "off" }
+    : s.cameraDeviceUid == null ? { kind: "auto" } : { kind: "device", uid: s.cameraDeviceUid };
+  return deviceRows({ devices: cameras, current, offLabel: MENU_LABELS.noCamera,
+                      autoLabel: MENU_LABELS.autoCamera, staleLabel: MENU_LABELS.stale })
+    .map((r): MenuRow => ({
+      key: keyOf(r.choice), pick: { kind: "choice", menu: "camera", choice: r.choice }, label: r.label,
+      icon: r.choice.kind === "off" ? "camera-off" : "camera", checked: r.selected, closesMenu: true,
+    }));
+}
+
+/** What a row press does to the selection: the ONE place, for both surfaces. */
+export function applyMenuPick(s: DeviceSelection, pick: MenuPick): DeviceSelection {
+  if (pick.kind === "toggle-system-audio") return { ...s, systemAudio: !s.systemAudio };
+  const c = pick.choice;
+  if (pick.menu === "mic") return { ...s, micDeviceUid: c.kind === "device" ? c.uid : null };
+  if (c.kind === "off") return { ...s, camera: false };
+  return { ...s, camera: true, cameraDeviceUid: c.kind === "device" ? c.uid : null };
 }

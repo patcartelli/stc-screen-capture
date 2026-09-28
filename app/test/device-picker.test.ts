@@ -103,3 +103,90 @@ describe("decidePopoverToggle", () => {
     expect(decidePopoverToggle("mic", "camera")).toBe("camera");
   });
 });
+
+import { micMenuRows, cameraMenuRows, applyMenuPick, MENU_LABELS, type DeviceSelection } from "../src/device-picker.js";
+
+const sel = (over: Partial<DeviceSelection> = {}): DeviceSelection =>
+  ({ micDeviceUid: null, systemAudio: false, camera: false, cameraDeviceUid: null, ...over });
+const micsTest = [{ name: "Elgato Wave:3", uid: "wave" }, { name: "iPhone Microphone", uid: "iphone" }];
+const camsTest = [{ name: "Elgato Facecam 4k", uid: "facecam" }, { name: "Camera 2", uid: "cam2" }];
+
+describe("micMenuRows (STC-456)", () => {
+  test("system audio, then Mute External, then every device — the design's order", () => {
+    expect(micMenuRows(micsTest, sel()).map((r) => r.label)).toEqual(
+      [MENU_LABELS.systemAudio, MENU_LABELS.muteExternal, "Elgato Wave:3", "iPhone Microphone"]);
+  });
+  test("system audio and the mic are checked INDEPENDENTLY — two checks can show at once", () => {
+    const rows = micMenuRows(micsTest, sel({ systemAudio: true, micDeviceUid: "wave" }));
+    expect(rows.filter((r) => r.checked).map((r) => r.label)).toEqual([MENU_LABELS.systemAudio, "Elgato Wave:3"]);
+  });
+  test("no mic chosen checks Mute External", () => {
+    expect(micMenuRows(micsTest, sel()).find((r) => r.checked)?.label).toBe(MENU_LABELS.muteExternal);
+  });
+  test("toggling system audio keeps the menu open; picking a mic closes it", () => {
+    const rows = micMenuRows(micsTest, sel());
+    expect(rows[0]!.closesMenu).toBe(false);
+    expect(rows.slice(1).every((r) => r.closesMenu)).toBe(true);
+  });
+  test("icons: laptop for system audio, mic-off for mute, mic for devices", () => {
+    expect(micMenuRows(micsTest, sel()).map((r) => r.icon)).toEqual(["system-audio", "mic-off", "mic", "mic"]);
+  });
+  test("a stale mic uid shows as itself, checked", () => {
+    const rows = micMenuRows(micsTest, sel({ micDeviceUid: "gone" }));
+    expect(rows.at(-1)).toMatchObject({ label: MENU_LABELS.stale, checked: true });
+  });
+  test("keys are unique, so the DOM can find a row by key", () => {
+    const keys = micMenuRows(micsTest, sel({ micDeviceUid: "gone" })).map((r) => r.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe("cameraMenuRows (STC-456)", () => {
+  test("No Camera, Automatic, then every device", () => {
+    expect(cameraMenuRows(camsTest, sel()).map((r) => r.label)).toEqual(
+      [MENU_LABELS.noCamera, MENU_LABELS.autoCamera, "Elgato Facecam 4k", "Camera 2"]);
+  });
+  test("camera off checks No Camera even with a device uid stored", () => {
+    const rows = cameraMenuRows(camsTest, sel({ camera: false, cameraDeviceUid: "facecam" }));
+    expect(rows.filter((r) => r.checked).map((r) => r.label)).toEqual([MENU_LABELS.noCamera]);
+  });
+  test("camera on with a uid checks that device", () => {
+    const rows = cameraMenuRows(camsTest, sel({ camera: true, cameraDeviceUid: "facecam" }));
+    expect(rows.find((r) => r.checked)?.label).toBe("Elgato Facecam 4k");
+  });
+  test("a stored camera that is gone shows as itself, checked (Review Focus 5)", () => {
+    const rows = cameraMenuRows(camsTest, sel({ camera: true, cameraDeviceUid: "gone" }));
+    expect(rows.at(-1)).toMatchObject({ label: MENU_LABELS.stale, checked: true });
+  });
+  test("every camera row closes the menu", () => {
+    expect(cameraMenuRows(camsTest, sel()).every((r) => r.closesMenu)).toBe(true);
+  });
+});
+
+describe("applyMenuPick (STC-456)", () => {
+  test("toggle-system-audio flips ONLY systemAudio (Review Focus 4)", () => {
+    expect(applyMenuPick(sel({ micDeviceUid: "wave" }), { kind: "toggle-system-audio" }))
+      .toEqual(sel({ micDeviceUid: "wave", systemAudio: true }));
+  });
+  test("a mic pick sets the uid and leaves system audio alone", () => {
+    const s = applyMenuPick(sel({ systemAudio: true }), { kind: "choice", menu: "mic", choice: { kind: "device", uid: "wave" } });
+    expect(s).toEqual(sel({ systemAudio: true, micDeviceUid: "wave" }));
+  });
+  test("off from the MIC menu clears the mic; it does not turn the camera off", () => {
+    const s = applyMenuPick(sel({ camera: true, micDeviceUid: "wave" }), { kind: "choice", menu: "mic", choice: { kind: "off" } });
+    expect(s).toEqual(sel({ camera: true }));
+  });
+  test("off from the CAMERA menu turns the camera off and keeps the uid", () => {
+    const s = applyMenuPick(sel({ camera: true, cameraDeviceUid: "facecam" }),
+      { kind: "choice", menu: "camera", choice: { kind: "off" } });
+    expect(s).toEqual(sel({ camera: false, cameraDeviceUid: "facecam" }));
+  });
+  test("a camera device pick turns the camera ON and sets the uid", () => {
+    expect(applyMenuPick(sel(), { kind: "choice", menu: "camera", choice: { kind: "device", uid: "cam2" } }))
+      .toEqual(sel({ camera: true, cameraDeviceUid: "cam2" }));
+  });
+  test("Automatic turns the camera on with a null uid (the helper's pickCamera ranking)", () => {
+    expect(applyMenuPick(sel({ cameraDeviceUid: "cam2" }), { kind: "choice", menu: "camera", choice: { kind: "auto" } }))
+      .toEqual(sel({ camera: true, cameraDeviceUid: null }));
+  });
+});
