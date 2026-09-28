@@ -18,6 +18,7 @@ import {
 } from "./still-io.js";
 import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite } from "@transform/shot.js";
+import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
@@ -395,65 +396,76 @@ function reconcileWindowRecording(): void {
  * PREVIOUS run left behind with no panel and no clean stop to claim it.
  */
 async function recoverUnsavedTakes(): Promise<void> {
-  await purgeStaleTempTakes(process.env).catch((e) => {
-    console.error("[temp-takes] purge failed:", e);
-    return [];
-  });
-  const orphaned = await listTempTakes(process.env).catch((e) => {
-    console.error("[temp-takes] could not list temp storage:", e);
-    return [];
-  });
-  if (orphaned.length === 0) return;
+  // Adjacent to STC-468: called `void` at the end of `app.whenReady()`, with
+  // nothing to catch a rejection. The purge and the list already have their
+  // own `.catch`, but `dialog.showMessageBox` below did not, and neither did
+  // the per-take recovery loop as a WHOLE (only individual takes inside it
+  // were guarded) — a throw from anywhere else in this function used to be an
+  // unhandled rejection at startup. Wrapped the same way `captureStill`
+  // wraps a whole request: reported, never silently fatal.
+  try {
+    await purgeStaleTempTakes(process.env).catch((e) => {
+      console.error("[temp-takes] purge failed:", e);
+      return [];
+    });
+    const orphaned = await listTempTakes(process.env).catch((e) => {
+      console.error("[temp-takes] could not list temp storage:", e);
+      return [];
+    });
+    if (orphaned.length === 0) return;
 
-  const { response } = await dialog.showMessageBox({
-    type: "info",
-    buttons: ["Review", "Discard all"],
-    defaultId: 0,
-    cancelId: 0,
-    message: orphaned.length === 1 ? "1 unsaved take recovered" : `${orphaned.length} unsaved takes recovered`,
-    detail: "The app didn't shut down cleanly last time — these takes never made it to your library.",
-  });
+    const { response } = await dialog.showMessageBox({
+      type: "info",
+      buttons: ["Review", "Discard all"],
+      defaultId: 0,
+      cancelId: 0,
+      message: orphaned.length === 1 ? "1 unsaved take recovered" : `${orphaned.length} unsaved takes recovered`,
+      detail: "The app didn't shut down cleanly last time — these takes never made it to your library.",
+    });
 
-  if (response === 1) {
-    for (const t of orphaned) await rm(t.dir, { recursive: true, force: true }).catch(() => {});
-    return;
-  }
-
-  // Oldest first: `presentThumbnail` always unshifts its newest call to the
-  // front of the stack, so presenting in this order leaves the genuinely
-  // most-recent recovered take frontmost — matching the ticket's "most
-  // recent first, and focuses it" (STC-392 focus rule 1 does the actual
-  // focusing now; see thumbnail-window.ts).
-  const ordered = [...orphaned].reverse();
-  const { thumbnail, saveFolder } = readSettings(app.getPath("userData"));
-  for (const t of ordered) {
-    if (t.kind === "still") {
-      try {
-        const shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
-        presentThumbnail({
-          dir: t.dir, shot, corner: thumbnail.corner,
-          // A recovered temp take has never been decided on — nobody has
-          // said yes to it, the same as an ordinary fresh capture.
-          take: { kind: "shot", origin: "fresh" },
-          dist: here, rendererDir: join(here, "..", "renderer"),
-        });
-      } catch (e) {
-        console.error("[recovery] could not reopen a recovered still:", t.dir, e);
-      }
-    } else if (t.kind === "recording") {
-      // No STC-392 panel exists yet for a recording, so there is nothing to
-      // "bring back" — the closest honest equivalent is to save it outright
-      // (rather than let it expire silently in 7 days) and bring the library
-      // where it now lives in front of the user.
-      try {
-        await promoteTake(process.env, saveFolder, t.dir);
-        openLibrary();
-      } catch (e) {
-        console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
-      }
-    } else {
-      console.error("[recovery] unrecognised temp take, leaving it in place:", t.dir);
+    if (response === 1) {
+      for (const t of orphaned) await rm(t.dir, { recursive: true, force: true }).catch(() => {});
+      return;
     }
+
+    // Oldest first: `presentThumbnail` always unshifts its newest call to the
+    // front of the stack, so presenting in this order leaves the genuinely
+    // most-recent recovered take frontmost — matching the ticket's "most
+    // recent first, and focuses it" (STC-392 focus rule 1 does the actual
+    // focusing now; see thumbnail-window.ts).
+    const ordered = [...orphaned].reverse();
+    const { thumbnail, saveFolder } = readSettings(app.getPath("userData"));
+    for (const t of ordered) {
+      if (t.kind === "still") {
+        try {
+          const shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
+          presentThumbnail({
+            dir: t.dir, shot, corner: thumbnail.corner,
+            // A recovered temp take has never been decided on — nobody has
+            // said yes to it, the same as an ordinary fresh capture.
+            take: { kind: "shot", origin: "fresh" },
+            dist: here, rendererDir: join(here, "..", "renderer"),
+          });
+        } catch (e) {
+          console.error("[recovery] could not reopen a recovered still:", t.dir, e);
+        }
+      } else if (t.kind === "recording") {
+        // No STC-392 panel exists yet for a recording, so there is nothing to
+        // "bring back" — the closest honest equivalent is to save it outright
+        // (rather than let it expire silently in 7 days) and bring the library
+        // where it now lives in front of the user.
+        try {
+          await promoteTake(process.env, saveFolder, t.dir);
+          openLibrary();
+        } catch (e) {
+          console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
+        }
+      } else {
+        console.error("[recovery] unrecognised temp take, leaving it in place:", t.dir);
+      }
+    }
+  } catch (e) {
+    console.error("[recovery] could not recover unsaved takes:", e);
   }
 }
 
@@ -514,12 +526,63 @@ function migrateLegacyAppData(): void {
  */
 let systemShuttingDown = false;
 
+/**
+ * STC-468: a process-level backstop. Until now nothing in this file (or
+ * anywhere else in the repo) installed `unhandledRejection` or
+ * `uncaughtException` — Node's default for the first is a stderr warning
+ * (survivable), but Electron's default for the second is to crash the whole
+ * main process, silently taking a live recording or capture down with it and
+ * leaving no trace of why.
+ *
+ * Logged loudly, never fatal by itself — the same "never throws" rule
+ * `captureStill` already applies to a single request, applied here to the
+ * process as a whole: visible is the fix, not a forced exit. A fault severe
+ * enough to leave the process actually unable to continue still crashes on
+ * its own, same as before; this only removes the SILENT crash and the
+ * silent drop.
+ *
+ * Installed before `app.whenReady()`, so nothing during startup — a helper
+ * spawn, a settings read, a migration — has a window with no backstop at all.
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] unhandled rejection:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[process] uncaught exception:", error);
+});
+
 app.whenReady().then(async () => {
   // Subscribed before anything else touches quit machinery, so there is no
   // window during startup where a shutdown notification could arrive and be
   // missed. See the comment at `quitDecision`'s call site for the whole
   // story; this line by itself proves only that the module is reachable.
   powerMonitor.on("shutdown", () => { systemShuttingDown = true; });
+
+  // STC-466: one guard covering every WebContents this app ever creates —
+  // the main window, the editor, the still editor, one overlay per display,
+  // the countdown panel, one thumbnail panel per capture, and the toast —
+  // rather than seven copies that could each drift, or a future eighth
+  // window nobody remembered to wire up by hand. `web-contents-created`
+  // fires for all of them.
+  //
+  // Every page here is a bundled file:// page this app loads itself with
+  // `loadFile`; none of them has a reason to navigate anywhere else, open a
+  // second window, or be granted a permission a screen recorder's own
+  // renderer would ever ask for. Denying all three unconditionally is the
+  // safe default — a future window that genuinely needs one of them earns it
+  // explicitly, rather than every window inheriting Electron's permissive
+  // defaults until someone notices.
+  //
+  // `will-navigate` fires only for navigation the PAGE initiates (a clicked
+  // link, `window.location`) — never for this process's own `loadFile`/
+  // `loadURL` calls, which is exactly why `editor-window.ts` can re-navigate
+  // the editor to a different take without tripping this guard.
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-navigate", (navEvent) => navEvent.preventDefault());
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    contents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  });
 
   // FIRST, before anything reads settings or looks for unsaved takes — both
   // of those resolve paths that this rename moved (STC-397).
@@ -960,6 +1023,16 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
     const mics = await micsForBar();
 
     return await recordFlowBody(source, stored, mics, windows);
+  } catch (e: any) {
+    // Adjacent to STC-468: this used to have no catch-all at all, unlike
+    // `captureStill` above — a rejection anywhere in the flow (the overlay,
+    // `micsForBar`, `recordFlowBody`) would reach one of THREE fire-and-forget
+    // call sites (the tray, the hotkey, the menu bar) with nothing to catch
+    // it, which is precisely an unhandled rejection in the main process.
+    // Same shape as `captureStill`'s own catch: report it as a RecordResult
+    // rather than let it escape.
+    return { ok: false, code: e?.code ?? "record-flow-failed",
+             detail: e?.detail ?? String(e?.message ?? e) };
   } finally {
     recordFlowActive = false;
   }
@@ -1428,18 +1501,29 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
  * Cancel second, and ONLY our own flow — see `recordFlowActive`.
  */
 async function onRecordHotkey(): Promise<void> {
-  if (sup?.state === "recording") {
-    await sup.stopRecording().catch((e) => console.error("[record] stop failed:", e));
-    return;
+  // Adjacent to STC-468: called `void`, from a global shortcut with no caller
+  // to reject to — same reasoning as `captureStill`'s own top-level catch.
+  // `runRecordFlow` no longer throws (see its own catch-all above), but this
+  // wraps the whole body anyway rather than leaning on that alone: `cancelCountdown`
+  // and `sup.stopRecording()` are both reachable here directly, and a second
+  // catch-all one call away is cheaper than re-deriving which of several
+  // callees is the one that cannot throw today.
+  try {
+    if (sup?.state === "recording") {
+      await sup.stopRecording().catch((e) => console.error("[record] stop failed:", e));
+      return;
+    }
+    if (recordFlowActive) {
+      // Whichever of the two is up; both are no-ops when they are not.
+      cancelCountdown();
+      await closeOverlay().catch(() => {});
+      return;
+    }
+    const r = await runRecordFlow("hotkey");
+    if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
+  } catch (e) {
+    console.error("[record] hotkey handling failed:", e);
   }
-  if (recordFlowActive) {
-    // Whichever of the two is up; both are no-ops when they are not.
-    cancelCountdown();
-    await closeOverlay().catch(() => {});
-    return;
-  }
-  const r = await runRecordFlow("hotkey");
-  if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
 }
 
 ipcMain.handle("shortcuts:get", async () => ({ shortcuts, report: shortcutReport }));
@@ -1855,9 +1939,115 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
   if (!isProjectVersion(doc?.version)) {
     throw new Error(`project.json version ${doc?.version} is not supported`);
   }
+  // STC-465 review (no ticket yet): this used to write the renderer's bytes
+  // VERBATIM once the version check above passed — unlike still:writeShot,
+  // which always round-trips through parseShot/shotForWrite. The identical
+  // fix (parseProject/projectForWrite) is NOT possible here: trim.ts reaches
+  // DOM-typed code (transform-version.ts -> cursor.ts -> cursor-art.ts, which
+  // draws the macOS pointer set on a Canvas) and tsconfig.node.json's no-DOM
+  // pass correctly refuses it — the exact reason project-version.ts already
+  // exists as its own four-line file rather than living in trim.ts (see that
+  // file's own header). Splitting parseProject's field-cleaning logic out of
+  // trim.ts the way project-version.ts already did for isProjectVersion would
+  // fix this properly; that is a bigger change than a same-day hardening pass
+  // and is exactly the kind of thing to file as this fix's own follow-up.
+  //
+  // What ships instead is narrower and REFUSES rather than repairs: every
+  // field a real project.json can carry is checked for a sane type/range, and
+  // an unrecognised top-level key refuses the write outright, the same
+  // "never trust the caller's bytes" property `still:writeShot` gets from its
+  // round trip, reached by a different, main-process-safe route.
+  rejectMalformedProjectDoc(doc);
   await writeFile(join(openTake, "project.json"), text);
   return true;
 });
+
+/**
+ * Every top-level key a `project.json` this build wrote or can read might
+ * carry (schema/project-1..12.schema.json's own union, STC-318's "one list"
+ * rule applied here by hand since the schemas themselves are not loaded at
+ * runtime in this process — see the handler's own comment on why not).
+ */
+const KNOWN_PROJECT_FIELDS = new Set([
+  "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
+  "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
+  "micLevel", "micMuted", "systemAudioMuted",
+]);
+
+/**
+ * Refuses a `project.json` document whose known fields are the wrong TYPE or
+ * out of range, or that carries a field this build has never written. It does
+ * NOT clamp or default a bad value the way `parseProject` does on load — this
+ * is a narrower, REJECTING guard (see `preview:writeProject`'s own comment for
+ * why the fuller fix is blocked here), so a document this refuses is simply
+ * never written, rather than silently repaired.
+ */
+function rejectMalformedProjectDoc(doc: Record<string, any>): void {
+  for (const key of Object.keys(doc)) {
+    if (!KNOWN_PROJECT_FIELDS.has(key)) {
+      throw new Error(`project.json: unrecognised field "${key}"`);
+    }
+  }
+  const isFiniteNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const isPlainObject = (v: unknown): v is Record<string, any> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+  if (doc.output !== undefined) {
+    if (!isPlainObject(doc.output) || !isFiniteNum(doc.output.width) || !isFiniteNum(doc.output.height)) {
+      throw new Error("project.json: output.width/height must be numbers");
+    }
+  }
+  if (doc.cursor !== undefined) {
+    if (!isPlainObject(doc.cursor)) throw new Error("project.json: cursor is not an object");
+    if (doc.cursor.style !== undefined && doc.cursor.style !== "default" && doc.cursor.style !== "circle") {
+      throw new Error("project.json: cursor.style is invalid");
+    }
+    if (doc.cursor.scale !== undefined && (!isFiniteNum(doc.cursor.scale) || doc.cursor.scale <= 0)) {
+      throw new Error("project.json: cursor.scale must be a positive number");
+    }
+  }
+  if (doc.trim !== undefined) {
+    if (!isPlainObject(doc.trim) || !Number.isInteger(doc.trim.startNs) || !Number.isInteger(doc.trim.endNs)
+        || doc.trim.startNs < 0 || doc.trim.endNs < 0) {
+      throw new Error("project.json: trim.startNs/endNs must be non-negative integers");
+    }
+  }
+  if (doc.zoom !== undefined) {
+    if (!isPlainObject(doc.zoom)) throw new Error("project.json: zoom is not an object");
+    if (doc.zoom.enabled !== undefined && typeof doc.zoom.enabled !== "boolean") {
+      throw new Error("project.json: zoom.enabled must be a boolean");
+    }
+    if (doc.zoom.intensity !== undefined && !isFiniteNum(doc.zoom.intensity)) {
+      throw new Error("project.json: zoom.intensity must be a number");
+    }
+    if (doc.zoom.preset !== undefined && typeof doc.zoom.preset !== "string") {
+      throw new Error("project.json: zoom.preset must be a string");
+    }
+  }
+  if (doc.textPt !== undefined && (!isFiniteNum(doc.textPt) || doc.textPt <= 0)) {
+    throw new Error("project.json: textPt must be a positive number");
+  }
+  if (doc.micLevel !== undefined && !isFiniteNum(doc.micLevel)) {
+    throw new Error("project.json: micLevel must be a number");
+  }
+  if (doc.systemAudioLevel !== undefined && !isFiniteNum(doc.systemAudioLevel)) {
+    throw new Error("project.json: systemAudioLevel must be a number");
+  }
+  if (doc.micMuted !== undefined && typeof doc.micMuted !== "boolean") {
+    throw new Error("project.json: micMuted must be a boolean");
+  }
+  if (doc.systemAudioMuted !== undefined && typeof doc.systemAudioMuted !== "boolean") {
+    throw new Error("project.json: systemAudioMuted must be a boolean");
+  }
+  if (doc.bookmarks !== undefined) {
+    if (!Array.isArray(doc.bookmarks) || !doc.bookmarks.every((b: unknown) => Number.isInteger(b) && (b as number) >= 0)) {
+      throw new Error("project.json: bookmarks must be an array of non-negative integers");
+    }
+  }
+  if (doc.slug !== undefined && typeof doc.slug !== "string") {
+    throw new Error("project.json: slug must be a string");
+  }
+}
 
 /**
  * STC-413: a media export (.mp4/.png) is a DELIVERABLE and lands at the top
@@ -1885,7 +2075,15 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   // Source media is never mutated. The leaf-name rule above still admitted
   // display.mp4, camera.mp4 and the sidecars — an export named after one of
   // them would have replaced the recording with its own rendering.
-  if (TAKE_FILES.has(name) || name === "take.json") {
+  // STC-465 review: capture.json (the bundle-identity file, capture-doc.ts)
+  // and the library thumbnail (THUMBNAIL_FILE, library-items.ts) are just as
+  // load-bearing as anything already in TAKE_FILES — a renderer-supplied
+  // export named either one would corrupt the bundle the same way a
+  // display.mp4-named export used to. Imported constants, not restated
+  // strings, so the two lists cannot drift the way CLAUDE.md already
+  // warns about elsewhere in this file.
+  if (TAKE_FILES.has(name) || name === "take.json"
+      || name === CAPTURE_DOC_FILE || name === THUMBNAIL_FILE) {
     throw new Error(`refusing to overwrite the take's own "${name}"`);
   }
 
