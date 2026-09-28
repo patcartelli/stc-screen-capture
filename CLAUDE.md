@@ -126,6 +126,11 @@ events → deterministic transform → CFR MP4 with cursor overlay.
 | `schema/anchors-3.schema.json` | anchors-2 plus an optional `scope` block (STC-370) — a region or window recording's `kind`/`region`/`window`, mirroring shot-1's own kind/crop/window shapes. A whole-display take stays v2 with no `scope` at all; `helper/test/stop-reasons.test.ts` validates against this (superset) schema now, not anchors-2, since `window-resized`/`window-closed` are reachable only at v3 |
 | `docs/STC-370-RUNBOOK.md` | what to run on the Mac for region/window recording scope: capturing each by hand, a REAL window resize/close mid-take, and the one design assumption (a plain move is safe) nothing here can verify |
 | `helper/test/region-window-scope.grant.test.ts` | region/window scope on the real binary — a smaller capture, the right `anchors.json` scope block, a refused unknown `windowId`, and `STC_CAPTURE_FAULT=window-resized`/`=window-closed` proving the watcher's stop/sidecar path without scripting a real resize |
+| `helper/src/DisplayChangeDecisions.swift` | STC-235's pure decisions — `decideDisplayChange` (refit vs. `display-reconfigured`/`region-out-of-bounds`), `DISPLAY_CHANGE_SETTLE_MS` (250, one decision per burst of CG callbacks) and `REFIT_FRAME_TIMEOUT_MS` (3000, a refit that never produces a frame is a take whose geometry is unknown), and `SettleDebounce` as a value so "a burst collapses to one decision" is a test rather than a hope about timer scheduling. No ScreenCaptureKit, no clock — every row of the spec's outcome table is tested without a display (`helper/test/display-change/`) |
+| `transform/src/display-geometry.ts` | STC-235's `checkGeometry` — the pure half `session.ts`'s `loadSession` calls to accept or refuse an anchors-7 `geometry` timeline (entry 0 matches the top-level display/full capture rect, `startNs` strictly increasing, every `contentRect` inside `capture`). Loaders refuse, never default |
+| `schema/anchors-7.schema.json` | anchors-6 plus `geometry` (STC-235) — present only after at least one refit: entry 0 is the take's start (full-frame `contentRect`, `startNs = capture.firstFrameNs`), later entries are where the display's own `display`/`contentRect` moved to and the session-relative `startNs` of the first frame recorded under it. A take with no refit stays v2-v6 with no `geometry` key at all — `anchorsDocument` emits the minimum version that can express the document, same rule `projectForWrite`/`shotForWrite` already follow |
+| `docs/STC-235-RUNBOOK.md` | what only a Mac can settle for display hot-swap: whether `updateConfiguration` survives a real mode change or the restart fallback fires, the real seam length, **§3 — the acceptance: a real scaled-resolution change mid-take, watched**, an unrelated-display unplug (continues) vs. the captured display (stops), a region pushed out of bounds by a scaling change (stops), system audio's own survival, and whether SCK's `contentRect` attachment agrees with the computed fit rect. Also documents the new "paused from the very start, refitted before the first frame" stop case, and the open question of whether a real mode change reaches the refit path at all before SCK's own `didStopWithError` race beats it there |
+| `helper/test/display-refit.grant.test.ts` | STC-235's refit path on the real binary, driven by `STC_CAPTURE_FAULT=display-refit`/`=display-gone` (`Capture.swift`'s `armDisplayFault`) — a forced pillarbox so the pixels are checkable, a `display-refit` warning whose `startNs` matches a real demuxed frame PTS, `loadSession` accepting the take, and a Swift frame probe (`helper/test/frame-probe/main.swift`) confirming real content inside the computed `contentRect` and near-black bars outside it. Plus the paused-mid-refit case (geometry lands only after resume) and a no-fault control proving the fault is what made the difference |
 | `app/renderer/index.html`, `app/src/renderer.ts` | the main window (STC-374) — stripped to scope/source/camera/Record/Profile/grid at rest; still-capture prefs and the shortcuts editor moved behind the profile sheet, a slide-over panel (`#profilesheet`) rather than a fourth window. The Scope picker (Screen/Window/Area) and its "source" control are wired to STC-370's `region`/`windowId` — picking a window or an area opens the same overlay `capturestill` uses (`main.ts`'s new `pickCaptureTarget`), and the pick is a sticky preference (`settings.ts`'s new `scope` block) the same way a chosen display already was **The Scope picker, its `settings.ts` `scope` block and `pickCaptureTarget` were retired by STC-388**; see the retired row below |
 | (retired) `scope-picker.e2e.test.ts`, `scope-indicator.ts`, `scope-indicator-window.ts`, `scope-indicator.html`, `scope-indicator.test.ts`, `scope-indicator.e2e.test.ts` | **Removed by STC-388** (spec §5, `docs/superpowers/specs/2026-09-16-stc-388-record-flow-design.md`): scope is a per-take choice made on the overlay now, not a sticky `Settings.scope`, so the sticky picker, `pickCaptureTarget` and STC-381's confirmation flash have nothing left to confirm. What Record sends the helper is built in ONE place, `recordFlowBody`'s start-param builder in `app/src/main.ts` — a new start parameter (STC-420's show-clicks, say) goes there, never into a second builder. E2E tests that need a take running go through `app/test/_record-flow.ts`'s `startRecordFlow`, never a bare `#record` click. `docs/STC-388-RUNBOOK.md`. History for the retired files is in `docs/TICKET-LOG.md` (STC-374, STC-381) |
 | `docs/STC-374-RUNBOOK.md` | what only a Mac can settle for the profile sheet and the wired-up scope picker: whether the slide-over reads as a panel or a modal, whether picking a window or an area feels like the same gesture still capture already has, and a REAL window resize/move while it is the recording's own scope (STC-370's runbook covers a resize mid-take; this is about picking one in the first place) |
@@ -373,19 +378,22 @@ See `PHASE-1.md` → "Settled by phase 0" for the full table. The ones most like
 
 ## Phase 1 scope (sprint)
 
-Display capture + cursor events only. No camera, mic, system audio, display hot-swap rebuild,
-segmentation, or fault-injection soak. See `PHASE-1.md` → Non-goals for the explicit deferred list.
+Display capture + cursor events only. No camera, mic, system audio, segmentation, or
+fault-injection soak. See `PHASE-1.md` → Non-goals for the explicit deferred list. Display
+hot-swap rebuild shipped later, as STC-235 — see its table row below.
 
-`AVAssetWriter` cannot change output dimensions mid-file — a display resolution change must stop
-the recording cleanly, not rebuild mid-stream (phase 2 concern).
+`AVAssetWriter` cannot change output dimensions mid-file, so a display change refits the SAME
+stream into the take's fixed capture size (`fitRect`, STC-235) rather than rebuilding the file;
+only a lost display or an out-of-bounds region still stops the recording.
 
 ## Toolchain
 
-No Xcode.app — `swiftc` 5.8 with the MacOSX13.3 SDK (Command Line Tools) on macOS 27. SwiftPM
-cannot resolve without full Xcode, so **build with `helper/build.sh`, not `swift build`**
-(`Package.swift` is kept for when Xcode lands). macOS 14+ SCK API (`SCContentSharingPicker`, HDR,
-`SCScreenshotManager`) is out of reach; `captureResolution` is absent from the 13.3 headers but
-reachable via KVC (`setValue(3, forKey: "captureResolution")`, verified in phase 0).
+No Xcode.app — `swiftc` 6.4 with the macOS 27.0 SDK (Command Line Tools), `helper/build.sh`
+targeting `arm64-apple-macos26.0`. SwiftPM cannot resolve without full Xcode, so **build with
+`helper/build.sh`, not `swift build`** (`Package.swift` is kept for when Xcode lands). The SDK has
+moved on since phase 0's MacOSX13.3-era notes: `captureResolution`, `preservesAspectRatio` and
+`destinationRect` (`SCStreamConfiguration`) are ordinary properties now (`Capture.swift:931-935`)
+— no KVC needed for any of them, unlike the phase-0 finding this paragraph used to record.
 
 ## Correctness traps
 

@@ -32,3 +32,35 @@ func captureSize(_ pixelWidth: Int, _ pixelHeight: Int) -> (w: Int, h: Int) {
     return (evenFloor(Double(pixelWidth) * scale),
             evenFloor(Double(pixelHeight) * scale))
 }
+
+/// Where a refitted source lands inside the take's FIXED capture frame
+/// (STC-235). SPACE: source pixels → capture pixels; the transform's name for
+/// the result is `contentRect` (`transform/src/spaces.ts`).
+///
+/// The capture size never changes mid-take — AVAssetWriter cannot — so a
+/// display whose aspect changed is fitted, letterboxed or pillarboxed, never
+/// stretched. Every edge is even (H.264 4:2:0), the rect is centred, and a
+/// same-aspect source is exactly the full frame so an ordinary resolution
+/// change records no letterbox at all. The `1e-3` aspect tolerance absorbs the
+/// capture cap's own even-rounding (e.g. a 3456x2234 display vs its own
+/// 3340x2160 capture, where captureSize's even-floor has already nudged the
+/// aspect ratio slightly off the source's).
+struct FitRect: Equatable { let x: Int, y: Int, width: Int, height: Int }
+
+func fitRect(sourceWidth: Int, sourceHeight: Int, intoWidth: Int, intoHeight: Int) -> FitRect {
+    guard sourceWidth > 0, sourceHeight > 0 else { return FitRect(x: 0, y: 0, width: intoWidth, height: intoHeight) }
+    // Round to the NEAREST even integer (round v/2, then double) — not round-
+    // then-floor-to-even, which would round 1607.44 down to 1606 when the
+    // nearest even integer is 1608 (3840 × 1440/3440, the letterbox case
+    // below).
+    func even(_ v: Double) -> Int { max(2, Int((v / 2).rounded()) * 2) }
+    let sa = Double(sourceWidth) / Double(sourceHeight), ia = Double(intoWidth) / Double(intoHeight)
+    if abs(sa - ia) < 1e-3 { return FitRect(x: 0, y: 0, width: intoWidth, height: intoHeight) }
+    if sa > ia {
+        let h = min(intoHeight, even(Double(intoWidth) / sa))
+        return FitRect(x: 0, y: (intoHeight - h) / 4 * 2, width: intoWidth, height: h)
+    } else {
+        let w = min(intoWidth, even(Double(intoHeight) * sa))
+        return FitRect(x: (intoWidth - w) / 4 * 2, y: 0, width: w, height: intoHeight)
+    }
+}

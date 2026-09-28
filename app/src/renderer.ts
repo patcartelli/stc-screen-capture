@@ -832,19 +832,17 @@ const RECORDING_FAULTS: Record<string, string> = {
 /**
  * Emitted by the helper's watchers whenever ANY display changes, recording or
  * not — alone it is not worth an alert. A take the display change ENDS says so
- * through `helper:recording-ended`; one it survives (STC-235) sends
- * `display-refit`, which is news, not a problem: the recording continues.
+ * through `helper:recording-ended` (`ENDED_BY_HELPER`'s `display-reconfigured`
+ * / `region-out-of-bounds`); one it survives (STC-235) sends `display-refit`,
+ * which is news, not a problem: the recording continues. The helper used to
+ * send a separate `display-change-during-recording` warning before every such
+ * stop; since STC-235 it does not, and the stop's own reason is the one
+ * message.
  */
 const INFORMATIONAL_WARNINGS = new Set(["display-reconfigured", "display-refit", "display-refit-rect-mismatch"]);
 
 recorder.on("helper:warning", (l) => {
   const code = String(l.code);
-  // STC-235: the helper stops sending this once Task 10 lands (a stop still
-  // reaches the user through `ENDED_BY_HELPER`); left in place until then.
-  if (code === "display-change-during-recording") {
-    alertUser("Display configuration changed — the recording was stopped.");
-    return;
-  }
   if (INFORMATIONAL_WARNINGS.has(code)) {
     // An idle display change is not an alert, but it is a new list of
     // displays; the picker must not go on offering one that was unplugged.

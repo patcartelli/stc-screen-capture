@@ -47,5 +47,26 @@ for (w, h) in [(6016, 3384), (5120, 2160), (2160, 3840), (1919, 1081), (801, 601
     }
 }
 
+func checkFit(_ label: String, _ got: FitRect, _ want: FitRect) {
+    if got == want { print("ok   \(label)") }
+    else { print("FAIL \(label): got \(got), want \(want)"); failures += 1 }
+}
+checkFit("same aspect is the full frame",
+         fitRect(sourceWidth: 2880, sourceHeight: 1800, intoWidth: 3456, intoHeight: 2160),
+         FitRect(x: 0, y: 0, width: 3456, height: 2160))
+checkFit("4:3 into 16:9 pillarboxes, centred",
+         fitRect(sourceWidth: 1600, sourceHeight: 1200, intoWidth: 3840, intoHeight: 2160),
+         FitRect(x: 480, y: 0, width: 2880, height: 2160))
+checkFit("21:9 into 16:9 letterboxes, centred",
+         fitRect(sourceWidth: 3440, sourceHeight: 1440, intoWidth: 3840, intoHeight: 2160),
+         FitRect(x: 0, y: 276, width: 3840, height: 1608))
+for (sw, sh, iw, ih) in [(1919, 1081, 3840, 2160), (1000, 3000, 3840, 2160), (7, 5, 640, 360), (3456, 2234, 3340, 2160)] {
+    let r = fitRect(sourceWidth: sw, sourceHeight: sh, intoWidth: iw, intoHeight: ih)
+    if [r.x, r.y, r.width, r.height].contains(where: { $0 % 2 != 0 }) { print("FAIL \(sw)x\(sh): odd edge \(r)"); failures += 1 }
+    if r.x < 0 || r.y < 0 || r.x + r.width > iw || r.y + r.height > ih { print("FAIL \(sw)x\(sh): outside \(r)"); failures += 1 }
+    if abs((iw - r.width) - 2 * r.x) > 2 || abs((ih - r.height) - 2 * r.y) > 2 { print("FAIL \(sw)x\(sh): not centred \(r)"); failures += 1 }
+    if r.width != iw && r.height != ih { print("FAIL \(sw)x\(sh): touches neither axis \(r)"); failures += 1 }
+}
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
 exit(failures == 0 ? 0 : 1)

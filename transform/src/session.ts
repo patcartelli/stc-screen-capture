@@ -111,6 +111,57 @@ export function rebaseMicAudio(raw: DemuxedAudio, measuredFirstNs: number): Demu
   };
 }
 
+/**
+ * STC-235, found on the first real-hardware run. A refit's `startNs` is the
+ * helper's own number for the first refitted frame, in the helper's clock —
+ * but `geometryAt` compares it against the DEMUXED PTS of the frame being
+ * shown, and display.mp4 stores the session-start gap as an empty edit
+ * quantised to the 90 kHz movie timescale (the same reason `checkFrameOffset`
+ * needs a tolerance at all). Every demuxed PTS therefore sits the same
+ * sub-tick amount off the helper's clock — -10583 ns on that take, where the
+ * refitted frame demuxed at 1260200209 against a startNs of 1260210792, so
+ * geometryAt chose entry 0 for it and the first refitted frame was drawn
+ * under the OLD geometry.
+ *
+ * So each entry i >= 1 is snapped to the FIRST demuxed frame f with
+ * f >= startNs - OFFSET_TOLERANCE_NS: the frame the helper meant, read on the
+ * file's clock. Entry 0 is left alone — it must keep equalling
+ * capture.firstFrameNs, and geometryAt already falls back to it for any frame
+ * before its startNs. An entry with no such frame (the refit landed on a frame
+ * the writer then dropped at the very end) is left UNCHANGED: geometryAt can
+ * never select it, which is correct, and refusing the take would turn a
+ * harmless trailing entry into a recording nobody can open.
+ *
+ * Order: snapping is monotone non-decreasing in startNs (a larger startNs can
+ * only move the "first frame >= startNs - tol" later), so snapped entries stay
+ * sorted; an unsnapped entry has startNs - tol > the last frame >= every
+ * snapped value, so it stays strictly after them. The one way strictness is
+ * lost is two refits snapping onto the SAME frame (both happened between two
+ * written frames). Then only the LATER entry is kept: that frame was produced
+ * after both refits applied, so the later configuration is the one it was
+ * actually captured under — and it is also what geometryAt's last-match-wins
+ * scan would have chosen anyway, so dropping the earlier one changes no
+ * selection, it only restores the strictly-increasing shape every other
+ * reader of `geometry` assumes.
+ *
+ * Returns the input unchanged when there is nothing to snap; never mutates it.
+ */
+function snapGeometryToFrames(anchors: Anchors, framesNs: readonly number[]): Anchors {
+  const g = anchors.geometry;
+  if (!g || g.length < 2) return anchors;
+  const out = [g[0]!];
+  let fi = 0;
+  for (let i = 1; i < g.length; i++) {
+    const e = g[i]!;
+    const floor = e.startNs - OFFSET_TOLERANCE_NS;
+    while (fi < framesNs.length && framesNs[fi]! < floor) fi++;
+    const snapped = fi < framesNs.length ? { ...e, startNs: framesNs[fi]! } : e;
+    if (out.length > 1 && out[out.length - 1]!.startNs === snapped.startNs) out.pop();
+    out.push(snapped);
+  }
+  return { ...anchors, geometry: out };
+}
+
 export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   const { anchors, events } = input;
 
@@ -238,7 +289,9 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   }
 
   return {
-    anchors,
+    // checkGeometry above ran on the helper's ORIGINAL document; this is the
+    // same timeline read on the file's clock — see snapGeometryToFrames.
+    anchors: snapGeometryToFrames(anchors, video.framesNs),
     events: [...events.events].sort((a, b) => a.t - b.t),
     frames: video.framesNs,
     cameraFrames: cameraVideo?.framesNs,

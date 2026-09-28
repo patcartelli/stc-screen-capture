@@ -84,7 +84,9 @@ configuration. Don't re-discover these.
   nothing forever. Any test that stalls a consumer to exercise back-pressure must call `resume()`.
 - **`stateAt(n)` seek cost** — at 120 Hz, 30 min = 216k ticks. If seek is implemented as
   "step from tick 0," a 60 fps export of a long recording is quadratic. Plan checkpoints.
-- **`AVAssetWriter` dimension rigidity** — see above; display hot-swap is a stop, not a rebuild.
+- **`AVAssetWriter` dimension rigidity** — see above; a display change refits the stream into
+  the same file at the take's fixed size (STC-235) rather than rebuilding it; only a lost
+  display or an out-of-bounds region still stops.
 - **WebCodecs demux** — WebCodecs accepts `EncodedVideoChunk`, not MP4. mp4box.js (already in
   `scratch/`) is the demuxer. `VideoDecoder` is async; the sink needs a pre-decoded frame cache,
   not synchronous decoder calls inside `render()`.
