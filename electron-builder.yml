@@ -8,6 +8,7 @@ directories:
   output: release
 files:
   - app/dist/**/*
+  - app/renderer/**/*
   - package.json
 extraResources:
   - from: helper/build/stc-helper
