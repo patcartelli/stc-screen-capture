@@ -42,6 +42,7 @@ import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
+import type { OptionsState } from "./record-options.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
@@ -1039,6 +1040,21 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
   }
 }
 
+/**
+ * The bar's toggles ARE the sticky settings (fix round 2's ONE write call
+ * site) — called from exactly two places in `recordFlowBody` below: the
+ * Settings branch and the eventual Record path. Never from a plain
+ * cancel/Escape, where `options` is equally present but nothing must be
+ * written — `record-flow.e2e.test.ts`'s own documented contract is "Escape
+ * at each step writes nothing."
+ */
+function writeBarOptions(options: OptionsState): void {
+  writeSettings(app.getPath("userData"), {
+    camera: options.camera, micDeviceUid: options.micDeviceUid,
+    systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+  });
+}
+
 /** The flow proper. Split out so `recordFlowActive` has exactly one `finally`
  * covering every step it needs to cover. */
 async function recordFlowBody(
@@ -1052,28 +1068,34 @@ async function recordFlowBody(
     },
     dist: here, renderer: join(here, "..", "renderer"),
   });
-  // The bar's toggles ARE the sticky settings, so they are written back — only
-  // SCOPE is per-take. Written before the countdown, so a cancelled countdown
-  // still keeps a mic (and now a camera device / system-audio choice) the
-  // user just made. Written before the Settings branch below too (fix round
-  // 1, controller ruling): Settings closes the overlay through the same
-  // `{ kind: "cancelled" }` outcome a plain Escape does, and `options` is
-  // still the bar's live state at the moment it was pressed — returning
-  // before this write would silently drop a toggle made just before Settings
-  // was clicked, which is exactly the choice this comment already promises
-  // survives a cancelled countdown.
-  if (options) {
-    writeSettings(app.getPath("userData"), {
-      camera: options.camera, micDeviceUid: options.micDeviceUid,
-      systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
-    });
-  }
-
   // The bar's own Settings control (STC-456): closes the overlay with no
   // take, then hands off to the main window's existing sheet — the same
   // door the profile button already opens, never a second implementation.
-  if (afterClose === "settings") { openSettingsSheet(); return { ok: false, cancelled: true }; }
+  // The bar's toggles are written back HERE too (fix round 1, controller
+  // ruling) — Settings closes the overlay through the same
+  // `{ kind: "cancelled" }` outcome a plain Escape does, and `options` is
+  // still the bar's live state at the moment it was pressed, so returning
+  // with no write would silently drop a choice made just before Settings.
+  //
+  // Fix round 2: this write must NOT run on a plain Escape (`outcome.kind
+  // === "cancelled"` with no `afterClose`) — `options` is present there too,
+  // and the suite's own documented contract is "Escape at each step writes
+  // nothing." So the write lives in exactly the two places that keep a
+  // choice on purpose — Settings, right here, and the eventual Record path
+  // below — through the one `writeBarOptions` call site, never a third copy
+  // of the same argument object.
+  if (afterClose === "settings") {
+    if (options) writeBarOptions(options);
+    openSettingsSheet();
+    return { ok: false, cancelled: true };
+  }
   if (outcome.kind === "cancelled" || !options) return { ok: false, cancelled: true };
+
+  // The bar's toggles ARE the sticky settings, so they are written back —
+  // only SCOPE is per-take. Written before the countdown, so a cancelled
+  // countdown still keeps a mic (and now a camera device / system-audio
+  // choice) the user just made.
+  writeBarOptions(options);
 
   // THE start-param builder — the only place a Record's `start` request is
   // assembled (spec §3). A new setting that reaches the helper (STC-420's

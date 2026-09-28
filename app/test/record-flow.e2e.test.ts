@@ -218,13 +218,25 @@ describe("Escape writes nothing, at either phase", () => {
   }, 120_000);
 
   test("Escape in the options phase — the newly reachable state", async () => {
-    const { win, startLog, tempTakes } = await launch();
+    const { win, startLog, tempTakes, ud } = await launch();
     const before = readdirSync(tempTakes).length;
+    // Not for the countdown (Escape happens before Record either way) — this
+    // is what guarantees settings.json exists on disk, so the systemAudio
+    // read below is a real "still false" rather than a missing file.
+    await withoutCountdown(win);
     await win.click("#record");
     const overlay = await overlayWindow();
     await dragARegion(overlay);
     await send(overlay, { t: "key", key: "Enter" });
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+
+    // A bar toggle made before Escape (fix round 2): `options` is present on
+    // a plain Escape exactly as it is on Settings, and this suite's own
+    // contract — "Escape at each step writes nothing" — has to hold even so.
+    // Only the SETTINGS branch and the Record path are allowed to persist a
+    // toggle; a cancel must not.
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
 
     // Before this ticket there was no state between a selection and a take —
     // Escape here is reachable for the first time.
@@ -236,6 +248,11 @@ describe("Escape writes nothing, at either phase", () => {
     expect(readLines(startLog)).toEqual([]);
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
     expect(await toastPage(app!)).toBeUndefined();
+    // The toggle above must not have reached disk — unchanged from the
+    // default `false`, not merely absent (settings.json may not exist at
+    // all yet, which `readWrittenSettings` would throw on reading; the file
+    // written on launch/withoutCountdown already guarantees it exists here).
+    expect(readWrittenSettings(ud).systemAudio).toBe(false);
   }, 120_000);
 });
 
