@@ -1,8 +1,8 @@
 import { parseShot, type Redaction, type Shot } from "@transform/shot";
-import { decorationForMode, layoutStill, pxPerPointOf } from "@transform/still-decorate";
-import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
-import { renderStill, sampleRedactionFills } from "@transform/still-render";
+import { decorationForMode } from "@transform/still-decorate";
+import { DEFAULT_EXPORT_OPTIONS, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { normaliseRegion, undoLast } from "@transform/still-redact";
+import { composeStill, stillPixelBytes } from "./still-compose.js";
 
 /**
  * The still editor's view (STC-300) — v1's whole job is Redact, moved here
@@ -92,18 +92,17 @@ function decoratedShot(): Shot {
 async function draw(): Promise<void> {
   if (!shot || !frame) return;
   const decorated = decoratedShot();
-  const layout = layoutStill(decorated);
-
-  const out = document.createElement("canvas");
-  out.width = layout.canvas.width;
-  out.height = layout.canvas.height;
-  const ctx = out.getContext("2d", { alpha: true });
-  if (!ctx) return;
-  // Sampled from the FRAME, not the composite — the frame is what a region
-  // is normalised against, and reading the composite would mean reading
-  // pixels an earlier fill had already replaced.
-  const redactionFills = sampleRedactionFills(frame, shot.frame, decorated.decoration.redactions);
-  renderStill(ctx as never, { frame, redactionFills }, layout);
+  // Always at NATIVE scale: this is the INTERACTIVE view a redaction box gets
+  // placed against, and `saveFinished()` composes its own export-scoped
+  // canvas separately (STC-465 review, finding D1) — conflating the two would
+  // mean placement precision tracks whatever output-scale preference happens
+  // to be stored. `composeStill` still applies the shot's own colour space,
+  // which this view's context was missing before (the same finding): visible
+  // only as a P3 capture's on-screen preview reading slightly wrong, never
+  // checked here because nothing compared this window's colours to the
+  // panel's.
+  const { canvas: out, plan } = composeStill(decorated, frame,
+    { ...DEFAULT_EXPORT_OPTIONS, scale: "native" });
   composite = out;
 
   // Never cropped, unlike the panel's own resting view (STC-426): every edge
@@ -114,7 +113,7 @@ async function draw(): Promise<void> {
   canvas.width = Math.max(1, Math.round(out.width * fit));
   canvas.height = Math.max(1, Math.round(out.height * fit));
   const scale = canvas.width / out.width;
-  const c = layout.content;
+  const c = plan.layout.content;
   contentInView = { x: c.x * scale, y: c.y * scale, width: c.width * scale, height: c.height * scale };
   paintView();
 }
@@ -216,10 +215,15 @@ undoBtn.addEventListener("click", undo);
  * still to a deliverable: `raw/` is source material under STC-413, never the
  * thing you send someone.
  *
- * The composite is the FULL-RESOLUTION one `draw()` already built, never the
- * view canvas — that is fitted to the window and would write out whatever
- * size the user happened to have dragged it to, which is STC-318's "a way of
- * looking must not change what comes out" in a second window.
+ * The export is composed FRESH, at the real output scale and the shot's own
+ * colour space (`composeStill`, `still-compose.ts`) — never the interactive
+ * `composite` `draw()` keeps for placing a box, which is deliberately pinned
+ * to native scale (see `draw()`'s own doc) and would otherwise write out
+ * whatever size the user happened to have been editing at rather than what
+ * the output-scale preference actually asks for. That is exactly the STC-318
+ * "a way of looking must not change what comes out" rule, and the panel's own
+ * `runExport` reads the same way: compose (or reuse a composite already built
+ * at the right scale) at export time, never the live view.
  *
  * `planRender`'s format fallback is the panel's, for the panel's reason: a
  * stored JPEG under a mode that carries transparency falls back to PNG
@@ -229,7 +233,7 @@ undoBtn.addEventListener("click", undo);
  * exit already uses.
  */
 async function saveFinished(): Promise<void> {
-  if (!shot || !composite) return;
+  if (!shot || !frame) return;
   saveBtn.disabled = true;
   const previous = hint.textContent;
   setHint("Saving…");
@@ -237,23 +241,19 @@ async function saveFinished(): Promise<void> {
     const settings = (await window.stillEditor.getSettings()).still;
     const decorated = decoratedShot();
     let options: ExportOptions = { ...settings };
-    const layout = layoutStill(decorated);
-    const pxPerPoint = pxPerPointOf(decorated);
-    let plan = planRender(options, { layout, pxPerPoint });
+    let composed = composeStill(decorated, frame, options);
     let fellBackToPng = false;
-    if (stillIsBlocked(plan)) {
+    if (stillIsBlocked(composed.plan)) {
       options = { ...options, format: "png" };
-      plan = planRender(options, { layout, pxPerPoint });
+      composed = composeStill(decorated, frame, options);
       fellBackToPng = true;
     }
 
-    const ctx = composite.getContext("2d", { alpha: true });
-    if (!ctx) { setHint("Could not read the image."); return; }
-    const data = ctx.getImageData(0, 0, composite.width, composite.height).data;
-    const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    const { canvas: exportCanvas, plan } = composed;
+    const bytes = stillPixelBytes(exportCanvas);
 
     const r = await window.stillEditor.exportStill({
-      bytes, width: composite.width, height: composite.height, alpha: plan.alpha,
+      bytes, width: exportCanvas.width, height: exportCanvas.height, alpha: plan.alpha,
       colorSpace: shot.display.colorSpace ?? "",
       target: { file: true, clipboard: false },
       options,

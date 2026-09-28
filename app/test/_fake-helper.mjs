@@ -274,7 +274,13 @@ process.stdin.on("data", (chunk) => {
             timebase: { numer: 125, denom: 3 },
             display: { id: cmd.displayId ?? 1, pointWidth: 1920, pointHeight: 1080,
                        pixelWidth: 3840, pixelHeight: 2160, backingScale: 2,
-                       originX: 0, originY: 0 },
+                       originX: 0, originY: 0,
+                       // Absent by default, matching every other still fixture in this
+                       // file's family before STC-465's review — set only when a test
+                       // explicitly asks for a P3 display, so nothing else in the suite
+                       // that already asserts against a colourSpace-less shot moves.
+                       ...(process.env.STC_FAKE_STILL_COLORSPACE
+                         ? { colorSpace: process.env.STC_FAKE_STILL_COLORSPACE } : {}) },
             frame: { file: "frame.png", width, height, alpha: cmd.kind === "window" },
             decoration: { mode: cmd.kind === "window" ? "window-only" : "selected-area",
                           canvas: "natural", cursor: false, redactions: [] },
