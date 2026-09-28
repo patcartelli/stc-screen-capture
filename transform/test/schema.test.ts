@@ -336,3 +336,51 @@ describe("v6 schema carries the system-audio track (STC-418)", () => {
     expect(compile("schema/anchors-6.schema.json")(doc)).toBe(false);
   });
 });
+
+describe("anchors-7 carries a refit geometry timeline (STC-235)", () => {
+  const base = () => ({
+    version: 7,
+    timebase: { numer: 125, denom: 3 },
+    t0Ns: "1000000000",
+    display: { id: 1, pointWidth: 1728, pointHeight: 1117, pixelWidth: 3456, pixelHeight: 2234,
+               backingScale: 2, originX: 0, originY: 0 },
+    capture: { width: 3340, height: 2160, codec: "h264", firstFrameNs: 16000000 },
+    files: { display: "display.mp4" },
+    stop: { t: 9000000000, reason: "user" },
+    geometry: [
+      { startNs: 16000000,
+        display: { id: 1, pointWidth: 1728, pointHeight: 1117, pixelWidth: 3456, pixelHeight: 2234,
+                   backingScale: 2, originX: 0, originY: 0 },
+        contentRect: { x: 0, y: 0, width: 3340, height: 2160 } },
+      { startNs: 4000000000,
+        display: { id: 1, pointWidth: 1440, pointHeight: 900, pixelWidth: 2880, pixelHeight: 1800,
+                   backingScale: 2, originX: 0, originY: 0 },
+        contentRect: { x: 0, y: 36, width: 3340, height: 2088 } },
+    ],
+  });
+
+  test("a two-entry geometry validates", () => {
+    const v = compile("schema/anchors-7.schema.json");
+    expect(v(base()), JSON.stringify(v.errors)).toBe(true);
+  });
+  test("a one-entry geometry is refused (write none instead)", () => {
+    const v = compile("schema/anchors-7.schema.json");
+    const d = base(); d.geometry = d.geometry.slice(0, 1);
+    expect(v(d)).toBe(false);
+  });
+  test("an unknown key in a geometry entry is refused", () => {
+    const v = compile("schema/anchors-7.schema.json");
+    const d: any = base(); d.geometry[1].scale = 2;
+    expect(v(d)).toBe(false);
+  });
+  test("region-out-of-bounds is a valid stop reason", () => {
+    const v = compile("schema/anchors-7.schema.json");
+    const d = base(); d.stop.reason = "region-out-of-bounds";
+    expect(v(d), JSON.stringify(v.errors)).toBe(true);
+  });
+  test("anchors-6 still refuses geometry (it is new at 7)", () => {
+    const v = compile("schema/anchors-6.schema.json");
+    const d: any = base(); d.version = 6;
+    expect(v(d)).toBe(false);
+  });
+});
