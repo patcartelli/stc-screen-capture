@@ -4,10 +4,11 @@ import type {
 import { pixelSize, rectContains } from "./selection.js";
 import { HANDLES, handleAt, handlePoint } from "./overlay-hittest.js";
 import {
-  barContains, controlAt, controlEnabled, sizeLabel,
-  type BarLayout, type ControlId, type OptionsState,
+  barContains, controlAt, controlEnabled, parseDimension, sizeLabel,
+  type BarLayout, type ControlId, type MenuAnchor, type OptionsState,
 } from "./record-options.js";
-import { micLabel } from "./mic-devices.js";
+import type { MenuRow } from "./device-picker.js";
+import { iconSvg, type Glyph } from "./icons.js";
 
 /**
  * The overlay's view (STC-290). It draws state and reports input; it decides
@@ -48,16 +49,23 @@ interface OverlayPayload {
    * directly — that is undefined for a window pick, which was the bug.
    */
   anchor?: Rect;
+  /** STC-456 — the open device menu: where it opens and what it lists. */
+  menu?: { anchor: MenuAnchor; rows: MenuRow[] };
 }
 
 const $ = (id: string) => document.getElementById(id)!;
 const marquee = $("marquee"), highlight = $("highlight");
 const sizeChip = $("size"), titleChip = $("title"), legend = $("legend");
-const bar = $("bar"), micmenu = $("micmenu");
-// STC-456 interim — Task 6 replaces this. New control ids (crop, settings,
-// keys, clicks) have no `#ctl-<id>` element yet, so this is nullable and
-// `renderBar` skips a control whose element is missing rather than throwing.
-const ctl = (id: ControlId) => document.getElementById(`ctl-${id}`);
+const bar = $("bar"), pane = $("pane"), menuEl = $("menu");
+const sizeW = $("size-w") as HTMLInputElement, sizeH = $("size-h") as HTMLInputElement;
+/** Every `ControlId` has a `#ctl-<id>` in overlay.html (STC-456). */
+const ctl = (id: ControlId) => $(`ctl-${id}`);
+
+// Glyphs (STC-456): the markup names them, `icons.ts` holds the one copy of
+// every path. Swapped in once at startup.
+for (const el of document.querySelectorAll<HTMLElement>("[data-icon]")) {
+  el.outerHTML = iconSvg(el.dataset.icon as Glyph, el.dataset.class ?? "");
+}
 
 /** Where this window's display sits in the global space. Set on first state. */
 let origin: Point = { x: 0, y: 0 };
@@ -144,8 +152,11 @@ function hide(...els: HTMLElement[]): void {
 
 function renderLegend(mode: string, phase: OverlayPayload["phase"]): void {
   if (phase === "options") {
+    // "Click", not "Return": in the options phase Return re-confirms the
+    // selection (selection.ts `confirm` → nextPhase "options"), it does not
+    // start the take. The ↵ on the button is decorative (STC-456).
     legend.innerHTML = `Adjust selection <span class="sep">·</span>` +
-      `Click <b>Record</b> <span class="sep">·</span><kbd>Esc</kbd> cancel`;
+      `Click <b>Capture Video</b> <span class="sep">·</span><kbd>Esc</kbd> cancel`;
   } else {
     legend.innerHTML = mode === "window"
       ? `<kbd>Click</kbd> select window <span class="sep">·</span>` +
@@ -157,30 +168,34 @@ function renderLegend(mode: string, phase: OverlayPayload["phase"]): void {
   legend.style.display = "block";
 }
 
+function placeAt(el: HTMLElement, r: Rect): void {
+  el.style.left = `${r.x}px`; el.style.top = `${r.y}px`;
+  el.style.width = `${r.width}px`; el.style.height = `${r.height}px`;
+}
+
+/** Swap a trigger's leading glyph, only when it actually changes. */
+function setLeadingGlyph(el: HTMLElement, g: Glyph): void {
+  if (el.dataset.glyph === g) return;
+  el.dataset.glyph = g;
+  el.querySelector("svg")!.outerHTML = iconSvg(g);
+}
+
 /**
- * Draw the options bar (STC-388). Every rect comes from the payload already
- * decided by `record-options.ts`; this converts global points to this window's
- * local space and sets text, and does no geometry of its own.
+ * Draw the options bar (STC-388; STC-456's pane over a capture button). Every
+ * rect comes from the payload already decided by `record-options.ts`; this
+ * converts global points to this window's local space and sets state, and
+ * does no geometry of its own — the menu's size is the one exception, since
+ * only the DOM knows how wide its labels are.
  */
 function renderBar(p: OverlayPayload): void {
-  // STC-456 interim — Task 6 replaces this. The mic menu no longer has a
-  // payload to draw from (`record-options.ts` dropped `micMenuLayout`), so it
-  // is always hidden here; Task 6 rebuilds it from `menuAnchor`.
-  micmenu.hidden = true;
   if (p.phase !== "options" || !p.bar || !p.options || !p.display) {
-    bar.hidden = true; return;
+    bar.hidden = true; menuEl.hidden = true; return;
   }
-  const l = toLocal(p.bar.rect);
   bar.hidden = false;
-  bar.style.left = `${l.x}px`; bar.style.top = `${l.y}px`;
-  bar.style.width = `${l.width}px`; bar.style.height = `${l.height}px`;
+  placeAt(pane, toLocal(p.bar.pane));
   for (const c of p.bar.controls) {
-    // New control ids (crop, settings, keys, clicks) have no DOM element yet —
-    // Task 6 adds them.
     const el = ctl(c.id);
-    if (!el) continue;
-    const r = toLocal(c.rect);
-    el.style.width = `${r.width}px`; el.style.height = `${r.height}px`;
+    placeAt(el, toLocal(c.rect));
     el.dataset.enabled = controlEnabled(c.id, p.options) ? "1" : "0";
   }
   // The anchor, not `p.state.rect` — the latter is undefined for a window
@@ -188,20 +203,48 @@ function renderBar(p: OverlayPayload): void {
   // for every window take. `p.anchor` is the SAME rect `barLayout` above was
   // built from (overlay-session.ts's `push`), so the readout cannot disagree
   // with the bar it is drawn inside of.
-  const sel = p.anchor;
-  const sizeEl = ctl("size");
-  if (sizeEl) sizeEl.textContent = sel ? sizeLabel(sel, p.display) : "—";
-  const expandEl = ctl("expand");
-  if (expandEl) expandEl.dataset.on = p.options.fullDisplay ? "1" : "0";
-  const cameraEl = ctl("camera");
-  if (cameraEl) cameraEl.dataset.on = p.options.camera ? "1" : "0";
-  const mic = p.options.mics.find((m) => m.uid === p.options!.micDeviceUid);
-  const micEl = ctl("mic");
-  if (micEl) {
-    // micLabel, not a second spelling — see mic-devices.ts.
-    micEl.textContent = `🔊 ${mic ? micLabel(mic) : "Off"}`;
-    micEl.setAttribute("aria-label", `Input: ${mic ? micLabel(mic) : "Off"}`);
-  }
+  //
+  // The fields show the live size unless the user is typing in them: a
+  // broadcast mid-edit must not overwrite what they have typed so far.
+  const px = p.anchor ? pixelSize(p.anchor, p.display) : undefined;
+  if (document.activeElement !== sizeW) sizeW.value = px ? String(px.width) : "";
+  if (document.activeElement !== sizeH) sizeH.value = px ? String(px.height) : "";
+  // `data-label` is the readout as one string — what the e2e suite reads now
+  // that the element holds two inputs rather than text.
+  ctl("size").dataset.label = p.anchor ? sizeLabel(p.anchor, p.display) : "—";
+  ctl("expand").dataset.on = p.options.fullDisplay ? "1" : "0";
+  const micOn = p.options.micDeviceUid != null;
+  ctl("mic").dataset.on = micOn ? "1" : "0";
+  ctl("camera").dataset.on = p.options.camera ? "1" : "0";
+  // The trigger's glyph follows the state: mic-off when muted, camera-off when off.
+  setLeadingGlyph(ctl("mic"), micOn ? "mic" : "mic-off");
+  setLeadingGlyph(ctl("camera"), p.options.camera ? "camera" : "camera-off");
+  renderMenu(p.menu);
+}
+
+/**
+ * The open device menu (STC-456). Rows come from `device-picker.ts`, the same
+ * model the main window's popover draws. It drops below its trigger and over
+ * the capture button, or rises above the trigger when `menuAnchor` said the
+ * display's bottom is too close; `anchor.y` is the NEAR edge either way.
+ */
+function renderMenu(m: { anchor: MenuAnchor; rows: MenuRow[] } | undefined): void {
+  if (!m) { menuEl.hidden = true; menuEl.replaceChildren(); return; }
+  menuEl.replaceChildren(...m.rows.map((r) => {
+    const row = document.createElement("div");
+    row.className = "row"; row.dataset.key = r.key;
+    row.setAttribute("role", r.closesMenu ? "menuitemradio" : "menuitemcheckbox");
+    row.setAttribute("aria-checked", String(r.checked));
+    row.innerHTML = `${iconSvg(r.icon)}<span class="label"></span>${iconSvg("check", "check")}`;
+    row.querySelector(".label")!.textContent = r.label;
+    return row;
+  }));
+  menuEl.hidden = false;
+  const a = { x: m.anchor.x - origin.x, y: m.anchor.y - origin.y };
+  const w = menuEl.offsetWidth, h = menuEl.offsetHeight;
+  const top = m.anchor.side === "below" ? a.y : a.y - h;
+  menuEl.style.left = `${Math.max(8, Math.min(a.x, window.innerWidth - w - 8))}px`;
+  menuEl.style.top = `${Math.max(8, Math.min(top, window.innerHeight - h - 8))}px`;
 }
 
 function render(p: OverlayPayload): void {
@@ -316,6 +359,34 @@ function render(p: OverlayPayload): void {
  */
 const SYNTHETIC_INPUT = new URLSearchParams(location.search).get("synthetic") === "1";
 
+// ── the size field (STC-456) ────────────────────────────────────────────────
+
+/** Set while Escape blurs a size input: that blur reverts, it does not commit. */
+let reverting = false;
+
+/** Send the typed size in PIXELS; anything unparseable reverts to the live one. */
+function commitSize(): void {
+  const w = parseDimension(sizeW.value), h = parseDimension(sizeH.value);
+  if (w === undefined || h === undefined) { if (current) render(current); return; }
+  // Unchanged is not a resize: a click in and out of the field must not
+  // re-centre the marquee through a points round trip, or clear `fullDisplay`.
+  const now = current?.anchor && current.display ? pixelSize(current.anchor, current.display) : undefined;
+  if (now && now.width === w && now.height === h) return;
+  send({ t: "size", width: w, height: h });
+}
+
+for (const f of [sizeW, sizeH]) {
+  // Numbers only, as typed: strip anything else the moment it lands (a paste included).
+  f.addEventListener("input", () => { f.value = f.value.replace(/\D+/g, "").slice(0, 5); });
+  f.addEventListener("focus", () => f.select());
+  // Leaving the PAIR commits; Tab from W to H does not.
+  f.addEventListener("blur", (ev) => {
+    if (reverting) return;
+    const to = ev.relatedTarget;
+    if (to !== sizeW && to !== sizeH) commitSize();
+  });
+}
+
 if (!SYNTHETIC_INPUT) installRealInput();
 
 function installRealInput(): void {
@@ -323,16 +394,30 @@ window.addEventListener("pointerdown", (e) => {
   // The bar sits over the scrim, so a press on it must not also start a new
   // marquee underneath. First refusal, then the selection as before.
   if (current?.phase === "options" && current.bar) {
+    // A menu row first: the menu drops OVER the capture button, so the bar's
+    // own hit test would read a press on a row as a press on Capture.
+    const row = (e.target as Element).closest?.("#menu .row") as HTMLElement | null;
+    if (row && current.menu) {
+      const picked = current.menu.rows.find((r) => r.key === row.dataset.key);
+      if (picked) send({ t: "menuPick", pick: picked.pick });
+      return;
+    }
     const g = toGlobal(e);
     const hit = controlAt(g, current.bar);
+    // Any press outside the open menu closes it, except on the two triggers,
+    // whose own `control` toggles (or switches) the menu in one step.
+    if (current.menu && hit !== "mic" && hit !== "camera") send({ t: "menuClose" });
+    // The size field's inputs take focus by default; nothing else to send.
+    if (hit === "size") return;
     if (hit) {
       if (controlEnabled(hit, current.options!)) send({ t: "control", id: hit });
       return;
     }
     // The pane's own padding IS the bar (Review Focus 3): a press there is
     // swallowed rather than falling through to a new marquee, even though it
-    // landed on no control.
-    if (barContains(g, current.bar)) return;
+    // landed on no control. A press that only closed a menu is swallowed too —
+    // dismissing a menu must not also start a new selection.
+    if (barContains(g, current.bar) || current.menu) return;
   }
   const state = current?.state;
   const at = toGlobal(e);
@@ -361,6 +446,32 @@ window.addEventListener("pointerup", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
+  // The size fields own their keys (STC-456, Review Focus 1): digits, arrows,
+  // Space, Return and Escape typed there are editing, not selection gestures.
+  const t = e.target as HTMLElement;
+  if (t === sizeW || t === sizeH) {
+    if (e.key === "Enter") {
+      // Leaving the pair is the commit (the blur handler), so Return is just
+      // "leave" — one path, one `size` event.
+      e.preventDefault();
+      t.blur();
+    } else if (e.key === "Escape") {
+      // Revert, and do NOT cancel the overlay. Blur fires synchronously inside
+      // `blur()`, and its handler would commit the half-typed value — the flag
+      // is what tells it this blur is a revert.
+      e.preventDefault();
+      reverting = true;
+      try { t.blur(); } finally { reverting = false; }
+      if (current) render(current);
+    }
+    return;   // nothing typed in the field reaches the selection reducer
+  }
+  if (e.key === "Escape" && current?.menu) {
+    // First Escape closes the open menu; the next one cancels, as before.
+    e.preventDefault();
+    send({ t: "menuClose" });
+    return;
+  }
   // Space and the arrows both scroll a document by default, and Escape can be
   // swallowed; the overlay wants all of them verbatim.
   if ([" ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Escape", "Enter"].includes(e.key)) {

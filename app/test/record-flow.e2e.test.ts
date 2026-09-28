@@ -271,7 +271,7 @@ describe("the marquee stays adjustable with the bar up", () => {
     await send(overlay, { t: "key", key: "Enter" });
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
 
-    const before = (await overlay.textContent("#ctl-size"))?.trim();
+    const before = (await overlay.getAttribute("#ctl-size", "data-label"))?.trim();
     expect(before).toBeTruthy();
 
     // `reduce` (selection.ts) trusts the `handle` field on the event
@@ -283,7 +283,7 @@ describe("the marquee stays adjustable with the bar up", () => {
     await send(overlay, { t: "pointermove", at: { x: to.x + 80, y: to.y + 80 } });
     await send(overlay, { t: "pointerup", at: { x: to.x + 80, y: to.y + 80 } });
 
-    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).not.toBe(before);
+    await expect.poll(() => overlay.getAttribute("#ctl-size", "data-label"), { timeout: 10_000 }).not.toBe(before);
     // And the bar itself never left — this is the property that justifies it
     // living in the overlay window at all, not a side effect of the resize.
     expect(await overlay.getAttribute("#bar", "hidden")).toBeNull();
@@ -310,7 +310,7 @@ describe("the marquee stays adjustable with the bar up", () => {
     await awaitConfirmable(overlay);
     await send(overlay, { t: "key", key: "Enter" }); // pending = R1 (200x100 pts)
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
-    const beforeReadout = (await overlay.textContent("#ctl-size"))?.trim();
+    const beforeReadout = (await overlay.getAttribute("#ctl-size", "data-label"))?.trim();
     expect(beforeReadout).toBe(`${Math.round(200 * scaleFactor)} × ${Math.round(100 * scaleFactor)}`);
 
     // Adjust the marquee AFTER Enter — no new outcome, so pre-fix `pending`
@@ -319,8 +319,8 @@ describe("the marquee stays adjustable with the bar up", () => {
     await send(overlay, { t: "pointerdown", at: to, handle: "se" });
     await send(overlay, { t: "pointermove", at: adjustedTo });
     await send(overlay, { t: "pointerup", at: adjustedTo });
-    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).not.toBe(beforeReadout);
-    const afterReadout = (await overlay.textContent("#ctl-size"))?.trim();
+    await expect.poll(() => overlay.getAttribute("#ctl-size", "data-label"), { timeout: 10_000 }).not.toBe(beforeReadout);
+    const afterReadout = (await overlay.getAttribute("#ctl-size", "data-label"))?.trim();
     expect(afterReadout).toBe(`${Math.round(280 * scaleFactor)} × ${Math.round(180 * scaleFactor)}`);
 
     await send(overlay, { t: "control", id: "record" });
@@ -701,7 +701,7 @@ describe("switching a picked window back to an area keeps the bar honest", () =>
     await awaitConfirmable(overlay);
 
     const expectedReadout = `${Math.round(200 * scaleFactor)} × ${Math.round(100 * scaleFactor)}`;
-    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).toBe(expectedReadout);
+    await expect.poll(() => overlay.getAttribute("#ctl-size", "data-label"), { timeout: 10_000 }).toBe(expectedReadout);
 
     await send(overlay, { t: "control", id: "record" });
     await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
@@ -779,7 +779,7 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     const overlay = await toOptionsPhase(win);
 
     await send(overlay, { t: "size", width: 800, height: 600 });
-    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).toBe("800 × 600");
+    await expect.poll(() => overlay.getAttribute("#ctl-size", "data-label"), { timeout: 10_000 }).toBe("800 × 600");
 
     // Give an errant start a moment it would need, then prove none happened.
     await sleep(300);

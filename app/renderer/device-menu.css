@@ -1,0 +1,24 @@
+/* The device dropdown (STC-456). One component for the Record options bar
+   (dark, forced) and the main window's #devicestate popover (follows the OS).
+   The host sets --menu-surface / --menu-on-surface; everything else is here.
+
+   Glyphs are Material Symbols (app/src/icons.ts): FILLED outlines, so they
+   take `fill: currentColor` and never a stroke. */
+.device-menu {
+  position: fixed; box-sizing: border-box; z-index: 10;
+  width: max-content; min-width: 200px; max-width: 320px;
+  padding: 4px 0; border-radius: 16px;
+  background: var(--menu-surface); color: var(--menu-on-surface);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  font: 400 14px/1 var(--font-sans);
+}
+.device-menu[hidden] { display: none; }
+.device-menu .row {
+  display: flex; align-items: center; gap: 12px;
+  height: 44px; padding: 0 16px; cursor: default; white-space: nowrap;
+}
+.device-menu .row:hover { background: color-mix(in srgb, var(--menu-on-surface) 8%, transparent); }
+.device-menu .row .label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.device-menu .row svg { width: 20px; height: 20px; flex: none; opacity: .72; fill: currentColor; }
+.device-menu .row .check { visibility: hidden; opacity: 1; }
+.device-menu .row[aria-checked="true"] .check { visibility: visible; }
