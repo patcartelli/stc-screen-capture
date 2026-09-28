@@ -1,5 +1,9 @@
 # STC-401: real packaging (bundle ID + signing that survives a rebuild)
 
+Linear: https://linear.app/studio-cartelli/issue/STC-401/package-the-app-electron-builder-bundle-id-comstudiocartellicapture
+(source of truth for acceptance criteria — this doc elaborates it, not the
+other way around).
+
 ## Why
 
 Split off STC-397 (see `docs/TICKET-LOG.md`'s STC-397 row). There is no
@@ -44,7 +48,12 @@ Add `electron-builder` as a devDependency and configure it for macOS only:
   regardless of notarization.
 - `mac.extendInfo`: `NSCameraUsageDescription` / `NSMicrophoneUsageDescription`
   strings, reusing the exact copy `tools/test-host/STCTestHost.app`'s
-  `Info.plist` already uses.
+  `Info.plist` already uses. Screen Recording and Input Monitoring (the
+  `CGEventTap` STC-315 requires) are pure TCC prompts on macOS — neither
+  takes a hardened-runtime entitlement nor (per current Apple docs) an
+  Info.plist usage-description key, unlike Camera/Microphone. Confirmed
+  empirically during execution (this session has real signing tools), not
+  assumed.
 - No `mac.icon` — none exists in this repo. electron-builder falls back to
   Electron's default icon when omitted. Cosmetic; deliberately out of scope
   for a TCC-identity fix, same pattern this repo already uses elsewhere for
@@ -53,6 +62,57 @@ Add `electron-builder` as a devDependency and configure it for macOS only:
   `app/dist` (the esbuild bundle output) and `scratch/out`.
 - No notarization (`notarize` omitted/false). Nothing here ever picks up a
   quarantine flag, so Gatekeeper's network-download check never fires.
+
+## The helper has to ship inside the bundle (load-bearing)
+
+`app/src/main.ts:76` currently resolves the Swift helper via
+`join(here, "..", "..", "helper", "build", "stc-helper")` — a path that only
+exists because `here` is `app/dist/` inside the source checkout. Once
+`app/dist/main.mjs` ships inside a packaged `.app` (under `Resources/` or
+`app.asar`), that relative path resolves to nothing outside the bundle and
+the packaged app cannot spawn the helper at all. This is not an edge case —
+it is the primary reason a naïve electron-builder config would produce a
+bundle that launches and then does nothing.
+
+Fix:
+
+- `electron-builder`'s `extraResources` copies `helper/build/stc-helper`
+  into the packaged app (e.g. `Contents/Resources/stc-helper`).
+- `main.ts`'s `HELPER` constant branches on `app.isPackaged`: packaged →
+  `join(process.resourcesPath, "stc-helper")`; unpackaged → the existing
+  relative path. The `STC_HELPER_BIN` env override stays, unchanged, for
+  the E2E suite's stand-in helper.
+- The embedded helper binary is listed in `mac.binaries` so
+  electron-builder explicitly re-signs it (with the same STC Dev Signing
+  identity) as part of packaging, rather than shipping whatever signature
+  `helper/build.sh` happened to leave on it — `helper/build.sh` itself is
+  untouched, since `tools/test-host` and ad-hoc dev builds still use it
+  directly.
+- TCC inheritance itself (helper's grants coming from being a spawned
+  *child* of the signed app, not from where its bytes live on disk) is
+  already proven — PHASE-0 §6, increment 2 — and doesn't change; what
+  changes is only that the parent is now `Capture.app` instead of
+  `Electron.app`, which re-keys every grant once (see Verification).
+
+## Entitlements and TCC re-keying
+
+Changing the bundle ID re-keys every macOS permission this app uses —
+Screen Recording, Camera, Microphone, and Input Monitoring all have to be
+granted again against `com.studiocartelli.capture`. `docs/STC-315-RUNBOOK.md`
+§0 and `docs/STC-292-RUNBOOK.md` §7 are the existing runbook sections for
+re-running the permission-denied paths; this ticket doesn't rewrite them,
+but verification re-runs them once against the new bundle.
+
+## README's false Releases claim
+
+`README.md`'s "Download and Install" section (lines 53-56) currently tells
+readers to download a `.dmg` from GitHub Releases and points at a page that
+has never had a release on it — predates this ticket, but since "Name and
+identity" is already being rewritten in the same file, this gets corrected
+in the same pass rather than left standing. Given the dev-machine-only
+scope decision, the fix is to stop claiming a Releases download exists
+(state that the app is built from source today), not to build a DMG to
+make the claim true.
 
 ## Scripts
 
@@ -83,7 +143,8 @@ step exists" framing becomes wrong once this lands. Troubleshooting's
 `app:start` path still shows as Electron under Privacy & Security, and the
 README needs to say so explicitly rather than leaving one bundle ID as the
 only answer when there are now two valid ones depending on how the app was
-launched.
+launched. The "Download and Install" section's false Releases/DMG claim is
+corrected in the same pass (see above).
 
 `docs/PRE-DEMO-CHECKLIST.md` is NOT rewritten by this ticket. It already
 says "until packaging ships (STC-401)" and correctly scopes packaging as
@@ -113,14 +174,22 @@ verified end-to-end here rather than only typechecked:
    constant. That is a necessary condition for grant survival, not a
    sufficient one — see the manual step below for the sufficient one.
 5. Launch via `open release/mac-arm64/Capture.app`, confirm it requests
-   Screen Recording / Input Monitoring under `com.studiocartelli.capture`
-   (visible in System Settings → Privacy & Security) rather than
-   `com.github.Electron`.
-6. Run one real take through the packaged app (record a few seconds,
+   Screen Recording / Input Monitoring / Camera / Microphone under
+   `com.studiocartelli.capture` (visible in System Settings → Privacy &
+   Security) rather than `com.github.Electron`, and that this is **one
+   entry** — not a second one for the embedded helper (the acceptance
+   criterion for helper-bundling: "no second entry in System Settings").
+6. Confirm `app.getName()` still resolves to `Capture` from the packaged
+   bundle and userData still resolves to the existing
+   `…/Application Support/Capture` (STC-397's migration must not re-run or
+   double-move — the packaged app should find the same settings and
+   unsaved takes the unpackaged dev build already migrated).
+7. Run one real take through the packaged app (record a few seconds,
    stop, confirm it appears in the library and exports) — the same "one
    real take" check `docs/PRE-DEMO-CHECKLIST.md` already prescribes,
-   proving the packaged bundle is not just launchable but functional.
-7. **The claim that actually matters — grant survives a rebuild — needs a
+   proving the packaged bundle is not just launchable but functional, and
+   proving the bundled helper (not the dev-tree one) is what actually ran.
+8. **The claim that actually matters — grant survives a rebuild — needs a
    manual step this session will attempt but may not be able to complete
    unattended**: grant Screen Recording once, rebuild with a real source
    change, relaunch, and confirm no new prompt appears and capture still
