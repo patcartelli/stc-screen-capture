@@ -2,8 +2,9 @@ import { describe, test, expect } from "vitest";
 import {
   BAR_GAP, BAR_HEIGHT, BAR_MARGIN, CAPTURE_GAP, CAPTURE_HEIGHT, CONTROL_IDS, MENU_GAP,
   PANE_WIDTH, barContains, barLayout, controlAt, controlEnabled, expandedSelection,
-  menuAnchor, sizeLabel,
+  menuAnchor, sizeLabel, parseDimension, resizeToPixels,
 } from "../src/record-options.js";
+import { MIN_SELECTION_POINTS } from "../src/selection.js";
 import type { DisplayInfo, Rect } from "../src/selection.js";
 
 /**
@@ -180,5 +181,41 @@ describe("expand, and the readout", () => {
     // scaleFactor 2: a 400x200 point marquee records 800x400 pixels, and the
     // number a user checks against a spec is the pixel one.
     expect(sizeLabel({ x: 0, y: 0, width: 400, height: 200 }, display)).toBe("800 × 400");
+  });
+});
+
+describe("typing a size (STC-456)", () => {
+  // scaleFactor 2: 1 pt = 2 px.
+  test("parseDimension keeps digits and refuses everything else", () => {
+    expect(parseDimension("1440")).toBe(1440);
+    expect(parseDimension(" 1440 ")).toBe(1440);
+    expect(parseDimension("")).toBeUndefined();
+    expect(parseDimension("0")).toBeUndefined();
+    expect(parseDimension("14a0")).toBeUndefined();
+    expect(parseDimension("-5")).toBeUndefined();
+    expect(parseDimension("1e3")).toBeUndefined();
+  });
+  test("resizes around the marquee's centre, and the readout shows what was typed", () => {
+    const anchor = { x: 400, y: 300, width: 400, height: 200 };
+    const r = resizeToPixels(anchor, display, 1000, 600);
+    expect(r).toEqual({ x: 350, y: 250, width: 500, height: 300 });
+    expect(sizeLabel(r, display)).toBe("1000 × 600");
+  });
+  test("an odd pixel count on a 2x display rounds to a whole point", () => {
+    const r = resizeToPixels({ x: 400, y: 300, width: 400, height: 200 }, display, 1001, 601);
+    expect(Number.isInteger(r.width) && Number.isInteger(r.height)).toBe(true);
+  });
+  test("larger than the display clamps to the display (Review Focus 2)", () => {
+    const r = resizeToPixels({ x: 400, y: 300, width: 400, height: 200 }, display, 99999, 99999);
+    expect(r).toEqual(display.bounds);
+  });
+  test("tiny clamps UP to MIN_SELECTION_POINTS, never to an invisible marquee", () => {
+    const r = resizeToPixels({ x: 400, y: 300, width: 400, height: 200 }, display, 1, 1);
+    expect(r.width).toBe(MIN_SELECTION_POINTS);
+    expect(r.height).toBe(MIN_SELECTION_POINTS);
+  });
+  test("growing near an edge shifts the rect back inside rather than clipping it", () => {
+    const r = resizeToPixels({ x: 1500, y: 900, width: 100, height: 100 }, display, 800, 400);
+    expect(r).toEqual({ x: 1200, y: 800, width: 400, height: 200 });
   });
 });

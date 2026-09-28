@@ -1,4 +1,4 @@
-import { pixelSize, rectContains, type DisplayInfo, type Point, type Rect } from "./selection.js";
+import { MIN_SELECTION_POINTS, pixelSize, rectContains, type DisplayInfo, type Point, type Rect } from "./selection.js";
 import type { MicInfo } from "./mic-devices.js";
 
 /**
@@ -209,4 +209,31 @@ export function expandedSelection(display: DisplayInfo): Rect {
 export function sizeLabel(selection: Rect, display: DisplayInfo): string {
   const { width, height } = pixelSize(selection, display);
   return `${width} × ${height}`;
+}
+
+/** A typed dimension: digits only, positive. Anything else is "not a number
+ * yet", and the field reverts rather than guessing. */
+export function parseDimension(text: string): number | undefined {
+  const t = text.trim();
+  if (!/^\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  return n > 0 ? n : undefined;
+}
+
+/**
+ * The marquee after the user types a size in PIXELS (the unit the readout
+ * shows, `sizeLabel`), in global POINTS. Centred on the old anchor, whole
+ * points, at least MIN_SELECTION_POINTS, at most the display, then shifted
+ * (never shrunk) to sit inside it.
+ */
+export function resizeToPixels(anchor: Rect, display: DisplayInfo,
+                               widthPx: number, heightPx: number): Rect {
+  const b = display.bounds;
+  const s = display.scaleFactor > 0 ? display.scaleFactor : 1;
+  const w = clamp(Math.round(widthPx / s), MIN_SELECTION_POINTS, b.width);
+  const h = clamp(Math.round(heightPx / s), MIN_SELECTION_POINTS, b.height);
+  const cx = anchor.x + anchor.width / 2, cy = anchor.y + anchor.height / 2;
+  const x = clamp(Math.round(cx - w / 2), b.x, b.x + b.width - w);
+  const y = clamp(Math.round(cy - h / 2), b.y, b.y + b.height - h);
+  return { x, y, width: w, height: h };
 }
