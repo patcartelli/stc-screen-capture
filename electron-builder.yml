@@ -1,0 +1,21 @@
+# electron-builder.yml — STC-401. Dev-machine packaging only: this produces
+# a signed .app for local use, keeping TCC grants alive across rebuilds the
+# same way helper/build.sh already does for the Swift helper. No
+# notarization, no DMG/zip, no auto-update — see the design spec.
+appId: com.studiocartelli.capture
+productName: Capture
+directories:
+  output: release
+files:
+  - app/dist/**/*
+  - package.json
+mac:
+  target:
+    - target: dir
+  identity: "STC Dev Signing"
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSCameraUsageDescription: "Capture records a camera picture-in-picture alongside the screen."
+    NSMicrophoneUsageDescription: "Capture records a microphone track alongside the screen."
