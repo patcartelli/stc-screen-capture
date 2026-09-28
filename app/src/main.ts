@@ -54,6 +54,7 @@ import { openStillEditor } from "./still-editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
+import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
 import { ensureCaptureId, readBundleId } from "./capture-identity.js";
@@ -987,7 +988,7 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
   // FINDING 6 (STC-388 review, HIGH). `recordFlowActive` is now part of THIS
   // guard, and is set below in the SAME synchronous block as this check —
   // never after an `await`. It used to be set only after two awaited helper
-  // round trips (`listWindows`/`micsForBar`), which is exactly the window a
+  // round trips (`listWindows`/`devicesForBar`), which is exactly the window a
   // second ⌃⌥⇧⌘4 press is plausible in: nothing has appeared on screen yet.
   // That press would pass this guard a second time — `overlayIsOpen()` and
   // `countdownIsOpen()` are both still false, since neither has opened — and
@@ -1020,13 +1021,13 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
     }
 
     const stored = readSettings(app.getPath("userData"));
-    const mics = await micsForBar();
+    const { mics, cameras } = await devicesForBar();
 
-    return await recordFlowBody(source, stored, mics, windows);
+    return await recordFlowBody(source, stored, mics, cameras, windows);
   } catch (e: any) {
     // Adjacent to STC-468: this used to have no catch-all at all, unlike
     // `captureStill` above — a rejection anywhere in the flow (the overlay,
-    // `micsForBar`, `recordFlowBody`) would reach one of THREE fire-and-forget
+    // `devicesForBar`, `recordFlowBody`) would reach one of THREE fire-and-forget
     // call sites (the tray, the hotkey, the menu bar) with nothing to catch
     // it, which is precisely an unhandled rejection in the main process.
     // Same shape as `captureStill`'s own catch: report it as a RecordResult
@@ -1041,20 +1042,30 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
 /** The flow proper. Split out so `recordFlowActive` has exactly one `finally`
  * covering every step it needs to cover. */
 async function recordFlowBody(
-  source: RecordSource, stored: Settings, mics: MicInfo[], windows: WindowInfo[],
+  source: RecordSource, stored: Settings, mics: MicInfo[], cameras: DeviceLike[], windows: WindowInfo[],
 ): Promise<RecordResult> {
-  const { outcome, options } = await openOverlay({
+  const { outcome, options, afterClose } = await openOverlay({
     windows, mode: "region", purpose: "record",
-    initialOptions: { micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics },
+    initialOptions: {
+      micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics,
+      systemAudio: stored.systemAudio, cameraDeviceUid: stored.cameraDeviceUid, cameras,
+    },
     dist: here, renderer: join(here, "..", "renderer"),
   });
+  // The bar's own Settings control (STC-456): closes the overlay with no
+  // take, then hands off to the main window's existing sheet — the same
+  // door the profile button already opens, never a second implementation.
+  if (afterClose === "settings") { openSettingsSheet(); return { ok: false, cancelled: true }; }
   if (outcome.kind === "cancelled" || !options) return { ok: false, cancelled: true };
 
   // The bar's toggles ARE the sticky settings, so they are written back — only
   // SCOPE is per-take. Written before the countdown, so a cancelled countdown
-  // still keeps a mic the user just chose.
-  writeSettings(app.getPath("userData"),
-                { camera: options.camera, micDeviceUid: options.micDeviceUid });
+  // still keeps a mic (and now a camera device / system-audio choice) the
+  // user just made.
+  writeSettings(app.getPath("userData"), {
+    camera: options.camera, micDeviceUid: options.micDeviceUid,
+    systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+  });
 
   // THE start-param builder — the only place a Record's `start` request is
   // assembled (spec §3). A new setting that reaches the helper (STC-420's
@@ -1063,16 +1074,17 @@ async function recordFlowBody(
   // decided in two places.
   const startParams: Record<string, unknown> = { camera: options.camera };
   if (options.micDeviceUid != null) startParams.micDeviceUid = options.micDeviceUid;
-  // STC-414: from STORED settings — the bar has no camera-device control,
-  // only the camera on/off above. An absent field means "the helper's own
+  // STC-456: from the BAR now — its own camera menu (`device-picker.ts`)
+  // picks a device directly, the same options object `micDeviceUid` above
+  // already reads from. An absent field still means "the helper's own
   // pickCamera ranking", not "no camera" (that is `camera`'s job), so it is
   // sent even when the camera is off; the helper only consults it once it
   // has decided to open a camera at all.
-  if (stored.cameraDeviceUid != null) startParams.cameraDeviceUid = stored.cameraDeviceUid;
-  // STC-418: from STORED settings, never from the bar or the renderer — the
-  // bar has no system-audio control (that is STC-459). Only when on; absent
-  // is "off" to the helper's parseStartRequest.
-  if (stored.systemAudio) startParams.systemAudio = true;
+  if (options.cameraDeviceUid != null) startParams.cameraDeviceUid = options.cameraDeviceUid;
+  // STC-456 (absorbs STC-459): from the BAR's own toggle now, not a stored-
+  // only preference. Only when on; absent is "off" to the helper's
+  // parseStartRequest — the existing pin this ticket keeps.
+  if (options.systemAudio) startParams.systemAudio = true;
   let countdownDisplay: number | undefined;
   if (outcome.kind === "window") {
     startParams.windowId = outcome.windowId;
@@ -1195,26 +1207,46 @@ function windowsFromReply(r: HelperLine): WindowInfo[] {
 }
 
 /**
- * The mics the bar can offer.
+ * The mics AND cameras the bar can offer, from ONE `sup.devices()` call
+ * (STC-456) — the same call the window's mic and camera pickers already make
+ * through `recorder:devices`, and the same `mics`/`cameras` shapes they
+ * already read. A second enumeration, or two separate ones here, would be
+ * two answers to one question — and STC-233 already records a CoreAudio
+ * enumeration stalling, which is reason enough not to ask twice.
  *
- * `sup.devices()` — the SAME call the window's mic picker already makes through
- * `recorder:devices`, and the same `mics` shape it already reads. A second
- * enumeration with its own field names would be two answers to one question.
- *
- * Failure is not fatal and is not reported: an empty list disables the control,
- * which is exactly what "no mic available" should look like, and a modal about
- * it would sit between the user and a recording they asked for. `devices()` can
- * also answer `{ stalled: true }` — the window's picker already tolerates that,
- * and so does this: `mics` is simply absent and the control disables.
+ * Failure is not fatal and is not reported: an empty list disables (or, for
+ * the camera, degrades) the control, which is exactly what "nothing
+ * available" should look like, and a modal about it would sit between the
+ * user and a recording they asked for. `devices()` can also answer
+ * `{ stalled: true }` — the window's pickers already tolerate that, and so
+ * does this: both lists are simply absent and their controls read that way.
  */
-async function micsForBar(): Promise<MicInfo[]> {
+async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[] }> {
   try {
     const r = await sup!.devices();
     const mics = (r as { mics?: unknown }).mics;
-    return Array.isArray(mics) ? mics as MicInfo[] : [];
+    const cameras = (r as { cameras?: unknown }).cameras;
+    return {
+      mics: Array.isArray(mics) ? mics as MicInfo[] : [],
+      cameras: Array.isArray(cameras) ? cameras as DeviceLike[] : [],
+    };
   } catch {
-    return [];
+    return { mics: [], cameras: [] };
   }
+}
+
+/**
+ * The bar's Settings control (STC-456): the overlay closes with no take, and
+ * this hands off to the main window's existing sheet — `openLibrary` is the
+ * SAME "show and focus the window" step the tray's own Library item already
+ * uses, so a settings hand-off with no window open behaves exactly like any
+ * other way back into the app. `ui:open-settings` is a fire-and-forget
+ * broadcast (`send` already no-ops when there is no live window to send to,
+ * which cannot happen here since `openLibrary` just ensured one).
+ */
+function openSettingsSheet(): void {
+  openLibrary();
+  send("ui:open-settings", undefined);
 }
 
 /**

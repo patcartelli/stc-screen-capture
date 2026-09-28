@@ -9,6 +9,7 @@ import { startRecordFlow } from "./_record-flow.js";
 import { HIDE_SETTLE_MS } from "../src/overlay-session.js";
 import { toastPage } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { hasWindow } from "./_windows.js";
 
 /**
  * The whole Record flow, in a real app (STC-388).
@@ -33,7 +34,7 @@ afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, AP
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-interface Launched { win: Page; startLog: string; tempTakes: string }
+interface Launched { win: Page; startLog: string; tempTakes: string; ud: string }
 
 async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
@@ -49,7 +50,12 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   });
   const win = await app.firstWindow();
   await win.waitForSelector("#record");
-  return { win, startLog, tempTakes };
+  return { win, startLog, tempTakes, ud };
+}
+
+/** `settings.json`'s current contents, for the fields STC-456 writes back. */
+function readWrittenSettings(ud: string): any {
+  return JSON.parse(readFileSync(join(ud, "settings.json"), "utf8"));
 }
 
 const readLines = (file: string): any[] =>
@@ -687,5 +693,91 @@ describe("switching a picked window back to an area keeps the bar honest", () =>
     expect(cmd.region).toBeDefined();
     expect(`${Math.round(cmd.region.width * scaleFactor)} × ${Math.round(cmd.region.height * scaleFactor)}`)
       .toBe(expectedReadout);
+  }, 120_000);
+});
+
+describe("system audio and the camera device reach start (STC-456, absorbs STC-459)", () => {
+  /** Drag a region and confirm it, up to the bar being live — the shared
+   * prefix every test below needs before it can press a control of its own. */
+  async function toOptionsPhase(win: Page): Promise<Page> {
+    await win.click("#record");
+    const overlay = await overlayWindow();
+    await dragARegion(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+    return overlay;
+  }
+
+  test("Include System Audio on → start carries systemAudio: true, and it is written back", async () => {
+    const { win, startLog, ud } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
+    await send(overlay, { t: "control", id: "record" });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect(cmd.systemAudio, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
+    await expect.poll(() => readWrittenSettings(ud).systemAudio, { timeout: 10_000 }).toBe(true);
+  }, 120_000);
+
+  test("off → the key is ABSENT, not false (the existing pin)", async () => {
+    const { win, startLog, ud } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    // No toggle pressed — System Audio stays off, exactly as it started.
+    await send(overlay, { t: "control", id: "record" });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect("systemAudio" in cmd, `start payload was ${JSON.stringify(cmd)}`).toBe(false);
+    expect(readWrittenSettings(ud).systemAudio).toBe(false);
+  }, 120_000);
+
+  test("a camera picked on the bar → start carries camera: true and that cameraDeviceUid", async () => {
+    const { win, startLog, ud } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "control", id: "camera" });
+    await send(overlay, {
+      t: "menuPick",
+      pick: { kind: "choice", menu: "camera", choice: { kind: "device", uid: "fixture-cam-9" } },
+    });
+    await send(overlay, { t: "control", id: "record" });
+
+    await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
+    const [cmd] = readLines(startLog);
+    expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
+    expect(cmd.cameraDeviceUid).toBe("fixture-cam-9");
+    await expect.poll(() => readWrittenSettings(ud).cameraDeviceUid, { timeout: 10_000 }).toBe("fixture-cam-9");
+  }, 120_000);
+
+  test("a typed size does NOT start a take (Review Focus 1)", async () => {
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "size", width: 800, height: 600 });
+    await expect.poll(() => overlay.textContent("#ctl-size"), { timeout: 10_000 }).toBe("800 × 600");
+
+    // Give an errant start a moment it would need, then prove none happened.
+    await sleep(300);
+    expect(readLines(startLog)).toEqual([]);
+  }, 120_000);
+
+  test("Settings closes the overlay without a take and opens the settings sheet", async () => {
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "control", id: "settings" });
+
+    await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
+    expect(readLines(startLog)).toEqual([]);
+    await expect.poll(() => win.getAttribute("#profilesheet", "class"), { timeout: 10_000 }).toMatch(/open/);
   }, 120_000);
 });

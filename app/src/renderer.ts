@@ -427,6 +427,10 @@ function setProfileOpen(open: boolean): void {
 }
 profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
 profileCloseBtn.addEventListener("click", () => setProfileOpen(false));
+// STC-456: the options bar's own Settings control, with no renderer of its
+// own, asks main to open this sheet — the same function the profile button's
+// click handler calls, so there is one way this sheet opens, not two.
+recorder.on("ui:open-settings", () => setProfileOpen(true));
 document.addEventListener("keydown", (e) => {
   if (e.code === "Escape") { setProfileOpen(false); closePopover(); }
 });
