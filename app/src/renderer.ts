@@ -116,7 +116,7 @@ import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
 import { MODEL_CODE } from "./product.js";
-import { micLabel, type MicInfo } from "./mic-devices.js";
+import { micDevices, type MicInfo } from "./mic-devices.js";
 import {
   decidePopoverToggle, micMenuRows, cameraMenuRows, applyMenuPick,
   type DeviceLike, type DeviceChoice, type PopoverId, type DeviceSelection, type MenuRow,
@@ -281,7 +281,7 @@ function renderIdleStatus(): void {
 async function refreshDevices(): Promise<void> {
   try {
     const r = await recorder.devices();
-    knownMics = Array.isArray(r.mics) ? r.mics.map((m) => ({ name: micLabel(m), uid: m.uid })) : [];
+    knownMics = Array.isArray(r.mics) ? micDevices(r.mics as MicInfo[]) : [];
     knownCameras = Array.isArray(r.cameras) ? r.cameras : [];
   } catch {
     knownMics = [];
@@ -777,11 +777,22 @@ recorder.on("pill:state", (s: { collapsed: boolean }) => {
  * nothing else would refresh it until the next `helper:ready` or a real
  * unplug. There is no display equivalent under STC-388's fresh, never-
  * persisted scope pick — a vanished display just refuses the take.
+ *
+ * STC-456 fix round (Finding 2): `writeBarOptions` (main.ts) now sends this
+ * same channel after the Record options bar writes a choice back — a camera
+ * pick, a mic pick, or a system-audio toggle made on the bar, not only the
+ * mic-not-found correction above. All FOUR stored fields are re-read here now,
+ * not just the mic uid — a bar choice this window did not make itself could
+ * change any of them, and a stale `#camera-state`/`#mic-state` (or a popover
+ * still checking the OLD row) is exactly Finding 2's bug.
  */
 recorder.on("settings:changed", () => {
   void (async () => {
     const s = await recorder.getSettings();
     storedMicUid = s.micDeviceUid;
+    storedSystemAudio = s.systemAudio;
+    storedCamera = s.camera;
+    storedCameraUid = s.cameraDeviceUid;
     await refreshDevices();
   })();
 });

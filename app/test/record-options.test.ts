@@ -140,12 +140,13 @@ describe("the controls (STC-456)", () => {
     expect(barContains(padding, l)).toBe(true);
     expect(controlAt(padding, l)).toBeUndefined();
   });
-  test("keys and clicks are always disabled; mic needs a mic", () => {
-    expect(controlEnabled("keys", { mics: [{}] })).toBe(false);
-    expect(controlEnabled("clicks", { mics: [{}] })).toBe(false);
-    expect(controlEnabled("mic", { mics: [] })).toBe(false);
-    expect(controlEnabled("mic", { mics: [{}] })).toBe(true);
-    expect(controlEnabled("camera", { mics: [] })).toBe(true);
+  test("keys and clicks are always disabled; mic and camera are always enabled (STC-456 review, Finding 1)", () => {
+    expect(controlEnabled("keys")).toBe(false);
+    expect(controlEnabled("clicks")).toBe(false);
+    // The mic trigger must stay reachable with ZERO mics — its menu holds
+    // Include System Audio and Mute External, neither of which needs one.
+    expect(controlEnabled("mic")).toBe(true);
+    expect(controlEnabled("camera")).toBe(true);
   });
 });
 
@@ -154,21 +155,37 @@ describe("where a menu opens (STC-456)", () => {
   test("drops from the trigger's bottom-left, 4 below it", () => {
     const l = barLayout({ x: 200, y: 200, width: 300, height: 200 }, display);
     const trig = l.controls.find((c) => c.id === "mic")!.rect;
-    expect(menuAnchor(l, "mic", display)).toEqual(
+    expect(menuAnchor(l, "mic", display, 2)).toEqual(
       { menu: "mic", side: "below", x: trig.x, y: trig.y + trig.height + MENU_GAP });
   });
   test("it covers the capture button rather than avoiding it", () => {
     const l = barLayout({ x: 200, y: 200, width: 300, height: 200 }, display);
-    const a = menuAnchor(l, "camera", display);
+    const a = menuAnchor(l, "camera", display, 3);
     expect(a.y).toBeLessThan(l.capture.y + l.capture.height);
   });
   test("flips ABOVE the trigger when a full menu would run off the display's bottom", () => {
     // Bar placed low: the marquee fills the display, so the bar sits inside at the bottom.
     const l = barLayout(display.bounds, display);
     const trig = l.controls.find((c) => c.id === "mic")!.rect;
-    const a = menuAnchor(l, "mic", display);
+    const a = menuAnchor(l, "mic", display, 2);
     expect(a.side).toBe("above");
     expect(a.y).toBe(trig.y - MENU_GAP);
+  });
+  // Finding 6/7 (STC-456 fix round): the flip is NOT "only when the bar sits
+  // at the bottom edge" — it is whenever trigger-bottom + gap + this SPECIFIC
+  // menu's height would cross the display's bottom margin. Same bar, same
+  // ordinary `below` placement (not `inside`): a short menu still fits below
+  // it, a long one does not, and `rowCount` is what tells them apart. Before
+  // `menuHeight(rowCount)` replaced a fixed `MENU_MAX_HEIGHT` guess, a 7-row
+  // menu here would have been sized the same as a 2-row one.
+  test("rowCount, not a fixed guess, decides the flip — a short menu fits where a long one doesn't", () => {
+    const sel = { x: 400, y: 700, width: 400, height: 50 };
+    const l = barLayout(sel, display);
+    expect(l.placement).toBe("below");
+    const short = menuAnchor(l, "mic", display, 2);
+    const long = menuAnchor(l, "mic", display, 7);
+    expect(short.side).toBe("below");
+    expect(long.side).toBe("above");
   });
 });
 

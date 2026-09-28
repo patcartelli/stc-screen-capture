@@ -27,10 +27,16 @@ rows and the state change; `app/src/device-menu-dom.ts`'s `buildMenuRow`
 draws them (used by both `overlay.ts`'s `renderMenu` and `renderer.ts`'s main
 window popover); `app/renderer/device-menu.css` is the one shared dropdown
 stylesheet. The overlay's menus drop BELOW their trigger and sit OVER the
-capture button on purpose (Patrick's ruling), flipping ABOVE only when the
-bar sits at the bottom of the display (`menuAnchor`, `record-options.ts`).
-The main window's popover keeps its old position, under its trigger, and now
-also offers "Include System Audio" (STC-459 folded into this ticket).
+capture button on purpose (Patrick's ruling), flipping ABOVE whenever the
+trigger's bottom edge, plus the gap, plus THAT menu's own height
+(`menuHeight(rowCount)`, `record-options.ts`) would cross the display's
+bottom margin — not only when the bar itself sits at the bottom of the
+display; an ordinary `below`-placed bar with a long enough menu (the camera
+list, say) crosses the same line and flips for the same reason. The main
+window's popover keeps its old position, under its trigger, and now also
+offers "Include System Audio" (STC-459 folded into this ticket). The mic
+trigger is never disabled, even with zero mics — its menu's two device-less
+rows (Include System Audio, Mute External) need none.
 
 A typed size (`parseDimension`/`resizeToPixels`) resizes the marquee around
 its centre; `barPress` (`record-options.ts`) decides pointerdown ordering: a
@@ -64,12 +70,23 @@ that gap.
 4. **Crop.** Returns to drawing (the marquee disappears, back to a fresh
    drag). A new drag brings the bar back.
 5. **Settings.** The overlay closes and the main window opens with the
-   settings sheet already open.
-6. **Mic menu.** Drops below its trigger and over Capture Video; flips
-   above the trigger when the bar sits at the bottom of the display (drag a
-   marquee near the bottom edge, or Expand on a bar-at-bottom layout).
-   Toggling "Include System Audio" keeps the menu open. Record → `system.m4a`
-   exists in the take's folder.
+   settings sheet already open. A camera or mic pick (or a system-audio
+   toggle) made on the bar just before pressing Settings shows up in the
+   main window too — `#camera-state`/`#mic-state` and the popover's own
+   checked row, not just `settings.json` (STC-456 fix round, Finding 2:
+   `writeBarOptions` used to write the file but never tell an already-open
+   main window, so its labels stayed stale until something else refreshed
+   them).
+6. **Mic menu.** Drops below its trigger and over Capture Video; flips above
+   the trigger whenever the trigger's bottom + gap + the menu's own height
+   would cross the display's bottom margin — NOT only when the bar sits at
+   the bottom of the display: a bar in its ordinary `below` placement can
+   also cross that line if the menu itself is long enough (drag a marquee
+   near the bottom edge, or Expand on a bar-at-bottom layout, to force it
+   either way). Toggling "Include System Audio" keeps the menu open. Record
+   → `system.m4a` exists in the take's folder. With no mic connected, the
+   trigger is still clickable and the menu still opens — it offers only
+   Include System Audio and Mute External.
 7. **Camera menu.** The "Automatic" row sits between "No Camera" and the
    named devices (it was left out of Frame 9 by accident — Patrick confirmed
    it stays). Pick a named camera, Record → that camera is the one in the

@@ -796,6 +796,13 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     // keeps a mic the user just chose.
     await send(overlay, { t: "control", id: "mic" });
     await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
+    // Also pick the one mic the fake helper offers (STC-456 fix round,
+    // Finding 2's own regression): this is a SECOND bar choice, a device
+    // pick rather than a toggle, and it closes the bar's own menu.
+    await send(overlay, {
+      t: "menuPick",
+      pick: { kind: "choice", menu: "mic", choice: { kind: "device", uid: "fixture-mic-1" } },
+    });
 
     await send(overlay, { t: "control", id: "settings" });
 
@@ -803,6 +810,13 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     expect(readLines(startLog)).toEqual([]);
     await expect.poll(() => win.getAttribute("#profilesheet", "class"), { timeout: 10_000 }).toMatch(/open/);
     await expect.poll(() => readWrittenSettings(ud).systemAudio, { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => readWrittenSettings(ud).micDeviceUid, { timeout: 10_000 }).toBe("fixture-mic-1");
+    // Finding 2's actual bug: `writeBarOptions` never told the main window
+    // its settings had changed, so `#mic-state` (and the popover's own
+    // checked row) kept showing whatever was true before the overlay opened.
+    // `settings:changed` (main.ts) -> the renderer's handler re-reading all
+    // four stored fields is what this proves.
+    await expect.poll(() => win.textContent("#mic-state"), { timeout: 10_000 }).toBe("Fixture USB Mic");
   }, 120_000);
 
   test("Settings from the tray, with NO main window open, still opens the sheet once it is created (fix round 1, CRITICAL)", async () => {

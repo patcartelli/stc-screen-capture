@@ -1047,12 +1047,23 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
  * cancel/Escape, where `options` is equally present but nothing must be
  * written — `record-flow.e2e.test.ts`'s own documented contract is "Escape
  * at each step writes nothing."
+ *
+ * Sends `settings:changed` after the write (STC-456 fix round, Finding 2) —
+ * before this it did not, so a camera or mic pick made on the BAR (or a
+ * system-audio toggle) never reached an already-open main window: its
+ * `#camera-state`/`#mic-state` labels and the popover's own checked rows kept
+ * showing whatever was true before the overlay opened, until something else
+ * happened to refresh them. The same channel `main.ts` already sends on a
+ * mic-not-found correction below, and the same one `renderer.ts` already
+ * listens for — this just makes the bar a second sender of it, not a second
+ * channel.
  */
 function writeBarOptions(options: OptionsState): void {
   writeSettings(app.getPath("userData"), {
     camera: options.camera, micDeviceUid: options.micDeviceUid,
     systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
   });
+  send("settings:changed", undefined);
 }
 
 /** The flow proper. Split out so `recordFlowActive` has exactly one `finally`
@@ -1244,12 +1255,15 @@ function windowsFromReply(r: HelperLine): WindowInfo[] {
  * two answers to one question — and STC-233 already records a CoreAudio
  * enumeration stalling, which is reason enough not to ask twice.
  *
- * Failure is not fatal and is not reported: an empty list disables (or, for
- * the camera, degrades) the control, which is exactly what "nothing
- * available" should look like, and a modal about it would sit between the
- * user and a recording they asked for. `devices()` can also answer
- * `{ stalled: true }` — the window's pickers already tolerate that, and so
- * does this: both lists are simply absent and their controls read that way.
+ * Failure is not fatal and is not reported: an empty list degrades the
+ * control down to its device-less rows — the mic trigger stays enabled
+ * either way (STC-456 review, Finding 1: its menu's Include System Audio and
+ * Mute External need no mic), and the camera menu falls back to No
+ * Camera/Automatic only — which is exactly what "nothing available" should
+ * look like, and a modal about it would sit between the user and a recording
+ * they asked for. `devices()` can also answer `{ stalled: true }` — the
+ * window's pickers already tolerate that, and so does this: both lists are
+ * simply absent and their menus read that way.
  */
 async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[] }> {
   try {

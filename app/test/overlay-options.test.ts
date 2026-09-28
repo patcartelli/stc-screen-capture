@@ -213,7 +213,7 @@ describe("the bar belongs on ONE display, not every window's own (Finding 5, STC
 
   test("does NOT belong on a display the anchor never touches — the bug this fixes", () => {
     // Before this fix, `push()` built a layout for EVERY window unconditionally:
-    // `barLayout`/`micMenuLayout` clamp into whichever display's bounds they
+    // `barLayout`/`menuAnchor` clamp into whichever display's bounds they
     // are handed, so display B got a fully visible, fully live copy of a bar
     // that belongs on display A.
     expect(barBelongsOn(anchorOnA, displayB.id, [displayA, displayB])).toBe(false);

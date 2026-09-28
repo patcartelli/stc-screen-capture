@@ -27,7 +27,13 @@ export const CONTROL_IDS: readonly ControlId[] =
 export type MenuId = "mic" | "camera";
 
 export interface OptionsState extends DeviceSelection {
-  /** What the mic menu can offer. Empty disables the mic control outright. */
+  /**
+   * What the mic menu can offer. The mic trigger is ALWAYS enabled, even when
+   * this is empty — a Mac mini/Studio with no mic attached, or a stalled
+   * enumeration (`devicesForBar` returning `mics: []`), must still reach
+   * Include System Audio and Mute External, both of which live in this menu
+   * now and neither of which needs a mic to exist (STC-456 review).
+   */
   mics: readonly MicInfo[];
   /** What the camera menu can offer. Empty still offers No Camera / Automatic. */
   cameras: readonly DeviceLike[];
@@ -66,9 +72,22 @@ const CARET_CONTROL = 48;          // icon + ▾
 export const CAPTURE_GAP = 8;
 export const CAPTURE_HEIGHT = 36;
 export const MENU_GAP = 4;
-/** The tallest a menu is expected to be (6 rows of 44 + padding), for the
- * below/above decision only. The view sizes the menu; this is an upper bound. */
-const MENU_MAX_HEIGHT = 280;
+/**
+ * The device menu's own row metrics (STC-456 fix round, Finding 7) —
+ * `device-menu.css`'s `.device-menu .row { height: 44px }` and its
+ * `padding: 4px 0`, named here rather than re-guessed. `menuHeight` is the
+ * ONE place a row count becomes a pixel height; a fixed `MENU_MAX_HEIGHT`
+ * guess (280, sized for 6 rows) under-counted a real 7-row menu by about
+ * 36px, which could pick "below" when the menu actually ran off the
+ * display's bottom. The view still SIZES the menu (only the DOM knows a
+ * label's actual width), but the below/above decision needs this estimate
+ * before the DOM exists.
+ */
+export const MENU_ROW_HEIGHT = 44;
+export const MENU_VERTICAL_PADDING = 8; // 4px top + 4px bottom
+export function menuHeight(rowCount: number): number {
+  return rowCount * MENU_ROW_HEIGHT + MENU_VERTICAL_PADDING;
+}
 
 /** The whole block the placement rules move: pane + gap + capture button. */
 export const BAR_HEIGHT = PANE_HEIGHT + CAPTURE_GAP + CAPTURE_HEIGHT;
@@ -162,12 +181,18 @@ export function controlAt(p: Point, layout: BarLayout): ControlId | undefined {
   return layout.controls.find((c) => rectContains(c.rect, p))?.id;
 }
 
-/** Keys and clicks are slots for STC-419/STC-420: laid out now so the bar
- * does not change shape when they land, and never enabled until then. */
-export function controlEnabled(id: ControlId, s: { mics: readonly unknown[] }): boolean {
-  if (id === "keys" || id === "clicks") return false;
-  if (id === "mic") return s.mics.length > 0;
-  return true;
+/**
+ * Keys and clicks are slots for STC-419/STC-420: laid out now so the bar does
+ * not change shape when they land, and never enabled until then.
+ *
+ * The mic control is ALWAYS enabled (STC-456 review, Finding 1) — its menu
+ * holds Include System Audio and Mute External, neither of which needs a mic
+ * to exist, so a machine with zero mics (or a stalled enumeration) must still
+ * be able to open it. No state is consulted for any control any more, so this
+ * takes none.
+ */
+export function controlEnabled(id: ControlId): boolean {
+  return id !== "keys" && id !== "clicks";
 }
 
 /** What one press in the options phase sends, in ORDER. */
@@ -223,17 +248,24 @@ export interface MenuAnchor { menu: MenuId; x: number; y: number; side: "below" 
 
 /**
  * Where a menu opens: dropping from its trigger's bottom-left and OVER the
- * capture button (Patrick, 2026-09-28). Flipped above the trigger only when a
- * menu of MENU_MAX_HEIGHT would run off the display's bottom — the bar's
- * `inside` placement at the bottom edge is the case that forces it. `y` is the
- * menu's NEAR edge: its top when below, its bottom when above. The view sizes
- * the menu to fit and clamps it horizontally, since only it knows the width.
+ * capture button (Patrick, 2026-09-28). Flipped above the trigger whenever
+ * trigger-bottom + `MENU_GAP` + `menuHeight(rowCount)` would cross the
+ * display's bottom minus `BAR_MARGIN` — NOT only when the bar itself sits at
+ * the bottom edge (an earlier doc's claim): a bar in ordinary `below`
+ * placement, with the trigger far enough down the pane, crosses that same
+ * line for a menu with enough rows, and flips for exactly the same reason.
+ * `rowCount` lets this be precise instead of a fixed guess (Finding 7): a
+ * short 2-row mic menu and a full 7-row camera list do not need the same
+ * clearance. `y` is the menu's NEAR edge: its top when below, its bottom when
+ * above. The view still clamps the menu horizontally, since only it knows the
+ * rendered width.
  */
-export function menuAnchor(layout: BarLayout, menu: MenuId, display: DisplayInfo): MenuAnchor {
+export function menuAnchor(layout: BarLayout, menu: MenuId, display: DisplayInfo,
+                           rowCount: number): MenuAnchor {
   const trig = layout.controls.find((c) => c.id === menu)!.rect;
   const b = display.bounds;
   const below = trig.y + trig.height + MENU_GAP;
-  if (below + MENU_MAX_HEIGHT <= b.y + b.height - BAR_MARGIN) {
+  if (below + menuHeight(rowCount) <= b.y + b.height - BAR_MARGIN) {
     return { menu, side: "below", x: trig.x, y: below };
   }
   return { menu, side: "above", x: trig.x, y: trig.y - MENU_GAP };

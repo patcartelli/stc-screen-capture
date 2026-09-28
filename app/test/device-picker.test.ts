@@ -139,6 +139,17 @@ describe("micMenuRows (STC-456)", () => {
     const keys = micMenuRows(micsTest, sel({ micDeviceUid: "gone" })).map((r) => r.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
+  // STC-456 fix round, Finding 1: a Mac mini/Studio with no mic attached (or
+  // a stalled enumeration — `devicesForBar` returning `mics: []`) must still
+  // be able to reach Include System Audio and Mute External. The mic trigger
+  // is ALWAYS enabled (`controlEnabled` no longer even takes a mic list) and
+  // this is the menu it opens: exactly the toggle plus the one "off" row,
+  // no device rows and no crash on an empty list.
+  test("with zero mics, the menu is still exactly System Audio + Mute External", () => {
+    const rows = micMenuRows([], sel());
+    expect(rows.map((r) => r.label)).toEqual([MENU_LABELS.systemAudio, MENU_LABELS.muteExternal]);
+    expect(rows).toHaveLength(2);
+  });
 });
 
 describe("cameraMenuRows (STC-456)", () => {

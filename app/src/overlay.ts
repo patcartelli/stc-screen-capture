@@ -197,7 +197,7 @@ function renderBar(p: OverlayPayload): void {
   for (const c of p.bar.controls) {
     const el = ctl(c.id);
     placeAt(el, toLocal(c.rect));
-    el.dataset.enabled = controlEnabled(c.id, p.options) ? "1" : "0";
+    el.dataset.enabled = controlEnabled(c.id) ? "1" : "0";
   }
   // The anchor, not `p.state.rect` — the latter is undefined for a window
   // pick (selection.ts never sets one), which used to leave this reading "—"
@@ -229,18 +229,39 @@ function renderBar(p: OverlayPayload): void {
   renderMenu(p.menu);
 }
 
+/** The signature of the last row set actually drawn into `#menu`, so a
+ * broadcast that changed nothing about the ROWS (every pointermove sends
+ * one) can skip rebuilding them — see `renderMenu` below. `undefined` when
+ * the menu is closed or has never been drawn. */
+let lastMenuRowsSignature: string | undefined;
+const menuRowsSignature = (rows: MenuRow[]): string =>
+  rows.map((r) => `${r.key}:${r.checked}`).join("|");
+
 /**
  * The open device menu (STC-456). Rows come from `device-picker.ts`, the same
  * model the main window's popover draws. It drops below its trigger and over
  * the capture button, or rises above the trigger when `menuAnchor` said the
  * display's bottom is too close; `anchor.y` is the NEAR edge either way.
+ *
+ * The rebuild is skipped when the rows' keys and checked states match the
+ * last render (STC-456 fix round, Finding "ALSO" (b)): every pointermove
+ * re-broadcasts the whole overlay state, so a naive `replaceChildren` on
+ * every call rebuilds this menu dozens of times while nothing about it
+ * actually changed — dropping a row's own `:hover` mid-gesture (runbook
+ * check 15). The menu still REPOSITIONS every time, since the anchor can
+ * move (a marquee edit while the menu happens to be open) independently of
+ * the rows.
  */
 function renderMenu(m: { anchor: MenuAnchor; rows: MenuRow[] } | undefined): void {
-  if (!m) { menuEl.hidden = true; menuEl.replaceChildren(); return; }
-  // No `onPick` — this menu's rows are pressed through the delegated
-  // `pointerdown` handler below (`barPress`'s ordering rules), not their own
-  // listeners. See device-menu-dom.ts's header for why.
-  menuEl.replaceChildren(...m.rows.map((r) => buildMenuRow(r)));
+  if (!m) { menuEl.hidden = true; menuEl.replaceChildren(); lastMenuRowsSignature = undefined; return; }
+  const signature = menuRowsSignature(m.rows);
+  if (signature !== lastMenuRowsSignature) {
+    // No `onPick` — this menu's rows are pressed through the delegated
+    // `pointerdown` handler below (`barPress`'s ordering rules), not their
+    // own listeners. See device-menu-dom.ts's header for why.
+    menuEl.replaceChildren(...m.rows.map((r) => buildMenuRow(r)));
+    lastMenuRowsSignature = signature;
+  }
   menuEl.hidden = false;
   const a = { x: m.anchor.x - origin.x, y: m.anchor.y - origin.y };
   const w = menuEl.offsetWidth, h = menuEl.offsetHeight;
@@ -426,7 +447,7 @@ window.addEventListener("pointerdown", (e) => {
     const { actions, swallow } = barPress({
       fieldFocused, onField, menuOpen: current.menu !== undefined, hit,
       inBar: barContains(g, current.bar),
-      enabled: hit !== undefined && controlEnabled(hit, current.options!),
+      enabled: hit !== undefined && controlEnabled(hit),
     });
     for (const a of actions) {
       if (a.t === "commitSize") commitAndLeaveField();

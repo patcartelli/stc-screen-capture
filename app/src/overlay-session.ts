@@ -8,12 +8,13 @@ import {
 } from "./selection.js";
 import {
   barLayout, expandedSelection, menuAnchor, resizeToPixels,
-  type ControlId, type MenuId, type OptionsState,
+  type ControlId, type MenuAnchor, type MenuId, type OptionsState,
 } from "./record-options.js";
 import {
-  decidePopoverToggle, applyMenuPick, micMenuRows, cameraMenuRows, type MenuPick,
+  decidePopoverToggle, applyMenuPick, closesMenu, micMenuRows, cameraMenuRows,
+  type MenuPick, type MenuRow,
 } from "./device-picker.js";
-import { micLabel } from "./mic-devices.js";
+import { micDevices } from "./mic-devices.js";
 
 /**
  * The selection overlay's windows and lifecycle (STC-290).
@@ -106,8 +107,8 @@ export function outcomeOnRelease(ev: SelectionEvent, state: SelectionState,
 
 /**
  * The bar's anchor rect, in GLOBAL points — ONE notion of "the thing being
- * recorded" (STC-388), used for the bar's layout, the mic menu's layout, the
- * size readout, and `expand`'s choice of display. Pure and exported, same
+ * recorded" (STC-388), used for the bar's layout, the device menu's anchor,
+ * the size readout, and `expand`'s choice of display. Pure and exported, same
  * reason as `nextPhase`/`fullDisplayFor`: `app/test/overlay-options.test.ts`
  * settles it with no Electron window.
  *
@@ -139,13 +140,13 @@ export function anchorRectFor(mode: Mode, pending: SelectionOutcome | undefined,
 }
 
 /**
- * Whether the options bar (and the mic menu drawn from it) belong on the
+ * Whether the options bar (and the device menu drawn from it) belong on the
  * display with `displayId` (STC-388 review, Finding 5).
  *
  * `push()` runs once per overlay window — one per display — and every other
  * drawn element is positioned by a bare `toLocal(...)` (overlay.ts), which
  * lands off-screen on a display that does not contain the anchor. `barLayout`
- * and `micMenuLayout` do not have that property: they CLAMP their result into
+ * and `menuAnchor` do not have that property: they CLAMP their result into
  * the RECEIVING display's own bounds, so calling them unconditionally for
  * every window put a fully visible, fully live (same hit-testing) copy of the
  * bar on every OTHER display too. `dominantDisplay` is the same rule
@@ -530,13 +531,16 @@ class OverlaySession {
       // STC-456: the open menu's rows and where it anchors, built from the ONE
       // row model (device-picker.ts) both this bar and the main window's
       // popover share. Undefined whenever no menu is open, or there is no
-      // layout/display to anchor it against.
-      menu: layout && d && this.options.openMenu ? {
-        anchor: menuAnchor(layout, this.options.openMenu, d),
-        rows: this.options.openMenu === "mic"
-          ? micMenuRows(this.options.mics.map((m) => ({ name: micLabel(m), uid: m.uid })), this.options)
-          : cameraMenuRows([...this.options.cameras], this.options),
-      } : undefined,
+      // layout/display to anchor it against. The rows are built FIRST so
+      // their own count (not a fixed guess) drives `menuAnchor`'s
+      // below/above decision (Finding 7).
+      menu: ((): { anchor: MenuAnchor; rows: MenuRow[] } | undefined => {
+        if (!layout || !d || !this.options.openMenu) return undefined;
+        const rows = this.options.openMenu === "mic"
+          ? micMenuRows(micDevices(this.options.mics), this.options)
+          : cameraMenuRows([...this.options.cameras], this.options);
+        return { anchor: menuAnchor(layout, this.options.openMenu, d, rows.length), rows };
+      })(),
     });
   }
 
@@ -547,7 +551,7 @@ class OverlaySession {
     if (ev.t === "control") return this.onControl(ev.id);
     if (ev.t === "menuPick") {
       const next = applyMenuPick(this.options, ev.pick);
-      const closes = ev.pick.kind !== "toggle-system-audio";
+      const closes = closesMenu(ev.pick);
       this.options = { ...this.options, ...next, openMenu: closes ? null : this.options.openMenu };
       return this.broadcast();
     }
@@ -652,7 +656,9 @@ class OverlaySession {
         this.afterClose = "settings";
         return void this.finish({ kind: "cancelled" });
       case "mic":
-        if (this.options.mics.length === 0) return;
+        // Always enabled (STC-456 review, Finding 1) — the menu holds
+        // Include System Audio and Mute External, neither of which needs a
+        // mic to exist, so a machine with zero mics must still open it.
         this.options = { ...this.options, openMenu: toggleMenu(this.options.openMenu, "mic") };
         return this.broadcast();
       case "camera":
