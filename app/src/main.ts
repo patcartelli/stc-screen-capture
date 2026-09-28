@@ -1052,20 +1052,28 @@ async function recordFlowBody(
     },
     dist: here, renderer: join(here, "..", "renderer"),
   });
+  // The bar's toggles ARE the sticky settings, so they are written back — only
+  // SCOPE is per-take. Written before the countdown, so a cancelled countdown
+  // still keeps a mic (and now a camera device / system-audio choice) the
+  // user just made. Written before the Settings branch below too (fix round
+  // 1, controller ruling): Settings closes the overlay through the same
+  // `{ kind: "cancelled" }` outcome a plain Escape does, and `options` is
+  // still the bar's live state at the moment it was pressed — returning
+  // before this write would silently drop a toggle made just before Settings
+  // was clicked, which is exactly the choice this comment already promises
+  // survives a cancelled countdown.
+  if (options) {
+    writeSettings(app.getPath("userData"), {
+      camera: options.camera, micDeviceUid: options.micDeviceUid,
+      systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+    });
+  }
+
   // The bar's own Settings control (STC-456): closes the overlay with no
   // take, then hands off to the main window's existing sheet — the same
   // door the profile button already opens, never a second implementation.
   if (afterClose === "settings") { openSettingsSheet(); return { ok: false, cancelled: true }; }
   if (outcome.kind === "cancelled" || !options) return { ok: false, cancelled: true };
-
-  // The bar's toggles ARE the sticky settings, so they are written back — only
-  // SCOPE is per-take. Written before the countdown, so a cancelled countdown
-  // still keeps a mic (and now a camera device / system-audio choice) the
-  // user just made.
-  writeSettings(app.getPath("userData"), {
-    camera: options.camera, micDeviceUid: options.micDeviceUid,
-    systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
-  });
 
   // THE start-param builder — the only place a Record's `start` request is
   // assembled (spec §3). A new setting that reaches the helper (STC-420's
@@ -1240,13 +1248,31 @@ async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[]
  * this hands off to the main window's existing sheet — `openLibrary` is the
  * SAME "show and focus the window" step the tray's own Library item already
  * uses, so a settings hand-off with no window open behaves exactly like any
- * other way back into the app. `ui:open-settings` is a fire-and-forget
- * broadcast (`send` already no-ops when there is no live window to send to,
- * which cannot happen here since `openLibrary` just ensured one).
+ * other way back into the app.
+ *
+ * Fix round 1 (CRITICAL): reachable from the tray or a hotkey with no main
+ * window open, in which case `openLibrary` -> `createWindow` calls
+ * `win.loadFile(...)` WITHOUT awaiting it — the renderer's preload script
+ * (and the `recorder.on("ui:open-settings", ...)` listener it installs) has
+ * not run yet. Sending synchronously right after, as this used to, is not
+ * queued by Electron; the message simply never arrives and Settings silently
+ * fails to open. `webContents.isLoading()` is true the instant `loadFile` is
+ * called (navigation starts synchronously; only the returned promise is
+ * async) and stays true through an existing window mid-navigation too, so
+ * checking it — rather than asking whether `createWindow` ran — is the one
+ * signal that covers both the fresh-window and the already-loading cases
+ * with no second mechanism. `did-finish-load` fires once preload and the
+ * renderer's top-level script (where the listener is installed) have run.
  */
 function openSettingsSheet(): void {
   openLibrary();
-  send("ui:open-settings", undefined);
+  const w = win;
+  if (!w || w.isDestroyed()) return;
+  if (w.webContents.isLoading()) {
+    w.webContents.once("did-finish-load", () => send("ui:open-settings", undefined));
+  } else {
+    send("ui:open-settings", undefined);
+  }
 }
 
 /**

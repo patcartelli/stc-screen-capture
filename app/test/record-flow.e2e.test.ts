@@ -9,7 +9,7 @@ import { startRecordFlow } from "./_record-flow.js";
 import { HIDE_SETTLE_MS } from "../src/overlay-session.js";
 import { toastPage } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
-import { hasWindow } from "./_windows.js";
+import { hasWindow, pageWithUrl } from "./_windows.js";
 
 /**
  * The whole Record flow, in a real app (STC-388).
@@ -769,15 +769,63 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     expect(readLines(startLog)).toEqual([]);
   }, 120_000);
 
-  test("Settings closes the overlay without a take and opens the settings sheet", async () => {
-    const { win, startLog } = await launch();
+  test("Settings closes the overlay without a take, opens the sheet, and KEEPS a choice made first (fix round 1, controller ruling)", async () => {
+    const { win, startLog, ud } = await launch();
     await withoutCountdown(win);
     const overlay = await toOptionsPhase(win);
+
+    // A choice made on the bar BEFORE Settings is pressed — the case the
+    // ruling says must survive, the same way a cancelled countdown already
+    // keeps a mic the user just chose.
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
 
     await send(overlay, { t: "control", id: "settings" });
 
     await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
     expect(readLines(startLog)).toEqual([]);
     await expect.poll(() => win.getAttribute("#profilesheet", "class"), { timeout: 10_000 }).toMatch(/open/);
+    await expect.poll(() => readWrittenSettings(ud).systemAudio, { timeout: 10_000 }).toBe(true);
+  }, 120_000);
+
+  test("Settings from the tray, with NO main window open, still opens the sheet once it is created (fix round 1, CRITICAL)", async () => {
+    // `openLibrary` -> `createWindow` calls `win.loadFile(...)` without
+    // awaiting it; before the fix, `ui:open-settings` was sent synchronously
+    // right after, before the fresh window's preload/renderer had installed
+    // its listener, and Electron does not queue an unheard `send`. Reachable
+    // only when the main window is closed and Record starts from the tray or
+    // a hotkey — `win.click("#record")` always has a window already, so this
+    // path needs the tray's own callback (`fireTrayRecord`, defined below)
+    // against a window count of zero, the same starting condition
+    // `hotkeys.e2e.test.ts`'s "with the last window closed" test uses.
+    //
+    // macOS only, like that test: `window-all-closed` quits on every other
+    // platform, so there is no "closed but still running" state to reach
+    // there. This suite runs on macOS.
+    if (process.platform !== "darwin") {
+      process.stderr.write("SKIP: menu-bar-first (no window, still running) is macOS-only behaviour\n");
+      return;
+    }
+    const { win, startLog } = await launch();
+    await withoutCountdown(win);
+    await win.close();
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+                      { timeout: 10_000 }).toBe(0);
+
+    await fireTrayRecord();
+    const overlay = await overlayWindow();
+    await dragARegion(overlay);
+    await send(overlay, { t: "key", key: "Enter" });
+    await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
+    await send(overlay, { t: "control", id: "settings" });
+
+    await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
+    expect(readLines(startLog)).toEqual([]);
+
+    // The window `openSettingsSheet` -> `openLibrary` -> `createWindow` just
+    // made, picked up fresh rather than reusing the CLOSED `win` above (a
+    // destroyed Page is not this new window).
+    const newWin = await pageWithUrl(app!, "index.html");
+    await expect.poll(() => newWin.getAttribute("#profilesheet", "class"), { timeout: 15_000 }).toMatch(/open/);
   }, 120_000);
 });
