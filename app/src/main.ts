@@ -58,6 +58,7 @@ import type { MicInfo } from "./mic-devices.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
 import { ensureCaptureId, readBundleId } from "./capture-identity.js";
+import { resolveHelperPath } from "./helper-path.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -68,13 +69,19 @@ import { ensureCaptureId, readBundleId } from "./capture-identity.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 /**
- * Overridable for the same reason STC_RECORDINGS_DIR is: the E2E suite needs to
- * drive the real start path against a stand-in, because the real helper cannot
- * record without a Screen Recording grant and CI has no way to give one. Also
- * useful for pointing the app at a debug build.
+ * Unpackaged vs packaged resolution lives in `resolveHelperPath`
+ * (STC-401) so it's unit-testable without Electron. Overridable via
+ * STC_HELPER_BIN for the same reason STC_RECORDINGS_DIR is: the E2E suite
+ * needs to drive the real start path against a stand-in, because the real
+ * helper cannot record without a Screen Recording grant and CI has no way
+ * to give one. Also useful for pointing the app at a debug build.
  */
-const HELPER = process.env.STC_HELPER_BIN
-  || join(here, "..", "..", "helper", "build", "stc-helper");
+const HELPER = resolveHelperPath({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  hereDir: here,
+  override: process.env.STC_HELPER_BIN,
+});
 
 let win: BrowserWindow | undefined;
 let sup: HelperSupervisor | undefined;

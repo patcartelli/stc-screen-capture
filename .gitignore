@@ -3,6 +3,7 @@ helper/build/
 *.o
 node_modules/
 app/dist/
+release/
 # recordings & spike artifacts
 sessions/
 scratch/out*/
