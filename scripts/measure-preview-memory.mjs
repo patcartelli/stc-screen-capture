@@ -76,10 +76,25 @@ async function measure(withCamera) {
     await win.waitForSelector("#takes >> text=Preview", { timeout: 30_000 });
     const before = await rendererRss(app);
 
-    await win.click("#takes >> text=Preview");
-    await win.waitForSelector("#player", { state: "visible", timeout: 60_000 });
+    // The preview became its own window in STC-373 — it no longer opens
+    // in-page as #player in the main window, so Preview opens a second
+    // BrowserWindow and the pixel check runs against ITS #stage. Filter on
+    // the URL rather than taking the first "window" event: on a machine with
+    // no helper permissions the supervisor can pop a toast window (e.g. "the
+    // recorder keeps failing to start") that races the editor window and
+    // would otherwise be mistaken for it. The predicate must pick out the
+    // VIDEO editor specifically — a bare `includes("editor.html")` would also
+    // match `still-editor.html`.
+    const [editorWin] = await Promise.all([
+      app.waitForEvent("window", {
+        predicate: (p) => /\/editor\.html(\?|#|$)/.test(p.url()),
+        timeout: 60_000,
+      }),
+      win.click("#takes >> text=Preview"),
+    ]);
+    await editorWin.waitForLoadState("domcontentloaded");
     // Wait for real pixels: RSS read before decoding starts measures nothing.
-    await win.waitForFunction(() => {
+    await editorWin.waitForFunction(() => {
       const c = document.getElementById("stage");
       if (!c) return false;
       const d = c.getContext("2d").getImageData(0, 0, 32, 32).data;

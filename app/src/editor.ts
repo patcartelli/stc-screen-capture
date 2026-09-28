@@ -54,6 +54,7 @@ declare const editor: {
 };
 
 import { loadSession, type LoadedSession } from "@transform/session";
+import type { ByteSource } from "@transform/chunk-reader";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
 import {
@@ -1336,25 +1337,68 @@ async function readVideo(name = "display.mp4"): Promise<ArrayBuffer> {
   return out.buffer;
 }
 
+/**
+ * A take file read by range (STC-236), over the same preview:size /
+ * preview:chunk channels readVideo uses — the renderer still never names a
+ * path. The video tracks go through this; the audio tracks still go through
+ * readVideo, whole (decoded PCM is their real cost, a separate ticket).
+ *
+ * preview:chunk returns fewer bytes than asked at EOF rather than failing, so
+ * the length is checked here: a short chunk handed to the decoder would be a
+ * corrupt frame, not an error anyone could see.
+ */
+async function ipcSource(name: string): Promise<ByteSource & { readonly bytesRead: number }> {
+  const size = await editor.takeFileSize(name);
+  let bytesRead = 0;
+  return {
+    size,
+    get bytesRead() { return bytesRead; },
+    async read(offset: number, length: number): Promise<Uint8Array> {
+      if (!Number.isInteger(offset) || !Number.isInteger(length) || offset < 0 || length < 0 || offset + length > size) {
+        throw new Error(`${name}: read [${offset}, ${offset + length}) is outside the ${size}-byte file`);
+      }
+      if (length === 0) return new Uint8Array(0);
+      const got = new Uint8Array(await editor.readTakeChunk(name, offset, length));
+      if (got.byteLength !== length) {
+        throw new Error(`${name}: short read at ${offset} — asked for ${length} bytes, got ${got.byteLength}. Was the file changed while open?`);
+      }
+      bytesRead += length;
+      return got;
+    },
+  };
+}
+
+let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?: Awaited<ReturnType<typeof ipcSource>> } | undefined;
+
+// Test hook (app/test/preview.e2e.test.ts): how much of each video file the
+// open take has actually read. Read-only, and zero when nothing is open.
+(window as unknown as { __stcVideoBytesRead: () => { display: number; displaySize: number; camera: number } })
+  .__stcVideoBytesRead = () => ({
+    display: openVideoSources?.display.bytesRead ?? 0,
+    displaySize: openVideoSources?.display.size ?? 0,
+    camera: openVideoSources?.camera?.bytesRead ?? 0,
+  });
+
 async function openTakeOrThrow(dir: string): Promise<void> {
   await closeTake();
   await editor.openPreview(dir);
 
   const dec = new TextDecoder();
-  const [anchors, events, mp4, projectRaw] = await Promise.all([
+  const [anchors, events, displaySrc, projectRaw] = await Promise.all([
     editor.readTakeFile("anchors.json").then((b) => JSON.parse(dec.decode(b))),
     editor.readTakeFile("events.json").then((b) => JSON.parse(dec.decode(b)))
       .catch(() => ({ version: 1, events: [] })),
-    readVideo(),
+    ipcSource("display.mp4"),
     editor.readTakeFile("project.json").then((b) => JSON.parse(dec.decode(b)))
       .catch(() => null),
   ]);
-  const cameraMp4 = anchors.files?.camera ? await readVideo(anchors.files.camera) : undefined;
-  // STC-233: same reasoning as cameraMp4 above, one track over.
+  const cameraSrc = anchors.files?.camera ? await ipcSource(anchors.files.camera) : undefined;
+  // STC-233: same reasoning as cameraSrc above (only when the anchors claim the track), one track over.
   const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
   // STC-418: and again for system audio — loadSession refuses a claimed track that was not supplied.
   const systemM4a = anchors.files?.system ? await readVideo(anchors.files.system) : undefined;
-  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a, systemM4a });
+  const session = await loadSession({ anchors, events, displayMp4: displaySrc, cameraMp4: cameraSrc, micM4a, systemM4a });
+  openVideoSources = { display: displaySrc, camera: cameraSrc };
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
@@ -1379,6 +1423,14 @@ async function openTakeOrThrow(dir: string): Promise<void> {
     ($("stage") as HTMLCanvasElement).dataset.clock = player!.clock;
     if (!scrubbing) scrub.value = String(frame);
     updateRulerPlayhead(tNs);
+  };
+  // STC-236: a frame read or decode failed (the take deleted from the library
+  // while open here, say). The player has already paused and reports once;
+  // the error's own message names the file. Without this the picture froze
+  // with the playhead still running and the cause only in the console.
+  player.onError = (e) => {
+    setPlayState(false);
+    alertUser(`The preview stopped: ${e.message}`);
   };
   await player.seek(player.firstRenderableNs);
   resetSpan();
@@ -1417,6 +1469,7 @@ async function closeTake(): Promise<void> {
   player?.close();
   player = undefined;
   openSession = undefined;
+  openVideoSources = undefined;
   openProject = undefined;
   openCapture = undefined;
   openDisplay = undefined;

@@ -15,6 +15,7 @@
  */
 import { writeSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { defaultFakeDisplays } from "./_fake-displays.mjs";
 
 const argv = process.argv.slice(2);
 const i = argv.indexOf("--stats-interval-ms");
@@ -197,14 +198,11 @@ process.stdin.on("data", (chunk) => {
         break;
       }
       case "devices": {
-        // Two displays by default, so the picker has something to pick (STC-247);
+        // Two displays by default, so the picker has something to pick (STC-247),
+        // the built-in one carrying the machine's REAL primary display id
+        // (STC-464, _fake-displays.mjs says why);
         // STC_FAKE_DISPLAYS overrides with a JSON array, [] included.
-        let displays = [
-          { id: 1, main: true, name: "Built-in Display", pointW: 1800, pointH: 1169,
-            pixelW: 3600, pixelH: 2338, originX: 0, originY: 0 },
-          { id: 2, main: false, name: "External Display", pointW: 2560, pointH: 1440,
-            pixelW: 2560, pixelH: 1440, originX: 1800, originY: 0 },
-        ];
+        let displays = defaultFakeDisplays();
         if (process.env.STC_FAKE_DISPLAYS) {
           try { displays = JSON.parse(process.env.STC_FAKE_DISPLAYS); } catch { /* keep the default */ }
         }
