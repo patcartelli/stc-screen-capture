@@ -205,6 +205,13 @@ describe("helper warnings during a take", () => {
     await new Promise((r) => setTimeout(r, 1_000));
     expect(await toastPage(app!)).toBeUndefined();
     expect(await win.textContent("#state")).toBe("recording");
+    // Not a toast, but not invisible either: the refit's payload is logged to
+    // the main window's console. The fake helper sends it 60 ms after start,
+    // before this test holds the window, so read the page's console HISTORY
+    // rather than subscribing late.
+    await expect.poll(async () => (await win.consoleMessages())
+      .some((m) => m.type() === "info" && m.text().startsWith("[helper] display-refit")),
+      { timeout: 10_000 }).toBe(true);
   }, 120_000);
 
   test("a region that no longer fits its refit display ends the take, in words (STC-235)", async () => {
