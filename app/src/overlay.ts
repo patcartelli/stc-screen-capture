@@ -9,6 +9,7 @@ import {
 } from "./record-options.js";
 import type { MenuRow } from "./device-picker.js";
 import { iconSvg, type Glyph } from "./icons.js";
+import { buildMenuRow } from "./device-menu-dom.js";
 
 /**
  * The overlay's view (STC-290). It draws state and reports input; it decides
@@ -236,15 +237,10 @@ function renderBar(p: OverlayPayload): void {
  */
 function renderMenu(m: { anchor: MenuAnchor; rows: MenuRow[] } | undefined): void {
   if (!m) { menuEl.hidden = true; menuEl.replaceChildren(); return; }
-  menuEl.replaceChildren(...m.rows.map((r) => {
-    const row = document.createElement("div");
-    row.className = "row"; row.dataset.key = r.key;
-    row.setAttribute("role", r.closesMenu ? "menuitemradio" : "menuitemcheckbox");
-    row.setAttribute("aria-checked", String(r.checked));
-    row.innerHTML = `${iconSvg(r.icon)}<span class="label"></span>${iconSvg("check", "check")}`;
-    row.querySelector(".label")!.textContent = r.label;
-    return row;
-  }));
+  // No `onPick` — this menu's rows are pressed through the delegated
+  // `pointerdown` handler below (`barPress`'s ordering rules), not their own
+  // listeners. See device-menu-dom.ts's header for why.
+  menuEl.replaceChildren(...m.rows.map((r) => buildMenuRow(r)));
   menuEl.hidden = false;
   const a = { x: m.anchor.x - origin.x, y: m.anchor.y - origin.y };
   const w = menuEl.offsetWidth, h = menuEl.offsetHeight;

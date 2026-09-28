@@ -141,9 +141,45 @@ describe("the mic picker", () => {
     win = await launch({ userData, recordings, mics: [] });
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("not connected");
     await win.click("#mic-picker");
-    const stale = '#devicepopover >> text="Mic (not connected)"';
-    await expect.poll(() => win.locator(stale).count(), { timeout: 20_000 }).toBeGreaterThan(0);
-    expect(await win.getAttribute(stale, "aria-selected")).toBe("true");
+    // STC-456: the popover's rows are the shared device-menu component now
+    // (device-picker.ts's micMenuRows), whose stale-device label is the
+    // generic MENU_LABELS.stale ("(not connected)") — one label shared with
+    // the camera menu — rather than this window's old per-picker
+    // "Mic (not connected)" string. A row's selected state is aria-checked
+    // now too, not the old listbox option's aria-selected.
+    // The row, not its inner `.label` span — the span's own text is an exact
+    // match too, and `aria-checked` lives on the row, not the span.
+    const stale = win.locator("#devicepopover .row", { hasText: "(not connected)" });
+    await expect.poll(() => stale.count(), { timeout: 20_000 }).toBeGreaterThan(0);
+    expect(await stale.getAttribute("aria-checked")).toBe("true");
+  }, 180_000);
+
+  // STC-456: the main window's popover joins the shared dropdown component
+  // (Task 6's device-menu.css / device-picker.ts's MenuRow), which is what
+  // gives the mic menu an "Include System Audio" row — a toggle, not a
+  // device choice, so picking it must not close the menu the way choosing a
+  // device does.
+  test("the mic popover offers Include System Audio, and toggling it persists without closing (STC-456)", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+    const { dir: recordings } = makeTakeFolder();
+
+    const win = await launch({ userData, recordings });
+    await win.click("#mic-picker");
+    const rows = win.locator("#devicepopover .row");
+    await expect.poll(() => rows.count(), { timeout: 20_000 }).toBeGreaterThan(0);
+    expect(await rows.first().textContent()).toContain("Include System Audio");
+    expect(await rows.first().getAttribute("aria-checked")).toBe("false");
+
+    await rows.first().click();
+
+    // Still open — a toggle keeps the menu up, unlike picking a device.
+    expect(await win.isHidden("#devicepopover")).toBe(false);
+    await expect.poll(() => rows.first().getAttribute("aria-checked")).toBe("true");
+
+    await expect.poll(() => {
+      const raw = JSON.parse(readFileSync(join(userData, "settings.json"), "utf8"));
+      return raw.systemAudio;
+    }, { timeout: 20_000 }).toBe(true);
   }, 180_000);
 });
 
