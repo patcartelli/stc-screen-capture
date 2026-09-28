@@ -4,8 +4,8 @@ import type {
 import { pixelSize, rectContains } from "./selection.js";
 import { HANDLES, handleAt, handlePoint } from "./overlay-hittest.js";
 import {
-  controlAt, controlEnabled, micItemAt, sizeLabel,
-  type BarLayout, type ControlId, type MicMenuLayout, type OptionsState,
+  barContains, controlAt, controlEnabled, sizeLabel,
+  type BarLayout, type ControlId, type OptionsState,
 } from "./record-options.js";
 import { micLabel } from "./mic-devices.js";
 
@@ -41,7 +41,6 @@ interface OverlayPayload {
   phase?: "select" | "options";
   options?: OptionsState;
   bar?: BarLayout;
-  micMenu?: MicMenuLayout;
   /**
    * STC-388 — the bar's anchor rect, in GLOBAL points: the marquee in region
    * mode, the picked window's own bounds in window mode (`anchorRectFor`,
@@ -55,7 +54,10 @@ const $ = (id: string) => document.getElementById(id)!;
 const marquee = $("marquee"), highlight = $("highlight");
 const sizeChip = $("size"), titleChip = $("title"), legend = $("legend");
 const bar = $("bar"), micmenu = $("micmenu");
-const ctl = (id: ControlId) => $(`ctl-${id}`);
+// STC-456 interim — Task 6 replaces this. New control ids (crop, settings,
+// keys, clicks) have no `#ctl-<id>` element yet, so this is nullable and
+// `renderBar` skips a control whose element is missing rather than throwing.
+const ctl = (id: ControlId) => document.getElementById(`ctl-${id}`);
 
 /** Where this window's display sits in the global space. Set on first state. */
 let origin: Point = { x: 0, y: 0 };
@@ -161,15 +163,23 @@ function renderLegend(mode: string, phase: OverlayPayload["phase"]): void {
  * local space and sets text, and does no geometry of its own.
  */
 function renderBar(p: OverlayPayload): void {
+  // STC-456 interim — Task 6 replaces this. The mic menu no longer has a
+  // payload to draw from (`record-options.ts` dropped `micMenuLayout`), so it
+  // is always hidden here; Task 6 rebuilds it from `menuAnchor`.
+  micmenu.hidden = true;
   if (p.phase !== "options" || !p.bar || !p.options || !p.display) {
-    bar.hidden = true; micmenu.hidden = true; return;
+    bar.hidden = true; return;
   }
   const l = toLocal(p.bar.rect);
   bar.hidden = false;
   bar.style.left = `${l.x}px`; bar.style.top = `${l.y}px`;
   bar.style.width = `${l.width}px`; bar.style.height = `${l.height}px`;
   for (const c of p.bar.controls) {
-    const el = ctl(c.id), r = toLocal(c.rect);
+    // New control ids (crop, settings, keys, clicks) have no DOM element yet —
+    // Task 6 adds them.
+    const el = ctl(c.id);
+    if (!el) continue;
+    const r = toLocal(c.rect);
     el.style.width = `${r.width}px`; el.style.height = `${r.height}px`;
     el.dataset.enabled = controlEnabled(c.id, p.options) ? "1" : "0";
   }
@@ -179,27 +189,19 @@ function renderBar(p: OverlayPayload): void {
   // built from (overlay-session.ts's `push`), so the readout cannot disagree
   // with the bar it is drawn inside of.
   const sel = p.anchor;
-  ctl("size").textContent = sel ? sizeLabel(sel, p.display) : "—";
-  ctl("expand").dataset.on = p.options.fullDisplay ? "1" : "0";
-  ctl("camera").dataset.on = p.options.camera ? "1" : "0";
+  const sizeEl = ctl("size");
+  if (sizeEl) sizeEl.textContent = sel ? sizeLabel(sel, p.display) : "—";
+  const expandEl = ctl("expand");
+  if (expandEl) expandEl.dataset.on = p.options.fullDisplay ? "1" : "0";
+  const cameraEl = ctl("camera");
+  if (cameraEl) cameraEl.dataset.on = p.options.camera ? "1" : "0";
   const mic = p.options.mics.find((m) => m.uid === p.options!.micDeviceUid);
-  // micLabel, not a second spelling — see mic-devices.ts.
-  ctl("mic").textContent = `🔊 ${mic ? micLabel(mic) : "Off"}`;
-  ctl("mic").setAttribute("aria-label", `Input: ${mic ? micLabel(mic) : "Off"}`);
-
-  if (!p.micMenu) { micmenu.hidden = true; return; }
-  const m = toLocal(p.micMenu.rect);
-  micmenu.hidden = false;
-  micmenu.style.left = `${m.x}px`; micmenu.style.top = `${m.y}px`;
-  micmenu.style.width = `${m.width}px`; micmenu.style.height = `${m.height}px`;
-  micmenu.replaceChildren(...p.micMenu.items.map((it) => {
-    const row = document.createElement("div");
-    row.className = "item";
-    row.style.height = `${it.rect.height}px`;
-    row.textContent = it.label;
-    row.dataset.on = it.uid === p.options!.micDeviceUid ? "1" : "0";
-    return row;
-  }));
+  const micEl = ctl("mic");
+  if (micEl) {
+    // micLabel, not a second spelling — see mic-devices.ts.
+    micEl.textContent = `🔊 ${mic ? micLabel(mic) : "Off"}`;
+    micEl.setAttribute("aria-label", `Input: ${mic ? micLabel(mic) : "Off"}`);
+  }
 }
 
 function render(p: OverlayPayload): void {
@@ -322,16 +324,15 @@ window.addEventListener("pointerdown", (e) => {
   // marquee underneath. First refusal, then the selection as before.
   if (current?.phase === "options" && current.bar) {
     const g = toGlobal(e);
-    if (current.micMenu) {
-      const item = micItemAt(g, current.micMenu);
-      if (item) { send({ t: "micPick", uid: item.uid }); return; }
-    }
     const hit = controlAt(g, current.bar);
     if (hit) {
       if (controlEnabled(hit, current.options!)) send({ t: "control", id: hit });
       return;
     }
-    if (current.micMenu) { send({ t: "micPick", uid: current.options!.micDeviceUid }); return; }
+    // The pane's own padding IS the bar (Review Focus 3): a press there is
+    // swallowed rather than falling through to a new marquee, even though it
+    // landed on no control.
+    if (barContains(g, current.bar)) return;
   }
   const state = current?.state;
   const at = toGlobal(e);

@@ -7,7 +7,7 @@ import {
   type SelectionOutcome, type SelectionState, type WindowInfo,
 } from "./selection.js";
 import {
-  barLayout, expandedSelection, micMenuLayout,
+  barLayout, expandedSelection,
   type ControlId, type OptionsState,
 } from "./record-options.js";
 
@@ -320,7 +320,8 @@ class OverlaySession {
       camera: opts.initialOptions?.camera ?? false,
       mics: opts.initialOptions?.mics ?? [],
       fullDisplay: false,
-      micMenuOpen: false,
+      // STC-456 interim — Task 6 replaces this.
+      openMenu: null,
     };
   }
 
@@ -472,7 +473,6 @@ class OverlaySession {
       phase: this.phase,
       options: this.phase === "options" ? this.options : undefined,
       bar: layout,
-      micMenu: layout && d ? micMenuLayout(layout, this.options, d) : undefined,
       // The same anchor the layout above was built from — never `state.rect`
       // a second time, which is undefined in window mode (the readout would
       // silently go back to reading a value that does not exist there).
@@ -486,7 +486,8 @@ class OverlaySession {
     if (this.done) return;
     if (ev.t === "control") return this.onControl(ev.id);
     if (ev.t === "micPick") {
-      this.options = { ...this.options, micDeviceUid: ev.uid, micMenuOpen: false };
+      // STC-456 interim — Task 6 replaces this.
+      this.options = { ...this.options, micDeviceUid: ev.uid, openMenu: null };
       return this.broadcast();
     }
     const prevRect = this.state.rect;
@@ -549,7 +550,8 @@ class OverlaySession {
         this.options = {
           ...this.options,
           fullDisplay: fullDisplayFor(this.options.fullDisplay, true, prevRect, this.state.rect),
-          micMenuOpen: false,
+          // STC-456 interim — Task 6 replaces this.
+          openMenu: null,
         };
         const outcome = confirm(this.state, this.ctx);
         if (outcome) this.setPending(outcome);
@@ -557,10 +559,12 @@ class OverlaySession {
       }
       case "mic":
         if (this.options.mics.length === 0) return;
-        this.options = { ...this.options, micMenuOpen: !this.options.micMenuOpen };
+        // STC-456 interim — Task 6 replaces this.
+        this.options = { ...this.options, openMenu: this.options.openMenu === "mic" ? null : "mic" };
         return this.broadcast();
       case "camera":
-        this.options = { ...this.options, camera: !this.options.camera, micMenuOpen: false };
+        // STC-456 interim — Task 6 replaces this.
+        this.options = { ...this.options, camera: !this.options.camera, openMenu: null };
         return this.broadcast();
       case "record": {
         // FINDING 1 (STC-388 review, CRITICAL). `pending` used to be commit-

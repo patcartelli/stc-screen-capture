@@ -1,14 +1,15 @@
 import { describe, test, expect } from "vitest";
 import {
-  BAR_GAP, BAR_HEIGHT, BAR_MARGIN, CONTROL_IDS, barLayout, barWidth,
-  controlAt, controlEnabled, expandedSelection, micItemAt, micMenuLayout,
-  sizeLabel, type OptionsState,
+  BAR_GAP, BAR_HEIGHT, BAR_MARGIN, CAPTURE_GAP, CAPTURE_HEIGHT, CONTROL_IDS, MENU_GAP,
+  PANE_WIDTH, barContains, barLayout, controlAt, controlEnabled, expandedSelection,
+  menuAnchor, sizeLabel,
 } from "../src/record-options.js";
 import type { DisplayInfo, Rect } from "../src/selection.js";
 
 /**
- * The options bar's decisions (STC-388), with no screen and no Electron — the
- * arrangement `selection.test.ts` and `overlay-hittest.test.ts` already have.
+ * The options bar's decisions (STC-388, then STC-456's new two-row pane), with
+ * no screen and no Electron — the arrangement `selection.test.ts` and
+ * `overlay-hittest.test.ts` already have.
  *
  * What this file can settle: where the bar goes, which control a press lands
  * on, and what is offered. What it CANNOT settle, and the runbook therefore
@@ -18,10 +19,6 @@ import type { DisplayInfo, Rect } from "../src/selection.js";
 const display: DisplayInfo = {
   id: 1, bounds: { x: 0, y: 0, width: 1600, height: 1000 }, scaleFactor: 2,
 };
-const options = (over: Partial<OptionsState> = {}): OptionsState => ({
-  micDeviceUid: null, camera: false, mics: [], fullDisplay: false,
-  micMenuOpen: false, ...over,
-});
 const bottom = (r: Rect) => r.y + r.height;
 const right = (r: Rect) => r.x + r.width;
 const overlaps = (a: Rect, b: Rect) =>
@@ -35,7 +32,7 @@ describe("where the bar goes", () => {
     expect(l.rect.y).toBe(bottom(sel) + BAR_GAP);
     expect(l.rect.x + l.rect.width / 2).toBe(sel.x + sel.width / 2);
     expect(l.rect.height).toBe(BAR_HEIGHT);
-    expect(l.rect.width).toBe(barWidth());
+    expect(l.rect.width).toBe(PANE_WIDTH);
   });
 
   test("rule 2: flips above when below would not fit", () => {
@@ -92,79 +89,85 @@ describe("where the bar goes", () => {
   });
 });
 
-describe("the controls", () => {
-  const l = barLayout({ x: 400, y: 300, width: 400, height: 200 }, display);
+describe("the controls (STC-456)", () => {
+  const sel = { x: 400, y: 300, width: 400, height: 200 };
+  const l = barLayout(sel, display);
 
-  test("every control is laid out, in order, inside the bar", () => {
+  test("the pane is 340 × 108 and the capture button sits 8 below it, full width", () => {
+    expect(l.pane).toMatchObject({ width: 340, height: 108 });
+    expect(l.capture).toMatchObject({ x: l.pane.x, width: 340, height: CAPTURE_HEIGHT });
+    expect(l.capture.y).toBe(l.pane.y + 108 + CAPTURE_GAP);
+    expect(l.rect).toEqual({ x: l.pane.x, y: l.pane.y, width: 340, height: BAR_HEIGHT });
+  });
+  test("every control id is laid out exactly once, in CONTROL_IDS order", () => {
     expect(l.controls.map((c) => c.id)).toEqual([...CONTROL_IDS]);
-    for (const c of l.controls) {
-      expect(c.rect.x).toBeGreaterThanOrEqual(l.rect.x);
-      expect(right(c.rect)).toBeLessThanOrEqual(right(l.rect));
+  });
+  test("every pane control sits inside the pane's 16px padding", () => {
+    for (const c of l.controls.filter((c) => c.id !== "record")) {
+      expect(c.rect.x).toBeGreaterThanOrEqual(l.pane.x + 16);
+      expect(c.rect.x + c.rect.width).toBeLessThanOrEqual(l.pane.x + 340 - 16);
+      expect(c.rect.y).toBeGreaterThanOrEqual(l.pane.y + 16);
+      expect(c.rect.y + c.rect.height).toBeLessThanOrEqual(l.pane.y + 108 - 16);
     }
   });
-
+  test("row 1 is size, expand, crop; row 2 is settings, mic, camera, keys, clicks", () => {
+    const y = (id: string) => l.controls.find((c) => c.id === id)!.rect.y;
+    for (const id of ["expand", "crop"]) expect(y(id)).toBe(y("size"));
+    for (const id of ["mic", "camera", "keys", "clicks"]) expect(y(id)).toBe(y("settings"));
+    expect(y("settings")).toBeGreaterThan(y("size"));
+  });
+  test("record IS the capture button", () => {
+    expect(l.controls.find((c) => c.id === "record")!.rect).toEqual(l.capture);
+  });
   test("controls do not overlap each other", () => {
-    for (let i = 1; i < l.controls.length; i++) {
-      expect(l.controls[i]!.rect.x).toBeGreaterThanOrEqual(right(l.controls[i - 1]!.rect));
+    for (const a of l.controls) for (const b of l.controls) {
+      if (a !== b) expect(overlaps(a.rect, b.rect)).toBe(false);
     }
   });
-
-  test("a press finds the control under it, and nothing outside the bar", () => {
+  test("a press finds the control under it", () => {
     for (const c of l.controls) {
-      const mid = { x: c.rect.x + c.rect.width / 2, y: c.rect.y + c.rect.height / 2 };
-      expect(controlAt(mid, l)).toBe(c.id);
+      expect(controlAt({ x: c.rect.x + c.rect.width / 2, y: c.rect.y + c.rect.height / 2 }, l)).toBe(c.id);
     }
-    expect(controlAt({ x: l.rect.x - 1, y: l.rect.y - 1 }, l)).toBeUndefined();
-    expect(controlAt({ x: right(l.rect) + 50, y: l.rect.y }, l)).toBeUndefined();
   });
-
-  test("the mic control is offered only when there is a mic to offer", () => {
-    expect(controlEnabled("mic", options())).toBe(false);
-    expect(controlEnabled("mic", options({
-      mics: [{ name: "Built-in", uid: "u", bluetooth: false }],
-    }))).toBe(true);
-    // Everything else is always available — Record most of all.
-    for (const id of CONTROL_IDS) {
-      if (id === "mic") continue;
-      expect(controlEnabled(id, options())).toBe(true);
-    }
+  test("the gap between pane and button is NOT the bar, and so not a swallowed press", () => {
+    const gap = { x: l.pane.x + 170, y: l.pane.y + 108 + CAPTURE_GAP / 2 };
+    expect(barContains(gap, l)).toBe(false);
+    expect(controlAt(gap, l)).toBeUndefined();
+  });
+  test("the pane's own padding IS the bar: a press there is swallowed, not a new marquee (Review Focus 3)", () => {
+    const padding = { x: l.pane.x + 4, y: l.pane.y + 4 };
+    expect(barContains(padding, l)).toBe(true);
+    expect(controlAt(padding, l)).toBeUndefined();
+  });
+  test("keys and clicks are always disabled; mic needs a mic", () => {
+    expect(controlEnabled("keys", { mics: [{}] })).toBe(false);
+    expect(controlEnabled("clicks", { mics: [{}] })).toBe(false);
+    expect(controlEnabled("mic", { mics: [] })).toBe(false);
+    expect(controlEnabled("mic", { mics: [{}] })).toBe(true);
+    expect(controlEnabled("camera", { mics: [] })).toBe(true);
   });
 });
 
-describe("the mic menu", () => {
-  const mics = [
-    { name: "Built-in", uid: "a", bluetooth: false },
-    { name: "AirPods", uid: "b", bluetooth: true },
-  ];
-  const l = barLayout({ x: 400, y: 300, width: 400, height: 200 }, display);
-
-  test("closed by default, and absent when there is nothing to list", () => {
-    expect(micMenuLayout(l, options({ mics }), display)).toBeUndefined();
-    expect(micMenuLayout(l, options({ micMenuOpen: true }), display)).toBeUndefined();
+describe("where a menu opens (STC-456)", () => {
+  // Patrick, 2026-09-28: below its trigger, OVER the capture button.
+  test("drops from the trigger's bottom-left, 4 below it", () => {
+    const l = barLayout({ x: 200, y: 200, width: 300, height: 200 }, display);
+    const trig = l.controls.find((c) => c.id === "mic")!.rect;
+    expect(menuAnchor(l, "mic", display)).toEqual(
+      { menu: "mic", side: "below", x: trig.x, y: trig.y + trig.height + MENU_GAP });
   });
-
-  test("open, it lists Off first and then every device", () => {
-    const menu = micMenuLayout(l, options({ mics, micMenuOpen: true }), display)!;
-    expect(menu.items.map((i) => i.uid)).toEqual([null, "a", "b"]);
-    expect(menu.items[0]!.label).toBe("Off");
-    // The SAME label rule the window's mic picker uses — one owner, so the two
-    // surfaces cannot name one device differently.
-    expect(menu.items.map((i) => i.label)).toEqual(["Off", "Built-in", "AirPods (Bluetooth)"]);
+  test("it covers the capture button rather than avoiding it", () => {
+    const l = barLayout({ x: 200, y: 200, width: 300, height: 200 }, display);
+    const a = menuAnchor(l, "camera", display);
+    expect(a.y).toBeLessThan(l.capture.y + l.capture.height);
   });
-
-  test("a press picks the item under it", () => {
-    const menu = micMenuLayout(l, options({ mics, micMenuOpen: true }), display)!;
-    for (const item of menu.items) {
-      const mid = { x: item.rect.x + item.rect.width / 2, y: item.rect.y + item.rect.height / 2 };
-      expect(micItemAt(mid, menu)).toEqual({ uid: item.uid });
-    }
-    expect(micItemAt({ x: menu.rect.x - 5, y: menu.rect.y - 5 }, menu)).toBeUndefined();
-  });
-
-  test("the menu stays inside the display", () => {
-    const menu = micMenuLayout(l, options({ mics, micMenuOpen: true }), display)!;
-    expect(menu.rect.y).toBeGreaterThanOrEqual(BAR_MARGIN);
-    expect(bottom(menu.rect)).toBeLessThanOrEqual(display.bounds.height - BAR_MARGIN);
+  test("flips ABOVE the trigger when a full menu would run off the display's bottom", () => {
+    // Bar placed low: the marquee fills the display, so the bar sits inside at the bottom.
+    const l = barLayout(display.bounds, display);
+    const trig = l.controls.find((c) => c.id === "mic")!.rect;
+    const a = menuAnchor(l, "mic", display);
+    expect(a.side).toBe("above");
+    expect(a.y).toBe(trig.y - MENU_GAP);
   });
 });
 
