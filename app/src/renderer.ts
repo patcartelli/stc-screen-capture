@@ -885,6 +885,15 @@ recorder.on("helper:warning", (l) => {
     // displays; the picker must not go on offering one that was unplugged.
     // A survived refit (STC-235) changes the same list, for the same reason.
     if (code === "display-reconfigured" || code === "display-refit") void refreshDisplays();
+    // A refit is otherwise invisible: it is not a toast, and nothing writes
+    // helper warnings to disk. Its payload (`path` update/restart/record,
+    // `startNs`, `display`, `contentRect`) is the only record of HOW a take
+    // survived a display change, which runbook §1/§2 ask about. So it goes to
+    // the DevTools console. An idle `display-reconfigured` stays silent: it
+    // fires on every monitor change and says nothing about a take.
+    if (code === "display-refit" || code === "display-refit-rect-mismatch") {
+      console.info(`[helper] ${code}`, JSON.stringify(l));
+    }
     return;
   }
   const camera = CAMERA_FAULTS[code];

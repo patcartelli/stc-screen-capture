@@ -1,4 +1,5 @@
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,6 +81,23 @@ export async function openEditorFromLibrary(app: ElectronApplication, win: Page,
   ]);
   await editorWin.waitForLoadState("domcontentloaded");
   return editorWin;
+}
+
+/**
+ * Wait until the editor has actually LOADED its take (STC-472).
+ *
+ * `openEditorFromLibrary` returns at `domcontentloaded`; the take loads after
+ * that, asynchronously (demux, by range since STC-236). `#scrub` gets its range
+ * in the same synchronous block that builds the player (`editor.ts`,
+ * `scrub.max = String(lastFrame(...))`), before anything draws — so a max other
+ * than "0" is the exact "the take is open" signal. Filling `#scrub` before it
+ * throws `page.fill: Malformed value`, which is how this surfaced on CI.
+ * Tests that already wait for real pixels (`inkiness`) or for `#clock` are
+ * past this point by construction; call this before touching `#scrub` when
+ * nothing else has waited.
+ */
+export async function waitForTakeLoaded(editorWin: Page, timeout = 30_000): Promise<void> {
+  await expect.poll(() => editorWin.getAttribute("#scrub", "max"), { timeout }).not.toBe("0");
 }
 
 /**

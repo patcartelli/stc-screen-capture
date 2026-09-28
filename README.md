@@ -52,9 +52,12 @@ changed.
 
 ### Download and Install
 
-1. Download the latest release from [GitHub Releases](https://github.com/patcartelli/stc-screen-capture/releases)
-2. Open the `.dmg` file and drag **Capture** to Applications
-3. Launch from Applications or Spotlight (⌘Space)
+There is no published release — no `.dmg`, no GitHub Releases download. Build it from source:
+
+1. Clone the repo and `npm ci`
+2. `npm run app:package` — produces a signed `.app` at `release/mac-arm64/Capture.app` (see "Name
+   and identity" below for what "signed" means here: a dev-machine identity, not a notarized one)
+3. Launch it from Finder or Spotlight (⌘Space)
 4. On first launch, macOS will prompt for Screen Recording permission — grant it
 5. Follow the same process for Input Monitoring when prompted
 
@@ -65,8 +68,13 @@ The app needs two permissions to work correctly:
 - **Screen Recording**: Required to capture what's on screen
 - **Input Monitoring**: Required to track cursor position and clicks for recording and animation
 
-Both are one-time prompts. To reset permissions:
+Both are one-time prompts. To reset permissions, the bundle ID depends on how you're running the
+app — see "Name and identity" below:
 ```bash
+# Packaged (npm run app:package):
+tccutil reset ScreenRecording com.studiocartelli.capture
+tccutil reset ListenEvent com.studiocartelli.capture
+# Unpackaged dev loop (npm run app:start):
 tccutil reset ScreenRecording com.github.Electron
 tccutil reset ListenEvent com.github.Electron
 ```
@@ -168,8 +176,8 @@ Why? Because:
 - **Auto-zoom stage 1**: Currently responds to clicks and drags only; keystroke-based changes are
   recorded but not auto-zoomed (see auto-zoom stage 2, not yet implemented)
 - **No audio**: Microphone capture is not implemented (phase 4 consideration)
-- **No app bundle yet**: there is no packaging step, so the app runs from source under Electron's
-  own identity — see "Name and identity" below
+- **No published release yet**: `npm run app:package` builds a real, signed `.app` locally, but
+  nothing is published for download — see "Name and identity" below
 
 ## Name and identity
 
@@ -178,15 +186,26 @@ the job — the version moves under it). `app/src/product.ts` is the one place a
 down, and `package.json`'s `productName` has to agree with it because Electron derives both the name
 a launcher matches and the `userData` folder settings live in from that field.
 
-**The bundle identifier is still Electron's own `com.github.Electron`, and that is not an oversight.**
-There is no packaging step in this repo — no electron-builder, no forge, no `Info.plist` of the app's
-own — so there is nowhere to put `com.studiocartelli.capture` yet. Two consequences worth knowing
-before you go looking for something that isn't there:
+**The app has two identities, depending on how you run it, and that is deliberate rather than a
+loose end.**
 
-- macOS lists this app as **Electron** under Privacy & Security, and `tccutil` takes
-  `com.github.Electron`. Permissions are keyed to that identifier, so they are shared with anything
-  else run the same way.
-- Spotlight and Raycast will not find "Capture" until a real bundle exists.
+- **`npm run app:package`** builds a real, signed `.app` (`electron-builder`, `electron-builder.yml`)
+  with its own bundle ID, `com.studiocartelli.capture`, signed with a stable local signing identity
+  ("STC Dev Signing" — see `helper/build.sh`'s own signing, which uses the same certificate). macOS
+  lists this build as **Capture** under Privacy & Security, `tccutil` takes
+  `com.studiocartelli.capture`, and Spotlight/Raycast find it by typing "capture". This identity is
+  **not notarized** and is scoped to this machine — see the design spec
+  (`docs/superpowers/specs/2026-09-28-stc-401-packaging-design.md`) for why: nothing here is meant
+  to be handed to anyone else, so there's no Apple Developer Program membership or notarization step
+  involved.
+- **`npm run app:start`** (the fast, unpackaged dev loop — `electron .` directly) never runs through
+  electron-builder at all, so it still shows up as **Electron** under Privacy & Security, keyed to
+  `com.github.Electron`, shared with every other unpackaged Electron app run the same way on this
+  machine. This is expected, not a bug to chase — it's the tradeoff for a dev loop that doesn't
+  rebuild a signed bundle on every save.
+
+Whichever identity you're troubleshooting a permission for, use the matching one — see the
+Troubleshooting section below.
 
 Renaming the product did move `userData` (from `…/Application Support/stc-screen-recorder` to
 `…/Capture`). Settings and any unsaved takes are carried across once, on first launch after the
@@ -211,15 +230,17 @@ pkill -f "$(pwd)/node_modules/electron" || killall Electron
 
 If you granted permission but capture still fails:
 
-1. Verify the permission: **System Settings → Privacy & Security → Screen Recording**. Run from
-   source it is listed as **Electron**, not Capture — the app has no bundle of its own yet, so it
-   inherits Electron's identity (`com.github.Electron`). See "Name and identity" below.
-2. If it's there but not working, try revoking and re-granting:
+1. Verify the permission: **System Settings → Privacy & Security → Screen Recording**. Which name
+   to look for depends on how you launched the app — **Capture** for `npm run app:package`'s signed
+   bundle, **Electron** for `npm run app:start`'s dev loop. See "Name and identity" above.
+2. If it's there but not working, try revoking and re-granting with the matching bundle ID:
    ```bash
-   tccutil reset ScreenRecording com.github.Electron
+   tccutil reset ScreenRecording com.studiocartelli.capture   # packaged
+   tccutil reset ScreenRecording com.github.Electron          # npm run app:start
    ```
 3. Launch the app again and re-grant when prompted
-4. If using a bundle from source, not the .dmg, you may need to `codesign -fs -` it
+4. If you built the `.app` yourself rather than via `npm run app:package`, you may need to
+   `codesign -fs -` it
 
 ### Input Monitoring permission not showing up
 
@@ -228,7 +249,11 @@ If you don't see it in System Settings:
 
 1. Make sure you opened the app and tried to record (which triggers the grant request)
 2. Check for a permission prompt that may have been denied by accident
-3. Reset it: `tccutil reset ListenEvent com.github.Electron`, then open the app again
+3. Reset it (matching bundle ID per "Name and identity" above), then open the app again:
+   ```bash
+   tccutil reset ListenEvent com.studiocartelli.capture   # packaged
+   tccutil reset ListenEvent com.github.Electron          # npm run app:start
+   ```
 
 ### Take is missing or won't export
 

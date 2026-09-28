@@ -114,4 +114,29 @@ async function recoverUnsavedTakes(): Promise<void> {
 }`;
     expect(preFix).not.toMatch(CATCH_ALL);
   });
+
+  // STC-466/467/468 review follow-up: runRecordFlow's own catch-all above
+  // means the bare `void runRecordFlow("menu-bar")` tray call site no longer
+  // risks an unhandled rejection, but it ALSO means a failure there is only
+  // visible if the returned RecordResult is inspected — the original fix
+  // dropped it on the floor with no logging anywhere. Structural for the same
+  // reason as the others: reaching this from a real tray click needs the
+  // click-driven fixtures this suite doesn't have.
+  test("the tray's menu-bar record action logs a failed RecordResult, not just a bare void call", () => {
+    const trayIdx = src.indexOf('runRecordFlow("menu-bar")');
+    expect(trayIdx).toBeGreaterThan(-1);
+    const surrounding = src.slice(trayIdx - 40, trayIdx + 220);
+    expect(surrounding).toMatch(/\.then\(/);
+    expect(surrounding).toMatch(/console\.error/);
+    // Control: the pre-fix shape — a bare `void` call with no `.then`, so a
+    // failed RecordResult was returned and never read.
+    const preFix = `
+    if (action === "record") {
+      if (sup?.state === "recording") { void onRecordHotkey(); return; }
+      void runRecordFlow("menu-bar");
+      return;
+    }`;
+    const preFixSlice = preFix.slice(preFix.indexOf('runRecordFlow("menu-bar")') - 40);
+    expect(preFixSlice).not.toMatch(/\.then\(/);
+  });
 });
