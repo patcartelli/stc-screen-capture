@@ -4,7 +4,7 @@ import type {
 import { pixelSize, rectContains } from "./selection.js";
 import { HANDLES, handleAt, handlePoint } from "./overlay-hittest.js";
 import {
-  barContains, controlAt, controlEnabled, parseDimension, sizeLabel,
+  barContains, barPress, controlAt, controlEnabled, parseDimension, sizeLabel,
   type BarLayout, type ControlId, type MenuAnchor, type OptionsState,
 } from "./record-options.js";
 import type { MenuRow } from "./device-picker.js";
@@ -204,11 +204,17 @@ function renderBar(p: OverlayPayload): void {
   // built from (overlay-session.ts's `push`), so the readout cannot disagree
   // with the bar it is drawn inside of.
   //
-  // The fields show the live size unless the user is typing in them: a
-  // broadcast mid-edit must not overwrite what they have typed so far.
+  // The fields show the live size unless the user is editing the PAIR: a
+  // broadcast mid-edit (every pointermove sends one) must not overwrite what
+  // they have typed so far — including the width they typed before Tabbing
+  // to the height, which is not the focused field any more but is still
+  // uncommitted.
   const px = p.anchor ? pixelSize(p.anchor, p.display) : undefined;
-  if (document.activeElement !== sizeW) sizeW.value = px ? String(px.width) : "";
-  if (document.activeElement !== sizeH) sizeH.value = px ? String(px.height) : "";
+  const editing = document.activeElement === sizeW || document.activeElement === sizeH;
+  if (!editing) {
+    sizeW.value = px ? String(px.width) : "";
+    sizeH.value = px ? String(px.height) : "";
+  }
   // `data-label` is the readout as one string — what the e2e suite reads now
   // that the element holds two inputs rather than text.
   ctl("size").dataset.label = p.anchor ? sizeLabel(p.anchor, p.display) : "—";
@@ -361,8 +367,17 @@ const SYNTHETIC_INPUT = new URLSearchParams(location.search).get("synthetic") ==
 
 // ── the size field (STC-456) ────────────────────────────────────────────────
 
-/** Set while Escape blurs a size input: that blur reverts, it does not commit. */
-let reverting = false;
+/** Set while a size input is blurred by code that has already decided what the
+ * blur means — Escape (a revert) or `commitAndLeaveField` (already committed)
+ * — so the blur handler does not commit a second time. */
+let skipBlurCommit = false;
+
+/** Commit the typed size NOW, then leave the field without a second commit. */
+function commitAndLeaveField(): void {
+  commitSize();
+  skipBlurCommit = true;
+  try { (document.activeElement as HTMLElement | null)?.blur(); } finally { skipBlurCommit = false; }
+}
 
 /** Send the typed size in PIXELS; anything unparseable reverts to the live one. */
 function commitSize(): void {
@@ -381,7 +396,7 @@ for (const f of [sizeW, sizeH]) {
   f.addEventListener("focus", () => f.select());
   // Leaving the PAIR commits; Tab from W to H does not.
   f.addEventListener("blur", (ev) => {
-    if (reverting) return;
+    if (skipBlurCommit) return;
     const to = ev.relatedTarget;
     if (to !== sizeW && to !== sizeH) commitSize();
   });
@@ -394,30 +409,34 @@ window.addEventListener("pointerdown", (e) => {
   // The bar sits over the scrim, so a press on it must not also start a new
   // marquee underneath. First refusal, then the selection as before.
   if (current?.phase === "options" && current.bar) {
+    // Focus moves (and the committing blur fires) only AFTER this handler, so
+    // a typed size is committed here, ahead of anything this press sends —
+    // see `barPress` rule 1.
+    const fieldFocused = document.activeElement === sizeW || document.activeElement === sizeH;
+    const onField = e.target === sizeW || e.target === sizeH;
     // A menu row first: the menu drops OVER the capture button, so the bar's
     // own hit test would read a press on a row as a press on Capture.
     const row = (e.target as Element).closest?.("#menu .row") as HTMLElement | null;
     if (row && current.menu) {
+      if (fieldFocused) commitAndLeaveField();
       const picked = current.menu.rows.find((r) => r.key === row.dataset.key);
       if (picked) send({ t: "menuPick", pick: picked.pick });
       return;
     }
     const g = toGlobal(e);
     const hit = controlAt(g, current.bar);
-    // Any press outside the open menu closes it, except on the two triggers,
-    // whose own `control` toggles (or switches) the menu in one step.
-    if (current.menu && hit !== "mic" && hit !== "camera") send({ t: "menuClose" });
-    // The size field's inputs take focus by default; nothing else to send.
-    if (hit === "size") return;
-    if (hit) {
-      if (controlEnabled(hit, current.options!)) send({ t: "control", id: hit });
-      return;
+    // Every decision is `barPress`'s (record-options.ts, unit tested); this
+    // only carries out its actions in the order given.
+    const { actions, swallow } = barPress({
+      fieldFocused, onField, menuOpen: current.menu !== undefined, hit,
+      inBar: barContains(g, current.bar),
+      enabled: hit !== undefined && controlEnabled(hit, current.options!),
+    });
+    for (const a of actions) {
+      if (a.t === "commitSize") commitAndLeaveField();
+      else send(a);
     }
-    // The pane's own padding IS the bar (Review Focus 3): a press there is
-    // swallowed rather than falling through to a new marquee, even though it
-    // landed on no control. A press that only closed a menu is swallowed too —
-    // dismissing a menu must not also start a new selection.
-    if (barContains(g, current.bar) || current.menu) return;
+    if (swallow) return;
   }
   const state = current?.state;
   const at = toGlobal(e);
@@ -460,8 +479,8 @@ window.addEventListener("keydown", (e) => {
       // `blur()`, and its handler would commit the half-typed value — the flag
       // is what tells it this blur is a revert.
       e.preventDefault();
-      reverting = true;
-      try { t.blur(); } finally { reverting = false; }
+      skipBlurCommit = true;
+      try { t.blur(); } finally { skipBlurCommit = false; }
       if (current) render(current);
     }
     return;   // nothing typed in the field reaches the selection reducer

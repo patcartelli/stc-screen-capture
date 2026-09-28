@@ -170,6 +170,55 @@ export function controlEnabled(id: ControlId, s: { mics: readonly unknown[] }): 
   return true;
 }
 
+/** What one press in the options phase sends, in ORDER. */
+export type BarPressAction =
+  | { t: "commitSize" }
+  | { t: "menuClose" }
+  | { t: "control"; id: ControlId };
+
+export interface BarPress {
+  /** A size input has focus right now (a typed value may be uncommitted). */
+  fieldFocused: boolean;
+  /** The press landed ON one of the size inputs. */
+  onField: boolean;
+  menuOpen: boolean;
+  /** `controlAt` for the press, undefined off every control. */
+  hit: ControlId | undefined;
+  /** `barContains` for the press: pane padding and capture button included. */
+  inBar: boolean;
+  /** `controlEnabled(hit)`; ignored when `hit` is undefined. */
+  enabled: boolean;
+}
+
+/**
+ * The options-phase pointerdown, decided (STC-456 fix round 1). No DOM.
+ *
+ * 1. A typed size is committed FIRST. The browser only moves focus (and fires
+ *    the blur that would commit it) after pointerdown has run, so without this
+ *    a press on Capture Video sent `control:record` before `size` and the take
+ *    started at the old size. The session handles IPC in order, so committing
+ *    here puts `size` ahead of whatever follows.
+ * 2. With a menu open, a press only closes it — the capture button's edges
+ *    either side of a menu are a dismiss target, not a start button. The two
+ *    triggers are the exception: their own `control` switches or closes the
+ *    menu in one step.
+ * 3. Otherwise an enabled control acts; the size field acts by taking focus.
+ *
+ * `swallow` says the press stops here rather than reaching the selection
+ * reducer: anything on the bar, and any press that closed a menu.
+ */
+export function barPress(p: BarPress): { actions: BarPressAction[]; swallow: boolean } {
+  const actions: BarPressAction[] = [];
+  if (p.fieldFocused && !p.onField) actions.push({ t: "commitSize" });
+  const trigger = p.hit === "mic" || p.hit === "camera";
+  if (p.menuOpen && !trigger) {
+    actions.push({ t: "menuClose" });
+    return { actions, swallow: true };
+  }
+  if (p.hit && p.hit !== "size" && p.enabled) actions.push({ t: "control", id: p.hit });
+  return { actions, swallow: p.hit !== undefined || p.inBar };
+}
+
 export interface MenuAnchor { menu: MenuId; x: number; y: number; side: "below" | "above"; }
 
 /**

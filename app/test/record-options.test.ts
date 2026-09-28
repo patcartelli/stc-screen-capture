@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   BAR_GAP, BAR_HEIGHT, BAR_MARGIN, CAPTURE_GAP, CAPTURE_HEIGHT, CONTROL_IDS, MENU_GAP,
   PANE_WIDTH, barContains, barLayout, controlAt, controlEnabled, expandedSelection,
-  menuAnchor, sizeLabel, parseDimension, resizeToPixels,
+  menuAnchor, sizeLabel, parseDimension, resizeToPixels, barPress, type BarPress,
 } from "../src/record-options.js";
 import { MIN_SELECTION_POINTS } from "../src/selection.js";
 import type { DisplayInfo, Rect } from "../src/selection.js";
@@ -217,5 +217,70 @@ describe("typing a size (STC-456)", () => {
   test("growing near an edge shifts the rect back inside rather than clipping it", () => {
     const r = resizeToPixels({ x: 1500, y: 900, width: 100, height: 100 }, display, 800, 400);
     expect(r).toEqual({ x: 1200, y: 800, width: 400, height: 200 });
+  });
+});
+
+describe("a press in the options phase (STC-456 fix round 1)", () => {
+  const press = (over: Partial<BarPress>) => barPress({
+    fieldFocused: false, onField: false, menuOpen: false, hit: undefined,
+    inBar: false, enabled: true, ...over,
+  });
+
+  test("a typed size is committed BEFORE Capture Video, not after it", () => {
+    // The browser blurs the field only after pointerdown; if `control:record`
+    // went first the take started at the old size and the late `size` was dropped.
+    expect(press({ fieldFocused: true, hit: "record", inBar: true }).actions)
+      .toEqual([{ t: "commitSize" }, { t: "control", id: "record" }]);
+  });
+
+  test("the same ordering for Expand, and for a press off the bar (a handle drag)", () => {
+    expect(press({ fieldFocused: true, hit: "expand", inBar: true }).actions)
+      .toEqual([{ t: "commitSize" }, { t: "control", id: "expand" }]);
+    const off = press({ fieldFocused: true });
+    expect(off.actions).toEqual([{ t: "commitSize" }]);
+    expect(off.swallow).toBe(false);           // the reducer still gets the press
+  });
+
+  test("pressing a size input does not commit: a click between W and H is still editing", () => {
+    const r = press({ fieldFocused: true, onField: true, hit: "size", inBar: true });
+    expect(r.actions).toEqual([]);
+    expect(r.swallow).toBe(true);
+  });
+
+  test("no focused field, no commit", () => {
+    expect(press({ hit: "record", inBar: true }).actions).toEqual([{ t: "control", id: "record" }]);
+  });
+
+  test("with a menu open, a press on the capture button only closes the menu", () => {
+    const r = press({ menuOpen: true, hit: "record", inBar: true });
+    expect(r.actions).toEqual([{ t: "menuClose" }]);
+    expect(r.swallow).toBe(true);
+    for (const id of ["size", "expand", "crop", "settings", "keys", "clicks"] as const) {
+      expect(press({ menuOpen: true, hit: id, inBar: true }).actions).toEqual([{ t: "menuClose" }]);
+    }
+  });
+
+  test("with a menu open, the mic and camera triggers keep their own switch/close", () => {
+    expect(press({ menuOpen: true, hit: "mic", inBar: true }).actions)
+      .toEqual([{ t: "control", id: "mic" }]);
+    expect(press({ menuOpen: true, hit: "camera", inBar: true }).actions)
+      .toEqual([{ t: "control", id: "camera" }]);
+  });
+
+  test("with a menu open, a press on bare desktop closes it and does not start a selection", () => {
+    const r = press({ menuOpen: true });
+    expect(r.actions).toEqual([{ t: "menuClose" }]);
+    expect(r.swallow).toBe(true);
+  });
+
+  test("a focused field AND an open menu: commit, then close, and nothing else", () => {
+    expect(press({ fieldFocused: true, menuOpen: true, hit: "record", inBar: true }).actions)
+      .toEqual([{ t: "commitSize" }, { t: "menuClose" }]);
+  });
+
+  test("a disabled control is swallowed but sends nothing; pane padding is swallowed", () => {
+    expect(press({ hit: "keys", inBar: true, enabled: false })).toEqual({ actions: [], swallow: true });
+    expect(press({ inBar: true })).toEqual({ actions: [], swallow: true });
+    expect(press({})).toEqual({ actions: [], swallow: false });
   });
 });
