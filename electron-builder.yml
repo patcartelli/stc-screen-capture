@@ -9,6 +9,9 @@ directories:
 files:
   - app/dist/**/*
   - package.json
+extraResources:
+  - from: helper/build/stc-helper
+    to: stc-helper
 mac:
   target:
     - target: dir
@@ -16,6 +19,8 @@ mac:
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  binaries:
+    - Contents/Resources/stc-helper
   extendInfo:
     NSCameraUsageDescription: "Capture records a camera picture-in-picture alongside the screen."
     NSMicrophoneUsageDescription: "Capture records a microphone track alongside the screen."
