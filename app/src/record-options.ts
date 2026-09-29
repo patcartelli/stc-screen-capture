@@ -1,12 +1,14 @@
-import { pixelSize, rectContains, type DisplayInfo, type Point, type Rect } from "./selection.js";
-import { micLabel, type MicInfo } from "./mic-devices.js";
+import { MIN_SELECTION_POINTS, pixelSize, rectContains, type DisplayInfo, type Point, type Rect } from "./selection.js";
+import type { MicInfo } from "./mic-devices.js";
+import type { DeviceLike, DeviceSelection } from "./device-picker.js";
 
 /**
- * The options bar's decisions (STC-388), with no DOM and no Electron.
+ * The options bar's decisions (STC-388, then STC-456's two-row pane), with no
+ * DOM and no Electron.
  *
  * Same arrangement `selection.ts` has for the marquee and `overlay-hittest.ts`
  * for its handles: everything that DECIDES — where the bar sits, what is in it,
- * which control a press lands on, what the mic menu offers — lives here and is
+ * which control a press lands on, where a menu opens — lives here and is
  * exercised by `app/test/record-options.test.ts` without a screen, a pointer or
  * an app. `overlay.ts` draws it; it does not repeat the reasoning.
  *
@@ -15,19 +17,26 @@ import { micLabel, type MicInfo } from "./mic-devices.js";
  * second display needs no special case.
  */
 
-export type ControlId = "size" | "expand" | "mic" | "camera" | "record";
+export type ControlId =
+  | "size" | "expand" | "crop" | "settings" | "mic" | "camera" | "keys" | "clicks" | "record";
 
-/** Left to right, as drawn. The readout first because it is the thing being
- * confirmed; Record last because it is the thing being committed to. */
-export const CONTROL_IDS: readonly ControlId[] = ["size", "expand", "mic", "camera", "record"];
+/** Row 1, then row 2, then the capture button (STC-456, Capture SK 016 Frame 9). */
+export const CONTROL_IDS: readonly ControlId[] =
+  ["size", "expand", "crop", "settings", "mic", "camera", "keys", "clicks", "record"];
 
-export interface OptionsState {
-  /** Sticky (`Settings.micDeviceUid`); null is "no mic", never "the default". */
-  micDeviceUid: string | null;
-  /** Sticky (`Settings.camera`). */
-  camera: boolean;
-  /** What the mic menu can offer. Empty disables the control outright. */
+export type MenuId = "mic" | "camera";
+
+export interface OptionsState extends DeviceSelection {
+  /**
+   * What the mic menu can offer. The mic trigger is ALWAYS enabled, even when
+   * this is empty — a Mac mini/Studio with no mic attached, or a stalled
+   * enumeration (`devicesForBar` returning `mics: []`), must still reach
+   * Include System Audio and Mute External, both of which live in this menu
+   * now and neither of which needs a mic to exist (STC-456 review).
+   */
   mics: readonly MicInfo[];
+  /** What the camera menu can offer. Empty still offers No Camera / Automatic. */
+  cameras: readonly DeviceLike[];
   /**
    * Set by the `expand` control, NEVER inferred from the marquee's geometry.
    *
@@ -40,34 +49,78 @@ export interface OptionsState {
    * happened to drag to the edges.
    */
   fullDisplay: boolean;
-  micMenuOpen: boolean;
+  /** Which menu is open, if any. One at a time. */
+  openMenu: MenuId | null;
 }
 
 // ── the bar's geometry ──────────────────────────────────────────────────────
 
-export const BAR_HEIGHT = 44;
 /** Between the marquee's edge and the bar. */
 export const BAR_GAP = 12;
 /** The closest the bar or its menu may come to a display edge. */
 export const BAR_MARGIN = 8;
-const BAR_PADDING = 10;
-const CONTROL_GAP = 8;
 
-/** Each control's width. The bar's width is DERIVED from these, so a control
- * cannot be widened into a bar that has no room for it. */
-const CONTROL_WIDTHS: Record<ControlId, number> = {
-  size: 104, expand: 36, mic: 88, camera: 36, record: 92,
-};
-const CONTROL_HEIGHT = BAR_HEIGHT - BAR_PADDING;
+// Given by Patrick (2026-09-28): the pane and its padding.
+export const PANE_WIDTH = 340;
+export const PANE_HEIGHT = 108;
+export const PANE_PADDING = 16;
+// Measured from the frame, not given. Tune here, nowhere else.
+const ROW_HEIGHT = 32;
+const ROW_GAP = 12;
+const ICON_CONTROL = 32;
+const CARET_CONTROL = 48;          // icon + ▾
+export const CAPTURE_GAP = 8;
+export const CAPTURE_HEIGHT = 36;
+export const MENU_GAP = 4;
+/**
+ * The device menu's own row metrics (STC-456 fix round, Finding 7) —
+ * `device-menu.css`'s `.device-menu .row { height: 44px }` and its
+ * `padding: 4px 0`, named here rather than re-guessed. `menuHeight` is the
+ * ONE place a row count becomes a pixel height; a fixed `MENU_MAX_HEIGHT`
+ * guess (280, sized for 6 rows) under-counted a real 7-row menu by about
+ * 36px, which could pick "below" when the menu actually ran off the
+ * display's bottom. The view still SIZES the menu (only the DOM knows a
+ * label's actual width), but the below/above decision needs this estimate
+ * before the DOM exists.
+ */
+export const MENU_ROW_HEIGHT = 44;
+export const MENU_VERTICAL_PADDING = 8; // 4px top + 4px bottom
+export function menuHeight(rowCount: number): number {
+  return rowCount * MENU_ROW_HEIGHT + MENU_VERTICAL_PADDING;
+}
 
-/** The one place the bar's width is decided — never a literal. */
-export function barWidth(): number {
-  const controls = CONTROL_IDS.reduce((n, id) => n + CONTROL_WIDTHS[id], 0);
-  return BAR_PADDING * 2 + controls + CONTROL_GAP * (CONTROL_IDS.length - 1);
+/** The whole block the placement rules move: pane + gap + capture button. */
+export const BAR_HEIGHT = PANE_HEIGHT + CAPTURE_GAP + CAPTURE_HEIGHT;
+
+const ROW2: readonly { id: ControlId; w: number }[] = [
+  { id: "settings", w: ICON_CONTROL }, { id: "mic", w: CARET_CONTROL },
+  { id: "camera", w: CARET_CONTROL }, { id: "keys", w: ICON_CONTROL }, { id: "clicks", w: ICON_CONTROL },
+];
+
+function paneControls(pane: Rect): { id: ControlId; rect: Rect }[] {
+  const inner = { x: pane.x + PANE_PADDING, y: pane.y + PANE_PADDING,
+                  width: PANE_WIDTH - PANE_PADDING * 2 };
+  const y1 = inner.y, y2 = inner.y + ROW_HEIGHT + ROW_GAP;
+  const right = inner.x + inner.width;
+  const crop = { x: right - ICON_CONTROL, y: y1, width: ICON_CONTROL, height: ROW_HEIGHT };
+  const expand = { x: crop.x - 8 - ICON_CONTROL, y: y1, width: ICON_CONTROL, height: ROW_HEIGHT };
+  // 16 before expand: room for the hairline divider the view draws there.
+  const size = { x: inner.x, y: y1, width: expand.x - 16 - inner.x, height: ROW_HEIGHT };
+  const used = ROW2.reduce((n, c) => n + c.w, 0);
+  const gap = (inner.width - used) / (ROW2.length - 1);
+  let x = inner.x;
+  const row2 = ROW2.map((c) => {
+    const r = { id: c.id, rect: { x, y: y2, width: c.w, height: ROW_HEIGHT } };
+    x += c.w + gap;
+    return r;
+  });
+  return [{ id: "size", rect: size }, { id: "expand", rect: expand }, { id: "crop", rect: crop }, ...row2];
 }
 
 export interface BarLayout {
   rect: Rect;
+  pane: Rect;
+  capture: Rect;
   /**
    * `inside` is the fallback, not a preference: a marquee covering the whole
    * display leaves nowhere that does not overlap it, so "never overlaps" cannot
@@ -89,7 +142,7 @@ const clamp = (v: number, lo: number, hi: number): number =>
  */
 export function barLayout(selection: Rect, display: DisplayInfo): BarLayout {
   const b = display.bounds;
-  const width = barWidth();
+  const width = PANE_WIDTH;
   const minX = b.x + BAR_MARGIN;
   const maxX = b.x + b.width - BAR_MARGIN - width;
   const x = clamp(selection.x + selection.width / 2 - width / 2, minX, maxX);
@@ -111,88 +164,111 @@ export function barLayout(selection: Rect, display: DisplayInfo): BarLayout {
     placement = "inside";
   }
 
-  const rect: Rect = { x, y, width, height: BAR_HEIGHT };
-  const controls: { id: ControlId; rect: Rect }[] = [];
-  let cx = x + BAR_PADDING;
-  for (const id of CONTROL_IDS) {
-    const w = CONTROL_WIDTHS[id];
-    controls.push({
-      id, rect: { x: cx, y: y + (BAR_HEIGHT - CONTROL_HEIGHT) / 2, width: w, height: CONTROL_HEIGHT },
-    });
-    cx += w + CONTROL_GAP;
-  }
-  return { rect, placement, controls };
+  const pane: Rect = { x, y, width: PANE_WIDTH, height: PANE_HEIGHT };
+  const capture: Rect = { x, y: y + PANE_HEIGHT + CAPTURE_GAP, width: PANE_WIDTH, height: CAPTURE_HEIGHT };
+  const controls = [...paneControls(pane), { id: "record" as const, rect: capture }];
+  return { rect: { x, y, width: PANE_WIDTH, height: BAR_HEIGHT }, pane, capture, placement, controls };
 }
 
-/** Which control a press landed on, or undefined for the bar's own padding
- * and everything outside it. */
+/** A press the bar swallows: on the pane (padding included) or the capture
+ * button, never the gap between them, which is the user's screen. */
+export function barContains(p: Point, layout: BarLayout): boolean {
+  return rectContains(layout.pane, p) || rectContains(layout.capture, p);
+}
+
 export function controlAt(p: Point, layout: BarLayout): ControlId | undefined {
-  if (!rectContains(layout.rect, p)) return undefined;
+  if (!barContains(p, layout)) return undefined;
   return layout.controls.find((c) => rectContains(c.rect, p))?.id;
 }
 
 /**
- * A control with nothing behind it is shown disabled rather than hidden: a bar
- * that changes width depending on the machine would move Record out from under
- * the pointer between one take and the next.
+ * Keys and clicks are slots for STC-419/STC-420: laid out now so the bar does
+ * not change shape when they land, and never enabled until then.
+ *
+ * The mic control is ALWAYS enabled (STC-456 review, Finding 1) — its menu
+ * holds Include System Audio and Mute External, neither of which needs a mic
+ * to exist, so a machine with zero mics (or a stalled enumeration) must still
+ * be able to open it. No state is consulted for any control any more, so this
+ * takes none.
  */
-export function controlEnabled(id: ControlId, s: OptionsState): boolean {
-  if (id === "mic") return s.mics.length > 0;
-  return true;
+export function controlEnabled(id: ControlId): boolean {
+  return id !== "keys" && id !== "clicks";
 }
 
-// ── the mic menu ────────────────────────────────────────────────────────────
+/** What one press in the options phase sends, in ORDER. */
+export type BarPressAction =
+  | { t: "commitSize" }
+  | { t: "menuClose" }
+  | { t: "control"; id: ControlId };
 
-const MIC_ITEM_HEIGHT = 28;
-const MIC_MENU_WIDTH = 220;
-
-export interface MicMenuLayout {
-  rect: Rect;
-  items: readonly { uid: string | null; label: string; rect: Rect }[];
+export interface BarPress {
+  /** A size input has focus right now (a typed value may be uncommitted). */
+  fieldFocused: boolean;
+  /** The press landed ON one of the size inputs. */
+  onField: boolean;
+  menuOpen: boolean;
+  /** `controlAt` for the press, undefined off every control. */
+  hit: ControlId | undefined;
+  /** `barContains` for the press: pane padding and capture button included. */
+  inBar: boolean;
+  /** `controlEnabled(hit)`; ignored when `hit` is undefined. */
+  enabled: boolean;
 }
 
 /**
- * The open mic menu, or undefined when it is closed or has nothing to list.
+ * The options-phase pointerdown, decided (STC-456 fix round 1). No DOM.
  *
- * Drawn by the overlay rather than opened as a native menu: this is a
- * transparent always-on-top panel, and a native popup would take key focus off
- * it — the failure 5850e4f cost us once already on the countdown.
+ * 1. A typed size is committed FIRST. The browser only moves focus (and fires
+ *    the blur that would commit it) after pointerdown has run, so without this
+ *    a press on Capture Video sent `control:record` before `size` and the take
+ *    started at the old size. The session handles IPC in order, so committing
+ *    here puts `size` ahead of whatever follows.
+ * 2. With a menu open, a press only closes it — the capture button's edges
+ *    either side of a menu are a dismiss target, not a start button. The two
+ *    triggers are the exception: their own `control` switches or closes the
+ *    menu in one step.
+ * 3. Otherwise an enabled control acts; the size field acts by taking focus.
+ *
+ * `swallow` says the press stops here rather than reaching the selection
+ * reducer: anything on the bar, and any press that closed a menu.
  */
-export function micMenuLayout(layout: BarLayout, s: OptionsState,
-                              display: DisplayInfo): MicMenuLayout | undefined {
-  if (!s.micMenuOpen || s.mics.length === 0) return undefined;
-  const anchor = layout.controls.find((c) => c.id === "mic");
-  if (!anchor) return undefined;
-
-  // "Off" first, and always present: null is a real choice here, not an
-  // absence — there is no automatic mic (settings.ts), so the list has to be
-  // able to say so.
-  const entries: { uid: string | null; label: string }[] =
-    [{ uid: null, label: "Off" },
-     ...s.mics.map((m) => ({ uid: m.uid, label: micLabel(m) }))];
-
-  const b = display.bounds;
-  const height = entries.length * MIC_ITEM_HEIGHT;
-  const x = clamp(anchor.rect.x, b.x + BAR_MARGIN, b.x + b.width - BAR_MARGIN - MIC_MENU_WIDTH);
-  // Above the bar when the bar is low, below it otherwise — the menu follows
-  // the bar's own reasoning rather than inventing a second one.
-  const belowBar = layout.rect.y + layout.rect.height + 4;
-  const y = belowBar + height <= b.y + b.height - BAR_MARGIN
-    ? belowBar
-    : clamp(layout.rect.y - 4 - height, b.y + BAR_MARGIN, b.y + b.height - BAR_MARGIN - height);
-
-  return {
-    rect: { x, y, width: MIC_MENU_WIDTH, height },
-    items: entries.map((e, i) => ({
-      ...e,
-      rect: { x, y: y + i * MIC_ITEM_HEIGHT, width: MIC_MENU_WIDTH, height: MIC_ITEM_HEIGHT },
-    })),
-  };
+export function barPress(p: BarPress): { actions: BarPressAction[]; swallow: boolean } {
+  const actions: BarPressAction[] = [];
+  if (p.fieldFocused && !p.onField) actions.push({ t: "commitSize" });
+  const trigger = p.hit === "mic" || p.hit === "camera";
+  if (p.menuOpen && !trigger) {
+    actions.push({ t: "menuClose" });
+    return { actions, swallow: true };
+  }
+  if (p.hit && p.hit !== "size" && p.enabled) actions.push({ t: "control", id: p.hit });
+  return { actions, swallow: p.hit !== undefined || p.inBar };
 }
 
-export function micItemAt(p: Point, menu: MicMenuLayout): { uid: string | null } | undefined {
-  const hit = menu.items.find((i) => rectContains(i.rect, p));
-  return hit ? { uid: hit.uid } : undefined;
+export interface MenuAnchor { menu: MenuId; x: number; y: number; side: "below" | "above"; }
+
+/**
+ * Where a menu opens: dropping from its trigger's bottom-left and OVER the
+ * capture button (Patrick, 2026-09-28). Flipped above the trigger whenever
+ * trigger-bottom + `MENU_GAP` + `menuHeight(rowCount)` would cross the
+ * display's bottom minus `BAR_MARGIN` — NOT only when the bar itself sits at
+ * the bottom edge (an earlier doc's claim): a bar in ordinary `below`
+ * placement, with the trigger far enough down the pane, crosses that same
+ * line for a menu with enough rows, and flips for exactly the same reason.
+ * `rowCount` lets this be precise instead of a fixed guess (Finding 7): a
+ * short 2-row mic menu and a full 7-row camera list do not need the same
+ * clearance. `y` is the menu's NEAR edge: its top when below, its bottom when
+ * above. The view still clamps the menu horizontally, since only it knows the
+ * rendered width.
+ */
+export function menuAnchor(layout: BarLayout, menu: MenuId, display: DisplayInfo,
+                           rowCount: number): MenuAnchor {
+  const trig = layout.controls.find((c) => c.id === menu)!.rect;
+  const b = display.bounds;
+  const below = trig.y + trig.height + MENU_GAP;
+  if (below + menuHeight(rowCount) <= b.y + b.height - BAR_MARGIN) {
+    return { menu, side: "below", x: trig.x, y: below };
+  }
+  return { menu, side: "above", x: trig.x, y: trig.y - MENU_GAP };
 }
 
 // ── what the controls mean ──────────────────────────────────────────────────
@@ -213,4 +289,31 @@ export function expandedSelection(display: DisplayInfo): Rect {
 export function sizeLabel(selection: Rect, display: DisplayInfo): string {
   const { width, height } = pixelSize(selection, display);
   return `${width} × ${height}`;
+}
+
+/** A typed dimension: digits only, positive. Anything else is "not a number
+ * yet", and the field reverts rather than guessing. */
+export function parseDimension(text: string): number | undefined {
+  const t = text.trim();
+  if (!/^\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  return n > 0 ? n : undefined;
+}
+
+/**
+ * The marquee after the user types a size in PIXELS (the unit the readout
+ * shows, `sizeLabel`), in global POINTS. Centred on the old anchor, whole
+ * points, at least MIN_SELECTION_POINTS, at most the display, then shifted
+ * (never shrunk) to sit inside it.
+ */
+export function resizeToPixels(anchor: Rect, display: DisplayInfo,
+                               widthPx: number, heightPx: number): Rect {
+  const b = display.bounds;
+  const s = display.scaleFactor > 0 ? display.scaleFactor : 1;
+  const w = clamp(Math.round(widthPx / s), MIN_SELECTION_POINTS, b.width);
+  const h = clamp(Math.round(heightPx / s), MIN_SELECTION_POINTS, b.height);
+  const cx = anchor.x + anchor.width / 2, cy = anchor.y + anchor.height / 2;
+  const x = clamp(Math.round(cx - w / 2), b.x, b.x + b.width - w);
+  const y = clamp(Math.round(cy - h / 2), b.y, b.y + b.height - h);
+  return { x, y, width: w, height: h };
 }

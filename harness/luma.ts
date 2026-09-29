@@ -1,4 +1,5 @@
 import { demuxTrack } from "@transform/demux";
+import { ChunkReader, memorySource } from "@transform/chunk-reader";
 
 /**
  * Per-frame mean luminance of a track, with its session-relative PTS.
@@ -17,7 +18,7 @@ import { demuxTrack } from "@transform/demux";
  */
 async function seriesFor(url: string, maxFrames: number): Promise<{ ptsNs: number; luma: number }[]> {
   const buf = await fetch(url).then((r) => r.arrayBuffer());
-  const v = await demuxTrack(buf, url);
+  const v = await demuxTrack(memorySource(buf, url), url);
   const cv = new OffscreenCanvas(64, 36);
   const ctx = cv.getContext("2d", { alpha: false, willReadFrequently: true })!;
   const out: { ptsNs: number; luma: number }[] = [];
@@ -44,11 +45,18 @@ async function seriesFor(url: string, maxFrames: number): Promise<{ ptsNs: numbe
   dec.configure({ codec: v.codec, codedWidth: v.codedWidth, codedHeight: v.codedHeight,
                   description: v.description });
 
-  for (const c of v.chunks) {
-    dec.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: c.data as BufferSource }));
-    // Bounded queue: feeding a whole take at once makes the decoder hold every
-    // chunk, and on a large track that is where memory goes.
-    while (dec.decodeQueueSize > 16) await new Promise((r) => setTimeout(r, 1));
+  const reader = new ChunkReader(v.chunks, v.bytes, url);
+  for (let i2 = 0; i2 < v.chunks.length;) {
+    const g = reader.groupOf(i2);
+    const datas = await reader.read(g.start, g.end - g.start);
+    for (let k = 0; k < datas.length; k++) {
+      const c = v.chunks[g.start + k]!;
+      dec.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: datas[k] as BufferSource }));
+      // Bounded queue: feeding a whole take at once makes the decoder hold every
+      // chunk, and on a large track that is where memory goes.
+      while (dec.decodeQueueSize > 16) await new Promise((r) => setTimeout(r, 1));
+    }
+    i2 = g.end;
   }
   await dec.flush();
   dec.close();

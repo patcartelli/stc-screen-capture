@@ -4,13 +4,16 @@ import { join } from "node:path";
 import { loadSession, rebaseMicAudio, SessionLoadError } from "../src/session.js";
 import type { Anchors } from "../src/types.js";
 import type { DemuxedAudio } from "../src/demux-audio.js";
+import { memorySource } from "../src/chunk-reader.js";
+import { geometryAt } from "../src/display-geometry.js";
 
 const root = join(__dirname, "..", "..");
 const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
-const mp4 = (p: string) => {
+const rawBuf = (p: string) => {
   const b = readFileSync(join(root, p));
   return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 };
+const mp4 = (p: string) => memorySource(rawBuf(p), p);
 
 /** anchors describing the offset fixture: frames begin 250 ms in */
 function offsetAnchors(over: Partial<Anchors> = {}): any {
@@ -93,7 +96,7 @@ describe("loadSession", () => {
   });
 });
 
-describe("loader accepts v1 through v6 anchors", () => {
+describe("loader accepts v1 through v7 anchors", () => {
   // The helper does not emit v2 until increment 3, does not emit v3 until
   // STC-370 (only for a region/window take), and does not emit v4 until
   // STC-233 (only when a mic was requested). A loader that demanded the
@@ -177,16 +180,99 @@ describe("loader accepts v1 through v6 anchors", () => {
     expect(s.systemAudio).toBeUndefined();
   });
 
-  test("a version 7 anchors document is rejected by name", async () => {
-    // Widening must not become "accept anything". Version 7, not 6: STC-418
-    // made 6 a real, supported version (the `system` audio block), so it is
+  test("a version 8 anchors document is rejected by name", async () => {
+    // Widening must not become "accept anything". Version 8, not 7: STC-235
+    // made 7 a real, supported version (the `geometry` timeline), so it is
     // no longer a stand-in for "unknown future version" — the same thing
-    // already happened to 3 (STC-370), 4 (STC-233) and 5 (STC-240).
+    // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240) and 6 (STC-418).
     await expect(loadSession({
-      anchors: offsetAnchors({ version: 7 as any }),
+      anchors: offsetAnchors({ version: 8 as any }),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 7 is not supported/);
+    })).rejects.toThrow(/version 8 is not supported/);
+  });
+
+  // STC-235: a v7 document with malformed geometry is refused, never silently
+  // accepted — checkGeometry (display-geometry.ts) is wired into the loader.
+  test("a version 7 anchors document with malformed geometry is refused", async () => {
+    const display = { id: 1, pointWidth: 640, pointHeight: 360, pixelWidth: 640, pixelHeight: 360,
+                       backingScale: 1, originX: 0, originY: 0 };
+    await expect(loadSession({
+      anchors: offsetAnchors({
+        version: 7,
+        geometry: [
+          // entry 0's contentRect is not the full capture frame (y != 0) —
+          // checkGeometry must refuse rather than default.
+          { startNs: 250_000_000, display, contentRect: { x: 0, y: 2, width: 640, height: 358 } },
+          { startNs: 1_000_000_000, display, contentRect: { x: 0, y: 0, width: 640, height: 360 } },
+        ],
+      } as any),
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(SessionLoadError);
+  });
+
+  // STC-235, found on the first hardware run: display.mp4 stores the
+  // session-start gap as an empty edit at a 90 kHz movie timescale, so every
+  // demuxed PTS sits a sub-tick amount (-10583 ns on that take) off the
+  // helper's clock. A refit's startNs is in the helper's clock; the frame it
+  // names demuxes slightly EARLIER, and geometryAt (comparing startNs to the
+  // demuxed PTS) used to pick the OLD geometry for the first refitted frame.
+  describe("v7 geometry startNs snapped onto the demuxed frame grid", () => {
+    const display = { id: 1, pointWidth: 640, pointHeight: 360, pixelWidth: 640, pixelHeight: 360,
+                      backingScale: 1, originX: 0, originY: 0 };
+    const full = { x: 0, y: 0, width: 640, height: 360 };
+    const pillar = { x: 80, y: 0, width: 480, height: 360 };
+    const frames: number[] = load("fixtures/offset/frames.json");
+    const v7 = (startNs1: number) => offsetAnchors({
+      version: 7,
+      geometry: [
+        { startNs: 250_000_000, display, contentRect: full },
+        { startNs: startNs1, display, contentRect: pillar },
+      ],
+    } as any);
+    const open = (anchors: any) => loadSession({
+      anchors,
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    });
+
+    test("a refit startNs one empty-edit quantum AFTER a frame's demuxed PTS snaps to that frame", async () => {
+      const f = frames[5]!;
+      const anchors = v7(f + 10_583);
+      const s = await open(anchors);
+      expect(s.anchors.geometry![1]!.startNs).toBe(f);
+      expect(s.frames).toContain(s.anchors.geometry![1]!.startNs);
+      // the frame at that PTS now selects the refitted geometry, not entry 0
+      expect(geometryAt(s.anchors, f).contentRect).toEqual(pillar);
+      // and the frame before it still selects the old one
+      expect(geometryAt(s.anchors, frames[4]!).contentRect).toEqual(full);
+      // entry 0 is untouched, and the caller's document is not mutated
+      expect(s.anchors.geometry![0]!.startNs).toBe(250_000_000);
+      expect(anchors.geometry[1].startNs).toBe(f + 10_583);
+    });
+
+    test("a refit startNs past the last frame is left unchanged and the take still loads", async () => {
+      const past = frames[frames.length - 1]! + 1_000_000;
+      const s = await open(v7(past));
+      expect(s.anchors.geometry![1]!.startNs).toBe(past);
+      expect(geometryAt(s.anchors, frames[frames.length - 1]!).contentRect).toEqual(full);
+    });
+
+    test("two refits landing on the same frame collapse to the LATER one", async () => {
+      const f = frames[5]!;
+      const late = { x: 160, y: 0, width: 320, height: 360 };
+      const s = await open(offsetAnchors({
+        version: 7,
+        geometry: [
+          { startNs: 250_000_000, display, contentRect: full },
+          { startNs: frames[4]! + 100_000, display, contentRect: pillar },
+          { startNs: f + 10_583, display, contentRect: late },
+        ],
+      } as any));
+      expect(s.anchors.geometry!.map((e) => e.startNs)).toEqual([250_000_000, f]);
+      expect(geometryAt(s.anchors, f).contentRect).toEqual(late);
+    });
   });
 
   test("a version 2 events document loads, cursor events included", async () => {
@@ -338,7 +424,7 @@ describe("loading a mic track", () => {
       anchors: offsetAnchors({ version: 4, mic: { present: false } } as any),
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-      micM4a: mp4("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
+      micM4a: rawBuf("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
     })).rejects.toThrow(/a mic\.m4a was supplied/i);
   });
 
@@ -376,7 +462,7 @@ describe("loading a system-audio track (STC-418)", () => {
       anchors: offsetAnchors({ version: 6, system: { present: false } } as any),
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-      systemM4a: mp4("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
+      systemM4a: rawBuf("fixtures/offset/display.mp4"), // any ArrayBuffer — never demuxed on this path
     })).rejects.toThrow(/a system\.m4a was supplied/i);
   });
 
@@ -385,7 +471,7 @@ describe("loading a system-audio track (STC-418)", () => {
       anchors: systemAnchors(),
       events: { version: 1, events: [] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-      micM4a: mp4("fixtures/offset/display.mp4"),
+      micM4a: rawBuf("fixtures/offset/display.mp4"),
     })).rejects.toThrow(/a mic\.m4a was supplied/i);
   });
 

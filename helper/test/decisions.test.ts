@@ -17,6 +17,7 @@ describe("capture decisions", () => {
         // [PauseInterval] (STC-240), declared there.
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
+        "helper/src/CaptureGeometry.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/src/CaptureDecisions.swift",
         "helper/test/decisions/main.swift",

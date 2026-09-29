@@ -250,6 +250,36 @@ describe("helper warnings during a take", () => {
     expect(await toastPage(app!)).toBeUndefined();
   }, 120_000);
 
+  test("a display refit mid-take is not an alert, and the take keeps recording (STC-235)", async () => {
+    const win = await recordWithWarning("display-refit");
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect(await toastPage(app!)).toBeUndefined();
+    expect(await win.textContent("#state")).toBe("recording");
+    // Not a toast, but not invisible either: the refit's payload is logged to
+    // the main window's console. The fake helper sends it 60 ms after start,
+    // before this test holds the window, so read the page's console HISTORY
+    // rather than subscribing late.
+    await expect.poll(async () => (await win.consoleMessages())
+      .some((m) => m.type() === "info" && m.text().startsWith("[helper] display-refit")),
+      { timeout: 10_000 }).toBe(true);
+  }, 120_000);
+
+  test("a region that no longer fits its refit display ends the take, in words (STC-235)", async () => {
+    // Modelled on "a display stream that dies ends the take" above, same
+    // unsolicited-stop env vars — just a different reason, and no warning
+    // precedes it (a region going out of bounds is not a dead stream).
+    const { win } = await launchAndPressRecord({
+      STC_FAKE_STREAM_DEATH_MS: "2500",
+      STC_FAKE_STOP_REASON: "region-out-of-bounds",
+    });
+    await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
+    await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
+    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => toastText(app!), { timeout: 10_000 })
+      .toMatch(/recorded area no longer fits on it, so the recording was stopped/);
+  }, 120_000);
+
   // STC-412 Task 7: none of the tests above prove a toast actually goes away
   // ON ITS OWN — each either checks it appears with the right text, or never
   // appears at all. `recordWithWarning` already drives a real warning through

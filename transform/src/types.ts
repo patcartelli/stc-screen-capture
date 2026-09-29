@@ -100,9 +100,9 @@ export type CaptureScope =
       };
     };
 
-/** Mirrors schema/anchors-1.schema.json through anchors-6.schema.json. */
+/** Mirrors schema/anchors-1.schema.json through anchors-7.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4 | 5 | 6;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {
@@ -115,7 +115,9 @@ export interface Anchors {
     originX: number;
     originY: number;
   };
-  capture: { width: number; height: number; codec: "h264" };
+  capture: { width: number; height: number; codec: "h264"; firstFrameNs?: number };
+  /** STC-235. Present only after a refit; see display-geometry.ts. */
+  geometry?: import("./display-geometry.js").GeometryEntry[];
   camera?: CameraTrack;
   /** STC-233. Absent means no mic was requested, the same as v1-v3. */
   mic?: MicTrack;

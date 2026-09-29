@@ -49,15 +49,16 @@ final class App {
         installSignalHandlers()
         startHeartbeat()
         Watchers.shared.start()
-        Watchers.shared.onDisplayChange = { [weak self] _, changes in
-            guard let self = self, self.state == .recording else { return }
-            // Increment 2 rebuilds the stream here. For now the change is at least never silent.
-            // AVAssetWriter cannot change output dimensions mid-file, so a
-            // reconfiguration is a clean stop, not a rebuild (phase 2 concern).
-            IO.send("warning", ["code": "display-change-during-recording",
-                                "changes": changes,
-                                "detail": "stopping cleanly — mid-stream rebuild is a phase 2 concern"])
-            self.stop(reason: "display-reconfigured")
+        Watchers.shared.onDisplayChange = { [weak self] _, _ in
+            // STC-235: the take survives any display change it can. The
+            // session debounces the burst CG sends, classifies it, and either
+            // refits the stream into the same display.mp4 at its fixed size
+            // or asks to be stopped (`onRefitFailed`, wired per session in
+            // start). A change while `.starting`/`.stopping` is ignored, as
+            // it always was. Watchers' own `display-reconfigured` warning
+            // still goes out for every callback, recording or not.
+            guard let self = self, self.state == .recording, let session = self.capture else { return }
+            session.displayChanged()
         }
         IO.send("ready", ["pid": ProcessInfo.processInfo.processIdentifier,
                           "timebase": Clock.describe,
@@ -172,8 +173,8 @@ final class App {
 
         let session = CaptureSession(dir: url, t0Ns: startedAtNs)
         capture = session
-        // STC-306: a stream that dies after `started` ends the take the way a
-        // display change does (`Watchers.onDisplayChange` in boot()). Set per
+        // STC-306: a stream that dies after `started` ends the take the way an
+        // unrefittable display change does (`onRefitFailed`, below). Set per
         // session rather than once, because the session is per take; the
         // identity check keeps a stale session's late callback from stopping
         // a later take. `didStopWithError` has already sent the
@@ -192,6 +193,19 @@ final class App {
         // CaptureSession: App.stop() is what resets App.state and sends the
         // client its "stopped" reply.
         session.onWindowChanged = { [weak self, weak session] reason in
+            DispatchQueue.main.async {
+                guard let self, let session,
+                      self.state == .recording, self.capture === session else { return }
+                self.stop(reason: reason)
+            }
+        }
+        // STC-235: a display change the session could not refit — the
+        // captured display gone, a region no longer inside it, a refit that
+        // never produced a frame — ends the take through App.stop() with the
+        // classifier's reason, the same way and for the same reason as the
+        // two callbacks above. The identity check is what the display path
+        // lacked before: a stale session's late refit cannot stop a later take.
+        session.onRefitFailed = { [weak self, weak session] reason in
             DispatchQueue.main.async {
                 guard let self, let session,
                       self.state == .recording, self.capture === session else { return }
@@ -523,7 +537,7 @@ final class App {
     ///
     /// **STC-376**: `state == .stopping` — a stop already in flight, started
     /// by something else (an explicit `stop` command, `onStreamDied`,
-    /// `onWindowChanged`, a display reconfiguration) — used to fall through
+    /// `onWindowChanged`, `onRefitFailed`) — used to fall through
     /// the old two-way guard below as neither "recording/starting" (so it
     /// would have exited immediately, before that teardown had written
     /// anything) nor a case `stop()` itself would wait for if called again

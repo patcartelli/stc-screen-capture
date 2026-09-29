@@ -104,7 +104,14 @@ contextBridge.exposeInMainWorld("recorder", {
                       // did not ask for it. `main.ts`'s `reconcileWindowRecording`
                       // is the one place this is ever sent, off the same
                       // `sup.state` authority the tray already reconciles from.
-                      "recorder:recording-state"];
+                      "recorder:recording-state",
+                      // STC-456: the options bar's own Settings control has
+                      // no renderer of its own to route through (it lives in
+                      // the overlay window) — main closes the overlay, shows
+                      // and focuses this window, then sends this so the
+                      // renderer opens the SAME sheet the profile button
+                      // already does, rather than a second implementation.
+                      "ui:open-settings"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);

@@ -1,4 +1,5 @@
 import { EMBED_CSS_WIDTH } from "./output-size.js";
+import { effectivePointWidthFromGeometry } from "./spaces.js";
 
 /**
  * Will the viewer be able to read it? (STC-318)
@@ -153,3 +154,21 @@ export interface EmbedTarget { id: string; label: string; widthPx: number }
 export const EMBED_TARGETS: readonly EmbedTarget[] = [
   { id: "lab", label: "Site /lab page", widthPx: EMBED_CSS_WIDTH },
 ];
+
+/**
+ * The point width to judge a take by (STC-235). A refit can put more points
+ * into the same capture width — or pillarbox the content into less of it —
+ * and text is smallest in whichever geometry does that most. Larger effective
+ * width = smaller text, so the WORST entry is the max. A take with no refit
+ * returns `display.pointWidth` itself, untouched.
+ */
+export function effectivePointWidth(
+  anchors: { display: { pointWidth: number }; capture: { width: number };
+             geometry?: readonly { display: { pointWidth: number }; contentRect: { width: number } }[] },
+): number {
+  return effectivePointWidthFromGeometry(
+    anchors.display.pointWidth,
+    anchors.capture.width,
+    anchors.geometry,
+  );
+}

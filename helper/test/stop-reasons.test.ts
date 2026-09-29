@@ -30,8 +30,14 @@ import AjvImport from "ajv";
 const Ajv = (AjvImport as any).default ?? AjvImport;
 const root = join(__dirname, "..", "..");
 
-/** The files that can name a stop reason. */
-const SOURCES = ["helper/src/main.swift", "helper/src/Protocol.swift", "helper/src/Capture.swift"];
+/**
+ * The files that can name a stop reason. DisplayChangeDecisions.swift since
+ * STC-235: the classifier DECIDES `display-reconfigured`/`region-out-of-bounds`
+ * as `.stop("…")`, and Capture.swift relays them (and its own refit
+ * failures) through `failRefit("…")` -> `onRefitFailed` -> App.stop(reason:).
+ */
+const SOURCES = ["helper/src/main.swift", "helper/src/Protocol.swift", "helper/src/Capture.swift",
+                 "helper/src/DisplayChangeDecisions.swift"];
 
 /**
  * Signals the helper installs a graceful handler for (main.swift's
@@ -74,6 +80,16 @@ function handledSignals(src: string): number[] {
  * built at runtime that nobody checked is precisely the hole this file
  * exists to close.
  */
+/**
+ * STC-235's two relayed-reason patterns, named so the guard below can hold
+ * EACH of them to finding something on its own. The aggregate guard cannot:
+ * `display-reconfigured` is also reachable through `.stop("…")`, so a
+ * `failRefit` pattern that silently stopped matching would leave the
+ * aggregate list unchanged and the refit's own failure reasons unchecked.
+ */
+const CLASSIFIER_STOP = /\.stop\(\s*"([^"]*)"\s*\)/g;
+const FAIL_REFIT = /failRefit\(\s*"([^"]*)"\s*\)/g;
+
 function reasonsInSwift(): string[] {
   const out = new Set<string>();
   for (const file of SOURCES) {
@@ -91,6 +107,13 @@ function reasonsInSwift(): string[] {
       // than at the generic App.stop(reason: reason) call site that relays
       // whichever one arrives.
       ...src.matchAll(/onWindowChanged\?\(\s*"([^"]*)"\s*\)/g),
+      // STC-235: a display change that cannot be refitted reaches
+      // App.stop(reason:) the same relayed way, through `onRefitFailed`. The
+      // literals live where they are decided: the classifier's
+      // `.stop("…")` (DisplayChangeDecisions.swift) and CaptureSession's own
+      // `failRefit("…")` for a refit that failed or never produced a frame.
+      ...src.matchAll(CLASSIFIER_STOP),
+      ...src.matchAll(FAIL_REFIT),
     ].map((m) => m[1]!);
     for (const lit of lits) {
       if (!lit.includes("\\(")) { out.add(lit); continue; }
@@ -107,21 +130,27 @@ function reasonsInSwift(): string[] {
   return [...out].sort();
 }
 
-// anchors-3, not anchors-2: STC-370 added "window-resized"/"window-closed",
-// reachable only from a window-scope take, which always writes version 3
-// (anchorsDocument emits the MINIMUM version that can express the document —
-// AnchorsDoc.swift). anchors-3's `stop.reason` enum is anchors-2's own enum
-// PLUS those two families, never a narrower rewrite of it, so validating the
-// full set the Swift can produce against the superset schema is the same
-// claim this file always made, extended rather than duplicated. A reason
-// from BEFORE STC-370 still validates identically against either schema.
+// anchors-7, the newest superset. Every `stop.reason` enum from anchors-3 on
+// is its predecessor's PLUS new families, never a narrower rewrite, so
+// validating the full set the Swift can produce against the newest schema is
+// the same claim this file always made, extended rather than duplicated:
+// - anchors-3 (STC-370) added "window-resized"/"window-closed", reachable
+//   only from a window-scope take, which always writes version 3 or later
+//   (anchorsDocument emits the MINIMUM version that can express the
+//   document — AnchorsDoc.swift).
+// - "region-out-of-bounds" (STC-235, and its -timeout) is reachable from ANY
+//   region take, so it is in EVERY region-capable version, anchors-3 through
+//   anchors-7 — not only in anchors-7. A region take the classifier stops
+//   BEFORE any refit has landed has a one-entry geometry timeline, writes no
+//   `geometry` key, and so stays at v3-v6. anchors-3..6 were widened to carry
+//   it for exactly that take; the per-version test below holds them to it.
 const validateReason = (() => {
-  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-3.schema.json"), "utf8"));
+  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-7.schema.json"), "utf8"));
   const ajv = new Ajv({ allErrors: true, strict: true });
   return ajv.compile(schema.properties.stop.properties.reason);
 })();
 
-describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by STC-370)", () => {
+describe("stop.reason — the helper and anchors-7 agree (STC-311, extended by STC-370 and STC-235)", () => {
   test("every reason the Swift can write is accepted by the schema", () => {
     const reasons = reasonsInSwift();
     // A guard on the guard: if the regexes stopped matching, this test would
@@ -131,11 +160,21 @@ describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by S
     expect(reasons).toEqual(expect.arrayContaining([
       "user", "quit", "stdin-closed", "stopped-during-start", "signal-15",
       "window-resized", "window-closed",
+      "display-reconfigured", "region-out-of-bounds",
     ]));
     expect(reasons.length).toBeGreaterThanOrEqual(9);
+    // And a guard on each STC-235 pattern ALONE (see CLASSIFIER_STOP /
+    // FAIL_REFIT): the aggregate above still passes if either one stops
+    // matching, since the other supplies `display-reconfigured` too.
+    const capture = readFileSync(join(root, "helper/src/Capture.swift"), "utf8");
+    const decisions = readFileSync(join(root, "helper/src/DisplayChangeDecisions.swift"), "utf8");
+    expect([...capture.matchAll(FAIL_REFIT)].length,
+      "the failRefit(\"…\") pattern matches nothing in Capture.swift").toBeGreaterThanOrEqual(1);
+    expect([...decisions.matchAll(CLASSIFIER_STOP)].length,
+      "the .stop(\"…\") pattern matches nothing in DisplayChangeDecisions.swift").toBeGreaterThanOrEqual(1);
 
     for (const r of reasons) {
-      expect(validateReason(r), `the helper can write stop.reason "${r}", which anchors-3 refuses`).toBe(true);
+      expect(validateReason(r), `the helper can write stop.reason "${r}", which anchors-7 refuses`).toBe(true);
     }
   });
 
@@ -144,7 +183,21 @@ describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by S
     // was given, so the suffix is not a fixed list of five: a shutdown whose
     // writer wedges writes `quit-timeout` or `signal-15-timeout`.
     for (const r of reasonsInSwift()) {
-      expect(validateReason(`${r}-timeout`), `"${r}-timeout" is reachable but anchors-3 refuses it`).toBe(true);
+      expect(validateReason(`${r}-timeout`), `"${r}-timeout" is reachable but anchors-7 refuses it`).toBe(true);
+    }
+  });
+
+  test("a region take stopped before any refit lands (v3-v6) validates at its OWN version", () => {
+    // Every version a region take can be written at: 3 (scope) through 6
+    // (system audio), plus 7 once a refit has landed. The helper does not
+    // force v7 for a stop reason — it writes the minimum version that can
+    // express the document — so the reason must validate at each.
+    for (const v of [3, 4, 5, 6, 7]) {
+      const schema = JSON.parse(readFileSync(join(root, `schema/anchors-${v}.schema.json`), "utf8"));
+      const validate = new Ajv({ allErrors: true, strict: true }).compile(schema.properties.stop.properties.reason);
+      for (const r of ["region-out-of-bounds", "region-out-of-bounds-timeout"]) {
+        expect(validate(r), `anchors-${v} refuses "${r}", which a v${v} region take can carry`).toBe(true);
+      }
     }
   });
 
@@ -153,7 +206,7 @@ describe("stop.reason — the helper and anchors-3 agree (STC-311, extended by S
     // cannot produce must still be refused, or this file proves nothing.
     for (const bad of ["banana", "", "signal", "signal-", "signal-abc", "signal-15-timeou",
                        "user-timeout-timeout", "USER", " user"]) {
-      expect(validateReason(bad), `anchors-3 accepts "${bad}", which the helper never writes`).toBe(false);
+      expect(validateReason(bad), `anchors-7 accepts "${bad}", which the helper never writes`).toBe(false);
     }
   });
 });

@@ -1,6 +1,7 @@
 import type { DemuxedVideo } from "./demux.js";
 import { withTimeout, TimeoutError } from "./timeout.js";
 import { decoderPreference } from "./decoder-preference.js";
+import { ChunkReader } from "./chunk-reader.js";
 
 /** One constant, so the bound and the message it prints cannot disagree. */
 const FLUSH_MS = 60_000;
@@ -37,10 +38,16 @@ export async function decodeAll(video: DemuxedVideo): Promise<ImageBitmap[]> {
     description: video.description,
     ...decoderPreference(),
   });
-  for (const c of video.chunks) {
-    decoder.decode(new EncodedVideoChunk({
-      type: c.type, timestamp: c.timestampUs, data: c.data as BufferSource,
-    }));
+  // Group by group (STC-236): a chunk carries no bytes, only where they are.
+  const reader = new ChunkReader(video.chunks, video.bytes, "video");
+  for (let i = 0; i < video.chunks.length;) {
+    const g = reader.groupOf(i);
+    const datas = await reader.read(g.start, g.end - g.start);
+    datas.forEach((data, k) => {
+      const c = video.chunks[g.start + k]!;
+      decoder.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: data as BufferSource }));
+    });
+    i = g.end;
   }
   // flush() is a promise from the decoder; nothing guarantees it settles. The
   // `failure` side only fires on an error callback, so racing them still leaves
