@@ -72,9 +72,16 @@ function png(w: number, h: number, pixel: (x: number, y: number) => [number, num
   ]);
 }
 
-/** Saturated, varied content — the kind a P3/sRGB mix-up changes. */
+/**
+ * Saturated FLAT blocks, 8 px square, like the runbook's swatch page: flat
+ * interiors are where the colour bug shows, the block borders are the edges
+ * where two canvases' resampling may legitimately disagree.
+ */
+const BLOCKS: [number, number, number][] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [240, 200, 20], [20, 180, 200]];
 const picture = (x: number, y: number): [number, number, number, number] =>
-  [(x * 37) & 255, (y * 53) & 255, ((x + y) * 29) & 255, 255];
+  [...BLOCKS[(Math.floor(x / 8) + Math.floor(y / 8) * 3) % BLOCKS.length]!, 255];
+/** True on a block border — within 1 px of a colour step. */
+const onBorder = (x: number, y: number) => x % 8 === 0 || x % 8 === 7 || y % 8 === 0 || y % 8 === 7;
 
 function takeDir(colorSpace: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), "stc-compare-"));
@@ -126,6 +133,36 @@ describe("compare-still-exports (STC-477)", () => {
     expect(r.code).toBe(1);
   });
 
+  test("PASS: large differences confined to a few EDGE pixels — two canvases resampling a downscale", () => {
+    // The first real 1x run: swatch centres identical, 0.17% of pixels on
+    // swatch borders off by up to 82. Here: 40 border pixels of 12,800
+    // (0.3%), off by 60, every flat interior untouched.
+    const dir = takeDir("kCGColorSpaceDisplayP3");
+    let budget = 40;
+    const noisy = (x: number, y: number): [number, number, number, number] => {
+      const [r, g, b, a] = picture(x, y);
+      if (onBorder(x, y) && x % 8 === 7 && budget-- > 0) return [Math.max(0, r - 60), Math.min(255, g + 60), b, a];
+      return [r, g, b, a];
+    };
+    save(dir, png(160, 80, picture, P3), png(160, 80, noisy, P3));
+    const r = run("--dir", dir);
+    expect(r.out).toMatch(/in flat areas: 0/);
+    expect(r.out).toContain("PASS");
+    expect(r.code).toBe(0);
+  });
+
+  test("FAIL: the same edge noise everywhere is not scaling noise — over the edge budget", () => {
+    const dir = takeDir("kCGColorSpaceDisplayP3");
+    const noisy = (x: number, y: number): [number, number, number, number] => {
+      const [r, g, b, a] = picture(x, y);
+      return onBorder(x, y) ? [Math.max(0, r - 60), Math.min(255, g + 60), b, a] : [r, g, b, a];
+    };
+    save(dir, png(160, 80, picture, P3), png(160, 80, noisy, P3));
+    const r = run("--dir", dir);
+    expect(r.out).toMatch(/EDGE pixels differ by more than 4/);
+    expect(r.code).toBe(1);
+  });
+
   test("FAIL: same size and profile, different numbers — the colour-space bug", () => {
     const dir = takeDir("kCGColorSpaceDisplayP3");
     // What an sRGB canvas does to saturated P3 content: the same picture,
@@ -136,7 +173,7 @@ describe("compare-still-exports (STC-477)", () => {
     };
     save(dir, png(24, 16, picture, P3), png(24, 16, srgbish, P3));
     const r = run("--dir", dir);
-    expect(r.out).toMatch(/pixels: \d+ of 384 differ/);
+    expect(r.out).toMatch(/pixels: \d+ in FLAT areas differ by more than 4/);
     expect(r.code).toBe(1);
   });
 

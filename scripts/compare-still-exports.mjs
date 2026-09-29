@@ -33,6 +33,31 @@ import { inflateSync } from "node:zlib";
 /** Largest per-channel difference still called "the same pixel": encoder rounding, nothing more. */
 export const CHANNEL_TOLERANCE = 1;
 
+/**
+ * The rule that decides, and why it is not just CHANNEL_TOLERANCE.
+ *
+ * The first real run at `1x` (2026-09-29) had the panel and the editor agree
+ * on every swatch centre exactly, and still differ in 8,647 of 727,800
+ * pixels, by up to 82. Every difference above 4 sat on an EDGE (a swatch
+ * border, text); no pixel in a flat area differed by more than 4. That is two
+ * canvases in two windows resampling a 2x downscale slightly differently —
+ * Chromium does not promise bit-identical scaling across contexts — and the
+ * same pair at native scale (no resampling) agreed to 0 pixels.
+ *
+ * The colour-space bug is the opposite shape: it moves FLAT colour — a whole
+ * swatch interior shifts by tens of levels. So:
+ *
+ * - a FLAT pixel (its panel-side 3x3 neighbourhood never steps by more than
+ *   EDGE_STEP) must agree within FLAT_TOLERANCE, always;
+ * - an EDGE pixel may differ by more, but edge differences above
+ *   FLAT_TOLERANCE must stay under EDGE_BUDGET of all pixels — resampling
+ *   noise is a thin line along edges (0.17% measured), not a different
+ *   picture that happens to be busy.
+ */
+export const FLAT_TOLERANCE = 4;
+export const EDGE_STEP = 24;
+export const EDGE_BUDGET = 0.01;
+
 class CannotRun extends Error {}
 
 /** IHDR, the ICC profile's name, and the unfiltered pixels. 8-bit RGB/RGBA, non-interlaced only. */
@@ -130,29 +155,44 @@ export function compareExports(panel, editor, shotColorSpace) {
 
   let differing = 0;
   let maxDelta = 0;
+  let flatOver = 0;
+  let flatMax = 0;
+  let edgeOver = 0;
   let compared = false;
   if (panel.width === editor.width && panel.height === editor.height) {
     compared = true;
-    // Compare RGB, and alpha where both have it: an opaque RGB file and an
-    // RGBA one whose alpha is all 255 are the same picture.
-    const n = panel.width * panel.height;
-    for (let i = 0; i < n; i++) {
-      let pixelDiff = 0;
-      for (let c = 0; c < 3; c++) {
-        pixelDiff = Math.max(pixelDiff, Math.abs(panel.data[i * panel.channels + c] - editor.data[i * editor.channels + c]));
+    const W = panel.width, H = panel.height, n = W * H;
+    const at = (f, x, y, c) => f.data[(y * W + x) * f.channels + c];
+    const alphaAt = (f, x, y) => (f.channels === 4 ? f.data[(y * W + x) * 4 + 3] : 255);
+    const isEdge = (x, y) => {
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const X = x + dx, Y = y + dy;
+        if (X < 0 || Y < 0 || X >= W || Y >= H) continue;
+        for (let c = 0; c < 3; c++) if (Math.abs(at(panel, X, Y, c) - at(panel, x, y, c)) > EDGE_STEP) return true;
       }
-      const aP = panel.channels === 4 ? panel.data[i * 4 + 3] : 255;
-      const aE = editor.channels === 4 ? editor.data[i * 4 + 3] : 255;
-      pixelDiff = Math.max(pixelDiff, Math.abs(aP - aE));
-      if (pixelDiff > CHANNEL_TOLERANCE) differing++;
-      if (pixelDiff > maxDelta) maxDelta = pixelDiff;
+      return false;
+    };
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      // RGB, and alpha where both have it: an opaque RGB file and an RGBA one
+      // whose alpha is all 255 are the same picture.
+      let d = Math.abs(alphaAt(panel, x, y) - alphaAt(editor, x, y));
+      for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(at(panel, x, y, c) - at(editor, x, y, c)));
+      if (d > CHANNEL_TOLERANCE) differing++;
+      if (d > maxDelta) maxDelta = d;
+      if (d <= FLAT_TOLERANCE) continue;
+      if (isEdge(x, y)) edgeOver++;
+      else { flatOver++; if (d > flatMax) flatMax = d; }
     }
-    if (differing > 0) {
-      problems.push(`pixels: ${differing} of ${n} differ by more than ${CHANNEL_TOLERANCE} `
-        + `(largest channel difference ${maxDelta}) — the colour-space bug looks like this on saturated content`);
+    if (flatOver > 0) {
+      problems.push(`pixels: ${flatOver} in FLAT areas differ by more than ${FLAT_TOLERANCE} `
+        + `(largest ${flatMax}) — solid colour moved, which is what the colour-space bug looks like`);
+    }
+    if (edgeOver > EDGE_BUDGET * n) {
+      problems.push(`pixels: ${edgeOver} of ${n} EDGE pixels differ by more than ${FLAT_TOLERANCE} `
+        + `(over the ${EDGE_BUDGET * 100}% resampling allowance) — more than scaling noise`);
     }
   }
-  return { ok: problems.length === 0, problems, notes, compared, differing, maxDelta };
+  return { ok: problems.length === 0, problems, notes, compared, differing, maxDelta, flatOver, edgeOver };
 }
 
 function newestPngs(dir) {
@@ -227,7 +267,11 @@ function main(argv) {
   console.log(`panel : ${basename(panelPath)}  ${panel.width}x${panel.height}  profile ${panel.profile ?? "none"}`);
   console.log(`editor: ${basename(editorPath)}  ${editor.width}x${editor.height}  profile ${editor.profile ?? "none"}`);
   if (shotColorSpace !== undefined) console.log(`shot colour space: ${shotColorSpace ?? "(none recorded)"}`);
-  if (r.compared) console.log(`pixels differing by more than ${CHANNEL_TOLERANCE}: ${r.differing} (largest channel difference ${r.maxDelta})`);
+  if (r.compared) {
+    console.log(`pixels differing by more than ${CHANNEL_TOLERANCE}: ${r.differing} (largest channel difference ${r.maxDelta})`);
+    console.log(`  over ${FLAT_TOLERANCE} in flat areas: ${r.flatOver} (must be 0); on edges: ${r.edgeOver} `
+      + `(resampling noise, allowed up to ${Math.floor(EDGE_BUDGET * panel.width * panel.height)})`);
+  }
   for (const n of r.notes) console.log(`note: ${n}`);
   if (r.ok) {
     console.log("PASS — the panel and the editor exported the same picture");
