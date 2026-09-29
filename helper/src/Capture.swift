@@ -73,6 +73,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `wantCamera`/`wantMicUid` do for theirs.
     private var wantSystemAudio = false
     private var stoppingBegan = false
+    /// A mic or camera torn down MID-TAKE by a disconnect (`handleMicDisconnected`,
+    /// `handleCameraDisconnected`) is no longer in `mic`/`camera` by the time
+    /// the take's own `stop()` runs, so that stop would not wait for it: its
+    /// `m.stop`/`cam.stop` could still be finishing, and `writeSidecars` would
+    /// then read a nil `micTrack`/`cameraTrack` and write the take as having
+    /// no mic, beside a `mic.m4a` holding everything up to the unplug. Each
+    /// such teardown is in this group from the moment it claims the device
+    /// (entered under `lock`, in the same critical section that checks
+    /// `stoppingBegan`) until its track is stored; `stop()` waits on it with
+    /// everything else, under the same `stopTimeoutSeconds` backstop.
+    private let midTakeTeardowns = DispatchGroup()
     /// Guards RE-ENTRY into `stop()` itself (STC-305). `App.start`'s success
     /// handler can call `stop()` a second time on a session whose teardown is
     /// already in flight — a stray success racing a `stop` that arrived while
@@ -906,14 +917,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         guard !stoppingBegan, wantMicUid == uid, let m = mic else { lock.unlock(); return }
         mic = nil
+        midTakeTeardowns.enter()
         lock.unlock()
         IO.send("warning", ["code": "mic-disconnected", "uid": uid,
                             "detail": "the microphone disconnected mid-recording; the take continues "
                                     + "with no mic track from this point on"])
+        let teardowns = midTakeTeardowns   // strong: leave() must happen even if self is gone
         m.stop { [weak self] track in
             self?.lock.lock()
             self?.micTrack = track
             self?.lock.unlock()
+            teardowns.leave()
         }
     }
 
@@ -950,14 +964,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         guard !stoppingBegan, let cam = camera, cam.currentDeviceUid() == uid else { lock.unlock(); return }
         camera = nil
+        midTakeTeardowns.enter()
         lock.unlock()
         IO.send("warning", ["code": "camera-disconnected", "uid": uid,
                             "detail": "the camera disconnected mid-recording; the take continues "
                                     + "with no picture-in-picture from this point on"])
+        let teardowns = midTakeTeardowns   // strong: leave() must happen even if self is gone
         cam.stop { [weak self] track in
             self?.lock.lock()
             self?.cameraTrack = track
             self?.lock.unlock()
+            teardowns.leave()
         }
     }
 
@@ -2106,6 +2123,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 group.leave()
             }
         }
+
+        // A mic or camera a disconnect already took down mid-take: wait for
+        // its track too (see `midTakeTeardowns`). Nothing to wait for in the
+        // ordinary take — an empty group notifies at once.
+        group.enter()
+        midTakeTeardowns.notify(queue: .global()) { group.leave() }
 
         group.enter()
         let finishDisplay: () -> Void = { [weak self] in

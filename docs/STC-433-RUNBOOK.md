@@ -157,9 +157,28 @@ The check this pass exists for:
 (the mic reports itself gone 0.5s after opening, same idiom
 `STC_CAPTURE_FAULT=stream-died` already uses for the display side) if a
 real unplug is inconvenient to arrange — set it as an environment variable
-on the helper process before `start`ing a recording with a mic. No grant
-test yet exercises this via the fault (see the Next section) — it has to be
-run by hand for now.
+on the helper process before `start`ing a recording with a mic.
+
+**Run the automated half first** — `helper/test/device-disconnect.grant.test.ts`
+drives exactly this fault through the real helper binary, from YOUR terminal
+(it inherits the terminal's Screen Recording + Microphone + Camera grants, the
+way `stream-died.grant.test.ts` does; from an agent's shell it answers
+`-3801`):
+
+```
+npx vitest run -c vitest.grant.config.ts helper/test/device-disconnect.grant.test.ts
+```
+
+Three tests: the mic case (steps 2–4 above, asserted), the camera case (§5),
+and **a take stopped straight after the unplug** — the race found merging this
+into STC-235's stop path (2026-09-29): the end-of-take `stop()` found
+`mic == nil` and did not wait for the disconnect's own teardown, so
+`anchors.json` could say "no mic" beside a `mic.m4a` holding the audio up to
+the unplug. `CaptureSession.midTakeTeardowns` makes the stop wait for it.
+
+The injected fault proves the REACTION. Only a real unplug (steps 1–4 by hand)
+proves a real disconnect reaches that reaction rather than, say, an
+AVFoundation exception ending the take first.
 
 ## §5 — camera disconnect DURING an active recording (new, 2026-09-25)
 
@@ -186,10 +205,8 @@ Same shape as §4, with a camera instead of a mic:
 
 ## Next
 
-- No automated test exists for §4 or §5 yet. A grant test mirroring
-  `helper/test/stream-died.grant.test.ts`'s shape would need
-  `tools/test-host` to forward `STC_CAPTURE_FAULT` into the helper
-  subprocess it spawns (it doesn't today — `Process()` there inherits the
-  test-host app's own environment, not whatever a Node test sets via
-  `execFileSync`'s `env` option, since `open -W` doesn't propagate that).
-  Skipped in this pass rather than half-built.
+- §4 and §5 have a grant test now (`helper/test/device-disconnect.grant.test.ts`,
+  2026-09-29). It spawns the bare helper with `STC_CAPTURE_FAULT` in its
+  environment, as `stream-died.grant.test.ts` does — no `tools/test-host`
+  forwarding needed, because the bare binary inherits the launching
+  terminal's grants.
