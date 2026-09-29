@@ -139,7 +139,13 @@ The check this pass exists for:
    `recording`, the display capture is unaffected, and a `mic-disconnected`
    warning appears (not the old, mislabeled "A capture device was
    disconnected" camera toast — that specific toast should no longer show
-   for a mic uid). **This is the behavior that was broken before this fix;
+   for a mic uid), and NO "A capture device reported an error during the
+   recording. Recording Stopped" toast. That one was AVFoundation's
+   `deviceWasDisconnected` runtime error on the mic's own session ("Recording
+   Stopped" is Apple's wording, about that session, not the take); seen on the
+   2026-09-29 pass over a take that kept recording, now sent as `info`
+   (`runtimeErrorIsDeviceDisconnect`, CaptureDecisions.swift).
+   **This is the behavior that was broken before this fix;
    if the whole take still ends here, the fix did not work and needs a
    crash log, not another guess.**
 4. Stop the recording normally. **Expect**: `mic.m4a` exists and is
