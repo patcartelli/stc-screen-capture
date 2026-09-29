@@ -237,7 +237,7 @@ git checkout --detach origin/master          # or the branch, if #245 has not me
 node scripts/compare-still-exports.mjs --dir "$SAVE"
 ```
 
-**Expected: exit 1**, `FAIL — pixels: N of M differ …`, with NO `note:` line.
+**Expected: exit 1**, `FAIL — pixels: N in FLAT areas differ by more than 4 …`, with NO `note:` line.
 If the note appears, STC-478 did not take: stop.
 
 Move those aside as in §2. Then the fix, on whatever has #245 (`origin/master`
