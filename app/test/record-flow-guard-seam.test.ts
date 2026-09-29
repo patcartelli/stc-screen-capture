@@ -72,7 +72,9 @@ describe("record-flow guard seam (STC-468, adjacent to STC-466/467/468 bundle)",
     // own behaviour along with its errors.
     expect(body).toMatch(/sup\.stopRecording\(\)/);
     expect(body).toMatch(/cancelCountdown\(\)/);
-    expect(body).toMatch(/runRecordFlow\("hotkey"\)/);
+    // Starts through `recordAndAnnounce` since the STC-465 data-loss fixes,
+    // which reads the RecordResult and both logs and toasts a refusal.
+    expect(body).toMatch(/recordAndAnnounce\("hotkey"\)/);
     // Control: the pre-fix shape had no try/catch around the body at all.
     const preFix = `
 async function onRecordHotkey(): Promise<void> {
@@ -116,18 +118,23 @@ async function recoverUnsavedTakes(): Promise<void> {
   });
 
   // STC-466/467/468 review follow-up: runRecordFlow's own catch-all above
-  // means the bare `void runRecordFlow("menu-bar")` tray call site no longer
-  // risks an unhandled rejection, but it ALSO means a failure there is only
-  // visible if the returned RecordResult is inspected — the original fix
-  // dropped it on the floor with no logging anywhere. Structural for the same
-  // reason as the others: reaching this from a real tray click needs the
-  // click-driven fixtures this suite doesn't have.
+  // means a bare `void` tray call no longer risks an unhandled rejection, but
+  // it ALSO means a failure there is only visible if the returned RecordResult
+  // is inspected — the original fix dropped it on the floor with no logging
+  // anywhere. Since the STC-465 data-loss fixes the tray goes through
+  // `recordAndAnnounce`, which reads the result, logs it, and toasts the
+  // refusal; the tray call itself keeps a `.catch` for anything thrown on the
+  // way. Structural for the same reason as the others: reaching this from a
+  // real tray click needs the click-driven fixtures this suite doesn't have.
   test("the tray's menu-bar record action logs a failed RecordResult, not just a bare void call", () => {
-    const trayIdx = src.indexOf('runRecordFlow("menu-bar")');
+    const trayIdx = src.indexOf('recordAndAnnounce("menu-bar")');
     expect(trayIdx).toBeGreaterThan(-1);
-    const surrounding = src.slice(trayIdx - 40, trayIdx + 220);
-    expect(surrounding).toMatch(/\.then\(/);
-    expect(surrounding).toMatch(/console\.error/);
+    const surrounding = src.slice(trayIdx, trayIdx + 160);
+    expect(surrounding).toMatch(/\.catch\(/);
+    // ...and the function it calls actually reads and logs the answer.
+    const body = functionBody("recordAndAnnounce");
+    expect(body).toMatch(/await runRecordFlow\(source\)/);
+    expect(body).toMatch(/console\.error/);
     // Control: the pre-fix shape — a bare `void` call with no `.then`, so a
     // failed RecordResult was returned and never read.
     const preFix = `
@@ -136,6 +143,7 @@ async function recoverUnsavedTakes(): Promise<void> {
       void runRecordFlow("menu-bar");
       return;
     }`;
+    expect(preFix).not.toContain('recordAndAnnounce("menu-bar")');
     const preFixSlice = preFix.slice(preFix.indexOf('runRecordFlow("menu-bar")') - 40);
     expect(preFixSlice).not.toMatch(/\.then\(/);
   });

@@ -155,10 +155,20 @@ export interface RecordFlowOptions {
    * drag, the bar appearing) — not the enclosing test's own timeout.
    */
   stepTimeoutMs?: number;
+  /**
+   * Which door to come in through. `"window"` (the default) clicks
+   * `#record`; `"menu-bar"` fires the REAL tray callback
+   * (`__stcTrayOnSelect("action:record")`, tray.ts) — the same `onSelect` a
+   * click on the menu-bar item calls, and the same `recordAndAnnounce` path
+   * ⌃⌥⇧⌘4 takes (a global hotkey cannot be pressed from here; see
+   * `hotkeys.e2e.test.ts`'s header). Everything after the door is identical,
+   * which is the point: one flow, three doors (STC-388).
+   */
+  door?: "window" | "menu-bar";
 }
 
 /**
- * Click the main window's Record button and drive the real overlay all the
+ * Click the main window's Record button (or the menu-bar item — `door`) and drive the real overlay all the
  * way to the options bar's own Record control — the same path a real click
  * through `runRecordFlow` (main.ts) takes, up to (never past) any countdown
  * or the take actually starting.
@@ -167,7 +177,11 @@ export async function startRecordFlow(
   app: ElectronApplication, win: Page, opts: RecordFlowOptions = {},
 ): Promise<void> {
   const ms = opts.stepTimeoutMs ?? 15_000;
-  await win.click("#record");
+  if (opts.door === "menu-bar") {
+    await app.evaluate(() => (globalThis as any).__stcTrayOnSelect("action:record"));
+  } else {
+    await win.click("#record");
+  }
   const overlay = await overlayWindow(app, ms);
 
   if (opts.windowAt) {
