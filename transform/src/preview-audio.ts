@@ -165,6 +165,10 @@ export class PreviewAudio {
   /** Swap the mic (e.g. for the cleaned one). Takes effect from the next chunk scheduled. */
   setMic(track: PcmTrack | null): void { this.mic = track; }
 
+  /** The tracks being played now, so the ruler's waveform (waveform.ts) draws the same mix. */
+  get micTrack(): PcmTrack | null { return this.mic; }
+  get systemTrack(): PcmTrack | null { return this.system; }
+
   setMuted(muted: boolean): void {
     this.muted = muted;
     if (this.gain) this.gain.gain.value = muted ? 0 : 1;

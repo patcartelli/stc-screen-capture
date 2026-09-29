@@ -24,8 +24,9 @@ import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "./product.js";
  * pressure, disk pressure, an update), which is exactly wrong for a
  * recording that might be forty minutes long and mid-flight — the OS must
  * not be able to sweep it out from under the helper mid-write. This module
- * owns the purge instead, on a schedule this app controls (7 days, checked at
- * launch and periodically).
+ * owns the purge instead, on a schedule this app controls (7 days after crash
+ * recovery has offered a take back to the user, checked at launch and
+ * periodically — never before that offer; see `purgeStaleTempTakes`).
  *
  * ## Two roots, one naming rule
  *
@@ -144,46 +145,85 @@ export async function promoteTake(env: NodeJS.ProcessEnv, saveFolder: string | n
   const existing = existsSync(root) ? await readdir(root) : [];
   const dest = join(root, uniqueTakeName(basename(dir), existing));
   await moveDir(dir, dest);
+  // Temp-storage bookkeeping, meaningless once the take has left temp
+  // storage — and `raw/` is the user's own folder, so it is not left there.
+  // Best-effort: a marker that survives costs a few bytes, never the take.
+  await rm(join(dest, RECOVERY_OFFERED_FILE), { force: true }).catch(() => {});
   return dest;
 }
 
-/** How long an unsaved take is allowed to sit in temp storage before it is purged. */
+/**
+ * How long an unsaved take may sit in temp storage AFTER the user has been
+ * offered it by crash recovery, before it is purged.
+ */
 export const TEMP_TAKE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * A temp directory's age, from its OWN name where possible.
+ * The dotfile marking a temp take as already OFFERED to the user by crash
+ * recovery (`main.ts`'s `recoverUnsavedTakes`) — the one fact the purge
+ * needs and a take's own timestamped name cannot supply.
  *
- * The name is a timestamp (`takes.ts`'s `stamp`) written at the moment the
- * take was created, which is the age that matters — a shot someone reopened
- * to look at (bumping mtime) is not "fresher" for purge purposes just because
- * something touched it. `mtime` is the fallback for a directory this module
- * did not name — defensive, not expected, since nothing else writes here.
+ * Its contents are the epoch ms of the FIRST offer. It is never refreshed by
+ * a later one: a take the user was shown, sent to Review and then ignored
+ * again is re-offered on every launch, and a marker that moved with each
+ * offer would let that take live forever — the first offer is when the user
+ * was first told, and that is what the clock runs from.
+ *
+ * Same lesson as {@link ORPHAN_MARKER_FILE}: a marker whose content cannot be
+ * read as a positive number (the zero-byte shape a crash mid-`writeFile`
+ * leaves) must not read as ancient — here it reads as NOT OFFERED, which is
+ * the direction that keeps the take.
  */
-function parseStamp(name: string): Date | undefined {
-  const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/.exec(name);
-  if (!m) return undefined;
-  const [year, month, day, hour, minute, second] = m.slice(1, 7);
-  const dt = new Date(Number(year), Number(month) - 1, Number(day),
-                      Number(hour), Number(minute), Number(second));
-  return Number.isNaN(dt.getTime()) ? undefined : dt;
-}
+export const RECOVERY_OFFERED_FILE = ".recovery-offered-at";
 
-async function ageMs(dir: string, name: string, now: number): Promise<number> {
-  const parsed = parseStamp(name);
-  if (parsed) return now - parsed.getTime();
-  try { return now - (await stat(dir)).mtimeMs; } catch { return 0; }
+/** The first-offer time a marker records, or undefined for "never offered". */
+async function offeredAt(dir: string): Promise<number | undefined> {
+  try {
+    const text = (await readFile(join(dir, RECOVERY_OFFERED_FILE), "utf8")).trim();
+    const n = Number(text);
+    return text !== "" && Number.isFinite(n) && n > 0 ? n : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
- * Delete every temp take older than {@link TEMP_TAKE_MAX_AGE_MS}, permanently
- * (not to the Trash — this is an already-abandoned take the user never
- * interacted with, not a deliberate discard someone might want back).
+ * Record that crash recovery has put this temp take in front of the user
+ * (a panel re-presented for it). Keeps an existing valid marker — see
+ * {@link RECOVERY_OFFERED_FILE} for why the FIRST offer is the one that counts.
+ */
+export async function markOfferedForRecovery(dir: string, now: number = Date.now()): Promise<void> {
+  if (await offeredAt(dir) !== undefined) return;
+  await writeFile(join(dir, RECOVERY_OFFERED_FILE), String(now));
+}
+
+/**
+ * Delete every temp take that crash recovery OFFERED to the user more than
+ * {@link TEMP_TAKE_MAX_AGE_MS} ago, permanently (not to the Trash — a take the
+ * user was shown and left alone for a week is abandoned, and this root lives
+ * inside `~/Library/Application Support`, invisible, where a bare `rm` is the
+ * right call; see `sweepOrphanedBundles` for the contrasting `raw/` case).
  *
- * Called once at launch, before anything checks what is left for crash
- * recovery, and on a timer while the app runs. Never removes anything a live
- * panel or an in-progress recording could still be using: nothing legitimate
- * stays in temp for anywhere near 7 days, so age alone is a safe filter with
- * no separate "is this claimed" bookkeeping.
+ * **A take that has never been offered is never purged, however old.** This
+ * used to measure age from the take's own timestamped name, on the premise
+ * that "nothing legitimate stays in temp for anywhere near 7 days". Two things
+ * legitimately do, and both are ones this app itself PROMISES to offer back on
+ * the next launch: a recording whose promotion to the library failed
+ * (`recording-promote-failed`, main.ts), and a still whose panel was ignored,
+ * bumped by a Record, or left behind by Quit Anyway (STC-392). A menu-bar app
+ * can easily run for more than a week without relaunching, and a relaunch
+ * after day 7 ran this purge BEFORE the prompt that was supposed to offer the
+ * take — so in both cases the take was deleted without the user ever being
+ * asked (STC-465 review). Measuring from the offer instead keeps every such
+ * take until the user has actually been shown it; every launch offers
+ * whatever is in temp storage, so nothing unoffered outlives the next launch
+ * by more than the time to answer the prompt.
+ *
+ * Called once at launch, before crash recovery lists what is left (an offered
+ * take a week stale must not reach the prompt again), and on a timer while
+ * the app runs. Never removes anything a live panel or an in-progress
+ * recording could still be using: neither carries a marker that old — a
+ * fresh capture has none, and a re-presented panel times out long before.
  */
 export async function purgeStaleTempTakes(env: NodeJS.ProcessEnv,
                                           now: number = Date.now()): Promise<string[]> {
@@ -197,7 +237,8 @@ export async function purgeStaleTempTakes(env: NodeJS.ProcessEnv,
     try {
       if (!(await stat(dir)).isDirectory()) continue;
     } catch { continue; }
-    if (await ageMs(dir, name, now) >= TEMP_TAKE_MAX_AGE_MS) {
+    const offered = await offeredAt(dir);
+    if (offered !== undefined && now - offered >= TEMP_TAKE_MAX_AGE_MS) {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
       purged.push(name);
     }
@@ -244,9 +285,9 @@ export const ORPHAN_MARKER_FILE = ".orphaned-at";
  * independent conditions, and dropping either is the exact bug this function
  * exists not to have (see the mutation check in `orphan-sweep.test.ts`):
  *
- *  - AGE ALONE is wrong. `purgeStaleTempTakes` derives age from the
- *    directory's own NAME, which is right for a transient temp take and
- *    wrong here — a bundle behind a capture made eight days ago would be
+ *  - AGE ALONE is wrong. Age from the directory's own NAME (what
+ *    `purgeStaleTempTakes` used to use, before it too moved to a marker)
+ *    is wrong here — a bundle behind a capture made eight days ago would be
  *    reported while its finished file still sits at top level, silently
  *    making it uneditable. So age here is measured from a MARKER written
  *    the first time the bundle was seen orphaned, never from its creation
@@ -353,8 +394,40 @@ export async function sweepOrphanedBundles(env: NodeJS.ProcessEnv, saveFolder: s
 export interface TempTakeInfo {
   dir: string;
   name: string;
-  /** `shot.json` present → still; `anchors.json` present → recording; neither → unrecognised. */
-  kind: "still" | "recording" | "unknown";
+  /**
+   * `shot.json` present → still; `anchors.json` present → recording; neither
+   * → `unknown` when anything with bytes in it survived, `empty` when nothing
+   * did.
+   *
+   * `unknown` is not a curiosity: it is what a take looks like when the helper
+   * (or the whole app) died between creating the directory and writing its
+   * document — a `kill -9` mid-take, or the helper crashing mid-recording
+   * (`recording-lost`), leaves a `display.mp4` and no `anchors.json`, because
+   * `anchors.json` is written at STOP. So it is often the most recent,
+   * most-wanted take in the list, and crash recovery must surface it rather
+   * than skip it (STC-465 review).
+   *
+   * `empty` — a directory holding no file with a single byte in it (dotfiles
+   * aside, which are only ever this module's own bookkeeping) — is the one
+   * case with nothing to offer anyone: the helper made the directory and died
+   * before writing anything. Classified here, in the ONE place that reads a
+   * temp take's contents, so crash recovery never counts it as a take.
+   */
+  kind: "still" | "recording" | "unknown" | "empty";
+}
+
+/** Anything in `dir` with bytes in it, dotfiles aside — see {@link TempTakeInfo}'s `empty`. */
+async function hasContent(dir: string, names: string[]): Promise<boolean> {
+  for (const n of names) {
+    if (n.startsWith(".")) continue;
+    try {
+      const st = await lstat(join(dir, n));
+      // A subdirectory is not something this app ever writes into a take;
+      // counted as content rather than guessed at, so it is never discarded.
+      if (st.isDirectory() || st.size > 0) return true;
+    } catch { /* vanished mid-scan */ }
+  }
+  return false;
 }
 
 /**
@@ -380,7 +453,8 @@ export async function listTempTakes(env: NodeJS.ProcessEnv): Promise<TempTakeInf
       names = await readdir(dir);
     } catch { continue; }
     const kind = names.includes("shot.json") ? "still"
-               : names.includes("anchors.json") ? "recording" : "unknown";
+               : names.includes("anchors.json") ? "recording"
+               : await hasContent(dir, names) ? "unknown" : "empty";
     out.push({ dir, name, kind });
   }
   return out;

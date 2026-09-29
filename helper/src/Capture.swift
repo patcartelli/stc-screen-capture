@@ -94,10 +94,89 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// (STC-254). Holding them as plain properties is what allowed the overlap.
     private let gate = WriterGate()
 
+    /// The CURRENT display geometry — the take's start geometry until a refit
+    /// lands (STC-235), then the refit's. Guarded by `lock` since STC-235: a
+    /// refit writes them on `refitQueue` while `writeSidecars` reads them.
+    /// anchors.json's top-level `display` is the START geometry
+    /// (`geometry.first`), never these.
     private var displayID: CGDirectDisplayID = 0
     private var pointW = 0, pointH = 0, pixelW = 0, pixelH = 0
     private var originX = 0.0, originY = 0.0
+    /// Fixed for the life of the take — AVAssetWriter cannot change them. A
+    /// refit fits the new source INTO this frame; it never changes it.
     private var captureW = 0, captureH = 0
+
+    // MARK: STC-235 refit state
+    //
+    // Ownership, because this is the part a later edit can get wrong:
+    // - `refitQueue` (serial) owns the ORCHESTRATION: `debounce`,
+    //   `refitInFlight`, `refitFailed`, `refitGen`. Only ever touched on it.
+    // - `lock` guards what the frame path also touches: `geometry`,
+    //   `pendingGeometry`, `lastConfirmedGen`, `geometryUnrepresentable`, the
+    //   scalar display fields above, `stream` and `restarting`.
+    // - The WRITER, the gate, the pause gate, the tap, the sampler, camera,
+    //   mic and system audio are never touched by a refit. The only stream
+    //   operations a refit performs are on the DISPLAY `SCStream`.
+
+    /// The request this take started from, kept so a refit can re-resolve
+    /// the SAME display / window / region against fresh content. Set once in
+    /// `start`, before anything that could refit exists.
+    private var startRequest: StartRequest?
+    /// Every geometry this take was captured under. Entry 0 is appended by
+    /// the first ACCEPTED frame, beside `firstFramePtsNs`, from the same
+    /// values, so the loader's "entry 0 is the top level" rule holds by
+    /// construction. Guarded by `lock`.
+    private var geometry: [GeometryEntryDoc] = []
+    /// A refit whose stream update has completed and whose first frame has not
+    /// been WRITTEN yet. The next accepted, un-paused frame's PTS becomes the
+    /// entry's `startNs` (a paused frame never does — Review Focus 5).
+    /// `confirmed` is set by ANY complete or idle sample, paused or not: it is
+    /// what satisfies `REFIT_FRAME_TIMEOUT_MS`, since a take paused for a
+    /// minute after a refit, or showing a static screen, has a perfectly
+    /// working stream. Guarded by `lock`.
+    private struct PendingGeometry {
+        let display: DisplayGeometry
+        let rect: FitRect
+        let path: String
+        let gen: Int
+        var confirmed: Bool
+    }
+    private var pendingGeometry: PendingGeometry?
+    /// The newest refit generation a frame has confirmed. Guarded by `lock`.
+    private var lastConfirmedGen = 0
+    /// Set when the take's very FIRST written frame would carry a letterboxed
+    /// refit geometry — anchors-7 requires entry 0 to be the full capture
+    /// frame, so such a take cannot be described and is stopped instead of
+    /// being recorded wrongly. Guarded by `lock`. See the frame path.
+    private var geometryUnrepresentable = false
+    /// True while a restart has stopped the old display stream and the new
+    /// one has not yet successfully STARTED (it is published only from
+    /// `startCapture`'s completion), i.e. while `stream` is deliberately nil under a
+    /// live writer. `stop()` finalises the writer directly in that window
+    /// instead of treating a nil stream as "never started". Guarded by `lock`.
+    private var restarting = false
+    /// What the display stream is configured for right now, as far as a
+    /// refit can change it (`RefitShape`, DisplayChangeDecisions.swift): set
+    /// in `begin()` and moved by every armed refit. `apply` compares a
+    /// settled change against it so a change that touches nothing this take
+    /// depends on touches neither SCK nor the anchors version. Guarded by
+    /// `lock`.
+    private var currentShape: RefitShape?
+    private var debounce = SettleDebounce()
+    private var refitInFlight = false
+    /// Sticky: once a refit has asked for the take to end, no later display
+    /// change may start another refit on a take that is on its way out.
+    private var refitFailed = false
+    private var refitGen = 0
+    /// App sets it, like `onWindowChanged`, to end the take with the given
+    /// reason when a display change cannot be refitted. Called on
+    /// `refitQueue`; the handler dispatches to main itself.
+    var onRefitFailed: ((String) -> Void)?
+    private let refitQueue = DispatchQueue(label: "stc.capture.refit")
+    /// The display stream's sample queue — ONE queue for the life of the
+    /// take, so a restarted stream delivers on the same serial queue as the
+    /// stream it replaced and the frame path never runs on two at once.
+    private let screenQueue = DispatchQueue(label: "stc.capture.screen")
     /// What this take is scoped to (STC-370): the whole display by default,
     /// set from the resolved `CaptureTarget` in `begin()`. Read by
     /// `writeSidecars` to decide anchors.json's version and `scope` block.
@@ -253,6 +332,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // request's real bound was "content latency + 15 s" rather than 15 s,
         // which is what made capture.test.ts flaky under load.
         startLock.lock(); startCompletion = completion; startLock.unlock()
+        startRequest = request
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.startTimeoutSeconds) { [weak self] in
             self?.finishStart(.failure(CaptureError.startTimedOut))
         }
@@ -390,13 +470,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 actual: SCFrameStatus.complete.rawValue)))
             return
         }
-        let g = target.geometry
-        displayID = CGDirectDisplayID(g.id)
-        pointW = g.pointWidth; pointH = g.pointHeight
-        pixelW = g.pixelWidth; pixelH = g.pixelHeight
-        originX = g.originX; originY = g.originY
+        lock.lock()
+        setCurrentDisplay(target.geometry)
+        lock.unlock()
         captureScope = target.scope
         (captureW, captureH) = captureSize(target.pixelSize.width, target.pixelSize.height)
+        lock.lock()
+        currentShape = RefitShape(geometry: target.geometry,
+                                  sourcePixelWidth: target.pixelSize.width, sourcePixelHeight: target.pixelSize.height,
+                                  sourceRect: target.scope.region,
+                                  rect: FitRect(x: 0, y: 0, width: captureW, height: captureH))
+        lock.unlock()
 
         // No backstop is armed here: start() armed one covering this whole
         // request before it called SCShareableContent (STC-258). Arming a
@@ -432,6 +516,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
         do {
             try setupWriter()
+            armStartPausedFault()
             try startStream(filter: target.filter, sourceRect: target.sourceRect) { [weak self] err in
                 guard let self else { return }
                 if let err {
@@ -476,6 +561,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     }
                     self.finishStart(.success(self.describe()))
                     self.armStreamDeathFault()
+                    self.armDisplayFault()
                 }
             }
         } catch {
@@ -546,6 +632,69 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.windowFaultDelaySeconds) { [weak self] in
             self?.onWindowChanged?(fault)
         }
+    }
+
+    /// `STC_CAPTURE_FAULT=display-refit` / `=display-gone` (STC-235): 0.5 s in
+    /// (by default),
+    /// the display-change path runs as though CG had called back — the
+    /// debounced refit against the SAME display, with `apply` forcing a
+    /// 3/4-width pillarbox so the grant test sees a real second geometry and
+    /// real bars without anyone changing a display mode. `display-gone` skips
+    /// straight to the classifier's stop arm. Armed for EVERY scope (unlike
+    /// `armWindowFault`, which only a window take can use): the grant test
+    /// drives it on a whole-display take. Driven by
+    /// helper/test/display-refit.grant.test.ts.
+    ///
+    /// `STC_DISPLAY_FAULT_DELAY_MS` overrides the 0.5 s, for the grant test
+    /// that must PAUSE after the take's first written frame and still before
+    /// the fault fires — a margin a fixed 0.5 s leaves to the machine.
+    private func armDisplayFault() {
+        guard let fault = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"],
+              fault == "display-refit" || fault == "display-gone" else { return }
+        let delay = ProcessInfo.processInfo.environment["STC_DISPLAY_FAULT_DELAY_MS"]
+            .flatMap { Int($0) }.map { Double(max(0, $0)) / 1000 } ?? Self.windowFaultDelaySeconds
+        IO.log("STC_CAPTURE_FAULT=\(fault): the display-change path runs in \(delay) s")
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            if fault == "display-gone" {
+                // Through the classifier itself, as the real path would reach
+                // it with the captured display missing from fresh content.
+                self.refitQueue.async {
+                    if case .stop(let reason) = decideDisplayChange(capturedDisplayPresent: false, region: nil,
+                                                                   newPointWidth: 0, newPointHeight: 0) {
+                        self.failRefit(reason)
+                    }
+                }
+            } else {
+                self.displayChanged()
+            }
+        }
+    }
+
+    /// `STC_CAPTURE_START_PAUSED=1` (STC-235): the take is PAUSED from its
+    /// first instant — engaged in `begin()` after the writer exists and before
+    /// `startStream` is even called, so no stream exists yet and no frame can
+    /// be accepted ahead of it; the event tap is created but not yet on a run
+    /// loop and the cursor sampler has not started, so no event can precede it
+    /// either. It goes through `pause()` itself — the method the `pause`
+    /// command reaches through `main.swift`'s `setPaused` — so `anchors.pauses`,
+    /// the synthetic held-button releases and every writer's pause gate behave
+    /// exactly as a real pause a few milliseconds after t0 would. Nothing new
+    /// happens on a capture callback: this runs on the `SCShareableContent`
+    /// callback thread that `begin()` already runs on, before the stream that
+    /// owns `screenQueue` exists. A later `resume` command ends it as usual.
+    ///
+    /// A variable of its own, not an `STC_CAPTURE_FAULT` value, so it combines
+    /// with one: the grant test pairs it with `=display-refit` for "paused from
+    /// the start through a letterboxing refit", a precondition a `pause`
+    /// COMMAND could not reach — on real hardware the first frame was always
+    /// written before the command's round trip landed. Driven by
+    /// helper/test/display-refit.grant.test.ts.
+    private func armStartPausedFault() {
+        guard let v = ProcessInfo.processInfo.environment["STC_CAPTURE_START_PAUSED"],
+              !v.isEmpty, v != "0" else { return }
+        let engaged = pause()
+        IO.log("STC_CAPTURE_START_PAUSED=\(v): the take is paused from the start (engaged: \(engaged))")
     }
 
     /// The window's current bounds, in points, via Quartz Window Services
@@ -895,6 +1044,23 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// as a 10 s empty edit.
     private func startStream(filter: SCContentFilter, sourceRect: CGRect?,
                              completion: @escaping (Error?) -> Void) throws {
+        let cfg = streamConfiguration(sourceRect: sourceRect, destination: nil)
+        let s = SCStream(filter: filter, configuration: cfg, delegate: self)
+        try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: screenQueue)
+        lock.lock(); stream = s; lock.unlock()
+        s.startCapture { completion($0) }
+    }
+
+    /// The display stream's configuration, in ONE place so a refit's stream
+    /// cannot drift from the take's first one (STC-235). With `destination`
+    /// nil this is exactly the configuration every take has always started
+    /// with. With one, the source is scaled into that rect of the SAME
+    /// `captureW x captureH` frame: `fitRect` has already preserved the aspect
+    /// ratio, so SCK is told to fill the rect exactly
+    /// (`preservesAspectRatio = false`) rather than centre it again by its
+    /// own rules — placement is ours and deterministic, and it is what lets
+    /// the `display-refit` fault inject a narrower rect (plan deviation 3).
+    private func streamConfiguration(sourceRect: CGRect?, destination: FitRect?) -> SCStreamConfiguration {
         let cfg = SCStreamConfiguration()
         cfg.width = captureW
         cfg.height = captureH
@@ -914,11 +1080,364 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // macOS 14+, absent from the 13.3 SDK headers but present at runtime
         // (PHASE-0 §7). Explicit width/height governs output size regardless.
         cfg.captureResolution = .automatic
-        let s = SCStream(filter: filter, configuration: cfg, delegate: self)
-        try s.addStreamOutput(self, type: .screen,
-                              sampleHandlerQueue: DispatchQueue(label: "stc.capture.screen"))
-        stream = s
-        s.startCapture { completion($0) }
+        if let d = destination {
+            cfg.scalesToFit = true
+            cfg.preservesAspectRatio = false
+            cfg.destinationRect = CGRect(x: d.x, y: d.y, width: d.width, height: d.height)
+        }
+        return cfg
+    }
+
+    // MARK: - display change (STC-235)
+
+    /// Called by App for every CG reconfiguration callback while recording.
+    /// Each call (re)arms the settle debounce; the refit decision runs once,
+    /// `DISPLAY_CHANGE_SETTLE_MS` after the LAST callback of a burst. A
+    /// callback that arrives mid-refit re-arms it and is decided when the
+    /// current refit settles (`finishRefit`) — never two refits in flight.
+    func displayChanged() {
+        refitQueue.async { [weak self] in
+            guard let self else { return }
+            self.debounce.poke(nowMs: Self.nowMs())
+            self.refitQueue.asyncAfter(deadline: .now() + .milliseconds(DISPLAY_CHANGE_SETTLE_MS)) { [weak self] in
+                self?.refitIfDue()
+            }
+        }
+    }
+
+    private static func nowMs() -> Int { Int(Clock.nowNs() / 1_000_000) }
+
+    private func isStopping() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stoppingBegan
+    }
+
+    /// On `refitQueue`. Starts a refit if the debounce has settled and nothing
+    /// forbids one. Called by the debounce timer and by `finishRefit`.
+    private func refitIfDue() {
+        guard debounce.due(nowMs: Self.nowMs()), !refitInFlight, !refitFailed, !isStopping() else { return }
+        // A restarted stream's first frames can confirm its refit (and so
+        // clear `refitInFlight`) before its `startCapture` completion has
+        // published it. A refit started in that gap would find `stream` nil
+        // and end a healthy take; it waits instead, and the completion calls
+        // this again once the stream is published.
+        lock.lock(); let betweenStreams = restarting; lock.unlock()
+        if betweenStreams { return }
+        debounce.fire()
+        refitInFlight = true
+        refitGen += 1
+        refit(gen: refitGen)
+    }
+
+    /// On `refitQueue`: is generation `gen` still the refit that should act?
+    /// False once it has settled, failed, been superseded, or the take began
+    /// stopping — a late SCK completion must then do nothing at all: no
+    /// geometry, no restarted stream. A stop arriving mid-refit wins, and the
+    /// refit is simply abandoned (App is already ending the take, so there is
+    /// nothing to ask for).
+    private func live(_ gen: Int) -> Bool {
+        guard refitInFlight, gen == refitGen, !refitFailed else { return false }
+        if isStopping() { refitInFlight = false; return false }
+        return true
+    }
+
+    private func refit(gen: Int) {
+        SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { [weak self] content, _ in
+            guard let self else { return }
+            self.refitQueue.async {
+                guard self.live(gen) else { return }
+                guard let content, let req = self.startRequest else { return self.failRefit("display-reconfigured") }
+                self.lock.lock(); let id = self.displayID; self.lock.unlock()
+                let newDisplay = content.displays.first { $0.displayID == id }
+                // A window take follows its WINDOW, not the display it began
+                // on: `resolveCaptureTarget` finds whichever display holds it.
+                let decision = decideDisplayChange(capturedDisplayPresent: newDisplay != nil || req.windowId != nil,
+                                                   region: self.captureScope.region,
+                                                   newPointWidth: newDisplay?.width ?? 0,
+                                                   newPointHeight: newDisplay?.height ?? 0)
+                if case .stop(let reason) = decision { return self.failRefit(reason) }
+                // Same display, never "Automatic" again: a refit must not hop.
+                let pinned = StartRequest(copying: req, displayId: id)
+                switch self.resolveCaptureTarget(pinned, content: content) {
+                case .failure(.windowNotFound): return self.failRefit("window-closed")
+                case .failure: return self.failRefit("display-reconfigured")
+                case .success(let target): self.apply(target, gen: gen)
+                }
+            }
+        }
+    }
+
+    /// On `refitQueue`. Pushes the new target to the live stream; falls back
+    /// to restarting the display stream alone if either update errors.
+    private func apply(_ target: CaptureTarget, gen: Int) {
+        var src = captureSize(target.pixelSize.width, target.pixelSize.height)
+        if ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "display-refit" {
+            // A forced pillarbox — see armDisplayFault.
+            src = (captureW * 3 / 4 / 2 * 2, captureH)
+        }
+        let rect = fitRect(sourceWidth: src.w, sourceHeight: src.h, intoWidth: captureW, intoHeight: captureH)
+        let next = RefitShape(geometry: target.geometry,
+                              sourcePixelWidth: target.pixelSize.width, sourcePixelHeight: target.pixelSize.height,
+                              sourceRect: target.scope.region, rect: rect)
+
+        // CG calls back for EVERY display, so most settled changes are some
+        // other display's. Only what THIS take's stream reads or writes may
+        // reach SCK, and only a real change of geometry may reach anchors.json.
+        lock.lock(); let current = currentShape; lock.unlock()
+        let kind = current.map { refitNeeded(current: $0, next: next, followsWindow: target.scope.kind == .window) }
+            ?? .reconfigure
+        switch kind {
+        case .none:
+            // No SCK call, no geometry entry, no timeout armed. `finishRefit`
+            // clears `refitInFlight`, which is what retires this generation:
+            // `live(gen)` is false for every later check of it.
+            IO.log("refit: nothing this take depends on changed; stream and anchors left alone")
+            return finishRefit()
+        case .recordOnly:
+            // The description moved (the origin, typically) and the stream's
+            // configuration did not: record the new geometry through the
+            // ordinary landing path — so its `startNs` is still the next
+            // accepted frame's PTS — and leave the stream alone. No timeout:
+            // there is no updated stream whose liveness is in question, and
+            // a stream that dies on its own is `didStopWithError`'s job.
+            IO.log("refit: the display moved but the stream did not need to; recording the new geometry only")
+            armRefitLanding(next, path: "record", gen: gen)
+            return finishRefit()
+        case .reconfigure:
+            break
+        }
+
+        let cfg = streamConfiguration(sourceRect: target.sourceRect, destination: rect)
+
+        // Every wait needs a bound, and this one covers the updates, a
+        // restart AND the first refitted frame: an SCK call that never calls
+        // back is caught here too, not only a stream that delivers nothing.
+        // Any complete or idle sample, paused or not, confirms the refit
+        // (see the frame path); nothing confirming it in time means the take's geometry is unknown, and
+        // such a take must not continue.
+        refitQueue.asyncAfter(deadline: .now() + .milliseconds(REFIT_FRAME_TIMEOUT_MS)) { [weak self] in
+            guard let self, self.live(gen) else { return }
+            self.lock.lock(); let confirmed = self.lastConfirmedGen >= gen; self.lock.unlock()
+            if !confirmed { self.failRefit("display-reconfigured") }
+        }
+
+        lock.lock(); let s = stream; lock.unlock()
+        guard let s else { return failRefit("display-reconfigured") }
+        s.updateContentFilter(target.filter) { [weak self] err in
+            guard let self else { return }
+            self.refitQueue.async {
+                guard self.live(gen) else { return }
+                if let err {
+                    IO.log("refit: updateContentFilter failed (\(err)); restarting the display stream")
+                    return self.restartStream(target, cfg, next, gen: gen)
+                }
+                s.updateConfiguration(cfg) { err in
+                    self.refitQueue.async {
+                        guard self.live(gen) else { return }
+                        if let err {
+                            IO.log("refit: updateConfiguration failed (\(err)); restarting the display stream")
+                            return self.restartStream(target, cfg, next, gen: gen)
+                        }
+                        self.armRefitLanding(next, path: "update", gen: gen)
+                    }
+                }
+            }
+        }
+    }
+
+    /// On `refitQueue`. The fallback: the DISPLAY stream alone is stopped and
+    /// a new one started with the refit configuration, delivering into the
+    /// same frame path on the same `screenQueue`. The writer and its gate are
+    /// not touched — the one file carries on, with a PTS gap at the seam.
+    ///
+    /// `stream` is nil (and `restarting` true) from the moment the old stream
+    /// is let go until the new one has SUCCESSFULLY STARTED, so neither
+    /// `stop()` nor the delegate can mistake a stream for the live one before
+    /// it is: `stop()` finalises the writer itself in that whole window, and
+    /// a replaced (or not yet published) stream's `didStopWithError` fails
+    /// the identity check and is ignored.
+    ///
+    /// Why publication waits for `startCapture`'s completion: published
+    /// before it, a `stop()` in between would call `stopCapture` on a stream
+    /// that was never started. SCK need not answer that promptly, and if it
+    /// never does the 20 s backstop answers with an unfinalised mp4 — a lost
+    /// take. Unpublished, that same `stop()` takes the `restarting` branch
+    /// and finalises the writer at once; the completion below then sees
+    /// `stoppingBegan`, does not publish, and stops the new stream itself.
+    private func restartStream(_ target: CaptureTarget, _ cfg: SCStreamConfiguration, _ next: RefitShape, gen: Int) {
+        lock.lock()
+        if stoppingBegan { lock.unlock(); refitInFlight = false; return }
+        let old = stream
+        stream = nil
+        restarting = true
+        lock.unlock()
+
+        let startNew: () -> Void = { [weak self] in
+            guard let self else { return }
+            self.refitQueue.async {
+                guard self.live(gen) else { return }
+                let s = SCStream(filter: target.filter, configuration: cfg, delegate: self)
+                do {
+                    try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: self.screenQueue)
+                } catch {
+                    return self.failRefit("display-reconfigured")
+                }
+                // Everything this stream will deliver is the NEW geometry by
+                // construction, so the landing is armed BEFORE it starts: its
+                // very first frame, even one delivered ahead of the completion
+                // below, records it. Armed under `lock` with `stoppingBegan`
+                // as the tie-break (false = a stop began; nothing armed, and
+                // this stream is never started). `failRefit` clears the
+                // pending geometry again if the start fails.
+                guard self.armRefitLanding(next, path: "restart", gen: gen) else { return }
+                s.startCapture { err in
+                    // Published HERE, under `lock`, and only if nothing has
+                    // begun stopping the take — see the doc comment above.
+                    // Deliberately not gated on `live(gen)`: a stream that
+                    // STARTED must have an owner, and a still-running take's
+                    // stop() is that owner even if this refit has since timed
+                    // out and asked App to end the take.
+                    self.lock.lock()
+                    let stopping = self.stoppingBegan
+                    if err == nil, !stopping {
+                        self.stream = s
+                        self.restarting = false
+                    }
+                    self.lock.unlock()
+                    // stop() has already finalised the writer through its
+                    // `restarting` branch, so this stream's only owner is
+                    // here; its frames meet a closed gate meanwhile.
+                    if err == nil, stopping { s.stopCapture { _ in } }
+                    self.refitQueue.async {
+                        if err == nil, !stopping {
+                            // A display change that settled while this
+                            // stream was unpublished was held back by
+                            // `refitIfDue` (it must not find `stream` nil);
+                            // it may run now.
+                            self.refitIfDue()
+                        }
+                        guard self.live(gen) else { return }
+                        if let err {
+                            IO.log("refit: restarted stream failed to start (\(err))")
+                            return self.failRefit("display-reconfigured")
+                        }
+                    }
+                }
+            }
+        }
+        if let old { old.stopCapture { _ in startNew() } } else { startNew() }
+    }
+
+    /// On `refitQueue`, once the stream is known to carry the new
+    /// configuration. The scalar display fields move to the new geometry and
+    /// the NEXT accepted frame records it — from a frame, never from this
+    /// callback (spec, Refit step 4). Plan deviation 2: that frame is the
+    /// first one accepted after the update's completion handler, not one
+    /// gated on SCK's `contentRect` attachment.
+    ///
+    /// `path` is how the stream came to carry it: "update", "restart", or
+    /// "record" — the stream was left alone because only the display's
+    /// description moved (`RefitKind.recordOnly`). Returns false, having
+    /// armed nothing, when the take has begun stopping.
+    @discardableResult
+    private func armRefitLanding(_ next: RefitShape, path: String, gen: Int) -> Bool {
+        lock.lock()
+        if stoppingBegan { lock.unlock(); refitInFlight = false; return false }
+        // A pending geometry that was never written (the take is paused) is
+        // simply replaced: no frame in the file was captured under it.
+        pendingGeometry = PendingGeometry(display: next.geometry, rect: next.rect, path: path, gen: gen,
+                                          confirmed: false)
+        setCurrentDisplay(next.geometry)
+        currentShape = next
+        lock.unlock()
+        // The one observable moment a refit's geometry becomes pending — the
+        // `display-refit` warning only fires once a frame is WRITTEN, which a
+        // paused take never does. The grant test's paused-from-start case
+        // waits on this line before it resumes. On refitQueue, never the
+        // capture callback.
+        IO.log("refit: geometry armed (path: \(path), rect: \(next.rect.x),\(next.rect.y) \(next.rect.width)x\(next.rect.height)); lands on the next written frame")
+        return true
+    }
+
+    /// On `refitQueue`, dispatched by the frame path when a frame confirms
+    /// generation `gen`: the stream works, so this refit is settled and a
+    /// display change that arrived meanwhile may now run.
+    private func refitConfirmed(gen: Int) {
+        guard gen == refitGen, refitInFlight, !refitFailed else { return }
+        finishRefit()
+    }
+
+    /// On `refitQueue`, dispatched by the frame path once a refit's first
+    /// WRITTEN frame has recorded its geometry entry. `IO.send` is the
+    /// reliable, blocking channel, so it is sent from here and never from the
+    /// capture callback (CORRECTNESS-TRAPS: no capture callback may touch the
+    /// pipe).
+    private func refitLanded(ptsNs: Int64, pending p: PendingGeometry,
+                             reportedRect: CGRect?, scaleFactor: Double?) {
+        IO.send("warning", ["code": "display-refit", "startNs": Int(ptsNs), "path": p.path,
+                            "display": ["id": p.display.id, "pointWidth": p.display.pointWidth,
+                                        "pointHeight": p.display.pointHeight],
+                            "contentRect": ["x": p.rect.x, "y": p.rect.y,
+                                            "width": p.rect.width, "height": p.rect.height]])
+        // Plan deviation 2: the recorded rect is the COMPUTED one. SCK's
+        // `contentRect` attachment is documented in "points", which is
+        // ambiguous here, so it is compared under both readings (raw and
+        // x `scaleFactor`); a mismatch under both is reported, never acted
+        // on. Runbook §8 settles the unit.
+        guard let r = reportedRect else { return }
+        func near(_ a: CGRect) -> Bool {
+            abs(a.minX - CGFloat(p.rect.x)) <= 1 && abs(a.minY - CGFloat(p.rect.y)) <= 1 &&
+                abs(a.maxX - CGFloat(p.rect.x + p.rect.width)) <= 1 &&
+                abs(a.maxY - CGFloat(p.rect.y + p.rect.height)) <= 1
+        }
+        let k = CGFloat(scaleFactor ?? 1)
+        if near(r) || near(CGRect(x: r.minX * k, y: r.minY * k, width: r.width * k, height: r.height * k)) { return }
+        IO.send("warning", ["code": "display-refit-rect-mismatch",
+                            "computed": ["x": p.rect.x, "y": p.rect.y,
+                                         "width": p.rect.width, "height": p.rect.height],
+                            "reported": ["x": Double(r.minX), "y": Double(r.minY),
+                                         "width": Double(r.width), "height": Double(r.height)],
+                            "scaleFactor": scaleFactor.map { $0 as Any } ?? NSNull()])
+    }
+
+    /// On `refitQueue`. Asks App to end the take. Sticky: no refit starts
+    /// after this, and every in-flight completion sees `live(gen) == false`
+    /// and does nothing.
+    private func failRefit(_ reason: String) {
+        refitInFlight = false
+        refitFailed = true
+        lock.lock()
+        pendingGeometry = nil
+        let stoppingAlready = stoppingBegan
+        lock.unlock()
+        if stoppingAlready { return }
+        IO.log("refit: ending the take (\(reason))")
+        onRefitFailed?(reason)
+    }
+
+    /// On `refitQueue`. The refit settled; if another display change came in
+    /// meanwhile and its debounce has already elapsed, run it now. One whose
+    /// debounce is still running is picked up by its own timer.
+    private func finishRefit() {
+        refitInFlight = false
+        refitIfDue()
+    }
+
+    /// Under `lock`.
+    private func setCurrentDisplay(_ g: DisplayGeometry) {
+        displayID = CGDirectDisplayID(g.id)
+        pointW = g.pointWidth; pointH = g.pointHeight
+        pixelW = g.pixelWidth; pixelH = g.pixelHeight
+        originX = g.originX; originY = g.originY
+    }
+
+    /// Under `lock`. The scalar fields as a `DisplayGeometry` — built in ONE
+    /// place so geometry entry 0 and anchors.json's top-level `display` are
+    /// the same value (the loader deep-compares them).
+    private func currentDisplayGeometry() -> DisplayGeometry {
+        DisplayGeometry(id: Int(displayID), pointWidth: pointW, pointHeight: pointH,
+                        pixelWidth: pixelW, pixelHeight: pixelH,
+                        originX: originX, originY: originY)
     }
 
     // MARK: - frames
@@ -929,8 +1448,32 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                   let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false)
                             as? [[SCStreamFrameInfo: Any]],
                   let att = arr.first,
-                  let statusRaw = att[.status] as? Int,
-                  let dtRaw = att[.displayTime] as? UInt64,
+                  let statusRaw = att[.status] as? Int
+            else { return }
+
+            // STC-235: a refit waits (at most REFIT_FRAME_TIMEOUT_MS) for
+            // proof the updated stream is LIVE. Any complete or idle sample is
+            // that proof, paused or not: an idle one is exactly what a static
+            // screen delivers, and requiring a complete frame would stop a
+            // take for having nothing on screen change — unplugging an
+            // unrelated display, say (runbook §4). Idle samples carry no
+            // pixel buffer, so this runs before the guard below that needs
+            // one. It does NOT record the geometry; the first WRITTEN frame
+            // does (below).
+            if statusRaw == SCFrameStatus.complete.rawValue || statusRaw == SCFrameStatus.idle.rawValue {
+                lock.lock()
+                var confirmedGen: Int?
+                if var p = pendingGeometry, !p.confirmed {
+                    p.confirmed = true
+                    pendingGeometry = p
+                    lastConfirmedGen = max(lastConfirmedGen, p.gen)
+                    confirmedGen = p.gen
+                }
+                lock.unlock()
+                if let g = confirmedGen { refitQueue.async { self.refitConfirmed(gen: g) } }
+            }
+
+            guard let dtRaw = att[.displayTime] as? UInt64,
                   let pb = CMSampleBufferGetImageBuffer(sb)
             else { return }
 
@@ -943,6 +1486,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                                        timebase: (Clock.timebase.numer, Clock.timebase.denom),
                                        t0Ns: t0Ns, lastPtsNs: lastPtsNs)
             let ptsNs: Int64
+            // STC-235: what this frame did to a refit, acted on AFTER the
+            // lock is released and off this queue (refitQueue) — nothing
+            // below may block the capture callback or send on the pipe.
+            var landed: PendingGeometry?
+            var unrepresentable = false
             switch decision {
             case .skip:
                 lock.unlock(); return       // idle/blank/suppressed: VFR emits nothing
@@ -952,15 +1500,69 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 // Paused: the frame is real and correctly timed, and must not
                 // reach the writer, advance `lastPtsNs`, or become
                 // `firstFramePtsNs` — a take paused from its very first
-                // instant has no first frame until it resumes.
+                // instant has no first frame until it resumes. Nor may it
+                // become a refit's first frame (Review Focus 5): this return
+                // sits ABOVE the geometry block on purpose, so a refit that
+                // lands while paused is recorded from the first frame after
+                // resume, the first one actually in the file.
                 if pauseGate.isPaused(atNs: pts) {
                     framesPaused += 1; lock.unlock(); return
+                }
+                if geometryUnrepresentable {
+                    framesDropped += 1; lock.unlock(); return
+                }
+                if geometry.isEmpty, let p = pendingGeometry {
+                    // The take's FIRST written frame already carries a refit
+                    // (a take paused from its start through a display
+                    // change). No frame was captured under the start
+                    // geometry, so the refit's IS the start — but anchors-7
+                    // requires entry 0 to be the full capture frame, so only
+                    // a full-frame refit can be described that way. A
+                    // letterboxed one would be recorded with the wrong
+                    // mapping; it is refused instead, and the take ends
+                    // before a single frame is written.
+                    if p.rect == FitRect(x: 0, y: 0, width: captureW, height: captureH) {
+                        pendingGeometry = nil
+                        landed = p
+                    } else {
+                        geometryUnrepresentable = true
+                        pendingGeometry = nil
+                        framesDropped += 1
+                        unrepresentable = true
+                    }
+                }
+                if unrepresentable {
+                    lock.unlock()
+                    refitQueue.async { self.failRefit("display-reconfigured") }
+                    return
                 }
                 ptsNs = pts
                 lastPtsNs = pts
                 if firstFramePtsNs < 0 { firstFramePtsNs = pts }
+                // Entry 0 from the same frame and the same values as
+                // `firstFramePtsNs` and the top-level `display`, so the
+                // loader's deep comparison holds by construction.
+                if geometry.isEmpty {
+                    geometry.append(GeometryEntryDoc(startNs: Int(pts), display: currentDisplayGeometry(),
+                                                     contentRect: FitRect(x: 0, y: 0,
+                                                                          width: captureW, height: captureH)))
+                }
+                if let p = pendingGeometry {
+                    pendingGeometry = nil
+                    geometry.append(GeometryEntryDoc(startNs: Int(pts), display: p.display, contentRect: p.rect))
+                    landed = p
+                }
             }
             lock.unlock()
+
+            if let p = landed {
+                let reported = (att[.contentRect] as? NSDictionary)
+                    .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+                let scale = (att[.scaleFactor] as? NSNumber)?.doubleValue
+                refitQueue.async {
+                    self.refitLanded(ptsNs: ptsNs, pending: p, reportedRect: reported, scaleFactor: scale)
+                }
+            }
 
             // The gate decides whether this frame may still be written, and
             // holds its own lock across the append so a concurrent stop cannot
@@ -974,6 +1576,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
+        // STC-235: only the CURRENT display stream can end the take. A refit's
+        // restart deliberately stops the old one (and a delegate callback for
+        // that is not a death); by then `stream` is nil or the new stream, so
+        // an identity check tells the two apart for as long as the old
+        // object can still call back — a `restarting` flag would only cover
+        // the window until the new stream is installed.
+        lock.lock(); let current = self.stream === stream; lock.unlock()
+        guard current else {
+            IO.log("stream: a replaced display stream reported a stop (\(error)); ignored")
+            return
+        }
         // If the start is still pending this IS its answer — the stream died on
         // the way up rather than reporting through startCapture's completion.
         let answeredStart = finishStart(.failure(CaptureError.streamFailed(error)))
@@ -1326,8 +1939,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// reply, whether it has resolved yet is not something the caller should
     /// be able to depend on. Its outcome is reported separately, once known.
     func describe() -> [String: Any] {
-        ["display": displayID, "capture": ["width": captureW, "height": captureH],
-         "source": ["pixelWidth": pixelW, "pixelHeight": pixelH]]
+        lock.lock(); defer { lock.unlock() }
+        return ["display": displayID, "capture": ["width": captureW, "height": captureH],
+                "source": ["pixelWidth": pixelW, "pixelHeight": pixelH]]
     }
 
     /// Tears down capture and writes events.json and anchors.json.
@@ -1378,6 +1992,15 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let cursorRL = cursorRunLoop
         let winWatcher = windowWatcher
         windowWatcher = nil
+        // STC-235: read under the lock a refit's restart swaps it under. Nil
+        // with `restarting` set means a restart is between streams: the old
+        // one is already being stopped by the restart, and the new one either
+        // sees `stoppingBegan` and never starts, or is mid-`startCapture` and
+        // its completion sees `stoppingBegan`, is never published, and stops
+        // itself — so the writer is finalised here directly rather than
+        // skipped as "never started".
+        let displayStream = stream
+        let midRestart = restarting
         lock.unlock()
 
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
@@ -1485,15 +2108,18 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         }
 
         group.enter()
-        if let stream {
-            stream.stopCapture { [weak self] _ in
-                guard let self else { group.leave(); return }
-                // Returns only once any in-flight append has finished, so the
-                // finishWriting below cannot race one (STC-254).
-                self.gate.closeAndMarkFinished()
-                guard let writer = self.writer else { group.leave(); return }
-                writer.finishWriting { group.leave() }
-            }
+        let finishDisplay: () -> Void = { [weak self] in
+            guard let self else { group.leave(); return }
+            // Returns only once any in-flight append has finished, so the
+            // finishWriting below cannot race one (STC-254).
+            self.gate.closeAndMarkFinished()
+            guard let writer = self.writer else { group.leave(); return }
+            writer.finishWriting { group.leave() }
+        }
+        if let displayStream {
+            displayStream.stopCapture { _ in finishDisplay() }
+        } else if midRestart {
+            finishDisplay()
         } else {
             group.leave()
         }
@@ -1509,6 +2135,16 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let camTrack = cameraTrack
         let micT = micTrack
         let sysT = systemAudioTrack
+        // STC-235: the top-level `display` is the take's START geometry —
+        // entry 0's own value, the same one the first frame recorded — never
+        // the scalar fields, which a refit has moved to the CURRENT one. A
+        // take that never got a frame has no entry 0 and falls back to the
+        // scalars, exactly as before. A single entry writes no `geometry`
+        // key at all (anchorsDocument), so a take nothing refitted is
+        // byte-for-byte what it was.
+        let geo = geometry
+        let startDisplay = geo.first?.display ?? currentDisplayGeometry()
+        let firstFrameNs = firstFramePtsNs
         lock.unlock()
 
         // events-2 since STC-309: v1 plus `{t, kind: "cursor", shape}`. The
@@ -1526,11 +2162,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let doc = anchorsDocument(
             timebase: (Int(Clock.timebase.numer), Int(Clock.timebase.denom)),
             t0Ns: t0Ns,
-            display: DisplayGeometry(id: Int(displayID), pointWidth: pointW, pointHeight: pointH,
-                                     pixelWidth: pixelW, pixelHeight: pixelH,
-                                     originX: originX, originY: originY),
+            display: startDisplay,
             capture: CaptureGeometryDoc(width: captureW, height: captureH,
-                                        firstFrameNs: Int(firstFramePtsNs)),
+                                        firstFrameNs: Int(firstFrameNs)),
             camera: camTrack,
             requested: wantCamera,
             mic: micT,
@@ -1538,6 +2172,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             systemAudio: sysT,
             systemAudioRequested: wantSystemAudio,
             scope: captureScope,
+            geometry: geo,
             pauses: pauses,
             stopReason: reason,
             stopTNs: Int(stopTNs))

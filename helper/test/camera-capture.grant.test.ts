@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import AjvImport from "ajv";
 import { demuxTrack } from "../../transform/src/demux.js";
+import { memorySource } from "../../transform/src/chunk-reader.js";
 import { classifyCameraTrack } from "./_camera-health.js";
 
 const Ajv = (AjvImport as any).default ?? AjvImport;
@@ -135,7 +136,7 @@ describe("camera capture — requires Screen Recording AND Camera", () => {
     // frameIntervalNs — that is the number under suspicion. classifyCameraTrack
     // judges the timestamps first, so a boot-relative rebase can never hide
     // behind a busy machine; camera-health.test.ts covers that in CI.
-    const cameraFrames = (await demuxTrack(bufferOf(join(dir, "camera.mp4")), "camera.mp4")).framesNs.length;
+    const cameraFrames = (await demuxTrack(memorySource(bufferOf(join(dir, "camera.mp4")), "camera.mp4"), "camera.mp4")).framesNs.length;
     const verdict = classifyCameraTrack({
       frames: cameraFrames,
       device: String(cam.device ?? "unknown"),

@@ -202,31 +202,30 @@ describe("exportAudioPlan: which path an export's audio takes", () => {
   const on = { enabled: true, strength: 0.5 }, off = { enabled: false, strength: 0.5 };
 
   test("a take that asked for neither cleanup nor system audio keeps the mic-only path", () => {
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false })).toEqual({ path: "mic", cleanMic: false });
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: off })).toEqual({ path: "mic", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false })).toMatchObject({ path: "mic", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: off })).toMatchObject({ path: "mic", cleanMic: false });
   });
 
   test("cleanup on moves a mic-only take onto the mix path, cleaned", () => {
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: on })).toEqual({ path: "mix", cleanMic: true });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: on })).toMatchObject({ path: "mix", cleanMic: true });
   });
 
   test("cleanup on at strength 0 is off: an identity must not change the path", () => {
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: { enabled: true, strength: 0 } }))
-      .toEqual({ path: "mic", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: { enabled: true, strength: 0 } })).toMatchObject({ path: "mic", cleanMic: false });
   });
 
   test("system audio always mixes; cleanup decides only whether the mic is cleaned", () => {
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: off })).toEqual({ path: "mix", cleanMic: false });
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: on })).toEqual({ path: "mix", cleanMic: true });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: off })).toMatchObject({ path: "mix", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: on })).toMatchObject({ path: "mix", cleanMic: true });
   });
 
   test("no mic: cleanup has nothing to clean", () => {
-    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: false, cleanup: on })).toEqual({ path: "none", cleanMic: false });
-    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: true, cleanup: on })).toEqual({ path: "mix", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: false, cleanup: on })).toMatchObject({ path: "none", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: true, cleanup: on })).toMatchObject({ path: "mix", cleanMic: false });
   });
 
   test("not encoding: no audio path at all", () => {
-    expect(exportAudioPlan({ encode: false, hasMic: true, hasSystem: true, cleanup: on })).toEqual({ path: "none", cleanMic: false });
+    expect(exportAudioPlan({ encode: false, hasMic: true, hasSystem: true, cleanup: on })).toMatchObject({ path: "none", cleanMic: false });
   });
 });
 
@@ -285,9 +284,47 @@ describe("the mic level (STC-454 part 2)", () => {
   });
 
   test("the export plan: a mic level other than 1 takes the mix path, mic-only takes included", () => {
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 1 })).toEqual({ path: "mic", cleanMic: false });
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 2 })).toEqual({ path: "mix", cleanMic: false });
-    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 0 })).toEqual({ path: "mix", cleanMic: false });
-    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: false, micLevel: 2 })).toEqual({ path: "none", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 1 })).toMatchObject({ path: "mic", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 2 })).toMatchObject({ path: "mix", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micLevel: 0 })).toMatchObject({ path: "mix", cleanMic: false });
+    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: false, micLevel: 2 })).toMatchObject({ path: "none", cleanMic: false });
+  });
+});
+
+describe("exportAudioPlan: per-track mute (STC-454 part 3)", () => {
+  const plan = (o: Partial<Parameters<typeof exportAudioPlan>[0]>) =>
+    exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, ...o });
+
+  test("nothing muted: both tracks go in", () => {
+    expect(plan({})).toEqual({ path: "mix", cleanMic: false, mic: true, system: true });
+  });
+
+  test("system muted: the mic takes the UNTOUCHED path, as if no system audio had been recorded", () => {
+    expect(plan({ systemMuted: true })).toEqual({ path: "mic", cleanMic: false, mic: true, system: false });
+    // ...unless the mic itself asks for the mixer.
+    expect(plan({ systemMuted: true, micLevel: 2 })).toEqual({ path: "mix", cleanMic: false, mic: true, system: false });
+    expect(plan({ systemMuted: true, cleanup: { enabled: true, strength: 0.5 } }))
+      .toEqual({ path: "mix", cleanMic: true, mic: true, system: false });
+  });
+
+  test("mic muted: system audio alone, and nothing is cleaned or leveled", () => {
+    expect(plan({ micMuted: true, micLevel: 2, cleanup: { enabled: true, strength: 0.5 } }))
+      .toEqual({ path: "mix", cleanMic: false, mic: false, system: true });
+  });
+
+  test("everything muted: NO audio track (Patrick, 2026-09-25), whatever else is set", () => {
+    expect(plan({ micMuted: true, systemMuted: true, micLevel: 2, cleanup: { enabled: true, strength: 0.5 } }))
+      .toEqual({ path: "none", cleanMic: false, mic: false, system: false });
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, micMuted: true }))
+      .toEqual({ path: "none", cleanMic: false, mic: false, system: false });
+    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: true, systemMuted: true }))
+      .toEqual({ path: "none", cleanMic: false, mic: false, system: false });
+  });
+
+  test("muting a track the take does not have changes nothing", () => {
+    expect(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, systemMuted: true }))
+      .toEqual(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false }));
+    expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: true, micMuted: true }))
+      .toEqual(exportAudioPlan({ encode: true, hasMic: false, hasSystem: true }));
   });
 });

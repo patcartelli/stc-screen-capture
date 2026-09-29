@@ -1,10 +1,9 @@
 # STC-454 — preview audio: what to listen for on the Mac
 
-**Run this from the branch, not `master`, until it merges:**
+**All four parts are merged: run this from `master`.**
 
 ```
-git fetch origin claude/optimistic-ride-ed374b
-git checkout claude/optimistic-ride-ed374b && git pull
+git checkout master && git pull
 npm install && npm run app:start
 ```
 
@@ -168,3 +167,141 @@ Patrick's decisions (2026-09-25):
     (mutation-checked).
 - The existing voice-clean and system-audio e2e suites open the popover
   first now; the system-audio suite also expects dB labels.
+
+**Result (2026-09-25, Patrick): "looks good".** Part 2 merged as #229. The
+Audio pane's look and feel is its own follow-up, STC-460.
+
+---
+
+# Part 3 — mute per track
+
+**Run from `claude/optimistic-ride-ed374b` until it merges** (same commands as
+at the top).
+
+## What changed
+
+Patrick's decisions (2026-09-25):
+
+| Question | Answer |
+|---|---|
+| How is a mute stored? | **As its own field** (project-12 `micMuted` / `systemAudioMuted`), not as level 0. Un-muting brings back exactly the level you had. |
+| Per take, or a default for new takes? | **Per take only.** Every new take starts un-muted. |
+| Every track muted? | **No audio track** in the export, the same as a take recorded without sound. Not a silent track. |
+| The control? | **A speaker before each track's name** in the Audio popover. It shows a cross when muted; the slider and its dB value dim but stay where they were. |
+
+- A muted track is **left out of the export**, not mixed in at zero. A take
+  whose other track is untouched therefore exports exactly as it would have
+  without the muted track: a mic-only take with system audio muted takes the
+  same path as a take that never recorded system audio.
+- The **preview** hears a mute at once. The muted track plays at zero, so the
+  picture's audio clock does not change under a mute.
+- The header's speaker (part 1) is still the **app-wide** preview mute. It
+  never touches the take or the export. The per-track speakers do both.
+
+## §6 — the mutes, by ear
+
+1. Open a take with a mic and system audio. Open **Audio**: each track has a
+   speaker before its name. Play at 1x and mute System audio. It should go
+   silent within about half a second, with the voice carrying on and the
+   picture not stuttering. Un-mute it: it returns at the level the slider
+   shows.
+2. Move the Mic slider to +6 dB, mute the Mic, and close and reopen the take.
+   The speaker should still be crossed, with the slider still at +6 dB.
+   Un-mute: +6 dB is back.
+3. Export with **System audio muted**, and play the file. It should hold only
+   the voice.
+4. Export with **both muted**, and open the file in QuickTime and Finder's
+   Get Info. There should be no audio track at all: no volume control in the
+   player, and only "H.264" under Codecs.
+5. Is the speaker easy to hit, and does the crossed state read as "muted" at a
+   glance, in light and in dark mode?
+
+## In the app (Linux-verified, not heard)
+
+- `transform/test/audio-mix.test.ts`:
+  - a muted system track sends the mic down the untouched path, unless the
+    mic itself asks for the mixer;
+  - a muted mic is neither cleaned nor leveled;
+  - everything muted means no audio at all;
+  - muting a track the take doesn't have changes nothing.
+- `transform/test/trim.test.ts`:
+  - project-12 parses, writes and validates, and only a real `true` mutes;
+  - a mute keeps both levels and everything else v11 carries.
+- `app/test/mic-level.e2e.test.ts`:
+  - muting saves at v12 with the slider unmoved, and un-muting drops the key;
+  - system audio has its own mute;
+  - a reopened take shows its mute;
+  - Space on the focused speaker toggles it without starting playback
+    (mutation-checked);
+  - with every track muted the exported MP4 has no `mp4a` or `soun`. With
+    the mute not passed to the export plan (mutation-checked), the same export
+    fails trying to encode the placeholder mic.
+
+# Part 4 — the waveform on the ruler
+
+**Merged, but §6 (part 3) and §7 (part 4) have NOT been fully run on
+hardware yet (STC-463).** Run both from `master`.
+
+## What changed
+
+Patrick's decisions (2026-09-25):
+
+| Question | Answer |
+|---|---|
+| Where does it go? | **On the ruler**, like Clip activity: no new lane (STC-444 found three lanes cluttered). |
+| What does it show? | **The export's mix**: the mic (cleaned when cleanup is on) plus system audio at their levels, a muted track contributing nothing, hard-limited. |
+
+- A second toggle sits on the ruler's left edge, beside Clip activity's. It
+  shows only for a take with audio, starts **off** each time the editor opens,
+  and is never saved (the same rule Clip activity follows). Pressed, it
+  turns green.
+- The waveform is drawn mirrored about the ruler's middle on a **linear**
+  scale: full height is full scale, where the mix's hard limit clips. So a
+  -12 dB move shrinks it to a quarter of its height.
+- It is computed from `mixBlock`, the same function the export encodes and
+  the preview plays (`transform/src/waveform.ts`). A level, a mute or a
+  finished voice cleanup redraws it. The work runs in 8 ms slices, taking
+  about 1.5 s per 10 minutes of two-track audio (measured in Node). Until
+  the new drawing lands, the old one stays up.
+
+## §7 — the waveform, by eye
+
+1. Open a take with narration. Turn the waveform on. Do the shapes line up
+   with the voice: a word starting where the waveform rises, a pause lying
+   flat? Play at 1x and watch the playhead cross a loud word as you hear it.
+2. Open **Audio** and drag the Mic slider down to about -20 dB, then release.
+   The waveform should shrink. Mute the mic: on a mic-only take it goes flat;
+   with system audio, only the system audio's shape stays.
+3. Push the Mic to +12 dB on a loud take. Peaks that hit the top and bottom
+   edges are where the export clips. Is that useful, or does it just read as
+   "the waveform got taller"?
+4. Turn Clip activity on as well. Can the two still be told apart, or is it
+   one or the other?
+5. Zoom the timeline right in (scroll on the ruler). The waveform
+   has 1024 points across the whole take, so on a long take zoomed far in it
+   turns blocky. Is it still useful there?
+6. Open a 10-minute take. Does the waveform appear within a few seconds of
+   the picture, and does playback stay smooth while it computes?
+7. Light and dark mode: is the green legible against the ruler, and does it
+   stay out of the way of the ticks and playhead?
+
+## In the app (Linux-verified, not seen)
+
+The fixtures' audio decodes to silence, and there is no AAC encoder here, so
+no waveform with any height has been drawn anywhere.
+
+- `transform/test/waveform.test.ts`:
+  - agrees with `mixBlock`'s own output, sample for sample, over a whole
+    timeline with two offset tracks, both levels and an odd block size;
+  - buckets by session time, and catches a single-sample spike;
+  - applies levels and the hard limit; a level-0 (muted) track contributes
+    nothing;
+  - yields once per block.
+- `app/test/waveform.e2e.test.ts`:
+  - no toggle without audio;
+  - the toggle starts off; the peaks are computed once the audio decodes;
+    pressing it shows the overlay;
+  - muting the mic recomputes the peaks (mutation-checked: without the
+    recompute, the test fails);
+  - Space on the focused toggle flips it without starting playback
+    (mutation-checked).

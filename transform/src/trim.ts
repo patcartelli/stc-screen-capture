@@ -112,6 +112,8 @@ export function defaultProject(
     systemAudioLevel: DEFAULT_SYSTEM_AUDIO_LEVEL,
     narrationCleanup: { ...DEFAULT_NARRATION_CLEANUP },
     micLevel: DEFAULT_MIC_LEVEL,
+    micMuted: false,
+    systemAudioMuted: false,
   };
   // A recorded camera track is part of the take, so a take that has one shows
   // its PiP without needing an edit document to say so.
@@ -202,6 +204,11 @@ export function parseProject(
   project.micLevel = typeof doc.micLevel === "number"
     && doc.micLevel >= 0 && doc.micLevel <= MIC_LEVEL_LIMIT
     ? doc.micLevel : DEFAULT_MIC_LEVEL;
+  // project-12 (STC-454 part 3). Only a real `true` mutes: anything else is
+  // "no opinion", and silencing a track on a guess would lose sound the user
+  // never asked to lose.
+  project.micMuted = doc.micMuted === true;
+  project.systemAudioMuted = doc.systemAudioMuted === true;
   return project;
 }
 
@@ -361,9 +368,10 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 {
-  // Highest first: a document needing v11 needs it whatever its cleanup,
-  // levels, bookmarks, slug, overrides, zoom or textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 {
+  // Highest first: a document needing v12 needs it whatever its mic level,
+  // cleanup, levels, bookmarks, slug, overrides, zoom or textPt say.
+  if (project.micMuted || project.systemAudioMuted) return 12;
   if (project.micLevel !== undefined && project.micLevel !== DEFAULT_MIC_LEVEL) return 11;
   if (!isDefaultNarrationCleanup(project.narrationCleanup)) return 10;
   if (project.systemAudioLevel !== undefined && project.systemAudioLevel !== DEFAULT_SYSTEM_AUDIO_LEVEL) return 9;
@@ -407,5 +415,9 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (version >= 9) out.systemAudioLevel = project.systemAudioLevel;
   if (version >= 10) out.narrationCleanup = { ...project.narrationCleanup! };
   if (version >= 11) out.micLevel = project.micLevel;
+  if (version >= 12) {
+    out.micMuted = !!project.micMuted;
+    out.systemAudioMuted = !!project.systemAudioMuted;
+  }
   return out;
 }

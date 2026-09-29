@@ -377,6 +377,20 @@ struct StartRequest: Equatable {
     let systemAudio: Bool
 }
 
+extension StartRequest {
+    /// STC-235: the same request pinned to one display, for a refit. A refit
+    /// re-resolves the take's own target against fresh `SCShareableContent`
+    /// and must never hop displays — "Automatic" (nil) resolved once, at
+    /// start, and the refit keeps whatever it resolved to. Every other field
+    /// is copied unchanged; `region` in particular is the ORIGINAL request's,
+    /// which `decideDisplayChange` has already proven fits the new bounds.
+    init(copying r: StartRequest, displayId: CGDirectDisplayID?) {
+        self.init(dir: r.dir, displayId: displayId, region: r.region, windowId: r.windowId,
+                  camera: r.camera, micDeviceUid: r.micDeviceUid,
+                  cameraDeviceUid: r.cameraDeviceUid, systemAudio: r.systemAudio)
+    }
+}
+
 enum StartRequestError: Error, Equatable, CustomStringConvertible {
     case missingDir
     case regionAndWindow
@@ -474,10 +488,13 @@ enum WindowWatchDecision: Equatable {
 /// A MOVE alone changes nothing: `SCContentFilter(desktopIndependentWindow:)`
 /// follows the window as it moves, so frames keep arriving at the same pixel
 /// size wherever the window now sits. A RESIZE is the case that matters —
-/// `AVAssetWriter` cannot change output dimensions mid-file, the same
-/// constraint a display reconfiguration already ends a take for — so a
+/// `AVAssetWriter` cannot change output dimensions mid-file — so a
 /// window-scope take whose window changed size must end cleanly rather than
-/// silently deliver frames of the wrong size (or none). A window that is no
+/// silently deliver frames of the wrong size (or none). A DISPLAY change no
+/// longer ends a take (STC-235): the stream is refitted, letterboxed, into
+/// the same file at its fixed size. A window resize is deliberately NOT
+/// refitted that way: a window take ending on a resize is correct and must
+/// not be "fixed" (Patrick, STC-382). A window that is no
 /// longer found (closed, minimised, or its app quit) has nothing left to
 /// capture.
 ///

@@ -127,8 +127,24 @@ import {
  * exactly what version 7 did. No constant reaches the pixels for the first
  * time, so the fingerprint is unchanged; the bump records that every
  * export with a zoom in it now differs from the same document at 7.
+ *
+ * ## Version 9: the display can change under a take (STC-235)
+ *
+ * A v7 anchors document may now carry a `geometry` timeline
+ * (`display-geometry.ts`): a refit's WHICH display and WHERE-in-the-frame,
+ * keyed by the PTS of the frame it took effect on. `render()` looks up the
+ * geometry for the frame actually being SHOWN at `t` (never `t` itself — the
+ * held frame's geometry governs the seam the same way its pixels do) and maps
+ * the cursor through it (`spaces.ts`'s generalised `displayToOutput`, now
+ * taking an optional `contentRect`/`capture`). No constant reaches the
+ * pixels, so the fingerprint below is unchanged. Every take with no `geometry`
+ * — anchors v1-v6, and a v7 document with none — renders EXACTLY what version
+ * 8 did: `contentRect` defaults to the full capture, its ratio into
+ * `displayToOutput`'s scale is exactly 1, and `ox`/`oy` are exactly 0, so the
+ * result is bit-identical rather than merely close. `render-refit.test.ts`'s
+ * goldens, generated on the pre-STC-235 code, pin that claim.
  */
-export const TRANSFORM_VERSION = 8;
+export const TRANSFORM_VERSION = 9;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -140,6 +156,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 6, since: "2026-09-14", changed: "auto-zoom stage 2 (STC-326): a window with no manual override now derives its own crop via zoom-change.ts's deriveZoomCrop — the change track (session.changes) when it covers the window, greedy dead-zone cursor clustering otherwise (the fallback every take hits today, since no changes.json exists yet). A trusted null (everything changed, nothing did, or the union was barely tighter than the full frame) still crops to the whole frame; anything else blends toward a real target the same way a manual override does. The FIRST version where a take with NO overrides at all can render different pixels than the same take with auto-zoom off" },
   { version: 7, since: "2026-09-15", changed: "manual override, phase 2 (STC-331): project-6's overrides table gains a 'manual' variant — a window with no derived counterpart at all, authored with its own startNs/endNs/rect and a REQUIRED easing. Spliced into the same window list a derived window lives in (zoom-override.ts's manualWindows/CombinedZoomWindow) and resolved at the same first tier a geometry override is. nearestWindow (zoom-override.ts) and inWindow (zoom.ts) both moved from a sorted-disjoint bisect to a plain scan, since a manual window carries no promise of not overlapping a derived one or another manual one. No new constant reaches the pixels, so the fingerprint is unchanged; the bump records that a document can now render a span of time no derivation would ever have opened a window for" },
   { version: 8, since: "2026-09-19", changed: "the cursor follows the zoom crop (STC-421): render() now maps the pointer's position, velocity and pxPerPoint through zoom.crop (spaces.ts's throughCrop/throughCropVector) — the same crop the compositor stretches over the canvas — instead of placing it as if the whole capture filled the canvas. Since version 5 every zoomed frame had the picture magnified and the pointer left where the un-zoomed frame would have put it. Whole-frame crop is the identity by construction, so zoom-off pixels are unchanged; the fingerprint is unchanged because no constant moved" },
+  { version: 9, since: "2026-09-27", changed: "the display can change under a take (STC-235): render() now maps the cursor through the SHOWN frame's own geometry — the display it was captured on and the contentRect it occupies within the capture frame — read from anchors v7's optional geometry timeline (display-geometry.ts's geometryAt), instead of always the top-level display filling the whole capture. spaces.ts's displayToOutput gained an optional contentRect/capture pair; its default is the full capture, which is bit-identical to the old two-argument call. No constant reaches the pixels, so the fingerprint is unchanged; every take with no refit renders exactly what version 8 did, pinned by render-refit.test.ts's goldens" },
 ];
 
 /**

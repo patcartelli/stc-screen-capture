@@ -35,7 +35,7 @@ started, and must never let a take that is missing something look like a take th
 
 | decision | status | evidence |
 |---|---|---|
-| `recording.json` is a **segments array** from day one; each segment's media is a **replaceable identity** (stable id, not path or index), so re-take can swap media, keep the edit, regenerate auto-zoom | **schema + loader done (STC-307); not wired into the app** | `schema/recording-1.schema.json`, `transform/src/recording.ts`: a new file, sibling to `anchors`/`events`/`project` — not folded into `project.json`, which stays the edit document only. `synthesizeRecording` derives one from any existing `anchors.json` in memory (no file written to disk), since today's helper always produces exactly one segment. `loadSession`, `takes.ts` and the renderer do not read it yet — nothing downstream (re-take, STC-236, STC-235) exists to consume it |
+| `recording.json` is a **segments array** from day one; each segment's media is a **replaceable identity** (stable id, not path or index), so re-take can swap media, keep the edit, regenerate auto-zoom | **schema + loader done (STC-307); not wired into the app** | `schema/recording-1.schema.json`, `transform/src/recording.ts`: a new file, sibling to `anchors`/`events`/`project` — not folded into `project.json`, which stays the edit document only. `synthesizeRecording` derives one from any existing `anchors.json` in memory (no file written to disk), since today's helper always produces exactly one segment. `loadSession`, `takes.ts` and the renderer do not read it yet — nothing downstream (re-take, STC-235) exists to consume it |
 | Sidecars are versioned; readers accept v1..vN, writers emit latest | **holds** | `schema/anchors-{1,2}`, `project-{1,2}`, `events-1`; `loadSession`, `parseProject`, `takes.ts` each accept both |
 | `project.json` is the edit document (output size, cursor style, PiP geometry, trim). The take's own camera decides whether a PiP is on by default | **holds** | `transform/src/trim.ts` `parseProject` / `defaultProject`; there is exactly one parser and every caller goes through it |
 | Times in sidecars are session-relative integer ns; `t0Ns` is a decimal string because boot-relative ns can exceed 2^53 | **holds** | `schema/anchors-2`; `AnchorsDoc.swift` |
@@ -100,7 +100,7 @@ The numbers behind the rows above, each measured on real hardware. Full detail i
 - mach ticks are 41.667 ns on Apple Silicon and 1 ns on Intel; `CGEvent.timestamp` offset to the display clock is 0 ms, drift 0.0000 ms.
 - Camera lags the display by 65 ms (±33, the camera's own frame interval); camera-to-mic +1.8 ms median.
 - A cold USB camera can take 2.2 s to open, which is why it opens off the start path.
-- Export runs at 1.52× realtime at 4K on GPU raster; preview holds the whole file in memory, ~15 min of 4K is the ceiling.
+- Export runs at 1.52× realtime at 4K on GPU raster; preview held the whole file in memory with ~15 min of 4K as the ceiling, until STC-236 (2026-09-26) made the editor read video by range instead (`docs/STC-236-RUNBOOK.md`).
 - A `VideoDecoder` must be driven with one in-flight request, frames closed in the output callback, and never reset on an empty output queue.
 
 ## Conventions the code follows

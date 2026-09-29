@@ -59,6 +59,17 @@ export class PreviewPlayer {
   private cameraRenderedFrames = 0;
 
   onTime: ((tNs: number, playing: boolean) => void) | undefined;
+  /**
+   * A draw failed — a read or decode error from a frame source (STC-236).
+   * Fired ONCE per player, after playback is paused: the sources poison
+   * themselves, so every later draw fails the same way and a second report
+   * would say nothing new. Without this the callers that matter
+   * (`void this.draw()` in the tick, the editor's `void player.seek()`)
+   * dropped the rejection and the canvas froze with the playhead running.
+   */
+  onError: ((e: Error) => void) | undefined;
+  /** The first draw failure; see onError. captureFrame refuses once it is set. */
+  private failure: Error | null = null;
 
   constructor(private readonly canvas: HTMLCanvasElement,
               private readonly session: LoadedSession,
@@ -234,7 +245,9 @@ export class PreviewPlayer {
   play(rate: number = 1): void {
     if (rate === 0) { this.pause(); return; }
     if (this.playing) { this.setRate(rate); return; }
-    if (this.closed) return;
+    // After a draw failure the sources are poisoned; playing on would run the
+    // playhead over a frozen frame, which is the fault onError exists to end.
+    if (this.closed || this.failure) return;
     // Restarting from an end only makes sense toward the material: forward
     // from the last frame has nowhere to go, and neither does backward from
     // the first. Wrapping to the other end would be a seek nobody asked for.
@@ -304,8 +317,19 @@ export class PreviewPlayer {
     // queues, so that when seek() resolves the frame for its t has been
     // painted — captureFrame() depends on exactly that.
     if (this.rendering) { this.lateFrames++; this.redrawWanted = true; return this.inFlight!; }
-    this.inFlight = this.drawNow();
+    // Caught HERE, the one chain every draw goes through, rather than at each
+    // call site: the tick's `void this.draw()` and a caller's un-awaited
+    // seek() are covered alike, and the promise a caller holds resolves.
+    this.inFlight = this.drawNow().catch((e: unknown) => this.fail(e));
     return this.inFlight;
+  }
+
+  /** Pause, then report — once. Sink plumbing only; render() never sees it. */
+  private fail(e: unknown): void {
+    if (this.failure || this.closed) return;
+    this.failure = e instanceof Error ? e : new Error(String(e));
+    this.pause();
+    this.onError?.(this.failure);
   }
 
   private async drawNow(): Promise<void> {
@@ -370,6 +394,7 @@ export class PreviewPlayer {
     frame: number; tNs: number; rgba: ArrayBuffer; width: number; height: number;
   }> {
     if (this.closed) throw new Error("preview is closed");
+    if (this.failure) throw this.failure;
     const wasPlaying = this.playing;
     // Read BEFORE pause(), which zeroes it.
     const wasRate = this.playRate;
@@ -384,6 +409,9 @@ export class PreviewPlayer {
       if (view) await this.setViewSize(null);
       const { frame, tNs } = exportFrameOf(this.tNs);
       await this.seek(tNs);
+      // The draw swallowed its own failure (onError reported it); the canvas
+      // now holds an older frame, and returning it would be a lie.
+      if (this.failure) throw this.failure;
       const { width, height } = this.canvas;
       const data = this.ctx.getImageData(0, 0, width, height).data;
       // Sliced to the exact bytes: a Uint8ClampedArray view may sit inside a
@@ -399,7 +427,7 @@ export class PreviewPlayer {
       // is a way of LOOKING, and it must not quietly change the transport's
       // state — an 8x shuttle silently becoming 1x is the same family of
       // fault as STC-318's capture that changed size with the view.
-      if (wasPlaying) this.play(wasRate);
+      if (wasPlaying) this.play(wasRate);  // a no-op after a failure: play() refuses
     }
   }
 

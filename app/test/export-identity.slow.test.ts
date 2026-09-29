@@ -15,6 +15,7 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { RAW_SUBDIR } from "../src/takes.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { openEditorFromLibrary } from "./_editor-fixture.js";
 
 const root = join(__dirname, "..", "..");
 
@@ -100,11 +101,7 @@ async function launchWithTake() {
   await mainWin.waitForLoadState("domcontentloaded");
   await expect.poll(() => mainWin.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
   // The take player is the editor's own window now (STC-373).
-  const [win] = await Promise.all([
-    app.waitForEvent("window"),
-    mainWin.click("#takes >> text=Preview"),
-  ]);
-  await win.waitForLoadState("domcontentloaded");
+  const win = await openEditorFromLibrary(app, mainWin);
   await win.click("#openexport");
   await win.waitForSelector("#exportdialog[open]", { timeout: 10_000 });
   return { win, takeDir };

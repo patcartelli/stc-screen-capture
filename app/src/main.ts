@@ -18,7 +18,9 @@ import {
 } from "./still-io.js";
 import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite } from "@transform/shot.js";
+import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
+import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
@@ -34,13 +36,16 @@ import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, re
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
   purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
+  markOfferedForRecovery, type TempTakeInfo,
 } from "./temp-takes.js";
+import { recordRefusalText, stillNoticeText } from "./refusals.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
+import type { OptionsState } from "./record-options.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
@@ -53,9 +58,11 @@ import { openStillEditor } from "./still-editor-window.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
+import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
 import { ensureCaptureId, readBundleId } from "./capture-identity.js";
+import { resolveHelperPath } from "./helper-path.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -66,13 +73,19 @@ import { ensureCaptureId, readBundleId } from "./capture-identity.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 /**
- * Overridable for the same reason STC_RECORDINGS_DIR is: the E2E suite needs to
- * drive the real start path against a stand-in, because the real helper cannot
- * record without a Screen Recording grant and CI has no way to give one. Also
- * useful for pointing the app at a debug build.
+ * Unpackaged vs packaged resolution lives in `resolveHelperPath`
+ * (STC-401) so it's unit-testable without Electron. Overridable via
+ * STC_HELPER_BIN for the same reason STC_RECORDINGS_DIR is: the E2E suite
+ * needs to drive the real start path against a stand-in, because the real
+ * helper cannot record without a Screen Recording grant and CI has no way
+ * to give one. Also useful for pointing the app at a debug build.
  */
-const HELPER = process.env.STC_HELPER_BIN
-  || join(here, "..", "..", "helper", "build", "stc-helper");
+const HELPER = resolveHelperPath({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  hereDir: here,
+  override: process.env.STC_HELPER_BIN,
+});
 
 let win: BrowserWindow | undefined;
 let sup: HelperSupervisor | undefined;
@@ -96,11 +109,22 @@ ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
 ipcMain.on("toast:dismiss", () => hideToast());
 ipcMain.on("toast:message", (_e, text: unknown) => {
   if (typeof text !== "string" || !text) return;
+  showNotice(text);
+});
+
+/**
+ * The message toast, from MAIN — what the window's `alertUser` reaches over
+ * `toast:message`, callable with no window at all. The menu-bar item and the
+ * global hotkeys have no renderer waiting on their answer (STC-465 review),
+ * and this is how their refusals reach the user instead of `console.error`.
+ */
+function showNotice(text: string | undefined): void {
+  if (!text) return;
   showMessageToast(text, {
     corner: readSettings(app.getPath("userData")).thumbnail.corner,
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
-});
+}
 /**
  * The take each WINDOW may currently read, set only by preview:open.
  *
@@ -393,67 +417,159 @@ function reconcileWindowRecording(): void {
  * Nothing can be "claimed" yet at the point this runs — no capture has
  * started this session — so every survivor is, by definition, something a
  * PREVIOUS run left behind with no panel and no clean stop to claim it.
+ *
+ * ## The count is what Review delivers (STC-465 review)
+ *
+ * "N unsaved takes recovered" used to count every temp take, while Review
+ * only had a path for stills and recordings: an `unknown` take — a
+ * directory with a surviving `display.mp4` and no `anchors.json`, the exact
+ * shape a helper crash mid-take leaves — was counted, then `console.error`ed
+ * and left in temp storage for the purge. So the number said more than the
+ * user was then shown, and the take most likely to matter (the one that was
+ * running when things died) was the one silently skipped. Now every counted
+ * take has a way in front of the user, and an `empty` directory — nothing
+ * with a byte in it — is removed before counting rather than counted as a
+ * take nobody can be shown.
  */
 async function recoverUnsavedTakes(): Promise<void> {
-  await purgeStaleTempTakes(process.env).catch((e) => {
-    console.error("[temp-takes] purge failed:", e);
-    return [];
-  });
-  const orphaned = await listTempTakes(process.env).catch((e) => {
-    console.error("[temp-takes] could not list temp storage:", e);
-    return [];
-  });
-  if (orphaned.length === 0) return;
-
-  const { response } = await dialog.showMessageBox({
-    type: "info",
-    buttons: ["Review", "Discard all"],
-    defaultId: 0,
-    cancelId: 0,
-    message: orphaned.length === 1 ? "1 unsaved take recovered" : `${orphaned.length} unsaved takes recovered`,
-    detail: "The app didn't shut down cleanly last time — these takes never made it to your library.",
-  });
-
-  if (response === 1) {
-    for (const t of orphaned) await rm(t.dir, { recursive: true, force: true }).catch(() => {});
-    return;
-  }
-
-  // Oldest first: `presentThumbnail` always unshifts its newest call to the
-  // front of the stack, so presenting in this order leaves the genuinely
-  // most-recent recovered take frontmost — matching the ticket's "most
-  // recent first, and focuses it" (STC-392 focus rule 1 does the actual
-  // focusing now; see thumbnail-window.ts).
-  const ordered = [...orphaned].reverse();
-  const { thumbnail, saveFolder } = readSettings(app.getPath("userData"));
-  for (const t of ordered) {
-    if (t.kind === "still") {
-      try {
-        const shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
-        presentThumbnail({
-          dir: t.dir, shot, corner: thumbnail.corner,
-          // A recovered temp take has never been decided on — nobody has
-          // said yes to it, the same as an ordinary fresh capture.
-          take: { kind: "shot", origin: "fresh" },
-          dist: here, rendererDir: join(here, "..", "renderer"),
-        });
-      } catch (e) {
-        console.error("[recovery] could not reopen a recovered still:", t.dir, e);
-      }
-    } else if (t.kind === "recording") {
-      // No STC-392 panel exists yet for a recording, so there is nothing to
-      // "bring back" — the closest honest equivalent is to save it outright
-      // (rather than let it expire silently in 7 days) and bring the library
-      // where it now lives in front of the user.
-      try {
-        await promoteTake(process.env, saveFolder, t.dir);
-        openLibrary();
-      } catch (e) {
-        console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
-      }
-    } else {
-      console.error("[recovery] unrecognised temp take, leaving it in place:", t.dir);
+  // Adjacent to STC-468: called `void` at the end of `app.whenReady()`, with
+  // nothing to catch a rejection. The purge and the list already have their
+  // own `.catch`, but `dialog.showMessageBox` below did not, and neither did
+  // the per-take recovery loop as a WHOLE (only individual takes inside it
+  // were guarded) — a throw from anywhere else in this function used to be an
+  // unhandled rejection at startup. Wrapped the same way `captureStill`
+  // wraps a whole request: reported, never silently fatal.
+  // Declared outside the `try` so the notice after it can still report what
+  // was delivered before anything threw.
+  let failed = 0;
+  try {
+    await purgeStaleTempTakes(process.env).catch((e) => {
+      console.error("[temp-takes] purge failed:", e);
+      return [];
+    });
+    const found = await listTempTakes(process.env).catch((e) => {
+      console.error("[temp-takes] could not list temp storage:", e);
+      return [] as TempTakeInfo[];
+    });
+    // A directory the helper made and died before writing a byte into. There
+    // is nothing in it to offer, so it is neither counted nor kept.
+    for (const t of found) {
+      if (t.kind === "empty") await rm(t.dir, { recursive: true, force: true }).catch(() => {});
     }
+    const orphaned = found.filter((t) => t.kind !== "empty");
+    if (orphaned.length === 0) return;
+
+    const unfinished = orphaned.filter((t) => t.kind === "unknown").length;
+    const { response } = await dialog.showMessageBox({
+      type: "info",
+      buttons: ["Review", "Discard all"],
+      defaultId: 0,
+      cancelId: 0,
+      message: orphaned.length === 1 ? "1 unsaved take recovered" : `${orphaned.length} unsaved takes recovered`,
+      detail: "The app didn't shut down cleanly last time — these takes never made it to your library."
+        + (unfinished === 0 ? ""
+          : unfinished === 1 && orphaned.length === 1
+          ? "\n\nIt stopped before it finished writing, so it can't be opened here. Review shows what survived in Finder."
+          : unfinished === 1
+          ? "\n\n1 of them stopped before it finished writing, so it can't be opened here. Review shows what survived in Finder."
+          : `\n\n${unfinished} of them stopped before they finished writing, so they can't be opened here. Review shows what survived in Finder.`),
+    });
+
+    if (response === 1) {
+      for (const t of orphaned) await rm(t.dir, { recursive: true, force: true }).catch(() => {});
+      return;
+    }
+
+    // Oldest first: `presentThumbnail` always unshifts its newest call to the
+    // front of the stack, so presenting in this order leaves the genuinely
+    // most-recent recovered take frontmost — matching the ticket's "most
+    // recent first, and focuses it" (STC-392 focus rule 1 does the actual
+    // focusing now; see thumbnail-window.ts).
+    const ordered = [...orphaned].reverse();
+    const { thumbnail, saveFolder } = readSettings(app.getPath("userData"));
+    /**
+     * The way in for anything the app cannot open itself: moved out of temp
+     * storage into the same `raw/` a recording is promoted into — the user's
+     * own folder, where it is KEPT rather than purged — and revealed there in
+     * Finder. Reconstructing a take document from a bare, possibly unfinalised
+     * video is deliberately not attempted; the files are handed over as they are.
+     */
+    const reveal = async (t: TempTakeInfo): Promise<void> => {
+      try {
+        shell.showItemInFolder(await promoteTake(process.env, saveFolder, t.dir));
+      } catch (e) {
+        console.error("[recovery] could not move a recovered take out of temp storage:", t.dir, e);
+        failed++;
+      }
+    };
+    for (const t of ordered) {
+      if (t.kind === "still") {
+        let shot: unknown;
+        try {
+          shot = JSON.parse(await readFile(join(t.dir, "shot.json"), "utf8"));
+        } catch (e) {
+          // A still whose document cannot be read is revealed rather than
+          // re-offered: left in temp storage it would be counted on every
+          // launch and shown on none of them.
+          console.error("[recovery] could not read a recovered still — revealing it instead:", t.dir, e);
+          await reveal(t);
+          continue;
+        }
+        // Offered: the purge's clock starts HERE, never before (temp-takes.ts,
+        // `purgeStaleTempTakes`). A still whose panel is now ignored again stays
+        // in temp storage, is offered again on the next launch, and goes a week
+        // after this FIRST offer. Marked BEFORE the panel exists, so a Save
+        // pressed on it at once cannot race this write into a directory that
+        // has just moved. Best-effort: a marker that could not be written only
+        // means the take is kept longer, never lost sooner.
+        await markOfferedForRecovery(t.dir).catch((e) => {
+          console.error("[recovery] could not mark a still as offered:", t.dir, e);
+        });
+        try {
+          presentThumbnail({
+            dir: t.dir, shot, corner: thumbnail.corner,
+            // A recovered temp take has never been decided on — nobody has
+            // said yes to it, the same as an ordinary fresh capture.
+            take: { kind: "shot", origin: "fresh" },
+            dist: here, rendererDir: join(here, "..", "renderer"),
+          });
+        } catch (e) {
+          console.error("[recovery] could not reopen a recovered still:", t.dir, e);
+          failed++;
+        }
+      } else if (t.kind === "recording") {
+        // No STC-392 panel exists yet for a recording, so there is nothing to
+        // "bring back" — the closest honest equivalent is to save it outright
+        // (rather than let it expire silently in 7 days) and bring the library
+        // where it now lives in front of the user.
+        try {
+          await promoteTake(process.env, saveFolder, t.dir);
+          openLibrary();
+        } catch (e) {
+          console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
+          failed++;
+        }
+      } else {
+        // `unknown`: something survived — usually a `display.mp4` whose take
+        // never reached the clean stop that writes `anchors.json` — but no
+        // document the library can open, and a `raw/` child with neither
+        // document is not a bundle to its scan (nor an orphan to
+        // `sweepOrphanedBundles`, which needs `capture.json`). So Finder is
+        // where it can be seen.
+        await reveal(t);
+      }
+    }
+  } catch (e) {
+    console.error("[recovery] could not recover unsaved takes:", e);
+  }
+  // A take Review could not deliver is still in temp storage, NOT marked as
+  // offered, so the purge leaves it alone and the next launch asks again —
+  // which is exactly what this says, rather than a count that silently
+  // overstated what was shown.
+  if (failed > 0) {
+    showNotice(failed === 1
+      ? "1 recovered take couldn't be opened. It's still kept, and will be offered again the next time you open the app."
+      : `${failed} recovered takes couldn't be opened. They're still kept, and will be offered again the next time you open the app.`);
   }
 }
 
@@ -514,12 +630,74 @@ function migrateLegacyAppData(): void {
  */
 let systemShuttingDown = false;
 
+/**
+ * STC-468: a process-level backstop. Until now nothing in this file (or
+ * anywhere else in the repo) installed `unhandledRejection` or
+ * `uncaughtException` — Node's default for the first is a stderr warning
+ * (survivable), but Electron's default for the second is to crash the whole
+ * main process, silently taking a live recording or capture down with it and
+ * leaving no trace of why.
+ *
+ * Logged loudly, never fatal by itself — the same "never throws" rule
+ * `captureStill` already applies to a single request, applied here to the
+ * process as a whole: visible is the fix, not a forced exit. A fault severe
+ * enough to leave the process actually unable to continue still crashes on
+ * its own, same as before; this only removes the SILENT crash and the
+ * silent drop.
+ *
+ * Installed before `app.whenReady()`, so nothing during startup — a helper
+ * spawn, a settings read, a migration — has a window with no backstop at all.
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] unhandled rejection:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[process] uncaught exception:", error);
+});
+
 app.whenReady().then(async () => {
   // Subscribed before anything else touches quit machinery, so there is no
   // window during startup where a shutdown notification could arrive and be
   // missed. See the comment at `quitDecision`'s call site for the whole
   // story; this line by itself proves only that the module is reachable.
   powerMonitor.on("shutdown", () => { systemShuttingDown = true; });
+
+  // STC-466: one guard covering every WebContents this app ever creates —
+  // the main window, the editor, the still editor, one overlay per display,
+  // the countdown panel, one thumbnail panel per capture, and the toast —
+  // rather than seven copies that could each drift, or a future eighth
+  // window nobody remembered to wire up by hand. `web-contents-created`
+  // fires for all of them.
+  //
+  // Every page here is a bundled file:// page this app loads itself with
+  // `loadFile`; none of them has a reason to navigate anywhere else, open a
+  // second window, or be granted a permission a screen recorder's own
+  // renderer would ever ask for. Denying all three unconditionally is the
+  // safe default — a future window that genuinely needs one of them earns it
+  // explicitly, rather than every window inheriting Electron's permissive
+  // defaults until someone notices.
+  //
+  // `will-navigate` fires only for navigation the PAGE initiates (a clicked
+  // link, `window.location`) — never for this process's own `loadFile`/
+  // `loadURL` calls, which is exactly why `editor-window.ts` can re-navigate
+  // the editor to a different take without tripping this guard.
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-navigate", (navEvent) => navEvent.preventDefault());
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    // Not a bare deny-all: the editor's Publish flow (share.ts/editor.ts) copies
+    // the embed snippet via `navigator.clipboard.writeText`, which Chromium
+    // gates behind the `clipboard-sanitized-write` permission — the ONE web
+    // permission this app's own renderers actually use. Denying it here would
+    // regress that copy silently (it already falls back to a "could not copy"
+    // message, so nothing would visibly crash, making it easy to miss).
+    // Everything else (camera, mic, geolocation, notifications, ...) is
+    // genuinely unused — capture goes through the Swift helper, never through
+    // an Electron/Chromium permission — so those stay denied.
+    contents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+      callback(permission === "clipboard-sanitized-write");
+    });
+  });
 
   // FIRST, before anything reads settings or looks for unsaved takes — both
   // of those resolve paths that this rename moved (STC-397).
@@ -589,10 +767,16 @@ app.whenReady().then(async () => {
     if (!action) return;
     if (action === "record") {
       if (sup?.state === "recording") { void onRecordHotkey(); return; }
-      void runRecordFlow("menu-bar");
+      // `recordAndAnnounce` logs and toasts a refusal itself; the catch is for
+      // anything it throws on the way, since a bare `void` has no caller to
+      // reject to (STC-468).
+      void recordAndAnnounce("menu-bar").catch((e) => console.error("[record] menu-bar record failed:", e));
       return;
     }
-    if (isShotAction(action)) void captureStill(action, "menu-bar");
+    // Through `captureAndAnnounce`, like the hotkey: a menu-bar shot used to
+    // call `captureStill` bare, so its refusal was dropped AND an open window
+    // never heard about the shot at all (STC-465 review).
+    if (isShotAction(action)) void captureAndAnnounce(action, "menu-bar");
   });
   applyShortcuts(shortcuts);
   createWindow();
@@ -924,7 +1108,7 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
   // FINDING 6 (STC-388 review, HIGH). `recordFlowActive` is now part of THIS
   // guard, and is set below in the SAME synchronous block as this check —
   // never after an `await`. It used to be set only after two awaited helper
-  // round trips (`listWindows`/`micsForBar`), which is exactly the window a
+  // round trips (`listWindows`/`devicesForBar`), which is exactly the window a
   // second ⌃⌥⇧⌘4 press is plausible in: nothing has appeared on screen yet.
   // That press would pass this guard a second time — `overlayIsOpen()` and
   // `countdownIsOpen()` are both still false, since neither has opened — and
@@ -932,7 +1116,14 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
   // `sup.startRecording()` with different temp dirs, the second answered
   // `bad-state` for a take that DID start. Checking the flag here closes
   // that: a second call inside the gap now sees it already true.
-  if (capturing || overlayIsOpen() || countdownIsOpen() || recordFlowActive) {
+  //
+  // `recordFlowActive` answers its OWN code (STC-465 review): what is on
+  // screen then is this same Record's overlay or countdown, not a shot, and
+  // `capture-in-flight`'s sentence ("A shot is already in progress") would be
+  // wrong about it. `refusals.ts` says nothing for it at all — the flow in
+  // front of the user is the answer to a second press.
+  if (recordFlowActive) return { ok: false, code: "record-in-flight" };
+  if (capturing || overlayIsOpen() || countdownIsOpen()) {
     return { ok: false, code: "capture-in-flight" };
   }
   if (sup.state === "recording") return { ok: false, code: "already-recording" };
@@ -957,31 +1148,91 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
     }
 
     const stored = readSettings(app.getPath("userData"));
-    const mics = await micsForBar();
+    const { mics, cameras } = await devicesForBar();
 
-    return await recordFlowBody(source, stored, mics, windows);
+    return await recordFlowBody(source, stored, mics, cameras, windows);
+  } catch (e: any) {
+    // Adjacent to STC-468: this used to have no catch-all at all, unlike
+    // `captureStill` above — a rejection anywhere in the flow (the overlay,
+    // `devicesForBar`, `recordFlowBody`) would reach one of THREE fire-and-forget
+    // call sites (the tray, the hotkey, the menu bar) with nothing to catch
+    // it, which is precisely an unhandled rejection in the main process.
+    // Same shape as `captureStill`'s own catch: report it as a RecordResult
+    // rather than let it escape.
+    return { ok: false, code: e?.code ?? "record-flow-failed",
+             detail: e?.detail ?? String(e?.message ?? e) };
   } finally {
     recordFlowActive = false;
   }
 }
 
+/**
+ * The bar's toggles ARE the sticky settings (fix round 2's ONE write call
+ * site) — called from exactly two places in `recordFlowBody` below: the
+ * Settings branch and the eventual Record path. Never from a plain
+ * cancel/Escape, where `options` is equally present but nothing must be
+ * written — `record-flow.e2e.test.ts`'s own documented contract is "Escape
+ * at each step writes nothing."
+ *
+ * Sends `settings:changed` after the write (STC-456 fix round, Finding 2) —
+ * before this it did not, so a camera or mic pick made on the BAR (or a
+ * system-audio toggle) never reached an already-open main window: its
+ * `#camera-state`/`#mic-state` labels and the popover's own checked rows kept
+ * showing whatever was true before the overlay opened, until something else
+ * happened to refresh them. The same channel `main.ts` already sends on a
+ * mic-not-found correction below, and the same one `renderer.ts` already
+ * listens for — this just makes the bar a second sender of it, not a second
+ * channel.
+ */
+function writeBarOptions(options: OptionsState): void {
+  writeSettings(app.getPath("userData"), {
+    camera: options.camera, micDeviceUid: options.micDeviceUid,
+    systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+  });
+  send("settings:changed", undefined);
+}
+
 /** The flow proper. Split out so `recordFlowActive` has exactly one `finally`
  * covering every step it needs to cover. */
 async function recordFlowBody(
-  source: RecordSource, stored: Settings, mics: MicInfo[], windows: WindowInfo[],
+  source: RecordSource, stored: Settings, mics: MicInfo[], cameras: DeviceLike[], windows: WindowInfo[],
 ): Promise<RecordResult> {
-  const { outcome, options } = await openOverlay({
+  const { outcome, options, afterClose } = await openOverlay({
     windows, mode: "region", purpose: "record",
-    initialOptions: { micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics },
+    initialOptions: {
+      micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics,
+      systemAudio: stored.systemAudio, cameraDeviceUid: stored.cameraDeviceUid, cameras,
+    },
     dist: here, renderer: join(here, "..", "renderer"),
   });
+  // The bar's own Settings control (STC-456): closes the overlay with no
+  // take, then hands off to the main window's existing sheet — the same
+  // door the profile button already opens, never a second implementation.
+  // The bar's toggles are written back HERE too (fix round 1, controller
+  // ruling) — Settings closes the overlay through the same
+  // `{ kind: "cancelled" }` outcome a plain Escape does, and `options` is
+  // still the bar's live state at the moment it was pressed, so returning
+  // with no write would silently drop a choice made just before Settings.
+  //
+  // Fix round 2: this write must NOT run on a plain Escape (`outcome.kind
+  // === "cancelled"` with no `afterClose`) — `options` is present there too,
+  // and the suite's own documented contract is "Escape at each step writes
+  // nothing." So the write lives in exactly the two places that keep a
+  // choice on purpose — Settings, right here, and the eventual Record path
+  // below — through the one `writeBarOptions` call site, never a third copy
+  // of the same argument object.
+  if (afterClose === "settings") {
+    if (options) writeBarOptions(options);
+    openSettingsSheet();
+    return { ok: false, cancelled: true };
+  }
   if (outcome.kind === "cancelled" || !options) return { ok: false, cancelled: true };
 
-  // The bar's toggles ARE the sticky settings, so they are written back — only
-  // SCOPE is per-take. Written before the countdown, so a cancelled countdown
-  // still keeps a mic the user just chose.
-  writeSettings(app.getPath("userData"),
-                { camera: options.camera, micDeviceUid: options.micDeviceUid });
+  // The bar's toggles ARE the sticky settings, so they are written back —
+  // only SCOPE is per-take. Written before the countdown, so a cancelled
+  // countdown still keeps a mic (and now a camera device / system-audio
+  // choice) the user just made.
+  writeBarOptions(options);
 
   // THE start-param builder — the only place a Record's `start` request is
   // assembled (spec §3). A new setting that reaches the helper (STC-420's
@@ -990,16 +1241,17 @@ async function recordFlowBody(
   // decided in two places.
   const startParams: Record<string, unknown> = { camera: options.camera };
   if (options.micDeviceUid != null) startParams.micDeviceUid = options.micDeviceUid;
-  // STC-414: from STORED settings — the bar has no camera-device control,
-  // only the camera on/off above. An absent field means "the helper's own
+  // STC-456: from the BAR now — its own camera menu (`device-picker.ts`)
+  // picks a device directly, the same options object `micDeviceUid` above
+  // already reads from. An absent field still means "the helper's own
   // pickCamera ranking", not "no camera" (that is `camera`'s job), so it is
   // sent even when the camera is off; the helper only consults it once it
   // has decided to open a camera at all.
-  if (stored.cameraDeviceUid != null) startParams.cameraDeviceUid = stored.cameraDeviceUid;
-  // STC-418: from STORED settings, never from the bar or the renderer — the
-  // bar has no system-audio control (that is STC-459). Only when on; absent
-  // is "off" to the helper's parseStartRequest.
-  if (stored.systemAudio) startParams.systemAudio = true;
+  if (options.cameraDeviceUid != null) startParams.cameraDeviceUid = options.cameraDeviceUid;
+  // STC-456 (absorbs STC-459): from the BAR's own toggle now, not a stored-
+  // only preference. Only when on; absent is "off" to the helper's
+  // parseStartRequest — the existing pin this ticket keeps.
+  if (options.systemAudio) startParams.systemAudio = true;
   let countdownDisplay: number | undefined;
   if (outcome.kind === "window") {
     startParams.windowId = outcome.windowId;
@@ -1122,25 +1374,66 @@ function windowsFromReply(r: HelperLine): WindowInfo[] {
 }
 
 /**
- * The mics the bar can offer.
+ * The mics AND cameras the bar can offer, from ONE `sup.devices()` call
+ * (STC-456) — the same call the window's mic and camera pickers already make
+ * through `recorder:devices`, and the same `mics`/`cameras` shapes they
+ * already read. A second enumeration, or two separate ones here, would be
+ * two answers to one question — and STC-233 already records a CoreAudio
+ * enumeration stalling, which is reason enough not to ask twice.
  *
- * `sup.devices()` — the SAME call the window's mic picker already makes through
- * `recorder:devices`, and the same `mics` shape it already reads. A second
- * enumeration with its own field names would be two answers to one question.
- *
- * Failure is not fatal and is not reported: an empty list disables the control,
- * which is exactly what "no mic available" should look like, and a modal about
- * it would sit between the user and a recording they asked for. `devices()` can
- * also answer `{ stalled: true }` — the window's picker already tolerates that,
- * and so does this: `mics` is simply absent and the control disables.
+ * Failure is not fatal and is not reported: an empty list degrades the
+ * control down to its device-less rows — the mic trigger stays enabled
+ * either way (STC-456 review, Finding 1: its menu's Include System Audio and
+ * Mute External need no mic), and the camera menu falls back to No
+ * Camera/Automatic only — which is exactly what "nothing available" should
+ * look like, and a modal about it would sit between the user and a recording
+ * they asked for. `devices()` can also answer `{ stalled: true }` — the
+ * window's pickers already tolerate that, and so does this: both lists are
+ * simply absent and their menus read that way.
  */
-async function micsForBar(): Promise<MicInfo[]> {
+async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[] }> {
   try {
     const r = await sup!.devices();
     const mics = (r as { mics?: unknown }).mics;
-    return Array.isArray(mics) ? mics as MicInfo[] : [];
+    const cameras = (r as { cameras?: unknown }).cameras;
+    return {
+      mics: Array.isArray(mics) ? mics as MicInfo[] : [],
+      cameras: Array.isArray(cameras) ? cameras as DeviceLike[] : [],
+    };
   } catch {
-    return [];
+    return { mics: [], cameras: [] };
+  }
+}
+
+/**
+ * The bar's Settings control (STC-456): the overlay closes with no take, and
+ * this hands off to the main window's existing sheet — `openLibrary` is the
+ * SAME "show and focus the window" step the tray's own Library item already
+ * uses, so a settings hand-off with no window open behaves exactly like any
+ * other way back into the app.
+ *
+ * Fix round 1 (CRITICAL): reachable from the tray or a hotkey with no main
+ * window open, in which case `openLibrary` -> `createWindow` calls
+ * `win.loadFile(...)` WITHOUT awaiting it — the renderer's preload script
+ * (and the `recorder.on("ui:open-settings", ...)` listener it installs) has
+ * not run yet. Sending synchronously right after, as this used to, is not
+ * queued by Electron; the message simply never arrives and Settings silently
+ * fails to open. `webContents.isLoading()` is true the instant `loadFile` is
+ * called (navigation starts synchronously; only the returned promise is
+ * async) and stays true through an existing window mid-navigation too, so
+ * checking it — rather than asking whether `createWindow` ran — is the one
+ * signal that covers both the fresh-window and the already-loading cases
+ * with no second mechanism. `did-finish-load` fires once preload and the
+ * renderer's top-level script (where the listener is installed) have run.
+ */
+function openSettingsSheet(): void {
+  openLibrary();
+  const w = win;
+  if (!w || w.isDestroyed()) return;
+  if (w.webContents.isLoading()) {
+    w.webContents.once("did-finish-load", () => send("ui:open-settings", undefined));
+  } else {
+    send("ui:open-settings", undefined);
   }
 }
 
@@ -1372,12 +1665,33 @@ function excludeAlso(params: CaptureParams, ids: number[]): void {
 /**
  * A hotkey or menu-bar capture has no renderer waiting on a reply, so its
  * outcome is announced instead. A window that happens to be open updates its
- * take list and says what happened; one that is not open misses nothing,
- * because the shot is already on disk.
+ * take list; one that is not open misses nothing, because the shot is already
+ * on disk.
+ *
+ * A refusal (or a warning) is said HERE, not left to that window (STC-465
+ * review): it used to reach the user only through `still:captured`, which is
+ * a no-op with no main window — and in a menu-bar-first app that is the
+ * normal case. The window's own listener stays quiet for the same reason
+ * (`reportStill(r, false)`), so an open window does not say it twice.
  */
 async function captureAndAnnounce(action: ShotAction, source: CaptureSource): Promise<void> {
   const r = await captureStill(action, source);
+  showNotice(stillNoticeText(r));
   send("still:captured", r);
+}
+
+/**
+ * The Record answer for the doors with no renderer waiting on it — the
+ * menu-bar item and ⌃⌥⇧⌘4. The window's button reads `runRecordFlow`'s
+ * answer itself (`recorder:start`) and says it through `refusals.ts` too;
+ * these two used to discard it (the menu bar) or only `console.error` it (the
+ * hotkey), so a Record that counted down and was then refused — no grant,
+ * say — showed nothing at all (STC-465 review).
+ */
+async function recordAndAnnounce(source: Exclude<RecordSource, "window">): Promise<void> {
+  const r = await runRecordFlow(source);
+  if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
+  showNotice(recordRefusalText(r));
 }
 
 ipcMain.handle("still:capture", async (_e, action?: ShotAction) =>
@@ -1428,18 +1742,28 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
  * Cancel second, and ONLY our own flow — see `recordFlowActive`.
  */
 async function onRecordHotkey(): Promise<void> {
-  if (sup?.state === "recording") {
-    await sup.stopRecording().catch((e) => console.error("[record] stop failed:", e));
-    return;
+  // Adjacent to STC-468: called `void`, from a global shortcut with no caller
+  // to reject to — same reasoning as `captureStill`'s own top-level catch.
+  // `runRecordFlow` no longer throws (see its own catch-all above), but this
+  // wraps the whole body anyway rather than leaning on that alone: `cancelCountdown`
+  // and `sup.stopRecording()` are both reachable here directly, and a second
+  // catch-all one call away is cheaper than re-deriving which of several
+  // callees is the one that cannot throw today.
+  try {
+    if (sup?.state === "recording") {
+      await sup.stopRecording().catch((e) => console.error("[record] stop failed:", e));
+      return;
+    }
+    if (recordFlowActive) {
+      // Whichever of the two is up; both are no-ops when they are not.
+      cancelCountdown();
+      await closeOverlay().catch(() => {});
+      return;
+    }
+    await recordAndAnnounce("hotkey");
+  } catch (e) {
+    console.error("[record] hotkey handling failed:", e);
   }
-  if (recordFlowActive) {
-    // Whichever of the two is up; both are no-ops when they are not.
-    cancelCountdown();
-    await closeOverlay().catch(() => {});
-    return;
-  }
-  const r = await runRecordFlow("hotkey");
-  if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
 }
 
 ipcMain.handle("shortcuts:get", async () => ({ shortcuts, report: shortcutReport }));
@@ -1855,9 +2179,183 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
   if (!isProjectVersion(doc?.version)) {
     throw new Error(`project.json version ${doc?.version} is not supported`);
   }
+  // STC-465 review (no ticket yet): this used to write the renderer's bytes
+  // VERBATIM once the version check above passed — unlike still:writeShot,
+  // which always round-trips through parseShot/shotForWrite. The identical
+  // fix (parseProject/projectForWrite) is NOT possible here: trim.ts reaches
+  // DOM-typed code (transform-version.ts -> cursor.ts -> cursor-art.ts, which
+  // draws the macOS pointer set on a Canvas) and tsconfig.node.json's no-DOM
+  // pass correctly refuses it — the exact reason project-version.ts already
+  // exists as its own four-line file rather than living in trim.ts (see that
+  // file's own header). Splitting parseProject's field-cleaning logic out of
+  // trim.ts the way project-version.ts already did for isProjectVersion would
+  // fix this properly; that is a bigger change than a same-day hardening pass
+  // and is exactly the kind of thing to file as this fix's own follow-up.
+  //
+  // What ships instead is narrower and REFUSES rather than repairs: every
+  // field a real project.json can carry is checked for a sane type/range, and
+  // an unrecognised top-level key refuses the write outright, the same
+  // "never trust the caller's bytes" property `still:writeShot` gets from its
+  // round trip, reached by a different, main-process-safe route.
+  rejectMalformedProjectDoc(doc);
   await writeFile(join(openTake, "project.json"), text);
   return true;
 });
+
+/**
+ * Every top-level key a `project.json` this build wrote or can read might
+ * carry (schema/project-1..12.schema.json's own union, STC-318's "one list"
+ * rule applied here by hand since the schemas themselves are not loaded at
+ * runtime in this process — see the handler's own comment on why not).
+ */
+const KNOWN_PROJECT_FIELDS = new Set([
+  "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
+  "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
+  "micLevel", "micMuted", "systemAudioMuted",
+]);
+
+/**
+ * Refuses a `project.json` document whose known fields are the wrong TYPE or
+ * out of range, or that carries a field this build has never written. It does
+ * NOT clamp or default a bad value the way `parseProject` does on load — this
+ * is a narrower, REJECTING guard (see `preview:writeProject`'s own comment for
+ * why the fuller fix is blocked here), so a document this refuses is simply
+ * never written, rather than silently repaired.
+ */
+function rejectMalformedProjectDoc(doc: Record<string, any>): void {
+  for (const key of Object.keys(doc)) {
+    if (!KNOWN_PROJECT_FIELDS.has(key)) {
+      throw new Error(`project.json: unrecognised field "${key}"`);
+    }
+  }
+  const isFiniteNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const isPlainObject = (v: unknown): v is Record<string, any> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+  const inRange = (v: number, min: number, max: number) => v >= min && v <= max;
+
+  if (doc.output !== undefined) {
+    const o = doc.output;
+    if (!isPlainObject(o) || !Number.isInteger(o.width) || !Number.isInteger(o.height)
+        || !inRange(o.width, 1, 3840) || !inRange(o.height, 1, 2160) || o.fps !== 60) {
+      throw new Error("project.json: output must be {width: 1..3840, height: 1..2160, fps: 60}");
+    }
+  }
+  if (doc.cursor !== undefined) {
+    if (!isPlainObject(doc.cursor)) throw new Error("project.json: cursor is not an object");
+    if (doc.cursor.style !== undefined && doc.cursor.style !== "default" && doc.cursor.style !== "circle") {
+      throw new Error("project.json: cursor.style is invalid");
+    }
+    if (doc.cursor.scale !== undefined
+        && (!isFiniteNum(doc.cursor.scale) || doc.cursor.scale <= 0 || doc.cursor.scale > 8)) {
+      throw new Error("project.json: cursor.scale must be in (0, 8]");
+    }
+  }
+  if (doc.trim !== undefined) {
+    const t = doc.trim;
+    if (!isPlainObject(t) || !Number.isInteger(t.startNs) || !Number.isInteger(t.endNs)
+        || t.startNs < 0 || t.endNs < 0 || t.endNs <= t.startNs) {
+      throw new Error("project.json: trim.startNs/endNs must be non-negative integers with endNs > startNs");
+    }
+  }
+  if (doc.zoom !== undefined) {
+    if (!isPlainObject(doc.zoom)) throw new Error("project.json: zoom is not an object");
+    if (doc.zoom.enabled !== undefined && typeof doc.zoom.enabled !== "boolean") {
+      throw new Error("project.json: zoom.enabled must be a boolean");
+    }
+    if (doc.zoom.intensity !== undefined
+        && (!isFiniteNum(doc.zoom.intensity) || !inRange(doc.zoom.intensity, 0, 1))) {
+      throw new Error("project.json: zoom.intensity must be a number in 0..1");
+    }
+    if (doc.zoom.preset !== undefined && !ZOOM_PRESET_NAMES.includes(doc.zoom.preset)) {
+      throw new Error("project.json: zoom.preset is invalid");
+    }
+  }
+  // STC-330/STC-331/STC-329: a discriminated union, kept in sync with
+  // schema/project-12.schema.json's own `overrides` union by hand — the same
+  // "narrower guard, not the full parser" tradeoff this function's own header
+  // already applies everywhere else. The rect's x+width/y+height<=1 sum
+  // constraint is deliberately NOT checked here either, matching the schema's
+  // own note that it is `cleanOverrides`' job at load time, not a write-time
+  // refusal.
+  if (doc.overrides !== undefined) {
+    if (!Array.isArray(doc.overrides)) throw new Error("project.json: overrides must be an array");
+    const isEasing = (v: unknown) => v === "calm" || v === "standard" || v === "snappy";
+    const isRect = (v: unknown): v is Record<string, any> =>
+      isPlainObject(v) && ["x", "y", "width", "height"].every((k) => isFiniteNum(v[k]) && inRange(v[k], 0, 1));
+    for (const entry of doc.overrides) {
+      if (!isPlainObject(entry)) throw new Error("project.json: overrides entry is not an object");
+      if (entry.kind === "geometry") {
+        if (typeof entry.windowId !== "string" || !entry.windowId || !isRect(entry.rect)
+            || (entry.easing !== undefined && !isEasing(entry.easing))) {
+          throw new Error("project.json: malformed geometry override");
+        }
+      } else if (entry.kind === "manual") {
+        if (typeof entry.id !== "string" || !entry.id || !Number.isInteger(entry.startNs) || entry.startNs < 0
+            || !Number.isInteger(entry.endNs) || entry.endNs < 0 || !isRect(entry.rect) || !isEasing(entry.easing)) {
+          throw new Error("project.json: malformed manual override");
+        }
+      } else if (entry.kind === "removed") {
+        if (typeof entry.windowId !== "string" || !entry.windowId) {
+          throw new Error("project.json: malformed removed override");
+        }
+      } else if (entry.kind === "retime") {
+        if (typeof entry.windowId !== "string" || !entry.windowId
+            || (entry.startNs === undefined && entry.endNs === undefined)
+            || (entry.startNs !== undefined && (!Number.isInteger(entry.startNs) || entry.startNs < 0))
+            || (entry.endNs !== undefined && (!Number.isInteger(entry.endNs) || entry.endNs < 0))) {
+          throw new Error("project.json: malformed retime override");
+        }
+      } else {
+        throw new Error(`project.json: overrides entry has unknown kind "${entry.kind}"`);
+      }
+    }
+  }
+  if (doc.pip !== undefined) {
+    const p = doc.pip;
+    if (!isPlainObject(p) || typeof p.enabled !== "boolean" || p.corner !== "bottom-right"
+        || !isFiniteNum(p.widthPct) || p.widthPct <= 0 || p.widthPct > 1
+        || !Number.isInteger(p.marginPx) || p.marginPx < 0) {
+      throw new Error("project.json: malformed pip");
+    }
+  }
+  if (doc.transform !== undefined) {
+    if (!isPlainObject(doc.transform) || !Number.isInteger(doc.transform.version) || doc.transform.version < 1) {
+      throw new Error("project.json: transform.version must be a positive integer");
+    }
+  }
+  if (doc.narrationCleanup !== undefined) {
+    const n = doc.narrationCleanup;
+    if (!isPlainObject(n) || typeof n.enabled !== "boolean"
+        || !isFiniteNum(n.strength) || !inRange(n.strength, 0, 1)) {
+      throw new Error("project.json: malformed narrationCleanup");
+    }
+  }
+  if (doc.textPt !== undefined && (!isFiniteNum(doc.textPt) || doc.textPt <= 0)) {
+    throw new Error("project.json: textPt must be a positive number");
+  }
+  if (doc.micLevel !== undefined && (!isFiniteNum(doc.micLevel) || !inRange(doc.micLevel, 0, 3.9811))) {
+    throw new Error("project.json: micLevel must be a number in 0..3.9811");
+  }
+  if (doc.systemAudioLevel !== undefined
+      && (!isFiniteNum(doc.systemAudioLevel) || !inRange(doc.systemAudioLevel, 0, 1))) {
+    throw new Error("project.json: systemAudioLevel must be a number in 0..1");
+  }
+  if (doc.micMuted !== undefined && typeof doc.micMuted !== "boolean") {
+    throw new Error("project.json: micMuted must be a boolean");
+  }
+  if (doc.systemAudioMuted !== undefined && typeof doc.systemAudioMuted !== "boolean") {
+    throw new Error("project.json: systemAudioMuted must be a boolean");
+  }
+  if (doc.bookmarks !== undefined) {
+    if (!Array.isArray(doc.bookmarks) || !doc.bookmarks.every((b: unknown) => Number.isInteger(b) && (b as number) >= 0)) {
+      throw new Error("project.json: bookmarks must be an array of non-negative integers");
+    }
+  }
+  if (doc.slug !== undefined && typeof doc.slug !== "string") {
+    throw new Error("project.json: slug must be a string");
+  }
+}
 
 /**
  * STC-413: a media export (.mp4/.png) is a DELIVERABLE and lands at the top
@@ -1885,7 +2383,15 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   // Source media is never mutated. The leaf-name rule above still admitted
   // display.mp4, camera.mp4 and the sidecars — an export named after one of
   // them would have replaced the recording with its own rendering.
-  if (TAKE_FILES.has(name) || name === "take.json") {
+  // STC-465 review: capture.json (the bundle-identity file, capture-doc.ts)
+  // and the library thumbnail (THUMBNAIL_FILE, library-items.ts) are just as
+  // load-bearing as anything already in TAKE_FILES — a renderer-supplied
+  // export named either one would corrupt the bundle the same way a
+  // display.mp4-named export used to. Imported constants, not restated
+  // strings, so the two lists cannot drift the way CLAUDE.md already
+  // warns about elsewhere in this file.
+  if (TAKE_FILES.has(name) || name === "take.json"
+      || name === CAPTURE_DOC_FILE || name === THUMBNAIL_FILE) {
     throw new Error(`refusing to overwrite the take's own "${name}"`);
   }
 

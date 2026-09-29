@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
   <title>Capture</title>
   <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="device-menu.css">
   <style>
     /* ── instrument visual language (STC-372) ───────────────────────────────
        A restyle only: renderer.ts and library-view.ts reach the document
@@ -115,25 +116,15 @@
     .devicepicker-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .devicepicker-trigger[disabled] { opacity: .4; cursor: default; }
     .devicepicker-trigger::after { content: "▾"; font-size: 9px; color: var(--text-dim); }
-    /* Fixed position, one shared panel for whichever picker is open
-       (decidePopoverToggle in device-picker.ts guarantees at most one) —
-       positioned by renderer.ts under whichever trigger was clicked. Fixed,
-       not part of document flow, so opening it never resizes or reflows the
-       window — the same constraint the ticket puts on the pill, carried over
-       to where this UI actually lives (see STC-414's Linear comment). */
-    #devicepopover {
-      position: fixed; z-index: 20; min-width: 190px;
-      background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 4px; font-family: var(--font-sans);
-    }
-    #devicepopover button {
-      display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 6px;
-      padding: 5px 8px; border: none; border-radius: 5px; background: none; text-align: left;
-      font-size: var(--type-body); color: var(--text); cursor: pointer;
-    }
-    #devicepopover button:hover { background: var(--surface-hover); }
-    #devicepopover button::before { content: ""; width: 12px; flex: none; }
-    #devicepopover button[aria-selected="true"]::before { content: "✓"; color: var(--accent); }
+    /* STC-456: the popover is the shared device-menu component now
+       (device-menu.css) — same rows, same icons, same CSS as the Record
+       options bar's own menu. Positioned by renderer.ts under whichever
+       trigger was clicked (decidePopoverToggle in device-picker.ts
+       guarantees at most one open); `position: fixed` (device-menu.css)
+       means opening it never resizes or reflows the window, same as before.
+       It follows this window's own light/dark tokens rather than the bar's
+       forced dark. */
+    #devicepopover { --menu-surface: var(--surface); --menu-on-surface: var(--text); }
     h2 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); margin: 4px 0 0; color: var(--text-dim); }
     .take { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
             padding: 7px 0; border-top: 1px solid var(--border); }
@@ -417,18 +408,18 @@
   <table id="devicestate">
     <tbody>
       <tr><td>camera</td><td>
-        <button type="button" id="camera-picker" class="devicepicker-trigger" aria-haspopup="listbox">
+        <button type="button" id="camera-picker" class="devicepicker-trigger" aria-haspopup="menu">
           <span id="camera-state">—</span>
         </button>
       </td></tr>
       <tr><td>mic</td><td>
-        <button type="button" id="mic-picker" class="devicepicker-trigger" aria-haspopup="listbox">
+        <button type="button" id="mic-picker" class="devicepicker-trigger" aria-haspopup="menu">
           <span id="mic-state">—</span>
         </button>
       </td></tr>
     </tbody>
   </table>
-  <div id="devicepopover" role="listbox" hidden></div>
+  <div id="devicepopover" class="device-menu" role="menu" hidden></div>
 
   <table id="diagnostics" hidden>
     <tbody>

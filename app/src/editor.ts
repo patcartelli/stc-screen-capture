@@ -54,6 +54,7 @@ declare const editor: {
 };
 
 import { loadSession, type LoadedSession } from "@transform/session";
+import type { ByteSource } from "@transform/chunk-reader";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
 import {
@@ -62,6 +63,7 @@ import {
 } from "@transform/audio-mix";
 import { decodeAllAudio, pcmTrackOf } from "@transform/decode-audio";
 import { PreviewAudio } from "@transform/preview-audio";
+import { mixPeaks } from "@transform/waveform";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
 import {
   parseProject, projectForWrite, exportWindow, estimateExportMs,
@@ -71,7 +73,7 @@ import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from 
 import type { Size } from "@transform/spaces";
 import { render } from "@transform/render";
 import {
-  DEFAULT_TEXT_PT, EMBED_TARGETS, legibility, legibilitySentence, zoomFactorForCrop,
+  DEFAULT_TEXT_PT, EMBED_TARGETS, effectivePointWidth, legibility, legibilitySentence, zoomFactorForCrop,
 } from "@transform/legibility";
 import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
@@ -152,6 +154,7 @@ function applySpanTransform(): void {
   const transform = `scaleX(${scale}) translateX(${translatePct}%)`;
   ($("timeline") as HTMLElement).style.transform = transform;
   ($("ruler-activity-wrap") as HTMLElement).style.transform = transform;
+  ($("ruler-waveform-wrap") as HTMLElement).style.transform = transform;
   ($("zoom-canvas-wrap") as HTMLElement).style.transform = transform;
   ($("ruler-content") as HTMLElement).style.transform = transform;
   // STC-331, found fixing this file: editor.html's own comment already
@@ -286,7 +289,7 @@ $("ruler").addEventListener("pointerdown", (e) => {
   // without this guard #ruler's own setPointerCapture below steals the
   // button's pointer events on the very first pointerdown — a click that
   // never reaches the button, watched failing before this was added.
-  if ((e.target as HTMLElement).closest("#ruleractivitytoggle")) return;
+  if ((e.target as HTMLElement).closest(".rulertoggle")) return;
   if ((e.target as HTMLElement).closest(".rulerbookmark")) return;
   panning = true;
   panLastX = (e as PointerEvent).clientX;
@@ -543,6 +546,102 @@ function toggleRulerActivity(): void {
 }
 $("ruleractivitytoggle").addEventListener("click", toggleRulerActivity);
 
+// ---- the waveform on the ruler (STC-454 part 4) -------------------------
+//
+// The export's mix, drawn on the ruler behind its own toggle (Patrick,
+// 2026-09-25: a ruler overlay, not a lane; the mix, not the raw tracks).
+// The peaks come from waveform.ts's `mixPeaks`, which runs `mixBlock` over
+// the same tracks and the same `previewLevels()` the preview plays, so a
+// level, a mute or the cleaned mic changes the drawing the way it changes
+// the sound. A long take is millions of samples (~1.5 s per 10 min of two
+// tracks, measured), so the work is spread over short idle slices and a run
+// that a newer change has superseded stops at its next slice. Until the new
+// peaks land, the old drawing stays up.
+//
+// Off by default and never persisted, the same as Clip activity beside it:
+// a view preference, not an edit decision.
+
+const WAVE_SLICE_MS = 8;
+let wavePeaks: Float32Array | null = null;
+let waveRun = 0;
+
+/** Recompute the peaks from what the preview would play now. */
+function scheduleWaveform(): void {
+  const run = ++waveRun;
+  const canvas = $("ruler-waveform") as HTMLCanvasElement;
+  const audio = previewAudio;
+  if (!audio || !player || !audio.hasSound) {
+    wavePeaks = null;
+    canvas.dataset.state = "none";
+    drawRulerWaveform();
+    return;
+  }
+  const levels = previewLevels();
+  const it = mixPeaks({
+    mic: audio.micTrack, system: audio.systemTrack,
+    micLevel: levels.mic, systemLevel: levels.system,
+    durationNs: player.durationNs,
+  });
+  canvas.dataset.state = "computing";
+  const step = (): void => {
+    if (run !== waveRun) return;
+    const until = performance.now() + WAVE_SLICE_MS;
+    for (;;) {
+      const r = it.next();
+      if (r.done) {
+        wavePeaks = r.value;
+        canvas.dataset.state = "ready";
+        canvas.dataset.run = String(run);
+        drawRulerWaveform();
+        return;
+      }
+      if (performance.now() >= until) break;
+    }
+    setTimeout(step, 0);
+  };
+  setTimeout(step, 0);
+}
+
+/** Mirrored about the ruler's middle, linear: full height is full scale. */
+function drawRulerWaveform(): void {
+  const canvas = $("ruler-waveform") as HTMLCanvasElement;
+  const wrap = $("ruler-waveform-wrap") as HTMLElement;
+  const w = Math.max(1, Math.round(wrap.getBoundingClientRect().width)) || LANE_BUCKETS;
+  const h = 18;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, w, h);
+  const peaks = wavePeaks;
+  if (!peaks) return;
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#5fb38a";
+  const n = peaks.length;
+  const mid = h / 2;
+  const half = mid - 1;
+  for (let x = 0; x < w; x++) {
+    // Every bucket that falls in this column, so a narrow window cannot skip a peak.
+    const b0 = Math.floor((x * n) / w);
+    const b1 = Math.max(b0 + 1, Math.floor(((x + 1) * n) / w));
+    let peak = 0;
+    for (let b = b0; b < b1 && b < n; b++) peak = Math.max(peak, peaks[b]!);
+    if (!(peak > 0)) continue;
+    const a = Math.max(0.5, peak * half);
+    ctx.fillRect(x, mid - a, 1, 2 * a);
+  }
+}
+
+function updateWaveformToggle(): void {
+  const has = !!openSession?.micAudio || !!openSession?.systemAudio;
+  $("rulerwaveformtoggle").toggleAttribute("hidden", !has);
+}
+
+function toggleRulerWaveform(): void {
+  const btn = $("rulerwaveformtoggle") as HTMLButtonElement;
+  const on = btn.getAttribute("aria-pressed") !== "true";
+  btn.setAttribute("aria-pressed", String(on));
+  ($("ruler") as HTMLElement).toggleAttribute("data-waveform", on);
+}
+$("rulerwaveformtoggle").addEventListener("click", toggleRulerWaveform);
+
 
 
 /** A crisp square-cell checkerboard (STC-444 slice 2: "LCD crisp", finer of
@@ -601,7 +700,7 @@ function drawZoomLane(): void {
   ctx.fill();
 }
 
-function redrawLanes(): void { drawRulerActivity(); drawZoomLane(); layoutOverrideBlocks(); }
+function redrawLanes(): void { drawRulerActivity(); drawRulerWaveform(); drawZoomLane(); layoutOverrideBlocks(); }
 window.addEventListener("resize", redrawLanes);
 
 // ---- manual zoom override (STC-330/331) — the block lane's editing half ---
@@ -1238,25 +1337,68 @@ async function readVideo(name = "display.mp4"): Promise<ArrayBuffer> {
   return out.buffer;
 }
 
+/**
+ * A take file read by range (STC-236), over the same preview:size /
+ * preview:chunk channels readVideo uses — the renderer still never names a
+ * path. The video tracks go through this; the audio tracks still go through
+ * readVideo, whole (decoded PCM is their real cost, a separate ticket).
+ *
+ * preview:chunk returns fewer bytes than asked at EOF rather than failing, so
+ * the length is checked here: a short chunk handed to the decoder would be a
+ * corrupt frame, not an error anyone could see.
+ */
+async function ipcSource(name: string): Promise<ByteSource & { readonly bytesRead: number }> {
+  const size = await editor.takeFileSize(name);
+  let bytesRead = 0;
+  return {
+    size,
+    get bytesRead() { return bytesRead; },
+    async read(offset: number, length: number): Promise<Uint8Array> {
+      if (!Number.isInteger(offset) || !Number.isInteger(length) || offset < 0 || length < 0 || offset + length > size) {
+        throw new Error(`${name}: read [${offset}, ${offset + length}) is outside the ${size}-byte file`);
+      }
+      if (length === 0) return new Uint8Array(0);
+      const got = new Uint8Array(await editor.readTakeChunk(name, offset, length));
+      if (got.byteLength !== length) {
+        throw new Error(`${name}: short read at ${offset} — asked for ${length} bytes, got ${got.byteLength}. Was the file changed while open?`);
+      }
+      bytesRead += length;
+      return got;
+    },
+  };
+}
+
+let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?: Awaited<ReturnType<typeof ipcSource>> } | undefined;
+
+// Test hook (app/test/preview.e2e.test.ts): how much of each video file the
+// open take has actually read. Read-only, and zero when nothing is open.
+(window as unknown as { __stcVideoBytesRead: () => { display: number; displaySize: number; camera: number } })
+  .__stcVideoBytesRead = () => ({
+    display: openVideoSources?.display.bytesRead ?? 0,
+    displaySize: openVideoSources?.display.size ?? 0,
+    camera: openVideoSources?.camera?.bytesRead ?? 0,
+  });
+
 async function openTakeOrThrow(dir: string): Promise<void> {
   await closeTake();
   await editor.openPreview(dir);
 
   const dec = new TextDecoder();
-  const [anchors, events, mp4, projectRaw] = await Promise.all([
+  const [anchors, events, displaySrc, projectRaw] = await Promise.all([
     editor.readTakeFile("anchors.json").then((b) => JSON.parse(dec.decode(b))),
     editor.readTakeFile("events.json").then((b) => JSON.parse(dec.decode(b)))
       .catch(() => ({ version: 1, events: [] })),
-    readVideo(),
+    ipcSource("display.mp4"),
     editor.readTakeFile("project.json").then((b) => JSON.parse(dec.decode(b)))
       .catch(() => null),
   ]);
-  const cameraMp4 = anchors.files?.camera ? await readVideo(anchors.files.camera) : undefined;
-  // STC-233: same reasoning as cameraMp4 above, one track over.
+  const cameraSrc = anchors.files?.camera ? await ipcSource(anchors.files.camera) : undefined;
+  // STC-233: same reasoning as cameraSrc above (only when the anchors claim the track), one track over.
   const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
   // STC-418: and again for system audio — loadSession refuses a claimed track that was not supplied.
   const systemM4a = anchors.files?.system ? await readVideo(anchors.files.system) : undefined;
-  const session = await loadSession({ anchors, events, displayMp4: mp4, cameraMp4, micM4a, systemM4a });
+  const session = await loadSession({ anchors, events, displayMp4: displaySrc, cameraMp4: cameraSrc, micM4a, systemM4a });
+  openVideoSources = { display: displaySrc, camera: cameraSrc };
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
@@ -1266,7 +1408,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   openSession = session;
   openProject = project;
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
-  openDisplay = { pointWidth: anchors.display.pointWidth };
+  openDisplay = { pointWidth: effectivePointWidth(anchors) };
   player = new PreviewPlayer($("stage") as HTMLCanvasElement, session, project);
   const scrub = $("scrub") as HTMLInputElement;
   scrub.max = String(lastFrame(player.durationNs));
@@ -1281,6 +1423,14 @@ async function openTakeOrThrow(dir: string): Promise<void> {
     ($("stage") as HTMLCanvasElement).dataset.clock = player!.clock;
     if (!scrubbing) scrub.value = String(frame);
     updateRulerPlayhead(tNs);
+  };
+  // STC-236: a frame read or decode failed (the take deleted from the library
+  // while open here, say). The player has already paused and reports once;
+  // the error's own message names the file. Without this the picture froze
+  // with the playhead still running and the cause only in the console.
+  player.onError = (e) => {
+    setPlayState(false);
+    alertUser(`The preview stopped: ${e.message}`);
   };
   await player.seek(player.firstRenderableNs);
   resetSpan();
@@ -1315,9 +1465,11 @@ async function closeTake(): Promise<void> {
   cleanedFor = null;
   cleanWanted = null;
   setPreviewAudioState("none");
+  scheduleWaveform(); // no sound now: cancels any run in flight and clears the drawing
   player?.close();
   player = undefined;
   openSession = undefined;
+  openVideoSources = undefined;
   openProject = undefined;
   openCapture = undefined;
   openDisplay = undefined;
@@ -1409,6 +1561,7 @@ function updateSystemAudioUI(): void {
   const level = openProject!.systemAudioLevel ?? 1;
   ($("sysaudiolevel") as HTMLInputElement).value = String(sliderPctFromLevel(level));
   $("sysaudiovalue").textContent = formatLevelDb(level);
+  showMute("sysmute", row, !!openProject!.systemAudioMuted, "system audio");
 }
 
 $("sysaudiolevel").addEventListener("input", () => {
@@ -1416,6 +1569,7 @@ $("sysaudiolevel").addEventListener("input", () => {
   const pct = Number(($("sysaudiolevel") as HTMLInputElement).value);
   openProject.systemAudioLevel = levelFromSliderPct(pct);
   $("sysaudiovalue").textContent = formatLevelDb(openProject.systemAudioLevel);
+  scheduleWaveform();
 });
 $("sysaudiolevel").addEventListener("change", () => {
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
@@ -1433,6 +1587,7 @@ $("sysaudiolevel").addEventListener("change", () => {
 function updateAudioButton(): void {
   const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);
   $("audiobtn").toggleAttribute("hidden", !has);
+  updateWaveformToggle();
   if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
 }
 
@@ -1444,14 +1599,49 @@ function updateMicUI(): void {
   const level = openProject!.micLevel ?? 1;
   ($("miclevel") as HTMLInputElement).value = String(sliderPctFromMicLevel(level));
   $("miclevelvalue").textContent = formatLevelDb(level);
+  showMute("micmute", $("micaudio"), !!openProject!.micMuted, "mic");
 }
 
 $("miclevel").addEventListener("input", () => {
   if (!openProject) return;
   openProject.micLevel = micLevelFromSliderPct(Number(($("miclevel") as HTMLInputElement).value));
   $("miclevelvalue").textContent = formatLevelDb(openProject.micLevel);
+  scheduleWaveform();
 });
 $("miclevel").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- per-track mute (STC-454 part 3) -----------------------------------
+//
+// A speaker before each track's name (Patrick, 2026-09-25). Muting is its
+// OWN field (project-12's micMuted/systemAudioMuted), never level 0, so the
+// slider keeps its position — dimmed — and un-muting returns to exactly the
+// level that was set. The preview hears it at once (the levels callback
+// reads the mute per chunk); the export leaves a muted track out entirely,
+// and with every track muted writes no audio track at all.
+
+function showMute(id: string, row: HTMLElement, muted: boolean, what: string): void {
+  const btn = $(id) as HTMLButtonElement;
+  btn.setAttribute("aria-pressed", String(muted));
+  const label = `${muted ? "Unmute" : "Mute"} ${what}`;
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+  row.toggleAttribute("data-muted", muted);
+}
+
+$("micmute").addEventListener("click", () => {
+  if (!openProject) return;
+  openProject.micMuted = !openProject.micMuted;
+  updateMicUI();
+  scheduleWaveform();
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+$("sysmute").addEventListener("click", () => {
+  if (!openProject) return;
+  openProject.systemAudioMuted = !openProject.systemAudioMuted;
+  updateSystemAudioUI();
+  scheduleWaveform();
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 
@@ -1562,20 +1752,40 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
     ]);
     if (gen !== audioGen || !player) return;
     rawMic = mic;
-    previewAudio = new PreviewAudio({ mic, system }, () => ({
-      system: openProject?.systemAudioLevel ?? 1,
-      mic: openProject?.micLevel ?? 1,
-    }));
+    // A muted track plays at 0 (STC-454 part 3): the sound keeps being
+    // scheduled, so the clock the picture follows never changes under a mute.
+    previewAudio = new PreviewAudio({ mic, system }, previewLevels);
     previewAudio.setMuted(previewMuted);
     player.attachAudio(previewAudio);
     setPreviewAudioState(previewAudio.hasSound ? "ready" : "none");
     refreshCleanMic();
+    scheduleWaveform();
   } catch (e: any) {
     // A track that will not decode costs the preview its SOUND, never its
     // picture: the player carries on, on the wall clock, exactly as before.
     if (gen !== audioGen) return;
     setPreviewAudioState("unavailable", String(e?.message ?? e));
   }
+}
+
+/**
+ * The levels the preview plays and the waveform draws — ONE reader, so the
+ * two cannot disagree. A muted track plays at 0 (STC-454 part 3): the sound
+ * keeps being scheduled, so the clock the picture follows never changes
+ * under a mute.
+ */
+function previewLevels(): { system: number; mic: number } {
+  return {
+    system: openProject?.systemAudioMuted ? 0 : openProject?.systemAudioLevel ?? 1,
+    mic: openProject?.micMuted ? 0 : openProject?.micLevel ?? 1,
+  };
+}
+
+/** Swap the mic the preview plays, and redraw the waveform when it actually changed. */
+function useMic(track: PcmTrack | null): void {
+  if (!previewAudio || previewAudio.micTrack === track) return;
+  previewAudio.setMic(track);
+  scheduleWaveform();
 }
 
 /** Point the preview at the mic the export would use: raw, or cleaned at the project's strength. */
@@ -1585,13 +1795,13 @@ function refreshCleanMic(): void {
   const { cleanMic } = exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup });
   if (!cleanMic) {
     cleanWanted = null;
-    previewAudio.setMic(rawMic);
+    useMic(rawMic);
     if (!cleanBusy) setCleaning(false);
     return;
   }
   if (cleanedMic && cleanedFor === cleanup!.strength) {
     cleanWanted = null;
-    previewAudio.setMic(cleanedMic);
+    useMic(cleanedMic);
     return;
   }
   cleanWanted = cleanup!.strength;
@@ -1618,7 +1828,7 @@ function pumpClean(): void {
       cleanedFor = strength;
       if (cleanWanted === strength) {
         cleanWanted = null;
-        previewAudio?.setMic(cleanedMic);
+        useMic(cleanedMic);
       }
     } else {
       // The export cleans on its own; a preview that cannot is still a
@@ -1674,6 +1884,11 @@ window.addEventListener("keydown", (e) => {
   // this the timeline takes it as play/pause and the switch never toggles —
   // measured: the e2e's mutation check fails on exactly that.
   if (e.target === $("voicecleanon") && (e.key === " " || e.key === "Enter")) return;
+  // The same for the per-track mutes (STC-454 part 3).
+  if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
+  // And for the ruler's toggles (STC-454 part 4): Space on a focused one
+  // flips the overlay, not playback.
+  if ((e.target as HTMLElement | null)?.classList?.contains("rulertoggle") && (e.key === " " || e.key === "Enter")) return;
   const action = decideKey(
     {
       key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey,

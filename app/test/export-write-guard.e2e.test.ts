@@ -6,6 +6,8 @@ import { launchWithTakeInEditor, inkiness } from "./_editor-fixture.js";
 import { exportMediaName } from "../src/share.js";
 import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
+import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
+import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
@@ -56,7 +58,12 @@ describe("export:write, through the editor's bridge (STC-373)", () => {
       catch (e: any) { return String(e?.message ?? e); }
     }, name);
 
-    for (const name of ["display.mp4", "camera.mp4", "anchors.json", "events.json", "project.json", "take.json"]) {
+    // STC-465 review: capture.json (the bundle-identity file) and the
+    // library thumbnail are just as load-bearing as anything already in
+    // this list — a renderer-supplied export named either one would
+    // corrupt the bundle the same way a display.mp4-named export used to.
+    for (const name of ["display.mp4", "camera.mp4", "anchors.json", "events.json",
+                        "project.json", "take.json", CAPTURE_DOC_FILE, THUMBNAIL_FILE]) {
       expect(await attempt(name), name).toMatch(/refusing to overwrite/);
     }
     expect(statSync(join(takeDir, "display.mp4")).size).toBe(before);
