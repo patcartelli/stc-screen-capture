@@ -89,7 +89,10 @@ Launch the app normally (`npm run app:start`) and press Record.
   legible against whatever is likely to be behind it (light desktop
   backgrounds especially, since the pill itself is always dark)?
   **STC-447 (2026-09-29) added a 1px `rgba(255,255,255,0.14)` ring and a
-  hover tint for this; not yet looked at.** Check three things over a light
+  hover tint for this. CONFIRMED on hardware 2026-09-29: the ring follows
+  the pill's outer edge and its ends sit cleanly in the window's corners.
+  (The first look caught the ring hugging the digits. The collapsed pill was
+  content-height, not window-height; fixed with `100vw`/`100vh`.)** Check three things over a light
   desktop, a dark one, and a dark app window: (a) the ring gives the pill a
   visible edge without reading as a second colour; (b) the ring's curve sits
   cleanly inside the window's own rounded corners. The ring is CSS
