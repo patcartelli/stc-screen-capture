@@ -9,6 +9,15 @@ git checkout accounts/stc-465-still-editor-export-fix
 npm ci
 ```
 
+If git says the branch "is already used by worktree at …", an agent's worktree
+holds it: `cd` there and run everything from that folder instead (`npm ci`
+there too — a fresh worktree's `node_modules` is empty, and would otherwise
+quietly borrow your main checkout's).
+
+**Keep a copy of this file open somewhere else before §2.** It exists only on
+this branch until it merges, and §2 checks out the pre-fix build, which does
+not have it (or the compare script — §2 switches back before running that).
+
 ## What this settles, and what CI already did
 
 The still editor ("Redact") exported through its own copy of "composite, then
@@ -28,9 +37,28 @@ wrong; after the fix the editor's export of the SAME shot must be the same
 picture. `scripts/compare-still-exports.mjs` checks size, profile and every
 pixel. The eye check in §4 is corroboration.
 
-**Needs:** a Mac whose display is P3 (every recent Mac laptop, Studio Display,
-Pro Display XDR). Not the VM — its virtual display is not P3, and the check
-would pass without testing anything (the script says so when it happens).
+**Needs:** a P3 display — a recent Mac laptop's built-in screen, a Studio
+Display, a Pro Display XDR. **Many external monitors are not P3**, and a Mac
+running lid-closed on one has no P3 display at all even though the Mac itself
+has one — found the first time this was run (2026-09-29: a MacBook Pro in
+clamshell on an sRGB HP Z27; the swatches in §0 looked identical). The capture
+records the colour space of the display it came FROM, so the stills in §2 and
+§3 must be taken on the P3 screen. `system_profiler SPDisplaysDataType` lists
+what is connected.
+
+## VM or host (`docs/VM-TESTING.md`)
+
+**Every item here is host.** None can move to the Tart VM:
+
+| item | where | why |
+|---|---|---|
+| §2 control and §3 fix, colour half | host | needs a real P3 panel; the VM has one virtual 1280×800 display ("real displays" are host-only in VM-TESTING.md). On it the capture is not P3, and the script would pass while saying — in its `note:` line — that it tested nothing |
+| §3 fix, scale half | host (with the colour half) | a VM could run it, but `redaction.e2e.test.ts` already pins the exact halving on CI, and it rides on the same two files as the colour check for free |
+| §4 by eye | host | an eye on the P3 panel |
+
+VM-TESTING.md's rules 1 and 2 do not apply: this PR changes no permission,
+first-run, signing, bundle or startup code — `still-compose.ts` and the two
+renderers that call it only.
 
 ## 0. Once: something saturated to capture
 
@@ -74,11 +102,12 @@ pixel comparison never runs. So the control (§2) is native, and the fixed run
 
 ## 1. Where the saves land
 
-A Save writes to the top level of your save folder — `~/Desktop/stc` unless you
-chose another in Settings. Below it, `SAVE` means that folder:
+A Save writes to the top level of your save folder — the one Settings shows;
+`~/Desktop/stc` if you never chose one. Below it, `SAVE` means that folder. To
+read it rather than guess:
 
 ```
-SAVE=~/Desktop/stc          # or the folder Settings shows
+SAVE=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/Library/Application Support/Capture/settings.json'))).get('saveFolder') or os.path.expanduser('~/Desktop/stc'))"); echo "$SAVE"
 ```
 
 The script takes the two NEWEST PNGs there, so do not save anything else
@@ -93,7 +122,8 @@ git checkout --detach origin/master
 npm run app:start
 ```
 
-1. Take a **region** still of the swatch page (all six swatches).
+1. Take a **region** still of the swatch page (all six swatches), **on the P3
+   screen**.
 2. On the post-capture panel, press **Save**. (Panel save = file 1.)
 3. Open the library, open that still (it opens the still editor), press
    **Save** (⌘S). Do not draw a box, change the mode, or touch anything else.
