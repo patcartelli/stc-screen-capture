@@ -37,5 +37,8 @@
               // shared by two page entry points (overlay.ts, renderer.ts),
               // which are themselves excluded above. `document.createElement`
               // makes it a TS2584 here otherwise.
-              "app/src/device-menu-dom.ts"]
+              "app/src/device-menu-dom.ts",
+              // Same position (STC-477): the still composite shared by the
+              // panel and the still editor, both excluded above.
+              "app/src/still-compose.ts"]
 }

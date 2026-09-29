@@ -45,7 +45,7 @@ afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, AP
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function launch(extraEnv: Record<string, string> = {}):
+async function launch(extraEnv: Record<string, string> = {}, extraSettings: Record<string, unknown> = {}):
   Promise<{ win: Page; destDir: string; recordings: string; temp: string }> {
   const { dir: recordings } = makeTakeFolder();
   // A folder nothing is ever configured to write to. STC-412 unified
@@ -62,9 +62,12 @@ async function launch(extraEnv: Record<string, string> = {}):
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   // Seeded on disk, never through `recorder:setSettings` — that channel
   // deliberately strips `saveFolder` (STC-293 review, #92 — `saveFolder`
-  // replaced `still.destination` at STC-412).
+  // replaced `still.destination` at STC-412). `extraSettings` merges in on
+  // top, shallowly — a caller wanting `still.scale` passes the whole `still`
+  // block, same as `cleanStill` expects to receive a partial one.
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
     saveFolder: null,
+    ...extraSettings,
   }));
   app = await electron.launch({
     args: [root, `--user-data-dir=${userData}`],
@@ -372,5 +375,67 @@ describe("redaction", () => {
     // The window stays open — Save produces a file, it is not a way out.
     // Done is still the only thing that closes this editor.
     expect(await windowCount(app!, "still-editor.html")).toBe(1);
+  }, 60_000);
+
+  /**
+   * STC-465 review, risk register row 17 / step-2 finding D1: the editor
+   * built its export canvas from the RAW (unscaled) layout rather than
+   * `planRender`'s scaled one, so an output-scale preference other than the
+   * default `native` was silently ignored — a "1x" export of a retina
+   * capture came out at native resolution anyway.
+   *
+   * `_fake-helper.mjs` always reports a 2x capture (480x270 crop -> 960x540
+   * frame, pinned by the companion resolution test above), so "1x" must
+   * HALVE both dimensions per `scaleFactor` (`transform/src/still-export.ts`)
+   * — 480x270 — which a canvas sized from the unscaled layout cannot produce.
+   */
+  test("the editor's Save honours the 1x output-scale preference (STC-465 review, D1)", async () => {
+    const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
+    const { win } = await launch({ STC_FAKE_STILL_LOG: stillLog }, { still: { scale: "1x" } });
+    const { editor } = await redactingEditor(win);
+
+    await editor.click("#save");
+    await expect.poll(() => keptFileRequests(stillLog).length, { timeout: 15_000 }).toBe(1);
+
+    const kept = keptFileRequests(stillLog)[0];
+    expect(kept.width, `wrote ${kept.width}x${kept.height}`).toBe(480);
+    expect(kept.height, `wrote ${kept.width}x${kept.height}`).toBe(270);
+  }, 60_000);
+
+  /**
+   * STC-465 review, risk register row 17 / step-2 finding D1: the editor's
+   * canvas context was created with no `colorSpace` option, so a P3 capture
+   * was read and written as plain sRGB numbers even though the export
+   * request still declares `shot.display.colorSpace` (and `main.ts` tags the
+   * encoded file with it regardless). The request's own `colorSpace` FIELD
+   * cannot discriminate this — it is the same string either way, since
+   * `main.ts` trusts it unconditionally (`still:export`) — so this watches
+   * `HTMLCanvasElement.getContext` itself, which is the one place the bug
+   * actually lived.
+   */
+  test("the editor composites a P3 shot on a colour-managed canvas (STC-465 review, D1)", async () => {
+    const { win } = await launch({ STC_FAKE_STILL_COLORSPACE: "kCGColorSpaceDisplayP3" });
+    const { editor, dir } = await redactingEditor(win);
+
+    await editor.evaluate(() => {
+      (window as any).__2dColorSpaces = [];
+      const real = HTMLCanvasElement.prototype.getContext;
+      (HTMLCanvasElement.prototype as any).getContext = function (this: HTMLCanvasElement,
+                                                                   type: string, opts?: any) {
+        if (type === "2d") (window as any).__2dColorSpaces.push(opts?.colorSpace);
+        return (real as any).call(this, type, opts);
+      };
+    });
+
+    // A fresh drag rebuilds the composite canvas from scratch — `draw()`
+    // creates a brand-new `<canvas>` on every call — which is the only way to
+    // observe a NEW `getContext("2d", ...)` call after the patch above; the
+    // window's very first composite, from page load, ran before the patch
+    // could be installed.
+    await dragBox(editor, [0.3, 0.35], [0.7, 0.6]);
+    await expect.poll(() => storedRegions(dir).length, { timeout: 15_000 }).toBe(1);
+
+    const spaces: (string | undefined)[] = await editor.evaluate(() => (window as any).__2dColorSpaces);
+    expect(spaces, `observed 2d context options: ${JSON.stringify(spaces)}`).toContain("display-p3");
   }, 60_000);
 });

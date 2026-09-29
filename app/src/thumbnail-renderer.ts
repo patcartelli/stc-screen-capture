@@ -1,15 +1,15 @@
 import { parseShot, type Shot } from "@transform/shot";
 import { layoutStill, pxPerPointOf } from "@transform/still-decorate";
-import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { withTimeout } from "@transform/timeout";
 import {
   classifyDrag, discardDirection, isDiscardSwipe, parseCorner, swipeOffset,
   SETTLE_READY_MS, PANEL_SIZE, type Size,
 } from "./thumbnail.js";
-import { colorSpaceFor, planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
+import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import {
   actionsFor, closesPanel, type PanelAction, type PanelTake,
 } from "./panel-actions.js";
+import { composeStill, stillPixelBytes } from "./still-compose.js";
 
 /**
  * The floating thumbnail's view (STC-296, rebuilt on `panel-actions.ts` by
@@ -183,29 +183,16 @@ async function draw(): Promise<void> {
   // so there is nothing left here that could diverge from the stored
   // document. Reading it fresh on open already picks up whatever a previous
   // Edit session saved.
-  const layout = layoutStill(shot);
-  const pxPerPoint = pxPerPointOf(shot);
   const settings = (await window.thumb.getSettings()).still;
-  const plan = planRender(settings, { layout, pxPerPoint });
-
-  const out = document.createElement("canvas");
-  // `plan.layout`, not `layout`: `planRender` SCALES the layout for a 1x export
-  // of a 2x capture, and sizing the canvas from the unscaled one left the
-  // picture drawn into the top-left corner of a canvas twice as big — an
-  // export padded with empty space, and (once regions exist) a drag that maps
-  // to the wrong pixels. Invisible at the default `native` scale, which is why
-  // it survived STC-296.
-  out.width = plan.layout.canvas.width;
-  out.height = plan.layout.canvas.height;
-  const ctx = out.getContext("2d", { alpha: true, colorSpace: colorSpaceFor(shot.display.colorSpace) as never });
-  if (!ctx) return;
-  // The fills are sampled from the FRAME, not from the composite: the frame is
-  // what a region is normalised against, and reading the composite would mean
-  // reading pixels an earlier fill had already replaced. These are whatever
-  // the shot ALREADY carries — the panel cannot draw a new one any more, only
-  // show what a previous Edit session saved.
-  const redactionFills = sampleRedactionFills(frame, shot.frame, shot.decoration.redactions);
-  renderStill(ctx as never, { frame, redactionFills }, plan.layout);
+  // `composeStill` (STC-465 review, finding D1) sizes the canvas from
+  // `planRender`'s SCALED layout, not the raw one: a 1x export of a 2x
+  // capture would otherwise draw the picture into the top-left corner of a
+  // canvas twice as big — an export padded with empty space, and (once
+  // regions exist) a drag that maps to the wrong pixels. Invisible at the
+  // default `native` scale, which is why a hand-rolled copy of this in the
+  // still editor survived unnoticed. It also creates the context with the
+  // shot's own colour space, which that copy had dropped entirely.
+  const { canvas: out, plan } = composeStill(shot, frame, settings);
   composite = out;
 
   // Fill the pane rather than shrinking to fit inside it (STC-426 revision):
@@ -269,9 +256,7 @@ async function runExport(action: ExportAction): Promise<boolean> {
     fellBackToPng = true;
   }
 
-  const ctx = composite.getContext("2d", { alpha: true });
-  const data = ctx!.getImageData(0, 0, composite.width, composite.height).data;
-  const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  const bytes = stillPixelBytes(composite);
 
   const r = await window.thumb.exportStill({
     bytes, width: composite.width, height: composite.height, alpha: plan.alpha,
@@ -610,10 +595,8 @@ async function refreshDragFile(): Promise<void> {
   const layout = layoutStill(shot);
   const plan = planRender({ ...(await window.thumb.getSettings()).still },
                           { layout, pxPerPoint: pxPerPointOf(shot) });
-  const ctx = composite.getContext("2d", { alpha: true });
-  const data = ctx!.getImageData(0, 0, composite.width, composite.height).data;
   const r = await window.thumb.dragFile({
-    bytes: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    bytes: stillPixelBytes(composite),
     width: composite.width, height: composite.height, alpha: plan.alpha,
     colorSpace: shot.display.colorSpace ?? "",
     options: {},
