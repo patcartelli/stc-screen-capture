@@ -174,6 +174,20 @@ describe("compare-still-exports (STC-477)", () => {
     expect(r.code).toBe(1);
   });
 
+  test("a shot.json with NO colour space passes but names STC-478, not the display", () => {
+    // The real 2026-09-29 capture: frame.png P3, shot.json silent, both
+    // exports sRGB and identical. Advising "capture on a P3 display" there
+    // would send someone to fix a screen that was already P3.
+    const dir = mkdtempSync(join(tmpdir(), "stc-compare-"));
+    writeFileSync(join(dir, "shot.json"), JSON.stringify({ display: { pixelWidth: 3024 } }));
+    save(dir, png(24, 16, picture, "sRGB IEC61966-2.1"), png(24, 16, picture, "sRGB IEC61966-2.1"));
+    const r = run("--dir", dir);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("(none recorded)");
+    expect(r.out).toContain("STC-478");
+    expect(r.out).not.toMatch(/Capture on a P3 display/);
+  });
+
   test("explicit paths work the same as --dir, with --shot", () => {
     const dir = takeDir("kCGColorSpaceDisplayP3");
     const f = save(dir, png(24, 16, picture, P3), png(48, 32, picture, P3));

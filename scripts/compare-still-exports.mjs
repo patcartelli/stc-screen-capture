@@ -102,6 +102,13 @@ export function compareExports(panel, editor, shotColorSpace) {
   const wantsP3 = typeof shotColorSpace === "string" && /p3/i.test(shotColorSpace);
   if (shotColorSpace === undefined) {
     notes.push("no shot.json read: the colour check below cannot tell whether P3 was expected");
+  } else if (shotColorSpace === null) {
+    // What every real capture looked like on 2026-09-29: frame.png tagged
+    // Display P3, shot.json with no colour space at all, so both exports are
+    // sRGB and agree. "Capture on a P3 display" would be the wrong advice.
+    notes.push("shot.json records no colour space (STC-478: the helper drops it when the captured image's "
+      + "colour space has no name), so both exports were treated as sRGB — a pass here says nothing about "
+      + "the colour-space bug, whatever display it was captured on");
   } else if (!wantsP3) {
     notes.push(`the shot's colour space is "${shotColorSpace}", not P3 — on this display the colour-space bug `
       + "cannot show, so a pass here says nothing about it. Capture on a P3 display.");
@@ -177,7 +184,9 @@ function readShotColorSpace(path) {
   const file = path.endsWith(".json") ? path : join(path, "shot.json");
   if (!existsSync(file)) throw new CannotRun(`${file}: no shot.json there`);
   const shot = JSON.parse(readFileSync(file, "utf8"));
-  return shot?.display?.colorSpace ?? "(missing)";
+  // null, not a placeholder string: "no colour space recorded" is its own
+  // finding (STC-478), not an unusual colour space.
+  return typeof shot?.display?.colorSpace === "string" ? shot.display.colorSpace : null;
 }
 
 function main(argv) {
@@ -217,7 +226,7 @@ function main(argv) {
 
   console.log(`panel : ${basename(panelPath)}  ${panel.width}x${panel.height}  profile ${panel.profile ?? "none"}`);
   console.log(`editor: ${basename(editorPath)}  ${editor.width}x${editor.height}  profile ${editor.profile ?? "none"}`);
-  if (shotColorSpace !== undefined) console.log(`shot colour space: ${shotColorSpace}`);
+  if (shotColorSpace !== undefined) console.log(`shot colour space: ${shotColorSpace ?? "(none recorded)"}`);
   if (r.compared) console.log(`pixels differing by more than ${CHANNEL_TOLERANCE}: ${r.differing} (largest channel difference ${r.maxDelta})`);
   for (const n of r.notes) console.log(`note: ${n}`);
   if (r.ok) {

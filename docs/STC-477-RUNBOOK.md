@@ -41,10 +41,29 @@ pixel. The eye check in §4 is corroboration.
 Display, a Pro Display XDR. **Many external monitors are not P3**, and a Mac
 running lid-closed on one has no P3 display at all even though the Mac itself
 has one — found the first time this was run (2026-09-29: a MacBook Pro in
-clamshell on an sRGB HP Z27; the swatches in §0 looked identical). The capture
-records the colour space of the display it came FROM, so the stills in §2 and
-§3 must be taken on the P3 screen. `system_profiler SPDisplaysDataType` lists
-what is connected.
+clamshell on an sRGB HP Z27; the swatches in §0 looked identical). Take every
+still here on the P3 screen. `system_profiler SPDisplaysDataType` lists what is
+connected.
+
+## Two rounds, and why only one can run today
+
+The first hardware run (2026-09-29) found that **the colour half of this
+ticket cannot show on a real capture yet**: the helper does not record a P3
+still as P3 — **STC-478**. `frame.png` is tagged Display P3, but `shot.json`
+has no `display.colorSpace` (the helper writes one only when CoreGraphics
+gives the image's colour space a NAME, and this one has none), so the panel
+and the editor BOTH treat every real shot as sRGB. The editor's colour bug
+fires only for a shot that says P3, which no real shot does until STC-478
+lands. CI covers it meanwhile (`redaction.e2e.test.ts`, with the fake helper
+saying P3).
+
+So:
+
+- **Round A — scale (§2, §3). Runs today.** Both at `1x`. The old editor
+  ignored `1x`, so its file is twice the panel's size: the control fails on
+  SIZE. The fix makes them match.
+- **Round B — colour (§5). After STC-478 has merged.** Control at native
+  scale, where sizes match and the pixel comparison runs; fix at `1x`.
 
 ## VM or host (`docs/VM-TESTING.md`)
 
@@ -52,18 +71,17 @@ what is connected.
 
 | item | where | why |
 |---|---|---|
-| §2 control and §3 fix, colour half | host | needs a real P3 panel; the VM has one virtual 1280×800 display ("real displays" are host-only in VM-TESTING.md). On it the capture is not P3, and the script would pass while saying — in its `note:` line — that it tested nothing |
-| §3 fix, scale half | host (with the colour half) | a VM could run it, but `redaction.e2e.test.ts` already pins the exact halving on CI, and it rides on the same two files as the colour check for free |
+| Round A (§2, §3) | host | a VM could capture and compare, but `redaction.e2e.test.ts` already pins the halving on CI; the point of this round is the real pipeline on the real machine |
+| Round B (§5) | host | needs a real P3 panel; the VM has one virtual 1280×800 display ("real displays" are host-only in VM-TESTING.md) |
 | §4 by eye | host | an eye on the P3 panel |
 
 VM-TESTING.md's rules 1 and 2 do not apply: this PR changes no permission,
 first-run, signing, bundle or startup code — `still-compose.ts` and the two
 renderers that call it only.
 
-## 0. Once: something saturated to capture
+## 0. Once: something saturated to capture, and 1x
 
-A page of P3 swatches, each beside the nearest sRGB colour — P3-only colour is
-where the bug is loudest:
+A page of P3 swatches, each beside the nearest sRGB colour:
 
 ```
 cat > /tmp/stc-477-p3.html <<'EOF'
@@ -81,39 +99,34 @@ open -a Safari /tmp/stc-477-p3.html
 ```
 
 Top row is P3, bottom row sRGB. On a P3 display the top row is visibly more
-vivid; if it is not, this display cannot run this check.
+vivid (green most of all); if it is not, you are not looking at a P3 screen.
 
-Check the still settings are at their defaults for §2 — PNG, **native**
-scale. With the app quit:
+**Quit Capture completely** (it lives in the menu bar — closing the window is
+not quitting), then:
 
 ```
 open -e ~/Library/Application\ Support/Capture/settings.json
 ```
 
-In the `"still"` block, `"format"` must be `"png"` (the compare script reads
-PNG only) and `"scale"` must be `"native"` or absent. §3 changes the scale.
-
-**Why the two rounds differ in scale:** at native scale the old build's two
-files come out the SAME size, so the script gets to compare their pixels — and
-the pixels are where the colour bug shows, which is the half of this ticket
-only hardware can test. At `1x` the old editor file is twice the size and the
-pixel comparison never runs. So the control (§2) is native, and the fixed run
-(§3) is `1x`, where one pair of files tests both fixes.
+In the `"still"` block: `"format": "png"` (the compare script reads PNG only)
+and `"scale": "1x"` (add it if missing). Save. Edit this file only while the app
+is quit — it writes the file itself.
 
 ## 1. Where the saves land
 
 A Save writes to the top level of your save folder — the one Settings shows;
-`~/Desktop/stc` if you never chose one. Below it, `SAVE` means that folder. To
-read it rather than guess:
+`~/Desktop/stc` if you never chose one. `SAVE` below means that folder. Set it
+in the SAME shell you run the script from (an unset `SAVE` reaches the script
+as `--dir ""`):
 
 ```
 SAVE=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/Library/Application Support/Capture/settings.json'))).get('saveFolder') or os.path.expanduser('~/Desktop/stc'))"); echo "$SAVE"
 ```
 
-The script takes the two NEWEST PNGs there, so do not save anything else
-between the two saves in each round.
+The script takes the two NEWEST PNGs there, so save nothing else between the
+two saves of a round.
 
-## 2. Control — on the pre-fix build, the check must FAIL
+## 2. Round A control — pre-fix build, 1x: the check must FAIL
 
 A check that has never failed has not been shown to check anything.
 
@@ -122,59 +135,57 @@ git checkout --detach origin/master
 npm run app:start
 ```
 
-1. Take a **region** still of the swatch page (all six swatches), **on the P3
-   screen**.
+(Once PR #245 has merged, `origin/master` HAS the fix; use the commit before
+it instead: `git checkout --detach "$(git log origin/master --grep='(#245)' --format=%H -1)^"`.)
+
+1. Take a **region** still of the swatch page (all six swatches), on the P3
+   screen.
 2. On the post-capture panel, press **Save**. (Panel save = file 1.)
 3. Open the library, open that still (it opens the still editor), press
    **Save** (⌘S). Do not draw a box, change the mode, or touch anything else.
    (Editor save = file 2.)
-4. Quit the app, go back to the branch (the script lives there), and compare:
+4. Quit Capture, go back to the branch (the script lives there), and compare:
 
 ```
 git checkout accounts/stc-465-still-editor-export-fix
 node scripts/compare-still-exports.mjs --dir "$SAVE"
 ```
 
-**Expected: exit 1**, with `FAIL — pixels: N of M differ …` — the colour bug,
-seen by the real pipeline. Sizes match (native scale), and both files carry the
-same Display P3 profile: that is exactly the bug, P3 numbers promised and sRGB
-numbers delivered.
+**Expected: exit 1**, `FAIL — size: panel WxH, editor 2Wx2H (editor is 2.00x
+the panel …)` — the scale bug, on the real pipeline. A `note:` about the shot's
+colour space is expected until STC-478 (see above) and does not matter to this
+round.
 
-If it PASSES on the old build, stop: the check cannot see the colour bug on
-this machine, and a pass in §3 would mean nothing. Report what it printed.
+If it PASSES, stop and report what it printed: the check cannot see the scale
+bug here, and §3 would mean nothing.
 
-Move the two control files out of the way so §3's newest-two are the fixed ones:
+Move the two control files aside so §3's newest two are the fixed ones:
 
 ```
 mkdir -p "$SAVE/stc-477-control" && ls -t "$SAVE"/*.png | head -2 | xargs -I{} mv {} "$SAVE/stc-477-control/"
 ```
 
-## 3. The fix — on the branch, at 1x, the check must PASS
+## 3. Round A fix — this branch, 1x: the check must PASS
 
-Now set `"scale": "1x"` in the same `"still"` block (app quit), then:
+Still at `1x`:
 
 ```
 npm run app:start
 ```
 
-Same three steps as §2 on a fresh capture of the same page: region still,
-panel **Save**, then open it from the library and **Save** in the editor. Quit.
+Same three steps on a fresh capture of the same page: region still on the P3
+screen, panel **Save**, then open it from the library and **Save** in the
+editor. Quit Capture.
 
 ```
 node scripts/compare-still-exports.mjs --dir "$SAVE"
 ```
 
 **Expected: exit 0**, `PASS — the panel and the editor exported the same
-picture`, with:
-
-- the same size for both — the `1x` preference applying in the editor too,
-  not only the panel. If you framed about the same region as §2, that size is
-  roughly half §2's in each dimension; the exact halving is CI's test
-  (`redaction.e2e.test.ts`), so here it only has to match;
-- the same profile for both, a Display P3 one (`kCGColorSpaceDisplayP3`);
-- `pixels differing by more than 1: 0`;
-- and NO `note:` saying the shot is not P3. If that note appears, the capture
-  came from a non-P3 display and this run did not test the colour fix.
+picture`: the same size for both (the editor honouring `1x` like the panel),
+the same profile, `pixels differing by more than 1: 0`. The STC-478 `note:` is
+expected here too. If you framed about the same region as §2, the size is
+about half §2's editor file in each dimension.
 
 Independent of the script:
 
@@ -182,28 +193,59 @@ Independent of the script:
 sips -g pixelWidth -g pixelHeight -g profile "$(ls -t "$SAVE"/*.png | sed -n 1p)" "$(ls -t "$SAVE"/*.png | sed -n 2p)"
 ```
 
-## 4. By eye (corroboration)
-
-Open all four side by side in Preview on the P3 display:
+## 4. By eye (optional, today)
 
 ```
 open "$SAVE"/stc-477-control/*.png "$(ls -t "$SAVE"/*.png | sed -n 1p)" "$(ls -t "$SAVE"/*.png | sed -n 2p)"
 ```
 
-- The two **fixed** files should be indistinguishable, and their swatches should
-  match the Safari page.
-- The **control** editor file should look off beside the control panel file:
-  the P3 top row especially. Most likely oversaturated, though the exact shift
-  depends on how WebKit mapped the frame onto the sRGB canvas. The panel file is
-  the reference either way.
+The control editor file is twice the size of everything else; the other three
+should look alike. The colours will NOT match the Safari page's P3 row in any of
+them — that is STC-478 (every export is sRGB), not this ticket.
 
-## 5. Afterwards
+## 5. Round B — colour. Only after STC-478 has merged
+
+Needs a helper that records P3 and an app from BEFORE this PR's fix — and those
+never existed together in one commit. They don't have to: the helper binary is
+built into `helper/build/`, which git ignores, and `npm run app:start` never
+rebuilds it, so it survives a checkout.
+
+```
+git checkout --detach origin/master          # has STC-478 (and #245, if merged)
+helper/build.sh                              # a helper that records P3
+git checkout --detach "$(git log origin/master --grep='(#245)' --format=%H -1)^"   # app before the fix
+```
+
+(If #245 has NOT merged yet, `origin/master` is itself "before the fix": skip
+the third line.)
+
+Set `"scale"` to `"native"` (app quit) — at native, the old build's two files
+are the same size and the pixel comparison runs; at `1x` it stops at the size.
+Then `npm run app:start`, the same capture / panel Save / editor Save, quit, and
+compare from a checkout that has the script:
+
+```
+git checkout --detach origin/master          # or the branch, if #245 has not merged
+node scripts/compare-still-exports.mjs --dir "$SAVE"
+```
+
+**Expected: exit 1**, `FAIL — pixels: N of M differ …`, with NO `note:` line.
+If the note appears, STC-478 did not take: stop.
+
+Move those aside as in §2. Then the fix, on whatever has #245 (`origin/master`
+once merged, or the branch), at `1x`, with the same `helper/build/stc-helper`:
+capture, both Saves, compare. **Expected: exit 0, no `note:` line**, both files
+`kCGColorSpaceDisplayP3`. Opened in Preview, their P3 swatches should now match
+the Safari page's top row.
+
+## 6. Afterwards
 
 Set `"scale"` back to what it was (or delete the line — `native` is the
-default). Delete `$SAVE/stc-477-control` and the four stills if you do not want
-them.
+default). Delete `$SAVE/stc-477-control` and the stills if you don't want them.
 
 ## Reporting back
 
-Paste the script's output from §2 and §3. Pass is: §2 exit 1, §3 exit 0 with
-no `note:` line. Anything else, including a §2 pass, goes on STC-477.
+Paste the script's output. **Today (Round A):** §2 exit 1 on size, §3 exit 0 —
+that is enough to merge #245. **Round B:** §5 control exit 1 on pixels, fix exit
+0, neither with a `note:` — closes the last box on STC-477, recorded there and on
+STC-478.
