@@ -116,11 +116,13 @@ import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
 import { MODEL_CODE } from "./product.js";
-import { micLabel, type MicInfo } from "./mic-devices.js";
+import { recordRefusalText, stillNoticeText } from "./refusals.js";
+import { micDevices, type MicInfo } from "./mic-devices.js";
 import {
-  deviceRows, decidePopoverToggle,
-  type DeviceLike, type DeviceChoice, type PopoverId,
+  decidePopoverToggle, micMenuRows, cameraMenuRows, applyMenuPick,
+  type DeviceLike, type DeviceChoice, type PopoverId, type DeviceSelection, type MenuRow,
 } from "./device-picker.js";
+import { buildMenuRow } from "./device-menu-dom.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
@@ -238,6 +240,9 @@ const devicePopover = $("devicepopover") as HTMLDivElement;
 let storedCamera = false;
 let storedCameraUid: string | null = null;
 let storedMicUid: string | null = null;
+// STC-456: the mic menu's own "Include System Audio" row, since the popover
+// is the shared device-menu component now (device-picker.ts's micMenuRows).
+let storedSystemAudio = false;
 let knownMics: DeviceLike[] = [];
 let knownCameras: DeviceLike[] = [];
 let openPopover: PopoverId | null = null;
@@ -248,6 +253,12 @@ function cameraChoice(): DeviceChoice {
 }
 function micChoice(): DeviceChoice {
   return storedMicUid != null ? { kind: "device", uid: storedMicUid } : { kind: "off" };
+}
+function currentSelection(): DeviceSelection {
+  return {
+    micDeviceUid: storedMicUid, systemAudio: storedSystemAudio,
+    camera: storedCamera, cameraDeviceUid: storedCameraUid,
+  };
 }
 
 /**
@@ -271,7 +282,7 @@ function renderIdleStatus(): void {
 async function refreshDevices(): Promise<void> {
   try {
     const r = await recorder.devices();
-    knownMics = Array.isArray(r.mics) ? r.mics.map((m) => ({ name: micLabel(m), uid: m.uid })) : [];
+    knownMics = Array.isArray(r.mics) ? micDevices(r.mics as MicInfo[]) : [];
     knownCameras = Array.isArray(r.cameras) ? r.cameras : [];
   } catch {
     knownMics = [];
@@ -287,23 +298,21 @@ function closePopover(): void {
   devicePopover.replaceChildren();
 }
 
+/**
+ * STC-456: the popover draws `device-picker.ts`'s shared `MenuRow` model now
+ * — same rows, same icons, same CSS class (`device-menu.css`) the Record
+ * options bar's own menu uses — via `buildMenuRow` (`device-menu-dom.ts`),
+ * the same builder `overlay.ts` draws its menu with. `micMenuRows` is the
+ * mic popover's whole row list, "Include System Audio" included; unlike the
+ * bar, this popover has no separate toggle for it.
+ */
 function renderPopover(): void {
   if (openPopover == null) { devicePopover.hidden = true; return; }
   const isMic = openPopover === "mic";
-  const rows = deviceRows(isMic
-    ? { devices: knownMics, current: micChoice(), offLabel: "Off", staleLabel: "Mic (not connected)" }
-    : { devices: knownCameras, current: cameraChoice(), offLabel: "Off", autoLabel: "Automatic",
-       staleLabel: "Camera (not connected)" });
-  devicePopover.replaceChildren();
-  for (const row of rows) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = row.label;
-    b.setAttribute("role", "option");
-    b.setAttribute("aria-selected", String(row.selected));
-    b.addEventListener("click", () => void pickDevice(isMic, row.choice));
-    devicePopover.append(b);
-  }
+  const rows: MenuRow[] = isMic
+    ? micMenuRows(knownMics, currentSelection())
+    : cameraMenuRows(knownCameras, currentSelection());
+  devicePopover.replaceChildren(...rows.map((row) => buildMenuRow(row, (r) => void pickRow(isMic, r))));
   const trigger = isMic ? micTrigger : cameraTrigger;
   const r = trigger.getBoundingClientRect();
   devicePopover.hidden = false;
@@ -311,20 +320,32 @@ function renderPopover(): void {
   devicePopover.style.top = `${Math.round(r.bottom + 4)}px`;
 }
 
-async function pickDevice(isMic: boolean, choice: DeviceChoice): Promise<void> {
+/**
+ * `applyMenuPick` (device-picker.ts) is the one place that decides what a
+ * row press does to the selection — this only carries the CHANGED fields to
+ * the existing settings-write IPC (never the whole selection, so a picker
+ * open in another window mid-edit is not clobbered by a value this one only
+ * read, never touched) and re-renders: a toggle (`row.closesMenu === false`)
+ * stays open and redraws its own checked state in place; a device choice
+ * closes, exactly as before.
+ */
+async function pickRow(isMic: boolean, row: MenuRow): Promise<void> {
+  const next = applyMenuPick(currentSelection(), row.pick);
+  const patch: Partial<AppSettings> =
+    row.pick.kind === "toggle-system-audio" ? { systemAudio: next.systemAudio }
+    : row.pick.menu === "mic" ? { micDeviceUid: next.micDeviceUid }
+    : { camera: next.camera, cameraDeviceUid: next.cameraDeviceUid };
   try {
-    const saved = isMic
-      ? await recorder.setSettings({ micDeviceUid: choice.kind === "device" ? choice.uid : null })
-      : await recorder.setSettings(
-          choice.kind === "off" ? { camera: false }
-          : choice.kind === "auto" ? { camera: true, cameraDeviceUid: null }
-          : { camera: true, cameraDeviceUid: choice.uid });
-    if (isMic) storedMicUid = saved.micDeviceUid;
-    else { storedCamera = saved.camera; storedCameraUid = saved.cameraDeviceUid; }
+    const saved = await recorder.setSettings(patch);
+    storedMicUid = saved.micDeviceUid;
+    storedSystemAudio = saved.systemAudio;
+    storedCamera = saved.camera;
+    storedCameraUid = saved.cameraDeviceUid;
   } catch (e) {
     alertUser(`Could not save the ${isMic ? "mic" : "camera"} setting: ${String(e)}`);
   }
-  closePopover();
+  if (row.closesMenu) closePopover();
+  else renderPopover();
   renderIdleStatus();
 }
 
@@ -344,8 +365,9 @@ void (async () => {
     storedCamera = s.camera;
     storedCameraUid = s.cameraDeviceUid;
     storedMicUid = s.micDeviceUid;
+    storedSystemAudio = s.systemAudio;
   } catch {
-    storedCamera = false; storedCameraUid = null; storedMicUid = null;
+    storedCamera = false; storedCameraUid = null; storedMicUid = null; storedSystemAudio = false;
   }
   await refreshDevices();
 })();
@@ -400,6 +422,7 @@ async function refreshCaptureSettingsForRecording(): Promise<void> {
     storedCamera = s.camera;
     storedCameraUid = s.cameraDeviceUid;
     storedMicUid = s.micDeviceUid;
+    storedSystemAudio = s.systemAudio;
   } catch {
     // Best-effort — the "opening…" labels below still reflect whatever this
     // window already had, which is no worse than before this fix existed.
@@ -427,6 +450,10 @@ function setProfileOpen(open: boolean): void {
 }
 profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
 profileCloseBtn.addEventListener("click", () => setProfileOpen(false));
+// STC-456: the options bar's own Settings control, with no renderer of its
+// own, asks main to open this sheet — the same function the profile button's
+// click handler calls, so there is one way this sheet opens, not two.
+recorder.on("ui:open-settings", () => setProfileOpen(true));
 document.addEventListener("keydown", (e) => {
   if (e.code === "Escape") { setProfileOpen(false); closePopover(); }
 });
@@ -454,22 +481,18 @@ const KIND_WORDS: Record<string, string> = {
  * two must not drift: a shot taken by hotkey is the same shot, and reporting it
  * differently would make the window's account of the take library depend on
  * which door the user came through.
+ *
+ * `speak` is false for `still:captured`: a hotkey or menu-bar shot's refusal
+ * or warning is announced by MAIN (STC-465 review), because the door it came
+ * through has no window to rely on. Saying it here as well would show the same
+ * toast twice; the sentence itself is `refusals.ts`'s either way.
  */
-async function reportStill(r: StillResult): Promise<void> {
-  if (r.cancelled) return;
-  if (!r.ok) {
-    alertUser(r.code === "no-displays"
-      ? "Screen Recording permission is required.\nGrant it in System Settings › Privacy & Security › Screen & System Audio Recording, then try again."
-      : r.code === "still-unsupported"
-      ? "Shots need macOS 14 or newer."
-      : r.code === "overlay-open"
-      ? "A shot is already in progress."
-      : `Could not take the shot: ${r.code}\n${r.detail ?? ""}`);
-    return;
-  }
+async function reportStill(r: StillResult, speak = true): Promise<void> {
+  const notice = stillNoticeText(r);
+  if (speak && notice) alertUser(notice);
+  if (!r.ok) return;
   const px = r.shot?.frame ? `${r.shot.frame.width} × ${r.shot.frame.height}` : "";
   stillStatus(`Shot ${KIND_WORDS[r.kind ?? ""] ?? ""} ${px} → ${r.dir?.split("/").pop() ?? ""}`.replace(/\s+/g, " "));
-  if (r.warning) alertUser(r.warning);
   await refreshTakes();
   // The floating thumbnail (STC-296) is presented from the MAIN process, not
   // from here: a capture from the global hotkey or the menu bar has no window
@@ -502,77 +525,7 @@ stillBtn.addEventListener("click", async () => {
 // A capture that started somewhere this window was not: a global hotkey or the
 // menu bar. The shot is on disk whether or not anyone is watching — this only
 // keeps an open window from showing a stale take list and no explanation.
-recorder.on("still:captured", (r: StillResult) => { void reportStill(r); });
-
-/**
- * Why a take did not start, said in terms of what it costs and what to do.
- *
- * A map rather than the ternary chain this replaced: there are two permission
- * refusals now, they read almost identically to a user ("something about
- * privacy settings"), and they send you to DIFFERENT panes. A chain that grows
- * one arm per grant is how the second one ends up phrased as an afterthought
- * of the first.
- *
- * Neither says "try again" without saying what to change first — a start that
- * refused for a missing grant will refuse identically until the grant exists,
- * and inviting a retry is how someone presses Record four times and concludes
- * the app is broken.
- */
-const START_FAULTS: Record<string, string> = {
-  // STC-391: a shot is mid-flight — most likely a self-timer, which
-  // now spends seconds waiting with this window still live and pressable.
-  "capture-in-flight":
-    "A shot is already in progress. Finish or cancel it, then press Record.",
-  "no-displays":
-    "Screen Recording permission is required.\nGrant it in System Settings › " +
-    "Privacy & Security › Screen & System Audio Recording, then try again.",
-  // STC-315. This used to be a WARNING, arriving after the take was already
-  // running: the recording went ahead with no cursor track at all, and since
-  // the pixels never carry a pointer (the transform draws it from events.json)
-  // the resulting file looked like every other take and had no cursor
-  // anywhere. It is a refusal now — nothing was recorded — so the sentence has
-  // to say that first, before the fix, or a user reads "grant this" and
-  // assumes the take they just made is fine.
-  //
-  // The wording changed once macOS was WATCHED doing this (2026-09-09, on
-  // hardware after `tccutil reset ListenEvent`). Two things were wrong with
-  // the first draft, and both were guesses this file could not check from
-  // Linux:
-  //
-  // (1) It assumed `tapCreate` fails SILENTLY and sent the reader to System
-  //     Settings. It does not — macOS raises its own Input Monitoring prompt.
-  //     So the first refusal a user ever sees usually has a dialog on screen
-  //     next to it, and a message that ignores that sends them hunting through
-  //     Settings for something they could have answered in place.
-  //
-  // (2) That prompt says "receive KEYSTROKES from any application". This app
-  //     has never recorded a keypress — the tap's mask is mouse-only, and
-  //     STC-327 exists precisely because nothing here captures keyboard input
-  //     — but macOS's dialog is generic and cannot say so. Somebody reading
-  //     that for a screen recorder has every reason to click Deny, and until
-  //     now nothing told them otherwise. Naming the discrepancy is not
-  //     reassurance for its own sake: it is the difference between a grant
-  //     that gets given and one that gets refused for a sound reason.
-  //
-  // "Quit and reopen" rather than "press Record again", deliberately. Input
-  // Monitoring commonly needs the granted process restarted, and that has NOT
-  // been observed for THIS app: the runs that established the prompt went
-  // through the terminal (which is the granted identity for a directly-spawned
-  // helper), and `npm run app:start` makes the app a child of the terminal and
-  // resolves to its grants too — STC-292's runbook already records that trap.
-  // Only a bundle launched via `open` can settle it. So the instruction is the
-  // one that is sufficient in EITHER case rather than the shorter one that
-  // might send someone in a circle.
-  "event-tap-unavailable":
-    "Nothing was recorded — the take did not start.\n\nThe recorder could not " +
-    "watch your mouse, and the cursor is never captured in the video itself: it " +
-    "is drawn afterwards from what the tap records. A take without it would have " +
-    "no cursor at all, so it is refused rather than made.\n\nmacOS may have just " +
-    "asked to allow this — its dialog says \"keystrokes\", but this app records " +
-    "mouse movement and clicks only, and never what you type.\n\nAllow it, or " +
-    "tick the recorder under System Settings › Privacy & Security › Input " +
-    "Monitoring. Then quit and reopen the recorder and press Record.",
-};
+recorder.on("still:captured", (r: StillResult) => { void reportStill(r, false); });
 
 recordBtn.addEventListener("click", async () => {
   recordBtn.disabled = true;
@@ -586,7 +539,9 @@ recordBtn.addEventListener("click", async () => {
       if (!r.ok && r.cancelled) {
         setState("idle");
       } else if (!r.ok) {
-        alertUser(START_FAULTS[String(r.code)] ?? `Could not start: ${r.code}\n${r.detail ?? ""}`);
+        // `refusals.ts` — the SAME sentence the menu bar and the hotkey get.
+        const text = recordRefusalText(r);
+        if (text) alertUser(text);
         setState("idle");
       } else {
         applyRecordingState(true);
@@ -653,6 +608,9 @@ const ENDED_BY_HELPER: Record<string, string> = {
   // STC-306: SCStream reported itself dead under a live take. The helper
   // stops cleanly rather than sitting in "recording" with no frames arriving.
   "stream-stopped": "The display capture stopped unexpectedly, so the recording was stopped.",
+  // STC-235: a region take whose region no longer fits the changed display.
+  // Clamping would silently record a different area, so the helper stops.
+  "region-out-of-bounds": "The display changed and the recorded area no longer fits on it, so the recording was stopped.",
 };
 
 recorder.on("helper:recording-ended", (i) => {
@@ -748,11 +706,22 @@ recorder.on("pill:state", (s: { collapsed: boolean }) => {
  * nothing else would refresh it until the next `helper:ready` or a real
  * unplug. There is no display equivalent under STC-388's fresh, never-
  * persisted scope pick — a vanished display just refuses the take.
+ *
+ * STC-456 fix round (Finding 2): `writeBarOptions` (main.ts) now sends this
+ * same channel after the Record options bar writes a choice back — a camera
+ * pick, a mic pick, or a system-audio toggle made on the bar, not only the
+ * mic-not-found correction above. All FOUR stored fields are re-read here now,
+ * not just the mic uid — a bar choice this window did not make itself could
+ * change any of them, and a stale `#camera-state`/`#mic-state` (or a popover
+ * still checking the OLD row) is exactly Finding 2's bug.
  */
 recorder.on("settings:changed", () => {
   void (async () => {
     const s = await recorder.getSettings();
     storedMicUid = s.micDeviceUid;
+    storedSystemAudio = s.systemAudio;
+    storedCamera = s.camera;
+    storedCameraUid = s.cameraDeviceUid;
     await refreshDevices();
   })();
 });
@@ -809,7 +778,7 @@ const MIC_FAULTS: Record<string, string> = {
  * deliberately NOT one any more: since STC-315 a take that cannot record the
  * cursor does not start, so the helper answers the `start` request with that
  * code instead of warning about a recording already underway. Its wording
- * lives in START_FAULTS, where it can say "nothing was recorded" — which is
+ * lives in START_FAULTS (`refusals.ts`), where it can say "nothing was recorded" — which is
  * the fact a warning phrased for a live take could not state. Leaving a copy
  * here would be a message that can no longer fire, describing a take that can
  * no longer exist.
@@ -828,22 +797,32 @@ const RECORDING_FAULTS: Record<string, string> = {
 
 /**
  * Emitted by the helper's watchers whenever ANY display changes, recording or
- * not. While recording it is accompanied by display-change-during-recording,
- * which is the one that says what happened to the take; alone it is an idle
- * machine's monitor being plugged in, and not worth an alert.
+ * not — alone it is not worth an alert. A take the display change ENDS says so
+ * through `helper:recording-ended` (`ENDED_BY_HELPER`'s `display-reconfigured`
+ * / `region-out-of-bounds`); one it survives (STC-235) sends `display-refit`,
+ * which is news, not a problem: the recording continues. The helper used to
+ * send a separate `display-change-during-recording` warning before every such
+ * stop; since STC-235 it does not, and the stop's own reason is the one
+ * message.
  */
-const INFORMATIONAL_WARNINGS = new Set(["display-reconfigured"]);
+const INFORMATIONAL_WARNINGS = new Set(["display-reconfigured", "display-refit", "display-refit-rect-mismatch"]);
 
 recorder.on("helper:warning", (l) => {
   const code = String(l.code);
-  if (code === "display-change-during-recording") {
-    alertUser("Display configuration changed — the recording was stopped.");
-    return;
-  }
   if (INFORMATIONAL_WARNINGS.has(code)) {
     // An idle display change is not an alert, but it is a new list of
     // displays; the picker must not go on offering one that was unplugged.
-    if (code === "display-reconfigured") void refreshDisplays();
+    // A survived refit (STC-235) changes the same list, for the same reason.
+    if (code === "display-reconfigured" || code === "display-refit") void refreshDisplays();
+    // A refit is otherwise invisible: it is not a toast, and nothing writes
+    // helper warnings to disk. Its payload (`path` update/restart/record,
+    // `startNs`, `display`, `contentRect`) is the only record of HOW a take
+    // survived a display change, which runbook §1/§2 ask about. So it goes to
+    // the DevTools console. An idle `display-reconfigured` stays silent: it
+    // fires on every monitor change and says nothing about a take.
+    if (code === "display-refit" || code === "display-refit-rect-mismatch") {
+      console.info(`[helper] ${code}`, JSON.stringify(l));
+    }
     return;
   }
   const camera = CAMERA_FAULTS[code];

@@ -46,7 +46,7 @@ describe("the message toast's own clock", () => {
   });
 
   test("the real one still asks for more than the floor — the bug this fixes", () => {
-    // The `event-tap-unavailable` refusal's real length (renderer.ts). At the
+    // The `event-tap-unavailable` refusal's real length (refusals.ts). At the
     // flat 4 s this replaced, a reader got the floor for a message that wants
     // eight times it; the assertion is simply that length now MATTERS.
     expect(messageToastMs("x".repeat(572))).toBe(MESSAGE_TOAST_MAX_MS);

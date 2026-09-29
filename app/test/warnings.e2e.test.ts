@@ -30,7 +30,7 @@ const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
-async function launchAndPressRecord(env: Record<string, string>) {
+async function launchReady(env: Record<string, string>) {
   // An EMPTY recordings root, deliberately: the refusal test reads this
   // directory back to prove no take was created, and seeding it with a fixture
   // take would make "is it empty?" unanswerable. Nothing in this file opens a
@@ -48,8 +48,13 @@ async function launchAndPressRecord(env: Record<string, string>) {
   // out three real seconds on every take.
   await withoutCountdown(win);
   await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+  return { win, recordings };
+}
+
+async function launchAndPressRecord(env: Record<string, string>, door: "window" | "menu-bar" = "window") {
+  const { win, recordings } = await launchReady(env);
   // STC-388: `#record` opens the overlay; the bar's own Record starts the take.
-  await startRecordFlow(app, win);
+  await startRecordFlow(app!, win, { door });
   return { win, recordings };
 }
 
@@ -142,7 +147,7 @@ describe("a start the helper refuses (STC-315)", () => {
     // STC-315 on, does not exist.
     //
     // Mutation-proven three ways, each failing exactly this test of the four:
-    // drop the renderer's START_FAULTS entry, drop the stand-in's refusal, or
+    // drop START_FAULTS' entry (then renderer.ts's, now refusals.ts's), drop the stand-in's refusal, or
     // set `recording = true` on the failure path. A FOURTH mutation — the
     // stand-in claiming `state = "recording"` while still answering `error` —
     // deliberately did NOT fail, and that is a fact about the app rather than
@@ -159,6 +164,51 @@ describe("a start the helper refuses (STC-315)", () => {
     // satisfy this, and the assertion is the same either way.
     const takes = readdirSync(recordings).filter((n) => !n.startsWith("."));
     expect(takes).toEqual([]);
+  }, 120_000);
+});
+
+/**
+ * The SAME refusals, through the doors with no renderer waiting on the answer
+ * (STC-465 review).
+ *
+ * The menu-bar item and the global hotkeys are the NORMAL way into a
+ * menu-bar-first app, and until this fix a refusal through either said
+ * nothing: the menu bar discarded `runRecordFlow`'s answer, the Record hotkey
+ * only `console.error`ed it, and a shot's refusal travelled only over
+ * `still:captured` — to a main window that is usually closed. So a user could
+ * wait out the countdown, be refused, and record an entire demo into nothing.
+ *
+ * Driven through the REAL tray callback (`__stcTrayOnSelect`, the one seam
+ * there is — see `_record-flow.ts`'s `door`), which reaches the same
+ * `recordAndAnnounce`/`captureAndAnnounce` the hotkeys call. Both tests were
+ * watched failing before the fix: no toast ever appeared. The main window IS
+ * open here — it has to be on Linux CI, where closing the last window quits
+ * the app — which makes these strictly stronger than they look: the window
+ * being right there was not enough, because nothing ever told it.
+ */
+describe("a refusal through the menu bar or a hotkey is shown too (STC-465 review)", () => {
+  test("a Record refused after the menu-bar item started it says why", async () => {
+    const { win, recordings } = await launchAndPressRecord({
+      STC_FAKE_START_ERROR: "event-tap-unavailable",
+    }, "menu-bar");
+    await expect.poll(() => toastText(app!), { timeout: 15_000 }).toMatch(/Nothing was recorded/);
+    // The same sentence the window's own button gets — one mapping
+    // (`refusals.ts`), so the door cannot change what the user is told.
+    expect(await toastText(app!)).toMatch(/Input Monitoring/);
+    // And no take, and no window left believing one is running.
+    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    expect(readdirSync(recordings).filter((n) => !n.startsWith("."))).toEqual([]);
+  }, 120_000);
+
+  test("a shot refused after the menu-bar item started it says why", async () => {
+    const { win } = await launchReady({ STC_FAKE_STILL_ERROR: "no-displays" });
+    // "display" needs no overlay — the whole display under the pointer — so
+    // the refusal comes straight back from the helper.
+    await app!.evaluate(() => (globalThis as any).__stcTrayOnSelect("action:display"));
+    await expect.poll(() => toastText(app!), { timeout: 15_000 })
+      .toMatch(/Screen Recording permission is required/);
+    // No shot claimed in the window that did not ask for one.
+    expect(await win.getAttribute("#stillstatus", "hidden")).not.toBeNull();
   }, 120_000);
 });
 
@@ -198,6 +248,36 @@ describe("helper warnings during a take", () => {
     // Give it the time the others needed to appear, then require it did not.
     await new Promise((r) => setTimeout(r, 1_000));
     expect(await toastPage(app!)).toBeUndefined();
+  }, 120_000);
+
+  test("a display refit mid-take is not an alert, and the take keeps recording (STC-235)", async () => {
+    const win = await recordWithWarning("display-refit");
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect(await toastPage(app!)).toBeUndefined();
+    expect(await win.textContent("#state")).toBe("recording");
+    // Not a toast, but not invisible either: the refit's payload is logged to
+    // the main window's console. The fake helper sends it 60 ms after start,
+    // before this test holds the window, so read the page's console HISTORY
+    // rather than subscribing late.
+    await expect.poll(async () => (await win.consoleMessages())
+      .some((m) => m.type() === "info" && m.text().startsWith("[helper] display-refit")),
+      { timeout: 10_000 }).toBe(true);
+  }, 120_000);
+
+  test("a region that no longer fits its refit display ends the take, in words (STC-235)", async () => {
+    // Modelled on "a display stream that dies ends the take" above, same
+    // unsolicited-stop env vars — just a different reason, and no warning
+    // precedes it (a region going out of bounds is not a dead stream).
+    const { win } = await launchAndPressRecord({
+      STC_FAKE_STREAM_DEATH_MS: "2500",
+      STC_FAKE_STOP_REASON: "region-out-of-bounds",
+    });
+    await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
+    await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
+    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => toastText(app!), { timeout: 10_000 })
+      .toMatch(/recorded area no longer fits on it, so the recording was stopped/);
   }, 120_000);
 
   // STC-412 Task 7: none of the tests above prove a toast actually goes away

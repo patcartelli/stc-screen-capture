@@ -1,12 +1,13 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { homedir, tmpdir } from "node:os";
 import {
-  mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync, utimesSync,
+  mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync, utimesSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
   tempTakesRoot, insideTempTakesRoot, newTempTakeDir, promoteTake,
   purgeStaleTempTakes, listTempTakes, TEMP_TAKE_MAX_AGE_MS,
+  markOfferedForRecovery, RECOVERY_OFFERED_FILE,
   legacyTempTakesRoot, migrateLegacyTempTakes,
 } from "../src/temp-takes.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "../src/product.js";
@@ -168,40 +169,95 @@ describe("purgeStaleTempTakes", () => {
   });
   afterEach(() => { rmSync(tempRoot, { recursive: true, force: true }); });
 
-  test("removes a take older than 7 days, going by its OWN timestamped name", async () => {
-    const stale = join(tempRoot, "2020-01-01_00-00-00");
-    mkdirSync(stale, { recursive: true });
-    writeFileSync(join(stale, "shot.json"), "{}");
+  function take(name: string, files: Record<string, string> = { "shot.json": "{}" }): string {
+    const dir = join(tempRoot, name);
+    mkdirSync(dir, { recursive: true });
+    for (const [f, body] of Object.entries(files)) writeFileSync(join(dir, f), body);
+    return dir;
+  }
+
+  // ── The STC-465 review finding: nothing is purged before it is offered ──
+  //
+  // A recording whose promotion failed, or a still whose panel was ignored,
+  // legitimately sits in temp storage waiting for the next launch's recovery
+  // prompt — main.ts promises the user exactly that. Measuring age from the
+  // take's own NAME deleted such a take on the first relaunch (or 12-hour
+  // sweep) after day 7, before the prompt could ever show it. Watched failing
+  // against the name-based rule: this take was purged.
+  test("a take NEVER offered for recovery is never purged, however old", async () => {
+    const stranded = take("2020-01-01_00-00-00", { "anchors.json": "{}", "display.mp4": "x" });
     const now = new Date("2026-09-16T00:00:00").getTime();
-    const purged = await purgeStaleTempTakes(env, now);
+    expect(await purgeStaleTempTakes(env, now)).toEqual([]);
+    expect(existsSync(stranded)).toBe(true);
+    // Not even a directory this module did not name, aged by mtime — the old
+    // fallback — since age from creation is no longer the question at all.
+    const weird = take("not-a-stamp");
+    const old = Date.now() - TEMP_TAKE_MAX_AGE_MS * 10;
+    utimesSync(weird, old / 1000, old / 1000);
+    expect(await purgeStaleTempTakes(env, Date.now())).toEqual([]);
+    expect(existsSync(weird)).toBe(true);
+  });
+
+  test("a take offered 7+ days ago is purged, permanently", async () => {
+    const stale = take("2020-01-01_00-00-00");
+    const offered = new Date("2026-09-01T00:00:00").getTime();
+    await markOfferedForRecovery(stale, offered);
+    const purged = await purgeStaleTempTakes(env, offered + TEMP_TAKE_MAX_AGE_MS + 1);
     expect(purged).toEqual(["2020-01-01_00-00-00"]);
     expect(existsSync(stale)).toBe(false);
   });
 
-  test("a take younger than 7 days survives", async () => {
+  test("age runs from the OFFER, not from the capture", async () => {
+    // Captured years ago, offered an hour ago: the user has had an hour.
+    const dir = take("2020-01-01_00-00-00");
     const now = new Date("2026-09-16T12:00:00").getTime();
-    const recent = join(tempRoot, "2026-09-15_12-00-00");
-    mkdirSync(recent, { recursive: true });
-    const purged = await purgeStaleTempTakes(env, now);
-    expect(purged).toEqual([]);
-    expect(existsSync(recent)).toBe(true);
+    await markOfferedForRecovery(dir, now - 60 * 60 * 1000);
+    expect(await purgeStaleTempTakes(env, now)).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
   });
 
   test("exactly at the boundary is purged; one millisecond short survives", async () => {
     const at = new Date("2026-09-01T00:00:00").getTime();
     const name = "2026-09-01_00-00-00";
-    mkdirSync(join(tempRoot, name), { recursive: true });
+    await markOfferedForRecovery(take(name), at);
     expect(await purgeStaleTempTakes(env, at + TEMP_TAKE_MAX_AGE_MS - 1)).toEqual([]);
     expect(await purgeStaleTempTakes(env, at + TEMP_TAKE_MAX_AGE_MS)).toEqual([name]);
   });
 
-  test("a directory this module did not name falls back to mtime", async () => {
-    const weird = join(tempRoot, "not-a-stamp");
-    mkdirSync(weird, { recursive: true });
-    const old = Date.now() - TEMP_TAKE_MAX_AGE_MS - 60_000;
-    utimesSync(weird, old / 1000, old / 1000);
-    const purged = await purgeStaleTempTakes(env, Date.now());
-    expect(purged).toEqual(["not-a-stamp"]);
+  test("the FIRST offer is the one that counts — a re-offer does not restart the clock", async () => {
+    const dir = take("2026-09-01_00-00-00");
+    const first = new Date("2026-09-01T00:00:00").getTime();
+    await markOfferedForRecovery(dir, first);
+    await markOfferedForRecovery(dir, first + 6 * 24 * 60 * 60 * 1000);
+    expect(readFileSync(join(dir, RECOVERY_OFFERED_FILE), "utf8")).toBe(String(first));
+    expect(await purgeStaleTempTakes(env, first + TEMP_TAKE_MAX_AGE_MS)).toEqual(["2026-09-01_00-00-00"]);
+  });
+
+  test("an unreadable marker reads as NOT offered — the direction that keeps the take", async () => {
+    // `Number("")` is 0, which is finite: a zero-byte marker (a crash mid
+    // `writeFile`) must not read as an offer made at the epoch.
+    for (const [name, body] of [["2020-01-01_00-00-00", ""], ["2020-01-02_00-00-00", "  \n"],
+                                ["2020-01-03_00-00-00", "garbage"], ["2020-01-04_00-00-00", "-5"]]) {
+      take(name!, { "shot.json": "{}", [RECOVERY_OFFERED_FILE]: body! });
+    }
+    expect(await purgeStaleTempTakes(env, Date.now())).toEqual([]);
+    // ...and a later offer repairs it rather than being refused by it.
+    const dir = join(tempRoot, "2020-01-01_00-00-00");
+    await markOfferedForRecovery(dir, 1234);
+    expect(readFileSync(join(dir, RECOVERY_OFFERED_FILE), "utf8")).toBe("1234");
+  });
+
+  test("promotion leaves the marker behind — it is temp-storage bookkeeping, not part of the take", async () => {
+    const libRoot = mkdtempSync(join(tmpdir(), "stc-purge-lib-"));
+    try {
+      const dir = take("2026-09-16_10-00-00");
+      await markOfferedForRecovery(dir);
+      const dest = await promoteTake({ ...env, STC_RECORDINGS_DIR: libRoot }, null, dir);
+      expect(existsSync(join(dest, "shot.json"))).toBe(true);
+      expect(existsSync(join(dest, RECOVERY_OFFERED_FILE))).toBe(false);
+    } finally {
+      rmSync(libRoot, { recursive: true, force: true });
+    }
   });
 
   test("an empty or missing temp root is not an error", async () => {
@@ -233,12 +289,29 @@ describe("listTempTakes — crash recovery's input", () => {
   test("classifies by which document is inside — shot.json is a still, anchors.json a recording", async () => {
     put("2026-09-16_09-00-00", ["shot.json", "frame.png"]);
     put("2026-09-16_10-00-00", ["anchors.json", "events.json", "display.mp4"]);
-    put("2026-09-16_11-00-00", []);
     const items = await listTempTakes(env);
     const kinds = Object.fromEntries(items.map((i) => [i.name, i.kind]));
     expect(kinds["2026-09-16_09-00-00"]).toBe("still");
     expect(kinds["2026-09-16_10-00-00"]).toBe("recording");
-    expect(kinds["2026-09-16_11-00-00"]).toBe("unknown");
+  });
+
+  test("neither document, but something survived: unknown — the helper died mid-take", async () => {
+    // The shape a `kill -9` or a `recording-lost` leaves: anchors.json is
+    // written at STOP, so a take that never stopped has a video and no
+    // document. Crash recovery must be able to tell this from `empty`.
+    const dir = join(tempRoot, "2026-09-16_12-00-00");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "display.mp4"), Buffer.alloc(1024, 1));
+    const [item] = await listTempTakes(env);
+    expect(item!.kind).toBe("unknown");
+  });
+
+  test("nothing with a byte in it: empty — there is nothing to offer anyone", async () => {
+    put("2026-09-16_11-00-00", []);                       // mkdir, then died
+    put("2026-09-16_11-00-01", ["display.mp4"]);          // a zero-byte file
+    put("2026-09-16_11-00-02", [".recovery-offered-at"]); // our own bookkeeping only
+    const items = await listTempTakes(env);
+    expect(items.map((i) => i.kind)).toEqual(["empty", "empty", "empty"]);
   });
 
   test("most recent first, matching the library grid's own sort", async () => {

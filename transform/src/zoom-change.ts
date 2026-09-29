@@ -1,15 +1,17 @@
-import type { SessionEvent } from "./types.js";
+import type { Anchors, SessionEvent } from "./types.js";
 import type { Changes, ChangeFrame } from "./changes.js";
 import type { ZoomWindow } from "./zoom.js";
 import type { Rect } from "./spaces.js";
-import { toDisplayLocal, pixelsToUv } from "./spaces.js";
+import { globalToCaptureUv } from "./spaces.js";
+import { geometryAt } from "./display-geometry.js";
+import { frameIndexAt } from "./time.js";
 import { clampRectToFrame } from "./zoom-override.js";
 
 /**
  * Auto-zoom stage 2 (STC-326): WHERE to zoom, once stage 1 (`zoom.ts`) has
  * already decided WHEN. `deriveZoomCrop` is the pure function the ticket
- * asks for — `(window, changes, display) -> a crop in capture UV, or null`
- * — and it is the AUTOMATIC answer only: a manual override (STC-330,
+ * asks for — `(window, changes, anchors, frames) -> a crop in capture UV, or
+ * null` — and it is the AUTOMATIC answer only: a manual override (STC-330,
  * `zoom-override.ts`) always wins over this, which is why `render.ts` calls
  * `resolvedCrop` first and falls back here only when a window has none.
  *
@@ -105,8 +107,6 @@ export const VIEWPORT_MAX_FRACTION = 0.7;
  */
 export const CURSOR_DEAD_ZONE_UV = 0.06;
 
-interface DisplayGeom { originX: number; originY: number; pointWidth: number; pointHeight: number }
-
 /**
  * The three-tier floor/pad/clamp every candidate crop goes through, whether
  * it came from the change track or the cursor fallback — one place so the
@@ -192,8 +192,12 @@ function hasPosition(e: SessionEvent): e is Extract<SessionEvent, { x: number; y
 /**
  * The locked fallback: greedy dead-zone clustering of the window's own
  * trigger positions (BRIEF.md's original "movement decides where", demoted
- * to second-best signal by this ticket). Global points -> capture UV needs
- * only the display block, since UV is scale-invariant over it.
+ * to second-best signal by this ticket). Global points -> capture UV goes
+ * through `globalToCaptureUv`, one sample at a time, each with the geometry
+ * of the frame SHOWN at that sample's time (STC-235) — a refit mid-window
+ * means the two ends of a drag can be mapped through two different display
+ * blocks and content rects, and still land in the one shared capture UV
+ * space this clustering operates in.
  *
  * Greedy dead-zone, precisely: the cluster starts as a small rect centred on
  * the first point; a later point already inside the current rect is
@@ -202,10 +206,12 @@ function hasPosition(e: SessionEvent): e is Extract<SessionEvent, { x: number; y
  * point and the cluster never grows past the starting dead zone; a drag's
  * held moves grow it to the drag's own bounding box.
  */
-function deriveFromCursor(window: ZoomWindow, display: DisplayGeom): Rect | null {
-  const displayRect: Rect = { x: 0, y: 0, width: display.pointWidth, height: display.pointHeight };
-  const points = window.events.filter(hasPosition)
-    .map((e) => pixelsToUv(toDisplayLocal(e, { x: display.originX, y: display.originY }), displayRect));
+function deriveFromCursor(window: ZoomWindow, anchors: Anchors, frames: readonly number[]): Rect | null {
+  const points = window.events.filter(hasPosition).map((e) => {
+    const fi = frameIndexAt(frames, e.t);
+    const g = geometryAt(anchors, fi === null ? null : frames[fi]!);
+    return globalToCaptureUv(e, g.display, g.contentRect, anchors.capture);
+  });
   if (points.length === 0) return null;
 
   const z = CURSOR_DEAD_ZONE_UV;
@@ -221,15 +227,18 @@ function deriveFromCursor(window: ZoomWindow, display: DisplayGeom): Rect | null
 
 /**
  * The one entry point `render.ts` calls once a window has no manual
- * override. `display` is `session.anchors.display`; `changes` is
- * `session.changes`, absent on every take today.
+ * override. `anchors` is `session.anchors` — the geometry timeline
+ * (`anchors.geometry`, STC-235) a sample is mapped through per its own
+ * frame, falling back to the bare top-level `display` over the whole
+ * capture when there is no timeline at all; `frames` is `session.frames`;
+ * `changes` is `session.changes`, absent on every take today.
  */
 export function deriveZoomCrop(
-  window: ZoomWindow, changes: Changes | undefined, display: DisplayGeom,
+  window: ZoomWindow, changes: Changes | undefined, anchors: Anchors, frames: readonly number[],
 ): Rect | null {
   if (changes) {
     const framesInWindow = changes.frames.filter((f) => f.t >= window.startNs && f.t <= window.endNs);
     if (framesInWindow.length > 0) return deriveFromChanges(window, changes, framesInWindow);
   }
-  return deriveFromCursor(window, display);
+  return deriveFromCursor(window, anchors, frames);
 }

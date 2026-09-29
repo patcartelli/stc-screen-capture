@@ -221,9 +221,9 @@ export class HelperSupervisor {
       }
     });
 
-    // A stop nobody asked for: the helper decided, typically because the
-    // display was reconfigured (AVAssetWriter cannot change output dimensions
-    // mid-file, so it stops rather than corrupting the take).
+    // A stop nobody asked for: the helper decided — the captured display went
+    // away, a region no longer fits it, or the stream died. A display change
+    // it SURVIVES is a `display-refit` warning, not a stop (STC-235).
     c.on("stopped", (line) => {
       if (typeof line.seq === "number") return;   // answered a request; already handled
       void this.endRecording(String(line.reason ?? "helper-stopped"), line);

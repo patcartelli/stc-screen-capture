@@ -170,16 +170,25 @@ process.stdin.on("data", (chunk) => {
         // asked for it — with reason "stream-stopped", and the heartbeat goes
         // idle. The order is the subject: the warning alone used to be all the
         // user got, with the helper still claiming to record.
+        // STC-235: STC_FAKE_STOP_REASON overrides the unsolicited stop's
+        // reason (default "stream-stopped", unchanged) — e.g.
+        // "region-out-of-bounds" for a refit that no longer fits. The
+        // stream-stopped warning that precedes it is real only for the
+        // stream-stopped reason; a region going out of bounds is not a dead
+        // stream and the helper would not say so.
         const deathMs = Number(process.env.STC_FAKE_STREAM_DEATH_MS) || 0;
+        const stopReason = process.env.STC_FAKE_STOP_REASON || "stream-stopped";
         if (deathMs > 0) {
           setTimeout(() => {
             if (state !== "recording") return;
-            send("warning", { code: "stream-stopped", detail: "fake: the display stream died" });
+            if (stopReason === "stream-stopped") {
+              send("warning", { code: "stream-stopped", detail: "fake: the display stream died" });
+            }
             const dir = session;
             state = "idle";
             session = null;
             recordingStartedAt = null;
-            send("stopped", { dir, elapsedMs: deathMs, reason: "stream-stopped" });
+            send("stopped", { dir, elapsedMs: deathMs, reason: stopReason });
           }, deathMs);
         }
         break;

@@ -3,6 +3,8 @@ import { demuxAudioTrack, type DemuxedAudio } from "./demux-audio.js";
 import type { Anchors, Session, SessionEvent } from "./types.js";
 import type { Changes } from "./changes.js";
 import type { ByteSource } from "./chunk-reader.js";
+import { checkGeometry } from "./display-geometry.js";
+import { SessionLoadError } from "./session-error.js";
 
 /**
  * Turns a recorded session on disk into the Session the transform consumes.
@@ -11,12 +13,10 @@ import type { ByteSource } from "./chunk-reader.js";
  * paths, so the same code serves Node tests and the browser export sink.
  */
 
-export class SessionLoadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionLoadError";
-  }
-}
+// Re-exported so every existing `from "./session.js"` import keeps working —
+// the class itself lives in session-error.ts to avoid a circular import with
+// display-geometry.ts (checkGeometry throws it; session.ts calls checkGeometry).
+export { SessionLoadError };
 
 export interface SessionInput {
   anchors: Anchors;
@@ -111,6 +111,57 @@ export function rebaseMicAudio(raw: DemuxedAudio, measuredFirstNs: number): Demu
   };
 }
 
+/**
+ * STC-235, found on the first real-hardware run. A refit's `startNs` is the
+ * helper's own number for the first refitted frame, in the helper's clock —
+ * but `geometryAt` compares it against the DEMUXED PTS of the frame being
+ * shown, and display.mp4 stores the session-start gap as an empty edit
+ * quantised to the 90 kHz movie timescale (the same reason `checkFrameOffset`
+ * needs a tolerance at all). Every demuxed PTS therefore sits the same
+ * sub-tick amount off the helper's clock — -10583 ns on that take, where the
+ * refitted frame demuxed at 1260200209 against a startNs of 1260210792, so
+ * geometryAt chose entry 0 for it and the first refitted frame was drawn
+ * under the OLD geometry.
+ *
+ * So each entry i >= 1 is snapped to the FIRST demuxed frame f with
+ * f >= startNs - OFFSET_TOLERANCE_NS: the frame the helper meant, read on the
+ * file's clock. Entry 0 is left alone — it must keep equalling
+ * capture.firstFrameNs, and geometryAt already falls back to it for any frame
+ * before its startNs. An entry with no such frame (the refit landed on a frame
+ * the writer then dropped at the very end) is left UNCHANGED: geometryAt can
+ * never select it, which is correct, and refusing the take would turn a
+ * harmless trailing entry into a recording nobody can open.
+ *
+ * Order: snapping is monotone non-decreasing in startNs (a larger startNs can
+ * only move the "first frame >= startNs - tol" later), so snapped entries stay
+ * sorted; an unsnapped entry has startNs - tol > the last frame >= every
+ * snapped value, so it stays strictly after them. The one way strictness is
+ * lost is two refits snapping onto the SAME frame (both happened between two
+ * written frames). Then only the LATER entry is kept: that frame was produced
+ * after both refits applied, so the later configuration is the one it was
+ * actually captured under — and it is also what geometryAt's last-match-wins
+ * scan would have chosen anyway, so dropping the earlier one changes no
+ * selection, it only restores the strictly-increasing shape every other
+ * reader of `geometry` assumes.
+ *
+ * Returns the input unchanged when there is nothing to snap; never mutates it.
+ */
+function snapGeometryToFrames(anchors: Anchors, framesNs: readonly number[]): Anchors {
+  const g = anchors.geometry;
+  if (!g || g.length < 2) return anchors;
+  const out = [g[0]!];
+  let fi = 0;
+  for (let i = 1; i < g.length; i++) {
+    const e = g[i]!;
+    const floor = e.startNs - OFFSET_TOLERANCE_NS;
+    while (fi < framesNs.length && framesNs[fi]! < floor) fi++;
+    const snapped = fi < framesNs.length ? { ...e, startNs: framesNs[fi]! } : e;
+    if (out.length > 1 && out[out.length - 1]!.startNs === snapped.startNs) out.pop();
+    out.push(snapped);
+  }
+  return { ...anchors, geometry: out };
+}
+
 export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   const { anchors, events } = input;
 
@@ -135,12 +186,17 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // v6's `system` block (STC-418) is a second audio track, loaded below on
   // exactly the mic's terms. Nothing downstream consumes `systemAudio` yet —
   // export's weighted sum with the mic is a later PR of the same ticket.
+  //
+  // v7's `geometry` (STC-235) is validated here and read by render() through
+  // display-geometry.ts's geometryAt.
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
-    anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6
+    anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
+    anchors?.version !== 7
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5 or 6)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6 or 7)`);
   }
+  checkGeometry(anchors);
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.
   if (events?.version !== 1 && events?.version !== 2) {
@@ -200,7 +256,7 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   if (video.framesNs.length === 0) {
     throw new SessionLoadError("display.mp4 contains no frames");
   }
-  checkFrameOffset("display.mp4", (anchors.capture as { firstFrameNs?: number }).firstFrameNs, video.framesNs[0]!);
+  checkFrameOffset("display.mp4", anchors.capture.firstFrameNs, video.framesNs[0]!);
 
   let cameraVideo: DemuxedVideo | undefined;
   if (claimsCamera && input.cameraMp4) {
@@ -233,7 +289,9 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   }
 
   return {
-    anchors,
+    // checkGeometry above ran on the helper's ORIGINAL document; this is the
+    // same timeline read on the file's clock — see snapGeometryToFrames.
+    anchors: snapGeometryToFrames(anchors, video.framesNs),
     events: [...events.events].sort((a, b) => a.t - b.t),
     frames: video.framesNs,
     cameraFrames: cameraVideo?.framesNs,

@@ -536,6 +536,7 @@
                 "stopped-during-start",
                 "window-resized",
                 "window-closed",
+                "region-out-of-bounds",
                 "device-lost",
                 "error",
                 "quit",
@@ -546,6 +547,7 @@
                 "stopped-during-start-timeout",
                 "window-resized-timeout",
                 "window-closed-timeout",
+                "region-out-of-bounds-timeout",
                 "device-lost-timeout",
                 "error-timeout",
                 "quit-timeout",
@@ -556,7 +558,7 @@
               "pattern": "^signal-[0-9]+(-timeout)?$"
             }
           ],
-          "description": "Why the recording ended, as the helper writes it. Same families anchors-2 describes, plus 'window-resized'/'window-closed' (STC-370): a window-scope take whose window changed size or went away mid-take ends the same clean way a display reconfiguration does. A '-timeout' suffix on ANY of them means the writer did not finalise in time and the sidecars were written anyway. helper/test/stop-reasons.test.ts holds this schema to the reasons the Swift can actually produce."
+          "description": "Why the recording ended, as the helper writes it. Same families anchors-2 describes, plus 'window-resized'/'window-closed' (STC-370): a window-scope take whose window changed size or went away mid-take ends the same clean way a display reconfiguration does. Also 'region-out-of-bounds' (STC-235), widened into this version after the fact: a region take the display-change classifier stops BEFORE any refit has landed has no geometry timeline, so it stays at this version rather than being forced to anchors-7, and its stop reason must still validate here. A '-timeout' suffix on ANY of them means the writer did not finalise in time and the sidecars were written anyway. helper/test/stop-reasons.test.ts holds this schema to the reasons the Swift can actually produce."
         }
       }
     }
