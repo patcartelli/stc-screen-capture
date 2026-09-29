@@ -327,7 +327,12 @@
     #pill:hover { background: #17171a; }
     body.pill-collapsed #pill {
       position: static; top: auto; left: auto; visibility: visible;
-      width: 100%; height: 100%;
+      /* The VIEWPORT, not 100%. The parents (#record-row, body) have auto
+         height, so `height: 100%` fell back to the content height, one line
+         of the timer font inside a 26px window. That went unseen while pill
+         and body were the same colour; STC-447's ring drew a stadium hugging
+         the digits (seen on hardware 2026-09-29). */
+      width: 100vw; height: 100vh;
     }
     #pill-dot {
       width: 8px; height: 8px; border-radius: 50%; flex: none;
