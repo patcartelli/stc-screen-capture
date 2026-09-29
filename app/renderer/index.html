@@ -317,11 +317,22 @@
       display: inline-flex; align-items: center; gap: 6px;
       padding: 0 10px; height: 32px; box-sizing: border-box;
       background: #0b0b0c; color: #f5f5f5; font: var(--type-timer-pill)/1 var(--font-pixel);
-      border: none; border-radius: 16px; cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 16px; cursor: pointer;
+      transition: background-color 120ms ease;
     }
+    /* STC-447: the ring above and this hover mirror pill.ts's PILL_THEME.ring
+       and .hover. There is no box-shadow on purpose: collapsed, the pill fills
+       an opaque window edge to edge, so a CSS shadow would be clipped away.
+       The native window shadow already does that job. */
+    #pill:hover { background: #17171a; }
     body.pill-collapsed #pill {
       position: static; top: auto; left: auto; visibility: visible;
-      width: 100%; height: 100%;
+      /* The VIEWPORT, not 100%. The parents (#record-row, body) have auto
+         height, so `height: 100%` fell back to the content height, one line
+         of the timer font inside a 26px window. That went unseen while pill
+         and body were the same colour; STC-447's ring drew a stadium hugging
+         the digits (seen on hardware 2026-09-29). */
+      width: 100vw; height: 100vh;
     }
     #pill-dot {
       width: 8px; height: 8px; border-radius: 50%; flex: none;

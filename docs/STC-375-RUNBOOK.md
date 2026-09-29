@@ -88,6 +88,18 @@ Launch the app normally (`npm run app:start`) and press Record.
   point of hatching it), or does it just look broken? Is the whole pill
   legible against whatever is likely to be behind it (light desktop
   backgrounds especially, since the pill itself is always dark)?
+  **STC-447 (2026-09-29) added a 1px `rgba(255,255,255,0.14)` ring and a
+  hover tint for this. CONFIRMED on hardware 2026-09-29: the ring follows
+  the pill's outer edge and its ends sit cleanly in the window's corners.
+  (The first look caught the ring hugging the digits. The collapsed pill was
+  content-height, not window-height; fixed with `100vw`/`100vh`.)** Check three things over a light
+  desktop, a dark one, and a dark app window: (a) the ring gives the pill a
+  visible edge without reading as a second colour; (b) the ring's curve sits
+  cleanly inside the window's own rounded corners. The ring is CSS
+  (`border-radius` clamped to a 26px stadium) and the corners are macOS's, so
+  a sliver of mismatch at the ends is the thing to look for; (c) the native
+  window shadow is present. There is no CSS shadow, because it would be
+  clipped by the opaque window.
 - Click the pill itself. **CONFIRMED 2026-09-14: clicking it does stop the
   recording and restore the window** — the only reachable control while
   collapsed, by design (see "What changed" above). Still open: does the

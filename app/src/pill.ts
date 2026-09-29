@@ -160,4 +160,18 @@ export const PILL_THEME = {
   dotLive: "#ff3b30",
   dotPaused: "#f5f5f5",
   meterHatch: "#3a3a3c",
+  /**
+   * STC-447, answering the STC-375 runbook's open question: "is the whole
+   * pill legible against whatever is likely to be behind it". A dark pill had
+   * no edge of its own; a faint light hairline gives it one on any
+   * background. Fixed, not a token, for the same reason as everything above.
+   *
+   * There is deliberately NO shadow value here. PR #220 had one, but the
+   * collapsed pill fills an opaque window edge to edge (index.html's
+   * `body.pill-collapsed #pill`), so a CSS shadow is clipped to nothing. The
+   * window's own native macOS shadow is the shadow.
+   */
+  ring: "rgba(255, 255, 255, 0.14)",
+  /** The hover fill: says "this is a button" without a label. */
+  hover: "#17171a",
 } as const;
