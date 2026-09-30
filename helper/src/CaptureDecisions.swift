@@ -510,3 +510,29 @@ func decideWindowWatch(initial: (width: Double, height: Double),
                 || abs(current.height - initial.height) > tolerance
     return changed ? .resized : .unchanged
 }
+
+// ── runtime errors a disconnect already explains (STC-433) ──────────────────
+
+/// `AVError.Code.deviceWasDisconnected`, in `AVFoundationErrorDomain`. Spelled
+/// as numbers here because this file deliberately imports no AVFoundation;
+/// `helper/test/decisions/main.swift` checks both against Apple's own symbols.
+let AV_ERROR_DOMAIN = "AVFoundationErrorDomain"
+let AV_DEVICE_WAS_DISCONNECTED = -11808
+
+/// Is this `AVCaptureSessionRuntimeError` just the disconnect we already know about?
+///
+/// Pulling a mic or camera mid-take makes AVFoundation say it twice: an
+/// `AVCaptureDeviceWasDisconnected` (handled — `handleMicDisconnected` /
+/// `handleCameraDisconnected` end only that track and warn with
+/// `mic-disconnected` / `camera-disconnected`) AND a runtime error on that
+/// device's own capture session, `deviceWasDisconnected`, whose Apple
+/// description is "Recording Stopped". Forwarded as `av-runtime-error`, the
+/// window showed "A capture device reported an error during the recording.
+/// Recording Stopped" over a take that had NOT stopped (hardware pass,
+/// 2026-09-29: the take ran on 11 s past the unplug with its mic track kept).
+/// Such an error is reported as `info`, not a warning: the specific
+/// disconnect warning already says what happened, and says it correctly.
+/// Every other runtime error is still a warning.
+func runtimeErrorIsDeviceDisconnect(domain: String?, code: Int?) -> Bool {
+    domain == AV_ERROR_DOMAIN && code == AV_DEVICE_WAS_DISCONNECTED
+}

@@ -1674,3 +1674,15 @@ configuration. Don't re-discover these.
   collected against a flow carrying an unrelated fault is contaminated, not a pass**: §3's "extra work,
   but maybe acceptable" was judged with the library popping up throughout, which is itself extra work and
   not the cost §3 asks about, so it has to be re-run rather than banked.
+- **With the Mac's only display asleep, Electron never reaches `ready`, and every e2e test times out
+  (2026-09-29, found on the STC-433 branch).** A full `npm test` came back 104 failed / 2535 passed,
+  every failure an e2e test at ~102 s (`Test timed out in 30000ms`, then `app.close() did not finish
+  within 72000ms`), with 35 test Electrons left wedged behind it — not killable by SIGTERM. It looked
+  like the helper change under test; that test uses the FAKE helper. The machine was a MacBook Pro
+  lid-closed on one external monitor whose `system_profiler SPDisplaysDataType` read `Display Asleep:
+  Yes`, and a two-line Electron app (`console.log` in main, `app.whenReady()` → log) printed its first
+  line and never the second. Display woken: the same trivial app reached `ready`, and the same suite
+  passed 2639/2639. Before believing a wall of e2e timeouts on a real Mac, check `Display Asleep` (and
+  run a long suite under `caffeinate -d`); clean up with `pkill -9 -f
+  "<worktree>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron -r .*playwright-core"`,
+  which matches only Playwright-launched test instances, never a hand-started app.
