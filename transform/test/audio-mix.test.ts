@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks,
   LEVEL_FLOOR_DB, levelFromSliderPct, sliderPctFromLevel, exportAudioPlan,
-  MIC_BOOST_DB, MIC_LEVEL_MAX, MIC_UNITY_PCT, micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
+  MIC_BOOST_DB, MIC_LEVEL_MAX, MIC_UNITY_PCT, micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb, nudgeLevelDb,
   type PcmChunk, type PcmTrack,
 } from "../src/audio-mix.js";
 
@@ -326,5 +326,59 @@ describe("exportAudioPlan: per-track mute (STC-454 part 3)", () => {
       .toEqual(exportAudioPlan({ encode: true, hasMic: true, hasSystem: false }));
     expect(exportAudioPlan({ encode: true, hasMic: false, hasSystem: true, micMuted: true }))
       .toEqual(exportAudioPlan({ encode: true, hasMic: false, hasSystem: true }));
+  });
+});
+
+describe("STC-460: peaks, nudge, fine labels", () => {
+  const mic = track(0, f32(0.5, -0.25, 0.1, 0.1));
+  const sys = track(0, f32(0.5, 0.5, 0, 0));
+  const base = { mic, system: sys, systemLevel: 1, micLevel: 1, originNs: 0, from: 0, frames: 4 };
+  const emptyPeaks = (blockFrames: number) =>
+    ({ blockFrames, mic: new Float32Array(0), system: new Float32Array(0), mix: new Float32Array(0) });
+
+  test("measuring peaks never changes a sample", () => {
+    const plain = mixBlock(base);
+    const measured = mixBlock({ ...base, peaks: emptyPeaks(2) });
+    expect(measured.map((p) => Array.from(p))).toEqual(plain.map((p) => Array.from(p)));
+  });
+
+  test("peaks are per block, per track, after level, before the limit", () => {
+    const peaks = emptyPeaks(2);
+    mixBlock({ ...base, micLevel: 2, systemLevel: 0.5, peaks });
+    expect(peaks.mic[0]).toBeCloseTo(1);
+    expect(peaks.mic[1]).toBeCloseTo(0.2);
+    expect(peaks.system[0]).toBeCloseTo(0.25);
+    expect(peaks.system[1]).toBe(0);
+    expect(peaks.mix[0]).toBeCloseTo(1.25);
+    expect(peaks.mix[1]).toBeCloseTo(0.2);
+  });
+
+  test("a muted (level 0) track peaks at 0", () => {
+    const peaks = emptyPeaks(4);
+    mixBlock({ ...base, micLevel: 0, peaks });
+    expect(Array.from(peaks.mic)).toEqual([0]);
+  });
+
+  test("nudgeLevelDb moves by decibels and lands exactly on unity", () => {
+    const tenth = nudgeLevelDb(1, 0.1, MIC_LEVEL_MAX);
+    expect(20 * Math.log10(tenth)).toBeCloseTo(0.1, 6);
+    expect(nudgeLevelDb(tenth, -0.1, MIC_LEVEL_MAX)).toBe(1);
+    const up = nudgeLevelDb(1, 1, MIC_LEVEL_MAX);
+    expect(20 * Math.log10(up)).toBeCloseTo(1, 6);
+    expect(nudgeLevelDb(up, -1, MIC_LEVEL_MAX)).toBe(1);
+  });
+
+  test("nudgeLevelDb is clamped, and never mutes", () => {
+    expect(nudgeLevelDb(1, 50, 1)).toBe(1);
+    expect(nudgeLevelDb(MIC_LEVEL_MAX, 5, MIC_LEVEL_MAX)).toBeCloseTo(MIC_LEVEL_MAX, 9);
+    const floor = 10 ** (LEVEL_FLOOR_DB / 20);
+    expect(nudgeLevelDb(floor, -5, 1)).toBeCloseTo(floor, 12);
+    expect(nudgeLevelDb(0, 0.1, 1)).toBeGreaterThan(0);
+  });
+
+  test("formatLevelDb shows a decimal only for a fractional decibel", () => {
+    expect(formatLevelDb(10 ** (0.5 / 20))).toBe("+0.5 dB");
+    expect(formatLevelDb(10 ** (-7.3 / 20))).toBe("−7.3 dB");
+    expect(formatLevelDb(10 ** (-6.98 / 20))).toBe("−7 dB");
   });
 });

@@ -129,22 +129,58 @@
     .audiobtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
+    /* STC-460: the pane, redesigned. A popover still (Patrick's default: it
+       is opened to adjust and closed to watch, and docking is a bigger layout
+       change), but wider, with a real fader per track: a 12px thumb on a 4px
+       track, a tick where the level is AS RECORDED (0 dB, which is 75% on the
+       mic and the far end on system audio), and a live meter under it that
+       shows what is HEARD (after cleanup, level and mute) with a clip mark for
+       the mix's hard limit. The thumb is styled (not native) so the tick's
+       position is arithmetic: 6px + (100% - 12px) * --unity. */
     #audiopanel { position-anchor: --audiobtn; position-area: top span-left; margin: 0 0 6px;
                   position-try-fallbacks: flip-block; inset: auto;
-                  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+                  padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                   background: var(--surface, var(--bg)); color: var(--text);
                   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
-                  font-size: var(--type-label); }
-    #audiopanel .audiorows { display: grid; grid-template-columns: 22px auto 120px 6ch; gap: 8px 10px;
-                             align-items: center; }
+                  font-size: var(--type-body); width: 360px; }
+    #audiopanel .audiorows { display: grid; grid-template-columns: 22px 84px minmax(0, 1fr) 7ch; gap: 14px 10px;
+                             align-items: start; }
     #audiopanel .audiorow { display: contents; color: var(--text-dim); }
     #audiopanel .audiorow[hidden] { display: none; }
-    #audiopanel label.name { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
-    #audiopanel input[type="range"] { width: 120px; margin: 0; accent-color: var(--accent); }
-    #audiopanel input[type="range"]:disabled { opacity: 0.4; }
+    #audiopanel .audiorow > * { min-height: 22px; }
+    #audiopanel label.name { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+                             white-space: nowrap; color: var(--text); font-weight: 500; }
     #audiopanel input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
-    #audiopanel .value { text-align: right; color: var(--text); }
-    #voicecleanstrength:disabled + #voicecleanvalue { color: var(--text-dim); }
+    #audiopanel .value { text-align: right; color: var(--text); font-size: var(--type-value-sm);
+                         min-height: 22px; line-height: 22px; }
+    /* The value is also the reset: clickable only while the level differs from
+       its default (data-dirty), so it doubles as "this has been changed". */
+    #audiopanel .value[data-dirty] { cursor: pointer; border-radius: 4px; color: var(--accent); }
+    #audiopanel .value[data-dirty]:hover { background: var(--surface-hover); text-decoration: underline; }
+    #audiopanel .fader { position: relative; display: grid; gap: 4px; min-width: 0; }
+    #audiopanel .fader input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
+                                             margin: 0; background: transparent; cursor: pointer; }
+    #audiopanel input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
+                                             background: var(--border-strong); }
+    #audiopanel input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+                                             width: 12px; height: 12px; margin-top: -4px; border-radius: 50%;
+                                             background: var(--accent); border: 2px solid var(--surface, var(--bg));
+                                             box-shadow: 0 0 0 1px var(--accent); }
+    #audiopanel input[type="range"]:focus-visible { outline: none; }
+    #audiopanel input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--focus); }
+    #audiopanel input[type="range"]:disabled { opacity: 0.4; cursor: default; }
+    /* The as-recorded tick: on the track's centre line, above the meter. */
+    #audiopanel .unity { position: absolute; top: 3px; width: 1px; height: 16px; background: var(--text-dim);
+                         left: calc(6px + (100% - 12px) * var(--unity, 1)); pointer-events: none; opacity: 0.7; }
+    #audiopanel .meterrow { display: flex; align-items: center; gap: 6px; height: 6px; }
+    #audiopanel .meter { position: relative; flex: 1; height: 4px; border-radius: 2px; overflow: hidden;
+                         background: var(--surface-hover); }
+    #audiopanel .meter > i { position: absolute; inset: 0; transform-origin: left center; transform: scaleX(0);
+                             background: var(--accent); will-change: transform; }
+    #audiopanel .meter > i[data-hot] { background: var(--warn); }
+    #audiopanel .clip { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); flex: none; }
+    #audiopanel .clip[data-lit] { background: var(--rec); box-shadow: 0 0 0 2px var(--rec-soft); }
+    .audiorow[data-muted] .meter > i { opacity: 0.3; }
     /* STC-454 part 3: a speaker per track. Muted keeps the slider where it
        was, dimmed, so un-muting visibly returns to the same level. */
     .trackmute { width: 22px; height: 22px; padding: 0; border: none; border-radius: 5px;
@@ -559,12 +595,15 @@
                the speaker mutes the track and keeps the level (project-12's
                micMuted); a muted track is left out of the export. -->
           <div id="micaudio" class="audiorow" hidden
-               title="Your voice's level: the middle-right mark is as recorded; above it boosts up to +12 dB">
+               title="Your voice's level: the tick is as recorded (0 dB); above it boosts up to +12 dB. Double-click to reset; Shift+arrow nudges 0.1 dB">
             <button type="button" id="micmute" class="trackmute" aria-pressed="false"
                     aria-label="Mute mic" title="Mute mic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4"/><path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/></svg></button>
             <label class="name" for="miclevel">Mic</label>
-            <input id="miclevel" type="range" min="0" max="100" step="1" value="75" aria-label="Mic level">
-            <span id="miclevelvalue" class="value mono">0 dB</span>
+            <div class="fader" style="--unity:0.75">
+              <input id="miclevel" type="range" min="0" max="100" step="1" value="75" aria-label="Mic level">
+              <span class="unity" aria-hidden="true"></span><div class="meterrow" aria-hidden="true"><div class="meter"><i id="micmeter"></i></div><span id="micclip" class="clip" title="Clipping: the mix hit its hard limit"></span></div>
+            </div>
+            <span id="miclevelvalue" class="value mono" data-resets="miclevel">0 dB</span>
           </div>
           <!-- STC-418 PR 3: the recorded system audio's level (project-9's
                systemAudioLevel), a decibel fader, attenuate only. -->
@@ -573,9 +612,12 @@
             <button type="button" id="sysmute" class="trackmute" aria-pressed="false"
                     aria-label="Mute system audio" title="Mute system audio"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4"/><path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/></svg></button>
             <label class="name" for="sysaudiolevel">System audio</label>
-            <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
+            <div class="fader" style="--unity:1">
+              <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
                    aria-label="System audio level">
-            <span id="sysaudiovalue" class="value mono">0 dB</span>
+              <span class="unity" aria-hidden="true"></span><div class="meterrow" aria-hidden="true"><div class="meter"><i id="sysmeter"></i></div><span id="sysclip" class="clip" title="Clipping: the mix hit its hard limit"></span></div>
+            </div>
+            <span id="sysaudiovalue" class="value mono" data-resets="sysaudiolevel">0 dB</span>
           </div>
           <!-- STC-455: narration cleanup — steady background noise and harsh
                "s" sounds, on the mic only. Off by default; the strength is
@@ -584,9 +626,12 @@
                title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
             <span aria-hidden="true"></span>
             <label class="name"><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
-            <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
+            <div class="fader">
+              <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
                    aria-label="Voice cleanup strength" disabled>
-            <span id="voicecleanvalue" class="value mono">50%</span>
+              
+            </div>
+            <span id="voicecleanvalue" class="value mono" data-resets="voicecleanstrength">50%</span>
           </div>
         </div>
       </div>

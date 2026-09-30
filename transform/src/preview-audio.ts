@@ -44,7 +44,8 @@
  * thread stalled past the horizon) is TRIMMED to start on time, never played
  * late: a late chunk would shift every sample after it against the picture.
  */
-import { mixBlock, MIX_SAMPLE_RATE, MIX_CHANNELS, type PcmTrack } from "./audio-mix.js";
+import { mixBlock, MIX_SAMPLE_RATE, MIX_CHANNELS, type PcmTrack, type MixPeaks } from "./audio-mix.js";
+import { blockAt, METER_BLOCK_FRAMES, type MeterBlock } from "./audio-meter.js";
 
 /** 100 ms at 48 kHz: short enough that a level change is heard promptly. */
 export const PREVIEW_CHUNK_FRAMES = 4800;
@@ -149,6 +150,8 @@ export class PreviewAudio {
   private anchorCtxS = 0;
   private nextFrame = 0;
   private closed = false;
+  /** Peaks of what has been scheduled (STC-460), on the audio clock, for the Audio pane's meters. */
+  private meterBlocks: MeterBlock[] = [];
   private mic: PcmTrack | null;
   private readonly system: PcmTrack | null;
 
@@ -202,7 +205,21 @@ export class PreviewAudio {
     return { anchorMs: this.anchorCtxS * 1000, nowMs: () => now() * 1000 };
   }
 
+  /**
+   * The peaks of the sound being HEARD now (STC-460), measured by `mixBlock`
+   * while it made that sound, or null when nothing is playing. Reads the same
+   * output clock the picture follows, so a meter and a playhead agree.
+   */
+  meterNow(): MeterBlock | null {
+    const ctx = this.ctx;
+    if (!ctx || this.timer === null || ctx.state !== "running") return null;
+    const t = heardNowS(ctx);
+    while (this.meterBlocks.length && this.meterBlocks[0]!.endS < t - 0.5) this.meterBlocks.shift();
+    return blockAt(this.meterBlocks, t);
+  }
+
   stop(): void {
+    this.meterBlocks = [];
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
     for (const src of this.live) {
@@ -240,10 +257,16 @@ export class PreviewAudio {
     this.nextFrame = plan.nextFrame;
     const { system: systemLevel, mic: micLevel } = this.levels();
     for (const c of plan.chunks) {
+      const peaks: MixPeaks = { blockFrames: METER_BLOCK_FRAMES, mic: new Float32Array(0), system: new Float32Array(0), mix: new Float32Array(0) };
       const planes = mixBlock({
         mic: this.mic, system: this.system, systemLevel, micLevel,
-        originNs: this.anchorNs, from: c.from, frames: c.frames,
+        originNs: this.anchorNs, from: c.from, frames: c.frames, peaks,
       });
+      for (let k = 0; k < peaks.mix.length; k++) {
+        const startS = c.whenS + (k * METER_BLOCK_FRAMES) / MIX_SAMPLE_RATE;
+        const endS = c.whenS + Math.min(c.frames, (k + 1) * METER_BLOCK_FRAMES) / MIX_SAMPLE_RATE;
+        this.meterBlocks.push({ startS, endS, mic: peaks.mic[k]!, system: peaks.system[k]!, mix: peaks.mix[k]! });
+      }
       const buffer = ctx.createBuffer(MIX_CHANNELS, c.frames, MIX_SAMPLE_RATE);
       for (let ch = 0; ch < MIX_CHANNELS; ch++) buffer.copyToChannel(planes[ch]! as Float32Array<ArrayBuffer>, ch);
       const src = ctx.createBufferSource();

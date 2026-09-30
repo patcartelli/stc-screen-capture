@@ -130,6 +130,12 @@ function sampleAt(track: PcmTrack, outCh: number, i: number, originNs: number): 
  * clip, so a long take never holds a second full-length copy of itself.
  */
 export function mixBlock(opts: {
+  /**
+   * STC-460: optional per-block PEAKS, measured inside this same loop so the
+   * meters read the mix the ears and the export get, never a second path.
+   * Filled only when present; the returned samples are identical either way.
+   */
+  peaks?: MixPeaks;
   mic: PcmTrack | null;
   system: PcmTrack | null;
   systemLevel: number;
@@ -145,17 +151,60 @@ export function mixBlock(opts: {
   const rawMic = opts.micLevel ?? 1;
   const micGain = Math.min(MIC_LEVEL_MAX, Math.max(0, Number.isFinite(rawMic) ? rawMic : 1));
   const out = Array.from({ length: MIX_CHANNELS }, () => new Float32Array(opts.frames));
+  const peaks = opts.peaks;
+  const blockFrames = peaks ? Math.max(1, Math.floor(peaks.blockFrames)) : 0;
+  const blocks = peaks ? Math.ceil(opts.frames / blockFrames) : 0;
+  const micPk = peaks ? new Float32Array(blocks) : null;
+  const sysPk = peaks ? new Float32Array(blocks) : null;
+  const mixPk = peaks ? new Float32Array(blocks) : null;
   for (let ch = 0; ch < MIX_CHANNELS; ch++) {
     const dst = out[ch]!;
     for (let j = 0; j < opts.frames; j++) {
       const i = opts.from + j;
       let v = 0;
-      if (opts.mic && micGain > 0) v += micGain * sampleAt(opts.mic, ch, i, opts.originNs);
-      if (opts.system && level > 0) v += level * sampleAt(opts.system, ch, i, opts.originNs);
+      let m = 0, s = 0;
+      if (opts.mic && micGain > 0) { m = micGain * sampleAt(opts.mic, ch, i, opts.originNs); v += m; }
+      if (opts.system && level > 0) { s = level * sampleAt(opts.system, ch, i, opts.originNs); v += s; }
       dst[j] = v > 1 ? 1 : v < -1 ? -1 : v;
+      if (peaks) {
+        const b = Math.floor(j / blockFrames);
+        const am = Math.abs(m), as = Math.abs(s), av = Math.abs(v);
+        if (am > micPk![b]!) micPk![b] = am;
+        if (as > sysPk![b]!) sysPk![b] = as;
+        if (av > mixPk![b]!) mixPk![b] = av;
+      }
     }
   }
+  if (peaks) { peaks.mic = micPk!; peaks.system = sysPk!; peaks.mix = mixPk!; }
   return out;
+}
+
+/**
+ * Per-block peaks of one `mixBlock` call (STC-460), linear, AFTER each
+ * track's level and BEFORE the hard limit: a `mix` above 1 is the limiter
+ * engaging, which is what the meter's clip mark shows. `mic` and `system`
+ * are each track's own contribution (0 when muted or absent).
+ */
+export interface MixPeaks {
+  /** In: frames per block. Out arrays hold one peak per block. */
+  blockFrames: number;
+  mic: Float32Array;
+  system: Float32Array;
+  mix: Float32Array;
+}
+
+/**
+ * Move a level by `deltaDb` decibels (Shift+arrow, STC-460), clamped to the
+ * quietest level a slider can hold and to `maxLevel`. Nothing here mutes: a
+ * muted level (0) wakes at the floor when nudged up, and a nudge never lands
+ * on 0. Within 0.05 dB of as-recorded it returns EXACTLY 1, so unity reads
+ * "0 dB" and an untouched mic stays on the export's untouched path.
+ */
+export function nudgeLevelDb(level: number, deltaDb: number, maxLevel: number): number {
+  const floor = 10 ** (LEVEL_FLOOR_DB / 20);
+  const from = Number.isFinite(level) && level > floor ? level : floor;
+  const next = Math.min(maxLevel, Math.max(floor, from * 10 ** (deltaDb / 20)));
+  return Math.abs(20 * Math.log10(next)) < 0.05 ? 1 : next;
 }
 
 /**
@@ -277,7 +326,10 @@ export function sliderPctFromMicLevel(level: number): number {
  */
 export function formatLevelDb(level: number): string {
   if (!Number.isFinite(level) || level <= 0) return "Muted";
-  const db = Math.round(20 * Math.log10(level));
+  const exact = 20 * Math.log10(level);
+  // One decimal only when the level is NOT a whole decibel (STC-460: a
+  // Shift+arrow nudge is 0.1 dB, and a label that rounded it away would hide it).
+  const db = Math.abs(exact - Math.round(exact)) < 0.05 ? Math.round(exact) : Math.round(exact * 10) / 10;
   if (db === 0) return "0 dB";
   return db > 0 ? `+${db} dB` : `\u2212${-db} dB`;
 }
