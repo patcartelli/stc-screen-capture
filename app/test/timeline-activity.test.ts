@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { clipActivity, zoomCurve, CLICK_WEIGHT, MOVE_WEIGHT } from "../src/timeline-activity.js";
+import { clipActivity, zoomCurve, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT } from "../src/timeline-activity.js";
 import type { SessionEvent } from "@transform/types.js";
 
 const S = 1_000_000_000;
@@ -63,5 +63,29 @@ describe("zoomCurve", () => {
   test("refuses to divide by a sample count under 2, clamping to 2", () => {
     expect(zoomCurve(() => 0, S, 1)).toHaveLength(2);
     expect(zoomCurve(() => 0, S, 0)).toHaveLength(2);
+  });
+});
+
+describe("laneBitmap", () => {
+  test("1x draws one bitmap pixel per CSS pixel", () => {
+    expect(laneBitmap(800, 22, 1)).toEqual({ width: 800, height: 22, scale: 1 });
+  });
+
+  test("a 2x display gets a bitmap twice the CSS size, so nothing is stretched", () => {
+    expect(laneBitmap(800, 22, 2)).toEqual({ width: 1600, height: 44, scale: 2 });
+  });
+
+  test("a fractional ratio rounds the bitmap but reports the scale it was asked for", () => {
+    expect(laneBitmap(801, 22, 1.5)).toEqual({ width: 1202, height: 33, scale: 1.5 });
+  });
+
+  test("a ratio below 1 or not a number is treated as 1, never a shrunken bitmap", () => {
+    expect(laneBitmap(100, 22, 0.5).scale).toBe(1);
+    expect(laneBitmap(100, 22, NaN).scale).toBe(1);
+    expect(laneBitmap(100, 22, 0).scale).toBe(1);
+  });
+
+  test("an unlaid-out lane is still a 1-pixel bitmap, not zero", () => {
+    expect(laneBitmap(0, 22, 2)).toEqual({ width: 1, height: 44, scale: 2 });
   });
 });
