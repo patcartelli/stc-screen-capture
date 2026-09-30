@@ -61,6 +61,7 @@ import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
+import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import { ensureCaptureId, readBundleId } from "./capture-identity.js";
 import { resolveHelperPath } from "./helper-path.js";
 
@@ -107,9 +108,18 @@ ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
 // idempotent and always acts on the one toast that is up, so this needs no
 // argument and cannot close the wrong window.
 ipcMain.on("toast:dismiss", () => hideToast());
-ipcMain.on("toast:message", (_e, text: unknown) => {
-  if (typeof text !== "string" || !text) return;
-  showNotice(text);
+ipcMain.on("toast:message", (_e, message: unknown) => {
+  // A string or a `{ title?, body, action? }` — anything else is dropped,
+  // including an action id this build does not know (STC-457).
+  const m = parseToastMessage(message);
+  if (m) showNotice(m);
+});
+// The message toast's button. The page names an action by id; what it opens
+// is `toast-message.ts`'s table, so a renderer cannot ask for an address.
+ipcMain.on("toast:action", (_e, id: unknown) => {
+  if (!isToastActionId(id)) return;
+  void shell.openExternal(TOAST_ACTION_URLS[id]);
+  hideToast();
 });
 
 /**
@@ -118,9 +128,9 @@ ipcMain.on("toast:message", (_e, text: unknown) => {
  * global hotkeys have no renderer waiting on their answer (STC-465 review),
  * and this is how their refusals reach the user instead of `console.error`.
  */
-function showNotice(text: string | undefined): void {
-  if (!text) return;
-  showMessageToast(text, {
+function showNotice(message: ToastInput | undefined): void {
+  if (!message) return;
+  showMessageToast(message, {
     corner: readSettings(app.getPath("userData")).thumbnail.corner,
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
