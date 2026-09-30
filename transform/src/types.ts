@@ -97,12 +97,18 @@ export type CaptureScope =
         app?: string;
         title?: string;
         bounds: { x: number; y: number; width: number; height: number };
+        /**
+         * STC-482, anchors-8. Present only when the window MOVED. Entry 0 is the
+         * start (t 0, `bounds`' own x/y); later entries are where its top-left
+         * sat from that session ns onward. See window-track.ts.
+         */
+        track?: { t: number; x: number; y: number }[];
       };
     };
 
 /** Mirrors schema/anchors-1.schema.json through anchors-7.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {

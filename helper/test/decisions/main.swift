@@ -365,6 +365,20 @@ check("a height change past tolerance is a resize",
 check("the window no longer being found is gone, not resized",
       decideWindowWatch(initial: (800, 600), current: nil), WindowWatchDecision.gone)
 
+// ── the window track records only real movement (STC-482) ───────────────────
+check("an unmoved window records nothing",
+      shouldRecordWindowOrigin(last: (100, 50), current: (100, 50)), false)
+check("sub-tolerance jitter records nothing",
+      shouldRecordWindowOrigin(last: (100, 50), current: (100.3, 49.8)), false)
+check("a move on x past tolerance records",
+      shouldRecordWindowOrigin(last: (100, 50), current: (101, 50)), true)
+check("a move on y past tolerance records",
+      shouldRecordWindowOrigin(last: (100, 50), current: (100, 48)), true)
+check("a slow drag accumulates against the last RECORDED origin",
+      shouldRecordWindowOrigin(last: (100, 50), current: (100.6, 50)), true)
+check("a window that is gone records nothing (the watcher owns that)",
+      shouldRecordWindowOrigin(last: (100, 50), current: nil), false)
+
 // ── a disconnect's own runtime error is not a second alarm (STC-433) ───────
 // The constants are spelled as numbers in CaptureDecisions.swift (no
 // AVFoundation there); these two hold them to Apple's own symbols.

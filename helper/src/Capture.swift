@@ -198,6 +198,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `camera`/`cursorRunLoop`: a stop() that arrives before this is stored
     /// must not be outlived by it.
     private var windowWatcher: DispatchSourceTimer?
+    /// Samples a window-scope take's window origin at 30 Hz (STC-482). Guarded
+    /// by `lock` for the same reason as `windowWatcher`.
+    private var windowTracker: DispatchSourceTimer?
+    /// The window's origin over the take (STC-482), entry 0 being the start.
+    /// Written by the tracker's timer, read by `writeSidecars`; both under `lock`.
+    private var windowTrack: [WindowTrackEntryDoc] = []
 
     private let lock = NSLock()
     private var events: [[String: Any]] = []
@@ -569,6 +575,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                         self.startWindowWatcher(windowId: UInt32(w.id),
                                                 initialSize: (w.bounds.width, w.bounds.height))
                         self.armWindowFault()
+                        self.startWindowTracker(windowId: UInt32(w.id),
+                                                displayOrigin: (target.geometry.originX, target.geometry.originY),
+                                                start: (w.bounds.x, w.bounds.y))
                     }
                     self.finishStart(.success(self.describe()))
                     self.armStreamDeathFault()
@@ -625,6 +634,82 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         windowWatcher = t
         lock.unlock()
         t.resume()
+    }
+
+    /// STC-482: records where the window is, so the transform can take a
+    /// window's movement back out of the cursor. Window capture shows only the
+    /// window's own pixels, so a drag leaves the PICTURE still while the
+    /// cursor keeps travelling in global points.
+    ///
+    /// Entry 0 is the start bounds' own origin at t 0 — not a sample — so it
+    /// matches `scope.window.bounds` exactly, as the loader requires. Later
+    /// entries are appended only when the origin moved (`shouldRecordWindowOrigin`),
+    /// stamped on the events clock (`Clock.nowNs() - t0Ns`, the cursor's own),
+    /// and converted to display-local points with the take's START display
+    /// origin, the same conversion `scope.window.bounds` used.
+    ///
+    /// `STC_CAPTURE_FAULT=window-moved` replaces the sampler with one scripted
+    /// move: there is no API to drag another app's window on demand, so a real
+    /// move is not something a test can schedule.
+    private func startWindowTracker(windowId: UInt32,
+                                    displayOrigin: (x: Double, y: Double),
+                                    start: (x: Double, y: Double)) {
+        lock.lock()
+        windowTrack = [WindowTrackEntryDoc(tNs: 0, x: start.x, y: start.y)]
+        lock.unlock()
+
+        if ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "window-moved" {
+            IO.log("STC_CAPTURE_FAULT=window-moved: the window track gets one scripted move in \(Self.windowFaultDelaySeconds) s")
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.windowFaultDelaySeconds) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                self.windowTrack.append(WindowTrackEntryDoc(tNs: Int(Clock.nowNs() - self.t0Ns),
+                                                            x: start.x + 120, y: start.y + 60))
+                self.lock.unlock()
+            }
+            return
+        }
+
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInteractive))
+        t.schedule(deadline: .now() + WINDOW_TRACK_INTERVAL_SECONDS, repeating: WINDOW_TRACK_INTERVAL_SECONDS)
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            // Read the window outside the lock; only the append needs it.
+            let now = Clock.nowNs()
+            let current = Self.currentWindowOrigin(windowId: windowId).map {
+                (x: $0.x - displayOrigin.x, y: $0.y - displayOrigin.y)
+            }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard let last = self.windowTrack.last else { return }
+            if shouldRecordWindowOrigin(last: (last.x, last.y), current: current), let c = current {
+                self.windowTrack.append(WindowTrackEntryDoc(tNs: Int(now - self.t0Ns), x: c.x, y: c.y))
+            }
+        }
+        // Same stop() race as the watcher above: a stop that beat this store
+        // must not be outlived by the timer.
+        lock.lock()
+        if stoppingBegan {
+            lock.unlock()
+            t.cancel()
+            return
+        }
+        windowTracker = t
+        lock.unlock()
+        t.resume()
+    }
+
+    /// The window's top-left in GLOBAL points, via Quartz Window Services (the
+    /// same call `currentWindowSize` makes, for the same reason: this runs
+    /// 30 times a second and `SCShareableContent` is async). nil when the
+    /// window is no longer on screen.
+    private static func currentWindowOrigin(windowId: UInt32) -> (x: Double, y: Double)? {
+        guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(windowId)) as? [[String: Any]],
+              let info = list.first(where: { ($0[kCGWindowNumber as String] as? Int) == Int(windowId) }),
+              let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+              let x = boundsDict["X"] as? Double, let y = boundsDict["Y"] as? Double
+        else { return nil }
+        return (x, y)
     }
 
     /// `STC_CAPTURE_FAULT=window-resized` / `=window-closed`: shortly after a
@@ -2009,6 +2094,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let cursorRL = cursorRunLoop
         let winWatcher = windowWatcher
         windowWatcher = nil
+        let winTracker = windowTracker
+        windowTracker = nil
         // STC-235: read under the lock a refit's restart swaps it under. Nil
         // with `restarting` set means a restart is between streams: the old
         // one is already being stopped by the restart, and the new one either
@@ -2027,6 +2114,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // handler; cancelling it here is a no-op for that path (it has
         // already fired) and closes the watcher for every other stop reason.
         winWatcher?.cancel()
+        winTracker?.cancel()
 
         let answerLock = NSLock()
         var answered = false
@@ -2166,6 +2254,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // key at all (anchorsDocument), so a take nothing refitted is
         // byte-for-byte what it was.
         let geo = geometry
+        let track = windowTrack
         let startDisplay = geo.first?.display ?? currentDisplayGeometry()
         let firstFrameNs = firstFramePtsNs
         lock.unlock()
@@ -2196,6 +2285,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             systemAudioRequested: wantSystemAudio,
             scope: captureScope,
             geometry: geo,
+            windowTrack: track,
             pauses: pauses,
             stopReason: reason,
             stopTNs: Int(stopTNs))

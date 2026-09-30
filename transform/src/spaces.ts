@@ -57,11 +57,23 @@
  * the capture and is clipped, which is correct rather than a bug to clamp.
  *
  * **capture pixels** — the recorded picture. Origin at the top-left of the
- * captured REGION: the whole display for a recording, the crop or the
- * window's bounds for a still. At most 3840x2160 with both dimensions even
+ * captured REGION: the whole display for a whole-display recording, the
+ * region or the window's bounds for a region or window recording (STC-370,
+ * `anchors.scope`) and for a still. At most 3840x2160 with both dimensions even
  * (the hardware-encode cliff and H.264 4:2:0; `captureSize` in
  * `helper/src/CaptureGeometry.swift` owns that clamp). `pxPerPoint` is the
  * ratio into this space from display-local points.
+ *
+ * **scope** — the part of the display a take actually shows, in display-local
+ * points (STC-471): `anchors.scope`'s region, or its window's bounds. The
+ * helper writes the WHOLE display into `anchors.display` and only the scope
+ * into `capture`, so a conversion that reads `display` alone stretches the
+ * display across a frame holding a fraction of it. `scopedDisplay` is the one
+ * place that difference is closed: it turns a display into the
+ * `DisplayGeometry` of what was CAPTURED, and every consumer that maps a
+ * global point into the capture takes that, never the raw display. Global
+ * points -> display-local -> minus the scope's origin -> over its point size
+ * -> capture -> `contentRect` -> output.
  *
  * **capture contentRect** — capture pixels, the part of the frame the
  * display's content occupies after a refit (STC-235). Defaults to the whole
@@ -382,9 +394,48 @@ export interface DisplayGeometry {
 }
 
 /**
+ * `anchors.scope`, structurally (STC-471) — this module cannot import
+ * `types.ts`. A display scope, or none at all, is the whole display.
+ */
+export type ScopeLike =
+  | { kind: "display" }
+  | { kind: "region"; region: Rect }
+  | { kind: "window"; window: { bounds: Rect; [extra: string]: unknown } };
+
+/** The scope's rect in display-local points, or `undefined` for a whole-display take. */
+export function scopeRect(scope: ScopeLike | undefined): Rect | undefined {
+  if (!scope || scope.kind === "display") return undefined;
+  return scope.kind === "region" ? scope.region : scope.window.bounds;
+}
+
+/**
+ * The display, narrowed to what the take CAPTURED (STC-471): origin moved to
+ * the scope's top-left in global points, size the scope's, both in points.
+ * What every global -> capture conversion takes in place of the raw display,
+ * so `displayToOutput`, `globalToCaptureUv` and legibility need no scope
+ * logic of their own.
+ *
+ * A whole-display take gets its display back — the SAME object, not an equal
+ * one — which is what keeps every take without a scope byte-identical by
+ * construction rather than by arithmetic.
+ */
+export function scopedDisplay(display: DisplayGeometry, scope: ScopeLike | undefined): DisplayGeometry {
+  const r = scopeRect(scope);
+  if (!r) return display;
+  return {
+    originX: display.originX + r.x,
+    originY: display.originY + r.y,
+    pointWidth: r.width,
+    pointHeight: r.height,
+  };
+}
+
+/**
  * The affine map from global points to output pixels for a capture that
- * covers a whole display — and, since STC-235, for one whose content occupies
- * only `contentRect` of the capture frame after a refit.
+ * covers `display` — the whole display, or, given `scopedDisplay`'s result
+ * (STC-471), the region or window a scoped take shows — and, since STC-235,
+ * for one whose content occupies only `contentRect` of the capture frame
+ * after a refit.
  *
  * `sx`/`sy` are `pxPerPoint` on each axis — the display-to-output ratio,
  * which is the effective scale at any `backingScale` and at any export size,
@@ -462,10 +513,15 @@ export function effectivePointWidthFromGeometry(
   displayPointWidth: number,
   captureWidth: number,
   geometry?: readonly { display: { pointWidth: number }; contentRect: { width: number } }[],
+  scope?: ScopeLike,
 ): number {
-  if (!geometry) return displayPointWidth;
+  // A scoped take shows the scope's width in points, not the display's, on
+  // every geometry entry (STC-471) — the region keeps its point size across a
+  // refit, so only the contentRect ratio still varies.
+  const scoped = scopeRect(scope)?.width;
+  if (!geometry) return scoped ?? displayPointWidth;
   return Math.max(...geometry.map(
-    (g) => g.display.pointWidth * captureWidth / g.contentRect.width));
+    (g) => (scoped ?? g.display.pointWidth) * captureWidth / g.contentRect.width));
 }
 
 // ---------------------------------------------------------------------------

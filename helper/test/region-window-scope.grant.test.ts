@@ -188,4 +188,33 @@ describe("recording scope — region and window (STC-370)", () => {
     const anchors = loadAnchors(dir);
     expect(anchors.stop?.reason).toBe("window-closed");
   }, 60_000);
+
+  // STC-482. A window that MOVES leaves the picture still while the cursor
+  // keeps travelling, so the take records where the window was. There is no
+  // API to drag another app's window from a test, so STC_CAPTURE_FAULT=
+  // window-moved scripts one move; what is under test is the sidecar, not the
+  // sampler. What it cannot prove — that the 30 Hz sampler sees a REAL drag,
+  // and that its clock is the events' — is docs/STC-482-RUNBOOK.md's job.
+  test("a scripted window move (STC_CAPTURE_FAULT=window-moved) writes a v8 track", async () => {
+    const h = spawnHelper({ STC_CAPTURE_FAULT: "window-moved" });
+    await waitFor(() => find(h.fd3, "ready"));
+    const win = await findWindow(h);
+
+    const dir = session();
+    await startOrExplain(h, { dir, windowId: win.id }, "the window-moved fault (STC-482)");
+    await sleep(1500);                      // the fault fires ~0.5 s in
+    await h.request({ cmd: "stop" }, 30_000);
+
+    const validate8 = new Ajv({ allErrors: true, strict: true })
+      .compile(JSON.parse(readFileSync(join(root, "schema/anchors-8.schema.json"), "utf8")));
+    const raw = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
+    expect(validate8(raw), JSON.stringify(validate8.errors, null, 2)).toBe(true);
+    expect(raw.version).toBe(8);
+    const { bounds, track } = raw.scope.window;
+    expect(track.length).toBe(2);
+    expect(track[0]).toEqual({ t: 0, x: bounds.x, y: bounds.y });
+    expect(track[1].t).toBeGreaterThan(0);
+    expect(track[1].x).toBe(bounds.x + 120);
+    expect(track[1].y).toBe(bounds.y + 60);
+  }, 60_000);
 });
