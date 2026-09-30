@@ -19,6 +19,12 @@ contextBridge.exposeInMainWorld("toast", {
   // Names nothing: main closes whatever toast is currently up, which is by
   // construction the one this page belongs to (there is only ever one).
   dismiss: () => ipcRenderer.send("toast:dismiss"),
+  // STC-457: the message's button. Names an ACTION by id, never a URL — main
+  // owns what each id opens (`toast-message.ts`'s `TOAST_ACTION_URLS`).
+  action: (id: string) => ipcRenderer.send("toast:action", id),
+  // STC-457: the card's measured height, so main can size the window to it
+  // before showing it (`toast-window.ts`'s `showMessageToast`).
+  fit: (cardPx: number) => ipcRenderer.send("toast:fit", cardPx),
   // Fire-and-forget from main, not request/response: the window is about to
   // be destroyed regardless of what the page does with this, so there is
   // nothing to hand back. Same `on`/return-an-unsubscribe shape

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { PRODUCT_NAME } from "../src/product.js";
-import { toastPage } from "./_toast.js";
+import { toastPage, toastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 
@@ -67,8 +67,10 @@ describe("Electron shell", () => {
 
     const toast = await toastPage(app!);
     if (toast) {
-      const msg = await toast.textContent("#label");
-      expect(msg).toMatch(/Screen Recording permission|Could not start/);
+      // Poll: the toast's window is listed before its page has filled in
+      // the message (`toastText` is "" until it has).
+      await expect.poll(() => toastText(app!), { timeout: 10_000 })
+        .toMatch(/Screen Recording permission|Couldn't start/);
       expect(await win.locator("#record").isDisabled()).toBe(false);  // still usable
     } else {
       expect(await win.textContent("#record")).toBe("Stop");
