@@ -511,6 +511,30 @@ func decideWindowWatch(initial: (width: Double, height: Double),
     return changed ? .resized : .unchanged
 }
 
+// ── where a window-scope take's window is, over time (STC-482) ──────────────
+
+/// Half a point, the same tolerance `decideWindowWatch` uses for the same
+/// reason: two reads of an unmoved window can differ by a fraction of a point,
+/// and a track that recorded that noise would be a track of a window that
+/// never moved. A slow drag is not lost to it — each sample is compared with
+/// the last one RECORDED, not the last one read, so it accumulates.
+let WINDOW_TRACK_TOLERANCE_POINTS = 0.5
+
+/// How often a window-scope take samples its window's origin. 30 Hz: a
+/// title-bar drag is smooth and the transform interpolates linearly, so this
+/// is a step small enough to be invisible without being a poll of the window
+/// server every frame.
+let WINDOW_TRACK_INTERVAL_SECONDS = 1.0 / 30.0
+
+/// Whether `current` is a new entry for the track. nil (window gone) is not:
+/// the resize/close watcher owns that, and a track has no entry for "nowhere".
+func shouldRecordWindowOrigin(last: (x: Double, y: Double),
+                              current: (x: Double, y: Double)?) -> Bool {
+    guard let current else { return false }
+    return abs(current.x - last.x) > WINDOW_TRACK_TOLERANCE_POINTS
+        || abs(current.y - last.y) > WINDOW_TRACK_TOLERANCE_POINTS
+}
+
 // ── runtime errors a disconnect already explains (STC-433) ──────────────────
 
 /// `AVError.Code.deviceWasDisconnected`, in `AVFoundationErrorDomain`. Spelled

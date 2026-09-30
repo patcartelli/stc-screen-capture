@@ -284,5 +284,24 @@ describe("anchors document", () => {
     expect(validate2(oneEntry), JSON.stringify(validate2.errors, null, 2)).toBe(true);
     expect((oneEntry as { version: number }).version).toBe(2);
     expect((oneEntry as { geometry?: unknown }).geometry).toBeUndefined();
+
+    // STC-482: a window that moved validates against anchors-8 and is refused
+    // by anchors-7; one that never moved is still a v3 document.
+    const ajv8 = new Ajv({ allErrors: true, strict: true });
+    const validate8 = ajv8.compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-8.schema.json"), "utf8")),
+    );
+    const winMoved = extractJSON(out, "JSON-WINDOW-MOVED:");
+    expect(validate8(winMoved), JSON.stringify(validate8.errors, null, 2)).toBe(true);
+    const validate7w = new Ajv({ allErrors: true, strict: true }).compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-7.schema.json"), "utf8")),
+    );
+    expect(validate7w(winMoved), "anchors-7 must refuse a window track").toBe(false);
+    const winStill = extractJSON(out, "JSON-WINDOW-STILL:");
+    const validate3 = new Ajv({ allErrors: true, strict: true }).compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-3.schema.json"), "utf8")),
+    );
+    expect(validate3(winStill), JSON.stringify(validate3.errors, null, 2)).toBe(true);
+    expect((winStill as { version: number }).version).toBe(3);
   });
 }, 60_000);

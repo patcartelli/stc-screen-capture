@@ -180,16 +180,52 @@ describe("loader accepts v1 through v7 anchors", () => {
     expect(s.systemAudio).toBeUndefined();
   });
 
-  test("a version 8 anchors document is rejected by name", async () => {
-    // Widening must not become "accept anything". Version 8, not 7: STC-235
-    // made 7 a real, supported version (the `geometry` timeline), so it is
-    // no longer a stand-in for "unknown future version" — the same thing
-    // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240) and 6 (STC-418).
+  test("a version 9 anchors document is rejected by name", async () => {
+    // Widening must not become "accept anything". Version 9, not 8: STC-482
+    // made 8 a real, supported version (a window's `track`), so it is no
+    // longer a stand-in for "unknown future version" — the same thing
+    // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240), 6 (STC-418)
+    // and 7 (STC-235).
     await expect(loadSession({
-      anchors: offsetAnchors({ version: 8 as any }),
+      anchors: offsetAnchors({ version: 9 as any }),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 8 is not supported/);
+    })).rejects.toThrow(/version 9 is not supported/);
+  });
+
+  // STC-482: a v8 window track is validated at load and its displacement taken
+  // out of the cursor events, so everything downstream (render, auto-zoom)
+  // sees a window that never moved.
+  const windowScope = (track?: { t: number; x: number; y: number }[]) => ({
+    kind: "window" as const,
+    window: { id: 1, bounds: { x: 100, y: 50, width: 400, height: 300 }, ...(track ? { track } : {}) },
+  });
+
+  test("a version 8 window track is applied to the events at load", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors({
+        version: 8,
+        scope: windowScope([{ t: 0, x: 100, y: 50 }, { t: 2_000_000_000, x: 300, y: 80 }]),
+      } as any),
+      events: { version: 1, events: [
+        { t: 0, kind: "move", x: 150, y: 70 },
+        { t: 2_000_000_000, kind: "move", x: 350, y: 100 },        // the window went (+200,+30)
+      ] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    });
+    expect(s.events[0]).toMatchObject({ x: 150, y: 70 });
+    expect(s.events[1]).toMatchObject({ x: 150, y: 70 });         // still the same spot in the window
+  });
+
+  test("a version 8 document with a malformed window track is refused", async () => {
+    await expect(loadSession({
+      anchors: offsetAnchors({
+        version: 8,
+        scope: windowScope([{ t: 5, x: 100, y: 50 }, { t: 6, x: 300, y: 80 }]),     // entry 0 is not t 0
+      } as any),
+      events: { version: 1, events: [] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/not the take's start/);
   });
 
   // STC-235: a v7 document with malformed geometry is refused, never silently
