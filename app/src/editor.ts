@@ -180,23 +180,30 @@ function applySpanTransform(): void {
 // grid drawn over the CLIP LANE — a different feature that predates this
 // ticket and is untouched by it. This is the ruler's own time scale.
 
-/** 1s → 5s → 10s → 30s → 1m → …, doubling/quintupling in the same "nice
- *  round interval" spirit as the ticket's own documented ladder, extended
- *  past 1m for takes longer than a minute (this repo already has 5-minute
- *  and 60s example recordings). */
-const TICK_LADDER_S = [1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600];
-/** Never closer than this (scrubber.ts rule 9, applied to the ruler). */
-const MIN_TICK_SPACING_PX = 6;
+/** Major ticks: coarser intervals (STC-452) — 5s → 10s → 30s → 1m → …
+ *  These are the visually emphasized marks that define the ruler's hierarchy. */
+const MAJOR_TICK_LADDER_S = [5, 10, 30, 60, 300, 600, 1800, 3600, 7200];
+/** Minor ticks: finer intervals for visual continuity between major marks.
+ *  Drawn at reduced height/opacity so they don't clutter the ruler. */
+const MINOR_TICK_LADDER_S = [1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600];
+/** Major ticks must be at least this far apart to avoid clutter (STC-452).
+ *  Increased from 6px to 16px to provide sparser, more readable marks at zoom
+ *  levels showing long takes (2+ hours). */
+const MIN_MAJOR_TICK_SPACING_PX = 16;
+/** Minor ticks can be closer, used as subtle guidance between major marks. */
+const MIN_MINOR_TICK_SPACING_PX = 6;
 
 const MAX_RULER_LAYOUT_RETRIES = 5;
 let rulerLayoutRetriesLeft = MAX_RULER_LAYOUT_RETRIES;
 /**
  * Rebuilds #ruler-ticks from the current [spanStart, spanEnd] and the
- * ruler's own on-screen width — the coarsest interval off TICK_LADDER_S
- * whose on-screen spacing is still >= MIN_TICK_SPACING_PX. Ticks are
- * authored as a fraction of FULL DURATION (left: %), so the shared pan/zoom
- * transform on #ruler-content carries them for free; only each tick's WIDTH
- * needs a 1/scale correction to stay a constant on-screen px, since
+ * ruler's own on-screen width — STC-452 two-tier tick hierarchy:
+ * major ticks at wider spacing (>= 16px) for primary marks, and minor ticks
+ * at finer intervals (>= 6px) for visual continuity between them.
+ *
+ * Ticks are authored as a fraction of FULL DURATION (left: %), so the shared
+ * pan/zoom transform on #ruler-content carries them for free; only each tick's
+ * WIDTH needs a 1/scale correction to stay a constant on-screen px, since
  * scaleX() stretches the X axis a %-based left/width already lives on.
  *
  * Same retry-on-zero-width shape as updateTicks() above (STC-378) — a
@@ -223,20 +230,50 @@ function renderRulerTicks(): void {
   const scale = durationNs / span;
   const visibleS = span / 1e9;
   const pxPerSecond = width / Math.max(1e-9, visibleS);
-  let interval = TICK_LADDER_S[TICK_LADDER_S.length - 1]!;
-  for (const candidate of TICK_LADDER_S) {
-    if (candidate * pxPerSecond >= MIN_TICK_SPACING_PX) { interval = candidate; break; }
+
+  // Find major tick interval (STC-452: wider spacing for primary marks)
+  let majorInterval = MAJOR_TICK_LADDER_S[MAJOR_TICK_LADDER_S.length - 1]!;
+  for (const candidate of MAJOR_TICK_LADDER_S) {
+    if (candidate * pxPerSecond >= MIN_MAJOR_TICK_SPACING_PX) { majorInterval = candidate; break; }
   }
+
+  // Find minor tick interval (can be finer than major)
+  let minorInterval = MINOR_TICK_LADDER_S[MINOR_TICK_LADDER_S.length - 1]!;
+  for (const candidate of MINOR_TICK_LADDER_S) {
+    if (candidate * pxPerSecond >= MIN_MINOR_TICK_SPACING_PX && candidate < majorInterval) {
+      minorInterval = candidate;
+      break;
+    }
+  }
+
   const durationS = durationNs / 1e9;
   const tickWidthPx = Math.max(0.05, 1 / scale);
   const frag = document.createDocumentFragment();
-  for (let t = 0; t <= durationS + 1e-6; t += interval) {
+
+  // Render minor ticks first (so they appear behind major ticks in z-order)
+  if (minorInterval < majorInterval) {
+    const majorTickTolerance = 1e-6;
+    for (let t = 0; t <= durationS + 1e-6; t += minorInterval) {
+      // Skip if this position coincides with a major tick (approximately, accounting for FP error)
+      const nearestMajorTick = Math.round(t / majorInterval) * majorInterval;
+      if (Math.abs(t - nearestMajorTick) < majorTickTolerance) continue;
+      const div = document.createElement("div");
+      div.className = "ruler-tick minor";
+      div.style.left = `${Math.min(100, (t / durationS) * 100)}%`;
+      div.style.width = `${tickWidthPx}px`;
+      frag.appendChild(div);
+    }
+  }
+
+  // Render major ticks (these are always drawn)
+  for (let t = 0; t <= durationS + 1e-6; t += majorInterval) {
     const div = document.createElement("div");
     div.className = "ruler-tick";
     div.style.left = `${Math.min(100, (t / durationS) * 100)}%`;
     div.style.width = `${tickWidthPx}px`;
     frag.appendChild(div);
   }
+
   ticksEl.appendChild(frag);
   // The playhead mark is the same kind of fixed-width thing a tick is.
   ($("ruler-playhead") as HTMLElement).style.width = `${tickWidthPx}px`;
