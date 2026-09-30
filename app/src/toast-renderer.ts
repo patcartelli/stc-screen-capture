@@ -18,6 +18,8 @@ declare global {
     toast: {
       undo(dir: string): Promise<boolean>;
       dismiss(): void;
+      action(id: string): void;
+      fit(cardPx: number): void;
       onExpire(cb: () => void): () => void;
     };
   }
@@ -28,6 +30,9 @@ const mode = params.get("mode") ?? "undo";
 const dir = params.get("dir") ?? "";
 const ms = Number(params.get("ms") ?? "0");
 const text = params.get("text") ?? "";
+const title = params.get("title") ?? "";
+const actionId = params.get("action") ?? "";
+const actionLabel = params.get("actionLabel") ?? "";
 
 const bar = document.getElementById("bar") as HTMLDivElement;
 const label = document.getElementById("label") as HTMLSpanElement;
@@ -46,6 +51,29 @@ if (mode === "message") {
   label.textContent = text;
   undoBtn.hidden = true;
   closeBtn.hidden = false;
+  // STC-457: title and button are optional — a free-form string is body only.
+  if (title) {
+    (document.getElementById("title") as HTMLSpanElement).textContent = title;
+    document.getElementById("head")!.classList.add("has-title");
+  }
+  if (actionId && actionLabel) {
+    const btn = document.getElementById("action") as HTMLButtonElement;
+    btn.textContent = actionLabel;
+    document.getElementById("actions")!.classList.add("has-action");
+    btn.addEventListener("click", () => {
+      // Disabled first, the same reason as Undo and ✕: main is about to
+      // destroy this window and a second click has nothing left to ask.
+      btn.disabled = true;
+      window.toast.action(actionId);
+    });
+  }
+  // Report the card's height once fonts have settled — Geist's metrics wrap
+  // differently from the system font, and measuring before they load would
+  // size the window for the wrong text. Main shows the window on this
+  // (or on its own timeout, if it never comes).
+  const card = document.getElementById("card") as HTMLDivElement;
+  const report = () => window.toast.fit(card.getBoundingClientRect().height);
+  void document.fonts.ready.then(() => requestAnimationFrame(report));
 }
 
 /**

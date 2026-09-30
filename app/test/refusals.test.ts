@@ -22,19 +22,31 @@ describe("a Record that did not start", () => {
     expect(recordRefusalText({ ok: false, code: "record-in-flight" })).toBeUndefined();
   });
 
-  test("a known refusal gets its START_FAULTS sentence, verbatim", () => {
+  test("a known refusal gets its START_FAULTS message, verbatim", () => {
     for (const code of Object.keys(START_FAULTS)) {
-      expect(recordRefusalText({ ok: false, code, detail: "ignored" })).toBe(START_FAULTS[code]);
+      expect(recordRefusalText({ ok: false, code, detail: "ignored" })).toEqual(START_FAULTS[code]);
     }
-    expect(recordRefusalText({ ok: false, code: "event-tap-unavailable" }))
-      .toMatch(/^Nothing was recorded/);
+    expect(recordRefusalText({ ok: false, code: "event-tap-unavailable" })?.title)
+      .toBe("Nothing was recorded");
+  });
+
+  test("the permission refusals carry the action that opens their pane (STC-457)", () => {
+    expect(START_FAULTS["no-displays"]!.action?.id).toBe("open-screen-recording-settings");
+    expect(START_FAULTS["event-tap-unavailable"]!.action?.id).toBe("open-input-monitoring-settings");
+  });
+
+  test("every START_FAULTS message has a title and a body", () => {
+    for (const [code, m] of Object.entries(START_FAULTS)) {
+      expect(m.title, code).toBeTruthy();
+      expect(m.body, code).toBeTruthy();
+    }
   });
 
   test("an unknown one still says SOMETHING, with its code and detail", () => {
     expect(recordRefusalText({ ok: false, code: "start-failed", detail: "boom" }))
-      .toBe("Could not start: start-failed\nboom");
+      .toEqual({ title: "Couldn't start recording", body: "start-failed\nboom" });
     expect(recordRefusalText({ ok: false, code: "already-recording" }))
-      .toBe("Could not start: already-recording\n");
+      .toEqual({ title: "Couldn't start recording", body: "already-recording" });
   });
 });
 
@@ -46,16 +58,17 @@ describe("a shot", () => {
   });
 
   test("passes the helper's own warning through on success", () => {
-    expect(stillNoticeText({ ok: true, warning: "no alpha" })).toBe("no alpha");
+    expect(stillNoticeText({ ok: true, warning: "no alpha" }))
+      .toEqual({ title: "Shot saved with a warning", body: "no alpha" });
   });
 
   test("names the refusals it knows, and falls back to the code for the rest", () => {
-    expect(stillNoticeText({ ok: false, code: "no-displays" }))
-      .toMatch(/Screen Recording permission is required/);
-    expect(stillNoticeText({ ok: false, code: "still-unsupported" })).toBe("Shots need macOS 14 or newer.");
-    expect(stillNoticeText({ ok: false, code: "overlay-open" })).toBe("A shot is already in progress.");
+    expect(stillNoticeText({ ok: false, code: "no-displays" })?.title)
+      .toBe("Screen Recording permission needed");
+    expect(stillNoticeText({ ok: false, code: "still-unsupported" })?.body).toBe("Shots need macOS 14 or newer.");
+    expect(stillNoticeText({ ok: false, code: "overlay-open" })?.title).toBe("Shot in progress");
     expect(stillNoticeText({ ok: false, code: "helper-not-running", detail: "x" }))
-      .toBe("Could not take the shot: helper-not-running\nx");
+      .toEqual({ title: "Couldn't take the shot", body: "helper-not-running\nx" });
   });
 });
 

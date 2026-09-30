@@ -1,9 +1,10 @@
-import { BrowserWindow, screen } from "electron";
+import { BrowserWindow, ipcMain, screen } from "electron";
 import { join } from "node:path";
 import { positionFor, type Corner, type Size } from "./thumbnail.js";
 import { PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import { UNDO_WINDOW_MS } from "./panel-actions.js";
-import { MESSAGE_TOAST_SIZE, UNDO_TOAST_SIZE, messageToastMs } from "./toast.js";
+import { MESSAGE_TOAST_SIZE, UNDO_TOAST_SIZE, fitMessageHeight, messageToastMs } from "./toast.js";
+import { toToastMessage, type ToastInput } from "./toast-message.js";
 
 /**
  * The toast that appears when Trash PROMISES a deletion (STC-392 Task 6),
@@ -79,7 +80,7 @@ let current: { win: BrowserWindow; timer: NodeJS.Timeout } | undefined;
  * has no such promise to protect).
  */
 function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string>,
-                          size: Size): BrowserWindow {
+                          size: Size, showOnReady = true): BrowserWindow {
   hideToast();
   const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const { x, y } = positionFor(opts.corner, workArea, size);
@@ -102,7 +103,9 @@ function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.loadFile(join(opts.rendererDir, "toast.html"), { query });
-  win.once("ready-to-show", () => {
+  // A caller that shows the window itself (the message toast, once its page
+  // has measured its own height — STC-457) passes `showOnReady = false`.
+  if (showOnReady) win.once("ready-to-show", () => {
     // Rule 1: a notice, not a request for input — see the class doc above.
     win.showInactive();
   });
@@ -153,13 +156,43 @@ export function showUndoToast(opts: ShowUndoToastOptions): void {
  * is long enough to want out of the way early, and unlike the undo toast
  * there is no promise that an early close would abandon.
  */
-export function showMessageToast(text: string, opts: ToastWindowOptions): void {
-  const ms = messageToastMs(text);
-  const win = buildToastWindow(opts, { mode: "message", text, ms: String(ms) },
-                               MESSAGE_TOAST_SIZE);
+export function showMessageToast(message: ToastInput, opts: ToastWindowOptions): void {
+  const m = toToastMessage(message);
+  const ms = messageToastMs(m);
+  const query: Record<string, string> = { mode: "message", text: m.body, ms: String(ms) };
+  if (m.title) query.title = m.title;
+  if (m.action) { query.action = m.action.id; query.actionLabel = m.action.label; }
+  const win = buildToastWindow(opts, query, MESSAGE_TOAST_SIZE, false);
+
+  // The page measures its own card once fonts have loaded and answers with
+  // `toast:fit`; the window shrinks to it, re-anchors to its corner, and only
+  // THEN appears — so it never flashes at the 340 px ceiling first (STC-457).
+  // The fallback shows it at the ceiling if the page never answers: a toast
+  // the reader cannot see is worse than one taller than it needs to be.
+  let shown = false;
+  const reveal = () => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    win.showInactive();
+  };
+  const onFit = (e: Electron.IpcMainEvent, cardPx: unknown) => {
+    if (e.sender !== win.webContents || win.isDestroyed() || shown) return;
+    const height = fitMessageHeight(Number(cardPx));
+    const size = { width: MESSAGE_TOAST_SIZE.width, height };
+    const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    win.setBounds({ ...positionFor(opts.corner, workArea, size), ...size });
+    reveal();
+  };
+  ipcMain.on("toast:fit", onFit);
+  const fallback = setTimeout(reveal, FIT_FALLBACK_MS);
+  win.on("closed", () => { ipcMain.removeListener("toast:fit", onFit); clearTimeout(fallback); });
+
   const timer = setTimeout(hideToast, ms);
   current = { win, timer };
 }
+
+/** How long a message toast waits for its page to report a height before showing anyway. */
+const FIT_FALLBACK_MS = 1_500;
 
 /**
  * Take the toast off screen right now, if one is up — undo or message alike.

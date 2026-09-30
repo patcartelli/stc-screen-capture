@@ -18,9 +18,30 @@ export async function toastPage(app: ElectronApplication): Promise<Page | undefi
   return app.windows().find((w) => w.url().includes("toast.html") && w.url().includes("mode=message"));
 }
 
-/** The toast's message text, or "" if none is up. */
+/**
+ * The toast's message text, or "" if none is up — title (when there is one)
+ * and body, joined by a newline, the same string `toast-message.ts`'s
+ * `toastMessageText` builds. STC-457 gave the toast a separate `#title`; a
+ * test that asks "what did it say" means both.
+ */
 export async function toastText(app: ElectronApplication): Promise<string> {
   const page = await toastPage(app);
   if (!page) return "";
-  return (await page.textContent("#label")) ?? "";
+  // The window is listed by url as soon as it commits navigation, which can
+  // be before its DOM exists — an absent element is "nothing said yet", never
+  // a throw, so a poll on this keeps polling rather than failing on its first
+  // early read.
+  return page.evaluate(() => {
+    const head = document.getElementById("head");
+    const label = document.getElementById("label");
+    // `toast-renderer.ts` stamps `data-mode` in the same synchronous run that
+    // fills the label. Until then `#label` still holds the HTML's own
+    // placeholder ("Deleted", the undo toast's word), which is not anything
+    // the app said.
+    if (!head || !label || document.documentElement.dataset.mode !== "message") return "";
+    const title = head.classList.contains("has-title")
+      ? document.getElementById("title")?.textContent ?? "" : "";
+    const body = label.textContent ?? "";
+    return title ? `${title}\n${body}` : body;
+  }).catch(() => "");
 }

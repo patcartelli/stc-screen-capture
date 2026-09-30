@@ -2,7 +2,8 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'">
+  <link rel="stylesheet" href="tokens.css">
   <title>deleted</title>
   <style>
     /*
@@ -10,19 +11,20 @@
       `thumbnail.html`/`countdown.html` use — everything that reads as "a
       toast" is this card's own background and shadow.
     */
-    :root { color-scheme: light dark; }
+    /* color-scheme, fonts, type ramp and colors come from tokens.css (STC-457). */
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
       background: transparent; overflow: hidden;
-      font: 12px/1.4 -apple-system, system-ui, sans-serif;
+      font: var(--type-body-weight) var(--type-body)/var(--type-body-lh) var(--font-sans);
       -webkit-user-select: none; user-select: none;
     }
     #card {
       position: absolute; inset: 6px;
       border-radius: 12px;
-      background: rgba(30, 30, 32, 0.86);
-      color: #f2f2f2;
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
       display: flex; flex-direction: column;
       overflow: hidden;
       cursor: default;
@@ -33,7 +35,7 @@
       padding: 0 12px;
       gap: 10px;
     }
-    #label { font-size: 12px; }
+    #label { font-size: var(--type-body); }
     /*
       ── message mode ──────────────────────────────────────────────────────
       STC-412's final review, C1. This mode carries the main window's
@@ -62,12 +64,36 @@
       synchronous run that fills the label, before `ready-to-show` ever lets
       the window be seen.
     */
+    /*
+      STC-457: the message card is laid out by its CONTENT, not by the window.
+      `#card` leaves the absolute inset the undo toast uses and becomes an
+      in-flow box, so its natural height is measurable — `toast-renderer.ts`
+      reports it and main sizes the window to it. `max-height` is the same
+      340 px ceiling (`toast.ts`'s MESSAGE_TOAST_SIZE) less the gutter: past
+      it `#row` scrolls, the backstop this file already had.
+    */
+    html[data-mode="message"] #card {
+      position: relative; inset: auto;
+      margin: 6px; max-height: calc(100vh - 12px);
+    }
     html[data-mode="message"] #row {
       display: block;
-      padding: 10px 30px 10px 12px;
+      padding: 12px 14px;
       overflow-y: auto;
     }
-    html[data-mode="message"] #label { white-space: pre-wrap; }
+    #head { display: none; align-items: center; gap: 8px; margin-bottom: 4px; padding-right: 24px; }
+    html[data-mode="message"] #head.has-title { display: flex; }
+    #icon {
+      flex: none; width: 16px; height: 16px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--warn-soft); color: var(--warn);
+      font-size: 11px; font-weight: 600; line-height: 1;
+    }
+    #title { font-size: var(--type-heading); font-weight: var(--type-heading-weight); line-height: var(--type-heading-lh); }
+    html[data-mode="message"] #label { display: block; white-space: pre-wrap; color: var(--text-dim); }
+    html[data-mode="message"] #head:not(.has-title) + #label { color: var(--text); padding-right: 24px; }
+    #actions { display: none; margin-top: 10px; }
+    html[data-mode="message"] #actions.has-action { display: flex; }
     /*
       The way out before the clock runs down. Same ghost circle, same corner
       and the same reasoning as `thumbnail.html`'s own `#dismiss` — this app
@@ -80,20 +106,21 @@
       position: absolute; top: 6px; right: 6px; z-index: 1;
       width: 18px; height: 18px; padding: 0; line-height: 1;
       border: none; border-radius: 999px;
-      background: rgba(255, 255, 255, 0.12); color: #f2f2f2;
+      background: var(--surface-hover); color: var(--text-dim);
       font-size: 13px; cursor: pointer;
     }
-    #close:hover { background: rgba(255, 255, 255, 0.22); }
+    #close:hover { color: var(--text); }
+    #close:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     button {
-      font: inherit; font-size: 12px;
+      font: inherit; font-size: var(--type-body-strong); font-weight: var(--type-body-strong-weight);
       padding: 4px 12px; border-radius: 999px;
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      background: rgba(255, 255, 255, 0.08); color: inherit;
+      border: 1px solid var(--border-strong);
+      background: var(--surface-hover); color: inherit;
       cursor: pointer;
     }
-    button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+    button:hover:not(:disabled) { border-color: var(--text-dim); }
     button:disabled { opacity: 0.5; cursor: default; }
-    #bar-track { height: 3px; background: rgba(255, 255, 255, 0.12); }
+    #bar-track { height: 3px; background: var(--border); }
     /*
       No `animation-name` here on purpose. `toast-renderer.ts` sets BOTH
       `animationName` and `animationDuration` together, from the `ms` query
@@ -106,7 +133,7 @@
       the one window the user is watching.
     */
     #bar {
-      height: 100%; width: 100%; background: #7aa2ff;
+      height: 100%; width: 100%; background: var(--accent);
       transform-origin: left;
       animation-timing-function: linear;
       animation-fill-mode: forwards;
@@ -131,7 +158,9 @@
   <div id="card">
     <button id="close" type="button" title="Close" aria-label="Close" hidden>×</button>
     <div id="row">
+      <div id="head"><span id="icon" aria-hidden="true">!</span><span id="title"></span></div>
       <span id="label">Deleted</span>
+      <div id="actions"><button id="action" type="button"></button></div>
       <button id="undo" type="button">Undo</button>
     </div>
     <div id="bar-track"><div id="bar"></div></div>

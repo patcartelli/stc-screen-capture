@@ -20,6 +20,19 @@
  * a refusal cannot read one way from the window and another from the menu bar.
  */
 
+import type { ToastMessage } from "./toast-message.js";
+
+/**
+ * Screen Recording is not granted. One message for both doors (Record and a
+ * shot): they send the reader to the same pane, and two copies is how they
+ * would come to disagree. The action opens that pane (STC-457).
+ */
+const SCREEN_RECORDING_DENIED: ToastMessage = {
+  title: "Screen Recording permission needed",
+  body: "Grant it in System Settings › Privacy & Security › Screen & System Audio Recording, then try again.",
+  action: { id: "open-screen-recording-settings", label: "Open System Settings" },
+};
+
 /**
  * Why a take did not start, said in terms of what it costs and what to do.
  *
@@ -34,14 +47,14 @@
  * and inviting a retry is how someone presses Record four times and concludes
  * the app is broken.
  */
-export const START_FAULTS: Record<string, string> = {
+export const START_FAULTS: Record<string, ToastMessage> = {
   // STC-391: a shot is mid-flight — most likely a self-timer, which
   // now spends seconds waiting with this window still live and pressable.
-  "capture-in-flight":
-    "A shot is already in progress. Finish or cancel it, then press Record.",
-  "no-displays":
-    "Screen Recording permission is required.\nGrant it in System Settings › " +
-    "Privacy & Security › Screen & System Audio Recording, then try again.",
+  "capture-in-flight": {
+    title: "Shot in progress",
+    body: "Finish or cancel it, then press Record.",
+  },
+  "no-displays": SCREEN_RECORDING_DENIED,
   // STC-315. This used to be a WARNING, arriving after the take was already
   // running: the recording went ahead with no cursor track at all, and since
   // the pixels never carry a pointer (the transform draws it from events.json)
@@ -79,15 +92,19 @@ export const START_FAULTS: Record<string, string> = {
   // Only a bundle launched via `open` can settle it. So the instruction is the
   // one that is sufficient in EITHER case rather than the shorter one that
   // might send someone in a circle.
-  "event-tap-unavailable":
-    "Nothing was recorded — the take did not start.\n\nThe recorder could not " +
-    "watch your mouse, and the cursor is never captured in the video itself: it " +
-    "is drawn afterwards from what the tap records. A take without it would have " +
-    "no cursor at all, so it is refused rather than made.\n\nmacOS may have just " +
-    "asked to allow this — its dialog says \"keystrokes\", but this app records " +
-    "mouse movement and clicks only, and never what you type.\n\nAllow it, or " +
-    "tick the recorder under System Settings › Privacy & Security › Input " +
-    "Monitoring. Then quit and reopen the recorder and press Record.",
+  "event-tap-unavailable": {
+    title: "Nothing was recorded",
+    body:
+      "The take did not start.\n\nThe recorder could not " +
+      "watch your mouse, and the cursor is never captured in the video itself: it " +
+      "is drawn afterwards from what the tap records. A take without it would have " +
+      "no cursor at all, so it is refused rather than made.\n\nmacOS may have just " +
+      "asked to allow this — its dialog says \"keystrokes\", but this app records " +
+      "mouse movement and clicks only, and never what you type.\n\nAllow it under " +
+      "Privacy & Security › Input Monitoring. Then quit and reopen the recorder " +
+      "and press Record.",
+    action: { id: "open-input-monitoring-settings", label: "Open Input Monitoring" },
+  },
 };
 
 /** The shape every door's Record answer shares (`main.ts`'s `RecordResult`). */
@@ -99,7 +116,7 @@ export interface RecordOutcome {
 }
 
 /**
- * The sentence for a Record that did not start, or `undefined` when there is
+ * The message for a Record that did not start, or `undefined` when there is
  * nothing to say:
  *
  *  - it DID start;
@@ -113,10 +130,13 @@ export interface RecordOutcome {
  *    overlay the user is framing a take with (the toast is not excluded from
  *    a capture).
  */
-export function recordRefusalText(r: RecordOutcome): string | undefined {
+export function recordRefusalText(r: RecordOutcome): ToastMessage | undefined {
   if (r.ok || r.cancelled || r.code === "record-in-flight") return undefined;
   const code = String(r.code);
-  return START_FAULTS[code] ?? `Could not start: ${code}\n${r.detail ?? ""}`;
+  return START_FAULTS[code] ?? {
+    title: "Couldn't start recording",
+    body: r.detail ? `${code}\n${r.detail}` : code,
+  };
 }
 
 /** The shape every door's shot answer shares (`main.ts`'s `StillResult`). */
@@ -129,20 +149,27 @@ export interface StillOutcome {
 }
 
 /**
- * The sentence for a shot that did not happen — or, for one that did, the
+ * The message for a shot that did not happen — or, for one that did, the
  * helper's own warning about it (an alpha warning, say) — and `undefined`
  * when there is nothing to say, including a cancelled selection, which has
  * never produced a message (the way dismissing macOS's own crosshair does
  * not).
  */
-export function stillNoticeText(r: StillOutcome): string | undefined {
+export function stillNoticeText(r: StillOutcome): ToastMessage | undefined {
   if (r.cancelled) return undefined;
-  if (r.ok) return r.warning || undefined;
-  return r.code === "no-displays"
-    ? "Screen Recording permission is required.\nGrant it in System Settings › Privacy & Security › Screen & System Audio Recording, then try again."
-    : r.code === "still-unsupported"
-    ? "Shots need macOS 14 or newer."
-    : r.code === "overlay-open"
-    ? "A shot is already in progress."
-    : `Could not take the shot: ${r.code}\n${r.detail ?? ""}`;
+  if (r.ok) {
+    return r.warning ? { title: "Shot saved with a warning", body: r.warning } : undefined;
+  }
+  switch (r.code) {
+    case "no-displays": return SCREEN_RECORDING_DENIED;
+    case "still-unsupported":
+      return { title: "Shots aren't available", body: "Shots need macOS 14 or newer." };
+    case "overlay-open":
+      return { title: "Shot in progress", body: "Finish or cancel it first." };
+    default:
+      return {
+        title: "Couldn't take the shot",
+        body: r.detail ? `${r.code}\n${r.detail}` : String(r.code),
+      };
+  }
 }
