@@ -1,5 +1,5 @@
 import { EMBED_CSS_WIDTH } from "./output-size.js";
-import { effectivePointWidthFromGeometry } from "./spaces.js";
+import { effectivePointWidthFromGeometry, type ScopeLike } from "./spaces.js";
 
 /**
  * Will the viewer be able to read it? (STC-318)
@@ -164,11 +164,13 @@ export const EMBED_TARGETS: readonly EmbedTarget[] = [
  */
 export function effectivePointWidth(
   anchors: { display: { pointWidth: number }; capture: { width: number };
+             scope?: ScopeLike;
              geometry?: readonly { display: { pointWidth: number }; contentRect: { width: number } }[] },
 ): number {
   return effectivePointWidthFromGeometry(
     anchors.display.pointWidth,
     anchors.capture.width,
     anchors.geometry,
+    anchors.scope,
   );
 }

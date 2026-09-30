@@ -22,7 +22,7 @@ function v7(): Anchors {
 describe("geometryAt — the entry for the frame being SHOWN", () => {
   test("no geometry: the top-level display and the full frame", () => {
     const a = { ...v7(), version: 6, geometry: undefined } as Anchors;
-    expect(geometryAt(a, 5_000_000_000)).toEqual({ display: D0, contentRect: fullFrame(a.capture) });
+    expect(geometryAt(a, 5_000_000_000)).toEqual({ display: D0, shown: D0, contentRect: fullFrame(a.capture) });
   });
   test("a frame before the refit uses entry 0", () => {
     expect(geometryAt(v7(), 3_999_999_999).display).toBe(D0);
