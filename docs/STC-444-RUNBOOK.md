@@ -127,6 +127,11 @@ way slice 1's item 1 was — see the new checklist item 6.
 3. **Does the Zoom lane's dithered fill look like a screen** at real size,
    or too busy/noisy against real auto-zoom windows (which are usually
    wider than the synthetic ones in the comparison)?
+   **STC-451 (2026-09-30): confirmed on a Retina Mac.** The fill was drawn
+   into a CSS-pixel bitmap and stretched 2x with smoothing, so the crisp
+   checkerboard read as a flat dim blue; it only looked right at 1x, where the
+   comparison ran. It is drawn at device resolution now (`laneBitmap`). Still
+   unchecked: whether the pitch holds when the ruler is zoomed in.
 4. **Are the 1px bracket handles still comfortably grabbable** at actual
    size, not just legible? They kept the old handle's 10x20 hit box, but a
    thinner glyph can still read as harder to find with the pointer.
