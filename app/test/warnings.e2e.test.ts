@@ -119,20 +119,39 @@ describe("a start the helper refuses (STC-315)", () => {
     // on some other font stack. Watched failing at the old 240x68: +370px,
     // i.e. about 15% of the message on screen.
     const page = (await toastPage(app!))!;
+    //
+    // STC-457: the window is sized to the card now (`toast:fit`), so "the
+    // label is shorter than a fixed box" became "the row is not scrolling"
+    // (`scrollHeight` above `clientHeight` means content is hidden below) and
+    // "the window is the card plus its 6 px gutter, or the 340 px ceiling".
+    //
+    // The window exists (hidden) before the page has measured itself and main
+    // has answered with the fitted height, so wait for the resize first. If
+    // `toast:fit` never lands, the window stays at the ceiling until main's
+    // fallback shows it there, and this poll fails — which is the point.
+    await expect.poll(() => page.evaluate(() => window.innerHeight), { timeout: 5_000 })
+      .toBeLessThan(340);
     const fit = await page.evaluate(() => {
       const row = document.getElementById("row")!;
       const label = document.getElementById("label")!;
+      const card = document.getElementById("card")!;
       return {
         whiteSpace: getComputedStyle(label).whiteSpace,
-        overflowBy: label.getBoundingClientRect().height - row.clientHeight,
+        hiddenBelow: row.scrollHeight - row.clientHeight,
         widerBy: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         chars: (label.textContent ?? "").length,
+        cardBottom: card.getBoundingClientRect().bottom,
+        windowHeight: window.innerHeight,
       };
     });
-    expect(fit.chars).toBeGreaterThan(500);
+    expect(fit.chars).toBeGreaterThan(400);
     expect(fit.whiteSpace).toBe("pre-wrap");
-    expect(fit.overflowBy, `label exceeds its box by ${fit.overflowBy}px`).toBeLessThanOrEqual(0);
+    expect(fit.hiddenBelow, `${fit.hiddenBelow}px of the message is scrolled out of view`).toBeLessThanOrEqual(0);
     expect(fit.widerBy).toBeLessThanOrEqual(0);
+    // The card's bottom edge (plus its gutter) is inside the window: nothing
+    // is cut off, and the window is not left taller than the card either.
+    expect(fit.cardBottom + 6).toBeLessThanOrEqual(fit.windowHeight + 1);
+    expect(fit.windowHeight, `window ${fit.windowHeight}px, card bottom ${fit.cardBottom}px, row scroll ${fit.hiddenBelow}px`).toBeLessThan(340);
 
     // "Quit and reopen", not "press Record again". Input Monitoring commonly
     // needs the granted process restarted and that is UNOBSERVED for this app
@@ -206,7 +225,7 @@ describe("a refusal through the menu bar or a hotkey is shown too (STC-465 revie
     // the refusal comes straight back from the helper.
     await app!.evaluate(() => (globalThis as any).__stcTrayOnSelect("action:display"));
     await expect.poll(() => toastText(app!), { timeout: 15_000 })
-      .toMatch(/Screen Recording permission is required/);
+      .toMatch(/Screen Recording permission needed/);
     // No shot claimed in the window that did not ask for one.
     expect(await win.getAttribute("#stillstatus", "hidden")).not.toBeNull();
   }, 120_000);

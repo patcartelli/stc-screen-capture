@@ -1,4 +1,5 @@
 import type { Size } from "./thumbnail.js";
+import { toastMessageText, type ToastInput } from "./toast-message.js";
 
 /**
  * The toast's pure decisions — how big each mode's window is, and how long a
@@ -32,7 +33,7 @@ import type { Size } from "./thumbnail.js";
  * chosen for looks, and `warnings.e2e.test.ts` MEASURES it in real Chromium
  * with that exact message showing (`#label`'s rendered height against the
  * box's) rather than trusting anyone's arithmetic about font metrics. As
- * measured there, 400x300 holds it with about three lines to spare; at the
+ * measured there, 400x300 held it with about three lines to spare (STC-457's header row and button need 340); at the
  * 240x68 it was inheriting the same text overflows by 370px, which is the
  * ~15%-visible the review reported. `toast.html` still gets an
  * `overflow-y: auto` backstop in case that headroom is not enough on some
@@ -41,8 +42,34 @@ import type { Size } from "./thumbnail.js";
  */
 export const UNDO_TOAST_SIZE: Size = { width: 240, height: 68 };
 
-/** See the header: sized to hold the app's longest warning (`refusals.ts`) unscrolled. */
-export const MESSAGE_TOAST_SIZE: Size = { width: 400, height: 300 };
+/**
+ * See the header: sized to hold the app's longest warning (`refusals.ts`) unscrolled.
+ *
+ * Since STC-457 this is the message toast's WIDTH and its MAXIMUM height, not
+ * a fixed box: the page measures its own card and `fitMessageHeight` shrinks
+ * the window to it, so a one-line notice is no longer a mostly empty 340 px
+ * card. The 340 stays the ceiling — past it `#row` scrolls, exactly the
+ * backstop `toast.html` already had.
+ */
+export const MESSAGE_TOAST_SIZE: Size = { width: 400, height: 340 };
+
+/** `toast.html`'s `#card` margin on each side — the transparent gutter the shadow lives in. */
+export const TOAST_CARD_INSET_PX = 6;
+
+/** No message toast is shorter than the undo toast: a title alone still needs a card. */
+export const MESSAGE_TOAST_MIN_HEIGHT = UNDO_TOAST_SIZE.height;
+
+/**
+ * The window height that holds a card `cardPx` tall (its border box, as the
+ * page measures it) plus the gutter, clamped to [the undo toast's height,
+ * `MESSAGE_TOAST_SIZE.height`]. Rounded UP: a fractional pixel of clipped
+ * card is a visible line cut through the bottom border.
+ */
+export function fitMessageHeight(cardPx: number): number {
+  const wanted = Math.ceil(cardPx) + 2 * TOAST_CARD_INSET_PX;
+  if (!Number.isFinite(wanted)) return MESSAGE_TOAST_SIZE.height;
+  return Math.min(MESSAGE_TOAST_SIZE.height, Math.max(MESSAGE_TOAST_MIN_HEIGHT, wanted));
+}
 
 /**
  * A short notice's floor — long enough to notice, read and recognise, which
@@ -89,7 +116,7 @@ export const MESSAGE_TOAST_MAX_MS = 20_000;
  * ONE value (ruling 2, the undo toast's own rule) rather than computing it
  * twice.
  */
-export function messageToastMs(text: string): number {
-  const wanted = MESSAGE_TOAST_MIN_MS + text.length * MESSAGE_TOAST_PER_CHAR_MS;
+export function messageToastMs(message: ToastInput): number {
+  const wanted = MESSAGE_TOAST_MIN_MS + toastMessageText(message).length * MESSAGE_TOAST_PER_CHAR_MS;
   return Math.min(wanted, MESSAGE_TOAST_MAX_MS);
 }

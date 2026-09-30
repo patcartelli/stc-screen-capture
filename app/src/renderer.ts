@@ -99,7 +99,7 @@ declare const recorder: {
   /** STC-375: the pill's measured content width, fire-and-forget. */
   reportPillWidth(px: number): void;
   /** STC-412: show a warning via the toast. */
-  showToast(text: string): void;
+  showToast(message: ToastInput): void;
 };
 
 import { COUNTDOWN_OPTIONS } from "./countdown.js";
@@ -117,6 +117,7 @@ import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
 import { MODEL_CODE } from "./product.js";
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
+import type { ToastInput } from "./toast-message.js";
 import { micDevices, type MicInfo } from "./mic-devices.js";
 import {
   decidePopoverToggle, micMenuRows, cameraMenuRows, applyMenuPick,
@@ -461,7 +462,7 @@ document.addEventListener("keydown", (e) => {
 let currentDir: string | undefined;
 
 function setState(text: string): void { $("state").textContent = text; }
-function alertUser(text: string): void { recorder.showToast(text); }
+function alertUser(message: ToastInput): void { recorder.showToast(message); }
 function stillStatus(text?: string): void {
   const el = $("stillstatus");
   if (!text) { el.setAttribute("hidden", ""); el.textContent = ""; return; }
