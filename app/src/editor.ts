@@ -60,7 +60,11 @@ import { exportSession } from "@transform/export";
 import {
   levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack,
   micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
+  nudgeLevelDb, MIC_LEVEL_MAX, MIC_UNITY_PCT,
 } from "@transform/audio-mix";
+import {
+  meterStep, meterFill, clipLit, snapToUnity, METER_IDLE, type MeterState,
+} from "@transform/audio-meter";
 import { decodeAllAudio, pcmTrackOf } from "@transform/decode-audio";
 import { PreviewAudio } from "@transform/preview-audio";
 import { mixPeaks } from "@transform/waveform";
@@ -1689,6 +1693,124 @@ $("voicecleanstrength").addEventListener("change", () => {
   // On release, not per `input`: every re-clean is ~1 s a minute of audio.
   refreshCleanMic();
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- slider feel and level meters (STC-460) ------------------------------
+//
+// Presentation only: every number the meters show is measured by `mixBlock`
+// (audio-mix.ts) while it makes the sound the preview plays, and read back
+// through `previewAudio.meterNow()`. Nothing here touches the audio.
+//
+// Slider feel: the tick at "as recorded" is in the markup (`--unity`); a
+// pointer DRAG within 2% of it snaps onto it (keys never snap — a snap there
+// would make the neighbouring steps unreachable); double-click resets to it;
+// Shift+arrow nudges 0.1 dB. Arrow keys on a focused slider still never reach
+// the playhead: the window handler below returns for these targets.
+
+const FADERS: Record<string, { unityPct: number }> = {
+  miclevel: { unityPct: MIC_UNITY_PCT },
+  sysaudiolevel: { unityPct: 100 },
+};
+const faderDefaults: Record<string, () => number> = {
+  miclevel: () => MIC_UNITY_PCT,
+  sysaudiolevel: () => 100,
+  voicecleanstrength: () => Math.round(DEFAULT_NARRATION_CLEANUP.strength * 100),
+};
+let draggingFader: string | null = null;
+
+$("audiopanel").addEventListener("pointerdown", (e) => {
+  const id = (e.target as HTMLElement).id;
+  if (id in FADERS) draggingFader = id;
+});
+window.addEventListener("pointerup", () => { draggingFader = null; });
+window.addEventListener("pointercancel", () => { draggingFader = null; });
+
+// Capture phase on the panel, so the snap lands BEFORE the slider's own
+// `input` handler reads the value.
+$("audiopanel").addEventListener("input", (e) => {
+  const el = e.target as HTMLInputElement;
+  if (!draggingFader || el.id !== draggingFader || !(el.id in FADERS)) return;
+  el.value = String(snapToUnity(Number(el.value), FADERS[el.id]!.unityPct));
+}, true);
+
+$("audiopanel").addEventListener("dblclick", (e) => {
+  const el = e.target as HTMLInputElement;
+  const def = faderDefaults[el.id];
+  if (!def || el.disabled) return;
+  el.value = String(def());
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+});
+
+let nudgePersist: ReturnType<typeof setTimeout> | null = null;
+$("audiopanel").addEventListener("keydown", (e) => {
+  const el = e.target as HTMLInputElement;
+  if (!e.shiftKey || (el.id !== "miclevel" && el.id !== "sysaudiolevel" && el.id !== "voicecleanstrength")) return;
+  const dir = e.key === "ArrowRight" || e.key === "ArrowUp" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowDown" ? -1 : 0;
+  if (!dir || !openProject) return;
+  e.preventDefault();
+  if (el.id === "voicecleanstrength") {
+    // A percentage already moves in 1% steps natively; Shift only needs to
+    // stay out of the playhead's way, so a plain step is applied here.
+    el.value = String(Math.min(100, Math.max(0, Number(el.value) + dir)));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  if (el.id === "miclevel") {
+    openProject.micLevel = nudgeLevelDb(openProject.micLevel ?? 1, dir * 0.1, MIC_LEVEL_MAX);
+    el.value = String(sliderPctFromMicLevel(openProject.micLevel));
+    $("miclevelvalue").textContent = formatLevelDb(openProject.micLevel);
+  } else {
+    openProject.systemAudioLevel = nudgeLevelDb(openProject.systemAudioLevel ?? 1, dir * 0.1, 1);
+    el.value = String(sliderPctFromLevel(openProject.systemAudioLevel));
+    $("sysaudiovalue").textContent = formatLevelDb(openProject.systemAudioLevel);
+  }
+  scheduleWaveform();
+  // A held key repeats: persist once it settles, not per repeat.
+  if (nudgePersist) clearTimeout(nudgePersist);
+  nudgePersist = setTimeout(() => {
+    nudgePersist = null;
+    void persistProject().catch((err: any) => alertUser(String(err?.message ?? err)));
+  }, 300);
+});
+
+// The meters run only while the panel is open: a rAF loop for a closed panel
+// is work nobody can see.
+let meterRaf = 0;
+let meterLastMs = 0;
+let micMeter: MeterState = METER_IDLE;
+let sysMeter: MeterState = METER_IDLE;
+
+function paintMeter(id: "mic" | "sys", m: MeterState, nowMs: number): void {
+  const bar = $(`${id}meter`);
+  bar.style.transform = `scaleX(${meterFill(m.db)})`;
+  bar.toggleAttribute("data-hot", m.db > -3);
+  bar.dataset.db = m.db.toFixed(1);
+  $(`${id}clip`).toggleAttribute("data-lit", clipLit(m, nowMs));
+}
+
+function meterFrame(nowMs: number): void {
+  const blk = previewAudio?.meterNow() ?? null;
+  const dt = meterLastMs ? nowMs - meterLastMs : 16;
+  meterLastMs = nowMs;
+  const limited = !!blk && blk.mix > 1;
+  micMeter = meterStep(micMeter, blk?.mic ?? 0, limited && (blk?.mic ?? 0) > 0, nowMs, dt);
+  sysMeter = meterStep(sysMeter, blk?.system ?? 0, limited && (blk?.system ?? 0) > 0, nowMs, dt);
+  paintMeter("mic", micMeter, nowMs);
+  paintMeter("sys", sysMeter, nowMs);
+  meterRaf = requestAnimationFrame(meterFrame);
+}
+
+$("audiopanel").addEventListener("toggle", (e) => {
+  const open = (e as ToggleEvent).newState === "open";
+  if (open && !meterRaf) { meterLastMs = 0; meterRaf = requestAnimationFrame(meterFrame); }
+  if (!open && meterRaf) {
+    cancelAnimationFrame(meterRaf);
+    meterRaf = 0;
+    micMeter = METER_IDLE; sysMeter = METER_IDLE;
+    paintMeter("mic", micMeter, 0); paintMeter("sys", sysMeter, 0);
+  }
 });
 
 // ---- preview sound (STC-454) ---------------------------------------------
