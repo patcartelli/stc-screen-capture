@@ -143,13 +143,20 @@ function finishCrop(bbox: Rect): Rect | null {
   return clampRectToFrame(clamped);
 }
 
+export type CellClass = "survivor" | "ambient" | "quiet" | "unconcentrated";
+
 /**
- * The change-based signal: for each grid cell, is its change concentrated
- * near a trigger event (include) or spread through most of the window
- * (ambient, exclude)? The union of surviving cells, or null if none survive
- * — which is itself a trusted "don't zoom" answer, not a reason to fall back.
+ * Why each grid cell was kept or dropped, for one window — the classifier
+ * `deriveFromChanges` runs, exposed so STC-405's audit can say WHICH cells
+ * carried a crop rather than only where it landed. Row-major, top-left
+ * first, like `ChangeFrame.cells`.
+ *
+ *   ambient         active in most of the window's frames (a video tile, a clock)
+ *   quiet           nothing happened here
+ *   unconcentrated  changed, but mostly away from the trigger events
+ *   survivor        changed near a trigger and not continuously: what frames the crop
  */
-function deriveFromChanges(window: ZoomWindow, changes: Changes, framesInWindow: readonly ChangeFrame[]): Rect | null {
+export function classifyCells(window: ZoomWindow, changes: Changes, framesInWindow: readonly ChangeFrame[]): CellClass[] {
   const { gridWidth, gridHeight } = changes;
   const cellCount = gridWidth * gridHeight;
   const totalWeight = new Float64Array(cellCount);
@@ -166,13 +173,30 @@ function deriveFromChanges(window: ZoomWindow, changes: Changes, framesInWindow:
     }
   }
 
+  const out: CellClass[] = new Array(cellCount);
+  for (let i = 0; i < cellCount; i++) {
+    if (activeFrames[i]! / framesInWindow.length >= AMBIENT_FRAME_FRACTION) out[i] = "ambient"; // continuous
+    else if (totalWeight[i]! <= 0) out[i] = "quiet"; // nothing happened here
+    else if (burstWeight[i]! / totalWeight[i]! < BURST_CONCENTRATION) out[i] = "unconcentrated"; // not near a trigger
+    else out[i] = "survivor";
+  }
+  return out;
+}
+
+/**
+ * The change-based signal: for each grid cell, is its change concentrated
+ * near a trigger event (include) or spread through most of the window
+ * (ambient, exclude)? The union of surviving cells, or null if none survive
+ * — which is itself a trusted "don't zoom" answer, not a reason to fall back.
+ */
+function deriveFromChanges(window: ZoomWindow, changes: Changes, framesInWindow: readonly ChangeFrame[]): Rect | null {
+  const { gridWidth, gridHeight } = changes;
+  const classes = classifyCells(window, changes, framesInWindow);
+
   let minCol = Infinity, maxCol = -Infinity, minRow = Infinity, maxRow = -Infinity;
   for (let row = 0; row < gridHeight; row++) {
     for (let col = 0; col < gridWidth; col++) {
-      const i = row * gridWidth + col;
-      if (activeFrames[i]! / framesInWindow.length >= AMBIENT_FRAME_FRACTION) continue; // continuous -> ambient
-      if (totalWeight[i]! <= 0) continue; // nothing happened here
-      if (burstWeight[i]! / totalWeight[i]! < BURST_CONCENTRATION) continue; // not concentrated near a trigger
+      if (classes[row * gridWidth + col] !== "survivor") continue;
       minCol = Math.min(minCol, col); maxCol = Math.max(maxCol, col);
       minRow = Math.min(minRow, row); maxRow = Math.max(maxRow, row);
     }
@@ -206,12 +230,16 @@ function hasPosition(e: SessionEvent): e is Extract<SessionEvent, { x: number; y
  * point and the cluster never grows past the starting dead zone; a drag's
  * held moves grow it to the drag's own bounding box.
  */
-function deriveFromCursor(window: ZoomWindow, anchors: Anchors, frames: readonly number[]): Rect | null {
-  const points = window.events.filter(hasPosition).map((e) => {
+export function triggerPointsUv(window: ZoomWindow, anchors: Anchors, frames: readonly number[]): { x: number; y: number }[] {
+  return window.events.filter(hasPosition).map((e) => {
     const fi = frameIndexAt(frames, e.t);
     const g = geometryAt(anchors, fi === null ? null : frames[fi]!);
     return globalToCaptureUv(e, g.shown, g.contentRect, anchors.capture);
   });
+}
+
+function deriveFromCursor(window: ZoomWindow, anchors: Anchors, frames: readonly number[]): Rect | null {
+  const points = triggerPointsUv(window, anchors, frames);
   if (points.length === 0) return null;
 
   const z = CURSOR_DEAD_ZONE_UV;
