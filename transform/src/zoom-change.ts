@@ -210,7 +210,7 @@ function deriveFromCursor(window: ZoomWindow, anchors: Anchors, frames: readonly
   const points = window.events.filter(hasPosition).map((e) => {
     const fi = frameIndexAt(frames, e.t);
     const g = geometryAt(anchors, fi === null ? null : frames[fi]!);
-    return globalToCaptureUv(e, g.display, g.contentRect, anchors.capture);
+    return globalToCaptureUv(e, g.shown, g.contentRect, anchors.capture);
   });
   if (points.length === 0) return null;
 

@@ -9,6 +9,7 @@
  * the cursor drawn over it must be mapped the old way too.
  */
 import type { Anchors } from "./types.js";
+import { scopedDisplay, type DisplayGeometry } from "./spaces.js";
 import { SessionLoadError } from "./session-error.js";
 
 export interface CaptureRect { x: number; y: number; width: number; height: number }
@@ -18,16 +19,22 @@ export function fullFrame(capture: { width: number; height: number }): CaptureRe
   return { x: 0, y: 0, width: capture.width, height: capture.height };
 }
 
+/**
+ * `display` is the real display; `shown` is that display narrowed to what the
+ * take captured (STC-471 — `anchors.scope`, on THIS entry's display). Map
+ * global points through `shown`; `display` is for identity and comparison.
+ * With no scope `shown === display`.
+ */
 export function geometryAt(
   anchors: Anchors, frameNs: number | null,
-): { display: Anchors["display"]; contentRect: CaptureRect } {
+): { display: Anchors["display"]; shown: DisplayGeometry; contentRect: CaptureRect } {
   const g = anchors.geometry;
-  if (!g) return { display: anchors.display, contentRect: fullFrame(anchors.capture) };
+  if (!g) return { display: anchors.display, shown: scopedDisplay(anchors.display, anchors.scope), contentRect: fullFrame(anchors.capture) };
   let pick = g[0]!;
   if (frameNs !== null) {
     for (const e of g) { if (e.startNs <= frameNs) pick = e; else break; }
   }
-  return { display: pick.display, contentRect: pick.contentRect };
+  return { display: pick.display, shown: scopedDisplay(pick.display, anchors.scope), contentRect: pick.contentRect };
 }
 
 const sameDisplay = (a: Anchors["display"], b: Anchors["display"]) =>
