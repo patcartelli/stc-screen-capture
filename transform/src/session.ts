@@ -4,6 +4,7 @@ import type { Anchors, Session, SessionEvent } from "./types.js";
 import type { Changes } from "./changes.js";
 import type { ByteSource } from "./chunk-reader.js";
 import { checkGeometry } from "./display-geometry.js";
+import { checkWindowTrack, stabiliseEvents } from "./window-track.js";
 import { SessionLoadError } from "./session-error.js";
 
 /**
@@ -192,11 +193,14 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
-    anchors?.version !== 7
+    anchors?.version !== 7 && anchors?.version !== 8
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6 or 7)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7 or 8)`);
   }
   checkGeometry(anchors);
+  // v8's `scope.window.track` (STC-482): a window that moved. Validated here,
+  // applied below by taking its displacement out of the cursor events.
+  checkWindowTrack(anchors);
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.
   if (events?.version !== 1 && events?.version !== 2) {
@@ -292,7 +296,7 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     // checkGeometry above ran on the helper's ORIGINAL document; this is the
     // same timeline read on the file's clock — see snapGeometryToFrames.
     anchors: snapGeometryToFrames(anchors, video.framesNs),
-    events: [...events.events].sort((a, b) => a.t - b.t),
+    events: [...stabiliseEvents(anchors, events.events)].sort((a, b) => a.t - b.t),
     frames: video.framesNs,
     cameraFrames: cameraVideo?.framesNs,
     changes: input.changes,

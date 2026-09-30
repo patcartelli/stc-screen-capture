@@ -69,6 +69,15 @@ struct CaptureScopeDoc {
     static let display = CaptureScopeDoc(kind: .display, region: nil, window: nil)
 }
 
+/// One entry of a window-scope take's window track (STC-482): where the
+/// window's top-left sat from `tNs` (the events clock, session-relative)
+/// onward, in display-local points like the scope's `bounds`. Only the origin,
+/// because a window that changes SIZE ends the take (STC-370, STC-382).
+struct WindowTrackEntryDoc: Equatable {
+    let tNs: Int
+    let x: Double, y: Double
+}
+
 /// What the camera track turned out to be. `nil` means no camera on this take.
 struct CameraTrack {
     let present: Bool
@@ -148,6 +157,9 @@ struct SystemAudioTrack {
 /// demand — so nothing about an ordinary take changes, and an older build can
 /// still read it.
 ///
+/// `windowTrack` forces version 8 (STC-482) when a window-scope take's window
+/// moved (2 or more entries); entry 0 is the start and matches `bounds`.
+///
 /// `geometry` forces version 7 (STC-235) when it has 2 or more entries — a
 /// single entry (or none) is written as no `geometry` key at all and no
 /// version bump, the same minimum-version rule every other block above
@@ -166,6 +178,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                      systemAudioRequested: Bool = false,
                      scope: CaptureScopeDoc = .display,
                      geometry: [GeometryEntryDoc] = [],
+                     windowTrack: [WindowTrackEntryDoc] = [],
                      pauses: [PauseInterval],
                      stopReason: String,
                      stopTNs: Int) -> [String: Any] {
@@ -220,6 +233,11 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     if !pauses.isEmpty { version = max(version, 5) }
     if systemAudioRequested { version = max(version, 6) }
     if geometry.count >= 2 { version = max(version, 7) }
+    // STC-482: a window that MOVED. Two or more entries, on a window scope
+    // only — one entry is a window that never moved and writes no `track`, so
+    // every existing window take stays at whatever version it was.
+    let writesTrack = scope.kind == .window && windowTrack.count >= 2
+    if writesTrack { version = max(version, 8) }
     var doc: [String: Any] = [
         "version": version,
         "timebase": ["numer": timebase.numer, "denom": timebase.denom],
@@ -261,6 +279,9 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
             var wb: [String: Any] = ["id": w.id, "bounds": w.bounds.json]
             if let app = w.app, !app.isEmpty { wb["app"] = app }
             if let title = w.title, !title.isEmpty { wb["title"] = title }
+            if writesTrack {
+                wb["track"] = windowTrack.map { ["t": $0.tNs, "x": $0.x, "y": $0.y] as [String: Any] }
+            }
             scopeBlock["window"] = wb
         }
         doc["scope"] = scopeBlock

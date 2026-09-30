@@ -385,5 +385,50 @@ do {
     printJSON(d, marker: "JSON-ONE-ENTRY:")
 }
 
+// ── window track (STC-482) ──────────────────────────────────────────────────
+// A window that MOVED writes v8 with scope.window.track; one that never moved
+// (a single entry) or no track at all writes what it always did.
+do {
+    let win = StillWindowInfo(id: 42, app: "Finder", title: "Documents",
+                              bounds: StillRect(x: 10, y: 20, width: 800, height: 600))
+    let winScope = CaptureScopeDoc(kind: .window, region: nil, window: win)
+
+    let moved = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                capture: capture, camera: nil, requested: false,
+                                scope: winScope,
+                                windowTrack: [WindowTrackEntryDoc(tNs: 0, x: 10, y: 20),
+                                              WindowTrackEntryDoc(tNs: 3_000_000_000, x: -565, y: 26)],
+                                pauses: [],
+                                stopReason: "user", stopTNs: 20_000_000_000)
+    check(moved["version"] as? Int == 8, "a moved window must write version 8")
+    let track = ((moved["scope"] as? [String: Any])?["window"] as? [String: Any])?["track"] as? [[String: Any]]
+    check(track?.count == 2, "the track must carry both entries")
+    check(track?.first?["t"] as? Int == 0 && track?.first?["x"] as? Double == 10, "entry 0 is the start bounds' origin")
+    check(track?.last?["t"] as? Int == 3_000_000_000 && track?.last?["x"] as? Double == -565, "the move survives")
+    printJSON(moved, marker: "JSON-WINDOW-MOVED:")
+
+    let still = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                capture: capture, camera: nil, requested: false,
+                                scope: winScope,
+                                windowTrack: [WindowTrackEntryDoc(tNs: 0, x: 10, y: 20)],
+                                pauses: [],
+                                stopReason: "user", stopTNs: 20_000_000_000)
+    check(still["version"] as? Int == 3, "a window that never moved stays v3")
+    check((((still["scope"] as? [String: Any])?["window"]) as? [String: Any])?["track"] == nil,
+          "and writes no track")
+    printJSON(still, marker: "JSON-WINDOW-STILL:")
+
+    // A track handed to a take that is NOT a window scope must not be written:
+    // it would describe a window the take does not have.
+    let region = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                 capture: capture, camera: nil, requested: false,
+                                 scope: CaptureScopeDoc(kind: .region, region: StillRect(x: 1, y: 2, width: 30, height: 40), window: nil),
+                                 windowTrack: [WindowTrackEntryDoc(tNs: 0, x: 1, y: 2),
+                                               WindowTrackEntryDoc(tNs: 5, x: 9, y: 9)],
+                                 pauses: [],
+                                 stopReason: "user", stopTNs: 20_000_000_000)
+    check(region["version"] as? Int == 3, "a region take ignores a window track and stays v3")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

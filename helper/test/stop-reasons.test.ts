@@ -145,7 +145,7 @@ function reasonsInSwift(): string[] {
 //   `geometry` key, and so stays at v3-v6. anchors-3..6 were widened to carry
 //   it for exactly that take; the per-version test below holds them to it.
 const validateReason = (() => {
-  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-7.schema.json"), "utf8"));
+  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-8.schema.json"), "utf8"));
   const ajv = new Ajv({ allErrors: true, strict: true });
   return ajv.compile(schema.properties.stop.properties.reason);
 })();
