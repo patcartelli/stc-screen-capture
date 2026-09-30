@@ -49,6 +49,17 @@ describe("the Audio pane's feel", () => {
       el.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(await win.textContent("#miclevelvalue")).not.toBe("0 dB");
+    // The value is the visible reset: live only while changed.
+    expect(await win.getAttribute("#miclevelvalue", "data-dirty")).not.toBeNull();
+    await win.click("#miclevelvalue");
+    expect(await win.inputValue("#miclevel")).toBe("75");
+    expect(await win.getAttribute("#miclevelvalue", "data-dirty")).toBeNull();
+    await win.evaluate(() => {
+      const el = document.getElementById("miclevel") as HTMLInputElement;
+      el.value = "30";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
     await win.dblclick("#miclevel");
     expect(await win.inputValue("#miclevel")).toBe("75");
     expect(await win.textContent("#miclevelvalue")).toBe("0 dB");

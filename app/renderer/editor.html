@@ -153,6 +153,10 @@
     #audiopanel input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
     #audiopanel .value { text-align: right; color: var(--text); font-size: var(--type-value-sm);
                          min-height: 22px; line-height: 22px; }
+    /* The value is also the reset: clickable only while the level differs from
+       its default (data-dirty), so it doubles as "this has been changed". */
+    #audiopanel .value[data-dirty] { cursor: pointer; border-radius: 4px; color: var(--accent); }
+    #audiopanel .value[data-dirty]:hover { background: var(--surface-hover); text-decoration: underline; }
     #audiopanel .fader { position: relative; display: grid; gap: 4px; min-width: 0; }
     #audiopanel .fader input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
                                              margin: 0; background: transparent; cursor: pointer; }
@@ -598,7 +602,7 @@
               <input id="miclevel" type="range" min="0" max="100" step="1" value="75" aria-label="Mic level">
               <span class="unity" aria-hidden="true"></span><div class="meterrow" aria-hidden="true"><div class="meter"><i id="micmeter"></i></div><span id="micclip" class="clip" title="Clipping: the mix hit its hard limit"></span></div>
             </div>
-            <span id="miclevelvalue" class="value mono">0 dB</span>
+            <span id="miclevelvalue" class="value mono" data-resets="miclevel">0 dB</span>
           </div>
           <!-- STC-418 PR 3: the recorded system audio's level (project-9's
                systemAudioLevel), a decibel fader, attenuate only. -->
@@ -612,7 +616,7 @@
                    aria-label="System audio level">
               <span class="unity" aria-hidden="true"></span><div class="meterrow" aria-hidden="true"><div class="meter"><i id="sysmeter"></i></div><span id="sysclip" class="clip" title="Clipping: the mix hit its hard limit"></span></div>
             </div>
-            <span id="sysaudiovalue" class="value mono">0 dB</span>
+            <span id="sysaudiovalue" class="value mono" data-resets="sysaudiolevel">0 dB</span>
           </div>
           <!-- STC-455: narration cleanup — steady background noise and harsh
                "s" sounds, on the mic only. Off by default; the strength is
@@ -626,7 +630,7 @@
                    aria-label="Voice cleanup strength" disabled>
               
             </div>
-            <span id="voicecleanvalue" class="value mono">50%</span>
+            <span id="voicecleanvalue" class="value mono" data-resets="voicecleanstrength">50%</span>
           </div>
         </div>
       </div>

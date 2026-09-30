@@ -22,6 +22,7 @@ IDs) was redesigned:
 | As-recorded mark | A **tick** on each fader at 0 dB: 75 % on the mic, the far end on system audio. |
 | Detent | A **pointer drag** within 2 % of the tick lands on it. Keys never snap. |
 | Reset | **Double-click** a slider: mic and system to 0 dB, voice-cleanup strength to 50 %. |
+| Visible reset | The **dB value** on the right turns accent-coloured and clickable once the level differs from default; click it to reset (tooltip says to what). At default it is plain text. Dirty is read from the project, so a 0.1 dB nudge counts. |
 | Fine control | **Shift+arrow** nudges the mic or system level by **0.1 dB**. The label shows a decimal only when the level is not a whole decibel ("+0.1 dB"). Landing within 0.05 dB of 0 returns to exactly 0 dB. |
 | Meters | A peak bar under each track plus a clip dot. Per track, measured **after** cleanup, level and mute: what you hear and what exports. Runs only while the panel is open. |
 

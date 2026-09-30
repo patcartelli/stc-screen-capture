@@ -1733,14 +1733,53 @@ $("audiopanel").addEventListener("input", (e) => {
   el.value = String(snapToUnity(Number(el.value), FADERS[el.id]!.unityPct));
 }, true);
 
-$("audiopanel").addEventListener("dblclick", (e) => {
-  const el = e.target as HTMLInputElement;
+function resetFader(el: HTMLInputElement): void {
   const def = faderDefaults[el.id];
   if (!def || el.disabled) return;
   el.value = String(def());
   el.dispatchEvent(new Event("input", { bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+$("audiopanel").addEventListener("dblclick", (e) => resetFader(e.target as HTMLInputElement));
+
+// Double-click is hidden, so the value label is the visible reset: clickable
+// (and accent-coloured) only while the level differs from its default. Dirty
+// is read from the PROJECT, not the slider: a 0.1 dB nudge rounds to the same
+// slider position as as-recorded.
+function faderIsDefault(id: string): boolean {
+  if (!openProject) return true;
+  if (id === "miclevel") return (openProject.micLevel ?? 1) === 1;
+  if (id === "sysaudiolevel") return (openProject.systemAudioLevel ?? 1) === 1;
+  const strength = (openProject.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP).strength;
+  return Math.round(strength * 100) === faderDefaults.voicecleanstrength!();
+}
+
+function syncResetHints(): void {
+  for (const span of $("audiopanel").querySelectorAll<HTMLElement>("[data-resets]")) {
+    const id = span.dataset.resets!;
+    const dirty = !faderIsDefault(id);
+    span.toggleAttribute("data-dirty", dirty);
+    if (dirty) {
+      const def = faderDefaults[id]!();
+      span.title = id === "voicecleanstrength" ? `Reset to ${def}%` : "Reset to 0 dB (as recorded)";
+      span.setAttribute("role", "button");
+    } else {
+      span.removeAttribute("title");
+      span.removeAttribute("role");
+    }
+  }
+}
+
+$("audiopanel").addEventListener("click", (e) => {
+  const span = (e.target as HTMLElement).closest<HTMLElement>("[data-resets][data-dirty]");
+  if (span) resetFader($(span.dataset.resets!) as HTMLInputElement);
 });
+// Bubble phase: the slider's own `input`/`change` handlers have already
+// written the project by the time this runs.
+$("audiopanel").addEventListener("input", syncResetHints);
+$("audiopanel").addEventListener("change", syncResetHints);
+$("audiopanel").addEventListener("toggle", syncResetHints);
 
 let nudgePersist: ReturnType<typeof setTimeout> | null = null;
 $("audiopanel").addEventListener("keydown", (e) => {
@@ -1767,6 +1806,7 @@ $("audiopanel").addEventListener("keydown", (e) => {
     $("sysaudiovalue").textContent = formatLevelDb(openProject.systemAudioLevel);
   }
   scheduleWaveform();
+  syncResetHints();
   // A held key repeats: persist once it settles, not per repeat.
   if (nudgePersist) clearTimeout(nudgePersist);
   nudgePersist = setTimeout(() => {
