@@ -68,3 +68,25 @@ export function zoomCurve(
   }
   return out;
 }
+
+/**
+ * The pixel size of a lane's canvas bitmap on a display with the given
+ * `devicePixelRatio` (STC-451). A bitmap sized in CSS pixels is stretched,
+ * smoothed, by the browser on a 2x display, which turns the Zoom lane's crisp
+ * 4 px dither into a soft flat fill — invisible on a 1x screen, which is
+ * where it was compared. Draw at `width x height` after `ctx.scale(scale,
+ * scale)` and the lane's own CSS size stays the layout's. A ratio under 1 or
+ * not a number is 1: a shrunken bitmap is never the answer.
+ */
+export function laneBitmap(
+  cssWidth: number,
+  cssHeight: number,
+  dpr: number,
+): { width: number; height: number; scale: number } {
+  const scale = Number.isFinite(dpr) && dpr >= 1 ? dpr : 1;
+  return {
+    width: Math.max(1, Math.round(cssWidth * scale)),
+    height: Math.max(1, Math.round(cssHeight * scale)),
+    scale,
+  };
+}

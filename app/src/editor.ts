@@ -86,7 +86,7 @@ import {
   type ScrubState,
 } from "./scrubber.js";
 import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
-import { clipActivity, zoomCurve } from "./timeline-activity.js";
+import { clipActivity, zoomCurve, laneBitmap } from "./timeline-activity.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -648,14 +648,18 @@ $("rulerwaveformtoggle").addEventListener("click", toggleRulerWaveform);
  *  the two pitches compared) rather than a soft blur — `bg` is the gap
  *  color between lit cells, so it should be the lane's own background. */
 const DITHER_TILE_PX = 4;
-function ditherPattern(ctx: CanvasRenderingContext2D, color: string, bg: string): CanvasPattern {
+function ditherPattern(ctx: CanvasRenderingContext2D, color: string, bg: string, scale: number): CanvasPattern {
+  // STC-451: the tile is built in DEVICE pixels (whole cells, so a fractional
+  // ratio never blurs an edge) because the lane's bitmap is drawn at device
+  // resolution — see laneBitmap.
+  const half = Math.max(1, Math.round((DITHER_TILE_PX / 2) * scale));
+  const size = half * 2;
   const tile = document.createElement("canvas");
-  tile.width = DITHER_TILE_PX; tile.height = DITHER_TILE_PX;
+  tile.width = size; tile.height = size;
   const tctx = tile.getContext("2d")!;
   tctx.fillStyle = bg;
-  tctx.fillRect(0, 0, DITHER_TILE_PX, DITHER_TILE_PX);
+  tctx.fillRect(0, 0, size, size);
   tctx.fillStyle = color;
-  const half = DITHER_TILE_PX / 2;
   tctx.fillRect(0, 0, half, half);
   tctx.fillRect(half, half, half, half);
   return ctx.createPattern(tile, "repeat")!;
@@ -664,8 +668,11 @@ function ditherPattern(ctx: CanvasRenderingContext2D, color: string, bg: string)
 function drawZoomLane(): void {
   const canvas = $("zoom-curve") as HTMLCanvasElement;
   const wrap = $("zoom-canvas-wrap") as HTMLElement;
-  const w = Math.max(1, Math.round(wrap.getBoundingClientRect().width)) || LANE_BUCKETS;
-  const h = 22;
+  // STC-451: a bitmap at DEVICE resolution, drawn in device pixels (no
+  // ctx.scale) so the dither stays crisp on a 2x display; CSS still sizes
+  // the canvas to the lane (#zoom-curve is 100% x 100%).
+  const { width: w, height: h, scale } = laneBitmap(
+    wrap.getBoundingClientRect().width || LANE_BUCKETS, 22, window.devicePixelRatio);
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
@@ -684,7 +691,7 @@ function drawZoomLane(): void {
   // — see editor.html's --zoom-fill comment for why those stayed separate).
   const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#4f7fe0";
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0a0a0b";
-  ctx.fillStyle = ditherPattern(ctx, fillColor, bg);
+  ctx.fillStyle = ditherPattern(ctx, fillColor, bg, scale);
   ctx.beginPath();
   ctx.moveTo(0, h);
   for (let i = 0; i < curve.length; i++) {
@@ -692,7 +699,7 @@ function drawZoomLane(): void {
     // amount is not clamped to [0, 1] (zoom.ts's own note) — draw whatever
     // comes back, clipped to the lane's own height rather than pretending it
     // cannot exceed 1.
-    const y = h - Math.max(0, Math.min(1, curve[i]!)) * (h - 2) - 1;
+    const y = h - Math.max(0, Math.min(1, curve[i]!)) * (h - 2 * scale) - scale;
     ctx.lineTo(x, y);
   }
   ctx.lineTo(w, h);
