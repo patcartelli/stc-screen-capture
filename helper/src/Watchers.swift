@@ -35,7 +35,15 @@ final class Watchers {
         }
         nc.addObserver(forName: .AVCaptureSessionRuntimeError, object: nil, queue: .main) { n in
             let e = n.userInfo?[AVCaptureSessionErrorKey] as? NSError
-            IO.send("warning", ["code": "av-runtime-error", "detail": e?.localizedDescription ?? "unknown"])
+            // A disconnect's own session error is already told, correctly, by
+            // mic-/camera-disconnected — see runtimeErrorIsDeviceDisconnect.
+            if runtimeErrorIsDeviceDisconnect(domain: e?.domain, code: e?.code) {
+                IO.send("info", ["code": "av-runtime-error-device-disconnected",
+                                 "detail": e?.localizedDescription ?? "unknown"])
+                return
+            }
+            IO.send("warning", ["code": "av-runtime-error", "detail": e?.localizedDescription ?? "unknown",
+                                "domain": e?.domain ?? "unknown", "errorCode": e?.code ?? 0])
         }
         // NB: AVCaptureSessionWasInterrupted / ...InterruptionReasonKey are iOS-only.
         // On macOS, runtime errors above are the equivalent signal.

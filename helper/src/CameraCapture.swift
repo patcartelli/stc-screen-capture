@@ -65,6 +65,14 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     private var writer: AVAssetWriter?
     private let gate = WriterGate()
     private var deviceName = ""
+    /// The uid of the device actually opened — distinct from `deviceUid`
+    /// above, which is nil for the common "automatic" pick via `pickCamera`'s
+    /// ranking (STC-414) and so cannot itself tell a live disconnect which
+    /// physical device is running. Set once, alongside `deviceName`, under
+    /// the same lock; `currentDeviceUid()` is `Capture.swift`'s only way to
+    /// match a disconnect notification against the device this session
+    /// actually resolved to rather than the request that opened it.
+    private var resolvedDeviceUid = ""
 
     private let lock = NSLock()
     /// Last pts that passed the monotonic-ordering check, appended or not.
@@ -170,7 +178,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         // the open queue (CaptureSession.startCameraAsync's background
         // queue) while `track()` reads it from the stop path, which can run
         // concurrently on a different queue.
-        lock.lock(); deviceName = device.localizedName; lock.unlock()
+        lock.lock(); deviceName = device.localizedName; resolvedDeviceUid = device.uniqueID; lock.unlock()
 
         let s = AVCaptureSession()
         s.beginConfiguration()
@@ -208,6 +216,14 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         s.startRunning()
         armNoFramesWatchdog()
         return .success(deviceName)
+    }
+
+    /// The device this session actually resolved to, once `start()` has run —
+    /// empty before then. See `resolvedDeviceUid`'s own comment for why this
+    /// exists separately from the request.
+    func currentDeviceUid() -> String {
+        lock.lock(); defer { lock.unlock() }
+        return resolvedDeviceUid
     }
 
     /// Warns if the camera is running but has delivered nothing (STC-286).

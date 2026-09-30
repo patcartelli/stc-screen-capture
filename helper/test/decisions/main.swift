@@ -3,6 +3,7 @@
 // "framework" is assertions plus a non-zero exit code.
 import Foundation
 import CoreGraphics
+import AVFoundation
 
 var failures = 0
 func check(_ label: String, _ got: some Equatable, _ want: some Equatable) {
@@ -363,6 +364,21 @@ check("a height change past tolerance is a resize",
       decideWindowWatch(initial: (800, 600), current: (800, 500)), WindowWatchDecision.resized)
 check("the window no longer being found is gone, not resized",
       decideWindowWatch(initial: (800, 600), current: nil), WindowWatchDecision.gone)
+
+// ── a disconnect's own runtime error is not a second alarm (STC-433) ───────
+// The constants are spelled as numbers in CaptureDecisions.swift (no
+// AVFoundation there); these two hold them to Apple's own symbols.
+check("the domain constant is AVFoundation's", AV_ERROR_DOMAIN, AVFoundationErrorDomain)
+check("the code constant is AVError.deviceWasDisconnected",
+      AV_DEVICE_WAS_DISCONNECTED, AVError.Code.deviceWasDisconnected.rawValue)
+check("deviceWasDisconnected is the disconnect we already know about",
+      runtimeErrorIsDeviceDisconnect(domain: AVFoundationErrorDomain, code: AVError.Code.deviceWasDisconnected.rawValue), true)
+check("any other AVFoundation runtime error is still a warning",
+      runtimeErrorIsDeviceDisconnect(domain: AVFoundationErrorDomain, code: AVError.Code.deviceNotConnected.rawValue), false)
+check("the same number in another domain is not it",
+      runtimeErrorIsDeviceDisconnect(domain: NSOSStatusErrorDomain, code: -11808), false)
+check("no error at all is not it",
+      runtimeErrorIsDeviceDisconnect(domain: nil, code: nil), false)
 
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
 exit(failures == 0 ? 0 : 1)
