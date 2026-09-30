@@ -34,7 +34,11 @@ export async function toastText(app: ElectronApplication): Promise<string> {
   return page.evaluate(() => {
     const head = document.getElementById("head");
     const label = document.getElementById("label");
-    if (!head || !label) return "";
+    // `toast-renderer.ts` stamps `data-mode` in the same synchronous run that
+    // fills the label. Until then `#label` still holds the HTML's own
+    // placeholder ("Deleted", the undo toast's word), which is not anything
+    // the app said.
+    if (!head || !label || document.documentElement.dataset.mode !== "message") return "";
     const title = head.classList.contains("has-title")
       ? document.getElementById("title")?.textContent ?? "" : "";
     const body = label.textContent ?? "";
