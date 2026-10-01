@@ -7,7 +7,7 @@ import type { Project } from "./types.js";
 import { exportWindow, availableFrames } from "./trim.js";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
-import { decodeAllAudio, pcmTrackOf, decodeMicForMix } from "./decode-audio.js";
+import { decodeAllAudio, decodeMicForMix, decodeSystemForMix } from "./decode-audio.js";
 import {
   MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, exportAudioPlan, reusableTracks,
   type PcmTrack, type ExportDecoded,
@@ -187,7 +187,7 @@ export async function exportSession(
   const reuse = reusableTracks(plan, cleanup, opts.decoded);
   if (mixing) {
     mixSystem = plan.system && session.systemAudio
-      ? reuse.system ?? pcmTrackOf(await decodeAllAudio(session.systemAudio), "system.m4a")
+      ? reuse.system ?? await decodeSystemForMix(session.systemAudio)
       : null;
     // The WHOLE track, before the window is cut, so the noise profile is
     // learned from every pause in the take rather than only the clip's —

@@ -65,7 +65,7 @@ import {
 import {
   meterStep, meterFill, clipLit, snapToUnity, METER_IDLE, type MeterState,
 } from "@transform/audio-meter";
-import { decodeAllAudio, decodeMicForMix, pcmTrackOf } from "@transform/decode-audio";
+import { decodeMicForMix, decodeSystemForMix } from "@transform/decode-audio";
 import type { DemuxedAudio } from "@transform/demux-audio";
 import { PreviewAudio } from "@transform/preview-audio";
 import { mixPeaks } from "@transform/waveform";
@@ -1443,10 +1443,15 @@ let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?:
 
 // STC-469: the export exactly as the editor runs it, with or without the
 // preview's tracks — for the e2e identity check and the memory measurement.
-// Nothing is written; the encoded file is discarded.
+// Nothing is written; the encoded file is discarded. Unlike the read-only
+// hooks above, this one does REAL work (a whole export's decode and encode),
+// and exists only for the e2e identity check and the memory measurement.
 (window as unknown as { __stcExportForTest: (o: { reuse: boolean }) => Promise<unknown> }).__stcExportForTest =
   async ({ reuse }) => {
     if (!openSession || !openProject) throw new Error("no take open");
+    // runExport holds exportAbort for its whole run (cleared in its finally,
+    // even after a cancel), so set means a real export is still in flight.
+    if (exportAbort) throw new Error("a real export is running");
     const r = await exportSession(openSession, structuredClone(openProject), {
       audioHash: true, decoded: reuse ? decodedForExport() : undefined,
     });
@@ -1985,7 +1990,7 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
   try {
     const [mic, system] = await Promise.all([
       session.micAudio ? decodeMicForMix(session.micAudio, null) : null,
-      session.systemAudio ? decodeAllAudio(session.systemAudio).then((d) => pcmTrackOf(d, "system.m4a")) : null,
+      session.systemAudio ? decodeSystemForMix(session.systemAudio) : null,
     ]);
     if (gen !== audioGen || !player) return;
     rawMic = mic;
@@ -2012,6 +2017,13 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
  * keeps being scheduled, so the clock the picture follows never changes
  * under a mute.
  */
+function previewLevels(): { system: number; mic: number } {
+  return {
+    system: openProject?.systemAudioMuted ? 0 : openProject?.systemAudioLevel ?? 1,
+    mic: openProject?.micMuted ? 0 : openProject?.micLevel ?? 1,
+  };
+}
+
 /**
  * The tracks the preview holds, offered to the export (STC-469). The mic is
  * tagged with what it IS — raw, or cleaned at a strength — and
@@ -2024,13 +2036,6 @@ function decodedForExport(): ExportDecoded {
   return {
     system: previewAudio?.systemTrack ?? null,
     mic: known ? { track: mic!, cleanedAt } : null,
-  };
-}
-
-function previewLevels(): { system: number; mic: number } {
-  return {
-    system: openProject?.systemAudioMuted ? 0 : openProject?.systemAudioLevel ?? 1,
-    mic: openProject?.micMuted ? 0 : openProject?.micLevel ?? 1,
   };
 }
 
@@ -2124,10 +2129,18 @@ function pumpClean(): void {
     }
     if (cleanWanted !== null) pumpClean();
     else setCleaning(false);
-    // Gated on a successful track: after an error or null reply with cleanup
-    // still on, re-deciding would re-request the same clean forever. A good
-    // result is what can leave cleanup switched off meanwhile and need handing back to raw.
-    if (e.data.track && cleanWanted === null && !cleanBusy) refreshCleanMic();
+    // The one case this exists for: a cleaned mic landed AFTER cleanup was
+    // switched off, so the preview must hand back to raw (decoding it again
+    // if it was dropped). Gated on cleanup being OFF, not merely on nothing
+    // being wanted: mid strength-slider drag `input` updates the project
+    // without refreshing (only `change` does), and re-deciding here would
+    // start a clean at a strength the drag is only passing through. Gated on
+    // a successful track too: after an error or a null reply, re-deciding
+    // would re-request the same failing clean forever.
+    if (e.data.track && cleanWanted === null && !cleanBusy &&
+        !exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: openProject?.narrationCleanup }).cleanMic) {
+      refreshCleanMic();
+    }
   };
   // The COMPRESSED mic, cloned (STC-469): the worker decodes it itself, so
   // nothing here has to keep a raw decoded copy alive just to send one.

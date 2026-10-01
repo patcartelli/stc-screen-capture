@@ -91,3 +91,15 @@ export async function decodeMicForMix(audio: DemuxedAudio, cleanStrength: number
   const track = pcmTrackOf(await decodeAllAudio(audio), "mic.m4a");
   return track && cleanStrength !== null ? cleanNarration(track, cleanStrength) : track;
 }
+
+/**
+ * The ONE way a system-audio `PcmTrack` is made for playing or mixing
+ * (STC-469), `decodeMicForMix`'s twin: the export and the editor both call
+ * this, so the track the preview holds is sample-for-sample the track the
+ * export would decode — which is what lets the export reuse it (audio-mix.ts
+ * `reusableTracks`) by construction rather than by two call sites agreeing.
+ * There is no cleaning stage; system audio is never cleaned.
+ */
+export async function decodeSystemForMix(audio: DemuxedAudio): Promise<PcmTrack | null> {
+  return pcmTrackOf(await decodeAllAudio(audio), "system.m4a");
+}
