@@ -115,6 +115,9 @@ storage where recovery will find it. A panel failure must never cost the take
     redact listeners, the mode picker, drag-out, swipe-to-discard if it reads
     the frame) gets `if (take.kind !== "shot") return;` at its top. A guard
     at the entry can be grepped; a listener that was never attached can't.
+- The right-click menu drops **Save As…** for a recording (`thumbnail-menu.ts`):
+  it writes the decorated picture and a recording has none, so the row would
+  be dead. `thumbnail-menu.test.ts` pinned the old row, and is updated.
 - The action row is already right: `actionsFor({ kind: "recording", origin: "fresh" })`
   is Save, Edit, Trash, and `panel:edit` already promotes and opens `editor.ts`.
 

@@ -312,7 +312,7 @@ const fmtBytes = (n: number): string => {
   return `${n} B`;
 };
 
-const fmtDuration = (ms: number): string => {
+export const fmtDuration = (ms: number): string => {
   const s = Math.round(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };

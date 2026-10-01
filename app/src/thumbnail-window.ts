@@ -95,8 +95,19 @@ export const SETTLE_BACKSTOP_MS = 15_000;
 
 export interface PresentOptions {
   dir: string;
-  /** The shot document exactly as `capture-still` wrote it — not yet parsed. */
-  shot: unknown;
+  /**
+   * The shot document exactly as `capture-still` wrote it — not yet parsed.
+   * Present for `take.kind === "shot"` and ABSENT for a recording: exactly one
+   * of `shot` and `recording` is given, and `take.kind` says which. A take with
+   * both, or neither, is a bug in the caller.
+   */
+  shot?: unknown;
+  /**
+   * What a recording's card says about itself (STC-487): how long it ran and
+   * what it was pointed at. A recording has no picture in v1 (STC-392 D2), so
+   * this is the whole of its card. Present for `take.kind === "recording"`.
+   */
+  recording?: { durationMs: number; scope: string };
   corner: Corner;
   /** Where `thumbnail.html` and its preload live. */
   dist: string;
@@ -540,7 +551,8 @@ class ThumbnailSession {
     this.win.loadFile(join(opts.rendererDir, "thumbnail.html"), {
       query: {
         dir: opts.dir,
-        shot: JSON.stringify(opts.shot),
+        shot: JSON.stringify(opts.shot ?? null),
+        recording: JSON.stringify(opts.recording ?? null),
         take: JSON.stringify(opts.take),
         // The view needs it too, and only for the swipe: which way is
         // off-screen is a property of where the panel was put.
