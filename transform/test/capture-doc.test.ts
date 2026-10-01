@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import AjvImport from "ajv";
-import { parseCaptureDoc, captureDocForWrite } from "../src/capture-doc.js";
+import { parseCaptureDoc, captureDocForWrite, salvageCaptureDocId } from "../src/capture-doc.js";
 import { mintCaptureId } from "../src/capture-id.js";
 
 const Ajv = (AjvImport as any).default ?? AjvImport;
@@ -26,6 +26,29 @@ describe("capture-1 schema and loader agree", () => {
       { version: 1, id: mintCaptureId(), extra: true },   // noExtra, like parseShot
     ]) {
       expect(() => parseCaptureDoc(bad)).toThrow();
+    }
+  });
+});
+
+describe("salvageCaptureDocId (STC-436)", () => {
+  const bytes = (s: string) => new TextEncoder().encode(s);
+  const id = mintCaptureId();
+
+  test("recovers the one id a broken document still carries", () => {
+    expect(salvageCaptureDocId(bytes(`{"version":1,"id":"${id}`))).toBe(id);
+  });
+
+  test("the same id repeated is still one id", () => {
+    expect(salvageCaptureDocId(bytes(`"${id}" "${id}"`))).toBe(id);
+  });
+
+  test("two DIFFERENT ids refuse rather than guess", () => {
+    expect(salvageCaptureDocId(bytes(`"${id}" "${mintCaptureId()}"`))).toBeUndefined();
+  });
+
+  test("no id at all is undefined", () => {
+    for (const s of ["", "{ not json", `{"id":"cap_short"}`, `{"id":"${id.toLowerCase()}"}`]) {
+      expect(salvageCaptureDocId(bytes(s))).toBeUndefined();
     }
   });
 });

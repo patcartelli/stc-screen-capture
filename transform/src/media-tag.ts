@@ -21,7 +21,7 @@
  * Linux, so X is unseen". A later task (MP4 support, Task 3) reuses the
  * private chunk-walking helpers below rather than re-deriving them.
  */
-import { CAPTURE_ID_LENGTH, isCaptureId } from "./capture-id.js";
+import { captureIdTokens, isCaptureId } from "./capture-id.js";
 
 /** What `tagPng` writes. */
 export const PNG_TEXT_KEYWORD = "stc-capture-id";
@@ -120,40 +120,19 @@ function idUnderKeyword(bytes: Uint8Array, keyword: string): string | undefined 
   return undefined;
 }
 
-/** Is this byte one a capture id's body may contain? Crockford base32. */
-const ID_BODY_BYTE = (() => {
-  const ok = new Uint8Array(256);
-  for (const c of "0123456789ABCDEFGHJKMNPQRSTVWXYZ") ok[c.charCodeAt(0)] = 1;
-  return ok;
-})();
-
 /**
  * The first capture-id-shaped token in a run of bytes, or undefined.
  *
  * Deliberately a SCAN rather than a parse. The bytes it is handed are XMP —
- * a whole RDF/XML document — and a real parser for that in a module that may
- * import neither node nor DOM would be a large amount of code standing
- * between a 500-file scan and an id it can already see. What makes the scan
- * safe is that it decides nothing: every candidate is gated through
- * `isCaptureId`, so the only strings it can return are ones that already
- * match the exact `cap_` + 26-Crockford shape `capture-id.ts` owns. A
- * 30-character token of that shape does not appear in a screenshot's
- * metadata by accident.
- *
- * The boundary check is the one subtlety: without it a LONGER run of
- * Crockford characters would have its first 30 read as an id. A candidate
- * must therefore not be followed by another body character — the id is a
- * whole token, never a prefix of something else.
+ * a whole RDF/XML document — or a HEIC, and a real parser for either in a
+ * module that may import neither node nor DOM would be a large amount of code
+ * standing between a 500-file scan and an id it can already see. The scanner
+ * itself, and why it is safe, live with the id's shape in `capture-id.ts`
+ * (STC-436 moved it there, so a corrupt `capture.json`'s salvage reads ids
+ * with the same rule these readers do).
  */
 function captureIdIn(data: Uint8Array): string | undefined {
-  for (let i = 0; i + CAPTURE_ID_LENGTH <= data.length; i++) {
-    if (data[i] !== 0x63 || data[i + 1] !== 0x61       // "ca"
-        || data[i + 2] !== 0x70 || data[i + 3] !== 0x5f) continue;   // "p_"
-    const after = data[i + CAPTURE_ID_LENGTH];
-    if (after !== undefined && ID_BODY_BYTE[after]) continue;
-    const candidate = ascii(data, i, CAPTURE_ID_LENGTH);
-    if (isCaptureId(candidate)) return candidate;
-  }
+  for (const id of captureIdTokens(data)) return id;
   return undefined;
 }
 
