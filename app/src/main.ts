@@ -29,8 +29,10 @@ import {
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
-import { startCopyRender } from "./copy-render-window.js";
-import { copyPathFor } from "./recording-copy.js";
+import { startCopyRender, cancelCopyRender, cancelAllCopyRenders } from "./copy-render-window.js";
+import {
+  copyPathFor, copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
+} from "./recording-copy.js";
 import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
@@ -812,6 +814,10 @@ app.whenReady().then(async () => {
       });
     }
   }, TRASH_SWEEP_INTERVAL_MS);
+  // STC-488: its own timer (see COPY_PURGE_INTERVAL_MS), and the first round
+  // after startup rather than during it, since it asks the helper.
+  setTimeout(() => { void purgeCopies(); }, COPY_PURGE_FIRST_DELAY_MS);
+  setInterval(() => { void purgeCopies(); }, COPY_PURGE_INTERVAL_MS);
 
   startSupervisor();
   shortcuts = readSettings(app.getPath("userData")).shortcuts;
@@ -898,6 +904,9 @@ function runQuitTeardown(): void {
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
   cancelCountdown();
+  // STC-488: a Copy render at quit is abandoned and its partial deleted. The
+  // take itself is the unsaved-takes warning's business.
+  void cancelAllCopyRenders();
   hideToast();
   // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
   // is still armed for as long as this chain's own `await`s give the event
@@ -2876,6 +2885,34 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
 });
 
 /**
+ * STC-488: delete copies older than 24 h, except the one on the clipboard.
+ * The clipboard is asked ONCE, here. If it can't be read (the client rejects
+ * on an error reply), the round is skipped (`purgeDecision`'s undefined): a
+ * file that might be on the clipboard is worth one more hour on disk. Only
+ * ever deletes bare names `purgeDecision` returns, joined to `copiesRoot`.
+ */
+async function purgeCopies(): Promise<void> {
+  const root = copiesRoot(process.env);
+  let names: string[];
+  try { names = await readdir(root); } catch { return; }
+  let onClipboard: Set<string> | undefined;
+  try {
+    const line = await sup?.pasteboardFiles();
+    const paths = line?.paths;
+    if (Array.isArray(paths)) onClipboard = new Set(paths.map(String));
+  } catch { /* undefined: skip this round */ }
+  const entries: Array<{ name: string; mtimeMs: number }> = [];
+  for (const name of names) {
+    try { entries.push({ name, mtimeMs: (await stat(join(root, name))).mtimeMs }); } catch { /* gone */ }
+  }
+  for (const name of purgeDecision(entries, Date.now(), onClipboard, root)) {
+    await rm(join(root, name), { force: true }).catch((e) => {
+      console.error("[copy-purge] could not delete:", name, e);
+    });
+  }
+}
+
+/**
  * Close the panel without deciding anything (STC-412) — the take is
  * untouched: still in temp storage if it was fresh, still in the library if
  * it was re-opened. Governed entirely by STC-393's existing purge and
@@ -2887,6 +2924,9 @@ ipcMain.handle("panel:dismiss", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
+  // STC-488: closing the panel ends any render of its Copy. Nobody is
+  // waiting for it any more.
+  await cancelCopyRender(dir);
   dismissThumbnail(dir);
   return { ok: true };
 });
@@ -2920,9 +2960,15 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
   const origin = takeFor(dir)?.origin
     ?? (insideTempTakesRoot(process.env, dir) ? "fresh" : "library");
   if (trashStyle(origin) === "confirm") {
-    return trashWithConfirmation([{ path: dir, label: "this take", plural: false }]);
+    const r = await trashWithConfirmation([{ path: dir, label: "this take", plural: false }]);
+    // STC-488: only once the Trash went through; a declined confirmation
+    // leaves the render running.
+    if (r.ok) await cancelCopyRender(dir);
+    return r;
   }
 
+  // STC-488: a Trash cancels a running Copy render, once the Trash is decided.
+  await cancelCopyRender(dir);
   if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
   pendingTrash.promise(dir);
   dismissThumbnail(dir);

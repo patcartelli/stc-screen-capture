@@ -7,7 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
-import { windowCount, pageWithUrl } from "./_windows.js";
+import { windowCount, pageWithUrl, clickThatCloses } from "./_windows.js";
 
 /**
  * A recording's Copy (STC-488): rendered with cursor and zoom, written to the
@@ -25,6 +25,10 @@ import { windowCount, pageWithUrl } from "./_windows.js";
 //   test 2: 15 + 120 + 15 + recordAndStop 15 + readyPanel 30 = 195 s
 //   test 3: 120 + 15 + 30 = 165 s;  test 4 (busy): 15 + 15 + 30 = 60 s (+ 1.5 s waits)
 //   test 5: 120 + 15 + 30 = 165 s
+//   test 6 (trash after copy): 120 + 15 + 15 + 30 = 180 s
+//   test 7 (trash mid-render): 15 + 15 + 15 + 30 = 75 s (+ 1 s wait)
+//   test 8 (dismiss mid-render): 15 + 15 + 30 = 60 s
+//   test 9 (reuse): 120 + 15 + 15 + 15 + 30 = 195 s
 // Inner bounds (195 s worst) clear 300 s strictly; the ~105 s left is launch,
 // teardown and startRecordFlow's hidden bounds (judgement headroom).
 const root = join(__dirname, "..", "..");
@@ -177,5 +181,57 @@ describe("copying a recording (STC-488)", () => {
     expect(await panel.isEnabled("#save")).toBe(true);
     expect(await panel.isEnabled("#copy")).toBe(true);
     expect(existsSync(dir)).toBe(true);
+  }, 300_000);
+
+  test("Copy, then Trash: the copy outlives the take", async () => {
+    const l = await launch();
+    const dir = await recordAndStop(l);
+    const panel = await readyPanel();
+    await panel.click("#copy");
+    await expect.poll(() => copyRequests(l.copyLog).length, { timeout: 120_000 }).toBe(1);
+    const { path } = copyRequests(l.copyLog)[0]!;
+    await clickThatCloses(panel, "#trash");
+    await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: POLL_MS }).toBe(0);
+    expect(existsSync(path), "the paste still works").toBe(true);
+    void dir;
+  }, 300_000);
+
+  test("Trash during a render cancels it: no render window, no partial, no pasteboard write", async () => {
+    const l = await launch();
+    await recordAndStop(l);
+    const panel = await readyPanel();
+    await panel.click("#copy");
+    await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: POLL_MS }).toBe(1);
+    await clickThatCloses(panel, "#trash");
+    await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: POLL_MS }).toBe(0);
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect(readdirSync(l.copies)).toEqual([]);
+    expect(copyRequests(l.copyLog)).toEqual([]);
+  }, 300_000);
+
+  test("dismissing mid-render cancels it (Review Focus 2)", async () => {
+    const l = await launch();
+    const dir = await recordAndStop(l);
+    const panel = await readyPanel();
+    await panel.click("#copy");
+    await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: POLL_MS }).toBe(1);
+    await clickThatCloses(panel, "#dismiss");
+    await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: POLL_MS }).toBe(0);
+    expect(readdirSync(l.copies)).toEqual([]);
+    expect(copyRequests(l.copyLog)).toEqual([]);
+    expect(existsSync(dir), "dismiss leaves the take where it was").toBe(true);
+  }, 300_000);
+
+  test("a second Copy reuses the finished file without rendering again", async () => {
+    const l = await launch();
+    await recordAndStop(l);
+    const panel = await readyPanel();
+    await panel.click("#copy");
+    await expect.poll(() => copyRequests(l.copyLog).length, { timeout: 120_000 }).toBe(1);
+    await expect.poll(() => panel.isEnabled("#copy"), { timeout: POLL_MS }).toBe(true);
+    await panel.click("#copy");
+    await expect.poll(() => copyRequests(l.copyLog).length, { timeout: POLL_MS }).toBe(2);
+    expect(await windowCount(app!, "copy-render.html"), "no second render").toBe(0);
+    expect(copyRequests(l.copyLog)[1]!.path).toBe(copyRequests(l.copyLog)[0]!.path);
   }, 300_000);
 });
