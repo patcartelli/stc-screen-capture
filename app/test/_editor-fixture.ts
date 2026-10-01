@@ -23,7 +23,7 @@ const root = join(__dirname, "..", "..");
  * what a fresh profile happens to produce.
  */
 export async function launchApp(dir: string, env: Record<string, string> = {},
-    opts: { userData?: string } = {}):
+    opts: { userData?: string; ready?: string } = {}):
     Promise<{ app: ElectronApplication; win: Page }> {
   // `opts.userData` reuses a profile a previous launch in the same test made
   // (STC-454: a setting that must survive a restart); seeded only when new.
@@ -47,7 +47,9 @@ export async function launchApp(dir: string, env: Record<string, string> = {},
   });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
-  await win.waitForSelector("#takes >> text=Preview", { timeout: 20_000 });
+  // `opts.ready` (STC-435) is for a folder with nothing the library lists as
+  // a take — no "Preview" ever appears, so the default wait would time out.
+  await win.waitForSelector(opts.ready ?? "#takes >> text=Preview", { timeout: 20_000 });
   return { app, win };
 }
 

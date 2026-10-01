@@ -35,10 +35,11 @@ import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, renameCapture } from "./takes.js";
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
-  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
-  markOfferedForRecovery, type TempTakeInfo,
+  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, findOrphanedBundles,
+  markOfferedForRecovery, type TempTakeInfo, type OrphanedBundle,
 } from "./temp-takes.js";
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
+import { reclaimPrompt, reclaimResult } from "./reclaim.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
          recordingDurationMs, recordingScopeLabel } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
@@ -619,7 +620,7 @@ async function recoverUnsavedTakes(): Promise<void> {
         // never reached the clean stop that writes `anchors.json` — but no
         // document the library can open, and a `raw/` child with neither
         // document is not a bundle to its scan (nor an orphan to
-        // `sweepOrphanedBundles`, which needs `capture.json`). So Finder is
+        // `findOrphanedBundles`, which needs `capture.json`). So Finder is
         // where it can be seen.
         await reveal(t);
       }
@@ -789,25 +790,10 @@ app.whenReady().then(async () => {
   });
   setInterval(() => {
     void purgeStaleTempTakes(process.env).catch(() => {});
-    // Same timer, a different root (STC-413): `raw/` bundles are not temp
-    // takes and age from a different clock (a marker written on first
-    // sighting orphaned, not the bundle's own creation), but the cadence
-    // this app already sweeps on is exactly right for both. `temp-takes.ts`
-    // stays Electron-free, so `sweepOrphanedBundles` only DECIDES which
-    // bundles are due; trashing one is done HERE, through `shell.trashItem`
-    // — the same split `pendingTrash.due()` -> `shell.trashItem` uses a few
-    // lines down — so a mistaken sweep is one Finder restore away, never
-    // an `rm` nobody can undo.
-    const { saveFolder } = readSettings(app.getPath("userData"));
-    void sweepOrphanedBundles(process.env, saveFolder).then((due) => {
-      for (const dir of due) {
-        shell.trashItem(dir).catch((e) => {
-          console.error("[orphan-sweep] could not trash an orphaned bundle:", dir, e);
-        });
-      }
-    }).catch((e) => {
-      console.error("[orphan-sweep] failed:", e);
-    });
+    // `raw/` bundles are NOT swept here any more (STC-435): an unattended
+    // pass could only ever act when orphanhood was provable, and told nobody
+    // when it was not. Reclaim space (`recorder:reclaimSpace`) is the one
+    // path that trashes a bundle, and only after the user has seen it.
   }, TEMP_PURGE_INTERVAL_MS);
   // Keeps every promise `panel:trash` makes (STC-392 Task 6): whatever
   // `pendingTrash.due()` hands back has had its whole undo window elapse, so
@@ -1047,6 +1033,58 @@ ipcMain.handle("recorder:getSettings", async (): Promise<Settings> =>
  */
 ipcMain.handle("recorder:resolvedSaveFolder", async (): Promise<string> =>
   takesRoot(process.env, readSettings(app.getPath("userData")).saveFolder));
+
+/**
+ * Reclaim space (STC-435): find, show, and only then trash — the one path
+ * that ever removes a `raw/` bundle now that the 12-hour sweep is gone.
+ * `findOrphanedBundles` decides and `reclaim.ts` words it; this handler only
+ * asks and moves.
+ *
+ * The find runs TWICE, on purpose. The dialog can sit open for as long as the
+ * user likes, and a file put back in the folder meanwhile makes its bundle
+ * live again — so what is trashed is what the user agreed to AND what is
+ * still orphaned now, never the stale list alone.
+ *
+ * `reclaiming` refuses a second press while the first is still finding or
+ * asking: the sheet is modal once it is up, but the find before it is not.
+ */
+let reclaiming = false;
+ipcMain.handle("recorder:reclaimSpace", async (): Promise<{ moved: number; failed: number }> => {
+  if (reclaiming) return { moved: 0, failed: 0 };
+  reclaiming = true;
+  try {
+    const { saveFolder } = readSettings(app.getPath("userData"));
+    const prompt = reclaimPrompt(await findOrphanedBundles(process.env, saveFolder));
+    if (prompt.kind === "toast") {
+      showNotice(prompt.message);
+      return { moved: 0, failed: 0 };
+    }
+    const { kind: _kind, dirs, ...box } = prompt;
+    const { response } = win && !win.isDestroyed()
+      ? await dialog.showMessageBox(win, { type: "warning", ...box })
+      : await dialog.showMessageBox({ type: "warning", ...box });
+    if (response !== 0) return { moved: 0, failed: 0 };
+
+    const agreed = new Set(dirs);
+    const still = (await findOrphanedBundles(process.env, saveFolder)).orphans
+      .filter((b) => agreed.has(b.dir));
+    const moved: OrphanedBundle[] = [];
+    let failed = 0;
+    for (const b of still) {
+      try {
+        await shell.trashItem(b.dir);
+        moved.push(b);
+      } catch (e) {
+        console.error("[reclaim] could not trash a bundle:", b.dir, e);
+        failed++;
+      }
+    }
+    showNotice(reclaimResult(moved, failed));
+    return { moved: moved.length, failed };
+  } finally {
+    reclaiming = false;
+  }
+});
 
 /**
  * The renderer's own preferences, minus the ones it may not name.
