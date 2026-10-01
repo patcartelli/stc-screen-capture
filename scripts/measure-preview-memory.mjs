@@ -11,7 +11,7 @@
  * heap growth". A metric that cannot see the thing being measured produces
  * confident numbers about nothing.
  *
- * Usage: node scripts/measure-preview-memory.mjs <takeDir>
+ * Usage: node scripts/measure-preview-memory.mjs <takeDir> [--cleanup] [--export]
  */
 import { _electron as electron } from "playwright";
 import { execFileSync } from "node:child_process";
@@ -22,7 +22,7 @@ import { join, basename } from "node:path";
 const root = join(import.meta.dirname, "..");
 const src = process.argv[2];
 if (!src || !existsSync(join(src, "anchors.json"))) {
-  console.error("usage: node scripts/measure-preview-memory.mjs <takeDir>");
+  console.error("usage: node scripts/measure-preview-memory.mjs <takeDir> [--cleanup] [--export]");
   process.exit(2);
 }
 
@@ -33,7 +33,7 @@ function stage(withCamera) {
   const dir = mkdtempSync(join(tmpdir(), "stc-mem-"));
   const takeDir = join(dir, basename(src));
   mkdirSync(takeDir, { recursive: true });
-  const files = ["anchors.json", "events.json", "display.mp4", "project.json"];
+  const files = ["anchors.json", "events.json", "display.mp4", "project.json", "mic.m4a", "system.m4a"];
   if (withCamera) files.push("camera.mp4");
   for (const f of files) {
     if (existsSync(join(src, f))) cpSync(join(src, f), join(takeDir, f));
@@ -102,7 +102,29 @@ async function measure(withCamera) {
       return false;
     }, { timeout: 60_000 });
 
+    // STC-469: the audio is part of what the preview holds. Wait for it to
+    // decode, turn cleanup on if asked, and wait for the cleaned mic to play.
+    await editorWin.waitForFunction(() => {
+      const s = document.getElementById("previewaudio")?.dataset.state;
+      return s && s !== "loading";
+    }, null, { timeout: 600_000 });
+    if (process.argv.includes("--cleanup")) {
+      await editorWin.click("#audiobtn");
+      await editorWin.locator("#voicecleanon").check();
+      await editorWin.keyboard.press("Escape");
+      await editorWin.waitForFunction(() => (window).__stcPreviewAudio?.().playing === "cleaned", null, { timeout: 600_000 });
+    }
+
     const after = await rendererRss(app);
+    if (process.argv.includes("--export")) {
+      for (const reuse of [false, true]) {
+        let peak = 0;
+        const timer = setInterval(async () => { peak = Math.max(peak, await rendererRss(app)); }, 250);
+        await editorWin.evaluate((reuse) => (window).__stcExportForTest({ reuse }), reuse);
+        clearInterval(timer);
+        console.log(`  export (reuse=${reuse}): peak renderer RSS ${mb(peak)} MB`);
+      }
+    }
     return { bytes, before, after, growth: after - before };
   } finally {
     await app.close().catch(() => {});
