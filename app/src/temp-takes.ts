@@ -208,9 +208,9 @@ export async function markOfferedForRecovery(dir: string, now: number = Date.now
  * used to measure age from the take's own timestamped name, on the premise
  * that "nothing legitimate stays in temp for anywhere near 7 days". Two things
  * legitimately do, and both are ones this app itself PROMISES to offer back on
- * the next launch: a recording whose promotion to the library failed
- * (`recording-promote-failed`, main.ts), and a still whose panel was ignored,
- * bumped by a Record, or left behind by Quit Anyway (STC-392). A menu-bar app
+ * the next launch: a recording whose panel was ignored, bumped, or never
+ * shown (STC-487 — a stop no longer promotes), and a still whose panel was
+ * ignored, bumped by a Record, or left behind by Quit Anyway (STC-392). A menu-bar app
  * can easily run for more than a week without relaunching, and a relaunch
  * after day 7 ran this purge BEFORE the prompt that was supposed to offer the
  * take — so in both cases the take was deleted without the user ever being

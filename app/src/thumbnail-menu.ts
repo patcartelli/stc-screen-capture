@@ -98,7 +98,9 @@ export function buildThumbMenu(ctx: ThumbMenuContext): ThumbMenuItem[] {
   }
   // The ellipsis is not decoration: macOS spells "this opens a dialog" that
   // way, and Copy/Save vs Save As differ in exactly that.
-  items.push({ id: "save-as", label: "Save As…", enabled: !busy });
+  // A still facility (STC-487): Save As writes the decorated picture, and a
+  // recording has no picture on this surface to write.
+  if (ctx.take.kind === "shot") items.push({ id: "save-as", label: "Save As…", enabled: !busy });
   items.push({ id: "separator", type: "separator" });
   items.push({ id: "reveal", label: "Reveal in Finder", enabled: true });
   items.push({ id: "separator", type: "separator" });

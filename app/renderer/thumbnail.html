@@ -74,6 +74,11 @@
     button:disabled { opacity: 0.4; cursor: default; }
     button:disabled:hover { background: rgba(255, 255, 255, 0.12); }
     button[hidden] { display: none; }
+    /* An author `display: flex` outranks the UA's `[hidden] { display: none }`,
+       so without this the renderer's `hidden = true` on one of these two did
+       nothing: a recording's card kept an empty picture area above it, and a
+       shot's panel drew an empty card (STC-487, caught by recording-panel.e2e). */
+    #thumbwrap[hidden], #takecard[hidden] { display: none; }
     #trash { margin-left: auto; padding: 4px 9px; }
     /*
       Controls show on hover (STC-426 revision) — the card at rest is just

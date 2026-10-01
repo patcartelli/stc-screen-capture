@@ -9,7 +9,7 @@ import { withoutCountdown } from "./_countdown-fixture.js";
 import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { toastText } from "./_toast.js";
-import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { openEditorFromLibrary, waitForTakeLoaded } from "./_editor-fixture.js";
 
 /**
@@ -50,6 +50,9 @@ async function launch(opts: {
       ...(opts.camera ? { STC_FAKE_CAMERA: opts.camera } : {}),
     },
   });
+  // A stopped take leaves a fresh panel now (STC-487), so a quit raises the
+  // "unsaved takes" warning (STC-392 D8); unstubbed it is a real modal.
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   // STC-391: Record counts down now. This file is not about the countdown,

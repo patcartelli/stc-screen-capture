@@ -312,10 +312,34 @@ const fmtBytes = (n: number): string => {
   return `${n} B`;
 };
 
-const fmtDuration = (ms: number): string => {
+export const fmtDuration = (ms: number): string => {
   const s = Math.round(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
+
+/**
+ * A recording's length in ms, from its `anchors.json` (`stop.t` is session
+ * nanoseconds). The ONE derivation: the library's scan and the recording
+ * panel (STC-487) both call it, so two windows cannot disagree on how long a
+ * take ran.
+ */
+export const recordingDurationMs = (anchors: { stop?: { t?: number } } | undefined): number =>
+  Math.round((anchors?.stop?.t ?? 0) / 1e6);
+
+/**
+ * What a recording was pointed at, in the record flow's own vocabulary
+ * (Screen / Window / Area). Read from the take's own `anchors.json` because
+ * scope is decided per take now (STC-388), not stored as a setting. A window
+ * with no recorded app name is just "Window".
+ */
+export function recordingScopeLabel(
+  anchors: { scope?: { kind?: string; window?: { app?: string } } } | undefined,
+): string {
+  const scope = anchors?.scope;
+  if (scope?.kind === "region") return "Area";
+  if (scope?.kind === "window") return scope.window?.app || "Window";
+  return "Screen";
+}
 
 /** How each decoration mode reads to a person. */
 const MODE_LABELS: Readonly<Record<DecorationMode, string>> = {

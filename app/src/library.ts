@@ -8,7 +8,7 @@ import { readPngCaptureId, readMp4CaptureId, readMp4CaptureIdInTail, readHeicCap
 import { readBundleId } from "./capture-identity.js";
 import {
   recordingItem, stillItem, looseFileItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
-  THUMBNAIL_FILE, SUPPORTED_ANCHORS_VERSIONS,
+  THUMBNAIL_FILE, SUPPORTED_ANCHORS_VERSIONS, recordingDurationMs,
   type FinishedFileInfo, type InvalidItem, type LibraryList, type StillInfo, type TakeInfo, type TakeList,
 } from "./library-items.js";
 
@@ -770,7 +770,7 @@ async function readRecording(dir: string, name: string, names: string[],
 
   out.push({
     dir, name, recordedAt,
-    durationMs: Math.round((anchors.stop?.t ?? 0) / 1e6),
+    durationMs: recordingDurationMs(anchors),
     width: anchors.capture?.width ?? 0,
     height: anchors.capture?.height ?? 0,
     events,

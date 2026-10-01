@@ -40,10 +40,13 @@ describe("the template", () => {
     expect(actions).toEqual(["copy", "save", "edit", "save-as", "reveal", "trash"]);
   });
 
-  test("a fresh recording offers save, edit, save-as, reveal, delete — and no copy", () => {
+  test("a fresh recording offers save, edit, reveal, delete — no copy, and no save-as", () => {
     // Copy needs a format picker STC-395 has not built yet (`panel-actions.ts`).
+    // Save As writes the decorated PICTURE; a recording's panel has none, so
+    // the row would do nothing (STC-487 — it used to be listed because no
+    // recording ever reached this menu).
     const actions = ids(buildThumbMenu({ take: RECORDING_FRESH })).filter((id) => id !== "separator");
-    expect(actions).toEqual(["save", "edit", "save-as", "reveal", "trash"]);
+    expect(actions).toEqual(["save", "edit", "reveal", "trash"]);
   });
 
   test("delete is last, and behind a separator", () => {
