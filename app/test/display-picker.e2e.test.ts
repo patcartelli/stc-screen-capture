@@ -7,7 +7,7 @@ import { waitForStart } from "./_start-log.js";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
-import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { fakeDisplayIds } from "./_fake-displays.mjs";
 
 /**
@@ -40,6 +40,9 @@ async function launch(opts: { userData: string; recordings: string; startLog?: s
       ...(opts.displays ? { STC_FAKE_DISPLAYS: opts.displays } : {}),
     },
   });
+  // A stopped take leaves a fresh panel now (STC-487), so a quit raises the
+  // "unsaved takes" warning (STC-392 D8); unstubbed it is a real modal.
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   // STC-391: Record counts down now. This file is not about the countdown,

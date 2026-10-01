@@ -7,7 +7,7 @@ import { waitForStart } from "./_start-log.js";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
-import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * The system-audio preference reaching the helper (STC-418 PR 2).
@@ -49,6 +49,9 @@ async function launch(opts: { userData: string; recordings: string; startLog: st
       STC_OVERLAY_SYNTHETIC_INPUT: "1",
     },
   });
+  // A stopped take leaves a fresh panel now (STC-487), so a quit raises the
+  // "unsaved takes" warning (STC-392 D8); unstubbed it is a real modal.
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   await withoutCountdown(win);
