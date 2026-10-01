@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
-import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 
 /**
  * The pill's real window collapse, wired through the real app (STC-375).
@@ -58,6 +58,10 @@ async function launch(env: Record<string, string> = {}): Promise<{ win: Page }> 
     cwd: root,
     env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER, ...env },
   });
+  // A stopped take leaves a fresh panel now (STC-487), so a quit raises the
+  // "unsaved takes" warning (STC-392 D8). Unstubbed it is a real modal and
+  // app.close() waits on it until closeApp gives up.
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   // STC-391: Record counts down now. This file is not about the countdown,
