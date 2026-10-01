@@ -88,6 +88,12 @@ export interface Settings {
    */
   systemAudio: boolean;
   /**
+   * Record keyboard commands for the next take (STC-419): the Record bar's
+   * Keys toggle. OFF by default and sticky, like systemAudio. Commands only —
+   * the helper never records typing. Sent to the helper only when on.
+   */
+  recordKeys: boolean;
+  /**
    * Whether the editor's preview plays its sound (STC-454): the speaker
    * button in the editor's header. An app preference, not part of any take —
    * it never reaches project.json or an export. Off (sound on) by default.
@@ -220,7 +226,7 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false,
+  camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false, recordKeys: false,
   previewMuted: false,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
@@ -370,6 +376,7 @@ export function readSettings(dir: string): Settings {
     micDeviceUid: cleanMicDeviceUid(doc.micDeviceUid),
     cameraDeviceUid: cleanCameraDeviceUid(doc.cameraDeviceUid),
     systemAudio: doc.systemAudio === true,
+    recordKeys: doc.recordKeys === true,
     previewMuted: doc.previewMuted === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
@@ -412,6 +419,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     cameraDeviceUid: cleanCameraDeviceUid(merged.cameraDeviceUid),
     // `=== true`, the camera's rule: off unless explicitly on.
     systemAudio: merged.systemAudio === true,
+    recordKeys: merged.recordKeys === true,
     previewMuted: merged.previewMuted === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),

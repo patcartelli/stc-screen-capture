@@ -303,7 +303,7 @@ export interface OpenOptions {
    * defaults each to its "off"/"none" value.
    */
   initialOptions?: Pick<OptionsState, "micDeviceUid" | "camera" | "mics">
-    & Partial<Pick<OptionsState, "systemAudio" | "cameraDeviceUid" | "cameras">>;
+    & Partial<Pick<OptionsState, "systemAudio" | "keys" | "cameraDeviceUid" | "cameras">>;
 }
 
 /**
@@ -368,6 +368,7 @@ class OverlaySession {
       micDeviceUid: opts.initialOptions?.micDeviceUid ?? null,
       camera: opts.initialOptions?.camera ?? false,
       systemAudio: opts.initialOptions?.systemAudio ?? false,
+      keys: opts.initialOptions?.keys ?? false,
       cameraDeviceUid: opts.initialOptions?.cameraDeviceUid ?? null,
       mics: opts.initialOptions?.mics ?? [],
       cameras: opts.initialOptions?.cameras ?? [],
@@ -665,8 +666,11 @@ class OverlaySession {
         this.options = { ...this.options, openMenu: toggleMenu(this.options.openMenu, "camera") };
         return this.broadcast();
       case "keys":
+        // STC-419: a plain toggle. It closes any open menu, like the bar's other non-menu controls.
+        this.options = { ...this.options, keys: !this.options.keys, openMenu: null };
+        return this.broadcast();
       case "clicks":
-        return;   // disabled slots, STC-419 / STC-420
+        return;   // disabled slot, STC-420
       case "record": {
         // FINDING 1 (STC-388 review, CRITICAL). `pending` used to be commit-
         // time truth unconditionally, but region mode's `reduce` (selection.ts)

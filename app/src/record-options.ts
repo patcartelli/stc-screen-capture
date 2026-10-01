@@ -49,6 +49,8 @@ export interface OptionsState extends DeviceSelection {
    * happened to drag to the edges.
    */
   fullDisplay: boolean;
+  /** Record keyboard commands this take (STC-419). Sticky via settings.recordKeys. */
+  keys: boolean;
   /** Which menu is open, if any. One at a time. */
   openMenu: MenuId | null;
 }
@@ -182,8 +184,9 @@ export function controlAt(p: Point, layout: BarLayout): ControlId | undefined {
 }
 
 /**
- * Keys and clicks are slots for STC-419/STC-420: laid out now so the bar does
- * not change shape when they land, and never enabled until then.
+ * Keys has been live since STC-419; clicks is still STC-420's slot: laid out
+ * now so the bar does not change shape when it lands, and never enabled until
+ * then.
  *
  * The mic control is ALWAYS enabled (STC-456 review, Finding 1) — its menu
  * holds Include System Audio and Mute External, neither of which needs a mic
@@ -192,7 +195,7 @@ export function controlAt(p: Point, layout: BarLayout): ControlId | undefined {
  * takes none.
  */
 export function controlEnabled(id: ControlId): boolean {
-  return id !== "keys" && id !== "clicks";
+  return id !== "clicks";
 }
 
 /** What one press in the options phase sends, in ORDER. */

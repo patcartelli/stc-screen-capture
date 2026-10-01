@@ -1198,6 +1198,7 @@ function writeBarOptions(options: OptionsState): void {
   writeSettings(app.getPath("userData"), {
     camera: options.camera, micDeviceUid: options.micDeviceUid,
     systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+    recordKeys: options.keys,
   });
   send("settings:changed", undefined);
 }
@@ -1211,7 +1212,7 @@ async function recordFlowBody(
     windows, mode: "region", purpose: "record",
     initialOptions: {
       micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics,
-      systemAudio: stored.systemAudio, cameraDeviceUid: stored.cameraDeviceUid, cameras,
+      systemAudio: stored.systemAudio, keys: stored.recordKeys, cameraDeviceUid: stored.cameraDeviceUid, cameras,
     },
     dist: here, renderer: join(here, "..", "renderer"),
   });
@@ -1262,6 +1263,8 @@ async function recordFlowBody(
   // only preference. Only when on; absent is "off" to the helper's
   // parseStartRequest — the existing pin this ticket keeps.
   if (options.systemAudio) startParams.systemAudio = true;
+  // STC-419: from the BAR's Keys toggle. Only when on; absent is "off" to parseStartRequest.
+  if (options.keys) startParams.keys = true;
   let countdownDisplay: number | undefined;
   if (outcome.kind === "window") {
     startParams.windowId = outcome.windowId;

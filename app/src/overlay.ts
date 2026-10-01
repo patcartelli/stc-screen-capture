@@ -223,6 +223,7 @@ function renderBar(p: OverlayPayload): void {
   const micOn = p.options.micDeviceUid != null;
   ctl("mic").dataset.on = micOn ? "1" : "0";
   ctl("camera").dataset.on = p.options.camera ? "1" : "0";
+  ctl("keys").dataset.on = p.options.keys ? "1" : "0";
   // The trigger's glyph follows the state: mic-off when muted, camera-off when off.
   setLeadingGlyph(ctl("mic"), micOn ? "mic" : "mic-off");
   setLeadingGlyph(ctl("camera"), p.options.camera ? "camera" : "camera-off");
