@@ -9,8 +9,12 @@ import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
  * only allowed when the track is what the export would have made itself
  * (audio-mix.ts `reusableTracks`, decode-audio.ts `decodeMicForMix`), so the
  * MIXED SAMPLES must be identical with and without it — checked here by the
- * export's own audio hash — and the reuse must actually have happened,
- * or "identical" would be two runs of the old path agreeing.
+ * export's own audio hash. What carries the weight is NOT the hash alone (the
+ * placeholder AAC decodes to near-silence, so it could agree vacuously):
+ * (1) `audioReused` proves reuse really happened, (2) the raw-vs-cleaned
+ * CONTROL below proves the hash can tell the two tracks apart on this fixture,
+ * and (3) `decodeMicForMix` is the single producer of the mic track, with
+ * `reusableTracks` unit-tested in audio-mix.test.ts.
  */
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
@@ -44,6 +48,17 @@ describe("export reuses the preview's decoded audio", () => {
     expect(fresh.audioReused).toEqual({ mic: false, system: false });
     expect(reused.audioHash).not.toBe("");
     expect(reused.audioHash).toBe(fresh.audioHash);
+
+    // CONTROL: the hash can tell raw from cleaned on this fixture. If this
+    // ever fails, the fixture is too silent for the identity check above to
+    // mean anything, and sample identity rests on audio-mix.test.ts's
+    // reusableTracks tests plus decodeMicForMix being the single producer.
+    await win.click("#audiobtn");
+    await win.locator("#voicecleanon").uncheck();
+    await win.keyboard.press("Escape");
+    await expect.poll(() => win.evaluate(() => (window as any).__stcPreviewAudio().playing), { timeout: 30_000 }).toBe("raw");
+    const raw = await exportWith(win, false);
+    expect(raw.audioHash).not.toBe(fresh.audioHash);
   }, 180_000);
 
   test("cleanup off: the raw mic is reused, same mixed samples", async () => {
@@ -52,6 +67,7 @@ describe("export reuses the preview's decoded audio", () => {
     const reused = await exportWith(win, true);
     const fresh = await exportWith(win, false);
     expect(reused.audioReused).toEqual({ mic: true, system: true });
+    expect(fresh.audioReused).toEqual({ mic: false, system: false });
     expect(reused.audioHash).toBe(fresh.audioHash);
   }, 180_000);
 });
