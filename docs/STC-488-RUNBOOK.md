@@ -17,7 +17,7 @@ Run this first:
 npx vitest run helper/test/copy-file.grant.test.ts
 ```
 
-Must show 1 passed. A failure means the helper never put the file on the pasteboard, and nothing below will paste.
+Must show 2 passed (the round trip, and a missing file refused as copy-refused). A failure means the helper never put the file on the pasteboard, and nothing below will paste.
 
 ## 1. Paste targets (host)
 
@@ -25,7 +25,7 @@ Record 10 s of anything with the pointer moving. On the panel, press Copy and wa
 
 | target | expected |
 |---|---|
-| Finder (a folder, Cmd-V) | the `.mp4`, named after the take, cursor visible when played |
+| Finder (a folder, Cmd-V) | the `.mp4`, named after the take's folder, cursor visible when played |
 | Slack (a DM to yourself) | an uploaded video |
 | Mail (a new message) | an attachment |
 | Messages | a video bubble |
@@ -44,7 +44,7 @@ Record 60 s at full resolution. Press Copy and time "Rendering..." to "Copied". 
 
 ## 4. Cancel (host)
 
-Start a Copy on a 60 s take and press Trash halfway. Check that `~/Library/Application Support/<product name>/copies/` has no `.partial` and no new `.mp4`. Repeat with Cmd-Q during a render: quit should finish promptly (it waits at most 5 s for the cancel).
+Start a Copy on a 60 s take and press Trash halfway. Check that `~/Library/Application Support/<product name>/copies/` has no `.partial` and no new `.mp4`. Repeat with Cmd-Q during a render: quit should finish promptly (the copy-cancel stage of quit is bounded at 5 s).
 
 ## 5. The purge (VM or host, optional, slow)
 
