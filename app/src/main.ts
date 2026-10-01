@@ -69,7 +69,9 @@ import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
-import { ensureCaptureId, readBundleId } from "./capture-identity.js";
+import {
+  ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
+} from "./capture-identity.js";
 import { resolveHelperPath } from "./helper-path.js";
 
 /**
@@ -142,6 +144,13 @@ function showNotice(message: ToastInput | undefined): void {
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
 }
+
+/**
+ * Every `ensureCaptureId` call's `onRepair` (STC-436): a corrupt
+ * `capture.json` that could not be salvaged costs the user a second tile,
+ * and stderr is invisible in a packaged app.
+ */
+const noticeCaptureIdRepair = (r: CaptureIdRepair): void => showNotice(captureIdRepairNotice(r));
 /**
  * The take each WINDOW may currently read, set only by preview:open.
  *
@@ -2564,7 +2573,7 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
 
   const { saveFolder } = readSettings(app.getPath("userData"));
   const root = takesRoot(process.env, saveFolder);
-  const id = await ensureCaptureId(openTake);
+  const id = await ensureCaptureId(openTake, noticeCaptureIdRepair);
   const files = await scanFinishedFilesAt(process.env, saveFolder);
   const matched = files.find((f) => f.id === id)?.file;
   const dest = matched ?? join(root, name);
@@ -2593,7 +2602,7 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
 ipcMain.handle("take:captureId", async (e) => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
-  return await ensureCaptureId(openTake);
+  return await ensureCaptureId(openTake, noticeCaptureIdRepair);
 });
 
 /**
@@ -2674,7 +2683,7 @@ ipcMain.handle("still:export", async (_e, req: {
   // the capture the user is trying to save.
   let captureId: string | undefined;
   if (fallbackDir) {
-    try { captureId = await ensureCaptureId(fallbackDir); }
+    try { captureId = await ensureCaptureId(fallbackDir, noticeCaptureIdRepair); }
     catch (e) {
       console.error("[still] could not mint a capture id for", fallbackDir, e);
     }
