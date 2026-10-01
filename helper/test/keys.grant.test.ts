@@ -15,7 +15,11 @@
  *
  * The CONTROL is load-bearing: the same injection with `keys` absent must
  * leave an events-2 with no key in it, or "Keys off records nothing" is
- * untested.
+ * untested. Both tests assert the helper LOGGED the injection (stderr) and
+ * read `keysRecorded`/`keysDropped` from the stop reply, so a control that
+ * passes because nothing was injected at all fails instead. The counters are
+ * in the stop reply only, never the periodic stats (Capture.swift's
+ * `finishUp`).
  */
 import { describe, test, expect, afterEach } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -53,10 +57,11 @@ function spawnHelper(env: Record<string, string> = {}) {
   });
   live.push(proc);
   const out: Line[] = [], fd3: Line[] = [];
+  const err = { text: "" };
   collect(proc.stdout!, out);
-  proc.stderr!.resume();
+  proc.stderr!.on("data", (c: Buffer) => { err.text += c.toString("utf8"); });
   collect(proc.stdio[3] as Readable, fd3);
-  return { proc, out, fd3, send: (c: object) => proc.stdin!.write(JSON.stringify(c) + "\n") };
+  return { proc, out, fd3, err, send: (c: object) => proc.stdin!.write(JSON.stringify(c) + "\n") };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -96,8 +101,9 @@ async function take(env: Record<string, string>, start: object,
   if (r.ev === "error") throw explainFailedStart(r as StartOutcome, "STC-419 key capture");
   if (during) await during(h); else await sleep(1500);
   h.send({ cmd: "stop", seq: 9 });
-  await waitFor(() => h.fd3.find((l) => l.seq === 9), 30_000, "stop");
-  return JSON.parse(readFileSync(join(dir, "events.json"), "utf8"));
+  const stopped = await waitFor(() => h.fd3.find((l) => l.seq === 9), 30_000, "stop");
+  const doc = JSON.parse(readFileSync(join(dir, "events.json"), "utf8"));
+  return { doc, stopped, stderr: h.err.text };
 }
 const keysOf = (doc: any) => doc.events.filter((e: any) => e.kind === "key").map((e: any) => [e.key, e.mods]);
 
@@ -116,7 +122,11 @@ describe("key capture (STC-419)", () => {
   ];
 
   test("keys: true records commands only, as a valid events-3", async () => {
-    const doc = await take({ STC_KEY_INJECT: injectFile(SCRIPT) }, { keys: true });
+    const { doc, stopped, stderr } = await take({ STC_KEY_INJECT: injectFile(SCRIPT) }, { keys: true });
+    expect(stderr).toContain(`STC_KEY_INJECT: ${SCRIPT.length} synthetic`);
+    expect(stopped.ev).toBe("stopped");
+    // 5 kept; 5 dropped: the held ↓, a, A, ⌥e, space.
+    expect([stopped.keysRecorded, stopped.keysDropped]).toEqual([5, 5]);
     expect(validate3(doc), JSON.stringify(validate3.errors, null, 2)).toBe(true);
     expect(doc.version).toBe(3);
     // "K" assumes a US/ABC layout on the test machine (the keycap of kVK_ANSI_K).
@@ -126,13 +136,18 @@ describe("key capture (STC-419)", () => {
   }, 60_000);
 
   test("CONTROL: keys absent writes events-2 with no key events, injection or not", async () => {
-    const doc = await take({ STC_KEY_INJECT: injectFile(SCRIPT) }, {});
+    const { doc, stopped, stderr } = await take({ STC_KEY_INJECT: injectFile(SCRIPT) }, {});
+    // The injection DID run — otherwise this control passes vacuously.
+    expect(stderr).toContain(`STC_KEY_INJECT: ${SCRIPT.length} synthetic`);
+    expect(stopped.ev).toBe("stopped");
+    // Keys off returns before counting anything (handleKeyEvent's `wantKeys`).
+    expect([stopped.keysRecorded, stopped.keysDropped]).toEqual([0, 0]);
     expect(doc.version).toBe(2);
     expect(keysOf(doc)).toEqual([]);
   }, 60_000);
 
   test("a key pressed while paused is not recorded", async () => {
-    const doc = await take(
+    const { doc } = await take(
       { STC_KEY_INJECT: injectFile([
         { afterMs: 300, keyCode: 125, flags: 0 },   // ↓ — recorded
         { afterMs: 900, keyCode: 126, flags: 0 },   // ↑ — paused, dropped

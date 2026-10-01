@@ -4,6 +4,12 @@ import Foundation
 /// STC-419: what a key prints with NO modifiers, on the layout that was current
 /// when the take started — what is on the keycap, so AZERTY's ⌘A reads ⌘A.
 ///
+/// The ASCII-CAPABLE layout, not simply the current one: on an ASCII-capable
+/// layout (US, AZERTY, Dvorak…) the two are the same source, but on Russian or
+/// Greek the current layout's keycaps are not ASCII and every ⌘ chord would be
+/// dropped. The ASCII-capable source is the one macOS itself resolves
+/// shortcuts against, so ⌘K on a Russian layout reads ⌘K, as the app sees it.
+///
 /// The Text Input Source APIs must be called on the MAIN thread, and the tap
 /// callback is not on it. So the layout's `uchr` bytes and the keyboard type
 /// are copied ONCE, at start, on main; `UCKeyTranslate` over that copy is safe
@@ -26,7 +32,7 @@ final class KeyLayoutSnapshot {
             IO.log("STC-419: KeyLayoutSnapshot taken off the main thread; refusing")
             return nil
         }
-        guard let src = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+        guard let src = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
               let ptr = TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData) else { return nil }
         layout = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue() as Data
         keyboardType = UInt32(LMGetKbdType())

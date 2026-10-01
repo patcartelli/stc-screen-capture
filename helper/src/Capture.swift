@@ -2103,8 +2103,6 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 "paused": pauseGate.isPaused,
                 "nonMonotonic": framesNonMonotonic, "events": events.count,
                 "cursorEvents": cursorEvents,
-                // STC-419: what was kept and what was counted and forgotten.
-                "keysRecorded": keysRecorded, "keysDropped": keysDropped,
                 "tapReenables": tapReenables,
                 // Which kind, so a re-enable can be read as starvation or not.
                 "tapDisabled": ["timeout": tapDisables["timeout"] ?? 0,
@@ -2206,6 +2204,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             // answers `paused: true` here even though anchors.json will carry
             // a CLOSED interval once writeSidecars has run.
             var s = self.stats()
+            // STC-419: the key counters go in the stop reply ONLY. `stats()`
+            // also feeds the 200 ms heartbeat, and a live `keysDropped` there
+            // would hand the renderer the user's typing rhythm.
+            self.lock.lock()
+            s["keysRecorded"] = self.keysRecorded
+            s["keysDropped"] = self.keysDropped
+            self.lock.unlock()
             if actualReason != reason { s["stopWarning"] = "writer did not finalise in time" }
             self.writeSidecars(reason: actualReason)
             self.lock.lock()
