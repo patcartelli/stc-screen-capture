@@ -11,7 +11,7 @@ Branch: `accounts/stc-469-preview-audio-memory` until merged, then `master`.
 - Export reuses the preview's decoded tracks where `audio-mix.ts`'s `reusableTracks` says they are
   exactly what the export would have produced, instead of decoding the files a second time.
 - Whole-track PCM is kept on purpose: the preview must stay the export's mix. Streaming PCM
-  through a temp file read by range is the filed follow-up (option B).
+  through a temp file read by range is the filed follow-up (option B, STC-490).
 
 ## Measured
 
