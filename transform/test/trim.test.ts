@@ -589,6 +589,52 @@ describe("project-12: per-track mute (STC-454 part 3)", () => {
   });
 });
 
+describe("project-13: show clicks (STC-420)", () => {
+  const Ajv = (AjvImport as any).default ?? AjvImport;
+  const schema = (n: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${n}.schema.json`), "utf8")));
+  const validate12 = schema(12);
+  const validate13 = schema(13);
+  const raw = (extra: object) => ({
+    version: 13, transform: { version: 1 }, output: { fps: 60, width: 640, height: 360 },
+    cursor: { style: "default", scale: 1 }, ...extra,
+  });
+
+  test("on by default, after a parse at every older version, and when malformed", () => {
+    expect(defaultProject(640, 360).showClicks).toBe(true);
+    for (const doc of [null, { version: 1 }, { version: 12 }, raw({}), raw({ showClicks: "no" }), raw({ showClicks: 0 })]) {
+      expect(parseProject(doc, 640, 360, duration).showClicks).toBe(true);
+    }
+  });
+
+  test("only a real false turns it off", () => {
+    expect(parseProject(raw({ showClicks: false }), 640, 360, duration).showClicks).toBe(false);
+  });
+
+  test("an untouched project stays below v13; an off one is v13, schema-valid, and round-trips", () => {
+    expect(projectForWrite(defaultProject(640, 360), duration).version).toBe(3);
+    const off = { ...defaultProject(640, 360), showClicks: false };
+    const out = projectForWrite(off, duration);
+    expect(out.version).toBe(13);
+    expect(validate13(out), JSON.stringify(validate13.errors, null, 2)).toBe(true);
+    expect(parseProject(out, 640, 360, duration).showClicks).toBe(false);
+  });
+
+  test("v13 carries what the lower versions carry", () => {
+    const p = { ...defaultProject(640, 360), showClicks: false, micMuted: true, systemAudioLevel: 0.25 };
+    const back = parseProject(projectForWrite(p, duration), 640, 360, duration);
+    expect(back.micMuted).toBe(true);
+    expect(back.systemAudioLevel).toBe(0.25);
+    expect(back.showClicks).toBe(false);
+  });
+
+  test("project-12 refuses the field; project-13 refuses a non-boolean", () => {
+    expect(validate12({ ...raw({ showClicks: false }), version: 12 })).toBe(false);
+    expect(validate13(raw({ showClicks: "false" }))).toBe(false);
+    expect(validate13(raw({ showClicks: true }))).toBe(true);
+  });
+});
+
 describe("estimateExportMs", () => {
   test("is the measured 11 ms/frame", () => {
     expect(estimateExportMs(60)).toBe(60 * EXPORT_MS_PER_FRAME);
