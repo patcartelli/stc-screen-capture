@@ -22,6 +22,11 @@ describe("labels", () => {
   });
   test("every named key has a label that is not its raw name for the renamed ones", () => {
     for (const n of NAMED_KEYS) expect(keyLabel(n, []).length).toBeGreaterThan(0);
+    expect(keyLabel("Escape", [])).toBe("Esc");
+    expect(keyLabel("ForwardDelete", [])).toBe("Fwd Delete");
+    expect(keyLabel("PageUp", [])).toBe("Page Up");
+    expect(keyLabel("PageDown", [])).toBe("Page Down");
+    expect(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].map((n) => keyLabel(n, [])).join("")).toBe("↑↓←→");
   });
   test("count text", () => {
     expect(keycastText({ label: "↓", count: 1, opacity: 1 })).toBe("↓");
@@ -98,6 +103,9 @@ describe("layout", () => {
   });
   test("never narrower than its minimum font", () => {
     expect(keycastFontPx(100)).toBe(14);
+  });
+  test("an unclamped pill never hands fillText a maxWidth below the text's own width", () => {
+    expect(keycastLayout(1920, 1080, 100.4).maxTextWidth).toBeGreaterThanOrEqual(100.4);
   });
   test("a long label on a tiny output stays inside the canvas (Review Focus 2)", () => {
     const b = keycastLayout(320, 180, 2000);

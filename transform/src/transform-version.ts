@@ -12,7 +12,8 @@ import {
 import {
   KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
   KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
-  KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, NAMED_KEYS, keyLabel,
+  KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR,
+  NAMED_KEYS, keyLabel, keycastText,
 } from "./keycast.js";
 
 /**
@@ -202,7 +203,11 @@ export function transformFingerprint(): string {
     },
     keycast: [KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
       KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
-      KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, NAMED_KEYS.map((k) => keyLabel(k, []))],
+      KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR,
+      NAMED_KEYS.map((k) => keyLabel(k, [])),
+      // Every modifier glyph, and the repeat-count format.
+      NAMED_KEYS.map((k) => keyLabel(k, ["ctrl", "opt", "shift", "cmd"])),
+      keycastText({ label: "x", count: 2, opacity: 1 })],
   };
   const text = JSON.stringify(inputs);
   let h = 0x811c9dc5;

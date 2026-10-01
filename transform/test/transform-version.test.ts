@@ -18,12 +18,11 @@ const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
  * TRANSFORM_VERSION, add a TRANSFORM_HISTORY entry saying what changed, then
  * update this fingerprint. Never update the fingerprint alone.
  *
- * It last moved at version 4 (STC-371): `ZOOM_PRESETS` itself changed —
- * standard and snappy now push in and release at different omegas instead of
- * one symmetric spring — so the fingerprint moved because an input already
- * declared to it changed value, not because a new input was added.
+ * It last moved at version 12 (STC-419): the keycast's constants were added
+ * as inputs — hold and fade, font, sizing, placement, both colours, every
+ * key label with and without the modifier glyphs, and the ` ×N` count format.
  */
-const PINNED_FINGERPRINT = "7a2ecac8";
+const PINNED_FINGERPRINT = "f5959acd";
 
 describe("the transform version is honest about what it renders", () => {
   test("the fingerprint of every pixel-deciding constant is pinned to this version", () => {

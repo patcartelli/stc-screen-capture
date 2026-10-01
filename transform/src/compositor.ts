@@ -1,7 +1,7 @@
 import type { FrameState } from "./render.js";
 import { isWholeFrame, uvRectToPixels } from "./spaces.js";
 import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
-import { KEYCAST_BG_ALPHA, keycastFont, keycastFontPx, keycastLayout, keycastText } from "./keycast.js";
+import { KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR, keycastFont, keycastFontPx, keycastLayout, keycastText } from "./keycast.js";
 
 /**
  * The one compositor. Both sinks call exactly this with identical inputs, and
@@ -89,11 +89,11 @@ function drawKeycast(
   ctx.font = keycastFont(keycastFontPx(width));
   const box = keycastLayout(width, height, ctx.measureText(text).width);
   ctx.globalAlpha = k.opacity;
-  ctx.fillStyle = `rgba(0, 0, 0, ${KEYCAST_BG_ALPHA})`;
+  ctx.fillStyle = `rgba(${KEYCAST_BG_RGB}, ${KEYCAST_BG_ALPHA})`;
   ctx.beginPath();
   ctx.roundRect(box.x, box.y, box.width, box.height, box.radius);
   ctx.fill();
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = KEYCAST_TEXT_COLOR;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, box.textX, box.textY, box.maxTextWidth);

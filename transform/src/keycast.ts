@@ -42,6 +42,9 @@ export const KEYCAST_PAD_X_EM = 0.75;
 export const KEYCAST_PAD_Y_EM = 0.45;
 export const KEYCAST_SIDE_MARGIN_PX = 8;
 export const KEYCAST_BG_ALPHA = 0.72;
+/** The pill's background as `r, g, b` (alpha is KEYCAST_BG_ALPHA) and its text colour. */
+export const KEYCAST_BG_RGB = "0, 0, 0";
+export const KEYCAST_TEXT_COLOR = "#ffffff";
 
 const MOD_GLYPH: Record<KeyMod, string> = { ctrl: "⌃", opt: "⌥", shift: "⇧", cmd: "⌘" };
 const KEY_WORD: Record<NamedKey, string> = {
@@ -133,7 +136,9 @@ export function keycastLayout(outputW: number, outputH: number, textWidth: numbe
   const padX = Math.round(fontPx * KEYCAST_PAD_X_EM);
   const padY = Math.round(fontPx * KEYCAST_PAD_Y_EM);
   const maxWidth = Math.max(0, outputW - 2 * KEYCAST_SIDE_MARGIN_PX);
-  const width = Math.min(maxWidth, Math.round(textWidth) + 2 * padX);
+  // ceil, not round: a rounded-down box would hand fillText a maxWidth below
+  // the text's own width, and the canvas would squeeze the glyphs to fit.
+  const width = Math.min(maxWidth, Math.ceil(textWidth) + 2 * padX);
   const height = fontPx + 2 * padY;
   const x = Math.round((outputW - width) / 2);
   const y = Math.round(outputH - outputH * KEYCAST_BOTTOM_FRACTION - height);
