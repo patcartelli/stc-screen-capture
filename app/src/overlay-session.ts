@@ -666,7 +666,10 @@ class OverlaySession {
         this.options = { ...this.options, openMenu: toggleMenu(this.options.openMenu, "camera") };
         return this.broadcast();
       case "keys":
-        // STC-419: a plain toggle. It closes any open menu, like the bar's other non-menu controls.
+        // STC-419: a plain toggle. A real press while a menu is open never
+        // reaches here: `barPress` swallows it and only the menu closes.
+        // `openMenu: null` is for a synthetic `control` event, which skips
+        // barPress and must not leave a menu hanging open.
         this.options = { ...this.options, keys: !this.options.keys, openMenu: null };
         return this.broadcast();
       case "clicks":
