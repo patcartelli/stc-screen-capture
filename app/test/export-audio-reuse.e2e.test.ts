@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach } from "vitest";
 import type { ElectronApplication, Page } from "playwright";
 import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
-import { makeMicAndSystemTakeFolder } from "./_take-fixture.js";
+import { makeAudibleMicAndSystemTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
@@ -9,11 +9,14 @@ import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
  * only allowed when the track is what the export would have made itself
  * (audio-mix.ts `reusableTracks`, decode-audio.ts `decodeMicForMix`), so the
  * MIXED SAMPLES must be identical with and without it — checked here by the
- * export's own audio hash. What carries the weight is NOT the hash alone (the
- * placeholder AAC decodes to near-silence, so it could agree vacuously):
- * (1) `audioReused` proves reuse really happened, (2) the raw-vs-cleaned
- * CONTROL below proves the hash can tell the two tracks apart on this fixture,
- * and (3) `decodeMicForMix` is the single producer of the mic track, with
+ * export's own audio hash. The fixture is AUDIBLE (`makeAudibleMicAndSystemTakeFolder`:
+ * a tone over hiss with pauses, real AAC from `afconvert`) — the placeholder
+ * AAC the other fixtures use is the AAC silent frame and decodes to exact
+ * zeros, on which every mix hashes the same and the identity would hold
+ * vacuously. The hash is backed by: (1) `audioReused`, proving reuse really
+ * happened; (2) the raw-vs-cleaned CONTROL below, proving the hash tells the
+ * two mic tracks apart on this fixture; and (3) `decodeMicForMix` /
+ * `decodeSystemForMix` being the single producers of each track, with
  * `reusableTracks` unit-tested in audio-mix.test.ts.
  */
 let app: ElectronApplication | undefined;
@@ -34,7 +37,7 @@ const exportWith = (win: Page, reuse: boolean) =>
 
 describe("export reuses the preview's decoded audio", () => {
   test("cleanup on: same mixed samples, mic and system both reused", async () => {
-    const { dir } = makeMicAndSystemTakeFolder();
+    const { dir } = makeAudibleMicAndSystemTakeFolder();
     const win = await openEditor(dir);
     await win.click("#audiobtn");
     await win.locator("#voicecleanon").check();
@@ -50,9 +53,8 @@ describe("export reuses the preview's decoded audio", () => {
     expect(reused.audioHash).toBe(fresh.audioHash);
 
     // CONTROL: the hash can tell raw from cleaned on this fixture. If this
-    // ever fails, the fixture is too silent for the identity check above to
-    // mean anything, and sample identity rests on audio-mix.test.ts's
-    // reusableTracks tests plus decodeMicForMix being the single producer.
+    // ever fails, the fixture has stopped being audible (or cleanup has
+    // stopped changing it) and the identity check above means nothing.
     await win.click("#audiobtn");
     await win.locator("#voicecleanon").uncheck();
     await win.keyboard.press("Escape");
@@ -62,7 +64,7 @@ describe("export reuses the preview's decoded audio", () => {
   }, 180_000);
 
   test("cleanup off: the raw mic is reused, same mixed samples", async () => {
-    const { dir } = makeMicAndSystemTakeFolder();
+    const { dir } = makeAudibleMicAndSystemTakeFolder();
     const win = await openEditor(dir);
     const reused = await exportWith(win, true);
     const fresh = await exportWith(win, false);

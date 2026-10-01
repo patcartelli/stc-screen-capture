@@ -1,4 +1,5 @@
-import { mkdtempSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, cpSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
@@ -134,24 +135,80 @@ export function makeMicTakeFolder(
 }
 
 /**
- * Mic AND system audio (STC-469): the two fixtures above, together. Both
- * tracks are the placeholder AAC that decodes (to near-silence) in Chromium,
- * which is enough to drive the export's MIX path end to end.
+ * Mic (mono) AND system (stereo) audio that is actually AUDIBLE (STC-469):
+ * ~4.5 s of a 220 Hz tone over low hiss with pauses (scripts/make-long-audio-take.mjs's
+ * signal, on a shorter cycle so 4.5 s holds three pauses), encoded to AAC-LC
+ * 48 kHz by macOS's own `afconvert` (CI is macOS, and so is every host this
+ * suite runs on). The placeholder fixtures above repeat the AAC SILENT frame,
+ * which Chromium decodes to exact zeros, so any two mixes of them hash the
+ * same; this one gives narration cleanup a noise floor to
+ * learn from the pauses and a tone to keep, so a raw mix and a cleaned mix
+ * really differ.
+ *
+ * The anchors' mic/system blocks are computed from the FILE (`afinfo`'s
+ * packet count), never hard-coded. Checked in Node through `loadSession`
+ * itself (2026-10-01): afconvert's file carries NO edit list (its 2112-sample
+ * encoder priming is not recorded as an `elst`), the first sample's cts is 0,
+ * the esds AudioSpecificConfig reads 1188 (mono) / 1190 (stereo), and
+ * `rebaseMicAudio` puts 213 frames on 100 ms .. 4.622666667 s — the same
+ * last PTS computed here. The priming samples decode like any other frame,
+ * identically on every path, which is all an identity check needs.
  */
-export function makeMicAndSystemTakeFolder(
-  takeName = "2026-10-01_10-00-00-micsys",
+export function makeAudibleMicAndSystemTakeFolder(
+  takeName = "2026-10-01_11-00-00-audible",
 ): { dir: string; takeDir: string } {
-  const { dir, takeDir } = makeMicTakeFolder(takeName);
-  const { frames, frameUs } = writePlaceholderAac(join(takeDir, "system.m4a"), 2);
+  const { dir, takeDir } = makeTakeFolder(takeName);
+  const blocks: Record<"mic" | "system", { frames: number }> = { mic: { frames: 0 }, system: { frames: 0 } };
+  for (const [name, channels] of [["mic", 1], ["system", 2]] as const) {
+    const wav = join(takeDir, `${name}.wav`);
+    const m4a = join(takeDir, `${name}.m4a`);
+    writeToneWav(wav, channels, 4.5);
+    execFileSync("/usr/bin/afconvert", ["-f", "m4af", "-d", "aac@48000", wav, m4a]);
+    rmSync(wav);
+    const info = execFileSync("/usr/bin/afinfo", [m4a], { encoding: "utf8" });
+    const packets = Number(/audio packets:\s*(\d+)/.exec(info)?.[1]);
+    if (!(packets > 0)) throw new Error(`afinfo reported no audio packets for ${m4a}:\n${info}`);
+    blocks[name].frames = packets;
+  }
+  const frameNs = (1024 * 1e9) / 48_000;
+  const lastNs = (frames: number) => 100_000_000 + Math.round((frames - 1) * frameNs);
   const anchors = JSON.parse(readFileSync(join(takeDir, "anchors.json"), "utf8"));
   anchors.version = 6;
-  anchors.files = { ...anchors.files, system: "system.m4a" };
+  anchors.files = { ...anchors.files, mic: "mic.m4a", system: "system.m4a" };
+  anchors.mic = {
+    present: true, device: "Fixture Mic", sampleRate: 48_000, channels: 1,
+    firstFramePtsNs: 100_000_000, lastFramePtsNs: lastNs(blocks.mic.frames),
+  };
   anchors.system = {
     present: true, sampleRate: 48_000, channels: 2,
-    firstFramePtsNs: 100_000_000, lastFramePtsNs: 100_000_000 + Math.round((frames - 1) * frameUs * 1000),
+    firstFramePtsNs: 100_000_000, lastFramePtsNs: lastNs(blocks.system.frames),
   };
   writeFileSync(join(takeDir, "anchors.json"), JSON.stringify(anchors, null, 2));
   return { dir, takeDir };
+}
+
+/**
+ * 16-bit PCM WAV at 48 kHz: a 0.2-amplitude 220 Hz tone for 0.9 s of every
+ * 1.5 s, over 0.01-amplitude hiss throughout (seeded, so every run writes the
+ * same bytes).
+ */
+function writeToneWav(path: string, channels: 1 | 2, seconds: number): void {
+  const RATE = 48_000;
+  const frames = Math.round(RATE * seconds);
+  const data = Buffer.alloc(frames * channels * 2);
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32) * 2 - 1;
+  for (let i = 0; i < frames; i++) {
+    const t = i / RATE;
+    const v = (t % 1.5 < 0.9 ? 0.2 * Math.sin(2 * Math.PI * 220 * t) : 0) + 0.01 * rnd();
+    for (let c = 0; c < channels; c++) data.writeInt16LE(Math.round(v * 32767), (i * channels + c) * 2);
+  }
+  const h = Buffer.alloc(44);
+  h.write("RIFF", 0); h.writeUInt32LE(36 + data.length, 4); h.write("WAVE", 8);
+  h.write("fmt ", 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(channels, 22);
+  h.writeUInt32LE(RATE, 24); h.writeUInt32LE(RATE * channels * 2, 28); h.writeUInt16LE(channels * 2, 32);
+  h.writeUInt16LE(16, 34); h.write("data", 36); h.writeUInt32LE(data.length, 40);
+  writeFileSync(path, Buffer.concat([h, data]));
 }
 
 /**
