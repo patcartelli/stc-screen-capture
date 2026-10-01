@@ -124,7 +124,7 @@ final class App {
                 IO.send("error", seq: seq, ["code": code, "detail": e.reason])
             }
         case "pasteboard-files":
-            IO.send("pasteboard-files", seq: seq, ["paths": CopyFile.files()])
+            IO.send("pasteboard-files", seq: seq, ["paths": CopyFile.files(), "changeCount": CopyFile.changeCount()])
         case "export-still":
             // The one way out (STC-293). Deliberately state-free, like
             // capture-still: exporting a still during a recording must not be

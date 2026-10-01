@@ -67,7 +67,7 @@ declare global {
         dir?: string;
       }>;
       menu(ctx: { take: PanelTake; busy: boolean; copying?: boolean }): Promise<string | null>;
-      copyRecording(dir: string): Promise<{ ok: boolean; cancelled?: boolean; detail?: string }>;
+      copyRecording(dir: string): Promise<{ ok: boolean; cancelled?: boolean; ready?: boolean; detail?: string }>;
       onCopyProgress(cb: (done: number, total: number) => void): () => void;
       revealShot(dir: string): Promise<boolean>;
       /** The three actions that CHANGE where a take lives (STC-392) — see `panel-actions.ts`. */
@@ -387,6 +387,7 @@ async function copyRecording(): Promise<boolean> {
   try {
     const r = await window.thumb.copyRecording(dir);
     if (r.ok) setStatus("Copied, paste anywhere");
+    else if (r.ready) setStatus("Ready, press Copy to put it on the clipboard");
     else if (r.cancelled) setStatus("");
     else setStatus(`Could not copy: ${r.detail ?? "unknown error"}`);
     return r.ok;

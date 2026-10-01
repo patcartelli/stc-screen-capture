@@ -29,7 +29,7 @@ import {
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
-import { startCopyRender, cancelCopyRender, cancelAllCopyRenders } from "./copy-render-window.js";
+import { startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight } from "./copy-render-window.js";
 import {
   copyPathFor, copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
 } from "./recording-copy.js";
@@ -56,7 +56,7 @@ import {
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
   unsavedTakeDirs, takeFor,
 } from "./thumbnail-window.js";
-import { promotes, trashStyle } from "./panel-actions.js";
+import { promotes, trashStyle, lockedWhileCopying } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
 import { openEditor } from "./editor-window.js";
 import { openStillEditor } from "./still-editor-window.js";
@@ -1027,6 +1027,10 @@ app.on("before-quit", (e) => {
       // storage, which is the same backstop Quit Anyway already relies on —
       // STC-393's recovery prompt finds it on the next launch either way.
       const { saveFolder } = readSettings(app.getPath("userData"));
+      // A live Copy render is still READING these takes; end it (bounded like
+      // the teardown's own cancel) before promotion moves them out from under it.
+      await withTimeout(cancelAllCopyRenders(), COPY_CANCEL_AT_QUIT_MS, "cancelling copy renders before Save All")
+        .catch((err) => console.error("[copy] could not finish cancelling before Save All:", err));
       for (const dir of unsavedTakeDirs()) {
         await promoteTake(process.env, saveFolder, dir).catch((err) => {
           console.error("[quit] could not save a take before quitting:", dir, err);
@@ -2816,7 +2820,20 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
   const helper = sup;   // captured: the render below is long and `sup` can go away under it
   if (!helper) return { ok: false, detail: "the helper is not running" };
   const out = copyPathFor(process.env, dir);
+  // A render takes long enough for the person to copy something else. The
+  // clipboard's changeCount is read before it and after it; a courtesy, not a
+  // gate: if it cannot be read (the client rejects on an error reply), write.
+  const readChangeCount = async (): Promise<number | undefined> => {
+    try {
+      const n = Number((await helper.pasteboardFiles()).changeCount);
+      return Number.isFinite(n) ? n : undefined;
+    } catch { return undefined; }
+  };
+  let changeBefore: number | undefined;
+  let rendered = false;
   if (!existsSync(out)) {
+    rendered = true;
+    changeBefore = await readChangeCount();
     const panel = e.sender;
     const r = await startCopyRender({
       takeDir: dir, outPath: out, dist: here, rendererDir: join(here, "..", "renderer"),
@@ -2831,6 +2848,12 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
   }
   // A queued start can outlive a cancel; a gone panel gets no pasteboard write.
   if (takeFor(dir)?.kind !== "recording") return { ok: false, cancelled: true };
+  if (rendered && changeBefore !== undefined) {
+    const after = await readChangeCount();
+    // Moved: something newer is on the clipboard. Keep the file; the next Copy
+    // is a cache hit and writes at once.
+    if (after !== undefined && after !== changeBefore) return { ok: false, ready: true };
+  }
   try {
     // HelperClient.request REJECTS with a HelperError on an error reply.
     await helper.copyFile(out);
@@ -2845,6 +2868,8 @@ ipcMain.handle("panel:save", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
+  // main enforces the lock too (panel-actions.ts's rule), not only the panel.
+  if (lockedWhileCopying("save") && copyRenderInFlight(dir)) return { ok: false, detail: "a copy is still rendering" };
   try {
     // Asked, not assumed: `promotes("save")` is `panel-actions.ts`'s own
     // answer, not a second place this handler decides "save promotes" for
@@ -2877,6 +2902,7 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
+  if (lockedWhileCopying("edit") && copyRenderInFlight(dir)) return { ok: false, detail: "a copy is still rendering" };
   try {
     // Same reasoning as `panel:save` above: `promotes("edit")` is asked, not
     // hardcoded — this handler has no opinion of its own about whether Edit

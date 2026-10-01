@@ -20,6 +20,10 @@ enum CopyFile {
         }
     }
 
+    /// The general pasteboard's change count: lets the app tell, after a long
+    /// render, whether the person copied something else in the meantime.
+    static func changeCount() -> Int { NSPasteboard.general.changeCount }
+
     /// Absolute paths of every file URL on the general pasteboard. Read-only;
     /// the purge's one check (no polling).
     static func files() -> [String] {

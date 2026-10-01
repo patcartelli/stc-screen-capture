@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync, cpSync } from "node:fs";
+import { mkdtempSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync, cpSync, truncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
@@ -31,6 +31,11 @@ import { windowCount, pageWithUrl, clickThatCloses } from "./_windows.js";
 //   test 7 (trash mid-render): 15 + 30 + 15 + 15 + 15 = 90 s (+ 1 s wait)
 //   test 8 (dismiss mid-render): 15 + 30 + 15 + 15 + 15 = 90 s
 //   test 9 (reuse): 15 + 30 + 120 + 15 (enabled) + 15 (copy-file 2) = 195 s
+//   test 10 (clipboard moved mid-render, F1): 15 + 30 + 15 (Ready status) + 15 (enabled)
+//     + 15 (copy-file 2) = 90 s
+//   test 11 (quit mid-render, F8): 15 + 30 + 15 (render window) = 60 s; the close
+//     is closeApp's own APP_CLOSE_MS bound, which throws rather than hangs
+//   test 12 (a failing render, F8): 15 + 30 + 120 (status) + 15 (enabled) = 180 s
 // Inner bounds (195 s worst) clear 300 s strictly; the ~105 s left is launch,
 // teardown and startRecordFlow's hidden bounds (judgement headroom).
 const root = join(__dirname, "..", "..");
@@ -242,5 +247,54 @@ describe("copying a recording (STC-488)", () => {
     const second = statSync(path);
     expect(second.mtimeMs, "the file was not rewritten").toBe(first.mtimeMs);
     expect(second.ino, "the file was not replaced").toBe(first.ino);
+  }, 300_000);
+
+  test("a copy made elsewhere mid-render keeps the file and asks for a second press (F1)", async () => {
+    // The fake pasteboard's changeCount moves 1 s after its first read; the render takes 3 s+.
+    const l = await launch({ STC_FAKE_PASTEBOARD: "[]", STC_FAKE_PASTEBOARD_CHANGE_AFTER_MS: "1000" });
+    const dir = await recordAndStop(l);
+    const panel = await readyPanel();
+    await panel.click("#copy");
+    await expect.poll(() => panel.textContent("#status"), { timeout: 15_000 })
+      .toBe("Ready, press Copy to put it on the clipboard");
+    expect(copyRequests(l.copyLog), "the newer clipboard must not be overwritten").toEqual([]);
+    const out = join(l.copies, `${dir.split("/").pop()}.mp4`);
+    expect(existsSync(out), "the finished file is kept").toBe(true);
+    await expect.poll(() => panel.isEnabled("#copy"), { timeout: 15_000 }).toBe(true);
+    expect(await panel.isEnabled("#save")).toBe(true);
+    expect(await panel.isVisible("#copyprogress")).toBe(false);
+
+    await panel.click("#copy");
+    await expect.poll(() => copyRequests(l.copyLog).length, { timeout: 15_000 }).toBe(1);
+    expect(copyRequests(l.copyLog)[0]!.path).toBe(out);
+    expect(await windowCount(app!, "copy-render.html"), "the second press renders nothing").toBe(0);
+  }, 300_000);
+
+  test("quitting during a render leaves no partial", async () => {
+    const l = await launch();
+    await recordAndStop(l);
+    const panel = await readyPanel();
+    await panel.click("#copy");
+    await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: 15_000 }).toBe(1);
+    const a = app; app = undefined;
+    // closeApp throws if the app does not close inside APP_CLOSE_MS.
+    await closeApp(a);
+    expect(readdirSync(l.copies)).toEqual([]);
+    expect(copyRequests(l.copyLog)).toEqual([]);
+  }, 300_000);
+
+  test("a render that fails reports it and cleans up", async () => {
+    const l = await launch();
+    const dir = await recordAndStop(l);
+    const panel = await readyPanel();
+    // An index-less display.mp4: the demuxer cannot read it, so the render fails.
+    truncateSync(join(dir, "display.mp4"), 1_000);
+    await panel.click("#copy");
+    await expect.poll(() => panel.textContent("#status"), { timeout: 120_000 }).toMatch(/^Could not copy/);
+    await expect.poll(() => panel.isEnabled("#copy"), { timeout: 15_000 }).toBe(true);
+    expect(await panel.isEnabled("#save")).toBe(true);
+    expect(await panel.isEnabled("#edit")).toBe(true);
+    expect(readdirSync(l.copies)).toEqual([]);
+    expect(copyRequests(l.copyLog)).toEqual([]);
   }, 300_000);
 });

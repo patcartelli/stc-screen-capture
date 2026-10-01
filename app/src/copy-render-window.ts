@@ -131,6 +131,9 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   jobs.set(opts.takeDir, job);
   bySender.set(senderId, job);
   opts.grant(senderId, opts.takeDir);
+  // Destroyed by anything but settle (settle's own destroy lands here too, and
+  // is a no-op: a job settles once).
+  win.on("closed", () => job.settle({ ok: false, detail: "the render window closed" }));
   win.webContents.on("render-process-gone", (_e, d) =>
     job.settle({ ok: false, detail: `the render stopped (${d.reason})` }));
   // A preload that throws fires no did-fail-load, and copy-render.ts's
@@ -155,9 +158,6 @@ export async function cancelCopyRender(takeDir: string): Promise<void> {
 }
 
 export function copyRenderInFlight(takeDir: string): boolean { return jobs.get(takeDir)?.state === "live"; }
-export function copyRenderWindowCount(): number {
-  return [...jobs.values()].filter((j) => j.state === "live").length;
-}
 export async function cancelAllCopyRenders(): Promise<void> {
   await Promise.all([...jobs.keys()].map(cancelCopyRender));
 }
