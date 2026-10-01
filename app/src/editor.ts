@@ -65,7 +65,8 @@ import {
 import {
   meterStep, meterFill, clipLit, snapToUnity, METER_IDLE, type MeterState,
 } from "@transform/audio-meter";
-import { decodeAllAudio, pcmTrackOf } from "@transform/decode-audio";
+import { decodeAllAudio, decodeMicForMix, pcmTrackOf } from "@transform/decode-audio";
+import type { DemuxedAudio } from "@transform/demux-audio";
 import { PreviewAudio } from "@transform/preview-audio";
 import { mixPeaks } from "@transform/waveform";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
@@ -1427,6 +1428,19 @@ let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?:
     camera: openVideoSources?.camera?.bytesRead ?? 0,
   });
 
+// STC-469: what the preview is holding, for the e2e suite. Read-only.
+(window as unknown as { __stcPreviewAudio: () => unknown }).__stcPreviewAudio = () => {
+  const playing = previewAudio?.micTrack ?? null;
+  return {
+    micAudio: micSource,
+    rawMicHeld: rawMic !== null,
+    cleanedFor,
+    playing: playing === null ? null : playing === cleanedMic ? "cleaned" : playing === rawMic ? "raw" : null,
+    cleaning: ($("previewaudio") as HTMLButtonElement).dataset.cleaning === "true",
+    micLength: playing?.channels[0]?.length ?? null,
+  };
+};
+
 async function openTakeOrThrow(dir: string): Promise<void> {
   await closeTake();
   await editor.openPreview(dir);
@@ -1509,6 +1523,7 @@ async function closeTake(): Promise<void> {
   previewAudio?.close();
   previewAudio = null;
   rawMic = null;
+  micSource = null;
   cleanedMic = null;
   cleanedFor = null;
   cleanWanted = null;
@@ -1914,6 +1929,8 @@ let previewAudio: PreviewAudio | null = null;
 let previewMuted = false;
 let audioGen = 0;
 let rawMic: PcmTrack | null = null;
+/** The take's COMPRESSED mic — what the cleanup worker and a raw re-decode start from (STC-469). Null when there is no playable mic. */
+let micSource: DemuxedAudio | null = null;
 let cleanedMic: PcmTrack | null = null;
 let cleanedFor: number | null = null;
 let cleanWanted: number | null = null;
@@ -1953,11 +1970,12 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
   setPreviewAudioState("loading");
   try {
     const [mic, system] = await Promise.all([
-      session.micAudio ? decodeAllAudio(session.micAudio).then((d) => pcmTrackOf(d, "mic.m4a")) : null,
+      session.micAudio ? decodeMicForMix(session.micAudio, null) : null,
       session.systemAudio ? decodeAllAudio(session.systemAudio).then((d) => pcmTrackOf(d, "system.m4a")) : null,
     ]);
     if (gen !== audioGen || !player) return;
     rawMic = mic;
+    micSource = mic ? session.micAudio! : null;
     // A muted track plays at 0 (STC-454 part 3): the sound keeps being
     // scheduled, so the clock the picture follows never changes under a mute.
     previewAudio = new PreviewAudio({ mic, system }, previewLevels);
@@ -1996,7 +2014,7 @@ function useMic(track: PcmTrack | null): void {
 
 /** Point the preview at the mic the export would use: raw, or cleaned at the project's strength. */
 function refreshCleanMic(): void {
-  if (!previewAudio || !rawMic) return;
+  if (!previewAudio || !micSource) return;
   const cleanup = openProject?.narrationCleanup;
   const { cleanMic } = exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup });
   if (!cleanMic) {
@@ -2015,15 +2033,12 @@ function refreshCleanMic(): void {
 }
 
 function pumpClean(): void {
-  if (cleanBusy || cleanWanted === null || !rawMic) return;
+  if (cleanBusy || cleanWanted === null || !micSource) return;
   const strength = cleanWanted;
   const id = ++cleanSeq;
   const gen = audioGen;
   cleanBusy = true;
   setCleaning(true);
-  // A COPY goes to the worker (and is transferred): the raw mic stays here,
-  // playable, for "off" and for the next strength.
-  const track: PcmTrack = { startNs: rawMic.startNs, sampleRate: rawMic.sampleRate, channels: rawMic.channels.map((c) => c.slice()) };
   const worker = cleanWorker ??= new Worker("../dist/narration-worker.js");
   worker.onmessage = (e: MessageEvent<{ id: number; track?: PcmTrack; error?: string }>) => {
     if (e.data.id !== id) return;
@@ -2045,7 +2060,9 @@ function pumpClean(): void {
     if (cleanWanted !== null) pumpClean();
     else setCleaning(false);
   };
-  worker.postMessage({ id, strength, track }, track.channels.map((c) => c.buffer as ArrayBuffer));
+  // The COMPRESSED mic, cloned (STC-469): the worker decodes it itself, so
+  // nothing here has to keep a raw decoded copy alive just to send one.
+  worker.postMessage({ id, strength, audio: micSource });
 }
 
 $("previewaudio").addEventListener("click", () => {
