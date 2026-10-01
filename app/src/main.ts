@@ -2794,7 +2794,8 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
   if (typeof dir !== "string" || !insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
     return { ok: false, detail: "not a recording on a panel" };
   }
-  if (!sup) return { ok: false, detail: "the helper is not running" };
+  const helper = sup;   // captured: the render below is long and `sup` can go away under it
+  if (!helper) return { ok: false, detail: "the helper is not running" };
   const out = copyPathFor(process.env, dir);
   if (!existsSync(out)) {
     const panel = e.sender;
@@ -2811,7 +2812,7 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
   }
   try {
     // HelperClient.request REJECTS with a HelperError on an error reply.
-    await sup.copyFile(out);
+    await helper.copyFile(out);
   } catch (err: any) {
     return { ok: false, detail: String(err?.detail ?? err?.code ?? err?.message ?? err) };
   }

@@ -376,11 +376,13 @@ async function awaitComposite(): Promise<boolean> {
  * `busy`, so Trash and dismiss stay live for its whole length.
  */
 async function copyRecording(): Promise<boolean> {
-  if (copying) return false;
+  // `busy` is checked HERE, not only by the buttons: ⌘C reaches perform() by key
+  // while a Save/Edit/Trash is deciding, and must not render a take mid-promote.
+  if (copying || busy) return false;
   copying = true;
   copyProgress.value = 0;
   copyProgress.hidden = false;
-  setActionsEnabled(true);           // applies the copying locks
+  setActionsEnabled(!busy);          // applies the copying locks
   setStatus("Rendering… 0%");
   try {
     const r = await window.thumb.copyRecording(dir);
@@ -391,7 +393,7 @@ async function copyRecording(): Promise<boolean> {
   } finally {
     copying = false;
     copyProgress.hidden = true;
-    setActionsEnabled(true);
+    setActionsEnabled(!busy);
   }
 }
 
