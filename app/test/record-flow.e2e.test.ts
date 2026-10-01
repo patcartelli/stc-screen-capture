@@ -8,7 +8,7 @@ import { withCountdown, withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { HIDE_SETTLE_MS } from "../src/overlay-session.js";
 import { toastPage } from "./_toast.js";
-import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { hasWindow, pageWithUrl } from "./_windows.js";
 
 /**
@@ -48,6 +48,10 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
            STC_HELPER_BIN: FAKE_HELPER, STC_FAKE_START_LOG: startLog,
            STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
+  // A stopped take leaves a fresh panel now (STC-487), so a quit raises the
+  // "unsaved takes" warning (STC-392 D8). Unstubbed it is a real modal and
+  // app.close() waits on it until closeApp gives up.
+  await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#record");
   return { win, startLog, tempTakes, ud };

@@ -140,20 +140,21 @@ describe("HelperSupervisor — the helper can stop itself", () => {
 });
 
 /**
- * A clean stop promotes the take out of temp storage (STC-393), whichever of
- * `stopRecording` or the self-initiated `endRecording` path got there — the
- * whole point of putting the promote inside the supervisor rather than at
- * each call site in `main.ts`.
+ * A clean stop does NOT promote (STC-487, superseding STC-393's "a clean stop
+ * IS the save"): the take stays in temp storage until someone decides on it at
+ * the panel. Both stop paths — `stopRecording` and the self-initiated
+ * `endRecording` — report it through ONE event, `take-ended`, and the
+ * supervisor owns no promotion and no save folder at all.
  *
- * `promoteTake` reads `process.env` directly (matching every other Electron-
- * free module in this app — `takes.ts`, `temp-takes.ts`), so these mutate it
- * for the duration of the test rather than injecting it.
+ * The temp and library roots are read from `process.env` by the modules that
+ * own them (`takes.ts`, `temp-takes.ts`), so these mutate it for the duration
+ * of the test rather than injecting it.
  */
-describe("HelperSupervisor — promotes a clean stop out of temp storage (STC-393)", () => {
+describe("HelperSupervisor — a clean stop leaves the take in temp storage (STC-487)", () => {
   let base: string, tempRoot: string, libRoot: string, prevTemp: string | undefined, prevLib: string | undefined;
 
   function setEnv() {
-    base = mkdtempSync(join(tmpdir(), "stc-sup-promote-"));
+    base = mkdtempSync(join(tmpdir(), "stc-sup-takeended-"));
     tempRoot = join(base, "temp");
     libRoot = join(base, "lib");
     mkdirSync(tempRoot, { recursive: true });
@@ -168,7 +169,7 @@ describe("HelperSupervisor — promotes a clean stop out of temp storage (STC-39
     rmSync(base, { recursive: true, force: true });
   }
 
-  test("stopRecording() moves the take from temp into raw/ (STC-413)", async () => {
+  test("stopRecording() leaves the take in temp, the library empty, and emits take-ended", async () => {
     setEnv();
     try {
       const s = sup({}, FAKE_BIN);
@@ -177,16 +178,24 @@ describe("HelperSupervisor — promotes a clean stop out of temp storage (STC-39
       const dir = join(tempRoot, "2026-09-16_10-00-00");
       // Unlike the real helper, the stand-in does not create `dir` on start
       // (its "start" handling has nothing that captures) — matched here so
-      // the promote at stop has something real to move.
+      // there is something real that a promote WOULD have moved.
       mkdirSync(dir, { recursive: true });
+      const ended: any[] = [];
+      s.on("take-ended", (i) => ended.push(i));
+      let recordingEnded = false;
+      s.on("recording-ended", () => { recordingEnded = true; });
       await s.startRecording(dir);
       await s.stopRecording();
-      expect(existsSync(dir)).toBe(false);
-      expect(existsSync(join(libRoot, RAW_SUBDIR, "2026-09-16_10-00-00"))).toBe(true);
+      expect(existsSync(dir)).toBe(true);
+      expect(existsSync(join(libRoot, RAW_SUBDIR, "2026-09-16_10-00-00"))).toBe(false);
+      expect(ended).toEqual([{ dir, reason: "stopped" }]);
+      // A Stop somebody asked for is not "the helper stopped on its own".
+      expect(recordingEnded).toBe(false);
+      expect(s.state).toBe("idle");
     } finally { restoreEnv(); }
   }, 20_000);
 
-  test("the helper stopping itself (recording-ended) promotes too, and reports the NEW dir", async () => {
+  test("the helper stopping itself emits BOTH take-ended and recording-ended, with the TEMP dir", async () => {
     setEnv();
     try {
       const s = sup();
@@ -196,26 +205,28 @@ describe("HelperSupervisor — promotes a clean stop out of temp storage (STC-39
       mkdirSync(dir, { recursive: true });
       s.markRecordingForTest(dir);
 
-      const notified = new Promise<any>((res) => s.on("recording-ended", res));
-      const info = await notified;
-      expect(info.dir).toBe(join(libRoot, RAW_SUBDIR, "2026-09-16_11-00-00"));
-      expect(existsSync(dir)).toBe(false);
-      expect(existsSync(info.dir)).toBe(true);
+      const order: string[] = [];
+      const takeEnded = new Promise<any>((res) => s.on("take-ended", (i) => { order.push("take-ended"); res(i); }));
+      const recordingEnded = new Promise<any>((res) => s.on("recording-ended", (i) => { order.push("recording-ended"); res(i); }));
+      const [t, r] = await Promise.all([takeEnded, recordingEnded]);
+      expect(t.dir).toBe(dir);
+      expect(r.dir).toBe(dir);
+      expect(t.reason).toBe(r.reason);
+      // The panel's event first, so the alert never describes a take with no panel yet.
+      expect(order).toEqual(["take-ended", "recording-ended"]);
+      expect(existsSync(dir)).toBe(true);
+      expect(existsSync(join(libRoot, RAW_SUBDIR, "2026-09-16_11-00-00"))).toBe(false);
     } finally { restoreEnv(); }
   }, 20_000);
 
-  test("a dir outside the temp root (a bare test tmpdir) is left exactly where it was", async () => {
-    // The existing "start failure is reported" test above relies on this:
-    // `session()` makes a directory under the OS tmpdir, nowhere near
-    // whatever STC_TEMP_TAKES_DIR happens to be, and stopRecording() must not
-    // try to move it anywhere.
-    const dir = session();
-    const s = sup();
+  test("a stop with no recording directory emits no take-ended (nothing to decide on)", async () => {
+    const s = sup({}, FAKE_BIN);
     live.push(s);
     await s.ready();
-    const started = await s.startRecording(dir).catch((e) => e);
-    if (started instanceof Error) return;   // no grant here — nothing to assert
-    await s.stopRecording();
-    expect(existsSync(dir)).toBe(true);
+    const ended: any[] = [];
+    s.on("take-ended", (i) => ended.push(i));
+    s.markRecordingForTest(undefined as unknown as string);
+    await s.stopRecording().catch(() => {});
+    expect(ended).toEqual([]);
   }, 20_000);
 });

@@ -248,21 +248,19 @@ describe("crash recovery (STC-393)", () => {
     expect(existsSync(join(s.tempTakes, name))).toBe(true);
   }, 60_000);
 
-  test("Review promotes a recovered recording straight to the library", async () => {
+  test("Review puts a recovered recording up as a panel, and promotes nothing (STC-487)", async () => {
     const s = seed();
     const name = recentStamp(60 * 60 * 1000);
     makeTakeFolder(name, { into: s.tempTakes });
-    const { win, calls } = await launch(s, 0);   // 0 = "Review"
+    const { calls } = await launch(s, 0);   // 0 = "Review"
     await expect.poll(() => calls(), { timeout: 15_000 }).toBe(1);
-    // Promoted into `raw/` now (STC-413), not directly under the recordings
-    // root — a top-level listing would show `raw` itself, not the take's own
-    // stamped name.
-    await expect.poll(() => readdirSync(join(s.recordings, RAW_SUBDIR)), { timeout: 15_000 })
-      .toEqual([name]);
-    expect(existsSync(join(s.tempTakes, name))).toBe(false);
-    // The main window came to the front rather than being left showing
-    // whatever it opened with — the closest this app has to "reveal it".
-    await expect.poll(() => win.textContent("#takes"), { timeout: 15_000 }).toContain(name.slice(0, 10));
+    // A recording gets the same panel a still does — nobody has said yes to a
+    // recovered take. It used to be saved outright for want of a panel.
+    await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: 15_000 }).toBe(1);
+    // Still in temp storage, marked as offered, and nothing in the library.
+    expect(existsSync(join(s.tempTakes, name))).toBe(true);
+    expect(existsSync(join(s.tempTakes, name, RECOVERY_OFFERED_FILE))).toBe(true);
+    expect(existsSync(join(s.recordings, RAW_SUBDIR, name))).toBe(false);
   }, 60_000);
 
   test("most recent first: the newest recovered still ends up frontmost in the stack", async () => {

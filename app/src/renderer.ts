@@ -92,6 +92,8 @@ declare const recorder: {
   chooseShareDestination(): Promise<{ destination: string | null }>;
   /** The resolved save location — never null, never a phrase (STC-412 I1). */
   resolvedSaveFolder(): Promise<string>;
+  /** STC-435: find unused `raw/` bundles, ask, trash. Main shows every result itself. */
+  reclaimSpace(): Promise<{ moved: number; failed: number }>;
   start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
@@ -619,10 +621,12 @@ recorder.on("helper:recording-ended", (i) => {
   // died. The file is valid; what would be wrong is leaving the button saying
   // "Stop" (or, before Finding 2's fix, the pickers still locked).
   applyRecordingState(false);
-  refreshTakes();
   const why = ENDED_BY_HELPER[String(i.reason)] ?? `Recording stopped by the recorder (${i.reason}).`;
-  alertUser(`${why}\nWhat was captured up to that point was saved.`);
-  if (i.dir) recorder.reveal(i.dir);
+  // Not "saved", and no grid refresh or Finder reveal (STC-487): a stop no
+  // longer promotes, so `i.dir` is a temp path and the library has nothing new.
+  // Main puts up the take's panel from its own `take-ended`; this is only the
+  // WHY, and where to find it.
+  alertUser(`${why}\nWhat was captured up to that point is waiting in the panel at the corner of the screen. Save it to keep it.`);
 });
 
 recorder.on("helper:recording-lost", (i) => {
@@ -988,6 +992,14 @@ $("stillchoosedest").addEventListener("click", async () => {
   // of the default `refreshDestination` exists to avoid.
   await recorder.chooseStillDestination();
   await refreshDestination();
+});
+$("reclaimspace").addEventListener("click", async () => {
+  // Disabled for the round trip: the sheet main puts up is modal, but the
+  // find before it is not, and a second press there would be swallowed by
+  // main's own guard with no feedback at all.
+  const btn = $("reclaimspace") as HTMLButtonElement;
+  btn.disabled = true;
+  try { await recorder.reclaimSpace(); } finally { btn.disabled = false; }
 });
 $("sitechoosedest").addEventListener("click", async () => {
   // Same reason `stillchoosedest` above re-fetches rather than trusting the

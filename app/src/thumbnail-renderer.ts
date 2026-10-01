@@ -1,4 +1,5 @@
 import { parseShot, type Shot } from "@transform/shot";
+import { fmtDuration } from "./library-items.js";
 import { layoutStill, pxPerPointOf } from "@transform/still-decorate";
 import { withTimeout } from "@transform/timeout";
 import {
@@ -123,21 +124,36 @@ function parseTake(v: string | null): PanelTake {
 }
 const take: PanelTake = parseTake(params.get("take"));
 // A recording has no picture in v1 (D2) — `#takecard` stands in for the
-// canvas (`thumbnail.html`'s own markup comment). Nothing presents one of
-// these today (`main.ts` only ever sends `kind: "shot"`), so this is the
-// whole of that wiring: no recording-specific frame fetch exists to guard.
+// canvas (`thumbnail.html`'s own markup comment). The card shows what IS
+// known: how long it ran and what it was pointed at (STC-487). A missing
+// `recording` block is a bug in the caller, not a reason to show nothing: the
+// panel still needs Save and Trash, so the meta line is what degrades, never
+// the buttons.
 if (take.kind === "recording") {
   ($("takecard") as HTMLElement).hidden = false;
   ($("thumbwrap") as HTMLElement).hidden = true;
+  const rec = JSON.parse(params.get("recording") ?? "null") as
+    { durationMs: number; scope: string } | null;
+  ($("takemeta") as HTMLElement).textContent =
+    rec ? `${fmtDuration(rec.durationMs)} · ${rec.scope}` : "";
 }
-const shot: Shot = parseShot(JSON.parse(params.get("shot") ?? "null"));
+/**
+ * The shot, or `null` for a recording (STC-487). Parsed only for a shot:
+ * `parseShot` refuses rather than defaults, so calling it for a recording
+ * would throw before the panel painted. Every shot-only path below reads it
+ * through `if (!shot) return …` at its own entry — a guard at the entry can be
+ * grepped, where a listener that was never attached cannot.
+ */
+const stillShot: Shot | null =
+  take.kind === "shot" ? parseShot(JSON.parse(params.get("shot") ?? "null")) : null;
 /**
  * The "skip the panel" preference (STC-296): this window is never shown at
  * all, so it composites and copies itself the instant it can rather than
  * waiting on a "painted" round trip through main first — there is nothing to
  * animate into, so nothing to wait for.
  */
-const silent = params.get("silent") === "1";
+// Never for a recording: it has no Copy to run (STC-487 §3.2).
+const silent = take.kind === "shot" && params.get("silent") === "1";
 /** Which way this panel leaves the screen — see `discardDirection`. */
 const corner = parseCorner(params.get("corner"));
 
@@ -177,7 +193,8 @@ let cropRect: { x: number; y: number; width: number; height: number } | undefine
 function setStatus(text: string): void { statusEl.textContent = text; }
 
 async function draw(): Promise<void> {
-  if (!frame) return;
+  const shot = stillShot;
+  if (!shot || !frame) return;
   // `shot` directly, not a recomposed copy: the panel no longer creates
   // redactions or changes the mode (STC-300 moved both to the still editor),
   // so there is nothing left here that could diverge from the stored
@@ -243,7 +260,8 @@ function paintView(): void {
 type ExportAction = "copy" | "save" | "save-as";
 
 async function runExport(action: ExportAction): Promise<boolean> {
-  if (!composite) return false;
+  const shot = stillShot;
+  if (!shot || !composite) return false;
   const settings = (await window.thumb.getSettings()).still;
   let options: ExportOptions = { ...settings };
   const layout = layoutStill(shot);
@@ -367,6 +385,9 @@ async function perform(action: PanelAction): Promise<boolean> {
 
 async function run(action: PanelAction): Promise<boolean> {
   if (action === "copy") {
+    // A recording has no Copy until STC-395 — `actionsFor` does not offer it,
+    // and this is the entry a stray shortcut or menu id would still reach.
+    if (take.kind !== "shot") return false;
     setStatus("Copying…");
     if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
     return runExport("copy");
@@ -389,8 +410,12 @@ async function run(action: PanelAction): Promise<boolean> {
     // it is then only the dismiss half, and is a no-op on the promote:
     // `promoteTake` returns its argument unchanged for a directory already
     // out of temp storage.
-    if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
-    if (!(await runExport("save"))) return false;
+    // A recording has no file to write on this surface: Save is only the
+    // promote (`panel:save`), and the export is the editor's job.
+    if (take.kind === "shot") {
+      if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
+      if (!(await runExport("save"))) return false;
+    }
     const r = await window.thumb.save(dir);
     if (!r.ok) { setStatus(`Could not save: ${r.detail ?? "unknown error"}`); return false; }
     // The take has moved out of temp storage — every later call in this window
@@ -589,7 +614,8 @@ let dragGeneration = 0;
  * somebody's address still legible in it.
  */
 async function refreshDragFile(): Promise<void> {
-  if (!composite) return;
+  const shot = stillShot;
+  if (!shot || !composite) return;
   const mine = ++dragGeneration;
   dragFile = undefined;
   const layout = layoutStill(shot);
@@ -609,6 +635,8 @@ async function refreshDragFile(): Promise<void> {
 }
 
 card.addEventListener("pointerdown", (e) => {
+  // Drag-out hands over the decorated picture; a recording has none (STC-487).
+  if (take.kind !== "shot") return;
   // Only when nothing is already deciding an outcome for this take — the same
   // guard `perform` itself uses, so a swipe cannot start mid-Save any more
   // than a second click could.
@@ -753,8 +781,35 @@ document.addEventListener("contextmenu", (e) => {
   })();
 });
 
+/**
+ * Arm the settle window and tell main the panel is on screen-ready. ONE
+ * function, called by both paths below, so the 300 ms input guard
+ * (`SETTLE_KEYS_MS`) cannot be lost for a recording (STC-487).
+ */
+function paintCard(): void {
+  requestAnimationFrame(() => {
+    keysLiveAt = performance.now() + SETTLE_KEYS_MS;
+    // Published on the card, in this page's own `performance.now()` clock, so
+    // a test that reaches this panel AFTER it painted can tell whether it is
+    // still inside the settle window rather than assuming (STC-427: on a
+    // loaded CI runner the assumption was wrong, the press was honoured, and
+    // "ignores a key inside the window" read as a product failure).
+    card.dataset.keysLiveAt = String(keysLiveAt);
+    card.classList.add("in");
+    window.thumb.event({ kind: "painted" });
+  });
+}
+
 void (async () => {
-  const bytes = await window.thumb.getFrame(dir, shot.frame.file);
+  // A recording has no frame to fetch and nothing to composite: it paints the
+  // moment the card is filled in (STC-487). Without this branch `painted`
+  // would never fire and the panel would never be shown.
+  if (!stillShot) {
+    markReady();
+    paintCard();
+    return;
+  }
+  const bytes = await window.thumb.getFrame(dir, stillShot.frame.file);
   frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   await draw();
   markReady();
@@ -781,17 +836,7 @@ void (async () => {
   // Painted — safe to show without a flash of empty content, and the moment
   // this panel starts accepting keys (after `SETTLE_KEYS_MS` — see the block
   // comment above the keydown listener).
-  requestAnimationFrame(() => {
-    keysLiveAt = performance.now() + SETTLE_KEYS_MS;
-    // Published on the card, in this page's own `performance.now()` clock, so
-    // a test that reaches this panel AFTER it painted can tell whether it is
-    // still inside the settle window rather than assuming (STC-427: on a
-    // loaded CI runner the assumption was wrong, the press was honoured, and
-    // "ignores a key inside the window" read as a product failure).
-    card.dataset.keysLiveAt = String(keysLiveAt);
-    card.classList.add("in");
-    window.thumb.event({ kind: "painted" });
-  });
+  paintCard();
   // Only NOW, and deliberately not awaited: the panel is on screen and idle
   // until a person acts, so the drag file that a drag-out would otherwise
   // have to wait for happens in time nobody is using. Nothing downstream
