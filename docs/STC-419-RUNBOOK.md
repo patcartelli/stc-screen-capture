@@ -7,7 +7,7 @@ Plan: `docs/superpowers/plans/2026-10-01-stc-419-keycast.md`.
 
 ## What this ticket does, and the one rule
 
-Commands only: arrows, Return/Enter, Tab, Escape, Delete, Home/End, Page Up/Down, F1-F12, and chords with ⌘ or ⌃ on a printable ASCII key. **Typing never reaches disk.** The rule is `decideKeyEvent` in `helper/src/KeyDecisions.swift`; the schema enforces it again (`schema/events-3.schema.json`, an if/then) and so does the loader (`checkKeyEvent` in `transform/src/keycast.ts`). Dropped keys are only counted (`keysRecorded`/`keysDropped` stats). The keyboard layout snapshot is taken in `start()` in `helper/src/main.swift`, on the main thread (TIS must run there), and passed down. Keys are split into `Session.keys` by the loader and never enter `session.events`. The keycast is drawn last by `composite()` on the output canvas with a system font stack (`TRANSFORM_VERSION` 12). project-13 `keycast.show` is written only when false.
+Commands only: arrows, Return/Enter, Tab, Escape, Delete, Home/End, Page Up/Down, F1-F12, and chords with ⌘ or ⌃ on a printable ASCII key. **Typing never reaches disk.** The rule is `decideKeyEvent` in `helper/src/KeyDecisions.swift`; the schema enforces it again (`schema/events-3.schema.json`, an if/then) and so does the loader (`checkKeyEvent` in `transform/src/keycast.ts`). Dropped keys are only counted (`keysRecorded`/`keysDropped`, in the `stop` reply only, never the periodic stats, which would expose typing rhythm). The keyboard layout snapshot is taken in `start()` in `helper/src/main.swift`, on the main thread (TIS must run there), and passed down. It is the ASCII-capable layout (`TISCopyCurrentASCIICapableKeyboardLayoutInputSource`): the current layout when that is ASCII-capable, otherwise the one macOS resolves shortcuts against. Keys are split into `Session.keys` by the loader and never enter `session.events`. The keycast is drawn last by `composite()` on the output canvas with a system font stack (`TRANSFORM_VERSION` 12). project-13 `keycast.show` is written only when false.
 
 What has been verified on this Mac: unit suites, `npm run typecheck`, and `gate:identity` on `fixtures/keycast` and `fixtures/basic` (0 mismatches). **Not run here:** `helper/test/keys.grant.test.ts` (needs grants, SKIP-GRANT) and the new e2e files (`app/test/keys-toggle.e2e.test.ts`, `app/test/keycast-editor.e2e.test.ts`, two new cases in `app/test/preview-write-project.e2e.test.ts`). `STC_KEY_INJECT` (tests) builds real CGEvents and feeds `handleTapEvent`, so it proves everything except the tap actually delivering keyDown, which is §1-§2.
 
@@ -25,7 +25,7 @@ Turn Keys on in the Record bar and record a take. Expect **no new TCC prompt**. 
 
 ## 2. The real tap
 
-In a real treegrid (or Finder's list view) press ↓ ↓ ↓ → Return, ⌘K, then type a word into a text field, then Space, then hold ↓ for 2 s. Stop and open the take's `events.json`. Expect version 3 with ↓ x3, →, Return, `K` with `["cmd"]`, and one ↓ for the hold (auto-repeat dropped). The typed word and the Space must be **absent**.
+In a real treegrid (or Finder's list view) press ↓ ↓ ↓ → Return, ⌘K, then type a word into a text field, then Space, then hold ↓ for 2 s. Stop and open the take's `events.json`. Expect version 3 with ↓ ×3, →, Return, `K` with `["cmd"]`, and one ↓ for the hold (auto-repeat dropped). The typed word and the Space must be **absent**.
 
 Also run:
 
@@ -33,11 +33,15 @@ Also run:
 npm run test:capture -- helper/test/keys.grant.test.ts
 ```
 
-Its "K" assertion assumes a US/ABC layout. If one is available, repeat the ⌘-chord on a non-Latin layout (Russian, Greek) and check what happens (see §5).
+Its "K" assertion assumes a US/ABC layout.
+
+**Non-Latin layout.** Switch to a Russian (or any non-Latin) input source, record with Keys on, press ⌘K, stop. Expect `{"key":"K","mods":["cmd"]}` in `events.json`: the chord is labelled from the ASCII-capable layout macOS uses for shortcuts, not dropped.
+
+**Keys OFF (the mask).** Turn Keys off in the Record bar, record, press ⌘K and the arrows, stop. Expect `events.json` **version 2** with **no** `"kind":"key"` events. Injection cannot prove this one: it feeds `handleTapEvent` directly and never touches the tap's event mask.
 
 ## 3. Legibility at column width
 
-Export at the case-study column width (2464 px wide, STC-313's number) and view it at 1232 CSS px. Is the pill readable? Does `↓ x3` read as a count? Does the 1.2 s hold feel right, or should it be shorter? Report the numbers to change: the dials are `KEYCAST_HOLD_TICKS` and `KEYCAST_FONT_FRACTION` in `transform/src/keycast.ts`. Also check the editor's Keys switch (`#keycastbtn`) hides the pill without removing the recorded keys, and that the Record bar's Keys control is sticky and starts off.
+Export at the case-study column width (2464 px wide, STC-313's number) and view it at 1232 CSS px. Is the pill readable? Does `↓ ×3` read as a count? Does the 1.2 s hold feel right, or should it be shorter? Report the numbers to change: the dials are `KEYCAST_HOLD_TICKS` and `KEYCAST_FONT_FRACTION` in `transform/src/keycast.ts`. Also check the editor's Keys switch (`#keycastbtn`) hides the pill without removing the recorded keys, and that the Record bar's Keys control is sticky and starts off.
 
 ## 4. Gates
 
@@ -50,4 +54,4 @@ npm run gate:identity -- fixtures/basic
 
 - A keyboard layout switched mid-take is not seen; the snapshot is taken at start.
 - Space, lone modifiers and ⌥+letter never show (they are typing, or carry no command).
-- A non-Latin layout (Russian, Greek) may currently drop ⌘-chords; a follow-up fix is on this branch. Check §2 on one if you have it.
+- On a non-Latin layout (Russian, Greek), chords are labelled from the ASCII-capable layout macOS uses for shortcuts, so ⌘K reads ⌘K. §2 checks it.
