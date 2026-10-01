@@ -29,6 +29,8 @@ import {
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
+import { startCopyRender } from "./copy-render-window.js";
+import { copyPathFor } from "./recording-copy.js";
 import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
@@ -2674,6 +2676,7 @@ ipcMain.handle("thumbnail:menu", async (e, ctx: ThumbMenuContext) => {
       // ever calls.
       take: ctx?.take ?? { kind: "shot", origin: "fresh" },
       busy: ctx?.busy === true,
+      copying: ctx?.copying === true,
     }).map((item) => item.type === "separator"
       ? { type: "separator" as const }
       : { label: item.label, enabled: item.enabled !== false, click: () => answer(item.id) }));
@@ -2781,6 +2784,40 @@ ipcMain.handle("still:revealShot", async (_e, dir: string) => {
  * Every one validates the directory against the capture roots before it acts.
  * The renderer names a take; it never hands main a path to act on.
  */
+/**
+ * A recording's Copy (STC-488): render the take to `copiesRoot`, then put the
+ * file on the pasteboard. A finished copy that still exists is reused, so a
+ * second Copy is instant. Only a recording comes here; a shot's Copy is still
+ * `still:export`.
+ */
+ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
+  if (typeof dir !== "string" || !insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
+    return { ok: false, detail: "not a recording on a panel" };
+  }
+  if (!sup) return { ok: false, detail: "the helper is not running" };
+  const out = copyPathFor(process.env, dir);
+  if (!existsSync(out)) {
+    const panel = e.sender;
+    const r = await startCopyRender({
+      takeDir: dir, outPath: out, dist: here, rendererDir: join(here, "..", "renderer"),
+      delayMs: Number(process.env.STC_COPY_RENDER_DELAY_MS) || undefined,
+      grant: (id, d) => openTakes.set(id, d),
+      revoke: (id) => openTakes.delete(id),
+      onProgress: (done, total) => {
+        if (!panel.isDestroyed()) panel.send("thumb:copyProgress", done, total);
+      },
+    });
+    if (!r.ok) return r.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: r.detail };
+  }
+  try {
+    // HelperClient.request REJECTS with a HelperError on an error reply.
+    await sup.copyFile(out);
+  } catch (err: any) {
+    return { ok: false, detail: String(err?.detail ?? err?.code ?? err?.message ?? err) };
+  }
+  return { ok: true };
+});
+
 ipcMain.handle("panel:save", async (_e, dir: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {

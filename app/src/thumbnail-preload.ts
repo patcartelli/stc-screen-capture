@@ -17,10 +17,17 @@ contextBridge.exposeInMainWorld("thumb", {
   getSettings: () => ipcRenderer.invoke("recorder:getSettings"),
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   reveal: () => ipcRenderer.invoke("still:reveal"),
+  // STC-488: a recording's Copy renders, then goes on the pasteboard.
+  copyRecording: (dir: string) => ipcRenderer.invoke("panel:copyRecording", dir),
+  onCopyProgress: (cb: (done: number, total: number) => void) => {
+    const listener = (_e: unknown, done: number, total: number) => cb(done, total);
+    ipcRenderer.on("thumb:copyProgress", listener);
+    return () => { ipcRenderer.removeListener("thumb:copyProgress", listener); };
+  },
   // The right-click menu (STC-296 follow-up). Main builds and pops it up and
   // answers with the chosen id, so this window never holds a `Menu` and the
   // template stays checkable in one place.
-  menu: (ctx: { take: PanelTake; busy: boolean }) =>
+  menu: (ctx: { take: PanelTake; busy: boolean; copying?: boolean }) =>
     ipcRenderer.invoke("thumbnail:menu", ctx),
   // A DIRECTORY, which main validates against the recordings root before it
   // touches anything — the renderer names a take, never a path to act on.

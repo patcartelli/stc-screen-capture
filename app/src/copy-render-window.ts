@@ -133,6 +133,10 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   opts.grant(senderId, opts.takeDir);
   win.webContents.on("render-process-gone", (_e, d) =>
     job.settle({ ok: false, detail: `the render stopped (${d.reason})` }));
+  // A preload that throws fires no did-fail-load, and copy-render.ts's
+  // missing-bridge guard returns silently: without this the job never settles.
+  win.webContents.on("preload-error", (_e, path, err) =>
+    job.settle({ ok: false, detail: `the render's preload failed (${path}): ${String((err as Error)?.message ?? err)}` }));
   win.webContents.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
     if (isMainFrame) job.settle({ ok: false, detail: `the render page failed to load (${code} ${desc})` });
   });
