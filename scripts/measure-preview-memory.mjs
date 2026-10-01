@@ -108,9 +108,19 @@ async function settle(app, page) {
 
 async function measure(withCamera) {
   const { dir, bytes } = stage(withCamera);
+  // A throwaway profile, exactly as app/test/_editor-fixture.ts launches the
+  // app: since STC-412 a real profile's `saveFolder` OVERRIDES
+  // STC_RECORDINGS_DIR, so without this the run opens the first take in the
+  // user's real library — and toggling cleanup would write its project.json.
+  const userData = mkdtempSync(join(tmpdir(), "stc-mem-ud-"));
+  writeFileSync(join(userData, "settings.json"), JSON.stringify({ saveFolder: null }));
   const app = await electron.launch({
-    args: ["--js-flags=--expose-gc", root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: dir },
+    args: ["--js-flags=--expose-gc", root, `--user-data-dir=${userData}`], cwd: root,
+    env: {
+      ...process.env, STC_RECORDINGS_DIR: dir,
+      // Same isolation as the fixture: never the real temp-takes folder.
+      STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-mem-temp-")),
+    },
   });
   try {
     const win = await app.firstWindow();
@@ -139,10 +149,15 @@ async function measure(withCamera) {
     await editorWin.waitForFunction(() => {
       const c = document.getElementById("stage");
       if (!c) return false;
-      const d = c.getContext("2d").getImageData(0, 0, 32, 32).data;
+      // The CENTRE, not the corner: a corner can be legitimately dark (a
+      // dark menu bar, a letterbox) and then this waits forever.
+      const d = c.getContext("2d").getImageData((c.width >> 1) - 16, (c.height >> 1) - 16, 32, 32).data;
       for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 24) return true;
       return false;
-    }, { timeout: 60_000 });
+    // `null` is the page-function ARG: options are the third parameter. Passed
+    // second, the timeout was silently Playwright's 30 s default — too short
+    // once a long take's audio has to be read and demuxed first (STC-469).
+    }, null, { timeout: 180_000 });
 
     // STC-469: the audio is part of what the preview holds. Wait for it to
     // decode, turn cleanup on if asked, and wait for the cleaned mic to play.

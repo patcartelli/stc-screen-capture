@@ -27,14 +27,42 @@ where master has no `__stcPreviewAudio` hook). `--export` is branch-only — it 
 row's master cell is filled from it. Every steady-state and pre-export sample is taken after a
 forced GC (or, if `gc` is not exposed, once RSS stops moving); the script prints which.
 
-The controller fills this table from the run; every cell below reads "to be measured" until then.
+Measured 2026-10-01 on the dev Mac (host), same synthetic take for every run. Renderer RSS via
+`app.getAppMetrics()`, each steady-state and pre-export sample after a forced `gc()` (the script
+printed "settled by: gc" for every run). Display-only rows; display+camera agreed within ~80 MB.
 
-| | master | this branch |
+| | master (`fd6e14a`) | this branch |
 |---|---|---|
-| Steady state, cleanup on (renderer RSS) | to be measured — see §1 | to be measured — see §1 |
-| Export peak, `reuse=false` | same run as this branch's `reuse=false` (master never reuses) | to be measured — see §3 |
-| Export peak, `reuse=true` | n/a (no reuse on master) | to be measured — see §3 |
+| Steady state, cleanup on (renderer RSS growth) | +7191 MB | +7214 MB |
+| Steady state, cleanup off | not run | +6730 MB |
+| Export, `reuse=false` (peak over pre-export RSS) | = branch's `reuse=false` (master never reuses) | +3336 MB (peak 10.7 GB) |
+| Export, `reuse=true` (peak over pre-export RSS) | n/a | **+188 MB** |
 | Take length / channel layout | 30 min, mic mono + system stereo | 30 min, mic mono + system stereo |
+
+**What the numbers say.**
+
+- **Export reuse is the real win**: the export's own audio cost falls from +3.3 GB to +0.2 GB on a
+  30 min take — no second decode, no second `cleanNarration` (whose Float64 buffers dominate it).
+- **The steady-state saving is invisible in RSS.** Master and branch agree within noise. The ~345 MB
+  this branch frees is real (`__stcPreviewAudio().rawMicHeld` is false), but RSS does not shrink to
+  show it: renderer RSS here is set by the LOAD's high-water mark, and freed ArrayBuffer memory is
+  not handed back to the OS on this timescale even after a forced GC.
+- **The ticket's ceiling formula is ~6.5x too low for RSS.** Whole-track PCM for this take is
+  ~1.04 GB; steady-state RSS growth is ~6.7 GB with cleanup OFF (no worker involved), i.e.
+  ~220 MB per minute of mic+system, against STC-236's ~+143 MB for a display-only take. The likely
+  cause is the decode path's transients: `decodeAllAudio` keeps every `AudioData` alive until the
+  flush, `pcmTrackOf` then copies each into its own chunk, and `trackFromChunks` copies those into
+  one contiguous track — three full copies of each track alive at the peak, for both tracks at
+  once (they decode in parallel). That is inference from the code, not yet measured per stage.
+  It is the next thing to fix, and it is NOT option B (STC-490): decoding straight into the
+  contiguous track, closing each `AudioData` in the output callback, would remove two of the
+  three copies without changing a single sample.
+
+Two script bugs were found by running it and are fixed on this branch: the app launched with the
+REAL user profile, whose `saveFolder` (STC-412) overrides `STC_RECORDINGS_DIR`, so it opened a
+take from the user's real library; and the pixel wait passed its timeout in the page-argument
+slot, so it was silently Playwright's 30 s default, and sampled the top-left corner, which a
+real take can legitimately have dark.
 
 ## The ceiling
 
@@ -44,7 +72,8 @@ Whole-track PCM is float32 at 48 kHz: 48 000 x 4 B x 60 = 11.5 MB per channel-mi
 
 That is ~34.5 MB/min for a mono mic + stereo system take (~1 GB at 30 min, ~2 GB at an hour),
 plus ~1 MB/min of compressed audio. The saving of this branch is one mono mic, ~11.5 MB/min,
-~345 MB at 30 min, while cleanup is on. What remains is the ceiling of option B's reason to exist.
+~345 MB at 30 min, while cleanup is on. That is the PCM floor; the measured RSS above is ~6.5x it
+(see "What the numbers say").
 
 ## What only a Mac can settle
 
