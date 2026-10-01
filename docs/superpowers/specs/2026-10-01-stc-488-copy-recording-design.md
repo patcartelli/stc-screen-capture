@@ -30,15 +30,17 @@ check at purge time, no polling).
   document the editor loads for a take with no `project.json`. It is built by
   the same function, not by a second one written here.
 - **Where it goes:** `copiesRoot(env)`, which is
-  `~/Library/Application Support/stc-screen-recorder/copies/`, overridable with
+  `~/Library/Application Support/<PRODUCT_NAME>/copies/`, overridable with
   `STC_COPIES_DIR` the way `STC_TEMP_TAKES_DIR` overrides `tempTakesRoot`.
   It's a sibling of the temp-takes root and **never inside a take**, so Save
   (which moves the take) and Trash (which deletes it) can't touch a copy.
 - **File name:** `<take leaf name>.mp4`, e.g. `2026-10-01 18.04.12.mp4`. That
-  is what the person sees in Finder or Slack when they paste. A name that
-  already exists for a different take gets ` (2)`, ` (3)` and so on. A partial
-  render is written to `<name>.mp4.partial` and renamed only on success, so a
-  file without the suffix is always a complete MP4.
+  is what the person sees in Finder or Slack when they paste. There is no
+  ` (2)` collision suffix: the leaf is unique within the temp root by
+  construction, and a copy exists only for a take in that root (plan
+  deviation 2). Main writes the finished bytes to `<name>.mp4.partial` and
+  renames only on success, so a file without the suffix is always a complete
+  MP4 (deviation 5).
 
 ## 3. Where the render runs
 
@@ -65,9 +67,11 @@ check at purge time, no polling).
   which main chose. The renderer supplies no file name.
 - **Progress and cancel:** `exportSession`'s existing `onProgress(done, total)`
   and `signal` options. Progress is throttled to at most 10 updates a second
-  and forwarded by main to the panel that owns the job. Cancel aborts the
-  signal; the result's `cancelled` flag (or a thrown `ExportCancelled`) ends
-  the job either way.
+  and forwarded by main to the panel that owns the job. Cancel
+  destroys the render window rather than aborting a signal: `exportSession`
+  returns its bytes only when it finishes, so destroying the window cancels at
+  once and leaves nothing to clean up in the renderer, and no signal crosses
+  IPC (deviation 1).
 - **Capture identity (STC-413):** main resolves the take's capture id with the
   same `ensureCaptureId` the editor's `captureId` channel uses, and the render
   window passes it as `captureId`, so a pasted copy can be traced back to its
@@ -87,9 +91,8 @@ check at purge time, no polling).
   pattern a still's export already uses, so the take can't be moved into the
   library while the render is reading it. Copy is disabled too, so a second
   press can't start a second job.
-- **Trash stays enabled and cancels the render.** Main tells the render window
-  to abort (the job's `AbortSignal`), deletes
-  the `.partial`, and then runs the normal fresh-take Trash with its undo
+- **Trash stays enabled and cancels the render.** Main destroys the render
+  window, deletes the `.partial`, and then runs the normal fresh-take Trash with its undo
   toast. A panel that waits must always have a way out. Escape and the
   panel's own dismiss also cancel.
 - **On success:** main calls the helper's `copy-file` with the finished path.
@@ -119,8 +122,10 @@ check at purge time, no polling).
   `StillEncodeDecisions.swift`.
 - **`pasteboard-files`, a second command:** returns the file URLs currently on
   the general pasteboard, read-only. The purge is its only caller.
-- **The purge** runs once at launch and then on the existing
-  `TEMP_PURGE_INTERVAL_MS` timer, beside `purgeStaleTempTakes`. It lists
+- **The purge** has its own hourly timer (`COPY_PURGE_INTERVAL_MS`), first
+  run 60 s after launch (`COPY_PURGE_FIRST_DELAY_MS`). The existing
+  `TEMP_PURGE_INTERVAL_MS` is 12 h, which would let a "24 h" copy live 36 h,
+  and the delay keeps the helper request out of startup (deviation 4). It lists
   `copiesRoot`, asks the helper `pasteboard-files` once, and deletes every
   entry older than `COPY_MAX_AGE_MS` (24 h, by mtime) that isn't on the
   clipboard. Leftover `.partial` files older than one hour are deleted too:
@@ -150,9 +155,12 @@ check at purge time, no polling).
 - `thumbnail-menu.test.ts`: the recording menu now offers Copy.
 - `helper/test/copy-file/`: the request decisions, without a pasteboard.
 
-**Helper on CI (`helper/test/copy-file.test.ts`):** `copy-file` on a real
-file, then `pasteboard-files` returns that URL. It needs no TCC grant, the
-same footing as `still-encode.test.ts`.
+**Pasteboard round trip (`helper/test/copy-file.grant.test.ts`):** `copy-file`
+on a real file, then `pasteboard-files` returns that URL. It is a grant-suite
+test, not CI: `NSPasteboard.general` needs a real logged-in session, which
+this repo already decided keeps such tests out of `npm test`
+(`still-clipboard.grant.test.ts`'s header). The pure request decisions still
+run on CI (deviation 3).
 
 **E2E against the fake helper (`app/test/recording-copy.e2e.test.ts`):** real
 WebCodecs H.264 already runs on the `macos-15` runner (`export.e2e.test.ts`,
@@ -180,3 +188,28 @@ whether "Rendering…" on a small panel reads as progress or as a stall.
 - Rendering in the background before Copy is pressed (rejected, §1).
 - Clipboard promises or lazy pasteboard data (rejected: a paste before the
   render finishes would block or fail in the app being pasted into).
+
+## 8. What the build decided
+
+The plan's five deviations (cancel by destroying the window, no ` (2)` suffix,
+the pasteboard test in the grant suite, the purge's own timer, main writing
+the file) are folded into §2, §3, §5 and §6 above. The build made six more
+decisions:
+
+- **Cancel waits.** Trash, dismiss and quit wait for any in-flight write and
+  the cleanup before returning. Quit's wait is bounded by
+  `COPY_CANCEL_AT_QUIT_MS` (5 s, `main.ts`), so a stuck cancel cannot hold the
+  app open.
+- **Load and process failures are failures.** A failed page load, a failed
+  preload or a crashed render process settles the job as a failure, never as
+  a hang.
+- **A gone panel gets no pasteboard write.** `panel:copyRecording` re-checks
+  that the panel still exists after the render, before `copy-file`.
+- **Copy honours `busy`.** The renderer's `copyRecording` returns early when
+  the panel is busy, so Cmd-C during an in-flight Save, Edit or Trash starts
+  nothing.
+- **A reused copy keeps its mtime.** The 24 h clock runs from the render, not
+  from the last Copy.
+- **STC-232's tripwire.** The `parseProject` check in
+  `transform/test/trim.test.ts` accepts `loadTake` (`session-io.ts`) as an
+  approved route, since it is the one shared loader.
