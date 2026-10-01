@@ -7,7 +7,12 @@
  * Cancel DESTROYS the window. `exportSession` hands its bytes over only at
  * the end, so a destroyed window has written nothing, and there is no signal
  * to thread across IPC. A cancel that lands while `copy:write` is mid-write
- * is caught by the `cancelled` flag below, which deletes the partial.
+ * is caught by job LIVENESS below (not a flag), which deletes the partial and,
+ * if the rename already ran, the final file.
+ *
+ * A job stays in `jobs` until its cleanup has finished, and a new job for the
+ * same take waits for that (`startCopyRender`), so an old job's late `rm` can
+ * never delete a newer job's files.
  */
 import { BrowserWindow, ipcMain } from "electron";
 import { join, dirname } from "node:path";
@@ -39,33 +44,55 @@ interface Job {
   win: BrowserWindow;
   senderId: number;
   cancelled: boolean;
+  /** "live" until the first settle; "settling" while cleanup runs. */
+  state: "live" | "settling";
+  /** The in-flight `copy:write`, so cleanup can wait for it. */
+  writing?: Promise<void>;
+  /** The rename ran: outPath belongs to this job and is removed if it settles unsuccessfully. */
+  renamed: boolean;
   settle(o: CopyOutcome): void;
+  /** Resolves only after the window is gone AND the files are cleaned up. */
   settled: Promise<CopyOutcome>;
 }
 
 const jobs = new Map<string, Job>();
 const bySender = new Map<number, Job>();
 
+const logRm = (what: string) => (e: unknown) => console.error(`[copy] could not remove ${what}:`, e);
+
 ipcMain.on("copy:progress", (e, done: number, total: number) => {
-  bySender.get(e.sender.id)?.opts.onProgress(Number(done) || 0, Number(total) || 0);
+  const job = bySender.get(e.sender.id);
+  if (job?.state === "live") job.opts.onProgress(Number(done) || 0, Number(total) || 0);
 });
 ipcMain.on("copy:failed", (e, detail: string) => {
   bySender.get(e.sender.id)?.settle({ ok: false, detail: String(detail) });
 });
-ipcMain.handle("copy:write", async (e, bytes: ArrayBuffer) => {
+ipcMain.handle("copy:write", (e, bytes: Uint8Array) => {
   const job = bySender.get(e.sender.id);
-  if (!job) throw new Error("not a copy job");
+  if (!job || job.state !== "live") throw new Error("not a copy job");
   const partial = job.opts.outPath + PARTIAL_SUFFIX;
-  await mkdir(dirname(partial), { recursive: true });
-  await writeFile(partial, Buffer.from(bytes));
-  if (job.cancelled) { await rm(partial, { force: true }); return; }
-  await rename(partial, job.opts.outPath);
-  job.settle({ ok: true, path: job.opts.outPath });
+  job.writing = (async () => {
+    await mkdir(dirname(partial), { recursive: true });
+    if (job.state !== "live") return;                 // settled before we began: write nothing
+    await writeFile(partial, bytes);
+    // Liveness, not `cancelled`: a render death settles too. Cleanup awaits
+    // this promise, so it removes the partial (and a renamed outPath) AFTER us.
+    if (job.state !== "live") return;
+    await rename(partial, job.opts.outPath);
+    job.renamed = true;
+    if (job.state !== "live") return;                 // settled during the rename: cleanup removes outPath
+    job.settle({ ok: true, path: job.opts.outPath });
+  })();
+  return job.writing;
 });
 
 export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   const existing = jobs.get(opts.takeDir);
-  if (existing) return existing.settled;
+  // One caller per take is the contract: a duplicate gets the running job's
+  // outcome and its own `onProgress` is ignored.
+  if (existing?.state === "live") return existing.settled;
+  // A job still cleaning up owns this take's files; start only once it is done.
+  if (existing) return existing.settled.then(() => startCopyRender(opts));
   const win = new BrowserWindow({
     show: false, width: 64, height: 64, skipTaskbar: true,
     webPreferences: {
@@ -77,18 +104,28 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
     },
   });
   const senderId = win.webContents.id;
-  let settle!: (o: CopyOutcome) => void;
-  const settled = new Promise<CopyOutcome>((res) => { settle = res; });
+  let resolve!: (o: CopyOutcome) => void;
+  const settled = new Promise<CopyOutcome>((res) => { resolve = res; });
   const job: Job = {
-    opts, win, senderId, cancelled: false, settled,
+    opts, win, senderId, cancelled: false, state: "live", renamed: false, settled,
     settle: (o) => {
-      if (!jobs.has(opts.takeDir)) return;            // one outcome per job
-      jobs.delete(opts.takeDir);
+      if (job.state !== "live") return;               // one outcome per job
+      job.state = "settling";
       bySender.delete(senderId);
       opts.revoke(senderId);
       if (!win.isDestroyed()) win.destroy();
-      if (!o.ok) void rm(opts.outPath + PARTIAL_SUFFIX, { force: true });
-      settle(o);
+      void (async () => {
+        try {
+          if (!o.ok) {
+            await job.writing?.catch(() => {});       // nothing may write after the rm below
+            await rm(opts.outPath + PARTIAL_SUFFIX, { force: true }).catch(logRm("the partial"));
+            if (job.renamed) await rm(opts.outPath, { force: true }).catch(logRm("an orphaned copy"));
+          }
+        } finally {
+          if (jobs.get(opts.takeDir) === job) jobs.delete(opts.takeDir);
+          resolve(o);
+        }
+      })();
     },
   };
   jobs.set(opts.takeDir, job);
@@ -96,8 +133,12 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   opts.grant(senderId, opts.takeDir);
   win.webContents.on("render-process-gone", (_e, d) =>
     job.settle({ ok: false, detail: `the render stopped (${d.reason})` }));
-  void win.loadFile(join(opts.rendererDir, "copy-render.html"),
-    opts.delayMs ? { query: { delayMs: String(opts.delayMs) } } : undefined);
+  win.webContents.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
+    if (isMainFrame) job.settle({ ok: false, detail: `the render page failed to load (${code} ${desc})` });
+  });
+  win.loadFile(join(opts.rendererDir, "copy-render.html"),
+    opts.delayMs ? { query: { delayMs: String(opts.delayMs) } } : undefined)
+    .catch((e) => job.settle({ ok: false, detail: `the render page failed to load: ${String(e?.message ?? e)}` }));
   return settled;
 }
 
@@ -109,8 +150,10 @@ export async function cancelCopyRender(takeDir: string): Promise<void> {
   await job.settled;
 }
 
-export function copyRenderInFlight(takeDir: string): boolean { return jobs.has(takeDir); }
-export function copyRenderWindowCount(): number { return jobs.size; }
+export function copyRenderInFlight(takeDir: string): boolean { return jobs.get(takeDir)?.state === "live"; }
+export function copyRenderWindowCount(): number {
+  return [...jobs.values()].filter((j) => j.state === "live").length;
+}
 export async function cancelAllCopyRenders(): Promise<void> {
   await Promise.all([...jobs.keys()].map(cancelCopyRender));
 }

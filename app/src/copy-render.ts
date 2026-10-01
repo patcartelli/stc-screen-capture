@@ -13,7 +13,7 @@ declare global {
     copyRender: TakeIO & {
       captureId(): Promise<string>;
       progress(done: number, total: number): void;
-      write(bytes: ArrayBuffer): Promise<void>;
+      write(bytes: Uint8Array): Promise<void>;
       failed(detail: string): void;
     };
   }
@@ -34,6 +34,7 @@ const delayMs = Number(new URLSearchParams(location.search).get("delayMs")) || 0
 
 void (async () => {
   const io = window.copyRender;
+  if (!io) { console.error("[copy] the preload bridge is missing; nothing can be reported"); return; }
   try {
     if (delayMs > 0) {
       io.progress(0, 1);
@@ -54,8 +55,8 @@ void (async () => {
       },
     });
     if (!result.encoded) throw new Error("the export produced no file");
-    await io.write(result.encoded.buffer.slice(
-      result.encoded.byteOffset, result.encoded.byteOffset + result.encoded.byteLength) as ArrayBuffer);
+    // `encoded` spans its whole buffer (export.ts), so no copy is needed.
+    await io.write(result.encoded);
   } catch (e: any) {
     io.failed(String(e?.message ?? e));
   }

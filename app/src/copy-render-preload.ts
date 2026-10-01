@@ -12,6 +12,6 @@ contextBridge.exposeInMainWorld("copyRender", {
     ipcRenderer.invoke("preview:chunk", name, offset, length),
   captureId: () => ipcRenderer.invoke("take:captureId"),
   progress: (done: number, total: number) => ipcRenderer.send("copy:progress", done, total),
-  write: (bytes: ArrayBuffer) => ipcRenderer.invoke("copy:write", bytes),
+  write: (bytes: Uint8Array) => ipcRenderer.invoke("copy:write", bytes),
   failed: (detail: string) => ipcRenderer.send("copy:failed", detail),
 });
