@@ -22,7 +22,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, previewMuted: false,
+                 systemAudio: false, showClicks: true, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -63,7 +63,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, previewMuted: false,
+                 systemAudio: false, showClicks: true, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -119,7 +119,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, previewMuted: false,
+                 systemAudio: false, showClicks: true, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -614,4 +614,35 @@ test("a settings file from before STC-388 keeps a stray scope key, harmlessly", 
   const s = readSettings(d);
   expect(s.camera).toBe(true);
   expect((s as unknown as Record<string, unknown>).scope).toBeUndefined();
+});
+
+describe("the show-clicks preference (STC-420)", () => {
+  test("defaults to ON — the highlight existed before the control did", () => {
+    expect(readSettings(dir()).showClicks).toBe(true);
+    expect(DEFAULT_SETTINGS.showClicks).toBe(true);
+  });
+
+  test("persists off, and back on", () => {
+    const d = dir();
+    expect(writeSettings(d, { showClicks: false }).showClicks).toBe(false);
+    expect(readSettings(d).showClicks).toBe(false);
+    expect(writeSettings(d, { showClicks: true }).showClicks).toBe(true);
+    expect(readSettings(d).showClicks).toBe(true);
+  });
+
+  test("only a literal false is off — anything malformed keeps the existing behaviour", () => {
+    for (const bad of ["false", 0, null, {}]) {
+      const d = dir();
+      writeFileSync(join(d, "settings.json"), JSON.stringify({ showClicks: bad }));
+      expect(readSettings(d).showClicks, `stored ${JSON.stringify(bad)}`).toBe(true);
+      expect(writeSettings(d, { showClicks: bad as never }).showClicks).toBe(true);
+    }
+  });
+
+  test("an unrelated write does not turn it back on", () => {
+    const d = dir();
+    writeSettings(d, { showClicks: false });
+    writeSettings(d, { systemAudio: true });
+    expect(readSettings(d).showClicks).toBe(false);
+  });
 });

@@ -121,6 +121,7 @@
          pointer-events: auto; cursor: default; }
   .ctl:hover { color: #fff; background: rgba(255,255,255,.08); }
   .ctl[data-on="1"] { color: #fff; }
+  #ctl-clicks[data-on="0"] { opacity: .45; }   /* a toggle: off must read as off, not as hover-less */
   .ctl[data-enabled="0"] { opacity: .32; }
   .ctl[data-enabled="0"]:hover { background: none; color: rgba(255,255,255,.72); }
   .ctl svg { width: 20px; height: 20px; flex: none; fill: currentColor; }
@@ -158,7 +159,7 @@
     <div class="ctl" id="ctl-mic" aria-label="Microphone"><span data-icon="mic"></span><span data-icon="caret" data-class="caret"></span></div>
     <div class="ctl" id="ctl-camera" aria-label="Camera"><span data-icon="camera"></span><span data-icon="caret" data-class="caret"></span></div>
     <div class="ctl" id="ctl-keys" title="Show keypresses — coming with STC-419"><span data-icon="command"></span></div>
-    <div class="ctl" id="ctl-clicks" title="Show clicks — coming with STC-420"><span data-icon="click"></span></div>
+    <div class="ctl" id="ctl-clicks" role="switch" aria-label="Show clicks" title="Show clicks"><span data-icon="click"></span></div>
     <div class="ctl" id="ctl-record"><span data-icon="record"></span><span class="label">Capture Video</span><span class="kbd"><span data-icon="return"></span></span></div>
   </div>
   <div id="menu" class="device-menu" hidden role="menu"></div>
