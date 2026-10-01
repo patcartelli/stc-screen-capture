@@ -134,6 +134,27 @@ export function makeMicTakeFolder(
 }
 
 /**
+ * Mic AND system audio (STC-469): the two fixtures above, together. Both
+ * tracks are the placeholder AAC that decodes (to near-silence) in Chromium,
+ * which is enough to drive the export's MIX path end to end.
+ */
+export function makeMicAndSystemTakeFolder(
+  takeName = "2026-10-01_10-00-00-micsys",
+): { dir: string; takeDir: string } {
+  const { dir, takeDir } = makeMicTakeFolder(takeName);
+  const { frames, frameUs } = writePlaceholderAac(join(takeDir, "system.m4a"), 2);
+  const anchors = JSON.parse(readFileSync(join(takeDir, "anchors.json"), "utf8"));
+  anchors.version = 6;
+  anchors.files = { ...anchors.files, system: "system.m4a" };
+  anchors.system = {
+    present: true, sampleRate: 48_000, channels: 2,
+    firstFramePtsNs: 100_000_000, lastFramePtsNs: 100_000_000 + Math.round((frames - 1) * frameUs * 1000),
+  };
+  writeFileSync(join(takeDir, "anchors.json"), JSON.stringify(anchors, null, 2));
+  return { dir, takeDir };
+}
+
+/**
  * A still, from the committed window-capture fixture (STC-294).
  *
  * `fixtures/shot-window/` is a real `shot.json` plus a synthetic 720x480 RGBA

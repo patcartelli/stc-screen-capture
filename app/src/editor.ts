@@ -58,7 +58,7 @@ import type { ByteSource } from "@transform/chunk-reader";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
 import {
-  levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack,
+  levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack, type ExportDecoded,
   micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
   nudgeLevelDb, MIC_LEVEL_MAX, MIC_UNITY_PCT,
 } from "@transform/audio-mix";
@@ -1441,6 +1441,18 @@ let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?:
   };
 };
 
+// STC-469: the export exactly as the editor runs it, with or without the
+// preview's tracks — for the e2e identity check and the memory measurement.
+// Nothing is written; the encoded file is discarded.
+(window as unknown as { __stcExportForTest: (o: { reuse: boolean }) => Promise<unknown> }).__stcExportForTest =
+  async ({ reuse }) => {
+    if (!openSession || !openProject) throw new Error("no take open");
+    const r = await exportSession(openSession, structuredClone(openProject), {
+      audioHash: true, decoded: reuse ? decodedForExport() : undefined,
+    });
+    return { audioHash: r.audioHash, audioReused: r.audioReused };
+  };
+
 async function openTakeOrThrow(dir: string): Promise<void> {
   await closeTake();
   await editor.openPreview(dir);
@@ -2000,6 +2012,21 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
  * keeps being scheduled, so the clock the picture follows never changes
  * under a mute.
  */
+/**
+ * The tracks the preview holds, offered to the export (STC-469). The mic is
+ * tagged with what it IS — raw, or cleaned at a strength — and
+ * `reusableTracks` decides whether that is what this export needs.
+ */
+function decodedForExport(): ExportDecoded {
+  const mic = previewAudio?.micTrack ?? null;
+  const cleanedAt = mic !== null && mic === cleanedMic ? cleanedFor : null;
+  const known = mic !== null && (mic === cleanedMic || mic === rawMic);
+  return {
+    system: previewAudio?.systemTrack ?? null,
+    mic: known ? { track: mic!, cleanedAt } : null,
+  };
+}
+
 function previewLevels(): { system: number; mic: number } {
   return {
     system: openProject?.systemAudioMuted ? 0 : openProject?.systemAudioLevel ?? 1,
@@ -2324,6 +2351,7 @@ async function runExport(): Promise<void> {
     const result = await exportSession(openSession, exporting, {
       hash: true,
       captureId,
+      decoded: decodedForExport(),
       signal: exportAbort.signal,
       onProgress: (done, total) => {
         progress.value = Math.round((done / total) * 1000);

@@ -7,13 +7,12 @@ import type { Project } from "./types.js";
 import { exportWindow, availableFrames } from "./trim.js";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
-import { decodeAllAudio, pcmTrackOf } from "./decode-audio.js";
+import { decodeAllAudio, pcmTrackOf, decodeMicForMix } from "./decode-audio.js";
 import {
-  MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, exportAudioPlan,
-  type PcmTrack,
+  MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, exportAudioPlan, reusableTracks,
+  type PcmTrack, type ExportDecoded,
 } from "./audio-mix.js";
 import { tagMp4 } from "./media-tag.js";
-import { cleanNarration } from "./narration-clean.js";
 
 /**
  * The export sink. ONE implementation, called by both the CLI gates and the
@@ -43,6 +42,14 @@ export interface ExportOptions {
    * gate/harness drivers, which export straight from a fixture.
    */
   captureId?: string;
+  /**
+   * STC-469: tracks the caller (the editor's preview) has already decoded.
+   * Used only where `reusableTracks` says they are exactly what this export
+   * would make itself; otherwise ignored and the export decodes as before.
+   */
+  decoded?: ExportDecoded;
+  /** Test/gate only: a SHA-256 over every mixed audio block handed to the encoder. */
+  audioHash?: boolean;
 }
 
 export interface ExportResult {
@@ -76,6 +83,10 @@ export interface ExportResult {
    * above (`micEncodedChunks`) exactly as it did before system audio existed.
    */
   mixEncodedChunks: number;
+  /** "" unless `opts.audioHash` was set and the mix path ran. */
+  audioHash: string;
+  /** STC-469: which mix inputs came from `opts.decoded` rather than a fresh decode. */
+  audioReused: { mic: boolean; system: boolean };
   durationMs: number;
   cancelled: boolean;
 }
@@ -169,14 +180,26 @@ export async function exportSession(
   const mixing = plan.path === "mix";
   let mixMic: PcmTrack | null = null;
   let mixSystem: PcmTrack | null = null;
+  // STC-469: the preview's own tracks, where they are exactly what we would
+  // decode here (audio-mix.ts `reusableTracks`) — no second decode, and no
+  // second `cleanNarration`, which is the export's largest transient (its
+  // Float64 STFT buffers run ~7x the mic).
+  const reuse = reusableTracks(plan, cleanup, opts.decoded);
   if (mixing) {
-    mixSystem = plan.system && session.systemAudio ? pcmTrackOf(await decodeAllAudio(session.systemAudio), "system.m4a") : null;
-    mixMic = plan.mic && micAudio ? pcmTrackOf(await decodeAllAudio(micAudio), "mic.m4a") : null;
+    mixSystem = plan.system && session.systemAudio
+      ? reuse.system ?? pcmTrackOf(await decodeAllAudio(session.systemAudio), "system.m4a")
+      : null;
     // The WHOLE track, before the window is cut, so the noise profile is
     // learned from every pause in the take rather than only the clip's —
     // and a trimmed export cleans exactly as the full one would.
-    if (mixMic && cleaning) mixMic = cleanNarration(mixMic, cleanup!.strength);
+    mixMic = plan.mic && micAudio
+      ? reuse.mic ?? await decodeMicForMix(micAudio, cleaning ? cleanup!.strength : null)
+      : null;
   }
+  const audioReused = {
+    mic: mixing && reuse.mic !== null && mixMic === reuse.mic,
+    system: mixing && reuse.system !== null && mixSystem === reuse.system,
+  };
   const decodedAudio = micAudio && plan.path === "mic" ? await decodeAllAudio(micAudio) : null;
 
   let muxer: Muxer<ArrayBufferTarget> | undefined;
@@ -283,6 +306,7 @@ export async function exportSession(
   }
 
   const rolling = new Uint8Array(32);
+  const audioRolling = new Uint8Array(32);
   let peakBuffered = 0;
   let cancelled = false;
 
@@ -403,6 +427,11 @@ export async function exportSession(
           });
           const data = new Float32Array(n * MIX_CHANNELS);
           for (let ch = 0; ch < MIX_CHANNELS; ch++) data.set(planes[ch]!, ch * n);
+          if (opts.audioHash) {
+            const h = new Uint8Array(await crypto.subtle.digest("SHA-256", data as unknown as BufferSource));
+            const b = at / MIX_BLOCK_FRAMES;
+            for (let i = 0; i < 32; i++) audioRolling[i]! ^= h[i]! + ((b * 31 + i) & 0xff);
+          }
           const ad = new AudioData({
             format: "f32-planar", sampleRate: MIX_SAMPLE_RATE, numberOfFrames: n,
             numberOfChannels: MIX_CHANNELS, timestamp: Math.round((at * 1e6) / MIX_SAMPLE_RATE), data,
@@ -470,6 +499,8 @@ export async function exportSession(
       micEncodedChunks: cancelled ? 0 : micEncodedChunks,
       audioOutputChunks: cancelled ? 0 : audioOutputChunks,
       mixEncodedChunks: cancelled ? 0 : mixEncodedChunks,
+      audioHash: opts.audioHash && mixing && !cancelled ? await sha256Hex(audioRolling) : "",
+      audioReused,
       durationMs: Math.round(performance.now() - t0),
       cancelled,
     };
