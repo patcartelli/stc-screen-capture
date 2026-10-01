@@ -209,6 +209,9 @@ export function parseProject(
   // never asked to lose.
   project.micMuted = doc.micMuted === true;
   project.systemAudioMuted = doc.systemAudioMuted === true;
+  // project-13 (STC-419). Only a real `false` hides the keycast; anything else
+  // is "no opinion" and shown.
+  if (doc.keycast?.show === false) project.keycast = { show: false };
   return project;
 }
 
@@ -368,9 +371,10 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 {
-  // Highest first: a document needing v12 needs it whatever its mic level,
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 {
+  // Highest first: a document needing v13 needs it whatever its mutes, mic level,
   // cleanup, levels, bookmarks, slug, overrides, zoom or textPt say.
+  if (project.keycast?.show === false) return 13;
   if (project.micMuted || project.systemAudioMuted) return 12;
   if (project.micLevel !== undefined && project.micLevel !== DEFAULT_MIC_LEVEL) return 11;
   if (!isDefaultNarrationCleanup(project.narrationCleanup)) return 10;
@@ -419,5 +423,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
     out.micMuted = !!project.micMuted;
     out.systemAudioMuted = !!project.systemAudioMuted;
   }
+  if (version >= 13) out.keycast = { show: project.keycast?.show !== false };
   return out;
 }

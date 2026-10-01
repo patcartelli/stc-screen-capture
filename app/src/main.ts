@@ -2214,14 +2214,14 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
 
 /**
  * Every top-level key a `project.json` this build wrote or can read might
- * carry (schema/project-1..12.schema.json's own union, STC-318's "one list"
+ * carry (schema/project-1..13.schema.json's own union, STC-318's "one list"
  * rule applied here by hand since the schemas themselves are not loaded at
  * runtime in this process — see the handler's own comment on why not).
  */
 const KNOWN_PROJECT_FIELDS = new Set([
   "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
   "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
-  "micLevel", "micMuted", "systemAudioMuted",
+  "micLevel", "micMuted", "systemAudioMuted", "keycast",
 ]);
 
 /**
@@ -2356,6 +2356,12 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
   }
   if (doc.systemAudioMuted !== undefined && typeof doc.systemAudioMuted !== "boolean") {
     throw new Error("project.json: systemAudioMuted must be a boolean");
+  }
+  if (doc.keycast !== undefined) {
+    if (!isPlainObject(doc.keycast) || typeof doc.keycast.show !== "boolean"
+        || Object.keys(doc.keycast).some((k) => k !== "show")) {
+      throw new Error("project.json: keycast must be { show: boolean }");
+    }
   }
   if (doc.bookmarks !== undefined) {
     if (!Array.isArray(doc.bookmarks) || !doc.bookmarks.every((b: unknown) => Number.isInteger(b) && (b as number) >= 0)) {
