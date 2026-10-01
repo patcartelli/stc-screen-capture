@@ -35,4 +35,7 @@ await build({ ...common, entryPoints: ["app/src/toast-renderer.ts"], outfile: "a
 // same reason every other floating surface above is separate.
 await build({ ...common, entryPoints: ["app/src/still-editor-preload.ts"], outfile: "app/dist/still-editor-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/still-editor-renderer.ts"], outfile: "app/dist/still-editor-renderer.js", format: "iife", platform: "browser" });
+// STC-488: the hidden window that renders a recording's Copy.
+await build({ ...common, entryPoints: ["app/src/copy-render-preload.ts"], outfile: "app/dist/copy-render-preload.cjs", format: "cjs" });
+await build({ ...common, entryPoints: ["app/src/copy-render.ts"], outfile: "app/dist/copy-render.js", format: "iife", platform: "browser" });
 console.log("app built -> app/dist/");

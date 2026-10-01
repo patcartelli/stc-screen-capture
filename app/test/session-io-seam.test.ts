@@ -19,7 +19,8 @@ describe("one session loader (STC-488)", () => {
     expect(src("editor.ts")).not.toMatch(BUILDS_A_SESSION);
     expect(src("editor.ts")).toMatch(/from "\.\/session-io\.js"/);
   });
-  // Task 5 creates copy-render.ts and switches this on, with the same two
-  // assertions the editor's test above makes.
-  test.todo("the copy render imports it instead of calling loadSession");
+  test("the copy render imports it instead of calling loadSession", () => {
+    expect(src("copy-render.ts")).not.toMatch(BUILDS_A_SESSION);
+    expect(src("copy-render.ts")).toMatch(/from "\.\/session-io\.js"/);
+  });
 });
