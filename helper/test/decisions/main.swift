@@ -108,6 +108,28 @@ check("a failed open is still just a failure even if a stop arrived — there is
       decideCameraOpen(opened: false, stoppingBegan: true),
       CameraOpenDecision.reportFailure)
 
+// ── will the event tap deliver? (STC-480) ───────────────────────────────────
+// The VM case: tapCreate handed back a port with Input Monitoring OFF, and the
+// take recorded no cursor at all. A created tap is not enough on its own.
+check("a created tap with the grant OFF and no Accessibility is REFUSED (the VM case)",
+      decideEventTapAccess(tapCreated: true, listenEvent: .denied, accessibilityTrusted: false),
+      EventTapAccessDecision.refuse(requestAccess: false))
+check("never asked: refused, and macOS is asked so its prompt appears",
+      decideEventTapAccess(tapCreated: true, listenEvent: .unknown, accessibilityTrusted: false),
+      EventTapAccessDecision.refuse(requestAccess: true))
+check("Input Monitoring granted: record",
+      decideEventTapAccess(tapCreated: true, listenEvent: .granted, accessibilityTrusted: false),
+      EventTapAccessDecision.proceed)
+check("Accessibility alone also feeds a session tap — a machine that works today keeps working",
+      decideEventTapAccess(tapCreated: true, listenEvent: .denied, accessibilityTrusted: true),
+      EventTapAccessDecision.proceed)
+check("no tap at all is still STC-315's refusal, whatever the probe says",
+      decideEventTapAccess(tapCreated: false, listenEvent: .granted, accessibilityTrusted: true),
+      EventTapAccessDecision.refuse(requestAccess: false))
+check("no tap is not asked about twice — macOS prompted on that path itself",
+      decideEventTapAccess(tapCreated: false, listenEvent: .unknown, accessibilityTrusted: false),
+      EventTapAccessDecision.refuse(requestAccess: false))
+
 // ── which camera to open (STC-286) ──────────────────────────────────────────
 // Measured on this machine 2026-08-29: the helper opened "Elgato Virtual
 // Camera" because it is `discovery.devices.first`, and a virtual camera with

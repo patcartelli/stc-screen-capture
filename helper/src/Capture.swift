@@ -1,6 +1,8 @@
 import Foundation
 import ScreenCaptureKit
 import CoreGraphics
+import IOKit.hid
+import ApplicationServices
 // AVFoundation here is AVAssetWriter only — a file writer, no capture devices.
 // PHASE-0 §2a's hazard was AVCaptureDevice taking the default audio input;
 // phase 1 has no camera or mic, and nothing below opens a device.
@@ -527,6 +529,21 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // it is the run loop the source is added to that decides where the
         // callback lands, and that is still the dedicated thread below.
         guard let tap = makeEventTap() else {
+            finishStart(.failure(CaptureError.eventTapUnavailable))
+            return
+        }
+        // STC-480: a created tap is not proof it will deliver. With Input
+        // Monitoring off, a clean VM handed back a working-looking port that
+        // never saw an event, and the take had no cursor anywhere. Same
+        // refusal, same place — before anything of the take exists on disk.
+        let access = eventTapAccess()
+        if case .refuse(let requestAccess) = decideEventTapAccess(
+            tapCreated: true, listenEvent: access.listenEvent,
+            accessibilityTrusted: access.accessibilityTrusted) {
+            IO.log("event tap created but Input Monitoring is \(access.listenEvent) and " +
+                   "Accessibility is \(access.accessibilityTrusted ? "on" : "off"); refusing (STC-480)")
+            CFMachPortInvalidate(tap)
+            if requestAccess { _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
             finishStart(.failure(CaptureError.eventTapUnavailable))
             return
         }
@@ -1747,6 +1764,25 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             userInfo: Unmanaged.passUnretained(self).toOpaque())
     }
 
+    /// The grants that decide whether a created tap will actually deliver
+    /// (STC-480): Input Monitoring, and Accessibility, which also feeds a
+    /// session tap. Both are READS — neither call prompts.
+    ///
+    /// `STC_CAPTURE_FAULT=tap-silent` reports both as absent while the tap
+    /// itself is created for real, which is exactly the VM's state: a port
+    /// that exists and will never deliver. Same reason `no-event-tap` exists —
+    /// the honest way to produce it costs a machine its grants.
+    private func eventTapAccess() -> (listenEvent: ListenEventAccess, accessibilityTrusted: Bool) {
+        if ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "tap-silent" {
+            IO.log("STC_CAPTURE_FAULT=tap-silent: reporting Input Monitoring denied and no Accessibility")
+            return (.denied, false)
+        }
+        let raw = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+        let listen: ListenEventAccess = raw == kIOHIDAccessTypeGranted ? .granted
+            : raw == kIOHIDAccessTypeDenied ? .denied : .unknown
+        return (listen, AXIsProcessTrusted())
+    }
+
     /// Runs the tap on its own thread and run loop. If the tap's run loop is
     /// starved the system disables it (`tapDisabledByTimeout`), so it must not
     /// share a run loop with anything that can block — including command
@@ -2309,8 +2345,9 @@ enum CaptureError: Error, CustomStringConvertible {
     case frameStatusMismatch(actual: Int)
     /// STC-247: `start` named a display SCK did not list.
     case displayNotFound(requested: CGDirectDisplayID, available: [CGDirectDisplayID])
-    /// STC-315: `CGEvent.tapCreate` returned nil, so this take could carry no
-    /// cursor track. Refusing is the policy, not a fallback — see `begin()`.
+    /// STC-315: `CGEvent.tapCreate` returned nil — or (STC-480) it returned a
+    /// tap that no grant will feed — so this take could carry no cursor
+    /// track. Refusing is the policy, not a fallback — see `begin()`.
     case eventTapUnavailable
     /// STC-370: `start` named a windowId SCK's on-screen list does not have —
     /// closed, on another space, or never existed.
@@ -2334,8 +2371,8 @@ enum CaptureError: Error, CustomStringConvertible {
             return "SCFrameStatus.complete is \(actual), not \(SCFrameStatusCompleteRaw) — "
                  + "CaptureDecisions.swift must be updated or every frame will be discarded"
         case .eventTapUnavailable:
-            return "cursor input could not be recorded (CGEvent.tapCreate returned nil) — "
-                 + "Input Monitoring is the usual cause. The cursor is never only in the "
+            return "cursor input could not be recorded (no event tap, or one Input Monitoring "
+                 + "would leave silent) — Input Monitoring is the usual cause. The cursor is never only in the "
                  + "video, so a take with no cursor track is not started at all."
         case .windowNotFound(let id):
             return "no on-screen window with id \(id) — it may have closed, or never existed"
