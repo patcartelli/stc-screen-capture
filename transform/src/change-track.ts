@@ -1,8 +1,12 @@
 import { decodeAll } from "./decode.js";
+import { decoderPreference } from "./decoder-preference.js";
+import { ChunkReader } from "./chunk-reader.js";
+import { withTimeout } from "./timeout.js";
 import type { DemuxedVideo } from "./demux.js";
+import type { ChangeFrame } from "./changes.js";
 import { computeChangeDocument } from "./changes.js";
 import type { Changes } from "./changes.js";
-import type { Frame } from "./frame-diff-rule.js";
+import { changeGrid, GRID_W, GRID_H, DEFAULT_THRESHOLD, type Frame } from "./frame-diff-rule.js";
 
 /**
  * STC-322's post-recording pass, browser-dependent half.
@@ -85,4 +89,89 @@ export async function computeChangesForVideo(
   const bitmaps = await decodeAll(video);
   const frames = extractFrames(bitmaps);
   return computeChangeDocument(frames, video.framesNs, opts);
+}
+
+/** Frames the decoder may have queued before submission pauses — keeps the compressed backlog, and so the decoder's own memory, bounded. */
+const MAX_DECODE_QUEUE = 8;
+
+/**
+ * The same document as `computeChangesForVideo`, in memory proportional to TWO
+ * frames instead of the take (STC-405).
+ *
+ * `computeChangesForVideo` decodes every frame into a bitmap and then copies
+ * every frame's full RGBA out before reducing any of it: 33 MB a frame at 4K,
+ * so it fails with "Out of memory at ImageData creation" within a few
+ * seconds of a real take (measured on a 3840x2160 screen share, 2026-09-30).
+ * It was only ever exercised on the 90-frame fixture. This one reduces each
+ * frame against its predecessor the moment it is decoded, inside the decoder's
+ * output callback, and keeps only the previous frame's pixels. The reduction
+ * is the same `changeGrid` call on the same pairs, so the result is
+ * identical; `computeChangeDocument` stays the reference and the one the
+ * tests pin.
+ */
+export async function computeChangesStreaming(
+  video: DemuxedVideo,
+  opts: ComputeChangesOptions = {},
+): Promise<Changes> {
+  const threshold = opts.threshold ?? DEFAULT_THRESHOLD;
+  const gridWidth = opts.gridWidth ?? GRID_W;
+  const gridHeight = opts.gridHeight ?? GRID_H;
+  const cellCount = gridWidth * gridHeight;
+  const { codedWidth: width, codedHeight: height } = video;
+
+  const ctx = new OffscreenCanvas(width, height).getContext("2d", {
+    alpha: false, willReadFrequently: true,
+  }) as OffscreenCanvasRenderingContext2D;
+
+  const out: ChangeFrame[] = [];
+  let prev: Frame | null = null;
+  let failure: Error | null = null;
+
+  const decoder = new VideoDecoder({
+    output: (frame) => {
+      try {
+        const i = out.length;
+        if (frame.displayWidth !== width || frame.displayHeight !== height) {
+          throw new Error(`frame ${i} is ${frame.displayWidth}x${frame.displayHeight}, the track is ${width}x${height}`);
+        }
+        ctx.drawImage(frame, 0, 0);
+        const cur: Frame = { data: ctx.getImageData(0, 0, width, height).data, width, height };
+        if (prev === null) {
+          out.push({ t: video.framesNs[i]!, cells: new Array(cellCount).fill(0), changedFraction: 0 });
+        } else {
+          const g = changeGrid(prev, cur, threshold, gridWidth, gridHeight);
+          out.push({ t: video.framesNs[i]!, cells: Array.from(g.cells), changedFraction: g.changedFraction });
+        }
+        prev = cur;
+      } catch (e) {
+        failure ??= e instanceof Error ? e : new Error(String(e));
+      } finally {
+        frame.close();
+      }
+    },
+    error: (e) => { failure ??= e; },
+  });
+  decoder.configure({
+    codec: video.codec, codedWidth: width, codedHeight: height, description: video.description,
+    ...decoderPreference(),
+  });
+
+  const reader = new ChunkReader(video.chunks, video.bytes, "video");
+  for (let i = 0; i < video.chunks.length && !failure;) {
+    const g = reader.groupOf(i);
+    const datas = await reader.read(g.start, g.end - g.start);
+    for (let k = 0; k < datas.length && !failure; k++) {
+      const c = video.chunks[g.start + k]!;
+      while (decoder.decodeQueueSize > MAX_DECODE_QUEUE && !failure) await new Promise((r) => setTimeout(r, 1));
+      decoder.decode(new EncodedVideoChunk({ type: c.type, timestamp: c.timestampUs, data: datas[k] as BufferSource }));
+    }
+    i = g.end;
+  }
+  if (!failure) await withTimeout(decoder.flush(), 600_000, "decoder flush");
+  decoder.close();
+  if (failure) throw failure;
+  if (out.length !== video.chunks.length) {
+    throw new Error(`decoded ${out.length} frames, expected ${video.chunks.length}`);
+  }
+  return { version: 1, gridWidth, gridHeight, threshold, frames: out };
 }
