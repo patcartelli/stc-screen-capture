@@ -1524,6 +1524,7 @@ async function closeTake(): Promise<void> {
   previewAudio = null;
   rawMic = null;
   micSource = null;
+  rawLoading = false;
   cleanedMic = null;
   cleanedFor = null;
   cleanWanted = null;
@@ -1935,6 +1936,7 @@ let cleanedMic: PcmTrack | null = null;
 let cleanedFor: number | null = null;
 let cleanWanted: number | null = null;
 let cleanBusy = false;
+let rawLoading = false;
 let cleanSeq = 0;
 let cleanWorker: Worker | null = null;
 
@@ -2019,17 +2021,49 @@ function refreshCleanMic(): void {
   const { cleanMic } = exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup });
   if (!cleanMic) {
     cleanWanted = null;
-    useMic(rawMic);
+    if (rawMic) {
+      useMic(rawMic);
+      // STC-469: off means raw, so the cleaned copy is dead weight now.
+      cleanedMic = null;
+      cleanedFor = null;
+    } else {
+      // The raw mic was dropped while the cleaned one played: decode it back.
+      // Whatever is playing keeps playing until it arrives.
+      ensureRawMic();
+    }
     if (!cleanBusy) setCleaning(false);
     return;
   }
   if (cleanedMic && cleanedFor === cleanup!.strength) {
     cleanWanted = null;
     useMic(cleanedMic);
+    // STC-469: the cleaned mic is what plays; the worker re-cleans from the
+    // COMPRESSED track, so the raw decoded copy buys nothing any more.
+    rawMic = null;
     return;
   }
   cleanWanted = cleanup!.strength;
   pumpClean();
+}
+
+/** Decode the raw mic again (STC-469), then let `refreshCleanMic` re-decide — the project may have changed meanwhile. */
+function ensureRawMic(): void {
+  if (rawMic || rawLoading || !micSource) return;
+  rawLoading = true;
+  const gen = audioGen;
+  decodeMicForMix(micSource, null).then((track) => {
+    if (gen !== audioGen) return;
+    rawLoading = false;
+    // It decoded once already, so null here would mean the decoder changed
+    // its mind; with no raw to fall back to, there is no playable mic.
+    if (!track) { micSource = null; return; }
+    rawMic = track;
+    refreshCleanMic();
+  }, (e: any) => {
+    if (gen !== audioGen) return;
+    rawLoading = false;
+    console.warn(`preview mic re-decode failed: ${e?.message ?? e}`);
+  });
 }
 
 function pumpClean(): void {
@@ -2040,7 +2074,7 @@ function pumpClean(): void {
   cleanBusy = true;
   setCleaning(true);
   const worker = cleanWorker ??= new Worker("../dist/narration-worker.js");
-  worker.onmessage = (e: MessageEvent<{ id: number; track?: PcmTrack; error?: string }>) => {
+  worker.onmessage = (e: MessageEvent<{ id: number; track?: PcmTrack | null; error?: string }>) => {
     if (e.data.id !== id) return;
     cleanBusy = false;
     if (gen !== audioGen) { setCleaning(false); return; }
@@ -2050,7 +2084,10 @@ function pumpClean(): void {
       if (cleanWanted === strength) {
         cleanWanted = null;
         useMic(cleanedMic);
+        rawMic = null; // STC-469: see refreshCleanMic
       }
+    } else if (e.data.track === null) {
+      cleanWanted = null; // a mic that decodes to nothing has nothing to clean
     } else {
       // The export cleans on its own; a preview that cannot is still a
       // preview. Keep playing what was playing and say so.
@@ -2059,6 +2096,10 @@ function pumpClean(): void {
     }
     if (cleanWanted !== null) pumpClean();
     else setCleaning(false);
+    // Gated on a successful track: after an error or null reply with cleanup
+    // still on, re-deciding would re-request the same clean forever. A good
+    // result is what can leave cleanup switched off meanwhile and need handing back to raw.
+    if (e.data.track && cleanWanted === null && !cleanBusy) refreshCleanMic();
   };
   // The COMPRESSED mic, cloned (STC-469): the worker decodes it itself, so
   // nothing here has to keep a raw decoded copy alive just to send one.

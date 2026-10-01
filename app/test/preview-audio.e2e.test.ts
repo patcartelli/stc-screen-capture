@@ -23,11 +23,13 @@ import { join } from "node:path";
  *   message shape, end to end.
  */
 let app: ElectronApplication | undefined;
+let mainWin: Page | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 async function openEditor(dir: string, userData?: string): Promise<Page> {
   const launched = await launchApp(dir, {}, { userData });
   app = launched.app;
+  mainWin = launched.win;
   const editorWin = await openEditorFromLibrary(app, launched.win);
   await editorWin.waitForSelector("#stage", { timeout: 20_000 });
   await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/\d/);
@@ -153,5 +155,61 @@ describe("preview sound", () => {
     // Cloned, not transferred: the session keeps its compressed mic.
     expect(result.micStillUsable).toBe(true);
   }, 120_000);
+
+  const held = (win: Page) => win.evaluate(() => {
+    const h = (window as any).__stcPreviewAudio();
+    return { raw: h.rawMicHeld, playing: h.playing, cleanedFor: h.cleanedFor, cleaning: h.cleaning };
+  });
+  async function setCleanup(win: Page, on: boolean): Promise<void> {
+    await win.click("#audiobtn");
+    const box = win.locator("#voicecleanon");
+    if ((await box.isChecked()) !== on) await box.click();
+    await win.keyboard.press("Escape");
+  }
+
+  test("cleanup on drops the raw mic once the cleaned one plays; off decodes it back", async () => {
+    const { dir } = makeMicTakeFolder();
+    const win = await openEditor(dir);
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
+    expect(await held(win)).toMatchObject({ raw: true, playing: "raw", cleanedFor: null });
+
+    await setCleanup(win, true);
+    await expect.poll(() => held(win), { timeout: 30_000 })
+      .toEqual({ raw: false, playing: "cleaned", cleanedFor: 0.5, cleaning: false });
+
+    await setCleanup(win, false);
+    await expect.poll(() => held(win), { timeout: 30_000 })
+      .toEqual({ raw: true, playing: "raw", cleanedFor: null, cleaning: false });
+  }, 120_000);
+
+  test("rapid toggles settle on the project's state", async () => {
+    const { dir } = makeMicTakeFolder();
+    const win = await openEditor(dir);
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
+    await win.click("#audiobtn");
+    const box = win.locator("#voicecleanon");
+    for (let i = 0; i < 5; i++) await box.click(); // off → on, five times: ends ON
+    await win.keyboard.press("Escape");
+    await expect.poll(() => held(win), { timeout: 30_000 })
+      .toEqual({ raw: false, playing: "cleaned", cleanedFor: 0.5, cleaning: false });
+  }, 120_000);
+
+  test("a re-decode that lands after close is dropped", async () => {
+    const { dir } = makeMicTakeFolder();
+    let win = await openEditor(dir);
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
+    await setCleanup(win, true);
+    await expect.poll(() => held(win), { timeout: 30_000 }).toMatchObject({ raw: false, playing: "cleaned" });
+    // Off starts a raw re-decode; closing the window at once must not let it
+    // land on the next opening of the take.
+    await setCleanup(win, false);
+    await win.close();
+    win = await openEditorFromLibrary(app!, mainWin!);
+    await win.waitForSelector("#stage", { timeout: 20_000 });
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
+    // Reopened with cleanup OFF (persisted): raw, and nothing cleaned left over.
+    await expect.poll(() => held(win), { timeout: 30_000 })
+      .toEqual({ raw: true, playing: "raw", cleanedFor: null, cleaning: false });
+  }, 180_000);
 });
 
