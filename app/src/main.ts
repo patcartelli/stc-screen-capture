@@ -39,7 +39,8 @@ import {
   markOfferedForRecovery, type TempTakeInfo,
 } from "./temp-takes.js";
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
-import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport } from "./library.js";
+import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
+         recordingDurationMs, recordingScopeLabel } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
@@ -321,10 +322,6 @@ function openLibrary(): void {
 function startSupervisor(): void {
   sup = HelperSupervisor.start(HELPER, {
     statsIntervalMs: 500,
-    // Read fresh at the moment of every promotion (STC-412) — never cached —
-    // so a saveFolder chosen mid-session is honoured by the very next clean
-    // stop, with no synced field for the two to drift out of step over.
-    getSaveFolder: () => readSettings(app.getPath("userData")).saveFolder,
   });
   sup.on("ready", (l) => send("helper:ready", l));
   sup.on("stats", (l) => send("helper:stats", l));
@@ -333,20 +330,17 @@ function startSupervisor(): void {
   // The helper holds the capture devices: if it dies mid-recording the take is
   // gone, and that must be stated rather than left to look like an idle reset.
   sup.on("recording-lost", (i) => send("helper:recording-lost", i));
+  // The helper died: no take to decide on, but the panels hidden for it must
+  // not stay hidden (STC-487).
+  sup.on("recording-lost", () => showThumbnailsAfterCapture());
   // Stopped cleanly without being asked — the take is intact, unlike a loss.
-  // Already promoted out of temp storage by the time this fires (STC-393):
-  // `HelperSupervisor.endRecording` does that before emitting, so a grid
-  // refresh triggered by this event finds the take where it now lives.
+  // Still in TEMP storage (STC-487): a stop never promotes, so `dir` is a temp
+  // path and nothing is in the library yet. The panel `take-ended` puts up is
+  // where it gets decided on.
   sup.on("recording-ended", (i) => send("helper:recording-ended", i));
-  // A promotion that failed (STC-393) — the take is still a real recording,
-  // just stuck in temp storage rather than the library. Surfaced as a
-  // warning rather than folded into `recording-lost`: the file is intact,
-  // unlike a genuine loss, and crash recovery will pick it up on next launch
-  // if nothing here gets to it first.
-  sup.on("recording-promote-failed", (i) => send("helper:warning", {
-    code: "recording-not-promoted",
-    detail: `Recording saved but could not be moved into the library: ${i?.dir}`,
-  }));
+  // A take ended cleanly — asked for or not — and is waiting for a decision
+  // (STC-487). The ONE place a recording's panel is presented from a stop.
+  sup.on("take-ended", (i) => { void onTakeEnded(i?.dir); });
   sup.on("helper:warning", (l) => send("helper:warning", l));
   // STC-287. The camera opens off the critical path (deliberately — see
   // Capture.swift), so it goes live a second or so AFTER recording starts. The
@@ -415,6 +409,61 @@ function reconcileTrayRecording(): void {
 function reconcileWindowRecording(): void {
   const recording = sup?.state === "recording";
   send("recorder:recording-state", { recording, dir: recording ? sup?.recordingDir : undefined });
+}
+
+/**
+ * Put up a recording's panel (STC-487). ONE builder for its three callers —
+ * a clean stop (`take-ended`), crash recovery, and Trash-undo — because a
+ * second copy is the defect this repo keeps finding.
+ *
+ * It reads the take's own `anchors.json` once for the card's meta line
+ * (duration and scope). A missing or unreadable one degrades that line to
+ * empty and NEVER the panel: a take that cannot describe itself still needs
+ * Save and Trash. And a failure to present at all is logged and swallowed —
+ * the take stays in temp storage where recovery will find it, because a panel
+ * failure must never cost the take (the STC-296 rule).
+ *
+ * Never `silent`: `thumbnail.skip` means "straight to the clipboard", and a
+ * recording has no Copy until STC-395, so a silent one would have no outcome
+ * at all (decided with Patrick, 2026-09-30).
+ */
+async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): Promise<boolean> {
+  let recording = { durationMs: 0, scope: "Screen" };
+  try {
+    const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"));
+    recording = { durationMs: recordingDurationMs(anchors), scope: recordingScopeLabel(anchors) };
+  } catch (e) {
+    console.error("[recording-panel] could not read anchors.json for the card:", dir, e);
+  }
+  try {
+    presentThumbnail({
+      dir, recording, corner: readSettings(app.getPath("userData")).thumbnail.corner,
+      take: { kind: "recording", origin },
+      dist: here, rendererDir: join(here, "..", "renderer"),
+    });
+    return true;
+  } catch (e) {
+    console.error("[recording-panel] could not present the panel:", dir, e);
+    return false;
+  }
+}
+
+/**
+ * A take ended cleanly (`HelperSupervisor`'s `take-ended`).
+ *
+ * Quitting does not present: `shutdown()` stops a live take, which fires this
+ * too, and a panel for a window that is being torn down is worse than none.
+ * The take stays in temp storage and the recovery prompt offers it next launch
+ * — the same backstop Quit Anyway already relies on.
+ */
+async function onTakeEnded(dir: unknown): Promise<void> {
+  if (typeof dir !== "string" || quitting) return;
+  // The panels hidden for this recording come back FIRST, so the new one is
+  // unshifted in FRONT of them: it lands at the corner with the older stack
+  // behind it, and its own focus-on-paint takes over from `afterCapture`'s
+  // focus on `panels[0]`. That ordering is deliberate.
+  showThumbnailsAfterCapture();
+  await presentRecordingPanel(dir, "fresh");
 }
 
 /**
@@ -548,17 +597,14 @@ async function recoverUnsavedTakes(): Promise<void> {
           failed++;
         }
       } else if (t.kind === "recording") {
-        // No STC-392 panel exists yet for a recording, so there is nothing to
-        // "bring back" — the closest honest equivalent is to save it outright
-        // (rather than let it expire silently in 7 days) and bring the library
-        // where it now lives in front of the user.
-        try {
-          await promoteTake(process.env, saveFolder, t.dir);
-          openLibrary();
-        } catch (e) {
-          console.error("[recovery] could not move a recovered recording into the library:", t.dir, e);
-          failed++;
-        }
+        // Offered, as a still is: marked BEFORE the panel exists (same race,
+        // same reason), and presented the same way — nobody has said yes to a
+        // recovered take. A recording that could not get a panel stays in
+        // temp storage and is offered again next launch.
+        await markOfferedForRecovery(t.dir).catch((e) => {
+          console.error("[recovery] could not mark a recording as offered:", t.dir, e);
+        });
+        if (!(await presentRecordingPanel(t.dir, "fresh"))) failed++;
       } else {
         // `unknown`: something survived — usually a `display.mp4` whose take
         // never reached the clean stop that writes `anchors.json` — but no
@@ -799,7 +845,7 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", async () => {
   // A take in flight when its window goes is ENDED, not abandoned: the helper
   // would otherwise keep recording with nothing left that could stop it.
-  // `stopRecording` promotes it out of temp storage on its own (STC-393).
+  // `stopRecording` leaves it in temp storage and `take-ended` puts up its panel (STC-487).
   if (sup?.state === "recording") await sup.stopRecording().catch(() => {});
   // On macOS the app stays alive and the helper stays with it. Shutting the
   // helper down here left a reopened window (Dock click) with a supervisor
@@ -1331,30 +1377,31 @@ async function recordFlowBody(
     if (!countdownFired(counted.outcome)) return { ok: false, cancelled: true };
   }
   // Any floating panel still on screen would be IN the take, and unlike a shot
-  // there is no exclusion list for `start` to be added to.
-  // CLOSED rather than merely hidden (`closeThumbnail`, the same call quit
-  // makes) — hiding it for the length of a recording would leave it sitting
-  // out of sight with nothing to bring it back, since nothing times out any
-  // more. Its take is left in temp storage rather than exported (STC-392); a
-  // pending panel deliberately bumped by starting a recording is a choice the
-  // recovery prompt can still surface later, not a silent save.
+  // there is no exclusion list for `start` to be added to — so they are HIDDEN
+  // for its length (STC-392 focus rule 2), and `take-ended` (or any exit below
+  // that produces no take) shows them again. Nothing is closed and nothing
+  // is lost: each panel's take stays in temp storage with its panel intact.
   // After the countdown, so a cancelled one costs a pending panel nothing.
-  await closeThumbnail().catch(() => {});
+  await hideThumbnailForCapture();
 
-  // Temp storage, not the library (STC-393): the take is not real until a
-  // clean stop promotes it, so a denied grant or a crash mid-recording leaves
-  // nothing in the library at all rather than a broken entry someone has to
-  // notice and clean up. The helper creates the leaf directory itself and
-  // removes it again if the start fails; the root above it is ensured once at
-  // launch (`app.whenReady`).
-  const root = tempTakesRoot(process.env);
-  const existing = existsSync(root) ? readdirSync(root) : [];
-  const dir = newTempTakeDir(process.env, new Date(), existing);
+  // Temp storage, not the library (STC-393): the take is not real until the
+  // panel's Save or Edit promotes it (STC-487), so a denied grant or a crash
+  // mid-recording leaves nothing in the library at all rather than a broken
+  // entry someone has to notice and clean up. The helper creates the leaf
+  // directory itself and removes it again if the start fails; the root above
+  // it is ensured once at launch (`app.whenReady`).
+  //
+  // Inside the `try` so that anything throwing here still gives the hidden
+  // panels back — an exit after the hide that makes no recording must show them.
   try {
+    const root = tempTakesRoot(process.env);
+    const existing = existsSync(root) ? readdirSync(root) : [];
+    const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup!.startRecording(dir, startParams);
     console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
+    showThumbnailsAfterCapture();
     // A missing Screen Recording grant is the common case and is actionable —
     // surface the helper's own code rather than a generic failure.
     return { ok: false, code: e?.code ?? "start-failed",
@@ -1808,9 +1855,8 @@ ipcMain.handle("shortcuts:reset", async () => {
 
 ipcMain.handle("recorder:stop", async () => {
   if (!sup) throw new Error("supervisor not running");
-  // `stopRecording` promotes the take out of temp storage on its own
-  // (STC-393) — no recording panel exists yet (STC-392), so a clean stop IS
-  // the save.
+  // `stopRecording` leaves the take in temp storage; `take-ended` puts up its
+  // panel, and Save or Edit there is what promotes it (STC-487).
   const r = await sup.stopRecording();
   return { ok: true, info: r };
 });
@@ -2865,6 +2911,12 @@ ipcMain.handle("panel:undoTrash", async (_e, dir: string) => {
   if (!pendingTrash.undo(dir)) return false;
   hideToast();
   try {
+    // Branch on what is IN the directory: `takeFor(dir)` is already gone once
+    // a panel is closed, and this handler re-presents exactly that panel.
+    if (existsSync(join(dir, "anchors.json"))) {
+      await presentRecordingPanel(dir, "fresh");
+      return true;
+    }
     const shot = JSON.parse(await readFile(join(dir, "shot.json"), "utf8"));
     const { thumbnail } = readSettings(app.getPath("userData"));
     presentThumbnail({

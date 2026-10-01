@@ -258,7 +258,9 @@ describe("helper warnings during a take", () => {
     // would race that timer instead of asserting against the text the poll
     // above already confirmed is showing.
     const finalAlert = await toastText(app!);
-    expect(finalAlert).toMatch(/up to that point was saved/);
+    // Not "saved": a stop no longer promotes (STC-487), so it points at the panel.
+    expect(finalAlert).toMatch(/waiting in the panel at the corner of the screen/);
+    expect(finalAlert).not.toMatch(/was saved/);
     expect(finalAlert).not.toMatch(/press Stop/);
   }, 120_000);
 

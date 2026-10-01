@@ -1,6 +1,5 @@
 import { HelperClient, QUIT_GRACE_MS, type HelperLine, type SpawnOptions } from "./helper-client.js";
 import type { SupervisorState } from "./supervisor-state.js";
-import { promoteTake } from "./temp-takes.js";
 
 /**
  * Keeps a helper process alive and makes its death legible.
@@ -19,21 +18,6 @@ export interface SupervisorOptions extends SpawnOptions {
   /** restarts tolerated inside `restartWindowMs` before giving up */
   maxRestarts?: number;
   restartWindowMs?: number;
-  /**
-   * Where a promoted take should land (STC-412's `Settings.saveFolder`), read
-   * fresh at the moment of every promotion rather than captured once at
-   * construction — this supervisor is a long-lived singleton and the setting
-   * can change (a folder chosen mid-session) while it is still running. A
-   * function rather than a synced field for the same reason `still-io.ts`
-   * takes `SendExport` as a function: this module is deliberately
-   * Electron-free (no `app.getPath`), so it cannot read `settings.json`
-   * itself, and the alternative — main.ts keeping a mirrored field in step —
-   * is exactly the "one value, two copies" drift this codebase keeps paying
-   * for. Omitted entirely, `promoteTake` falls through to its own
-   * `STC_RECORDINGS_DIR`/`~/Desktop/stc` default, unchanged from before this
-   * option existed.
-   */
-  getSaveFolder?: () => string | null;
 }
 
 type Handler = (payload: any) => void;
@@ -120,36 +104,16 @@ export class HelperSupervisor {
     return this.client.request("export-still", params);
   }
 
-  /**
-   * Every clean stop promotes (STC-393): a display change, a closed window
-   * or a user pressing Stop are all "the file is valid and playable" per
-   * `endRecording`'s own distinction from a crash, and this is the ONE place
-   * that is true regardless of which of those asked for it — so the promote
-   * lives here rather than at each of `recorder:stop`, `window-all-closed`
-   * and `shutdown` in `main.ts`, each remembering to call it. No recording
-   * panel exists yet (STC-392), so a clean stop IS the save.
-   *
-   * `promoteTake` is a no-op for a `dir` outside the temp root (a bare
-   * `/tmp/...` path in a test, say), so nothing here needs to ask first
-   * whether promotion applies.
-   */
-  private async promote(dir: string | undefined): Promise<string | undefined> {
-    if (!dir) return dir;
-    try {
-      return await promoteTake(process.env, this.opts.getSaveFolder?.() ?? null, dir);
-    } catch (e: any) {
-      this.emit("recording-promote-failed", { dir, error: String(e?.message ?? e) });
-      return dir;
-    }
-  }
-
   async stopRecording(): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");
     const dir = this._recordingDir;
     const r = await this.client.request("stop");
     this._recordingDir = undefined;
     this.state = "idle";
-    await this.promote(dir);
+    // Never promotes (STC-487): the take stays in temp storage until someone
+    // decides on it at the panel. `take-ended` is how main hears about it —
+    // `recording-ended` is only for a stop nobody asked for.
+    if (dir) this.emit("take-ended", { dir, reason: "stopped" });
     return r;
   }
 
@@ -163,8 +127,12 @@ export class HelperSupervisor {
     const dir = this._recordingDir;
     this._recordingDir = undefined;
     this.state = "idle";
-    const promoted = await this.promote(dir);
-    this.emit("recording-ended", { reason, dir: promoted, info: line });
+    // Both events, in this order: `take-ended` is "a take is ready to decide
+    // on" (every clean stop, asked for or not); `recording-ended` keeps its
+    // old meaning — "the helper stopped without being asked" — for the pill,
+    // the tray and the main window. `dir` is the TEMP directory in both.
+    if (dir) this.emit("take-ended", { dir, reason });
+    this.emit("recording-ended", { reason, dir, info: line });
   }
 
   /**

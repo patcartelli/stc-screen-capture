@@ -619,10 +619,12 @@ recorder.on("helper:recording-ended", (i) => {
   // died. The file is valid; what would be wrong is leaving the button saying
   // "Stop" (or, before Finding 2's fix, the pickers still locked).
   applyRecordingState(false);
-  refreshTakes();
   const why = ENDED_BY_HELPER[String(i.reason)] ?? `Recording stopped by the recorder (${i.reason}).`;
-  alertUser(`${why}\nWhat was captured up to that point was saved.`);
-  if (i.dir) recorder.reveal(i.dir);
+  // Not "saved", and no grid refresh or Finder reveal (STC-487): a stop no
+  // longer promotes, so `i.dir` is a temp path and the library has nothing new.
+  // Main puts up the take's panel from its own `take-ended`; this is only the
+  // WHY, and where to find it.
+  alertUser(`${why}\nWhat was captured up to that point is waiting in the panel at the corner of the screen. Save it to keep it.`);
 });
 
 recorder.on("helper:recording-lost", (i) => {
