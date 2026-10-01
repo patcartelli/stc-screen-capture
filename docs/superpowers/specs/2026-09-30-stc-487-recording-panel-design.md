@@ -49,8 +49,14 @@ and only the second emits `recording-ended`. The old plan's "present from
   happens is worse than none.
 - `recording-ended` keeps its meaning: "the helper stopped without being
   asked". The tray, the pill and the main window still reconcile from it. Its
-  `dir` is now the temp directory. Every consumer has to be checked to
-  confirm none of them assumed a library path.
+  `dir` is now the temp directory. Every consumer was checked (review,
+  2026-10-01): the pill, the tray and the main window's `reconcile*` read
+  state only and are unaffected. **`renderer.ts`'s `helper:recording-ended`
+  handler is the one that assumed a library path** — see §3.6.
+- Stale text goes with it: the "Already promoted out of temp storage" comment
+  above `main.ts`'s `recording-ended` listener, `temp-takes.ts`'s reference to
+  `recording-promote-failed`, and `_fake-helper.mjs`'s note about
+  `HelperSupervisor.promote`.
 - **`shutdown()` does not lead to a panel.** It calls `stopRecording()`, so
   `take-ended` still fires, and `main.ts`'s listener returns early while
   quitting (the existing `quitting` flag). The take stays in temp storage and
@@ -91,12 +97,15 @@ storage where recovery will find it. A panel failure must never cost the take
   is added. The doc comment states that exactly one of them is present, and
   that `take.kind` says which. Both go through the load query as JSON, the
   way `shot` and `take` already do.
-- `thumbnail-renderer.ts` is shot-only from top to bottom today: `parseShot(null)`
+- `thumbnail-renderer.ts` is shot-only from top to bottom today, bar one thing:
+  it already unhides `#takecard` and hides `#thumbwrap` for `kind: "recording"`
+  (Phase A groundwork), so that part is done. `parseShot(null)`
   throws, and `painted` fires only after the PNG frame has been fetched and
   drawn. So a recording panel would never be shown. Changes:
   - `parseShot` runs only for `take.kind === "shot"`;
   - a recording fills `#takemeta` with `${fmtDuration(durationMs)} · ${scope}`,
-    reusing `library-items.ts`'s `fmtDuration` (exported, not copied);
+    reusing `library-items.ts`'s `fmtDuration` (a module-private `const` today: it
+    gets `export`ed, not copied);
   - the paint path branches: a shot keeps fetch → draw → paint; a recording
     goes straight to the same `requestAnimationFrame` block that arms
     `SETTLE_KEYS_MS` and emits `painted`. That block is factored into one
@@ -145,6 +154,25 @@ the whole mechanism.
 - The quit warning needs no change: `unsavedTakeDirs()` counts every
   fresh-origin panel, so it counts recordings as soon as they have one.
 
+### 3.6 The helper-stop alert
+
+`renderer.ts`'s `helper:recording-ended` handler tells the user "What was
+captured up to that point was saved.", refreshes the library grid and reveals
+`i.dir` in Finder. All three are wrong once a stop doesn't promote: nothing is
+saved yet, the grid has nothing new, and `dir` is a temp path. Decided with
+Patrick, 2026-10-01: **reword, don't drop.**
+
+- The handler keeps `applyRecordingState(false)` and the alert. The alert's
+  first line is unchanged (`ENDED_BY_HELPER[reason]` already says why it
+  stopped); the second line becomes
+  `"What was captured up to that point is waiting in the panel at the corner of the screen. Save it to keep it."`
+- `refreshTakes()` and `recorder.reveal(i.dir)` are removed.
+- Main presents the panel from `take-ended` independently of this window, so
+  the alert and the panel are two views of one event and neither waits on the
+  other. If the panel failed to present, the take is still in temp storage and
+  recovery offers it next launch (§3.2); the alert's claim is then optimistic
+  by one launch, which is the accepted cost of the STC-296 rule.
+
 ## 4. Testing
 
 **Unit (CI):**
@@ -152,6 +180,10 @@ the whole mechanism.
   storage and the library empty; it emits `take-ended` with the temp `dir`.
   The helper ending a take on its own emits BOTH `take-ended` and
   `recording-ended`. Uses the file's existing fake-helper harness.
+- Existing tests that pin the old behaviour are rewritten, not just added to:
+  `supervisor.test.ts:133` and `:189` ("…promotes too, and reports the NEW
+  dir"); and `warnings.e2e.test.ts:247` and `pill.e2e.test.ts:129-135` are
+  checked for an assumption that a stop lands in the library.
 - The scope label's four cases and the duration helper, next to where they live.
 - `panel-actions.test.ts`: unchanged, and it already pins a recording's action set.
 
@@ -193,4 +225,5 @@ show what ScreenCaptureKit captured.
 | Not mentioned | Crash recovery and Trash-undo present a recording's panel | Both hardcode the pre-panel behaviour |
 | Not mentioned | Renderer paint path branches; recordings skip the frame fetch | Otherwise `painted` never fires for a recording |
 | `win.click("#record")`, `launched.windows()` | `startRecordFlow`, `_windows.ts` | STC-388 and STC-416 test rules |
+| Not mentioned | `renderer.ts`'s `helper:recording-ended` alert says "saved", refreshes the grid and reveals `dir` | Found in review 2026-10-01; reworded, §3.6 |
 | Runbook `STC-392-RUNBOOK.md` | `STC-487-RUNBOOK.md` | STC-392's runbook already exists and is about Phase A |
