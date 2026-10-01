@@ -2052,6 +2052,7 @@ function ensureRawMic(): void {
   rawLoading = true;
   const gen = audioGen;
   decodeMicForMix(micSource, null).then((track) => {
+    // Defensive: closeTake runs once per page today (the editor reloads its renderer per take), so this is live only if a take is ever switched in-page.
     if (gen !== audioGen) return;
     rawLoading = false;
     // It decoded once already, so null here would mean the decoder changed

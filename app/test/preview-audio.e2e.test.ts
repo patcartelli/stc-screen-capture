@@ -194,14 +194,13 @@ describe("preview sound", () => {
       .toEqual({ raw: false, playing: "cleaned", cleanedFor: 0.5, cleaning: false });
   }, 120_000);
 
-  test("a re-decode that lands after close is dropped", async () => {
+  test("cleanup off persists across reopen; nothing cleaned survives", async () => {
     const { dir } = makeMicTakeFolder();
     let win = await openEditor(dir);
     await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
     await setCleanup(win, true);
     await expect.poll(() => held(win), { timeout: 30_000 }).toMatchObject({ raw: false, playing: "cleaned" });
-    // Off starts a raw re-decode; closing the window at once must not let it
-    // land on the next opening of the take.
+    // Off persists on the project; closing the window discards the renderer.
     await setCleanup(win, false);
     await win.close();
     win = await openEditorFromLibrary(app!, mainWin!);
