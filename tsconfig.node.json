@@ -40,5 +40,7 @@
               "app/src/device-menu-dom.ts",
               // Same position (STC-477): the still composite shared by the
               // panel and the still editor, both excluded above.
-              "app/src/still-compose.ts"]
+              "app/src/still-compose.ts",
+              // STC-488: a renderer module (imports @transform/session).
+              "app/src/session-io.ts"]
 }
