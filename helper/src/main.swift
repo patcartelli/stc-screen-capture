@@ -114,6 +114,17 @@ final class App {
             IO.send("camera-probe", seq: seq, ["auth": auth, "devices": devices])
         case "capture-still":
             captureStill(cmd, seq: seq)
+        case "copy-file":
+            // STC-488. State-free, like export-still: copying a finished
+            // render must never be refused because a take happens to be running.
+            switch CopyFile.copy(cmd) {
+            case .success(let o): IO.send("copied-file", seq: seq, o)
+            case .failure(let e):
+                let code = e.reason == "NSPasteboard refused the file" ? "pasteboard-failed" : "copy-refused"
+                IO.send("error", seq: seq, ["code": code, "detail": e.reason])
+            }
+        case "pasteboard-files":
+            IO.send("pasteboard-files", seq: seq, ["paths": CopyFile.files()])
         case "export-still":
             // The one way out (STC-293). Deliberately state-free, like
             // capture-still: exporting a still during a recording must not be

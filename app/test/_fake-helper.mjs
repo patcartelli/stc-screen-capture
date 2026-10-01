@@ -341,6 +341,31 @@ process.stdin.on("data", (chunk) => {
         }
         break;
       }
+      // ── STC-488: a recording's copy on the pasteboard ───────────────────
+      case "copy-file": {
+        if (process.env.STC_FAKE_COPY_LOG) {
+          try { writeFileSync(process.env.STC_FAKE_COPY_LOG, JSON.stringify(cmd) + "\n", { flag: "a" }); }
+          catch { /* a test seam is not worth killing the stand-in */ }
+        }
+        if (process.env.STC_FAKE_COPY_ERROR) {
+          send("error", { seq, code: process.env.STC_FAKE_COPY_ERROR, detail: "stand-in refused the pasteboard" });
+          break;
+        }
+        send("copied-file", { seq, changeCount: 1 });
+        break;
+      }
+      case "pasteboard-files": {
+        // Unset: an error, so a test machine's copy purge always SKIPS rather
+        // than deleting a developer's real copies (purgeDecision's undefined).
+        if (!process.env.STC_FAKE_PASTEBOARD) {
+          send("error", { seq, code: "unavailable", detail: "stand-in has no pasteboard" });
+          break;
+        }
+        let paths = [];
+        try { paths = JSON.parse(process.env.STC_FAKE_PASTEBOARD); } catch { /* keep [] */ }
+        send("pasteboard-files", { seq, paths });
+        break;
+      }
       case "quit":
         send("bye", { seq });
         process.exit(0);
