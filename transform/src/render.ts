@@ -15,6 +15,7 @@ import { deriveZoomCrop } from "./zoom-change.js";
 import { geometryAt } from "./display-geometry.js";
 import { DEFAULT_ZOOM } from "./trim.js";
 import { createCursorSim, type CursorSim } from "./cursor.js";
+import { buildKeycastPresses, keycastAt, type KeycastPress, type KeycastState } from "./keycast.js";
 
 /**
  * THE non-negotiable: render(project, session, t) → FrameState is a pure
@@ -49,6 +50,8 @@ export interface FrameState {
   pip: PipState | null;
   /** auto-zoom (STC-325/330/331). Always present; `crop` is the whole frame unless an override supplies a target */
   zoom: ZoomState;
+  /** The keycast (STC-419): the keyboard command on screen, or null. Drawn on the OUTPUT canvas, never through the crop. */
+  keycast: KeycastState | null;
 }
 
 /**
@@ -129,6 +132,16 @@ function pipStateAt(project: Project, session: Session, tNs: number): PipState |
 }
 
 const simCache = new WeakMap<Session, CursorSim>();
+
+/** Keycast presses, memoised per session like the cursor sim — a pure function of session.keys. */
+const keycastCache = new WeakMap<Session, KeycastPress[]>();
+
+function keycastFor(project: Project, session: Session, tick: number): KeycastState | null {
+  if (project.keycast?.show === false || !session.keys || session.keys.length === 0) return null;
+  let presses = keycastCache.get(session);
+  if (!presses) { presses = buildKeycastPresses(session.keys); keycastCache.set(session, presses); }
+  return keycastAt(presses, tick);
+}
 
 /** The take's derived windows, memoised per session — independent of preset or overrides, unlike the sims below. */
 const windowsCache = new WeakMap<Session, ZoomWindow[]>();
@@ -289,5 +302,6 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
     },
     pip: pipStateAt(project, session, tNs),
     zoom: { amount: zoomAmount, crop },
+    keycast: keycastFor(project, session, tick),
   };
 }

@@ -9,6 +9,11 @@ import {
   MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION, VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION,
   CURSOR_DEAD_ZONE_UV,
 } from "./zoom-change.js";
+import {
+  KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
+  KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
+  KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, NAMED_KEYS, keyLabel,
+} from "./keycast.js";
 
 /**
  * Which transform made the pixels (STC-308).
@@ -143,8 +148,19 @@ import {
  * `displayToOutput`'s scale is exactly 1, and `ox`/`oy` are exactly 0, so the
  * result is bit-identical rather than merely close. `render-refit.test.ts`'s
  * goldens, generated on the pre-STC-235 code, pin that claim.
+ *
+ * ## Version 12: the keycast (STC-419)
+ *
+ * events-3 may carry key events — keyboard COMMANDS only, never typing — and
+ * `render()` now answers `keycast` (keycast.ts's `keycastAt`), which the one
+ * compositor draws as a bottom-centre pill on the OUTPUT canvas, after the
+ * crop, with a repeat count. project-13's `keycast.show: false` hides it. A
+ * take with no key events, or with `keycast.show === false`, draws exactly
+ * what version 11 did: `fs.keycast` is null and the cursor branch is
+ * unchanged. The fingerprint moved because the keycast constants now reach
+ * the pixels.
  */
-export const TRANSFORM_VERSION = 11;
+export const TRANSFORM_VERSION = 12;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -159,6 +175,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 9, since: "2026-09-27", changed: "the display can change under a take (STC-235): render() now maps the cursor through the SHOWN frame's own geometry — the display it was captured on and the contentRect it occupies within the capture frame — read from anchors v7's optional geometry timeline (display-geometry.ts's geometryAt), instead of always the top-level display filling the whole capture. spaces.ts's displayToOutput gained an optional contentRect/capture pair; its default is the full capture, which is bit-identical to the old two-argument call. No constant reaches the pixels, so the fingerprint is unchanged; every take with no refit renders exactly what version 8 did, pinned by render-refit.test.ts's goldens" },
   { version: 10, since: "2026-09-30", changed: "a region or window take maps through its scope (STC-471): anchors write the WHOLE display into `display` and only the scope into `capture`, and render() used to stretch the display across a frame holding a fraction of it, so the cursor was misplaced for the whole take. spaces.ts's scopedDisplay narrows the display to the scope's origin and point size, geometryAt hands it out as `shown`, and render(), zoom-change.ts's cursor fallback and legibility's effective width all read that. A take with no scope gets its display back as the same object, so every one renders exactly what version 9 did, pinned by render-refit.test.ts's goldens. No constant reaches the pixels, so the fingerprint is unchanged" },
   { version: 11, since: "2026-09-30", changed: "a window that moves mid-take keeps the cursor on target (STC-482): anchors v8's optional scope.window.track records the window's origin over the take, and session.ts's loader takes that displacement out of the cursor events (window-track.ts's stabiliseEvents) BEFORE the spring sees them, so the pointer stays where it was relative to the window through a title-bar drag instead of trailing off by how far the window went. Applied to the events, not per render, so the spring's lag does not turn into a pointer trailing its own window and auto-zoom's cursor fallback reads the same corrected events. A take with no track returns the very events array it was given, so every take that did not move a window renders exactly what version 10 did. No constant reaches the pixels, so the fingerprint is unchanged" },
+  { version: 12, since: "2026-10-01", changed: "the keycast (STC-419): events-3 key events (keyboard COMMANDS only — named non-printing keys and cmd/ctrl chords; typing is never recorded) render as one bottom-centre pill on the output canvas, after the crop, with a repeat count; 1.2 s hold, 200 ms fade, in sim ticks (keycast.ts). project-13's keycast.show:false hides it. A take with no keys, or with it hidden, draws exactly what version 11 did. The fingerprint moved: the keycast constants reach the pixels" },
 ];
 
 /**
@@ -183,6 +200,9 @@ export function transformFingerprint(): string {
       BURST_CONCENTRATION, MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION,
       VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION, CURSOR_DEAD_ZONE_UV,
     },
+    keycast: [KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
+      KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
+      KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, NAMED_KEYS.map((k) => keyLabel(k, []))],
   };
   const text = JSON.stringify(inputs);
   let h = 0x811c9dc5;
