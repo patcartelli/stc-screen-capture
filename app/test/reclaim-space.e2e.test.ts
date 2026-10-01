@@ -64,6 +64,9 @@ beforeEach(async () => {
 });
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
+// 90 s per test: the launch (20 s), the button coming back (20 s), the bundle
+// leaving `raw/` (20 s) and the toast (10 s) are 70 s worst case.
+// `timeout-budget.test.ts` reads the literal, so it stays a literal.
 describe("Reclaim space, through the real app", () => {
   test("shows the orphan first, trashes it on confirm, and leaves the untagged image alone", async () => {
     const rec = bundle(RECORDING, "anchors.json");
@@ -80,7 +83,7 @@ describe("Reclaim space, through the real app", () => {
     await expect.poll(() => existsSync(rec), { timeout: 20_000 }).toBe(false);
     expect(readFileSync(join(root, "holiday.jpg"))).toEqual(Buffer.from(JPEG));
     await expect.poll(() => toastText(app!), { timeout: 10_000 }).toContain("Moved 1 take");
-  });
+  }, 90_000);
 
   test("Cancel moves nothing", async () => {
     const rec = bundle(RECORDING, "anchors.json");
@@ -91,7 +94,7 @@ describe("Reclaim space, through the real app", () => {
 
     expect(await asked()).toHaveLength(1);
     expect(existsSync(rec)).toBe(true);
-  });
+  }, 90_000);
 
   test("the skip case is a visible toast naming the file in the way — no dialog, nothing moved", async () => {
     const still = bundle(STILL, "shot.json");
@@ -106,5 +109,5 @@ describe("Reclaim space, through the real app", () => {
     expect(await toastText(app!)).toContain("holiday.jpg");
     expect(await asked()).toHaveLength(0);
     expect(existsSync(still)).toBe(true);
-  });
+  }, 90_000);
 });
