@@ -48,6 +48,7 @@ import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-wind
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
 import type { OptionsState } from "./record-options.js";
+import { recordTimeProject, type RecordTimeChoices } from "./take-project.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
@@ -450,6 +451,36 @@ async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): 
 }
 
 /**
+ * What the Record bar chose for a take still in flight, by its temp dir
+ * (STC-420). Set when `start` succeeds, consumed when the take ends. In
+ * memory on purpose: a take recovered after a crash was recorded with defaults
+ * as far as this process can tell, which is the safe direction (the highlight
+ * is ON, as before).
+ */
+const recordTimeChoices = new Map<string, RecordTimeChoices>();
+
+/**
+ * The reason Show Clicks reaches the transform at all: the choice is written
+ * into the take's project.json (project-13) so `render()` reads it from the
+ * project, never from a live setting (take-project.ts has the argument).
+ *
+ * Never throws and never overwrites. A take with no document is rendered with
+ * defaults, so a failure here costs the user's choice, not their recording —
+ * logged, not surfaced; and an existing project.json is the editor's and wins.
+ */
+async function writeRecordTimeProject(dir: string): Promise<void> {
+  const choices = recordTimeChoices.get(dir);
+  recordTimeChoices.delete(dir);
+  if (!choices) return;
+  try {
+    const text = recordTimeProject(choices);
+    if (text !== null) await writeFile(join(dir, "project.json"), text, { flag: "wx" });
+  } catch (e) {
+    console.error(`[record] could not write the take's project.json (${(e as Error).message}); it keeps the defaults`);
+  }
+}
+
+/**
  * A take ended cleanly (`HelperSupervisor`'s `take-ended`).
  *
  * Quitting does not present: `shutdown()` stops a live take, which fires this
@@ -458,7 +489,11 @@ async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): 
  * — the same backstop Quit Anyway already relies on.
  */
 async function onTakeEnded(dir: unknown): Promise<void> {
-  if (typeof dir !== "string" || quitting) return;
+  if (typeof dir !== "string") return;
+  // Before the `quitting` bail: a take that ended while quitting is recovered
+  // next launch, and it should recover with the choice it was recorded with.
+  await writeRecordTimeProject(dir);
+  if (quitting) return;
   // The panels hidden for this recording come back FIRST, so the new one is
   // unshifted in FRONT of them: it lands at the corner with the older stack
   // behind it, and its own focus-on-paint takes over from `afterCapture`'s
@@ -1282,6 +1317,7 @@ function writeBarOptions(options: OptionsState): void {
   writeSettings(app.getPath("userData"), {
     camera: options.camera, micDeviceUid: options.micDeviceUid,
     systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+    showClicks: options.showClicks,
   });
   send("settings:changed", undefined);
 }
@@ -1296,6 +1332,7 @@ async function recordFlowBody(
     initialOptions: {
       micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics,
       systemAudio: stored.systemAudio, cameraDeviceUid: stored.cameraDeviceUid, cameras,
+      showClicks: stored.showClicks,
     },
     dist: here, renderer: join(here, "..", "renderer"),
   });
@@ -1436,6 +1473,8 @@ async function recordFlowBody(
     const existing = existsSync(root) ? readdirSync(root) : [];
     const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup!.startRecording(dir, startParams);
+    // Only after a successful start: a refused one leaves no take to describe.
+    recordTimeChoices.set(dir, { showClicks: options.showClicks });
     console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
@@ -2305,7 +2344,7 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
 const KNOWN_PROJECT_FIELDS = new Set([
   "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
   "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
-  "micLevel", "micMuted", "systemAudioMuted",
+  "micLevel", "micMuted", "systemAudioMuted", "showClicks",
 ]);
 
 /**
@@ -2440,6 +2479,9 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
   }
   if (doc.systemAudioMuted !== undefined && typeof doc.systemAudioMuted !== "boolean") {
     throw new Error("project.json: systemAudioMuted must be a boolean");
+  }
+  if (doc.showClicks !== undefined && typeof doc.showClicks !== "boolean") {
+    throw new Error("project.json: showClicks must be a boolean");
   }
   if (doc.bookmarks !== undefined) {
     if (!Array.isArray(doc.bookmarks) || !doc.bookmarks.every((b: unknown) => Number.isInteger(b) && (b as number) >= 0)) {

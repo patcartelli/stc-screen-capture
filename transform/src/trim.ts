@@ -114,6 +114,7 @@ export function defaultProject(
     micLevel: DEFAULT_MIC_LEVEL,
     micMuted: false,
     systemAudioMuted: false,
+    showClicks: true,
   };
   // A recorded camera track is part of the take, so a take that has one shows
   // its PiP without needing an edit document to say so.
@@ -209,6 +210,10 @@ export function parseProject(
   // never asked to lose.
   project.micMuted = doc.micMuted === true;
   project.systemAudioMuted = doc.systemAudioMuted === true;
+  // project-13 (STC-420). The opposite default from the mutes: only a real
+  // `false` turns the highlight off, because ON is what every older take drew
+  // and a malformed value must not quietly change a take's pixels.
+  project.showClicks = doc.showClicks !== false;
   return project;
 }
 
@@ -368,9 +373,10 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 {
-  // Highest first: a document needing v12 needs it whatever its mic level,
-  // cleanup, levels, bookmarks, slug, overrides, zoom or textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 {
+  // Highest first: a document needing v13 needs it whatever its mutes, mic
+  // level, cleanup, levels, bookmarks, slug, overrides, zoom or textPt say.
+  if (project.showClicks === false) return 13;
   if (project.micMuted || project.systemAudioMuted) return 12;
   if (project.micLevel !== undefined && project.micLevel !== DEFAULT_MIC_LEVEL) return 11;
   if (!isDefaultNarrationCleanup(project.narrationCleanup)) return 10;
@@ -419,5 +425,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
     out.micMuted = !!project.micMuted;
     out.systemAudioMuted = !!project.systemAudioMuted;
   }
+  if (version >= 13) out.showClicks = project.showClicks !== false;
   return out;
 }

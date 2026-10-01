@@ -101,8 +101,8 @@ export function composite(
   // artwork stays legible through a click. (x, y) IS the hotspot: macOS
   // reports event locations at the hotspot, and cursor-art.ts puts each
   // shape's hotspot at its origin.
-  const { x, y, pxPerPoint, pressed, shape, style } = fs.cursor;
-  if (pressed) {
+  const { x, y, pxPerPoint, pressed, showClicks, shape, style } = fs.cursor;
+  if (pressed && showClicks) {
     ctx.beginPath();
     ctx.arc(x, y, CLICK_HIGHLIGHT_PT * pxPerPoint, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(255, 255, 255, 0.35)";

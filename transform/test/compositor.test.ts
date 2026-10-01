@@ -16,7 +16,7 @@ function frameState(over: Partial<FrameState["cursor"]> = {}): FrameState {
     tick: 0, frameIndex: null, framePtsNs: null, pip: null,
     zoom: { amount: 0, crop: FULL_FRAME_UV },
     cursor: {
-      x: 300.5, y: 200.25, vx: 0, vy: 0, pressed: false, visible: true,
+      x: 300.5, y: 200.25, vx: 0, vy: 0, pressed: false, showClicks: true, visible: true,
       shape: "arrow", style: "default", pxPerPoint: 1.5, ...over,
     },
   };
@@ -101,6 +101,18 @@ describe("composite() draws the pointer at the hotspot", () => {
     expect(arc).toBeGreaterThan(-1);
     expect(arc).toBeLessThan(translate);
     expect(ops[arc]).toBe(`arc(300.5,200.25,${CLICK_HIGHLIGHT_PT * 1.5},0,${Math.PI * 2})`);
+  });
+
+  test("showClicks off: a held button draws no highlight, and the pointer still draws (STC-420)", () => {
+    const ops = draw(frameState({ pressed: true, showClicks: false }));
+    expect(ops.some((o) => o.startsWith("arc("))).toBe(false);
+    expect(ops).toContain("translate(300.5,200.25)");
+  });
+
+  test("showClicks off with style: circle keeps the disc but not the highlight (STC-420)", () => {
+    const ops = draw(frameState({ style: "circle", pressed: true, showClicks: false }));
+    const arcs = ops.filter((o) => o.startsWith("arc("));
+    expect(arcs).toEqual([`arc(300.5,200.25,${CIRCLE_PT * 1.5},0,${Math.PI * 2})`]);
   });
 
   test("no highlight when no button is held", () => {
