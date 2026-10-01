@@ -105,11 +105,11 @@ export async function waitForTakeLoaded(editorWin: Page, timeout = 30_000): Prom
  * window's own page — the player moved there, out of the main window's old
  * in-page `#player`.
  */
-export async function launchWithTakeInEditor(opts: { pip?: boolean; env?: Record<string, string> } = {}):
+export async function launchWithTakeInEditor(opts: { pip?: boolean; env?: Record<string, string>; source?: string } = {}):
     Promise<{
       app: ElectronApplication; win: Page; editorWin: Page; takeDir: string; dir: string;
     }> {
-  const { dir, takeDir } = opts.pip ? makePipTakeFolder() : makeTakeFolder();
+  const { dir, takeDir } = opts.pip ? makePipTakeFolder() : makeTakeFolder(undefined, { source: opts.source });
   const { app, win } = await launchApp(dir, opts.env ?? {});
   const editorWin = await openEditorFromLibrary(app, win);
   return { app, win, editorWin, takeDir, dir };

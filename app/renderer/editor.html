@@ -127,6 +127,13 @@
     .audiobtn[hidden] { display: none; }
     .audiobtn:hover { color: var(--text); background: var(--surface-hover); }
     .audiobtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    /* STC-419: the Keys switch shares .audiobtn's look. It sits beside the
+       Audio button (which owns the auto margin), or takes it when Audio is
+       hidden; aria-pressed="false" reads as off. */
+    #keycastbtn { margin-left: 8px; anchor-name: none; }
+    #audiobtn[hidden] ~ #keycastbtn { margin-left: auto; }
+    #keycastbtn[aria-pressed="true"] { color: var(--accent); }
+    #keycastbtn[aria-pressed="false"] { opacity: .6; }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
     /* STC-460: the pane, redesigned. A popover still (Patrick's default: it
@@ -638,6 +645,13 @@
           </div>
         </div>
       </div>
+      <!-- STC-419: show/hide the keycast. Present only for a take that recorded
+           keys. Saved to the project (project-13's keycast.show); never edits
+           events.json. -->
+      <button type="button" id="keycastbtn" class="audiobtn" hidden aria-pressed="true"
+              title="Show keystrokes in the preview and export">
+        <span>Keys</span>
+      </button>
     </div>
     <!-- STC-444 slice 2: adaptive ticks + the played line, drawn by
          editor.ts's renderRulerTicks/updateRulerPlayhead. #ruler-ticks holds
