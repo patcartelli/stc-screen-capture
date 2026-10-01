@@ -1,5 +1,5 @@
-import { cleanNarration } from "@transform/narration-clean";
-import type { PcmTrack } from "@transform/audio-mix";
+import { decodeMicForMix } from "@transform/decode-audio";
+import type { DemuxedAudio } from "@transform/demux-audio";
 
 /**
  * Narration cleanup OFF the editor's main thread (STC-454). The preview plays
@@ -7,18 +7,21 @@ import type { PcmTrack } from "@transform/audio-mix";
  * about 1 s per minute of audio — long enough on a real take to stall the
  * picture and the transport if it ran where they do.
  *
- * The SAME `cleanNarration` export calls, bundled into this worker; nothing
- * here decides anything. Samples are transferred, not copied, both ways.
+ * STC-469: it is sent the COMPRESSED mic (~1 MB/min, structured-cloned — the
+ * session keeps using its own) and decodes it here, through the same
+ * `decodeMicForMix` the export calls, so the editor never has to keep a raw
+ * decoded copy just to have something to send. Nothing here decides
+ * anything. The cleaned samples are transferred back, not copied.
  */
-interface Request { id: number; strength: number; track: PcmTrack }
+interface Request { id: number; strength: number; audio: DemuxedAudio }
 
 const post = (self as unknown as { postMessage(m: unknown, transfer: Transferable[]): void }).postMessage.bind(self);
 
-self.onmessage = (e: MessageEvent<Request>) => {
-  const { id, strength, track } = e.data;
+self.onmessage = async (e: MessageEvent<Request>) => {
+  const { id, strength, audio } = e.data;
   try {
-    const out = cleanNarration(track, strength);
-    post({ id, track: out }, out.channels.map((c) => c.buffer as ArrayBuffer));
+    const track = await decodeMicForMix(audio, strength);
+    post({ id, track }, track ? track.channels.map((c) => c.buffer as ArrayBuffer) : []);
   } catch (err) {
     post({ id, error: err instanceof Error ? err.message : String(err) }, []);
   }
