@@ -36,6 +36,23 @@ export interface CursorShapeEvent {
 }
 export type SessionEvent = MoveEvent | ButtonEvent | CursorShapeEvent;
 
+/**
+ * A keyboard COMMAND (events-3, STC-419): a named non-printing key with any
+ * mods, or one printable character under cmd/ctrl. Never typing — the helper
+ * drops it and the schema refuses it. Kept OUT of `SessionEvent` on purpose:
+ * every cursor/zoom consumer reads `x`/`y` off those, and a key has neither,
+ * so the loader splits keys into `Session.keys` instead.
+ */
+export type KeyMod = "ctrl" | "opt" | "shift" | "cmd";
+export interface KeyEvent {
+  t: number;
+  kind: "key";
+  key: string;
+  mods: KeyMod[];
+}
+/** What events.json may hold: everything the cursor reads, plus keys. */
+export type RecordedEvent = SessionEvent | KeyEvent;
+
 /** Mirrors the optional `camera` block in schema/anchors-2.schema.json. */
 export interface CameraTrack {
   present: boolean;
