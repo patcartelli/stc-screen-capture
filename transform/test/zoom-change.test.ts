@@ -173,6 +173,54 @@ describe("deriveZoomCrop — the change track", () => {
   });
 });
 
+describe("deriveZoomCrop — a long merged window (STC-486)", () => {
+  // 15 clicks, one a second, merged by stage 1 into ONE ~16 s window. Every
+  // frame is within 600 ms of SOME click, so "near a trigger" no longer says
+  // anything — the shape of the Meet take STC-405 audited.
+  const clicks = Array.from({ length: 15 }, (_, i) =>
+    ({ t: (2000 + i * 1000) * MS, kind: "down", x: 500, y: 500, button: 0 } as SessionEvent));
+  const w = zoomWindowFrom(clicks);
+
+  /** Noise on every cell outside (1,1)..(2,2): active in ~35% of frames, at a fixed pseudo-random pattern. */
+  const noise = (frameIdx: number): [number, number][] => {
+    const out: [number, number][] = [];
+    for (let r = 0; r < 10; r++) for (let c = 0; c < 10; c++) {
+      if (c === 5 && r === 5) continue;
+      if (((frameIdx * 31 + c * 17 + r * 7) % 20) < 7) out.push([c, r]);
+    }
+    return out;
+  };
+
+  test("one real response to the first click, among noise everywhere: frame the response", () => {
+    const frames = regularFrameTimes(w);
+    const changes = makeChanges(10, 10, frames.map((t, i) => ({
+      t,
+      active: [
+        ...noise(i),
+        ...(t >= 2000 * MS && t <= 2000 * MS + BURST_TRAIL_NS ? [[5, 5]] as [number, number][] : []),
+      ],
+    })));
+    const crop = deriveZoomCrop(w, changes, anchorsWith(DISPLAY), framesCovering(w));
+    expect(crop).not.toBeNull();
+    const c = centerOf(crop!);
+    expect(c.x).toBeCloseTo(0.55, 1);
+    expect(c.y).toBeCloseTo(0.55, 1);
+  });
+
+  test("a held drag whose burst covers the whole window: the track says nothing, the cursor decides", () => {
+    // A move every 200 ms for 10 s: the merged burst interval IS the window.
+    const moves = Array.from({ length: 50 }, (_, i) =>
+      ({ t: (2000 + i * 200) * MS, kind: "move", x: 500, y: 500 } as SessionEvent));
+    const dw = zoomWindowFrom(moves);
+    const changes = makeChanges(10, 10, regularFrameTimes(dw).map((t, i) => ({ t, active: noise(i) })));
+    const crop = deriveZoomCrop(dw, changes, anchorsWith(DISPLAY), framesCovering(dw));
+    expect(crop).not.toBeNull(); // the cursor-only answer, not a trusted "don't zoom"
+    const c = centerOf(crop!);
+    expect(c.x).toBeCloseTo(0.5, 1);
+    expect(c.y).toBeCloseTo(0.5, 1);
+  });
+});
+
 describe("deriveZoomCrop — the cursor-clustering fallback", () => {
   test("changes entirely absent: a bare click clusters to a small dead zone around it", () => {
     const w: ZoomWindow = {

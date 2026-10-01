@@ -77,6 +77,16 @@ export const AMBIENT_FRAME_FRACTION = 0.8;
 export const BURST_CONCENTRATION = 0.5;
 
 /**
+ * A cell's share of change inside a burst interval must also exceed that
+ * interval's share of the window's frames by this much. Without it, a long
+ * window — every frame within 600 ms of SOME click — makes ANY cell that ever
+ * changed look concentrated (STC-486: 4 of 4 windows on a real Meet take).
+ * Uniform noise scores ~0 on this margin; a reaction scores up to 1 minus the
+ * interval's frame share.
+ */
+export const BURST_MARGIN = 0.25;
+
+/**
  * The union of surviving cells is treated as "no zoom" once its SHORTER axis
  * already covers this much of the full frame — the "barely tighter than the
  * full frame" floor the ticket names as its own outcome, distinct from (and
@@ -159,28 +169,66 @@ export type CellClass = "survivor" | "ambient" | "quiet" | "unconcentrated";
 export function classifyCells(window: ZoomWindow, changes: Changes, framesInWindow: readonly ChangeFrame[]): CellClass[] {
   const { gridWidth, gridHeight } = changes;
   const cellCount = gridWidth * gridHeight;
+  const n = framesInWindow.length;
   const totalWeight = new Float64Array(cellCount);
-  const burstWeight = new Float64Array(cellCount);
   const activeFrames = new Int32Array(cellCount);
 
+  // Candidates: each burst interval alone, then all of them together. A cell
+  // is event-triggered if its change concentrates in ANY candidate AND beats
+  // what that candidate's share of the frames would give it by chance.
+  const intervals = burstIntervals(window);
+  const K = intervals.length;
+  const candWeight = new Float64Array((K + 1) * cellCount);
+  const candFrames = new Int32Array(K + 1);
+
   for (const f of framesInWindow) {
-    const nearTrigger = window.events.some((e) => f.t >= e.t - BURST_LEAD_NS && f.t <= e.t + BURST_TRAIL_NS);
+    const k = intervals.findIndex(([lo, hi]) => f.t >= lo && f.t <= hi);
+    if (k >= 0) { candFrames[k]!++; candFrames[K]!++; }
     for (let i = 0; i < cellCount; i++) {
       const v = f.cells[i]!;
       totalWeight[i]! += v;
       if (v >= CELL_ACTIVE_FRACTION) activeFrames[i]!++;
-      if (nearTrigger) burstWeight[i]! += v;
+      if (k >= 0) { candWeight[k * cellCount + i]! += v; candWeight[K * cellCount + i]! += v; }
     }
   }
 
   const out: CellClass[] = new Array(cellCount);
   for (let i = 0; i < cellCount; i++) {
-    if (activeFrames[i]! / framesInWindow.length >= AMBIENT_FRAME_FRACTION) out[i] = "ambient"; // continuous
-    else if (totalWeight[i]! <= 0) out[i] = "quiet"; // nothing happened here
-    else if (burstWeight[i]! / totalWeight[i]! < BURST_CONCENTRATION) out[i] = "unconcentrated"; // not near a trigger
-    else out[i] = "survivor";
+    if (activeFrames[i]! / n >= AMBIENT_FRAME_FRACTION) { out[i] = "ambient"; continue; } // continuous
+    if (totalWeight[i]! <= 0) { out[i] = "quiet"; continue; } // nothing happened here
+    out[i] = "unconcentrated"; // not near a trigger
+    for (let k = 0; k <= K; k++) {
+      const share = candWeight[k * cellCount + i]! / totalWeight[i]!;
+      if (share >= BURST_CONCENTRATION && share - candFrames[k]! / n >= BURST_MARGIN) { out[i] = "survivor"; break; }
+    }
   }
   return out;
+}
+
+/** A trigger's burst window, [t - lead, t + trail]; overlapping ones merge, so a drag's many moves are ONE interval and two clicks a second apart are two. */
+function burstIntervals(window: ZoomWindow): [number, number][] {
+  const spans = window.events.map((e): [number, number] => [e.t - BURST_LEAD_NS, e.t + BURST_TRAIL_NS])
+    .sort((a, b) => a[0] - b[0]);
+  const out: [number, number][] = [];
+  for (const s of spans) {
+    const last = out[out.length - 1];
+    if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
+    else out.push([s[0], s[1]]);
+  }
+  return out;
+}
+
+/**
+ * Whether the burst test can tell a reaction from noise on this window at
+ * all: some interval must cover few enough frames that a cell could clear
+ * `BURST_MARGIN` over its frame share. When none can (one long drag whose
+ * burst covers the whole window) the change track has said nothing — that is
+ * UNINFORMATIVE, not "don't zoom", and the cursor gets the call.
+ */
+function burstIsInformative(window: ZoomWindow, framesInWindow: readonly ChangeFrame[]): boolean {
+  const n = framesInWindow.length;
+  return burstIntervals(window).some(([lo, hi]) =>
+    framesInWindow.filter((f) => f.t >= lo && f.t <= hi).length / n <= 1 - BURST_MARGIN);
 }
 
 /**
@@ -266,7 +314,7 @@ export function deriveZoomCrop(
 ): Rect | null {
   if (changes) {
     const framesInWindow = changes.frames.filter((f) => f.t >= window.startNs && f.t <= window.endNs);
-    if (framesInWindow.length > 0) return deriveFromChanges(window, changes, framesInWindow);
+    if (framesInWindow.length > 0 && burstIsInformative(window, framesInWindow)) return deriveFromChanges(window, changes, framesInWindow);
   }
   return deriveFromCursor(window, anchors, frames);
 }
