@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, existsSync, readdirSync, readFileSync, writeFileSync, cpSync } from "node:fs";
+import { mkdtempSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
@@ -20,15 +20,17 @@ import { windowCount, pageWithUrl, clickThatCloses } from "./_windows.js";
  */
 // Timeout arithmetic (_timeout-budget.ts: the outer literal must exceed the sum
 // of the inner `{ timeout }` bounds). Every test declares 300_000 as a LITERAL.
-//   test 1: poll 15 s (#copyprogress) + poll 120 s (copy-file) + poll 15 s (Copied)
-//           + recordAndStop poll 15 s + readyPanel 2 x 15 s = 195 s of inner bounds
-//   test 2: 15 + 120 + 15 + recordAndStop 15 + readyPanel 30 = 195 s
-//   test 3: 120 + 15 + 30 = 165 s;  test 4 (busy): 15 + 15 + 30 = 60 s (+ 1.5 s waits)
-//   test 5: 120 + 15 + 30 = 165 s
-//   test 6 (trash after copy): 120 + 15 + 15 + 30 = 180 s
-//   test 7 (trash mid-render): 15 + 15 + 15 + 30 = 75 s (+ 1 s wait)
-//   test 8 (dismiss mid-render): 15 + 15 + 30 = 60 s
-//   test 9 (reuse): 120 + 15 + 15 + 15 + 30 = 195 s
+//   Shared pieces: recordAndStop = 15 s poll; readyPanel = 2 x 15 s; each
+//   clickThatCloses = 15 s default; each windowCount poll = 15 s; copy-file = 120 s.
+//   test 1: 15 + 30 + #copyprogress 15 + 120 + Copied 15 = 195 s
+//   test 2: 15 + 30 + 15 + 120 + 15 (enabled) = 195 s
+//   test 3 (camera): 15 + 30 + 120 = 165 s
+//   test 4 (busy): 15 + 30 + Saving 15 + Could-not-save 15 = 75 s (+ 1.5 s waits)
+//   test 5 (refused): 15 + 30 + 120 = 165 s
+//   test 6 (trash after copy): 15 + 30 + 120 + clickThatCloses 15 + window poll 15 = 195 s
+//   test 7 (trash mid-render): 15 + 30 + 15 + 15 + 15 = 90 s (+ 1 s wait)
+//   test 8 (dismiss mid-render): 15 + 30 + 15 + 15 + 15 = 90 s
+//   test 9 (reuse): 15 + 30 + 120 + 15 (enabled) + 15 (copy-file 2) = 195 s
 // Inner bounds (195 s worst) clear 300 s strictly; the ~105 s left is launch,
 // teardown and startRecordFlow's hidden bounds (judgement headroom).
 const root = join(__dirname, "..", "..");
@@ -185,7 +187,7 @@ describe("copying a recording (STC-488)", () => {
 
   test("Copy, then Trash: the copy outlives the take", async () => {
     const l = await launch();
-    const dir = await recordAndStop(l);
+    await recordAndStop(l);
     const panel = await readyPanel();
     await panel.click("#copy");
     await expect.poll(() => copyRequests(l.copyLog).length, { timeout: 120_000 }).toBe(1);
@@ -193,7 +195,6 @@ describe("copying a recording (STC-488)", () => {
     await clickThatCloses(panel, "#trash");
     await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: POLL_MS }).toBe(0);
     expect(existsSync(path), "the paste still works").toBe(true);
-    void dir;
   }, 300_000);
 
   test("Trash during a render cancels it: no render window, no partial, no pasteboard write", async () => {
@@ -229,9 +230,17 @@ describe("copying a recording (STC-488)", () => {
     await panel.click("#copy");
     await expect.poll(() => copyRequests(l.copyLog).length, { timeout: 120_000 }).toBe(1);
     await expect.poll(() => panel.isEnabled("#copy"), { timeout: POLL_MS }).toBe(true);
+    const first = statSync(copyRequests(l.copyLog)[0]!.path);
     await panel.click("#copy");
+    // A re-render would show progress and a render window right after the click.
+    expect(await panel.isVisible("#copyprogress"), "no progress right after the click").toBe(false);
     await expect.poll(() => copyRequests(l.copyLog).length, { timeout: POLL_MS }).toBe(2);
+    expect(await panel.isVisible("#copyprogress"), "no progress before the second write").toBe(false);
     expect(await windowCount(app!, "copy-render.html"), "no second render").toBe(0);
-    expect(copyRequests(l.copyLog)[1]!.path).toBe(copyRequests(l.copyLog)[0]!.path);
+    const path = copyRequests(l.copyLog)[1]!.path;
+    expect(path).toBe(copyRequests(l.copyLog)[0]!.path);
+    const second = statSync(path);
+    expect(second.mtimeMs, "the file was not rewritten").toBe(first.mtimeMs);
+    expect(second.ino, "the file was not replaced").toBe(first.ino);
   }, 300_000);
 });

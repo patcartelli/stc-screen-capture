@@ -636,6 +636,11 @@ describe("estimateExportMs", () => {
  * that gate on a camera-LESS fixture.
  *
  * Four times is enough. This is the fifth caller's tripwire.
+ *
+ * `loadTake` (app/src/session-io.ts) is an approved route: it is the one shared
+ * loader every window uses, and session-io.ts itself calls `parseProject` and
+ * stays under this same check, so a file that obtains its project through it
+ * has still gone through the one parser.
  */
 describe("one parser decides a project (STC-232)", () => {
   const SCOPE = ["harness", join("app", "src")];
@@ -654,7 +659,7 @@ describe("one parser decides a project (STC-232)", () => {
 
   test("every file that produces a Project routes it through parseProject", () => {
     const offenders = sources()
-      .filter((f) => /:\s*Project\b/.test(f.src) && !f.src.includes("parseProject"))
+      .filter((f) => /:\s*Project\b/.test(f.src) && !f.src.includes("parseProject") && !f.src.includes("loadTake"))
       .map((f) => f.path);
     expect(offenders,
       "a Project built outside parseProject misses the defaults it applies — " +

@@ -226,6 +226,9 @@ const pendingTrash = new PendingTrash();
  * enough that the toast's own bar (driven by the identical `UNDO_WINDOW_MS`)
  * and the moment the file actually moves cannot drift far apart. */
 const TRASH_SWEEP_INTERVAL_MS = 1_000;
+// STC-488: how long quit waits for a cancelled copy render to finish removing
+// its partial; an in-flight write is one buffer, so a few seconds is generous.
+const COPY_CANCEL_AT_QUIT_MS = 5_000;
 
 // The renderer is sandboxed and cannot read files. It gets bytes over IPC and
 // never names a path: it may ask for one of a few fixed filenames, and only
@@ -905,8 +908,10 @@ function runQuitTeardown(): void {
   // answer when the process is going away underneath it.
   cancelCountdown();
   // STC-488: a Copy render at quit is abandoned and its partial deleted. The
-  // take itself is the unsaved-takes warning's business.
-  void cancelAllCopyRenders();
+  // take itself is the unsaved-takes warning's business. Called NOW so the
+  // windows die at once; the promise is awaited as a stage of the chain below,
+  // because the cleanup (wait out a write, rm the partial) outlives this tick.
+  const copyCancelled = cancelAllCopyRenders();
   hideToast();
   // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
   // is still armed for as long as this chain's own `await`s give the event
@@ -928,9 +933,14 @@ function runQuitTeardown(): void {
   // that exact path reachable on demand; its natural trigger is the OS.
   const commit = (d: string): Promise<void> =>
     process.env.STC_QUIT_FAULT === "trash-hangs" ? new Promise<void>(() => {}) : shell.trashItem(d);
-  Promise.all(pendingTrash.drainAll().map((d) =>
+  // Bounded like the trash commits: a cancel that never settles must not
+  // make the app unquittable.
+  const copyStage = withTimeout(copyCancelled, COPY_CANCEL_AT_QUIT_MS, "cancelling copy renders at quit")
+    .catch((e) => console.error("[copy] could not finish cancelling at quit:", e))
+    .then(() => { mark("copy"); });
+  Promise.all([copyStage, ...pendingTrash.drainAll().map((d) =>
     withTimeout(commit(d), TRASH_COMMIT_AT_QUIT_MS, `committing a promised deletion at quit (${d})`)
-      .catch((e) => console.error("[trash] could not commit at quit — the take stays in temp storage:", d, e))))
+      .catch((e) => console.error("[trash] could not commit at quit — the take stays in temp storage:", d, e)))])
     .then(() => { mark("trash"); return closeThumbnail(); })
     .catch(() => {})
     .then(() => { mark("thumbnail"); return closeOverlay(); })
@@ -2819,6 +2829,8 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
     });
     if (!r.ok) return r.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: r.detail };
   }
+  // A queued start can outlive a cancel; a gone panel gets no pasteboard write.
+  if (takeFor(dir)?.kind !== "recording") return { ok: false, cancelled: true };
   try {
     // HelperClient.request REJECTS with a HelperError on an error reply.
     await helper.copyFile(out);
@@ -2889,7 +2901,9 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
  * The clipboard is asked ONCE, here. If it can't be read (the client rejects
  * on an error reply), the round is skipped (`purgeDecision`'s undefined): a
  * file that might be on the clipboard is worth one more hour on disk. Only
- * ever deletes bare names `purgeDecision` returns, joined to `copiesRoot`.
+ * ever deletes bare names `purgeDecision` returns, joined to `copiesRoot`. A
+ * reused copy keeps its original mtime, so the 24 h clock runs from the
+ * render, not from the last Copy.
  */
 async function purgeCopies(): Promise<void> {
   const root = copiesRoot(process.env);
@@ -2926,8 +2940,9 @@ ipcMain.handle("panel:dismiss", async (_e, dir: string) => {
   }
   // STC-488: closing the panel ends any render of its Copy. Nobody is
   // waiting for it any more.
-  await cancelCopyRender(dir);
+  // The panel goes first: it need not wait out a large write's cleanup.
   dismissThumbnail(dir);
+  await cancelCopyRender(dir);
   return { ok: true };
 });
 
@@ -2962,7 +2977,10 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
   if (trashStyle(origin) === "confirm") {
     const r = await trashWithConfirmation([{ path: dir, label: "this take", plural: false }]);
     // STC-488: only once the Trash went through; a declined confirmation
-    // leaves the render running.
+    // leaves the render running. UNREACHABLE today: every recording panel is
+    // origin "fresh" and `panel:copyRecording` requires the temp root, so no
+    // render exists on a "confirm"-style take. If that ever changes, the
+    // cancel belongs BEFORE `trashOne`, not after it.
     if (r.ok) await cancelCopyRender(dir);
     return r;
   }
