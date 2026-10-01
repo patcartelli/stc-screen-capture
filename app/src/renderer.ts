@@ -92,6 +92,8 @@ declare const recorder: {
   chooseShareDestination(): Promise<{ destination: string | null }>;
   /** The resolved save location — never null, never a phrase (STC-412 I1). */
   resolvedSaveFolder(): Promise<string>;
+  /** STC-435: find unused `raw/` bundles, ask, trash. Main shows every result itself. */
+  reclaimSpace(): Promise<{ moved: number; failed: number }>;
   start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
@@ -990,6 +992,14 @@ $("stillchoosedest").addEventListener("click", async () => {
   // of the default `refreshDestination` exists to avoid.
   await recorder.chooseStillDestination();
   await refreshDestination();
+});
+$("reclaimspace").addEventListener("click", async () => {
+  // Disabled for the round trip: the sheet main puts up is modal, but the
+  // find before it is not, and a second press there would be swallowed by
+  // main's own guard with no feedback at all.
+  const btn = $("reclaimspace") as HTMLButtonElement;
+  btn.disabled = true;
+  try { await recorder.reclaimSpace(); } finally { btn.disabled = false; }
 });
 $("sitechoosedest").addEventListener("click", async () => {
   // Same reason `stillchoosedest` above re-fetches rather than trusting the
