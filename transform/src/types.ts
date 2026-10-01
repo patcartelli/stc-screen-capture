@@ -363,6 +363,8 @@ export interface NarrationCleanup {
 export interface Session {
   anchors: Anchors;
   events: SessionEvent[];
+  /** Keyboard commands (events-3, STC-419), sorted by t. Absent when the take recorded none. Never in `events`. */
+  keys?: KeyEvent[];
   frames: number[];
   cameraFrames?: number[];
   /** the frame-difference sidecar (STC-322), absent on every take today — nothing here can run the browser decode pass that writes it. Auto-zoom stage 2 (STC-326) falls back to cursor clustering when this is absent. */
