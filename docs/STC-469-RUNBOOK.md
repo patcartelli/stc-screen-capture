@@ -17,15 +17,22 @@ Branch: `accounts/stc-469-preview-audio-memory` until merged, then `master`.
 
 Take: synthetic, from `scripts/make-long-audio-take.mjs` on a real 13 s display take, 30 min of
 mic (mono, 48 kHz) + system (stereo, 48 kHz). `mic.m4a` 14.5 MB, `system.m4a` 23.1 MB.
-Command: `node scripts/measure-preview-memory.mjs <takeDir> --cleanup --export` (master: without
-`--export`, which it has no hook for; the branch's `reuse=false` run is master's export behaviour).
+Command (this branch): `node scripts/measure-preview-memory.mjs <takeDir> --cleanup --export`.
+
+Master has no copy of this version of the script, so master is measured by COPYING this branch's
+`scripts/measure-preview-memory.mjs` into a master worktree and running it there with `--cleanup`
+only. `--cleanup` works on both (it falls back to the `#previewaudio[data-cleaning]` indicator
+where master has no `__stcPreviewAudio` hook). `--export` is branch-only — it needs
+`__stcExportForTest` — and the branch's `reuse=false` run IS master's export behaviour, so that
+row's master cell is filled from it. Every steady-state and pre-export sample is taken after a
+forced GC (or, if `gc` is not exposed, once RSS stops moving); the script prints which.
 
 The controller fills this table from the run; every cell below reads "to be measured" until then.
 
 | | master | this branch |
 |---|---|---|
 | Steady state, cleanup on (renderer RSS) | to be measured — see §1 | to be measured — see §1 |
-| Export peak, `reuse=false` | to be measured — see §3 | to be measured — see §3 |
+| Export peak, `reuse=false` | same run as this branch's `reuse=false` (master never reuses) | to be measured — see §3 |
 | Export peak, `reuse=true` | n/a (no reuse on master) | to be measured — see §3 |
 | Take length / channel layout | 30 min, mic mono + system stereo | 30 min, mic mono + system stereo |
 
@@ -55,3 +62,7 @@ plus ~1 MB/min of compressed audio. The saving of this branch is one mono mic, ~
 - If that re-decode fails, the cleaned voice keeps playing while the project says cleanup is off,
   so preview and export differ until the next toggle.
 - After a cleanup-worker error with cleanup on, the preview keeps playing what it had.
+- A strength change followed by cleanup-off while a clean is in flight can briefly hold three mic
+  copies (the old cleaned one playing, the new cleaned one landed, the raw one decoding). It
+  converges when the raw mic lands; export reuse is unaffected, since it only reuses a track it
+  can identify.
