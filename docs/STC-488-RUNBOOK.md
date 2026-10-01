@@ -34,6 +34,10 @@ A target that pastes a path as text is a finding. Note which one.
 
 Also record one take with the camera on and play the pasted copy: PiP compositing is checked by eye here, since the e2e only checks that a camera take copies.
 
+Also record one take WITH the mic on (and system audio too, if available), Copy it, paste into Finder and play it: the narration (and the system audio) must be in the pasted file.
+
+Try the clipboard guard: start Copy on a 60 s take, and while "Rendering..." shows, copy some text from another app. When the render finishes the card must read "Ready, press Copy to put it on the clipboard" and your text must still be on the clipboard. Press Copy again: it must paste the video at once, with no new render.
+
 ## 2. Copy, then Trash (host)
 
 Copy, wait for "Copied", press Trash and let the undo toast expire. Paste in Finder. It must still paste the video.
@@ -42,6 +46,8 @@ Copy, wait for "Copied", press Trash and let the undo toast expire. Paste in Fin
 
 Record 60 s at full resolution. Press Copy and time "Rendering..." to "Copied". Expect around 40 s (export is about 1.5x faster than realtime). Write the number down. Does the progress bar read as progress, or look stalled at any point?
 
+Then a take of at least 10 minutes. The encoded bytes cross IPC whole, so watch the renderer and main process memory in Activity Monitor (the copy render window's renderer and the main Electron process) for the length of the Copy, and write down the peak of each and whether the Copy finished.
+
 ## 4. Cancel (host)
 
 Start a Copy on a 60 s take and press Trash halfway. Check that `~/Library/Application Support/<product name>/copies/` has no `.partial` and no new `.mp4`. Repeat with Cmd-Q during a render: quit should finish promptly (the copy-cancel stage of quit is bounded at 5 s).
@@ -49,3 +55,7 @@ Start a Copy on a 60 s take and press Trash halfway. Check that `~/Library/Appli
 ## 5. The purge (VM or host, optional, slow)
 
 Set a copy's mtime back 25 h (`touch -t`), copy a DIFFERENT file to the clipboard, and relaunch. After about 60 s the old copy must be gone. Repeat with the old copy itself on the clipboard: it must survive. A second Copy of a take reuses its file without touching its mtime, so the 24 h clock runs from the render.
+
+## 6. A copy render during a new recording (host, never measured)
+
+Start Copy on a 60 s take and press Record immediately (the render and the capture then share the GPU and the encoder). Record 30 s, stop, then open the NEW take's `anchors.json` and the stats it logged and look for dropped frames or non-monotonic PTS. Write down what you saw, even if it is nothing. If frames dropped, that is a separate decision (for example refusing to Copy while recording, or lowering the render's priority); this feature does not decide it.

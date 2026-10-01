@@ -61,8 +61,9 @@ check at purge time, no polling).
   `editor:open` uses. So the existing guarded `preview:read`/`preview:size`/
   `preview:chunk` handlers serve it unchanged, and the render window can never
   name a path. The render window's preload exposes only those three channels
-  plus `copy:progress`, `copy:done` and `copy:failed`. The finished bytes go
-  through a new `copy:write` handler. It accepts bytes only from a sender
+  plus `take:captureId`, `copy:progress`, `copy:write` and `copy:failed`.
+  There is no `copy:done`: success is `copy:write` finishing its rename. The
+  finished bytes go through that `copy:write` handler. It accepts bytes only from a sender
   registered as a copy job, and writes only to that job's `.partial` path,
   which main chose. The renderer supplies no file name.
 - **Progress and cancel:** `exportSession`'s existing `onProgress(done, total)`
@@ -73,7 +74,7 @@ check at purge time, no polling).
   once and leaves nothing to clean up in the renderer, and no signal crosses
   IPC (deviation 1).
 - **Capture identity (STC-413):** main resolves the take's capture id with the
-  same `ensureCaptureId` the editor's `captureId` channel uses, and the render
+  same `ensureCaptureId` the `take:captureId` channel uses, and the render
   window passes it as `captureId`, so a pasted copy can be traced back to its
   take like any other export. If it can't be resolved, the copy proceeds
   without one, matching the editor's behaviour.
@@ -87,10 +88,13 @@ check at purge time, no polling).
   stays false and `promotes("copy")` stays false. The button, ⌘C and the
   right-click menu all use `actionsFor`, so all three get it.
 - **While rendering:** the card shows "Rendering… 42%" and a progress bar.
-  Save and Edit are disabled, using the same `busy`/`setActionsEnabled(false)`
-  pattern a still's export already uses, so the take can't be moved into the
-  library while the render is reading it. Copy is disabled too, so a second
-  press can't start a second job.
+  Save and Edit are disabled (`panel-actions.ts`'s `lockedWhileCopying`, applied
+  by `setActionsEnabled`), so the take can't be moved into the library while
+  the render is reading it. This runs OUTSIDE the panel's `busy` flag, in its
+  own `copying` flag, which is what keeps Trash live. Copy is disabled too, so
+  a second press can't start a second job. Main enforces the same lock:
+  `panel:save` and `panel:edit` refuse with "a copy is still rendering" while a
+  render for that take is in flight.
 - **Trash stays enabled and cancels the render.** Main destroys the render
   window, deletes the `.partial`, and then runs the normal fresh-take Trash with its undo
   toast. A panel that waits must always have a way out. Escape and the
@@ -98,6 +102,15 @@ check at purge time, no polling).
 - **On success:** main calls the helper's `copy-file` with the finished path.
   The card shows "Copied, paste anywhere", every button is enabled again, and
   the panel stays open.
+- **A newer clipboard wins.** When Copy needs a render (a cache miss), main
+  reads the pasteboard's `changeCount` (from `pasteboard-files`) before the
+  render and again after it. If it moved, the person copied something else
+  meanwhile, so main does NOT call `copy-file`: it replies `ready`, the card
+  shows "Ready, press Copy to put it on the clipboard", every button is
+  enabled again and the file is kept. The next Copy is a cache hit and writes
+  at once. A cache hit writes immediately with no check (nothing ran long
+  enough to race). If the `changeCount` can't be read at either point, Copy
+  writes as before: the guard is a courtesy, not a gate.
 - **A second Copy:** if this take's finished copy still exists in
   `copiesRoot`, Copy skips the render and goes straight to `copy-file`. A
   copy the purge deleted is simply rendered again.
@@ -106,7 +119,11 @@ check at purge time, no polling).
   deleted, and the take is untouched. Nothing retries on its own.
 - **Quit during a render:** the job is cancelled and its `.partial` deleted,
   as part of `runQuitTeardown`. The existing unsaved-takes warning already
-  counts the take, because its panel is open.
+  counts the take, because its panel is open. "Save All" cancels the renders
+  first (bounded by `COPY_CANCEL_AT_QUIT_MS`), so it never promotes a take a
+  live render is still reading.
+- **The render window closes** by any route but the job's own settle: the
+  job settles as a failure ("the render window closed").
 - **The render window dies** (`render-process-gone`): it's treated as a
   failure, with the `.partial` deleted and the panel told.
 
@@ -121,7 +138,8 @@ check at purge time, no polling).
   the still path's decisions and is unit-tested without a pasteboard, like
   `StillEncodeDecisions.swift`.
 - **`pasteboard-files`, a second command:** returns the file URLs currently on
-  the general pasteboard, read-only. The purge is its only caller.
+  the general pasteboard and its `changeCount`, read-only. Its callers are the
+  purge and `panel:copyRecording`'s before/after check (§4).
 - **The purge** has its own hourly timer (`COPY_PURGE_INTERVAL_MS`), first
   run 60 s after launch (`COPY_PURGE_FIRST_DELAY_MS`). The existing
   `TEMP_PURGE_INTERVAL_MS` is 12 h, which would let a "24 h" copy live 36 h,
@@ -135,17 +153,20 @@ check at purge time, no polling).
   **skips this round** rather than deleting a file that might be on the
   clipboard.
 - **`app/src/recording-copy.ts`** (pure, Electron-free, node-only) owns
-  `copiesRoot`, `copyFileName(takeDir, existing)`, `COPY_MAX_AGE_MS`,
-  `copyFor(takeDir, entries)` (the cache lookup) and
-  `purgeDecision(entries, now, onClipboard)`. Main does the I/O, the same
+  `copiesRoot(env)`, `copyPathFor(env, takeDir)`, `PARTIAL_SUFFIX`,
+  `COPY_MAX_AGE_MS` and `purgeDecision(entries, now, onClipboard, root)`. There
+  is no separate cache-lookup function: the name is the cache key, so main's
+  `existsSync(copyPathFor(...))` is the lookup. Main does the I/O, the same
   split `temp-takes.ts` and `sweepOrphanedBundles` already follow.
 
 ## 6. Testing
 
 **Unit (CI):**
 - `recording-copy.test.ts`:
-  - file naming and the collision suffix;
-  - the cache hit and miss;
+  - where a copy lives (`copiesRoot`) and that a copy is named after its take
+    (`copyPathFor`; no collision suffix and no cache-lookup function, plan
+    deviation 2, so the hit and miss are covered end to end by the e2e's
+    reuse test);
   - `purgeDecision`: old deleted, young kept, the clipboard file kept however
     old, a stale `.partial` deleted, a fresh `.partial` kept, and no deletion
     at all when `onClipboard` is unknown.
@@ -174,7 +195,19 @@ windows are counted with `_windows.ts`.
    and `copy-file` was never sent.
 4. A second Copy sends `copy-file` again without rendering again (no new
    render window).
-5. Save and Edit are disabled during a render and enabled afterwards.
+5. Save and Edit are disabled during a render and enabled afterwards, by key
+   as well as by click.
+6. A camera take copies; a refused pasteboard write is reported and the panel
+   recovers.
+7. Dismiss mid-render cancels it; a second Copy reuses the file without a
+   render window or a rewrite (same inode and mtime).
+8. A clipboard change mid-render (`STC_FAKE_PASTEBOARD_CHANGE_AFTER_MS`) keeps
+   the file, sends no `copy-file`, shows the Ready status, and a second Copy
+   writes without a new render window.
+9. Quit mid-render closes inside the app-close bound and leaves `copiesRoot`
+   empty.
+10. A render that fails (a truncated `display.mp4`) reports "Could not copy",
+    re-enables the buttons, leaves no partial and sends no `copy-file`.
 
 **Hardware (`docs/STC-488-RUNBOOK.md`):** paste into Finder, Slack, Mail and
 Messages; Copy → Trash → paste; render time for a real 1-minute 4K take; and
