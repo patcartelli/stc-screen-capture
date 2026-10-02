@@ -51,6 +51,12 @@ const BASE_GOOD = {
   transform: { version: 8 },
 };
 
+// A valid pip.style (STC-461): every field cleanPipStyle requires.
+const GOOD_STYLE = {
+  shape: "circle", width: 0.125, cornerRadius: 0, center: { x: 0.9, y: 0.9 },
+  shadow: true, border: null, mirror: false,
+};
+
 describe("preview:writeProject refuses a malformed document (STC-465 review)", () => {
   test("refuses an out-of-range known field", async () => {
     const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
@@ -211,5 +217,24 @@ describe("preview:writeProject refuses a malformed document (STC-465 review)", (
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
     expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 14, keycast: { show: false } })).toBe("wrote");
     expect(JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8")).keycast).toEqual({ show: false });
+  }, 120_000);
+
+  test("refuses a malformed pip.style (STC-461)", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    const pip = { enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32 };
+    const style = { ...GOOD_STYLE, border: { widthPt: 2, color: "white" } };
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 15, pip: { ...pip, style } })).toMatch(/pip\.style/);
+    expect(existsSync(join(takeDir, "project.json"))).toBe(false);
+  }, 120_000);
+
+  test("a project-15 with a valid pip.style writes (STC-461)", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    const pip = { enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32 };
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 15, pip: { ...pip, style: GOOD_STYLE } })).toBe("wrote");
+    expect(JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8")).pip.style.shape).toBe("circle");
   }, 120_000);
 });
