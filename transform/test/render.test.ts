@@ -376,14 +376,34 @@ describe("render(): the cursor follows the zoom crop (STC-421)", () => {
 });
 
 import { DEFAULT_PIP_STYLE, pipRect, framingSource } from "../src/pip-style.js";
+import { fixedCornerPipUv, outputRect, roundRect, uvRectToPixels } from "../src/spaces.js";
+import { parseProject } from "../src/trim.js";
 
 describe("a styled PiP (STC-461)", () => {
   const t = 2_000_000_000; // inside the fixture camera's 1.0355 s .. 3.0245 s
   test("no style: no draw block, and the rect is exactly the fixed corner", () => {
     const { project, session } = pipSession();
+    expect(project.pip?.style).toBeUndefined();   // the control: this fixture really is unstyled
     const fs = render(project, session, t);
     expect(fs.pip).not.toBeNull();
     expect(fs.pip!.draw).toBeUndefined();
+    const cam = session.anchors.camera!;
+    const fixed = roundRect(uvRectToPixels(fixedCornerPipUv(project.pip!, project.output, cam), outputRect(project.output)));
+    expect({ x: fs.pip!.x, y: fs.pip!.y, width: fs.pip!.width, height: fs.pip!.height }).toEqual(fixed);
+  });
+  test("the styled gate fixture survives parseProject and renders a styled PiP", () => {
+    // fixtures/pip-styled/project.json is what gate:identity runs on; a loader
+    // that silently dropped its style would turn that gate into a second run of
+    // the unstyled one and still pass.
+    const raw = load("fixtures/pip-styled/project.json");
+    const { session } = pipSession();
+    const durationNs = session.frames[session.frames.length - 1]!;
+    expect(durationNs).toBeGreaterThan(t);
+    const project = parseProject(raw, raw.output.width, raw.output.height, durationNs, true);
+    expect(project.pip?.style).toBeDefined();
+    expect(project.pip!.style).toEqual(raw.pip.style);
+    const fs = render(project, session, t);
+    expect(fs.pip?.draw).toBeDefined();
   });
   test("a style resolves every drawing number", () => {
     const { project, session } = pipSession();
