@@ -176,9 +176,14 @@ function drawStyledPip(
   ctx.drawImage(camera, d.source.x, d.source.y, d.source.width, d.source.height, p.x, p.y, p.width, p.height);
   ctx.restore();
   if (d.border) {
+    // Its own save/restore: the context outlives the frame, and a lineWidth or
+    // strokeStyle left set here would make the next frame depend on whether the
+    // sink got there by seeking or by stepping.
+    ctx.save();
     ctx.lineWidth = d.border.px;
     ctx.strokeStyle = d.border.color;
     pipPath(ctx, p, d.radiusPx);
     ctx.stroke();
+    ctx.restore();
   }
 }

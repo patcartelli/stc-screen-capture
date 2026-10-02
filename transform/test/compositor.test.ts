@@ -167,7 +167,16 @@ describe("the styled PiP (STC-461) — drawing order", () => {
     expect(i("fill()")).toBeLessThan(i("clip()"));
     expect(i("clip()")).toBeLessThan(i("drawImage"));
     expect(ops[i("drawImage")]).toBe("drawImage([object Object],280,0,720,720,100,50,200,200)");
-    expect(ops.lastIndexOf("restore()")).toBeLessThan(i("stroke()"));
+    // The clip is released (the first restore after the image) before the border is stroked...
+    const clipRestore = ops.indexOf("restore()", i("drawImage"));
+    expect(clipRestore).toBeGreaterThan(-1);
+    expect(clipRestore).toBeLessThan(i("stroke()"));
+    // ...and the border has its own save/restore, so no stroke state outlives the frame.
+    const borderSave = ops.indexOf("save()", clipRestore);
+    expect(borderSave).toBeGreaterThan(clipRestore);
+    expect(borderSave).toBeLessThan(i("lineWidth="));
+    expect(ops.lastIndexOf("restore()")).toBeGreaterThan(i("stroke()"));
+    expect(ops.filter((o) => o === "save()").length).toBe(ops.filter((o) => o === "restore()").length);
     expect(ops).toContain("roundRect(100,50,200,200,100)");
     expect(ops).toContain("lineWidth=3");
     expect(ops).toContain("strokeStyle=#ffffff");
