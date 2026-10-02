@@ -8,6 +8,9 @@
  * Building a CGEvent needs no permission; POSTING one would, and would type
  * into whatever the machine has focused. So this proves everything except the
  * tap actually delivering keyDown — that is docs/STC-419-RUNBOOK.md's job.
+ * While STC_KEY_INJECT is set the helper keeps the REAL keyboard out of the
+ * tap's mask, so typing at the machine during a run cannot land in these
+ * takes (the first run, 2026-10-02, recorded a stray real ⌘H and failed).
  *
  * It is a grant test because a take only starts with Screen Recording (and,
  * since STC-315, Input Monitoring for the tap). `npm run test:capture`, never

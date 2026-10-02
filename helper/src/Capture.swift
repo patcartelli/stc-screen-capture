@@ -1751,8 +1751,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             (1 << CGEventType.rightMouseDown.rawValue) |
             (1 << CGEventType.rightMouseUp.rawValue) |
             (1 << CGEventType.rightMouseDragged.rawValue)
-        // STC-419: a Keys-off take never even asks for keyDown.
-        if wantKeys { mask |= (1 << CGEventType.keyDown.rawValue) }
+        // STC-419: a Keys-off take never even asks for keyDown. Under
+        // STC_KEY_INJECT the injection REPLACES the keyboard as the source
+        // (as STC_CAPTURE_FAULT=window-moved replaces the window sampler):
+        // first grant run, 2026-10-02, a real ⌘H pressed mid-test landed in
+        // the take and failed an exact-sequence assertion.
+        if wantKeys && !Self.keyInjectionActive { mask |= (1 << CGEventType.keyDown.rawValue) }
 
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo else { return Unmanaged.passUnretained(event) }
@@ -1886,9 +1890,14 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Builds REAL CGEvents (no permission needed to build one, only to post
     /// one) and feeds them through `handleTapEvent`, timestamped on the take's
     /// clock. Proves everything but the tap delivering keyDown — that is
-    /// docs/STC-419-RUNBOOK.md's job. Same shape as STC_CAPTURE_FAULT.
+    /// docs/STC-419-RUNBOOK.md's job. Same shape as STC_CAPTURE_FAULT. While it
+    /// is set the real keyboard is NOT in the tap's mask (`makeEventTap`).
+    private static var keyInjectionActive: Bool {
+        !(ProcessInfo.processInfo.environment["STC_KEY_INJECT"] ?? "").isEmpty
+    }
+
     private func startKeyInjection() {
-        guard let path = ProcessInfo.processInfo.environment["STC_KEY_INJECT"], !path.isEmpty else { return }
+        guard Self.keyInjectionActive, let path = ProcessInfo.processInfo.environment["STC_KEY_INJECT"] else { return }
         guard let data = FileManager.default.contents(atPath: path),
               let list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
             IO.log("STC_KEY_INJECT: could not read \(path)"); return
