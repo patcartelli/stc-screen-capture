@@ -86,7 +86,13 @@ jobs:
 
       # Everything that runs anywhere. Excludes *.grant.test.ts (needs a Screen
       # Recording grant, which no CI runner can give) and *.slow.test.ts.
+      #
+      # Bounded as one process (STC-498), like test:slow and every gate: 27 min
+      # is TEST_STEP_MS in scripts/gate-bounds.mjs, ~1.3x the slowest healthy
+      # run measured. gate-bounds.test.ts asserts the two agree. If it fires on
+      # a healthy run, the suite has outgrown it: re-measure and raise both.
       - name: Test
+        timeout-minutes: 27
         run: npm test
 
       # Real Chrome, not bundled Chromium: the bundled build lacks H.264, and
