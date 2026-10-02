@@ -2847,8 +2847,9 @@ async function refreshShareRow(): Promise<void> {
 
 async function publish(): Promise<void> {
   if (!openProject || !player) return;
-  // STC-461: commit a reframe first — while reframing persistProject writes
-  // nothing, so the slug below would never reach the project.json main reads.
+  // STC-461: commit a reframe first, so the take main publishes is the one the
+  // user ends up with — the live project still holds the temporary display
+  // style until the reframe is committed.
   await exitReframe(true);
   const btn = $("share") as HTMLButtonElement;
   const slug = ($("shareslug") as HTMLInputElement).value.trim();
