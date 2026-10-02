@@ -61,8 +61,13 @@ export const SAMPLE_PROCESSES = 3;
 export const QUICK_COMMAND_MS = 1_500;
 export const PARALLEL_COMMAND_MS = 5_000;
 
-/** `closeApp`'s own sample, which must fit in `CLOSE_GIVE_UP_MARGIN_MS`. */
-export const CLOSE_SAMPLE_MS = 3_000;
+/**
+ * `closeApp`'s own snapshot of the app it is about to kill, which must fit in
+ * `CLOSE_GIVE_UP_MARGIN_MS`. 3 s was too short: on the first stalled CI run
+ * with this in place (37043431975, load average 14 on a 3-CPU VM) not one of
+ * three samples finished inside it.
+ */
+export const CLOSE_SAMPLE_MS = 7_000;
 
 /**
  * Whether a finished test's errors mean it HUNG rather than failed an
@@ -153,13 +158,35 @@ export function run(cmd: string, args: readonly string[], timeoutMs: number): Pr
 }
 
 /**
- * `sample` one process into `file`, under `boundMs`. macOS only; resolves
- * false anywhere else, or when the process is gone, or when the bound fires.
+ * `sample` one process into `file`, under `boundMs`. macOS only; not ok
+ * anywhere else, or when the process is gone, or when the bound fires — and
+ * then `error` says which, since a missing sample is itself evidence.
  */
-export async function sampleProcess(pid: number, file: string, boundMs: number): Promise<boolean> {
-  if (process.platform !== "darwin") return false;
-  const r = await run("/usr/bin/sample", [String(pid), "1", "-mayDie", "-file", file], boundMs);
-  return r.ok;
+export async function sampleProcess(pid: number, file: string, boundMs: number): Promise<CommandResult> {
+  if (process.platform !== "darwin") return { ok: false, stdout: "", error: "not macOS" };
+  return run("/usr/bin/sample", [String(pid), "1", "-mayDie", "-file", file], boundMs);
+}
+
+/**
+ * What a hung app looks like the moment `closeApp` gives up on it, BEFORE
+ * the kill: its `ps` state, a `sample`, and (CI only) the screen, all at
+ * once, under `CLOSE_SAMPLE_MS`. The per-test snapshot runs after every
+ * hook, by which time `closeApp` has killed the app — on run 37043431975 it
+ * found no Electron process at all — so this is the only look at the app
+ * itself. Returns a clause for closeApp's error.
+ */
+export async function snapshotHungApp(pid: number, dir: string): Promise<string> {
+  mkdirSync(dir, { recursive: true });
+  const stem = join(dir, `close-gave-up-${pid}-${Date.now()}`);
+  const [stat, sampled] = await Promise.all([
+    run("ps", ["-o", "stat=,etime=,pcpu=", "-p", String(pid)], QUICK_COMMAND_MS),
+    sampleProcess(pid, `${stem}.sample.txt`, CLOSE_SAMPLE_MS),
+    process.platform === "darwin" && process.env.CI
+      ? run("screencapture", ["-x", `${stem}.png`], CLOSE_SAMPLE_MS)
+      : Promise.resolve(),
+  ]);
+  return `ps stat/etime/cpu: ${stat.stdout.trim() || "gone"}; `
+    + (sampled.ok ? `its stacks are in ${stem}.sample.txt` : `no sample (${sampled.error})`);
 }
 
 /**
@@ -204,7 +231,7 @@ export async function collectDiagnostics(dir: string, n: number, label: string):
       : Promise.resolve(),
   ]);
   const alive = electronMains(rows).map((m) => `${m.pid}(${m.ageS}s,${m.stat})`).join(" ") || "none";
-  const sampledPids = mains.filter((_, i) => sampled[i]).map((m) => m.pid).join(",") || "none";
+  const sampledPids = mains.filter((_, i) => sampled[i]!.ok).map((m) => m.pid).join(",") || "none";
   return `electron mains alive: ${alive}; sampled: ${sampledPids}; `
     + `${interesting(rows).length} app/helper processes; load: ${load.stdout.trim() || load.error}; wrote ${out}`;
 }
