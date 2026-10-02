@@ -1377,10 +1377,13 @@ $("vieweye").addEventListener("change", () => {
 // ---- the export dialog -------------------------------------------------
 
 const exportDialog = $("exportdialog") as HTMLDialogElement;
-$("openexport").addEventListener("click", () => {
+$("openexport").addEventListener("click", () => void (async () => {
+  // STC-461: the dialog never opens over a reframe — every output it leads to
+  // reads the live project, which holds the temporary display PiP meanwhile.
+  await exitReframe(true);
   if (!exportDialog.open) exportDialog.showModal();
-  void refreshShareRow();
-});
+  await refreshShareRow();
+})().catch((e: any) => alertUser(String(e?.message ?? e))));
 $("closeexport").addEventListener("click", () => exportDialog.close());
 
 // ---- opening and closing the take -------------------------------------
@@ -1460,6 +1463,7 @@ let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?:
 (window as unknown as { __stcExportForTest: (o: { reuse: boolean }) => Promise<unknown> }).__stcExportForTest =
   async ({ reuse }) => {
     if (!openSession || !openProject) throw new Error("no take open");
+    await exitReframe(true); // STC-461: never export the temporary reframe display
     // runExport holds exportAbort for its whole run (cleared in its finally,
     // even after a cancel), so set means a real export is still in flight.
     if (exportAbort) throw new Error("a real export is running");
@@ -1538,7 +1542,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 async function closeTake(): Promise<void> {
   exportAbort?.abort();
   // STC-461: a take closed (or reloaded) mid-reframe drops it — no write.
-  exitReframe(false);
+  void exitReframe(false);
   $("framestatus").setAttribute("hidden", "");
   // Not commitDraft()+closeOverrideEditor(): the take (and its project) are
   // going away regardless, and persisting a draft against a project about to
@@ -1876,7 +1880,7 @@ pipPanel.addEventListener("beforetoggle", (e) => {
   if ((e as ToggleEvent).newState !== "open") return;
   // The Camera button pressed mid-reframe: finish the reframe first, so the
   // inspector edits the real style and never the temporary display one.
-  exitReframe(true);
+  commitReframe();
   placePipPanel();
 });
 pipPanel.addEventListener("toggle", () => layoutPipOverlay());
@@ -2002,28 +2006,36 @@ function enterReframe(): void {
 
 /**
  * Leave reframe. `commit` puts the real style back WITH the new framing and
- * persists (Done, Escape, the Camera button); not committing (the take
+ * persists (Done, Escape, the Camera button, and every output entry point —
+ * export, publish, a frame grab — before it reads the live project); the
+ * returned promise settles when that write has. Not committing (the take
  * closing) restores the live project as it was and writes nothing.
+ * Synchronous up to the write: the live project is real again on return.
  */
-function exitReframe(commit: boolean): void {
-  if (!reframing) return;
+function exitReframe(commit: boolean): Promise<void> {
+  if (!reframing) return Promise.resolve();
   const { real, before } = reframing;
   reframing = null;
   frameDrag = null;
   $("pipframing").hidden = true;
   $("pipframebar").hidden = true;
-  if (!openProject?.pip) return;
-  if (!commit) { openProject.pip.style = before; return; }
+  if (!openProject?.pip) return Promise.resolve();
+  if (!commit) { openProject.pip.style = before; return Promise.resolve(); }
   // A take still on the fixed corner, left untouched, stays on it (and at its
   // own project version) rather than being rewritten as an explicit style.
   if (before === undefined && real.framing === undefined) {
     openProject.pip.style = undefined;
     updatePipButton();
     if (player) void player.seek(player.currentNs);
-    persistPip();
-    return;
+  } else {
+    setPipStyle(real, false);
   }
-  setPipStyle(real, true);
+  return persistProject();
+}
+
+/** Fire-and-report form, for the UI's own ways out of reframe. */
+function commitReframe(): void {
+  void exitReframe(true).catch((e: any) => alertUser(String(e?.message ?? e)));
 }
 
 $("pipframewindow").addEventListener("pointerdown", (e) => {
@@ -2061,14 +2073,14 @@ $("pipframing").addEventListener("wheel", (e) => {
   e.preventDefault();
   setFramingZoom((reframing.real.framing?.zoom ?? 1) * Math.exp(-e.deltaY / 500));
 }, { passive: false });
-$("pipframedone").addEventListener("click", () => exitReframe(true));
+$("pipframedone").addEventListener("click", commitReframe);
 // Capture phase + stopImmediatePropagation: Escape here ends the reframe and
 // nothing else (not the override editor's, not the frame menu's, not the timeline's).
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || !reframing) return;
   e.preventDefault();
   e.stopImmediatePropagation();
-  exitReframe(true);
+  commitReframe();
 }, { capture: true });
 
 $("micmute").addEventListener("click", () => {
@@ -2700,6 +2712,8 @@ $("trim-out").addEventListener("pointercancel", onHandleUp);
 
 async function runExport(): Promise<void> {
   if (!openSession || !openProject || exportAbort) return;
+  // STC-461: commit a reframe first — the export reads the live project.
+  await exitReframe(true);
   player?.pause();
   exportAbort = new AbortController();
 
@@ -2807,6 +2821,9 @@ async function refreshShareRow(): Promise<void> {
 
 async function publish(): Promise<void> {
   if (!openProject || !player) return;
+  // STC-461: commit a reframe first — while reframing persistProject writes
+  // nothing, so the slug below would never reach the project.json main reads.
+  await exitReframe(true);
   const btn = $("share") as HTMLButtonElement;
   const slug = ($("shareslug") as HTMLInputElement).value.trim();
   if (!slugIsValid(slug)) {
@@ -2870,6 +2887,8 @@ async function withFrame(action: "copy" | "save"): Promise<void> {
   if (!player || frameBusy) return;
   frameBusy = true;
   try {
+    // STC-461: commit a reframe first — captureFrame re-renders the live project.
+    await exitReframe(true);
     const { tNs, rgba, width, height } = await player.captureFrame();
     const settings = (await editor.getSettings()).still;
     const r = await editor.exportStill({
