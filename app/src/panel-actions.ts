@@ -18,18 +18,14 @@
  * like four cases rather than two independent questions, and the next kind or
  * the next origin would double it again.
  *
- * ## One absence is deliberate, and has a reason on it
+ * ## Copy mechanism (STC-395)
  *
- * **A recording has no Copy.** Copy needs a format and a recording's format
- * picker is STC-395, explicitly out of scope here. The only video file in a
- * fresh take is `display.mp4`, which has `showsCursor` off by design — copying
- * it would hand someone a file that looks like their recording and is missing
- * the pointer. An action that looks like it worked is worse than an absent one.
- * It comes back for free when its blocking ticket lands: one row.
- *
- * NOTE (2026-09-17): the spec's "Copy → Trash on recordings" block overturns
- * the Copy half — see D6/Q1 in the plan. `actionsFor` gains `copy` for a
- * recording once Q1 is answered.
+ * **Both kinds get Copy now.** A shot's Copy writes image data to the
+ * clipboard. A recording's Copy writes an APFS clone (`clonefile`) to temp;
+ * the clipboard references the clone as a file URL. Trash deletes only the
+ * take, so the paste still works. Clones purge after 24h, except a clone that
+ * is still the current clipboard item at purge time (one pasteboard check at
+ * purge, no polling).
  *
  * ## A shot's Edit opens a still editor now (STC-300)
  *
@@ -54,7 +50,8 @@ export type TakeKind = "shot" | "recording";
  * Whether anyone has said yes to it yet. Decides what Save and Trash mean.
  *
  * `fresh` is a capture still sitting in temp storage (STC-393) — nothing has
- * kept it, so Save promotes and Trash is cheap. `library` is STC-294's
+ * kept it, so Save promotes and Trash is cheap. Copy on a recording does NOT
+ * promote (STC-395: the clone outlives the take). `library` is STC-294's
  * re-open: already on disk, already kept, so there is nothing to Save and
  * Trash is destroying something the user chose.
  */
@@ -78,8 +75,8 @@ export interface PanelTake {
  */
 export function actionsFor(take: PanelTake): readonly PanelAction[] {
   const out: PanelAction[] = [];
-  // See the module doc: a recording has no Copy until STC-395.
-  if (take.kind === "shot") out.push("copy");
+  // Both kinds get Copy now (STC-395) — see the module doc for the mechanism.
+  out.push("copy");
   // Nothing to promote for something already in the library.
   if (take.origin === "fresh") out.push("save");
   // Both kinds get Edit now (STC-300) — see the module doc for where each
