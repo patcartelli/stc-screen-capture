@@ -9,7 +9,16 @@ Plan: `docs/superpowers/plans/2026-10-01-stc-419-keycast.md`.
 
 Commands only: arrows, Return/Enter, Tab, Escape, Delete, Home/End, Page Up/Down, F1-F12, and chords with ⌘ or ⌃ on a printable ASCII key. **Typing never reaches disk.** The rule is `decideKeyEvent` in `helper/src/KeyDecisions.swift`; the schema enforces it again (`schema/events-3.schema.json`, an if/then) and so does the loader (`checkKeyEvent` in `transform/src/keycast.ts`). Dropped keys are only counted (`keysRecorded`/`keysDropped`, in the `stop` reply only, never the periodic stats, which would expose typing rhythm). The keyboard layout snapshot is taken in `start()` in `helper/src/main.swift`, on the main thread (TIS must run there), and passed down. It is the ASCII-capable layout (`TISCopyCurrentASCIICapableKeyboardLayoutInputSource`): the current layout when that is ASCII-capable, otherwise the one macOS resolves shortcuts against. Keys are split into `Session.keys` by the loader and never enter `session.events`. The keycast is drawn last by `composite()` on the output canvas with a system font stack (`TRANSFORM_VERSION` 12). project-13 `keycast.show` is written only when false.
 
-What has been verified on this Mac: unit suites, `npm run typecheck`, and `gate:identity` on `fixtures/keycast` and `fixtures/basic` (0 mismatches). **Not run here:** `helper/test/keys.grant.test.ts` (needs grants, SKIP-GRANT) and the new e2e files (`app/test/keys-toggle.e2e.test.ts`, `app/test/keycast-editor.e2e.test.ts`, two new cases in `app/test/preview-write-project.e2e.test.ts`). `STC_KEY_INJECT` (tests) builds real CGEvents and feeds `handleTapEvent`, so it proves everything except the tap actually delivering keyDown, which is §1-§2.
+What has been verified on this Mac: unit suites, `npm run typecheck`, and `gate:identity` on `fixtures/keycast` and `fixtures/basic` (0 mismatches). **Not run here:** the new e2e files (`app/test/keys-toggle.e2e.test.ts`, `app/test/keycast-editor.e2e.test.ts`, two new cases in `app/test/preview-write-project.e2e.test.ts`); they run on CI. `STC_KEY_INJECT` (tests) builds real CGEvents and feeds `handleTapEvent`, so it proves everything except the tap actually delivering keyDown, which is §1-§2. While it is set, the real keyboard is kept OUT of the tap's mask, so typing at the machine during a grant run cannot land in the test's takes.
+
+## Results (Patrick, 2026-10-02, macOS 27)
+
+- **§1 PASSES.** No TCC prompt on a Keys-on take (an Input Monitoring prompt had appeared some launches earlier, for the cursor tap STC-315 already requires). Capture is NOT in the Accessibility-class list. On macOS 27 there is no "Accessibility" row in Privacy & Security; the equivalent is **Device Control and Data Access** ("monitor your keyboard … control any app"), and Capture is absent there. Input Monitoring is the only input grant keys need.
+- **The real tap delivers keyDown.** The first grant run, before the mask fix, recorded a real ⌘H pressed mid-run, and dropped 2 real typed keys as typing.
+- **`keys.grant.test.ts`: 3/3 pass** after the mask fix.
+- **§2, Keys on: passes.**
+- **§3: the export looks good** at column width. No change to `KEYCAST_HOLD_TICKS` or `KEYCAST_FONT_FRACTION`.
+- **Open:** §2 Keys OFF and the non-Latin layout check.
 
 ## 0. Build and branch
 
@@ -17,11 +26,11 @@ What has been verified on this Mac: unit suites, `npm run typecheck`, and `gate:
 git fetch && git checkout accounts/stc-419-show-keystrokes && helper/build.sh && npm run app:start
 ```
 
-## 1. Permissions (the claim this ticket rests on, UNVERIFIED on hardware)
+## 1. Permissions (the claim this ticket rests on; passed 2026-10-02, see Results)
 
-The premise: Input Monitoring already covers keyDown on a listen-only event tap, so no Accessibility grant is needed. Nothing has confirmed this on a Mac.
+The premise: Input Monitoring already covers keyDown on a listen-only event tap, so no Accessibility grant is needed.
 
-Turn Keys on in the Record bar and record a take. Expect **no new TCC prompt**. In System Settings > Privacy & Security > Accessibility the app must **not** be listed; Input Monitoring is the only input grant. If any prompt appears, stop and report which one: that sends the ticket's permission premise back for a decision.
+Turn Keys on in the Record bar and record a take. Expect **no new TCC prompt**. The app must **not** be in the Accessibility-class list: System Settings > Privacy & Security > Accessibility before macOS 27, **Device Control and Data Access** on macOS 27 (the Accessibility row is gone). Input Monitoring is the only input grant. If any prompt appears, stop and report which one: that sends the ticket's permission premise back for a decision.
 
 ## 2. The real tap
 
