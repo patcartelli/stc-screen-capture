@@ -114,6 +114,13 @@ describe("defaults", () => {
   test("DEFAULT_PIP is the one fixed-corner value", () => {
     expect(DEFAULT_PIP).toEqual(DEFAULT_PIP_FIXED);
   });
+  test("DEFAULT_PIP_STYLE IS the fixed corner at the Settings mock's nominal 1920x1080 / 1280x720", () => {
+    // Exact equality, not toBeCloseTo: isDefaultPipStyle compares with ===, so a
+    // near miss would make an untouched Settings default seed every new take.
+    expect(styleFromFixedCorner(DEFAULT_PIP_FIXED, { width: 1920, height: 1080 }, { width: 1280, height: 720 }))
+      .toEqual(DEFAULT_PIP_STYLE);
+    expect(isDefaultPipStyle(styleFromFixedCorner(DEFAULT_PIP_FIXED, { width: 1920, height: 1080 }, CAM))).toBe(true);
+  });
   test("isDefaultPipStyle / pipStylesEqual", () => {
     expect(isDefaultPipStyle({ ...DEFAULT_PIP_STYLE, center: { ...DEFAULT_PIP_STYLE.center } })).toBe(true);
     expect(isDefaultPipStyle(style({ shadow: true }))).toBe(false);

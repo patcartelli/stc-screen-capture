@@ -73,9 +73,18 @@ export const DEFAULT_PIP_FIXED = Object.freeze({
   enabled: true as boolean, corner: "bottom-right" as const, widthPct: 0.125, marginPx: PIP_SNAP_MARGIN_PX,
 });
 
-/** What Settings holds until someone changes it. Equal to it = nothing is seeded into a take. */
+/**
+ * What Settings holds until someone changes it. Equal to it = nothing is seeded into a take.
+ *
+ * It IS the fixed corner, expressed as a style: `DEFAULT_PIP_FIXED` at a 1920x1080
+ * output with a 1280x720 camera — the Settings mock's own nominal sizes — is a
+ * 240x135 PiP at (1648, 913), centred on (1768, 980.5). So the mock shows the
+ * default where an untouched take puts it, and a take seeded from an edited
+ * default starts from that spot instead of jumping. pip-style.test.ts holds this
+ * equal to `styleFromFixedCorner(DEFAULT_PIP_FIXED, 1920x1080, 1280x720)`.
+ */
 export const DEFAULT_PIP_STYLE: Readonly<PipStyle> = Object.freeze({
-  shape: "rect", cornerRadius: 0, center: Object.freeze({ x: 0.9, y: 0.86 }), width: 0.125,
+  shape: "rect", cornerRadius: 0, center: Object.freeze({ x: 1768 / 1920, y: 980.5 / 1080 }), width: 0.125,
   mirror: false, border: null, shadow: false,
 }) as Readonly<PipStyle>;
 
