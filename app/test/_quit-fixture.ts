@@ -118,6 +118,10 @@ export async function closeApp(app: ElectronApplication | undefined, hookBoundMs
   const onData = (chunk: Buffer | string) => {
     for (const line of String(chunk).split("\n")) {
       if (line.includes("[quit]")) quitLines.push(line.trim());
+      // STC-496: a resize refused because the app is quitting. It is rare by
+      // design and names the caller that crashed CI, so it is printed however
+      // fast the close was.
+      if (line.includes("[geometry]")) process.stderr.write(`[closeApp] pid ${proc.pid}: ${line.trim()}\n`);
     }
   };
   proc.stderr?.on("data", onData);
