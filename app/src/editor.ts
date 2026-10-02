@@ -87,6 +87,7 @@ import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
 import { windowId, overrideFor, resolvedWindows, rectFromGesture } from "@transform/zoom-override";
+import { committedOverrides, overridesWithoutWindow, overridesWithoutManual, type OverrideEdit } from "./override-edit.js";
 import type { Rect } from "@transform/spaces";
 import {
   clampTrimFrame, decideKey, formatReadout, formatShuttle, frameAtFraction, frameToNs,
@@ -452,7 +453,14 @@ async function persistProject(): Promise<void> {
   // stays usable meanwhile, so the write still happens — of a COPY whose PiP
   // is the one the reframe would commit right now (reframedProject). STC-396:
   // a framing held aside by the override editor is put back on that copy.
-  const live = reframing ? reframedProject(openProject, reframing) : openProject;
+  const reframed = reframing ? reframedProject(openProject, reframing) : openProject;
+  // STC-500: the same for an open zoom-override edit — the LIVE project has
+  // that window's own entry stripped (so the stage shows the unzoomed picture
+  // to draw on), and a save made meanwhile (trim, levels, a slug…) must not
+  // write it out without it. The copy carries the edit as Done would commit
+  // it right now; the live project stays stripped.
+  const overrides = editedOverrides();
+  const live = overrides ? { ...reframed, overrides } : reframed;
   const doc = projectForWrite(withHeldFraming(live, heldFraming), player.durationNs);
   await editor.writeProject(
     new TextEncoder().encode(JSON.stringify(doc, null, 2)).buffer as ArrayBuffer,
@@ -819,17 +827,28 @@ function manualEntries(): Extract<ZoomOverride, { kind: "manual" }>[] {
   return (openProject?.overrides ?? []).filter((o): o is Extract<ZoomOverride, { kind: "manual" }> => o.kind === "manual");
 }
 
-function overridesWithoutWindow(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
-  return (overrides ?? []).filter((o) => !(o.kind === "geometry" && o.windowId === id));
-}
+// overridesWithoutWindow / overridesWithoutRetime / overridesWithoutManual
+// moved to override-edit.ts (STC-500) with the commit rule that uses them.
 
-/** Strips a `retime` entry for `id` (STC-329) — the sibling of `overridesWithoutWindow`'s geometry-only filter, kept separate rather than folded in: a geometry drag and a retime drag commit independently (dragging the rect must not discard a prior retime, and vice versa). */
-function overridesWithoutRetime(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
-  return (overrides ?? []).filter((o) => !(o.kind === "retime" && o.windowId === id));
-}
-
-function overridesWithoutManual(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
-  return (overrides ?? []).filter((o) => !(o.kind === "manual" && o.id === id));
+/**
+ * The open zoom-override edit as data, or null when none is open (STC-500) —
+ * what `committedOverrides` needs to say what the edit would commit to right
+ * now. Done, every save made mid-edit, and every output read it the same way.
+ */
+function editState(): OverrideEdit | null {
+  if (editingWindowId !== null) {
+    return {
+      kind: "derived", windowId: editingWindowId, rect: draftRect, easing: draftEasing,
+      startNs: draftManualStart, endNs: draftManualEnd,
+    };
+  }
+  if (editingManualId !== null) {
+    return {
+      kind: "manual", id: editingManualId, rect: draftRect, easing: draftEasing,
+      startNs: draftManualStart, endNs: draftManualEnd,
+    };
+  }
+  return null;
 }
 
 /**
@@ -925,64 +944,44 @@ function layoutOverrideBlocks(): void {
 }
 
 /**
- * Writes the current draft into project.overrides and persists — an empty
- * draft means "no geometry override" (unchanged since STC-330).
- *
- * A `retime` entry (STC-329) is written or cleared independently, alongside
- * whatever this call decides about geometry: dragging the rect must not
- * discard a prior retime, and dragging an edge must not discard a prior
- * geometry override — the two compose (render.ts's own header says why:
- * retime changes WHEN, geometry/stage 2 still decide WHERE). Whether a
- * retime is needed is decided against the window's TRUE derived bounds,
- * looked up fresh here rather than trusted from whatever seeded
- * `draftManualStart`/`End` — those were seeded from the ALREADY-resolved
- * (possibly already-retimed) window, so comparing against them would miss a
- * retime that exactly undoes a previous one.
+ * The live project's overrides with the open edit committed into it, or
+ * undefined when no edit is open (STC-500). `committedOverrides`
+ * (override-edit.ts) is the rule; its header says what a derived and a manual
+ * commit each write. Undefined, too, for a derived edit with no session
+ * loaded: its retime is decided against the events, and guessing without them
+ * would drop one. Used by Done (below) and by persistProject for a save made
+ * mid-edit — one rule, so the two cannot drift.
+ */
+function editedOverrides(): ZoomOverride[] | undefined {
+  const edit = editState();
+  if (!openProject || !edit || (edit.kind === "derived" && !openSession)) return undefined;
+  return committedOverrides(openProject.overrides, edit, openSession?.events ?? [], openProject.zoom?.preset);
+}
+
+/**
+ * Done for a DERIVED window: writes the draft into project.overrides and
+ * persists. An empty draft means "no geometry override" (STC-330); a retime
+ * (STC-329) is written or cleared independently, decided against the window's
+ * TRUE derived bounds — both are `committedOverrides`' rules now. The edit is
+ * still open while persistProject runs, so it commits the same edit into its
+ * copy again: a no-op, because the rule is idempotent (and tested to be).
  */
 async function commitDraft(): Promise<void> {
   if (!openProject || !editingWindowId || !openSession) return;
-  const id = editingWindowId;
-  const withoutGeometry = overridesWithoutWindow(openProject.overrides, id);
-  const withGeometry = draftRect
-    ? [...withoutGeometry, {
-        kind: "geometry" as const, windowId: id, rect: draftRect,
-        ...(draftEasing ? { easing: draftEasing } : {}),
-      }]
-    : withoutGeometry;
-
-  const raw = zoomWindows(openSession.events).find((w) => windowId(w) === id);
-  const withoutRetime = overridesWithoutRetime(withGeometry, id);
-  const startChanged = !!raw && draftManualStart !== raw.startNs;
-  const endChanged = !!raw && draftManualEnd !== raw.endNs;
-  openProject.overrides = (startChanged || endChanged)
-    ? [...withoutRetime, {
-        kind: "retime" as const, windowId: id,
-        ...(startChanged ? { startNs: draftManualStart } : {}),
-        ...(endChanged ? { endNs: draftManualEnd } : {}),
-      }]
-    : withoutRetime;
+  openProject.overrides = editedOverrides()!;
   await persistProject();
 }
 
 /**
- * Writes the current manual draft into project.overrides and persists.
- * `easing` is REQUIRED on the schema (types.ts's own note says why), so an
- * unresolved "Project default" picker selection is resolved to the
- * project's CURRENT preset at commit time — a snapshot, not a live link;
- * a manual window has no `undefined` to mean "whatever the project says",
- * unlike a geometry override which does. An empty draft (Remove pressed)
- * deletes the window outright — there is no "no override" state for a
- * manual window to fall back to, since its rect and timing ARE the window.
+ * Done for a MANUAL window (STC-331): writes the draft into project.overrides
+ * and persists. An unresolved "Project default" easing resolves to the
+ * project's CURRENT preset at commit time (a snapshot, not a live link), and
+ * an empty draft (Remove pressed) deletes the window outright — both are
+ * `committedOverrides`' rules now.
  */
 async function commitManualDraft(): Promise<void> {
   if (!openProject || !editingManualId) return;
-  const withoutThis = overridesWithoutManual(openProject.overrides, editingManualId);
-  openProject.overrides = draftRect
-    ? [...withoutThis, {
-        kind: "manual" as const, id: editingManualId, startNs: draftManualStart, endNs: draftManualEnd,
-        rect: draftRect, easing: draftEasing || openProject.zoom?.preset || "standard",
-      }]
-    : withoutThis;
+  openProject.overrides = editedOverrides()!;
   await persistProject();
 }
 
@@ -1411,9 +1410,10 @@ $("vieweye").addEventListener("change", () => {
 
 const exportDialog = $("exportdialog") as HTMLDialogElement;
 $("openexport").addEventListener("click", () => void (async () => {
-  // STC-461: the dialog never opens over a reframe — every output it leads to
-  // reads the live project, which holds the temporary display PiP meanwhile.
-  await exitReframe(true);
+  // STC-461/STC-500: the dialog never opens over a reframe or an open zoom-
+  // override edit — every output it leads to reads the live project, which
+  // holds the temporary display PiP / the stripped override meanwhile.
+  await finishOpenEdits();
   if (!exportDialog.open) exportDialog.showModal();
   await refreshShareRow();
 })().catch((e: any) => alertUser(String(e?.message ?? e))));
@@ -1496,7 +1496,7 @@ let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?:
 (window as unknown as { __stcExportForTest: (o: { reuse: boolean }) => Promise<unknown> }).__stcExportForTest =
   async ({ reuse }) => {
     if (!openSession || !openProject) throw new Error("no take open");
-    await exitReframe(true); // STC-461: never export the temporary reframe display
+    await finishOpenEdits(); // STC-461/STC-500: never export a reframe or an override edit uncommitted
     // runExport holds exportAbort for its whole run (cleared in its finally,
     // even after a cancel), so set means a real export is still in flight.
     if (exportAbort) throw new Error("a real export is running");
@@ -1575,14 +1575,18 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 async function closeTake(): Promise<void> {
   exportAbort?.abort();
   // STC-461: a take closed mid-reframe COMMITS it — dropping it would lose the
-  // reframe the user can see. exitReframe builds and sends the write
-  // synchronously, before the teardown below clears openProject/player; it is
-  // awaited at the end so the write has landed when closeTake settles.
-  const reframeWrite = exitReframe(true);
+  // reframe the user can see. STC-500: so does an open zoom-override edit. It
+  // used to be dropped here ("a write nobody asked for"), but the live project
+  // has that window's own entry stripped while it is open, so dropping the
+  // draft lost the window's EXISTING override from disk as soon as any other
+  // save had happened mid-edit — and the decision (2026-10-02) is that what
+  // you see is what's kept. postOpenEditWrites builds and SENDS both writes
+  // synchronously, before the teardown below clears openProject/player and
+  // the edit state; it is awaited at the end so the writes have landed when
+  // closeTake settles. No closeOverrideEditor(): its repaint is for a take
+  // that stays open.
+  const editWrites = postOpenEditWrites();
   $("framestatus").setAttribute("hidden", "");
-  // Not commitDraft()+closeOverrideEditor(): the take (and its project) are
-  // going away regardless, and persisting a draft against a project about to
-  // be discarded would be a write nobody asked for. Just drop the state.
   editingWindowId = null;
   editingManualId = null;
   heldFraming = null; // the project is discarded below; nothing to restore into
@@ -1615,7 +1619,7 @@ async function closeTake(): Promise<void> {
   updatePipButton();
   applyStageDisplay();
   await editor.closePreview();
-  await reframeWrite.catch((e: any) => alertUser(String(e?.message ?? e)));
+  await editWrites.catch((e: any) => alertUser(String(e?.message ?? e)));
 }
 
 // ---- the header row's transport (STC-444) -----------------------------
@@ -2125,6 +2129,44 @@ function reframedProject(p: Project, r: { real: PipStyle; before: PipStyle | und
 /** Fire-and-report form, for the UI's own ways out of reframe. */
 function commitReframe(): void {
   void exitReframe(true).catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+/**
+ * Before any OUTPUT (export dialog, export, publish, frame copy/save, the
+ * export test hook): commit a reframe (STC-461) and an open zoom-override
+ * edit (STC-500), so what goes out is what the user sees and keeps. The
+ * override editor is CLOSED, not just committed — an export of a project
+ * whose window is still stripped from the live copy would leave it out — and
+ * closing repaints the stage framed again. Every output reads the live
+ * project, so this must settle before it does.
+ */
+async function finishOpenEdits(): Promise<void> {
+  await exitReframe(true);
+  if (editingWindowId !== null || editingManualId !== null) await closeOverrideEditor();
+}
+
+/**
+ * The going-away form, for closeTake and beforeunload: commit a reframe and an
+ * open override edit WITHOUT any teardown of the UI. Both writes are POSTED
+ * synchronously, before this returns — exitReframe is synchronous up to its
+ * write, and so are commitDraft/commitManualDraft (editedOverrides is
+ * synchronous and persistProject's first await is `editor.writeProject`,
+ * whose IPC invoke is sent as it is called) — so the caller may clear
+ * openProject/player/the edit state straight after. The returned promise
+ * settles when both writes have landed.
+ */
+function postOpenEditWrites(): Promise<void> {
+  const reframeWrite = exitReframe(true);
+  // With BOTH a reframe and an override edit open, this is a second write,
+  // and main's `preview:writeProject` (a plain `writeFile` of the same path)
+  // may run the two concurrently. Safe because they are the SAME bytes: the
+  // reframe's write already carried the edit (persistProject composes
+  // editedOverrides()), and this one carries the reframe (exitReframe has just
+  // put the real PiP back on the live project). Whichever lands last, the
+  // file holds that one document. Not skipped, because exitReframe can
+  // return without writing at all (no PiP), and then this is the only write.
+  const editWrite = commitCurrentEdit();
+  return Promise.all([reframeWrite, editWrite]).then(() => undefined);
 }
 
 $("pipframewindow").addEventListener("pointerdown", (e) => {
@@ -2851,8 +2893,9 @@ $("trim-out").addEventListener("pointercancel", onHandleUp);
 
 async function runExport(): Promise<void> {
   if (!openSession || !openProject || exportAbort) return;
-  // STC-461: commit a reframe first — the export reads the live project.
-  await exitReframe(true);
+  // STC-461/STC-500: commit a reframe and an open override edit first — the
+  // export reads the live project.
+  await finishOpenEdits();
   player?.pause();
   exportAbort = new AbortController();
 
@@ -2964,10 +3007,11 @@ async function refreshShareRow(): Promise<void> {
 
 async function publish(): Promise<void> {
   if (!openProject || !player) return;
-  // STC-461: commit a reframe first, so the take main publishes is the one the
-  // user ends up with — the live project still holds the temporary display
-  // style until the reframe is committed.
-  await exitReframe(true);
+  // STC-461/STC-500: commit a reframe and an open override edit first, so the
+  // take main publishes is the one the user ends up with — the live project
+  // still holds the temporary display style / the stripped override until
+  // they are committed.
+  await finishOpenEdits();
   const btn = $("share") as HTMLButtonElement;
   const slug = ($("shareslug") as HTMLInputElement).value.trim();
   if (!slugIsValid(slug)) {
@@ -3031,8 +3075,9 @@ async function withFrame(action: "copy" | "save"): Promise<void> {
   if (!player || frameBusy) return;
   frameBusy = true;
   try {
-    // STC-461: commit a reframe first — captureFrame re-renders the live project.
-    await exitReframe(true);
+    // STC-461/STC-500: commit a reframe and an open override edit first —
+    // captureFrame re-renders the live project.
+    await finishOpenEdits();
     const { tNs, rgba, width, height } = await player.captureFrame();
     const settings = (await editor.getSettings()).still;
     const r = await editor.exportStill({
@@ -3094,10 +3139,11 @@ document.addEventListener("keydown", (e) => {
 
 // STC-461: the editor reloads its renderer per take, so closing the window or
 // opening another take mid-reframe never reaches closeTake. Commit here too:
-// exitReframe sends the write synchronously (the IPC message is out before the
-// page goes), so the reframe the user can see is not silently dropped.
+// postOpenEditWrites sends the writes synchronously (the IPC messages are out
+// before the page goes), so the reframe the user can see — and, STC-500, an
+// open zoom-override edit — is not silently dropped.
 window.addEventListener("beforeunload", () => {
-  void exitReframe(true).catch(() => { /* the page is going; nowhere to report */ });
+  void postOpenEditWrites().catch(() => { /* the page is going; nowhere to report */ });
   void editor.closePreview();
 });
 
