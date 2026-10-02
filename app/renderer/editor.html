@@ -520,6 +520,10 @@
     <!-- STC-461: the PiP, draggable (with snapping) and resizable from its
          corner, shown only while the Camera popover is open. -->
     <div id="pipoverlay" hidden><div class="pipbox"><div id="piphandle"></div></div></div>
+    <!-- STC-461: Reframe. The live project shows the whole camera frame large
+         and centred; #pipframewindow is the crop, in the PiP's shape, with the
+         rest dimmed. The surface STC-497's guides draw inside. -->
+    <div id="pipframing" hidden><div id="pipframewindow"></div></div>
     <svg id="stageplay" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2 12.6 8 5 12.8Z" fill="currentColor"/></svg>
   </div>
 
@@ -783,6 +787,13 @@
          existence, so there is nothing to reset it back to). -->
     <button id="overridedelete" hidden>Delete window</button>
     <button id="overridedone">Done</button>
+  </div>
+
+  <!-- STC-461: appears only while reframing the camera inside the PiP. -->
+  <div class="overridebar" id="pipframebar" hidden>
+    <span>Drag to reframe</span>
+    <label>Zoom <input id="pipzoom" type="range" min="1" max="3" step="0.05"></label>
+    <button id="pipframedone">Done</button>
   </div>
 
   </div><!-- /.editorbody -->

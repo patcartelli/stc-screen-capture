@@ -43,3 +43,12 @@
                       touch-action: none; }
 #piphandle { position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; border-radius: 50%;
              background: var(--accent); cursor: nwse-resize; }
+
+/* Reframe (editor only): the same box as #pipoverlay. The window's huge
+   spread shadow dims everything outside the crop; overflow keeps that dim
+   inside the stage. */
+#pipframing { position: absolute; inset: 0; overflow: hidden; }
+#pipframing[hidden] { display: none; }
+#pipframewindow { position: absolute; cursor: grab; outline: 1px solid #fff; touch-action: none;
+                  box-shadow: 0 0 0 9999px rgba(0,0,0,.55); }
+#pipframewindow:active { cursor: grabbing; }

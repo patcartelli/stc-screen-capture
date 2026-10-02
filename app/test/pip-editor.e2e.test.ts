@@ -73,4 +73,25 @@ describe("the editor's Camera popover (STC-461)", () => {
     // ...and re-sided: the PiP is top-left now, so the panel is on the right.
     expect(await editorWin.evaluate(() => document.getElementById("pippanel")!.dataset.side)).toBe("right");
   }, 120_000);
+
+  test("reframe: dragging the window right moves framing.x right, and Done saves it", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ pip: true });
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await editorWin.click("#pipbtn");
+    await editorWin.click('[data-pip-preset="circle"]');
+    await editorWin.click("#pipreframe");
+    await editorWin.fill("#pipzoom", "2");
+    await editorWin.dispatchEvent("#pipzoom", "change");
+    const w = (await editorWin.locator("#pipframewindow").boundingBox())!;
+    await editorWin.mouse.move(w.x + w.width / 2, w.y + w.height / 2);
+    await editorWin.mouse.down();
+    await editorWin.mouse.move(w.x + w.width / 2 + 20, w.y + w.height / 2, { steps: 5 });
+    await editorWin.mouse.up();
+    await editorWin.click("#pipframedone");
+    await expect.poll(() => savedPip(takeDir)?.style?.framing?.zoom, { timeout: 10_000 }).toBe(2);
+    expect(savedPip(takeDir).style.framing.x).toBeGreaterThan(0.5);
+    expect(savedPip(takeDir).style.shape).toBe("circle");
+    expect(savedPip(takeDir).style.width).not.toBe(0.5);   // the temporary display style never leaked
+  }, 120_000);
 });
