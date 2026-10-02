@@ -36,6 +36,23 @@ export interface CursorShapeEvent {
 }
 export type SessionEvent = MoveEvent | ButtonEvent | CursorShapeEvent;
 
+/**
+ * A keyboard COMMAND (events-3, STC-419): a named non-printing key with any
+ * mods, or one printable character under cmd/ctrl. Never typing — the helper
+ * drops it and the schema refuses it. Kept OUT of `SessionEvent` on purpose:
+ * every cursor/zoom consumer reads `x`/`y` off those, and a key has neither,
+ * so the loader splits keys into `Session.keys` instead.
+ */
+export type KeyMod = "ctrl" | "opt" | "shift" | "cmd";
+export interface KeyEvent {
+  t: number;
+  kind: "key";
+  key: string;
+  mods: KeyMod[];
+}
+/** What events.json may hold: everything the cursor reads, plus keys. */
+export type RecordedEvent = SessionEvent | KeyEvent;
+
 /** Mirrors the optional `camera` block in schema/anchors-2.schema.json. */
 export interface CameraTrack {
   present: boolean;
@@ -231,7 +248,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -329,6 +346,11 @@ export interface Project {
   micMuted?: boolean;
   systemAudioMuted?: boolean;
   /**
+   * The keycast (project-14, STC-419). Only `show === false` hides it; absent
+   * means shown whenever the take HAS keys. Hiding never touches events.json.
+   */
+  keycast?: { show: boolean };
+  /**
    * Draw the click highlight (project-13, STC-420). Chosen on the Record
    * options bar and carried HERE, never read from a live setting at draw time:
    * a sink that consulted a preference would fork the transform. Always
@@ -353,6 +375,8 @@ export interface NarrationCleanup {
 export interface Session {
   anchors: Anchors;
   events: SessionEvent[];
+  /** Keyboard commands (events-3, STC-419), sorted by t. Absent when the take recorded none. Never in `events`. */
+  keys?: KeyEvent[];
   frames: number[];
   cameraFrames?: number[];
   /** the frame-difference sidecar (STC-322), absent on every take today — nothing here can run the browser decode pass that writes it. Auto-zoom stage 2 (STC-326) falls back to cursor clustering when this is absent. */

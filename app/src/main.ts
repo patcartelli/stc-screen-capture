@@ -1326,6 +1326,7 @@ function writeBarOptions(options: OptionsState): void {
   writeSettings(app.getPath("userData"), {
     camera: options.camera, micDeviceUid: options.micDeviceUid,
     systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+    recordKeys: options.keys,
     showClicks: options.showClicks,
   });
   send("settings:changed", undefined);
@@ -1340,7 +1341,7 @@ async function recordFlowBody(
     windows, mode: "region", purpose: "record",
     initialOptions: {
       micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics,
-      systemAudio: stored.systemAudio, cameraDeviceUid: stored.cameraDeviceUid, cameras,
+      systemAudio: stored.systemAudio, keys: stored.recordKeys, cameraDeviceUid: stored.cameraDeviceUid, cameras,
       showClicks: stored.showClicks,
     },
     dist: here, renderer: join(here, "..", "renderer"),
@@ -1392,6 +1393,8 @@ async function recordFlowBody(
   // only preference. Only when on; absent is "off" to the helper's
   // parseStartRequest — the existing pin this ticket keeps.
   if (options.systemAudio) startParams.systemAudio = true;
+  // STC-419: from the BAR's Keys toggle. Only when on; absent is "off" to parseStartRequest.
+  if (options.keys) startParams.keys = true;
   let countdownDisplay: number | undefined;
   if (outcome.kind === "window") {
     startParams.windowId = outcome.windowId;
@@ -2346,14 +2349,14 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
 
 /**
  * Every top-level key a `project.json` this build wrote or can read might
- * carry (schema/project-1..12.schema.json's own union, STC-318's "one list"
+ * carry (schema/project-1..14.schema.json's own union, STC-318's "one list"
  * rule applied here by hand since the schemas themselves are not loaded at
  * runtime in this process — see the handler's own comment on why not).
  */
 const KNOWN_PROJECT_FIELDS = new Set([
   "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
   "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
-  "micLevel", "micMuted", "systemAudioMuted", "showClicks",
+  "micLevel", "micMuted", "systemAudioMuted", "showClicks", "keycast",
 ]);
 
 /**
@@ -2491,6 +2494,12 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
   }
   if (doc.showClicks !== undefined && typeof doc.showClicks !== "boolean") {
     throw new Error("project.json: showClicks must be a boolean");
+  }
+  if (doc.keycast !== undefined) {
+    if (!isPlainObject(doc.keycast) || typeof doc.keycast.show !== "boolean"
+        || Object.keys(doc.keycast).some((k) => k !== "show")) {
+      throw new Error("project.json: keycast must be { show: boolean }");
+    }
   }
   if (doc.bookmarks !== undefined) {
     if (!Array.isArray(doc.bookmarks) || !doc.bookmarks.every((b: unknown) => Number.isInteger(b) && (b as number) >= 0)) {

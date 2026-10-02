@@ -22,7 +22,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, showClicks: true, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -63,7 +63,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, showClicks: true, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -119,7 +119,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, showClicks: true, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -614,6 +614,16 @@ test("a settings file from before STC-388 keeps a stray scope key, harmlessly", 
   const s = readSettings(d);
   expect(s.camera).toBe(true);
   expect((s as unknown as Record<string, unknown>).scope).toBeUndefined();
+});
+
+describe("recordKeys (STC-419)", () => {
+  test("off by default, only a literal true turns it on, and it round-trips", () => {
+    const d = mkdtempSync(join(tmpdir(), "stc-set-"));
+    expect(readSettings(d).recordKeys).toBe(false);
+    expect(writeSettings(d, { recordKeys: true }).recordKeys).toBe(true);
+    expect(readSettings(d).recordKeys).toBe(true);
+    expect(writeSettings(d, { recordKeys: "yes" as never }).recordKeys).toBe(false);
+  });
 });
 
 describe("the show-clicks preference (STC-420)", () => {

@@ -1669,6 +1669,7 @@ function updateAudioButton(): void {
   const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);
   $("audiobtn").toggleAttribute("hidden", !has);
   updateWaveformToggle();
+  updateKeycastUI();
   if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
 }
 
@@ -1710,6 +1711,27 @@ function showMute(id: string, row: HTMLElement, muted: boolean, what: string): v
   btn.title = label;
   row.toggleAttribute("data-muted", muted);
 }
+
+// ---- keycast (STC-419) -------------------------------------------------
+// One switch, saved to the project. Hiding is project.keycast.show === false
+// and nothing else: the take's keys stay in events.json.
+function updateKeycastUI(): void {
+  const btn = $("keycastbtn") as HTMLButtonElement;
+  const has = !!openSession?.keys?.length;
+  btn.hidden = !has;
+  const shown = openProject?.keycast?.show !== false;
+  btn.setAttribute("aria-pressed", shown ? "true" : "false");
+  btn.title = shown ? "Hide keystrokes in the preview and export" : "Show keystrokes in the preview and export";
+}
+
+$("keycastbtn").addEventListener("click", () => {
+  if (!openProject || !player) return;
+  const shown = openProject.keycast?.show !== false;
+  openProject.keycast = { show: !shown };
+  updateKeycastUI();
+  void player.seek(player.currentNs);   // repaint this frame with the new choice
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
 
 $("micmute").addEventListener("click", () => {
   if (!openProject) return;

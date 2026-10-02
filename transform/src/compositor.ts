@@ -1,6 +1,7 @@
 import type { FrameState } from "./render.js";
 import { isWholeFrame, uvRectToPixels } from "./spaces.js";
 import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
+import { KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR, keycastFont, keycastFontPx, keycastLayout, keycastText } from "./keycast.js";
 
 /**
  * The one compositor. Both sinks call exactly this with identical inputs, and
@@ -75,6 +76,30 @@ function drawSource(
   ctx.drawImage(frame, src.x, src.y, src.width, src.height, 0, 0, width, height);
 }
 
+/**
+ * The keycast pill (STC-419), on the OUTPUT canvas after everything else —
+ * a caption, not part of the picture, so the zoom never moves or scales it.
+ * keycast.ts decides the text and the box; this only draws them.
+ */
+function drawKeycast(
+  ctx: OffscreenCanvasRenderingContext2D, k: NonNullable<FrameState["keycast"]>, width: number, height: number,
+): void {
+  const text = keycastText(k);
+  ctx.save();
+  ctx.font = keycastFont(keycastFontPx(width));
+  const box = keycastLayout(width, height, ctx.measureText(text).width);
+  ctx.globalAlpha = k.opacity;
+  ctx.fillStyle = `rgba(${KEYCAST_BG_RGB}, ${KEYCAST_BG_ALPHA})`;
+  ctx.beginPath();
+  ctx.roundRect(box.x, box.y, box.width, box.height, box.radius);
+  ctx.fill();
+  ctx.fillStyle = KEYCAST_TEXT_COLOR;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, box.textX, box.textY, box.maxTextWidth);
+  ctx.restore();
+}
+
 export function composite(
   ctx: OffscreenCanvasRenderingContext2D,
   frame: DecodedFrame | null,
@@ -95,19 +120,21 @@ export function composite(
     ctx.drawImage(camera, fs.pip.x, fs.pip.y, fs.pip.width, fs.pip.height);
   }
 
-  if (!fs.cursor.visible) return;
-
-  // The click highlight sits UNDER the pointer, centred on the hotspot, so the
-  // artwork stays legible through a click. (x, y) IS the hotspot: macOS
-  // reports event locations at the hotspot, and cursor-art.ts puts each
-  // shape's hotspot at its origin.
-  const { x, y, pxPerPoint, pressed, showClicks, shape, style } = fs.cursor;
-  if (pressed && showClicks) {
-    ctx.beginPath();
-    ctx.arc(x, y, CLICK_HIGHLIGHT_PT * pxPerPoint, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
-    ctx.fill();
+  if (fs.cursor.visible) {
+    // The click highlight sits UNDER the pointer, centred on the hotspot, so the
+    // artwork stays legible through a click. (x, y) IS the hotspot: macOS
+    // reports event locations at the hotspot, and cursor-art.ts puts each
+    // shape's hotspot at its origin.
+    const { x, y, pxPerPoint, pressed, showClicks, shape, style } = fs.cursor;
+    if (pressed && showClicks) {
+      ctx.beginPath();
+      ctx.arc(x, y, CLICK_HIGHLIGHT_PT * pxPerPoint, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+      ctx.fill();
+    }
+    if (style === "circle") drawCircle(ctx, x, y, pxPerPoint);
+    else drawCursor(ctx, shape, x, y, pxPerPoint);
   }
-  if (style === "circle") drawCircle(ctx, x, y, pxPerPoint);
-  else drawCursor(ctx, shape, x, y, pxPerPoint);
+
+  if (fs.keycast) drawKeycast(ctx, fs.keycast, width, height);
 }

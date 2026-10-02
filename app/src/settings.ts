@@ -88,6 +88,12 @@ export interface Settings {
    */
   systemAudio: boolean;
   /**
+   * Record keyboard commands for the next take (STC-419): the Record bar's
+   * Keys toggle. OFF by default and sticky, like systemAudio. Commands only —
+   * the helper never records typing. Sent to the helper only when on.
+   */
+  recordKeys: boolean;
+  /**
    * Draw the click highlight in the next take (STC-420). Sticky like the other
    * bar toggles, but unlike them ON by default — it is the existing behaviour.
    * Never read at draw time: `main.ts` copies it into the take's project.json
@@ -227,7 +233,8 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false, showClicks: true,
+  camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false, recordKeys: false,
+  showClicks: true,
   previewMuted: false,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
@@ -377,6 +384,7 @@ export function readSettings(dir: string): Settings {
     micDeviceUid: cleanMicDeviceUid(doc.micDeviceUid),
     cameraDeviceUid: cleanCameraDeviceUid(doc.cameraDeviceUid),
     systemAudio: doc.systemAudio === true,
+    recordKeys: doc.recordKeys === true,
     showClicks: doc.showClicks !== false,
     previewMuted: doc.previewMuted === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
@@ -420,6 +428,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     cameraDeviceUid: cleanCameraDeviceUid(merged.cameraDeviceUid),
     // `=== true`, the camera's rule: off unless explicitly on.
     systemAudio: merged.systemAudio === true,
+    recordKeys: merged.recordKeys === true,
     showClicks: merged.showClicks !== false,
     previewMuted: merged.previewMuted === true,
     shortcuts: cleanShortcuts(merged.shortcuts),

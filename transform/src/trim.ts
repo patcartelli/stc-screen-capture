@@ -214,6 +214,9 @@ export function parseProject(
   // `false` turns the highlight off, because ON is what every older take drew
   // and a malformed value must not quietly change a take's pixels.
   project.showClicks = doc.showClicks !== false;
+  // project-14 (STC-419). Only a real `false` hides the keycast; anything else
+  // is "no opinion" and shown.
+  if (doc.keycast?.show === false) project.keycast = { show: false };
   return project;
 }
 
@@ -373,9 +376,11 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 {
-  // Highest first: a document needing v13 needs it whatever its mutes, mic
-  // level, cleanup, levels, bookmarks, slug, overrides, zoom or textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 {
+  // Highest first: a document needing v14 needs it whatever its showClicks,
+  // mutes, mic level, cleanup, levels, bookmarks, slug, overrides, zoom or
+  // textPt say.
+  if (project.keycast?.show === false) return 14;
   if (project.showClicks === false) return 13;
   if (project.micMuted || project.systemAudioMuted) return 12;
   if (project.micLevel !== undefined && project.micLevel !== DEFAULT_MIC_LEVEL) return 11;
@@ -426,5 +431,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
     out.systemAudioMuted = !!project.systemAudioMuted;
   }
   if (version >= 13) out.showClicks = project.showClicks !== false;
+  if (version >= 14) out.keycast = { show: project.keycast?.show !== false };
   return out;
 }
