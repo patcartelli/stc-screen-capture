@@ -45,6 +45,7 @@ declare const editor: {
   }>;
   getSettings: () => Promise<AppSettings>;
   setPreviewMuted: (muted: boolean) => Promise<unknown>;
+  setPipStyleDefault: (style: unknown) => Promise<unknown>;
   publish(): Promise<{
     ok: boolean; plan: string; message?: string;
     file?: string; name?: string; replaced?: boolean; snippet?: string;
@@ -92,6 +93,11 @@ import {
 } from "./scrubber.js";
 import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
 import { clipActivity, zoomCurve, laneBitmap } from "./timeline-activity.js";
+import {
+  editPipStyle, pipRect, pipSize, snapCenter, resizeFromCorner, styleFromFixedCorner,
+  PIP_SNAP_THRESHOLD_SCREEN_PX, type PipEdit, type PipStyle,
+} from "@transform/pip-style";
+import { buildPipInspector } from "./pip-inspector.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -1518,6 +1524,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   updateLegibilityUI();
   updateSystemAudioUI();
   updateVoiceCleanUI();
+  updatePipButton();
   void loadPreviewAudio(session, audioGen);
   applySpanTransform();
   redrawLanes();
@@ -1556,6 +1563,7 @@ async function closeTake(): Promise<void> {
   openDisplay = undefined;
   updateSystemAudioUI();
   updateVoiceCleanUI();
+  updatePipButton();
   applyStageDisplay();
   await editor.closePreview();
 }
@@ -1732,6 +1740,153 @@ $("keycastbtn").addEventListener("click", () => {
   void player.seek(player.currentNs);   // repaint this frame with the new choice
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
+
+// ---- PiP (STC-461) ----------------------------------------------------------
+//
+// The Camera popover hosts pip-inspector.ts; #pipoverlay lets the PiP be
+// dragged (snapping, pip-style.ts's snapCenter) and resized from its corner.
+// Every decision is pip-style.ts's. The player shares `openProject`, so an edit
+// is a mutation plus a repaint; a COMMIT also persists.
+//
+// #pippanel is `popover="auto"`, and a press on #pipoverlay is OUTSIDE it, so
+// the browser's light dismiss closes the inspector on a drag. Two things keep
+// that from breaking the gesture or losing the panel: the overlay is never
+// hidden while a drag is in flight (layoutPipOverlay checks `pipDrag`), and a
+// drag that ends with the panel closed re-opens it — dragging is part of using
+// the inspector, not leaving it. (docs/STC-461-RUNBOOK.md §3 judges how it feels.)
+
+function pipCamera(): Size | null {
+  const cam = openSession?.anchors.camera;
+  return cam?.present ? { width: cam.width, height: cam.height } : null;
+}
+
+/** The take's style, or the fixed corner expressed as one so a first edit cannot jump. */
+function currentPipStyle(): PipStyle | null {
+  const cam = pipCamera();
+  if (!openProject?.pip || !cam) return null;
+  return openProject.pip.style ?? styleFromFixedCorner(openProject.pip, openProject.output, cam);
+}
+
+function persistPip(): void {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+function setPipStyle(style: PipStyle, persist: boolean): void {
+  if (!openProject?.pip || !player) return;
+  openProject.pip.style = style;
+  pipInspector.render(style, openProject.pip.enabled);
+  layoutPipOverlay();
+  void player.seek(player.currentNs);
+  if (persist) persistPip();
+}
+
+const pipInspector = buildPipInspector($("pippanel"), {
+  surface: "editor",
+  onEdit(edit: PipEdit, phase) {
+    const style = currentPipStyle();
+    const cam = pipCamera();
+    if (!style || !cam) return;
+    setPipStyle(editPipStyle(style, edit, cam), phase === "commit");
+  },
+  onEnabled(enabled) {
+    if (!openProject?.pip || !player) return;
+    openProject.pip.enabled = enabled;
+    layoutPipOverlay();
+    void player.seek(player.currentNs);
+    persistPip();
+  },
+  // onReframe: wired by Task 8 (the reframe mode); #pipreframe does nothing until then.
+  onUseAsDefault() {
+    const style = currentPipStyle();
+    if (style) void editor.setPipStyleDefault(style).catch((e: any) => alertUser(String(e?.message ?? e)));
+  },
+});
+
+const pipPanel = $("pippanel") as HTMLElement & { hidePopover?: () => void; showPopover?: () => void };
+const pipPanelOpen = (): boolean => pipPanel.matches(":popover-open");
+
+function updatePipButton(): void {
+  const has = !!openProject?.pip && !!pipCamera();
+  $("pipbtn").toggleAttribute("hidden", !has);
+  if (!has) pipPanel.hidePopover?.();
+  const style = currentPipStyle();
+  if (style && openProject?.pip) pipInspector.render(style, openProject.pip.enabled);
+  layoutPipOverlay();
+}
+
+/** Output px → stage CSS px, from the stage's live box (it already reflects any CSS transform). */
+function stageScale(): { left: number; top: number; k: number } {
+  const r = ($("stage") as HTMLCanvasElement).getBoundingClientRect();
+  return { left: r.left, top: r.top, k: openProject ? r.width / openProject.output.width : 1 };
+}
+
+/** Shown while the inspector is open (or a drag is still finishing) for a PiP that is drawn. */
+function layoutPipOverlay(): void {
+  const overlay = $("pipoverlay");
+  const style = currentPipStyle();
+  const cam = pipCamera();
+  const shown = !!style && !!cam && !!openProject?.pip?.enabled && (pipPanelOpen() || !!pipDrag);
+  overlay.hidden = !shown;
+  if (!shown || !style || !cam || !openProject) return;
+  const r = pipRect(style, openProject.output, cam);
+  const { k } = stageScale();
+  const box = overlay.querySelector<HTMLElement>(".pipbox")!;
+  Object.assign(box.style, {
+    left: `${r.x * k}px`, top: `${r.y * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
+    borderRadius: style.shape === "circle" ? "50%" : `${style.cornerRadius * Math.min(r.width, r.height) * k}px`,
+  });
+}
+
+pipPanel.addEventListener("toggle", () => layoutPipOverlay());
+
+let pipDrag: { kind: "move" | "resize"; dx: number; dy: number } | null = null;
+
+$("pipoverlay").addEventListener("pointerdown", (e) => {
+  const style = currentPipStyle();
+  const cam = pipCamera();
+  if (!style || !cam || !openProject) return;
+  const target = e.target as HTMLElement;
+  if (!target.closest(".pipbox")) return;
+  const { left, top, k } = stageScale();
+  const px = (e.clientX - left) / k, py = (e.clientY - top) / k;
+  pipDrag = target.id === "piphandle"
+    ? { kind: "resize", dx: 0, dy: 0 }
+    : { kind: "move", dx: px - style.center.x * openProject.output.width, dy: py - style.center.y * openProject.output.height };
+  target.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+$("pipoverlay").addEventListener("pointermove", (e) => {
+  if (!pipDrag || !openProject) return;
+  const style = currentPipStyle();
+  const cam = pipCamera();
+  if (!style || !cam) return;
+  const { left, top, k } = stageScale();
+  const out = openProject.output;
+  const px = (e.clientX - left) / k, py = (e.clientY - top) / k;
+  if (pipDrag.kind === "resize") {
+    setPipStyle(resizeFromCorner(style, { x: px, y: py }, out, cam), false);
+    return;
+  }
+  const raw = { x: (px - pipDrag.dx) / out.width, y: (py - pipDrag.dy) / out.height };
+  const snapped = snapCenter(raw, pipSize(style, out, cam), out, PIP_SNAP_THRESHOLD_SCREEN_PX / k);
+  setPipStyle(editPipStyle(style, { kind: "move", center: snapped }, cam), false);
+});
+
+function endPipDrag(): void {
+  if (!pipDrag) return;
+  pipDrag = null;
+  persistPip();
+  // Light dismiss runs around this same pointerup; re-open once it has.
+  setTimeout(() => {
+    if (!pipPanelOpen() && !$("pipbtn").hidden) pipPanel.showPopover?.();
+    layoutPipOverlay();
+  }, 0);
+}
+$("pipoverlay").addEventListener("pointerup", endPipDrag);
+$("pipoverlay").addEventListener("pointercancel", endPipDrag);
+
+window.addEventListener("resize", () => { if (!$("pipoverlay").hidden) layoutPipOverlay(); });
 
 $("micmute").addEventListener("click", () => {
   if (!openProject) return;
@@ -2211,6 +2366,10 @@ window.addEventListener("keydown", (e) => {
   // this the timeline takes it as play/pause and the switch never toggles —
   // measured: the e2e's mutation check fails on exactly that.
   if (e.target === $("voicecleanon") && (e.key === " " || e.key === "Enter")) return;
+  // And for every control in the Camera popover (STC-461): its sliders' arrow
+  // keys move the slider, its buttons and switches take Space/Enter.
+  if ($("pippanel").contains(e.target as Node)
+      && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
   // And for the ruler's toggles (STC-454 part 4): Space on a focused one

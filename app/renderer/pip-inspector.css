@@ -1,0 +1,45 @@
+/* The PiP inspector (STC-461) — pip-inspector.ts's DOM, shared by the
+   editor's Camera popover and the Settings sheet (the device-menu.css
+   precedent: one component, the host decides where it sits). tokens.css
+   tokens only; no colour of its own. */
+.pip-inspector { display: grid; gap: 8px; min-width: 240px; font-size: var(--type-body); color: var(--text); }
+.pip-inspector button { font: inherit; font-size: var(--type-label); color: var(--text-dim);
+                        background: none; border: 1px solid var(--border); cursor: pointer; }
+.pip-inspector button:hover { color: var(--text); background: var(--surface-hover); }
+.pip-inspector button:focus-visible,
+.pip-inspector input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+.pip-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.pip-chip { padding: 3px 10px; border-radius: 999px; }
+
+.pip-segmented { display: grid; grid-template-columns: repeat(3, 1fr); }
+.pip-segmented button { padding: 3px 0; border-radius: 0; }
+.pip-segmented button + button { border-left: none; }
+.pip-segmented button:first-child { border-radius: 6px 0 0 6px; }
+.pip-segmented button:last-child { border-radius: 0 6px 6px 0; }
+.pip-segmented button[aria-checked="true"] { color: var(--accent); background: var(--accent-soft);
+                                             border-color: var(--accent); }
+
+.pip-row { display: flex; align-items: center; gap: 8px; justify-content: space-between;
+           min-height: 22px; color: var(--text-dim); }
+.pip-row input[type="range"] { flex: 1; min-width: 0; max-width: 160px; accent-color: var(--accent); }
+.pip-row input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+.pip-toggle { justify-content: flex-start; cursor: pointer; }
+.pip-border > .pip-toggle { flex: none; }
+.pip-border > .pip-row { flex: 1; min-width: 0; }
+.pip-border input[type="color"] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border);
+                                  border-radius: 4px; background: none; flex: none; }
+.pip-inspector input:disabled { opacity: .4; cursor: default; }
+
+.pip-actions { display: flex; gap: 8px; justify-content: flex-end; padding-top: 4px; }
+.pip-actions button { padding: 3px 10px; border-radius: 6px; }
+
+/* The PiP on the preview stage (editor only): sits exactly over #stage the
+   way #rectoverlay does — #stage fills #stagewrap at its natural size, so
+   `inset: 0` tracks it. Only the box itself takes the pointer. */
+#pipoverlay { position: absolute; inset: 0; pointer-events: none; }
+#pipoverlay[hidden] { display: none; }
+#pipoverlay .pipbox { position: absolute; pointer-events: auto; cursor: move; outline: 1px solid var(--accent);
+                      touch-action: none; }
+#piphandle { position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; border-radius: 50%;
+             background: var(--accent); cursor: nwse-resize; }
