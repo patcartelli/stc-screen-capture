@@ -239,8 +239,10 @@ describe("helper warnings during a take", () => {
 
   test("a code the UI has no words for is still shown, by name", async () => {
     const win = await recordWithWarning("some-new-fault");
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
-    expect(await toastText(app!)).toContain("some-new-fault");
+    // Polled, not read once: the toast window is listed as soon as it commits
+    // navigation, before its DOM exists, and `toastText` answers "" until then
+    // (`_toast.ts`). A single read raced that on a loaded CI runner.
+    await expect.poll(() => toastText(app!), { timeout: 10_000 }).toContain("some-new-fault");
   }, 120_000);
 
   test("a display stream that dies ends the take, and the UI says so (STC-306)", async () => {
