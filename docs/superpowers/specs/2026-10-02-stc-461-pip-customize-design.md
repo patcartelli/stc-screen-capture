@@ -44,7 +44,10 @@ export interface PipStyle {
   cornerRadius: number;  // 0..0.5, fraction of the SHORT side; ignored for circle
   center: { x: number; y: number };     // UV over the OUTPUT
   width: number;         // UV, fraction of output width
-  framing: Rect;         // UV over the CAMERA frame — which part of it shows
+  framing?: { x: number; y: number; zoom: number };
+                         // which part of the camera shows: centre in UV over the CAMERA
+                         // frame + zoom 1..3 over the largest crop that fits the shape.
+                         // Absent = centred, zoom 1.
   mirror: boolean;
   border: { widthPt: number; color: string } | null;  // color "#rrggbb"
   shadow: boolean;
@@ -65,12 +68,19 @@ Rules:
 - **One size input.** `width` only. Height is derived: 1:1 for square and circle;
   the framing crop's aspect (in camera pixels) for rect. Two independent
   dimensions could disagree with the shape.
-- **Framing agrees with the shape.** For square/circle, `framing` is 1:1 in camera
-  pixels. Enforced at load and on every edit (§4), never silently corrected.
+- **Framing agrees with the shape by construction.** It is a centre and a zoom, not
+  a rect: the crop's aspect always comes from the shape (camera aspect for rect, 1:1
+  for square/circle), so there is no "non-1:1 framing on a circle" to refuse. A
+  centre that would push the crop past the camera's edge is clamped at render time,
+  the same legitimate-state rule as the PiP's own centre. *(Amended while planning,
+  2026-10-02: the loader and the take-end seed never know the camera's size, so a
+  rect framing could not be checked where it is loaded.)*
 - **Border in points**, converted to output pixels by the same factor the cursor
   already uses, so it scales with the output.
-- **Presets** are a pure constant list in `pip-style.ts`, never stored. Picking one
-  writes a complete `PipStyle` into the document.
+- **Presets** are a pure constant list in `pip-style.ts`, never stored. A preset is
+  a LOOK — shape, radius, size, border, shadow — and picking one keeps the PiP's
+  position, framing and mirror. *(Amended while planning: a preset that also moved
+  the PiP would undo the drag the user just made.)*
 - The fixed-corner fields stay required and keep their meaning for documents
   without `style`; with `style` present they are carried but unused.
 
@@ -84,13 +94,14 @@ Owns every PiP decision:
   from shape/framing aspect, **clamped inside the output**, rounded to whole pixels
   (the rect places a decoded frame; a half-pixel offset resamples every edge —
   same reason `pipStateAt` rounds today).
-- `snap(center, size, output, thresholdPx)` — the four corners and four edge
-  centres at a fixed margin; threshold in SCREEN pixels, passed in by the caller.
-- `clampFraming(framing, shape, camera)` — inside the camera frame, never smaller
-  than the PiP's output size in camera pixels (no upscaling below 1:1), 1:1 for
-  square/circle.
-- `checkPipStyle(style, camera?)` — the refusals JSON Schema cannot express (§4).
-- `defaultFraming(shape, camera)` — centred, largest crop that fits the shape.
+- `snapCenter(center, size, output, thresholdPx)` — nine anchors: the corners and
+  edge centres at a fixed margin, plus dead centre; per axis, so an edge centre is
+  a corner of one axis and a middle of the other. The caller converts its SCREEN
+  threshold into output pixels.
+- `framingSource(style, camera)` — the framing's crop in camera pixels, clamped
+  inside the camera frame. `clampFraming` stores the same clamp back on an edit.
+- `cleanPipStyle(v)` — the one validator: returns the style or null (§4).
+- `DEFAULT_FRAMING` — centred, zoom 1.
 - `PIP_PRESETS` — Classic, Circle, Rounded square, Large circle. Values are tuned by
   eye on hardware (runbook).
 - `DEFAULT_PIP_STYLE` — today's corner geometry expressed as a style: rect, no
@@ -159,6 +170,12 @@ reports input; `pip-style.ts` decides. Contents, top to bottom:
   path, like trim and audio. No Apply button.
 - **Use as default** copies the take's style (minus `framing`, which is per take)
   into Settings.
+- **Reframe, concretely:** like STC-330's override editing, the LIVE project the
+  player reads gets a temporary PiP — the whole camera frame, large and centred —
+  and `#pipframing` draws the crop window over it in the PiP's shape, dimming the
+  rest. Drag the window to pan; scroll to zoom. Done restores the real style with
+  the new framing. The full camera frame is drawn by `render()` itself, so no second
+  drawing path exists.
 
 ### Settings (profile sheet)
 
@@ -171,18 +188,25 @@ reports input; `pip-style.ts` decides. Contents, top to bottom:
 
 At take end, `main.ts`'s `recordTimeChoices` (the path `showClicks` already rides)
 carries the Settings style into the new take's `project.json` **only when it
-differs from `DEFAULT_PIP_STYLE`**, with `framing = defaultFraming(shape, camera)`.
+differs from `DEFAULT_PIP_STYLE` and the take was started with the camera on**, with
+no `framing` (absent = centred).
 A user who never touches the setting gets takes byte-identical to today's.
 
 ## 4. Validation and errors
 
-Loaders refuse, never default.
+*(Amended while planning: `parseProject` is the repo's lenient loader — "a corrupt
+sidecar must not cost the recording", every field falls back on its own — so it
+cannot be where a style is refused.)*
 
-- `project-15.schema.json` validates types and ranges.
-- `checkPipStyle` refuses: framing outside the camera frame; non-1:1 framing for
-  square/circle; out-of-range radius; malformed colour. The message names the field.
-- `main.ts`'s `project.json` validation (the `pip` branch, ~line 2459) runs the
-  same check.
+- `project-15.schema.json` validates types and ranges; a test holds its bounds equal
+  to `pip-style.ts`'s constants.
+- `cleanPipStyle` is the one validator: shape, radius, centre, width, framing,
+  border width and `#rrggbb` colour, booleans. It never corrects a value.
+- **The write gate refuses.** `main.ts`'s `project.json` validation (the `pip`
+  branch, ~line 2459) throws `project.json: malformed pip.style` when a present
+  style fails `cleanPipStyle`, so a bad style is never written.
+- **The loader drops.** `parseProject` keeps a valid style and drops an invalid one,
+  so the take renders the old fixed-corner PiP instead of losing its project.
 - **Not an error:** a centre that would place the PiP partly off-frame (e.g. after an
   export-size change). `pipRect` clamps at render time — a legitimate state.
 - **Settings** is a preference file, not a take: a stored style that fails the
@@ -193,8 +217,8 @@ Loaders refuse, never default.
 
 - **`transform/test/pip-style.test.ts`** (Node): `pipRect` across output sizes ×
   camera aspects × shapes (integer, inside-the-frame invariants); `snap` inside /
-  just outside the threshold for each anchor; every `checkPipStyle` refusal;
-  `clampFraming` bounds; every preset passes `checkPipStyle`; border pt→px.
+  just outside the threshold for each anchor; every `cleanPipStyle` refusal;
+  `clampFraming` bounds; every preset passes `cleanPipStyle`; border pt→px.
 - **Back-compat:** no `style` → the rect equals `fixedCornerPipUv` exactly;
   `fixtures/pip/` and `gate:identity` byte-identical to master.
 - **`fixtures/pip-styled/`**: a project with circle + border + shadow + mirror +
