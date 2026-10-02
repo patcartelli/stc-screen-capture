@@ -131,9 +131,14 @@
        Audio button (which owns the auto margin), or takes it when Audio is
        hidden; aria-pressed="false" reads as off. */
     #keycastbtn { margin-left: 8px; anchor-name: none; }
-    #audiobtn[hidden] ~ #keycastbtn { margin-left: auto; }
     #keycastbtn[aria-pressed="true"] { color: var(--accent); }
     #keycastbtn[aria-pressed="false"] { opacity: .6; }
+    /* STC-492: the Clicks switch is first of the three and always present, so
+       it owns the auto margin; Audio and Keys sit 8px after whatever precedes. */
+    #clicksbtn { anchor-name: none; }
+    #audiobtn { margin-left: 8px; }
+    #clicksbtn[aria-pressed="true"] { color: var(--accent); }
+    #clicksbtn[aria-pressed="false"] { opacity: .6; }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
     /* STC-460: the pane, redesigned. A popover still (Patrick's default: it
@@ -590,6 +595,14 @@
     <div class="timecoderow">
       <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
       <span id="shuttle" class="mono"></span>
+      <!-- STC-492: show/hide the click highlight. Saved to the project
+           (project-13's showClicks; absent = on). Beside Keys and Audio, the
+           other per-take switches, because it changes the picture and not
+           the sound. -->
+      <button type="button" id="clicksbtn" class="audiobtn" aria-pressed="true"
+              title="Hide the click highlight in the preview and export">
+        <span>Clicks</span>
+      </button>
       <!-- STC-454 part 2: every audio control for the take, in one popover.
            All of it is saved to the project and heard in the preview at 1x
            and in the export; nothing here is ever baked in at capture. -->
