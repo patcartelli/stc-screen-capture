@@ -64,6 +64,12 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     private var deviceName = ""
     private var sampleRate: Double = 0
     private var channels = 0
+    /// What the device itself reports as its active format — only ever shown
+    /// in a warning, never used to configure anything (STC-485).
+    private var nativeFormat: MicFormat?
+    /// STC-485. Touched only on `queue` (the delegate's serial queue) after
+    /// `start()` installs it.
+    private var formatGuard: MicFormatGuard?
 
     /// The take's pause gate (STC-240). This one is the privacy property
     /// rather than symmetry: a pause that left mic.m4a recording would capture
@@ -85,6 +91,10 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     /// Set by `stop()` so the liveness watchdog below cannot warn about a take
     /// that has already ended.
     private var stopped = false
+    /// Set when the STC-485 guard ends the mic track, so the watchdog below
+    /// does not follow its `mic-format-mismatch` with a second, wrong reason
+    /// (a guard that trips on the first buffer leaves `appended` at zero).
+    private var formatTripped = false
 
     /// How long a mic may be RUNNING with zero samples before the user is told
     /// — the audio analogue of `CameraCapture.noFramesWarningSeconds` and the
@@ -121,7 +131,10 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         deviceName = device.localizedName
         sampleRate = asbd.mSampleRate
         channels = Int(asbd.mChannelsPerFrame)
+        nativeFormat = MicFormat(asbd)
         lock.unlock()
+        formatGuard = MicFormatGuard(expected: Self.expectedFormat(sampleRate: asbd.mSampleRate,
+                                                                   channels: Int(asbd.mChannelsPerFrame)))
 
         let s = AVCaptureSession()
         s.beginConfiguration()
@@ -139,6 +152,20 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         s.addInput(input)
 
         let output = AVCaptureAudioDataOutput()
+        // STC-485: ASK for the format rather than taking the device's. Left to
+        // choose, the output delivered the Wave:3's native 24-bit packed
+        // (3 bytes/frame), and the takes that came out as noise were 4-byte
+        // frames read 3 at a time. Rate and channels stay the device's own, so
+        // this is a sample-format conversion only, never a resample.
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: asbd.mSampleRate,
+            AVNumberOfChannelsKey: Int(asbd.mChannelsPerFrame),
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
         output.setSampleBufferDelegate(self, queue: queue)
         guard s.canAddOutput(output) else {
             s.commitConfiguration()
@@ -165,7 +192,7 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
             guard let self else { return }
             self.lock.lock()
             let seen = self.appended
-            let ended = self.stopped
+            let ended = self.stopped || self.formatTripped
             self.lock.unlock()
             guard !ended, seen == 0 else { return }
             IO.send("warning", ["code": "mic-no-frames",
@@ -215,6 +242,50 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         gate.install(input: inp)
     }
 
+    /// The format `audioSettings` asks for, and so the one the guard holds every
+    /// buffer to. `STC_CAPTURE_FAULT=mic-format-mismatch` expects 3-byte frames
+    /// instead, so the very first real buffer trips the guard and the warning
+    /// path is watched end to end on the real binary rather than reasoned
+    /// about — the trigger itself has never been reproduced on demand.
+    static func expectedFormat(sampleRate: Double, channels: Int) -> MicFormat {
+        let pinned = MicFormat.pinned(sampleRate: sampleRate, channels: channels)
+        guard ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "mic-format-mismatch" else { return pinned }
+        IO.log("STC_CAPTURE_FAULT=mic-format-mismatch: the mic guard expects 3-byte frames")
+        return MicFormat(sampleRate: sampleRate, formatID: pinned.formatID, flags: pinned.flags,
+                         bytesPerFrame: UInt32(3 * channels), channels: pinned.channels, bitsPerChannel: 24)
+    }
+
+    /// Runs the STC-485 guard on one delivered buffer. False means do not write
+    /// it; the first refusal is also the take's one `mic-format-mismatch`
+    /// warning.
+    private func passesFormatGuard(_ sb: CMSampleBuffer, ptsNs: Int64) -> Bool {
+        guard var g = formatGuard,
+              let desc = CMSampleBufferGetFormatDescription(sb),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc)?.pointee else { return false }
+        let bytes = CMSampleBufferGetDataBuffer(sb).map { CMBlockBufferGetDataLength($0) } ?? 0
+        let verdict = g.check(format: MicFormat(asbd), numSamples: CMSampleBufferGetNumSamples(sb),
+                              dataBytes: bytes, ptsNs: ptsNs)
+        formatGuard = g
+        switch verdict {
+        case .append: return true
+        case .drop: return false
+        case .trip(let fault):
+            lock.lock()
+            formatTripped = true
+            let device = deviceName
+            let native = nativeFormat.map { $0.description } ?? "unknown"
+            lock.unlock()
+            IO.send("warning", ["code": "mic-format-mismatch", "device": device,
+                                "atNs": Int(ptsNs),
+                                "expected": g.expected.description, "native": native,
+                                // Both formats IN the detail too: the toast shows only
+                                // `detail`, and this is the trigger's only evidence.
+                                "detail": fault.detail + " (expected \(g.expected); the device reports \(native)). "
+                                        + "The mic track ends here rather than recording noise"])
+            return false
+        }
+    }
+
     /// Exact PTS in nanoseconds — identical rule to `CameraCapture.ptsNs`.
     static func ptsNs(_ pts: CMTime) -> Int64 {
         CMTimeConvertScale(pts, timescale: 1_000_000_000, method: .roundHalfAwayFromZero).value
@@ -258,6 +329,10 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
             }
             monotonicGuardPtsNs = rel
             lock.unlock()
+
+            // Before the pause gate: the guard's pacing needs every delivered
+            // buffer, and a paused stretch is still delivered.
+            guard passesFormatGuard(sb, ptsNs: rel) else { return }
 
             if pauseGate.isPaused(atNs: rel) { return }
 

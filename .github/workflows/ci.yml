@@ -36,7 +36,14 @@ jobs:
     # Minutes are free on a public repo. A healthy run was ~6 min when this was
     # first written; it is 12-25 min now (742-1469 s over the same 17 runs),
     # almost all of it `npm test`.
-    timeout-minutes: 90
+    #
+    # 90 -> 95 (STC-396): the video framing gate is the still gate's twin and
+    # declares the same 220 s process bound (scripts/gate-bounds.mjs), which
+    # took the margin against this cap from 450 s to 230 s — under the 300 s
+    # that gate-bounds.test.ts requires. 5 more minutes restores it (530 s).
+    # The gate itself costs seconds; the bound is dominated by launch,
+    # readiness and teardown, which every gate shares.
+    timeout-minutes: 95
 
     # A post-merge master run re-verifies a tree CI already approved as a PR
     # head, which is the largest remaining duplication. It is NOT skipped by
