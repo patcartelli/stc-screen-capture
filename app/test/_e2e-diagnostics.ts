@@ -164,7 +164,16 @@ export function run(cmd: string, args: readonly string[], timeoutMs: number): Pr
  */
 export async function sampleProcess(pid: number, file: string, boundMs: number): Promise<CommandResult> {
   if (process.platform !== "darwin") return { ok: false, stdout: "", error: "not macOS" };
-  return run("/usr/bin/sample", [String(pid), "1", "-mayDie", "-file", file], boundMs);
+  const args = [String(pid), "1", "-mayDie", "-file", file];
+  // On CI, as root: Electron ships with the hardened runtime and no
+  // get-task-allow, so an unprivileged `sample` cannot attach to it — run
+  // 37053837355 sampled nothing but `Command failed`. GitHub's macOS runners
+  // allow `sudo -n`; `-n` makes it fail at once rather than prompt anywhere
+  // else. A developer's Mac takes the unprivileged path and simply gets no
+  // sample of an Electron app.
+  return process.env.CI
+    ? run("/usr/bin/sudo", ["-n", "/usr/bin/sample", ...args], boundMs)
+    : run("/usr/bin/sample", args, boundMs);
 }
 
 /**
