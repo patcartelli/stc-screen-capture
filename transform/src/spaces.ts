@@ -121,6 +121,9 @@
  * `project.pip`'s fixed-corner fields; see `fixedCornerPipUv`. It is a crop
  * in the same space as zoom rather than a corner in output pixels, so the
  * camera can be moved or resized later by the code that moves the zoom.
+ * With project-16's `pip.style` (STC-461) the authored rect is the source:
+ * `pip-style.ts`'s `pipRect`/`framingSource` own it, and `fixedCornerPipUv`
+ * remains the answer for documents without a style.
  *
  * =====================================================================
  * WHAT THIS MODULE DOES NOT OWN

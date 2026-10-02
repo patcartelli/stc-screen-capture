@@ -1,3 +1,4 @@
+import type { PipStyle } from "./pip-style.js";
 /**
  * `ZoomPreset` is derived from `ZOOM_PRESETS` in zoom.ts (`keyof typeof`), so
  * the preset NAMES have one source — the table itself. That makes this a
@@ -89,12 +90,14 @@ export interface MicTrack {
  */
 export type SystemAudioTrack = Omit<MicTrack, "device">;
 
-/** Mirrors the optional `pip` block in schema/project-2.schema.json. */
+/** Mirrors the optional `pip` block in schema/project-2.schema.json; `style` is project-16's (STC-461). */
 export interface Pip {
   enabled: boolean;
   corner: "bottom-right";
   widthPct: number;
   marginPx: number;
+  /** Absent = the fixed corner above. Present = pip-style.ts decides; the corner fields are carried, unused. */
+  style?: PipStyle;
 }
 
 /**
@@ -249,7 +252,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
