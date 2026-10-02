@@ -196,3 +196,119 @@ export function pipStylesEqual(a: PipStyle, b: PipStyle): boolean {
 export function isDefaultPipStyle(s: PipStyle): boolean {
   return pipStylesEqual(s, DEFAULT_PIP_STYLE);
 }
+
+export const DEFAULT_BORDER: Readonly<PipBorder> = Object.freeze({ widthPt: 2, color: "#ffffff" });
+
+export type PipPresetName = "classic" | "circle" | "rounded-square" | "large-circle";
+export interface PipPreset {
+  name: PipPresetName;
+  label: string;
+  /** A LOOK only: a preset never moves the PiP, reframes it or flips it. */
+  look: Pick<PipStyle, "shape" | "cornerRadius" | "width" | "border" | "shadow">;
+}
+
+/** Tuned by eye on hardware (docs/STC-461-RUNBOOK.md §1); change values here only. */
+export const PIP_PRESETS: readonly PipPreset[] = Object.freeze([
+  { name: "classic", label: "Classic",
+    look: { shape: "rect", cornerRadius: 0.12, width: 0.16, border: null, shadow: true } },
+  { name: "circle", label: "Circle",
+    look: { shape: "circle", cornerRadius: 0, width: 0.14, border: { ...DEFAULT_BORDER }, shadow: true } },
+  { name: "rounded-square", label: "Rounded square",
+    look: { shape: "square", cornerRadius: 0.2, width: 0.14, border: null, shadow: true } },
+  { name: "large-circle", label: "Large circle",
+    look: { shape: "circle", cornerRadius: 0, width: 0.24, border: { widthPt: 3, color: "#ffffff" }, shadow: true } },
+]);
+
+export type PipEdit =
+  | { kind: "preset"; name: PipPresetName }
+  | { kind: "shape"; shape: PipShape }
+  | { kind: "radius"; value: number }
+  | { kind: "size"; value: number }
+  | { kind: "border"; on: boolean }
+  | { kind: "borderWidth"; pt: number }
+  | { kind: "borderColor"; color: string }
+  | { kind: "shadow"; on: boolean }
+  | { kind: "mirror"; on: boolean }
+  | { kind: "move"; center: Point }
+  | { kind: "framing"; framing: PipFraming };
+
+/**
+ * What an inspector control or a drag MEANS. Always returns a style
+ * `cleanPipStyle` accepts: out-of-range input is clamped, a bad colour is
+ * ignored. The DOM only maps events to a `PipEdit`.
+ */
+export function editPipStyle(style: PipStyle, edit: PipEdit, camera: Size): PipStyle {
+  const s: PipStyle = { ...style, center: { ...style.center } };
+  switch (edit.kind) {
+    case "preset": {
+      const p = PIP_PRESETS.find((x) => x.name === edit.name);
+      if (!p) return s;
+      return { ...s, ...p.look, border: p.look.border ? { ...p.look.border } : null };
+    }
+    case "shape": return { ...s, shape: edit.shape };
+    case "radius": return { ...s, cornerRadius: clamp(edit.value, 0, PIP_RADIUS_MAX) };
+    case "size": return { ...s, width: clamp(edit.value, PIP_WIDTH_MIN, PIP_WIDTH_MAX) };
+    case "border": return { ...s, border: edit.on ? { ...(s.border ?? DEFAULT_BORDER) } : null };
+    case "borderWidth":
+      return { ...s, border: { ...(s.border ?? DEFAULT_BORDER), widthPt: clamp(edit.pt, PIP_BORDER_PT_MIN, PIP_BORDER_PT_MAX) } };
+    case "borderColor":
+      if (!PIP_COLOR_PATTERN.test(edit.color)) return s;
+      return { ...s, border: { ...(s.border ?? DEFAULT_BORDER), color: edit.color } };
+    case "shadow": return { ...s, shadow: edit.on };
+    case "mirror": return { ...s, mirror: edit.on };
+    case "move": return { ...s, center: { x: clamp(edit.center.x, 0, 1), y: clamp(edit.center.y, 0, 1) } };
+    case "framing": {
+      const zoom = clamp(edit.framing.zoom, 1, PIP_FRAMING_ZOOM_MAX);
+      return { ...s, framing: clampFraming({ ...edit.framing, zoom }, s.shape, camera) };
+    }
+  }
+}
+
+function nearestWithin(candidates: readonly number[], v: number, threshold: number): number | undefined {
+  let best: number | undefined;
+  let bestD = threshold;
+  for (const c of candidates) {
+    const d = Math.abs(c - v);
+    if (d <= bestD) { best = c; bestD = d; }
+  }
+  return best;
+}
+
+/**
+ * Nine anchors, decided per axis: an edge's margin, the middle, the far edge's
+ * margin. `size` and `thresholdPx` are OUTPUT pixels — the caller converts its
+ * screen threshold for the stage's current scale.
+ */
+export function snapCenter(center: Point, size: Size, output: Size, thresholdPx: number): Point {
+  const m = PIP_SNAP_MARGIN_PX;
+  const xs = [m + size.width / 2, output.width / 2, output.width - m - size.width / 2];
+  const ys = [m + size.height / 2, output.height / 2, output.height - m - size.height / 2];
+  const px = center.x * output.width;
+  const py = center.y * output.height;
+  const sx = nearestWithin(xs, px, thresholdPx);
+  const sy = nearestWithin(ys, py, thresholdPx);
+  return { x: (sx ?? px) / output.width, y: (sy ?? py) / output.height };
+}
+
+/** A corner handle: aspect locked, centre fixed; the larger of the two axes wins. */
+export function resizeFromCorner(style: PipStyle, pointer: Point, output: Size, camera: Size): PipStyle {
+  const cx = style.center.x * output.width;
+  const cy = style.center.y * output.height;
+  const now = pipSize(style, output, camera);
+  const aspect = now.width / now.height;
+  const halfW = Math.max(Math.abs(pointer.x - cx), Math.abs(pointer.y - cy) * aspect);
+  return { ...style, center: { ...style.center }, width: clamp((2 * halfW) / output.width, PIP_WIDTH_MIN, PIP_WIDTH_MAX) };
+}
+
+/** Pan by a delta in camera pixels as SEEN (a mirrored picture flips x back). */
+export function panFraming(style: PipStyle, deltaCameraPx: Point, camera: Size): PipFraming {
+  const f = style.framing ?? DEFAULT_FRAMING;
+  const dx = (style.mirror ? -deltaCameraPx.x : deltaCameraPx.x) / camera.width;
+  const dy = deltaCameraPx.y / camera.height;
+  return clampFraming({ x: f.x + dx, y: f.y + dy, zoom: f.zoom }, style.shape, camera);
+}
+
+export function zoomFraming(style: PipStyle, zoom: number, camera: Size): PipFraming {
+  const f = style.framing ?? DEFAULT_FRAMING;
+  return clampFraming({ ...f, zoom: clamp(zoom, 1, PIP_FRAMING_ZOOM_MAX) }, style.shape, camera);
+}

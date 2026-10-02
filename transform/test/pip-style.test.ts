@@ -3,6 +3,8 @@ import {
   cleanPipStyle, pipSize, pipRect, framingSource, clampFraming, styleFromFixedCorner,
   isDefaultPipStyle, pipStylesEqual, DEFAULT_PIP_STYLE, DEFAULT_PIP_FIXED, DEFAULT_FRAMING,
   PIP_WIDTH_MAX, PIP_FRAMING_ZOOM_MAX, type PipStyle,
+  PIP_PRESETS, editPipStyle, snapCenter, resizeFromCorner, panFraming, zoomFraming,
+  PIP_SNAP_MARGIN_PX, PIP_WIDTH_MIN, DEFAULT_BORDER,
 } from "../src/pip-style.js";
 import { fixedCornerPipUv, uvRectToPixels, outputRect, roundRect } from "../src/spaces.js";
 import { DEFAULT_PIP } from "../src/trim.js";
@@ -117,5 +119,106 @@ describe("defaults", () => {
     expect(isDefaultPipStyle(style({ shadow: true }))).toBe(false);
     expect(pipStylesEqual(style({ framing: DEFAULT_FRAMING }), style({ framing: { ...DEFAULT_FRAMING } }))).toBe(true);
     expect(pipStylesEqual(style({ border: { widthPt: 2, color: "#ffffff" } }), style({ border: null }))).toBe(false);
+  });
+});
+
+describe("presets", () => {
+  test("every preset yields a valid style", () => {
+    for (const p of PIP_PRESETS) {
+      expect(cleanPipStyle(editPipStyle(DEFAULT_PIP_STYLE, { kind: "preset", name: p.name }, CAM))).not.toBeNull();
+    }
+  });
+  test("a preset is a LOOK: position, framing and mirror survive it", () => {
+    const placed = style({ center: { x: 0.2, y: 0.3 }, mirror: true, framing: { x: 0.4, y: 0.5, zoom: 1.5 } });
+    const after = editPipStyle(placed, { kind: "preset", name: "circle" }, CAM);
+    expect(after.shape).toBe("circle");
+    expect(after.center).toEqual({ x: 0.2, y: 0.3 });
+    expect(after.mirror).toBe(true);
+    expect(after.framing).toEqual({ x: 0.4, y: 0.5, zoom: 1.5 });
+  });
+  test("names are unique", () => {
+    expect(new Set(PIP_PRESETS.map((p) => p.name)).size).toBe(PIP_PRESETS.length);
+  });
+});
+
+describe("editPipStyle clamps rather than producing an invalid style", () => {
+  test.each([
+    [{ kind: "size", value: 9 } as const, (s: PipStyle) => expect(s.width).toBe(PIP_WIDTH_MAX)],
+    [{ kind: "size", value: 0 } as const, (s: PipStyle) => expect(s.width).toBe(PIP_WIDTH_MIN)],
+    [{ kind: "radius", value: -1 } as const, (s: PipStyle) => expect(s.cornerRadius).toBe(0)],
+    [{ kind: "move", center: { x: -0.5, y: 2 } } as const, (s: PipStyle) => expect(s.center).toEqual({ x: 0, y: 1 })],
+    [{ kind: "borderWidth", pt: 99 } as const, (s: PipStyle) => expect(s.border!.widthPt).toBe(12)],
+  ])("%j", (edit, check) => {
+    const s = editPipStyle(style({ border: DEFAULT_BORDER }), edit, CAM);
+    expect(cleanPipStyle(s)).not.toBeNull();
+    check(s);
+  });
+  test("border on uses DEFAULT_BORDER; off is null; a bad colour is ignored", () => {
+    const on = editPipStyle(DEFAULT_PIP_STYLE, { kind: "border", on: true }, CAM);
+    expect(on.border).toEqual(DEFAULT_BORDER);
+    expect(editPipStyle(on, { kind: "border", on: false }, CAM).border).toBeNull();
+    expect(editPipStyle(on, { kind: "borderColor", color: "red" }, CAM).border!.color).toBe(DEFAULT_BORDER.color);
+  });
+  test("a framing edit is stored clamped", () => {
+    const s = editPipStyle(style({ shape: "circle" }), { kind: "framing", framing: { x: 1, y: 0, zoom: 1 } }, CAM);
+    expect(s.framing!.x).toBeCloseTo((560 + 360) / 1280, 12);
+  });
+});
+
+describe("snapCenter — nine anchors, per axis", () => {
+  const out = { width: 1920, height: 1080 };
+  const size = { width: 384, height: 216 };
+  const toPx = (c: { x: number; y: number }) => ({ x: c.x * out.width, y: c.y * out.height });
+  test("near the bottom-right anchor snaps the PiP's edge onto the margin", () => {
+    const anchorX = out.width - PIP_SNAP_MARGIN_PX - size.width / 2;
+    const anchorY = out.height - PIP_SNAP_MARGIN_PX - size.height / 2;
+    const c = snapCenter({ x: (anchorX - 10) / out.width, y: (anchorY + 9) / out.height }, size, out, 12);
+    expect(toPx(c)).toEqual({ x: anchorX, y: anchorY });
+    const r = pipRect(style({ width: 0.2, center: c }), out, CAM);
+    expect(r.x + r.width).toBe(out.width - PIP_SNAP_MARGIN_PX);
+    expect(r.y + r.height).toBe(out.height - PIP_SNAP_MARGIN_PX);
+  });
+  test("just outside the threshold does not snap", () => {
+    const anchorX = PIP_SNAP_MARGIN_PX + size.width / 2;
+    const c = snapCenter({ x: (anchorX + 13) / out.width, y: 0.37 }, size, out, 12);
+    expect(toPx(c).x).toBeCloseTo(anchorX + 13, 9);
+    expect(c.y).toBeCloseTo(0.37, 12);
+  });
+  test("dead centre is an anchor", () => {
+    expect(toPx(snapCenter({ x: 0.503, y: 0.497 }, size, out, 12))).toEqual({ x: 960, y: 540 });
+  });
+});
+
+describe("resizeFromCorner", () => {
+  test("width is twice the pointer's distance from the centre, clamped", () => {
+    const out = { width: 1000, height: 1000 };
+    const s = style({ shape: "square", center: { x: 0.5, y: 0.5 } });
+    expect(resizeFromCorner(s, { x: 650, y: 500 }, out, CAM).width).toBeCloseTo(0.3, 12);
+    expect(resizeFromCorner(s, { x: 2000, y: 500 }, out, CAM).width).toBe(PIP_WIDTH_MAX);
+    expect(resizeFromCorner(s, { x: 500, y: 500 }, out, CAM).width).toBe(PIP_WIDTH_MIN);
+  });
+});
+
+describe("panFraming", () => {
+  test("dragging the window right moves the framing centre right", () => {
+    const s = style({ shape: "square", framing: { x: 0.5, y: 0.5, zoom: 2 } });
+    expect(panFraming(s, { x: 64, y: 0 }, CAM).x).toBeCloseTo(0.55, 12);
+  });
+  test("mirrored: the same drag moves the crop the OTHER way in camera space (Review Focus 2)", () => {
+    const s = style({ shape: "square", mirror: true, framing: { x: 0.5, y: 0.5, zoom: 2 } });
+    expect(panFraming(s, { x: 64, y: 0 }, CAM).x).toBeCloseTo(0.45, 12);
+  });
+  test("clamped at the camera edge", () => {
+    const s = style({ shape: "square", framing: { x: 0.5, y: 0.5, zoom: 2 } });
+    const f = panFraming(s, { x: 5000, y: 0 }, CAM);
+    expect(framingSource({ ...s, framing: f }, CAM).x + 360).toBeCloseTo(1280, 9);
+  });
+  test("zoomFraming clamps to 1..PIP_FRAMING_ZOOM_MAX and keeps the crop inside", () => {
+    const s = style({ shape: "circle", framing: { x: 0.95, y: 0.5, zoom: 3 } });
+    expect(zoomFraming(s, 0.2, CAM).zoom).toBe(1);
+    expect(zoomFraming(s, 9, CAM).zoom).toBe(PIP_FRAMING_ZOOM_MAX);
+    const f = zoomFraming(s, 1, CAM);
+    const src = framingSource({ ...s, framing: f }, CAM);
+    expect(src.x + src.width).toBeLessThanOrEqual(1280 + 1e-9);
   });
 });
