@@ -43,7 +43,7 @@ const geometryFor = (takeDir: string, id: string): any =>
   (readProject(takeDir).overrides ?? []).find((o: any) => o.kind === "geometry" && o.windowId === id);
 
 describe("a save made while a block is selected", () => {
-  test("keeps the window's existing override on disk, and so does reloading the page mid-edit", async () => {
+  test("keeps the window's existing override on disk, and reloading mid-edit commits a newly drawn rect", async () => {
     const { win, takeDir } = await openPreview();
 
     // An existing geometry override on disk, committed the ordinary way.
@@ -64,11 +64,25 @@ describe("a save made while a block is selected", () => {
     expect(geometryFor(takeDir, WINDOW_ID)).toEqual(before);
     expect(await win.isVisible("#overridebar")).toBe(true); // still editing
 
+    const trimStart = readProject(takeDir).trim.startNs;
+
+    // Now draw a NEW rect and save nothing: the only write that can carry it
+    // is the one leaving the page makes (beforeunload — which is also the
+    // take-switch path, since opening another take re-navigates this window).
+    await dragOnStage(win, { x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 });
+    expect(geometryFor(takeDir, WINDOW_ID)).toEqual(before); // not written yet
+
     // Leave the page with the edit still open — no Done, no Escape.
     await win.reload();
     await expect.poll(() => win.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
-    expect(geometryFor(takeDir, WINDOW_ID)).toEqual(before);
-    expect(readProject(takeDir).trim?.startNs ?? 0).toBeGreaterThan(0);
+    await expect.poll(() => geometryFor(takeDir, WINDOW_ID)?.rect.width, { timeout: 10_000 })
+      .not.toBeCloseTo(before.rect.width, 2);
+    const after = geometryFor(takeDir, WINDOW_ID);
+    expect(after.rect.x).toBeCloseTo(0.1, 1);
+    expect(after.rect.y).toBeCloseTo(0.1, 1);
+    expect(after.rect.width).toBeCloseTo(0.4, 1);
+    expect(after.rect.height).toBeCloseTo(0.4, 1);
+    expect(readProject(takeDir).trim?.startNs).toBe(trimStart);
   }, 120_000);
 });
 

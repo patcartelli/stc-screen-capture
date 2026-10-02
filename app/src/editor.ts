@@ -836,13 +836,13 @@ function manualEntries(): Extract<ZoomOverride, { kind: "manual" }>[] {
  * now. Done, every save made mid-edit, and every output read it the same way.
  */
 function editState(): OverrideEdit | null {
-  if (editingWindowId) {
+  if (editingWindowId !== null) {
     return {
       kind: "derived", windowId: editingWindowId, rect: draftRect, easing: draftEasing,
       startNs: draftManualStart, endNs: draftManualEnd,
     };
   }
-  if (editingManualId) {
+  if (editingManualId !== null) {
     return {
       kind: "manual", id: editingManualId, rect: draftRect, easing: draftEasing,
       startNs: draftManualStart, endNs: draftManualEnd,
@@ -2153,11 +2153,18 @@ async function finishOpenEdits(): Promise<void> {
  * synchronous and persistProject's first await is `editor.writeProject`,
  * whose IPC invoke is sent as it is called) — so the caller may clear
  * openProject/player/the edit state straight after. The returned promise
- * settles when both writes have landed. With both open there are two writes
- * of the same document (each composes the other's commit), in order.
+ * settles when both writes have landed.
  */
 function postOpenEditWrites(): Promise<void> {
   const reframeWrite = exitReframe(true);
+  // With BOTH a reframe and an override edit open, this is a second write,
+  // and main's `preview:writeProject` (a plain `writeFile` of the same path)
+  // may run the two concurrently. Safe because they are the SAME bytes: the
+  // reframe's write already carried the edit (persistProject composes
+  // editedOverrides()), and this one carries the reframe (exitReframe has just
+  // put the real PiP back on the live project). Whichever lands last, the
+  // file holds that one document. Not skipped, because exitReframe can
+  // return without writing at all (no PiP), and then this is the only write.
   const editWrite = commitCurrentEdit();
   return Promise.all([reframeWrite, editWrite]).then(() => undefined);
 }
