@@ -132,6 +132,15 @@ describe("render(project, session, t) → FrameState", () => {
     expect(render(fixtureProject(), session, 2_300_000_000).cursor.pressed).toBe(false);
   });
 
+  test("showClicks reaches the FrameState from the PROJECT, default on (STC-420)", () => {
+    const session = fixtureSession();
+    expect(render(fixtureProject(), session, 2_100_000_000).cursor.showClicks).toBe(true);
+    const off = { ...fixtureProject(), showClicks: false };
+    const fs = render(off, session, 2_100_000_000);
+    expect(fs.cursor.showClicks).toBe(false);
+    expect(fs.cursor.pressed).toBe(true); // the fact is unchanged; only the choice moved
+  });
+
   test("does not mutate its inputs", () => {
     const session = fixtureSession();
     const project = fixtureProject();

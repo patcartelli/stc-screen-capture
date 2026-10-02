@@ -78,7 +78,7 @@ describe("the Audio pane's feel", () => {
   }, 120_000);
 
   test("playing with the panel open runs the meters on the audio clock without an error", async () => {
-    // The fixture decodes to near-silence, so the BAR staying low is all this
+    // The fixture decodes to exact silence, so the BAR staying low is all this
     // can see; a real voice moving it is the runbook's (needs a Mac and a take).
     const win = await openEditor(makeMicTakeFolder().dir);
     const errors: string[] = [];

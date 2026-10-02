@@ -45,7 +45,7 @@ export interface FrameState {
    * keeps its on-screen size relative to the content at any export size AND
    * at any zoom. `style` picks the artwork set or the circle.
    */
-  cursor: CursorState & { pxPerPoint: number; style: CursorStyle };
+  cursor: CursorState & { pxPerPoint: number; style: CursorStyle; showClicks: boolean };
   /** camera picture-in-picture, or null when there is none to draw */
   pip: PipState | null;
   /** auto-zoom (STC-325/330/331). Always present; `crop` is the whole frame unless an override supplies a target */
@@ -295,6 +295,7 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
       vx: vel.x,
       vy: vel.y,
       pressed: s.pressed,
+      showClicks: project.showClicks !== false,
       visible: s.visible,
       shape: s.shape,
       style: project.cursor.style,

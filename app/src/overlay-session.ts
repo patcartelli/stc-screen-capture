@@ -303,7 +303,7 @@ export interface OpenOptions {
    * defaults each to its "off"/"none" value.
    */
   initialOptions?: Pick<OptionsState, "micDeviceUid" | "camera" | "mics">
-    & Partial<Pick<OptionsState, "systemAudio" | "keys" | "cameraDeviceUid" | "cameras">>;
+    & Partial<Pick<OptionsState, "systemAudio" | "keys" | "cameraDeviceUid" | "cameras" | "showClicks">>;
 }
 
 /**
@@ -372,6 +372,7 @@ class OverlaySession {
       cameraDeviceUid: opts.initialOptions?.cameraDeviceUid ?? null,
       mics: opts.initialOptions?.mics ?? [],
       cameras: opts.initialOptions?.cameras ?? [],
+      showClicks: opts.initialOptions?.showClicks ?? true,
       fullDisplay: false,
       openMenu: null,
     };
@@ -673,7 +674,10 @@ class OverlaySession {
         this.options = { ...this.options, keys: !this.options.keys, openMenu: null };
         return this.broadcast();
       case "clicks":
-        return;   // disabled slot, STC-420
+        // A plain toggle (STC-420). Closes an open menu like any other press
+        // on the bar that is not a menu trigger.
+        this.options = { ...this.options, showClicks: !this.options.showClicks, openMenu: null };
+        return this.broadcast();
       case "record": {
         // FINDING 1 (STC-388 review, CRITICAL). `pending` used to be commit-
         // time truth unconditionally, but region mode's `reduce` (selection.ts)

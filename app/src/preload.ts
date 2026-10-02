@@ -51,6 +51,9 @@ contextBridge.exposeInMainWorld("recorder", {
   // through to `STC_RECORDINGS_DIR`/~/Desktop/stc inside `takes.ts`, and the
   // renderer has neither the env nor a home directory to name.
   resolvedSaveFolder: () => ipcRenderer.invoke("recorder:resolvedSaveFolder"),
+  // Reclaim space (STC-435). Takes nothing: main finds, asks and reports
+  // through its own dialog and toast, so the renderer never names a path.
+  reclaimSpace: () => ipcRenderer.invoke("recorder:reclaimSpace"),
   // The library (STC-294): one index over both kinds. The renderer asks for a
   // filtered list and is handed items it renders without knowing what kinds
   // exist — the filtering happens on this side of the bridge for exactly that

@@ -169,9 +169,9 @@ export const TEMP_TAKE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  * offer would let that take live forever — the first offer is when the user
  * was first told, and that is what the clock runs from.
  *
- * Same lesson as {@link ORPHAN_MARKER_FILE}: a marker whose content cannot be
- * read as a positive number (the zero-byte shape a crash mid-`writeFile`
- * leaves) must not read as ancient — here it reads as NOT OFFERED, which is
+ * Same lesson as STC-413's `.orphaned-at` marker (gone since STC-435): a
+ * marker whose content cannot be read as a positive number (the zero-byte
+ * shape a crash mid-`writeFile` leaves) must not read as ancient — here it reads as NOT OFFERED, which is
  * the direction that keeps the take.
  */
 export const RECOVERY_OFFERED_FILE = ".recovery-offered-at";
@@ -202,15 +202,15 @@ export async function markOfferedForRecovery(dir: string, now: number = Date.now
  * {@link TEMP_TAKE_MAX_AGE_MS} ago, permanently (not to the Trash — a take the
  * user was shown and left alone for a week is abandoned, and this root lives
  * inside `~/Library/Application Support`, invisible, where a bare `rm` is the
- * right call; see `sweepOrphanedBundles` for the contrasting `raw/` case).
+ * right call; see `findOrphanedBundles` for the contrasting `raw/` case).
  *
  * **A take that has never been offered is never purged, however old.** This
  * used to measure age from the take's own timestamped name, on the premise
  * that "nothing legitimate stays in temp for anywhere near 7 days". Two things
  * legitimately do, and both are ones this app itself PROMISES to offer back on
- * the next launch: a recording whose promotion to the library failed
- * (`recording-promote-failed`, main.ts), and a still whose panel was ignored,
- * bumped by a Record, or left behind by Quit Anyway (STC-392). A menu-bar app
+ * the next launch: a recording whose panel was ignored, bumped, or never
+ * shown (STC-487 — a stop no longer promotes), and a still whose panel was
+ * ignored, bumped by a Record, or left behind by Quit Anyway (STC-392). A menu-bar app
  * can easily run for more than a week without relaunching, and a relaunch
  * after day 7 ran this purge BEFORE the prompt that was supposed to offer the
  * take — so in both cases the take was deleted without the user ever being
@@ -247,148 +247,138 @@ export async function purgeStaleTempTakes(env: NodeJS.ProcessEnv,
 }
 
 /**
- * The dotfile marking a bundle first seen orphaned (STC-413).
- *
- * Its contents are the epoch ms it was written, so age is measured from the
- * SIGHTING rather than from the bundle's own (possibly much older) creation
- * date.
- *
- * The leading dot is convention only — it keeps the marker out of the way in
- * Finder and says "bookkeeping, not yours". It is NOT what keeps the scan
- * from seeing it, and an earlier version of this comment leaned on the
- * scan's dotfile skip (rule 2) as if it did. That skip applies to entries
- * the scan actually enumerates: top-level files and the direct children of
- * `raw/`. This marker sits one level deeper again, INSIDE a bundle, which
- * the scan reads only through `readdir` for `dirSize` and the
- * `shot.json`/`anchors.json` checks — it was never a candidate for listing
- * whatever it was called.
+ * What kind of take a `raw/` bundle holds, read from its document the way
+ * `library.ts`'s own scan does: `shot.json` is a still, `anchors.json` a
+ * recording. `unknown` is a bundle with neither — a take that died before
+ * its document was written — and is treated as possibly EITHER kind below.
  */
-export const ORPHAN_MARKER_FILE = ".orphaned-at";
+export type BundleKind = "recording" | "still" | "unknown";
+
+/** A `raw/` bundle no top-level file points back at — safe to offer for the Trash. */
+export interface OrphanedBundle {
+  dir: string;
+  /** The bundle directory's own name (its capture timestamp). */
+  name: string;
+  kind: BundleKind;
+  /** Everything under the bundle, recursively — what moving it to the Trash frees. */
+  bytes: number;
+}
+
+/** A bundle that may be orphaned but cannot be PROVEN so, and the files in the way. */
+export interface BlockedBundle extends OrphanedBundle {
+  /** Top-level file names (with extension) whose capture id could not be read. */
+  blockers: string[];
+}
+
+export interface ReclaimReport {
+  orphans: OrphanedBundle[];
+  blocked: BlockedBundle[];
+}
+
+/** Recursive size, never following a symlink — the same `lstat` rule as the walk itself. */
+async function treeBytes(dir: string): Promise<number> {
+  let total = 0;
+  let names: string[];
+  try { names = await readdir(dir); } catch { return 0; }
+  for (const n of names) {
+    const p = join(dir, n);
+    try {
+      const st = await lstat(p);
+      total += st.isDirectory() ? await treeBytes(p) : st.size;
+    } catch { /* vanished mid-scan */ }
+  }
+  return total;
+}
 
 /**
- * Find `raw/` bundles whose finished file is gone (STC-413), and return
- * their directories. **Never deletes anything here.**
+ * Find `raw/` bundles whose finished file is gone (STC-413), for "Reclaim
+ * space" (STC-435) to show the user before anything moves. **Read-only:
+ * this never writes, moves or removes anything** — not even a marker.
  *
- * This module is deliberately Electron-free, and the object being reported
- * is a `raw/` bundle — the SAME kind of object Task 11 already removes, via
- * `shell.trashItem`, under the rule "never `rm`, so a mistaken click is one
- * Finder restore away." `rawRoot` sits inside the user's own chosen folder,
- * visible and reachable — unlike `purgeStaleTempTakes`'s root, which lives
- * inside `~/Library/Application Support`, invisible and already abandoned,
- * where a bare `rm` is the right call. So this function only DECIDES; the
- * caller (`main.ts`, the same 12-hour timer that already runs
- * `purgeStaleTempTakes`) is what actually trashes each returned directory —
- * the identical `pendingTrash.due()` -> `shell.trashItem` split one call
- * site over.
+ * ## Why there is no clock any more
  *
- * A bundle is reported as due only when it is BOTH orphaned and aged — two
- * independent conditions, and dropping either is the exact bug this function
- * exists not to have (see the mutation check in `orphan-sweep.test.ts`):
+ * This used to run unattended on a 12-hour timer, and so needed a 7-day
+ * age gate measured from a `.orphaned-at` marker it wrote on first sighting
+ * — the only guard between "a file is briefly out of the folder" and the
+ * bundle behind it being trashed with nobody looking. STC-435 removed the
+ * timer: the only caller now is a person who pressed Reclaim space and is
+ * about to read the list. They are the guard, the Trash is the undo, and a
+ * marker written on a READ would have been a write the user never asked for.
+ * Any `.orphaned-at` left from before is a dotfile inside a bundle and goes
+ * with it.
  *
- *  - AGE ALONE is wrong. Age from the directory's own NAME (what
- *    `purgeStaleTempTakes` used to use, before it too moved to a marker)
- *    is wrong here — a bundle behind a capture made eight days ago would be
- *    reported while its finished file still sits at top level, silently
- *    making it uneditable. So age here is measured from a MARKER written
- *    the first time the bundle was seen orphaned, never from its creation
- *    date. **The marker's own content must not be misreadable as ancient**:
- *    `Number("")` is `0`, which is finite, so a zero-byte or
- *    whitespace-only marker (exactly the shape a crash leaves mid
- *    `writeFile` — it truncates before it writes, and the likeliest cause
- *    of a truncated write is a full disk, the very condition this sweep
- *    exists to relieve) must read as a FRESH sighting, never as epoch 0.
- *  - ORPHAN STATUS ALONE is wrong too: a read must not delete data, and a
- *    file temporarily moved out of the folder would read as deleted on one
- *    pass and reappear the next. So a first sighting only marks; being
- *    reported as due needs the mark to already be old, and a file coming
- *    back clears it.
+ * ## Orphanhood is proven per KIND, not per folder
  *
- * "No matched file" is not, by itself, "orphaned" — see this module's own
- * task brief. After Task 8's scan, a bundle with no matched file is one of
- * three different things: its file was really deleted; its file is a JPEG,
- * which carries no id to read at all (`library.ts`); or its file was moved
- * out of the folder. Only the first is a real orphan, and nothing
- * here can tell the three apart *for one bundle* — but if EVERY top-level
- * file yielded a readable id, then any bundle with no match among them truly
- * has none. So orphanhood is proven for the whole pass at once, by reusing
- * `scanFinishedFilesAt` (Task 8's own file scan — a second id-matching pass
- * here would be the two-owners defect this codebase keeps paying for): if
- * any top-level file's id could not be read, no bundle's orphan status can
- * be proven this pass, and NOTHING is reported. The cost is accepted and
- * stated rather than hidden: a folder containing even one untagged file
- * never reclaims disk from `raw/` until that file is read, moved out, or
- * deleted. That is the right way to be wrong — keeping a bundle that might
- * still be someone's source material beats deleting one that was.
+ * "No top-level file carries this bundle's id" is only proof when every file
+ * that COULD be its export had a readable id: a JPEG export carries none
+ * (STC-440), and a foreign file (a ⇧⌘4 screenshot) none either. The STC-413
+ * version gated the whole pass on that — one untagged file anywhere and
+ * nothing was reported, indefinitely, with a stderr line nobody saw. But
+ * rule 1 of `library.ts`'s scan reads the extension as the kind (`.mp4` is a
+ * recording, an image is a still), so an untagged image can only be hiding a
+ * STILL's export, and an untagged `.mp4` only a RECORDING's. A bundle is
+ * offered when no untagged file of its own kind exists; otherwise it is
+ * reported as `blocked`, naming the files in the way, and never offered.
+ * A bundle of `unknown` kind is blocked by an untagged file of either kind.
+ * That is still the right way to be wrong — keeping a bundle that might be
+ * someone's source material beats trashing one that was — just no longer
+ * wrong about the kinds that cannot be.
  *
- * A bundle with no readable `capture.json` (never exported, or one that
- * cannot be parsed) has nothing to match against a finished file at all and
- * is not this sweep's concern — it is either mid-flight or something
- * `library.ts`'s own scan already reports as broken.
+ * A bundle with no readable `capture.json` (never exported, or one that will
+ * not parse) has nothing to match against a finished file at all and is in
+ * neither list — it is either mid-flight or something `library.ts`'s own
+ * scan already reports as broken.
+ *
+ * Electron-free on purpose: this only DECIDES. `main.ts` asks the user, then
+ * trashes through `shell.trashItem` — never `rm`, because `raw/` sits inside
+ * the user's own visible folder, so a mistaken click must be one Finder
+ * restore away (contrast `purgeStaleTempTakes`, whose root is invisible and
+ * already abandoned).
  */
-export async function sweepOrphanedBundles(env: NodeJS.ProcessEnv, saveFolder: string | null,
-                                           now: number = Date.now()): Promise<string[]> {
+export async function findOrphanedBundles(env: NodeJS.ProcessEnv,
+                                          saveFolder: string | null): Promise<ReclaimReport> {
+  const report: ReclaimReport = { orphans: [], blocked: [] };
   const root = rawRoot(env, saveFolder);
   let names: string[];
-  try { names = await readdir(root); } catch { return []; }
+  try { names = await readdir(root); } catch { return report; }
 
+  // Rule 1's own scan, reused — a second id-matching pass here would be the
+  // two-owners defect this codebase keeps paying for.
   const finished = await scanFinishedFilesAt(env, saveFolder);
-  const provable = finished.every((f) => f.id !== undefined);
-  if (!provable) {
-    console.error(
-      "[orphan-sweep] skipped — a top-level file with no readable id is present, " +
-      "so no bundle's orphan status can be proven this pass");
-    return [];
-  }
   const idsPresent = new Set(
     finished.map((f) => f.id).filter((id): id is string => id !== undefined));
+  // The extension as the kind: `.mp4` is a recording, any other media
+  // extension a still — the same reading `library.ts` makes for `isVideo`.
+  const untagged = finished.filter((f) => f.id === undefined);
+  const untaggedOf = (kind: BundleKind): string[] => untagged
+    .filter((f) => kind === "unknown" || (f.ext === ".mp4") === (kind === "recording"))
+    .map((f) => basename(f.file));
 
-  const due: string[] = [];
-  for (const name of names) {
+  for (const name of [...names].sort().reverse()) {      // newest first, like the library
     if (name.startsWith(".")) continue;                  // never a bundle
     const dir = join(root, name);
     let st;
     // lstat, never stat: `stat` follows a symlink, so a symlinked entry
-    // under `raw/` would have this function read/write through it into
-    // wherever the link points — outside this function's declared root.
-    // `insideTakesRoot`-style path checks would NOT catch this either,
-    // since `resolve()` does not follow symlinks.
+    // under `raw/` would be offered for the Trash as if it were a bundle,
+    // and sized by reading wherever the link points — outside this
+    // function's declared root. `resolve()`-based path checks would NOT
+    // catch this either, since `resolve()` does not follow symlinks.
     try { st = await lstat(dir); } catch { continue; }    // vanished mid-scan
     if (!st.isDirectory()) continue;                      // not a real directory (a symlink included)
 
-    // Never exported, or an unreadable capture.json: not orphaned, just
-    // unfinished. Through `readBundleId`, the one reader (M2) — this was its
-    // own inline copy, and the three copies did not agree.
+    // Through `readBundleId`, the one reader (M2).
     const bundleId = await readBundleId(dir);
     if (bundleId === undefined) continue;
+    if (idsPresent.has(bundleId)) continue;              // its file is here
 
-    const markerPath = join(dir, ORPHAN_MARKER_FILE);
-    if (idsPresent.has(bundleId)) {
-      // The file is here — or came back. Clear any stale mark so a
-      // temporary move costs nothing. This is our own bookkeeping dotfile,
-      // never the bundle itself, so a plain `rm` is the right tool here.
-      await rm(markerPath, { force: true }).catch(() => {});
-      continue;
-    }
-
-    // A marker that cannot be read as a positive number is a FRESH sighting,
-    // never an ancient one — see the header's note on why `Number("")` (0)
-    // must not be trusted.
-    let markedAt: number | undefined;
-    try {
-      const text = (await readFile(markerPath, "utf8")).trim();
-      const n = Number(text);
-      markedAt = text !== "" && Number.isFinite(n) && n > 0 ? n : undefined;
-    } catch { /* not yet marked — this is the first sighting */ }
-
-    if (markedAt === undefined) {
-      await writeFile(markerPath, String(now));
-      continue;
-    }
-    if (now - markedAt >= TEMP_TAKE_MAX_AGE_MS) {
-      due.push(dir);
-    }
+    const kind: BundleKind = existsSync(join(dir, "shot.json")) ? "still"
+                           : existsSync(join(dir, "anchors.json")) ? "recording" : "unknown";
+    const entry = { dir, name, kind, bytes: await treeBytes(dir) };
+    const blockers = untaggedOf(kind);
+    if (blockers.length > 0) report.blocked.push({ ...entry, blockers });
+    else report.orphans.push(entry);
   }
-  return due;
+  return report;
 }
 
 export interface TempTakeInfo {

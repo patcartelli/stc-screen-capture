@@ -51,6 +51,12 @@ export interface OptionsState extends DeviceSelection {
   fullDisplay: boolean;
   /** Record keyboard commands this take (STC-419). Sticky via settings.recordKeys. */
   keys: boolean;
+  /**
+   * The bar's Show Clicks toggle (STC-420). ON by default: the highlight
+   * existed before the control did. Reaches the take through its project.json
+   * (main.ts), never through a live setting the sinks read.
+   */
+  showClicks: boolean;
   /** Which menu is open, if any. One at a time. */
   openMenu: MenuId | null;
 }
@@ -184,9 +190,8 @@ export function controlAt(p: Point, layout: BarLayout): ControlId | undefined {
 }
 
 /**
- * Keys has been live since STC-419; clicks is still STC-420's slot: laid out
- * now so the bar does not change shape when it lands, and never enabled until
- * then.
+ * Keys (STC-419) and clicks (STC-420) are both live; nothing on the bar is a
+ * disabled slot any more.
  *
  * The mic control is ALWAYS enabled (STC-456 review, Finding 1) — its menu
  * holds Include System Audio and Mute External, neither of which needs a mic
@@ -195,7 +200,7 @@ export function controlAt(p: Point, layout: BarLayout): ControlId | undefined {
  * takes none.
  */
 export function controlEnabled(id: ControlId): boolean {
-  return id !== "clicks";
+  return true;
 }
 
 /** What one press in the options phase sends, in ORDER. */

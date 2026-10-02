@@ -248,7 +248,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -346,10 +346,17 @@ export interface Project {
   micMuted?: boolean;
   systemAudioMuted?: boolean;
   /**
-   * The keycast (project-13, STC-419). Only `show === false` hides it; absent
+   * The keycast (project-14, STC-419). Only `show === false` hides it; absent
    * means shown whenever the take HAS keys. Hiding never touches events.json.
    */
   keycast?: { show: boolean };
+  /**
+   * Draw the click highlight (project-13, STC-420). Chosen on the Record
+   * options bar and carried HERE, never read from a live setting at draw time:
+   * a sink that consulted a preference would fork the transform. Always
+   * present after a parse, defaulted to true — what every take did before.
+   */
+  showClicks?: boolean;
 }
 
 /** project-10's `narrationCleanup` (STC-455). */

@@ -94,6 +94,13 @@ export interface Settings {
    */
   recordKeys: boolean;
   /**
+   * Draw the click highlight in the next take (STC-420). Sticky like the other
+   * bar toggles, but unlike them ON by default — it is the existing behaviour.
+   * Never read at draw time: `main.ts` copies it into the take's project.json
+   * (project-13) when a take ends with it off, and render() reads it there.
+   */
+  showClicks: boolean;
+  /**
    * Whether the editor's preview plays its sound (STC-454): the speaker
    * button in the editor's header. An app preference, not part of any take —
    * it never reaches project.json or an export. Off (sound on) by default.
@@ -227,6 +234,7 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 
 export const DEFAULT_SETTINGS: Settings = {
   camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false, recordKeys: false,
+  showClicks: true,
   previewMuted: false,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
@@ -377,6 +385,7 @@ export function readSettings(dir: string): Settings {
     cameraDeviceUid: cleanCameraDeviceUid(doc.cameraDeviceUid),
     systemAudio: doc.systemAudio === true,
     recordKeys: doc.recordKeys === true,
+    showClicks: doc.showClicks !== false,
     previewMuted: doc.previewMuted === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
@@ -420,6 +429,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     // `=== true`, the camera's rule: off unless explicitly on.
     systemAudio: merged.systemAudio === true,
     recordKeys: merged.recordKeys === true,
+    showClicks: merged.showClicks !== false,
     previewMuted: merged.previewMuted === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),

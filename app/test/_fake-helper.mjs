@@ -104,9 +104,9 @@ process.stdin.on("data", (chunk) => {
         // nothing for a `start`, unlike its own `capture-still` case a few
         // lines down. That made "a take directory exists under the temp
         // root" unobservable for a recording specifically, and it is also
-        // why `promoteTake`'s rename used to fail silently (caught by
-        // `HelperSupervisor.promote`, `recording-promote-failed`) on every
-        // successful start this stand-in has ever answered. Mirroring the
+        // why `promoteTake`'s rename used to fail silently on every
+        // successful start this stand-in has ever answered (it was caught by a
+        // supervisor-side promote that STC-487 removed). Mirroring the
         // still path here closes both gaps with one line, and only after the
         // refusal above: a helper that refused to start writes nothing.
         if (typeof cmd.dir === "string") {

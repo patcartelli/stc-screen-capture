@@ -189,11 +189,12 @@ one large enough to hold many old takes at once.
 
 ---
 
-## §7 The sweep — **superseded, being replaced (STC-435)**
+## §7 The sweep — **superseded, replaced by STC-435**
 
 The question below was answered by deciding rather than by waiting a week: the
-automatic sweep is being replaced by a user-initiated "Reclaim space" that
-shows what it would remove. Filed as STC-435. The observation that prompted it
+automatic sweep was replaced by a user-initiated "Reclaim space" that shows
+what it would remove (STC-435; `docs/STC-435-RUNBOOK.md`). There is no timer
+any more and `sweepOrphanedBundles` is now the read-only `findOrphanedBundles`. The observation that prompted it
 stands and is worth keeping:
 
 `sweepOrphanedBundles` reclaims `raw/` bundles whose finished file is gone.

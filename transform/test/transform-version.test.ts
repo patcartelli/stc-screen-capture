@@ -18,7 +18,7 @@ const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
  * TRANSFORM_VERSION, add a TRANSFORM_HISTORY entry saying what changed, then
  * update this fingerprint. Never update the fingerprint alone.
  *
- * It last moved at version 12 (STC-419): the keycast's constants were added
+ * It last moved at version 13 (STC-419): the keycast's constants were added
  * as inputs — hold and fade, font, sizing, placement, both colours, every
  * key label with and without the modifier glyphs, and the ` ×N` count format.
  */
