@@ -76,6 +76,7 @@ import {
 } from "@transform/trim";
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
 import type { Size } from "@transform/spaces";
+import { contentFraction, DEFAULT_SOLID_COLOR, type Framing, type FramingPreset } from "@transform/framing";
 import { render } from "@transform/render";
 import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, effectivePointWidth, legibility, legibilitySentence, zoomFactorForCrop,
@@ -1279,6 +1280,10 @@ $("outsize").addEventListener("change", () => {
 
 // ---- legibility + viewer's eye (STC-318), inside the export dialog ---------
 
+function frameFractionFor(p: Project): number {
+  return openCapture ? contentFraction(p.framing, p.output, openCapture.width / openCapture.height) : 1;
+}
+
 function updateLegibilityUI(): void {
   if (!openProject || !openDisplay || !player || !openSession) return;
   const sel = $("embedtarget") as HTMLSelectElement;
@@ -1301,7 +1306,8 @@ function updateLegibilityUI(): void {
 
   const fs = render(openProject, openSession, player.currentNs);
   const l = legibility(openDisplay, openProject.textPt ?? DEFAULT_TEXT_PT,
-                       embedWidthPx, zoomFactorForCrop(fs.zoom.crop.width));
+                       embedWidthPx, zoomFactorForCrop(fs.zoom.crop.width),
+                       frameFractionFor(openProject));
   const out = $("legibility");
   // Warns below 9pt; never blocks (STC-373's own scope line) — the export
   // button beside it stays enabled either way.
@@ -1670,6 +1676,7 @@ function updateAudioButton(): void {
   $("audiobtn").toggleAttribute("hidden", !has);
   updateWaveformToggle();
   updateKeycastUI();
+  updateFramingUI();
   if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
 }
 
@@ -1732,6 +1739,48 @@ $("keycastbtn").addEventListener("click", () => {
   void player.seek(player.currentNs);   // repaint this frame with the new choice
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
+
+// ---- framing (STC-396) -------------------------------------------------
+// A preset (or none) saved to the project. Preview and export both go through
+// render(), so what is previewed is what exports.
+function updateFramingUI(): void {
+  const f = openProject?.framing;
+  ($("framepreset") as HTMLSelectElement).value = f?.preset ?? "none";
+  const color = $("framecolor") as HTMLInputElement;
+  color.hidden = f?.preset !== "solid";
+  color.value = f?.color ?? DEFAULT_SOLID_COLOR;
+}
+
+async function setFraming(next: Framing | undefined): Promise<void> {
+  if (!openProject || !player) return;
+  const previous = openProject.framing;
+  if (next) openProject.framing = next; else delete openProject.framing;
+  try {
+    await persistProject();
+  } catch (e) {
+    if (previous) openProject.framing = previous; else delete openProject.framing;
+    updateFramingUI();
+    throw e;
+  }
+  updateFramingUI();
+  updateLegibilityUI();
+  await player.seek(player.currentNs);   // repaint this frame with the new choice
+}
+
+function framingFromControls(): Framing | undefined {
+  const v = ($("framepreset") as HTMLSelectElement).value;
+  if (v === "none") return undefined;
+  const preset = v as FramingPreset;
+  return preset === "solid"
+    ? { preset, color: ($("framecolor") as HTMLInputElement).value }
+    : { preset };
+}
+
+for (const id of ["framepreset", "framecolor"]) {
+  $(id).addEventListener("change", () => {
+    void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
+  });
+}
 
 $("micmute").addEventListener("click", () => {
   if (!openProject) return;
@@ -2367,6 +2416,8 @@ async function runExport(): Promise<void> {
   bar.removeAttribute("hidden");
   ($("export") as HTMLButtonElement).disabled = true;
   ($("outsize") as HTMLSelectElement).disabled = true;
+  ($("framepreset") as HTMLSelectElement).disabled = true;
+  ($("framecolor") as HTMLInputElement).disabled = true;
   progress.value = 0;
   status.textContent = "Exporting…";
   clearAlert();
@@ -2415,7 +2466,7 @@ async function runExport(): Promise<void> {
       output: exporting.output,
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {
-        const l = legibility(openDisplay!, exporting.textPt ?? DEFAULT_TEXT_PT, embedWidthPx);
+        const l = legibility(openDisplay!, exporting.textPt ?? DEFAULT_TEXT_PT, embedWidthPx, 1, frameFractionFor(exporting));
         return { textPt: l.textPt, embedWidthPx: l.embedWidthPx, textPx: l.textPx, verdict: l.verdict };
       })() : null,
       exportDurationMs: result.durationMs,
@@ -2429,6 +2480,8 @@ async function runExport(): Promise<void> {
     exportAbort = undefined;
     ($("export") as HTMLButtonElement).disabled = false;
     ($("outsize") as HTMLSelectElement).disabled = false;
+    ($("framepreset") as HTMLSelectElement).disabled = false;
+    ($("framecolor") as HTMLInputElement).disabled = false;
   }
 }
 
