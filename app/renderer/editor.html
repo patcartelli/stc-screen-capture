@@ -131,7 +131,8 @@
        Audio button (which owns the auto margin), or takes it when Audio is
        hidden; aria-pressed="false" reads as off. */
     #keycastbtn { margin-left: 8px; anchor-name: none; }
-    #keycastbtn[aria-pressed="true"] { color: var(--accent); }
+    #keycastbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
+                                       box-shadow: inset 0 0 0 1px var(--accent); }
     #keycastbtn[aria-pressed="false"] { opacity: .6; }
     /* STC-492: the Clicks switch is first of the three and always present, so
        it owns the auto margin; Audio and Keys sit 8px after whatever precedes. */
