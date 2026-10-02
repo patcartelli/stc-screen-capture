@@ -16,6 +16,7 @@ function frameState(over: Partial<FrameState["cursor"]> = {}): FrameState {
     tick: 0, frameIndex: null, framePtsNs: null, pip: null,
     zoom: { amount: 0, crop: FULL_FRAME_UV },
     keycast: null,
+    framing: null,
     cursor: {
       x: 300.5, y: 200.25, vx: 0, vy: 0, pressed: false, showClicks: true, visible: true,
       shape: "arrow", style: "default", pxPerPoint: 1.5, ...over,
