@@ -131,8 +131,45 @@ export const SLOW_TESTS_MS = 720_000;
  */
 export const GATE_DECODER_PREFERENCE = "prefer-software";
 
-/** What the job spends before the gates — build, typecheck, tests: ~6 min on CI, rounded up. */
-export const PRE_GATE_BUDGET_MS = 8 * 60_000;
+/**
+ * The `Test` step (`npm test`), bounded as ONE process the way test:slow and
+ * each gate are (STC-498).
+ *
+ * MEASURED, not guessed. Over 17 green runs from 2026-09-28 to 2026-10-01 (15
+ * master pushes plus PR runs 36930803502 attempt 2 and 37037142001, step
+ * timings from `gh run view <id> --json jobs`), the step took 626-1233 s,
+ * median ~940 s. 27 min is ~1.3x the slowest and ~1.7x the median: room for
+ * the suite to grow, not room for a wedge. A stalled e2e run is STC-496's to
+ * end early; this is the backstop that ends it at 27 min instead of at the job
+ * cap, and names the step that did it.
+ *
+ * Tighter than the other bounds on purpose, which means it CAN go red on a
+ * healthy run once the e2e suite grows past it. When it does, re-measure and
+ * raise it; do not read that red as a hang without checking the step's log.
+ *
+ * The Test step's `timeout-minutes` in ci.yml must equal this, and
+ * gate-bounds.test.ts asserts it.
+ */
+export const TEST_STEP_MS = 27 * 60_000;
+
+/**
+ * Everything from the job's start to the start of `Test`: checkout,
+ * setup-node, `npm ci`, build helper, typecheck. NOT process-bounded, so this
+ * term alone is an estimate. It is small enough that an estimate is fine: the
+ * same 17 runs put it at 32-79 s, and 3 min is ~2.3x the slowest.
+ */
+export const PRE_TEST_MS = 3 * 60_000;
+
+/**
+ * What the job spends before the gates.
+ *
+ * This was a flat 8 min ("~6 min on CI, rounded up") until STC-498. The e2e
+ * suite then grew to ~209 files and nobody revisited it: job start to the end
+ * of `Test` measured 658-1312 s, so the term undercounted by up to 14 min and
+ * the clearance test passed on a number that did not describe the job. It is
+ * a sum now, and its large term is a real bound rather than an estimate.
+ */
+export const PRE_GATE_BUDGET_MS = PRE_TEST_MS + TEST_STEP_MS;
 /** Vite server plus a Chrome launch, per gate. NOT the page reaching __ready. */
 export const LAUNCH_MS = 30_000;
 
@@ -247,8 +284,9 @@ export function attachCheckpointTrail(page, { keep = 40 } = {}) {
 }
 
 export function worstCaseJobMs({ attempts = GATE_ATTEMPTS } = {}) {
-  // PRE_GATE_BUDGET_MS covers build, typecheck and `npm test`; the slow suite
-  // is a separate step with its own process bound, so it is a separate term.
+  // PRE_GATE_BUDGET_MS covers setup, build, typecheck and `npm test` (the last
+  // process-bounded as TEST_STEP_MS); the slow suite is a separate step with
+  // its own process bound, so it is a separate term.
   let total = PRE_GATE_BUDGET_MS + SLOW_TESTS_MS;
   for (const [script, ms] of Object.entries(GATE_PROCESS_MS)) {
     total += ms * (attempts[script] ?? 1);
