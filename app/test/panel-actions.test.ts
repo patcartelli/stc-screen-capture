@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  actionsFor, closesPanel, promotes, trashStyle, UNDO_WINDOW_MS,
+  actionsFor, closesPanel, promotes, trashStyle, UNDO_WINDOW_MS, lockedWhileCopying,
   type PanelAction, type PanelTake,
 } from "../src/panel-actions.js";
 
@@ -24,19 +24,17 @@ describe("which actions a take has", () => {
     expect(actionsFor(fresh("shot"))).toEqual(["copy", "save", "edit", "trash"]);
   });
 
-  test("a fresh recording has save, edit and trash — and no copy", () => {
-    // Copy needs a format, and a recording's format picker is STC-395. The only
-    // video in a fresh take is display.mp4, which by design has no cursor in
-    // it: copying that hands someone a file that looks like their recording
-    // and is not.
-    expect(actionsFor(fresh("recording"))).toEqual(["save", "edit", "trash"]);
+  test("a fresh recording has copy, save, edit and trash", () => {
+    // STC-488: Copy RENDERS a recording (cursor and zoom included) to a file
+    // in the copies folder, so a Trash afterwards cannot break the paste.
+    expect(actionsFor(fresh("recording"))).toEqual(["copy", "save", "edit", "trash"]);
   });
 
   test("a take re-opened from the library cannot be saved again", () => {
     // STC-294's re-open: it is already in the library, and a second Save would
     // be the app inventing work nobody asked for.
     expect(actionsFor({ kind: "shot", origin: "library" })).toEqual(["copy", "edit", "trash"]);
-    expect(actionsFor({ kind: "recording", origin: "library" })).toEqual(["edit", "trash"]);
+    expect(actionsFor({ kind: "recording", origin: "library" })).toEqual(["copy", "edit", "trash"]);
   });
 
   test("every take has trash, and it is always last", () => {
@@ -97,5 +95,15 @@ describe("the reconcile (D1)", () => {
   test("the undo window is long enough to read the toast and reach it", () => {
     expect(UNDO_WINDOW_MS).toBeGreaterThanOrEqual(5_000);
     expect(UNDO_WINDOW_MS).toBeLessThanOrEqual(15_000);
+  });
+});
+
+describe("what a recording's copy locks while it renders (STC-488)", () => {
+  test("copy, save and edit lock; trash and dismiss never do", () => {
+    // Save would move the take out from under the render reading it, and Edit
+    // promotes first, the same move. A second Copy would start a second job.
+    // Trash and dismiss are the panel's way out, and they cancel the render.
+    const all: PanelAction[] = ["copy", "save", "edit", "trash", "dismiss"];
+    expect(all.filter(lockedWhileCopying)).toEqual(["copy", "save", "edit"]);
   });
 });

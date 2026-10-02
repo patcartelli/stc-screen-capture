@@ -32,7 +32,7 @@
   "exclude": ["app/src/renderer.ts", "app/src/overlay.ts", "app/src/thumbnail-renderer.ts",
               "app/src/library-view.ts", "app/src/editor.ts", "app/src/countdown-renderer.ts",
               "app/src/toast-renderer.ts", "app/src/still-editor-renderer.ts",
-              "app/src/narration-worker.ts",
+              "app/src/narration-worker.ts", "app/src/copy-render.ts",
               // Not a page — a DOM-touching row-building module (STC-456)
               // shared by two page entry points (overlay.ts, renderer.ts),
               // which are themselves excluded above. `document.createElement`
@@ -40,5 +40,7 @@
               "app/src/device-menu-dom.ts",
               // Same position (STC-477): the still composite shared by the
               // panel and the still editor, both excluded above.
-              "app/src/still-compose.ts"]
+              "app/src/still-compose.ts",
+              // STC-488: a renderer module (imports @transform/session).
+              "app/src/session-io.ts"]
 }
