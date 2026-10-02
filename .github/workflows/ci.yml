@@ -22,7 +22,10 @@ jobs:
     # transform/test/gate-bounds.test.ts asserts. 30 -> 45 -> 55 -> 65 as the
     # model stopped under-counting: first the retry (#39), then the readiness
     # wait, now the GC-retry path that was previously absorbed by margin and
-    # named in a comment.
+    # named in a comment. 70 -> 90 (STC-498) when PRE_GATE_BUDGET_MS went from
+    # 8 min to 30: it had said "~6 min" while build + typecheck + `npm test`
+    # measured 11-22 min across 17 green runs, so the worst case went from
+    # 60.5 min to 82.5 and 70 no longer cleared it with the 5 min margin.
     #
     # Rising is not a regression here. Every gate now carries its OWN process
     # bound, so a wedged gate dies at 7.5-13 min instead of holding the job to
@@ -30,8 +33,10 @@ jobs:
     # would now be killed at 7.5. This cap is a BACKSTOP behind four tighter
     # bounds rather than the thing that catches a wedge, which is exactly why it
     # can afford to state the worst case honestly instead of optimistically.
-    # Minutes are free on a public repo; a healthy run is ~6 min.
-    timeout-minutes: 70
+    # Minutes are free on a public repo. A healthy run was ~6 min when this was
+    # first written; it is 12-25 min now (742-1469 s over the same 17 runs),
+    # almost all of it `npm test`.
+    timeout-minutes: 90
 
     # A post-merge master run re-verifies a tree CI already approved as a PR
     # head, which is the largest remaining duplication. It is NOT skipped by
@@ -81,7 +86,13 @@ jobs:
 
       # Everything that runs anywhere. Excludes *.grant.test.ts (needs a Screen
       # Recording grant, which no CI runner can give) and *.slow.test.ts.
+      #
+      # Bounded as one process (STC-498), like test:slow and every gate: 27 min
+      # is TEST_STEP_MS in scripts/gate-bounds.mjs, ~1.3x the slowest healthy
+      # run measured. gate-bounds.test.ts asserts the two agree. If it fires on
+      # a healthy run, the suite has outgrown it: re-measure and raise both.
       - name: Test
+        timeout-minutes: 27
         run: npm test
 
       # Real Chrome, not bundled Chromium: the bundled build lacks H.264, and
