@@ -74,7 +74,9 @@ describe("a start the helper refuses (STC-315)", () => {
       STC_FAKE_START_ERROR: "event-tap-unavailable",
     });
 
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
+    // Until the page fills its label, `toastText` is "" — wait for words, not
+    // just for the window (STC-496: a single read in that gap failed CI).
+    await expect.poll(() => toastText(app!), { timeout: 10_000 }).not.toBe("");
     const alert = await toastText(app!);
     // What it cost FIRST. A message that opens with the fix reads as advice
     // about the next take and lets someone assume the one they just made is
@@ -239,8 +241,10 @@ describe("helper warnings during a take", () => {
 
   test("a code the UI has no words for is still shown, by name", async () => {
     const win = await recordWithWarning("some-new-fault");
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
-    expect(await toastText(app!)).toContain("some-new-fault");
+    // The text, polled — not the window then one read, which raced the page
+    // filling its label and returned "" (CI runs 36939977419, 36942147393,
+    // 37026748545; STC-496).
+    await expect.poll(() => toastText(app!), { timeout: 10_000 }).toContain("some-new-fault");
   }, 120_000);
 
   test("a display stream that dies ends the take, and the UI says so (STC-306)", async () => {
