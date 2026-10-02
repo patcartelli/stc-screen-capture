@@ -80,6 +80,8 @@ declare global {
       }>;
       /** Close without deciding (STC-412) — the take is untouched. */
       dismiss(dir: string): Promise<{ ok: boolean; detail?: string }>;
+      /** Copy a recording via clonefile (STC-395). */
+      copyRecording(dir: string): Promise<{ ok: boolean; detail?: string }>;
       dragFile(req: Record<string, unknown>): Promise<{ ok: boolean; file?: string; detail?: string }>;
       startDrag(file: string): void;
       reveal(): Promise<boolean>;
@@ -385,12 +387,29 @@ async function perform(action: PanelAction): Promise<boolean> {
 
 async function run(action: PanelAction): Promise<boolean> {
   if (action === "copy") {
-    // A recording has no Copy until STC-395 — `actionsFor` does not offer it,
-    // and this is the entry a stray shortcut or menu id would still reach.
-    if (take.kind !== "shot") return false;
     setStatus("Copying…");
-    if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
-    return runExport("copy");
+    if (take.kind === "shot") {
+      // A shot's Copy writes image data to clipboard (still:export).
+      if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
+      return runExport("copy");
+    } else {
+      // A recording's Copy writes an APFS clone (clonefile) to temp and puts
+      // the file URL on clipboard (STC-395). The clone outlives the take, so
+      // pasting still works after Trash.
+      try {
+        const result = await window.thumb.copyRecording(dir);
+        if (result.ok) {
+          setStatus("Copied to clipboard");
+          return true;
+        } else {
+          setStatus(`Could not copy: ${result.detail ?? "unknown error"}`);
+          return false;
+        }
+      } catch (e) {
+        setStatus(`Could not copy: ${(e as Error).message}`);
+        return false;
+      }
+    }
   }
   if (action === "save") {
     setStatus("Saving…");
