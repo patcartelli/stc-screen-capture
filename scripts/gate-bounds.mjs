@@ -131,8 +131,26 @@ export const SLOW_TESTS_MS = 720_000;
  */
 export const GATE_DECODER_PREFERENCE = "prefer-software";
 
-/** What the job spends before the gates — build, typecheck, tests: ~6 min on CI, rounded up. */
-export const PRE_GATE_BUDGET_MS = 8 * 60_000;
+/**
+ * What the job spends before the gates: everything from the job's start to the
+ * end of the `Test` step (checkout, `npm ci`, build helper, typecheck,
+ * `npm test`).
+ *
+ * MEASURED, not guessed (STC-498). This was 8 min, from "~6 min on CI, rounded
+ * up", and the e2e suite then grew to ~209 files without anyone revisiting it.
+ * Over 17 green runs from 2026-09-28 to 2026-10-01 (15 master pushes plus PR
+ * runs 36930803502 attempt 2 and 37037142001), job start to the end of `Test`
+ * took min 658 s, median 995 s, max 1312 s (21.9 min). `npm test` alone was
+ * 626-1233 s of that. So the old term undercounted by up to 14 min, and the
+ * clearance test passed on a number that did not describe the job.
+ *
+ * 30 min is ~1.4x the slowest healthy run and ~1.8x the median. That is room
+ * for the suite to keep growing, not room for a wedge: a stalled e2e run is
+ * STC-496's job to end, not this budget's to absorb. Re-measure when it gets
+ * close (the `gh run view <id> --json jobs` step timings are the source), and
+ * expect it to need raising again as the e2e suite grows.
+ */
+export const PRE_GATE_BUDGET_MS = 30 * 60_000;
 /** Vite server plus a Chrome launch, per gate. NOT the page reaching __ready. */
 export const LAUNCH_MS = 30_000;
 
