@@ -1,6 +1,7 @@
 import type { FrameState, PipDraw, PipState } from "./render.js";
 import { PIP_SHADOW } from "./pip-style.js";
-import { isWholeFrame, uvRectToPixels } from "./spaces.js";
+import { isWholeFrame, uvRectToPixels, type Rect } from "./spaces.js";
+import { gradientLine, type FramingLayout } from "./framing.js";
 import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
 import { KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR, keycastFont, keycastFontPx, keycastLayout, keycastText } from "./keycast.js";
 
@@ -64,17 +65,59 @@ function drawSource(
   ctx: OffscreenCanvasRenderingContext2D,
   frame: DecodedFrame,
   fs: FrameState,
-  width: number,
-  height: number,
+  dest: Rect,
 ): void {
   const c = fs.zoom.crop;
   if (isWholeFrame(c)) {
-    ctx.drawImage(frame, 0, 0, width, height);
+    ctx.drawImage(frame, dest.x, dest.y, dest.width, dest.height);
     return;
   }
   const { width: fw, height: fh } = frameSize(frame);
   const src = uvRectToPixels(c, { x: 0, y: 0, width: fw, height: fh });
-  ctx.drawImage(frame, src.x, src.y, src.width, src.height, 0, 0, width, height);
+  ctx.drawImage(frame, src.x, src.y, src.width, src.height, dest.x, dest.y, dest.width, dest.height);
+}
+
+/**
+ * The frame's chrome (STC-396): the background over the whole canvas, then the
+ * shadow, cast from the rounded content rect.
+ *
+ * The shadow is drawn WITHOUT a core: the rounded rect is filled far off-canvas
+ * to the left and `shadowOffsetX` shifts its shadow back into place, so only the
+ * shadow lands on the canvas and no opaque shape is painted. A core would be
+ * covered by the picture's ANTIALIASED rounded clip, so at the corner the edge
+ * coverage applies twice (black core, then a partial picture over it) and the
+ * corner reads darker than the background — a seam. The shift exceeds the
+ * canvas width plus the blur's reach, so the shape itself is never visible.
+ */
+function drawChrome(
+  ctx: OffscreenCanvasRenderingContext2D, f: FramingLayout, width: number, height: number,
+): void {
+  const bg = f.background;
+  if (bg.kind === "solid") {
+    ctx.fillStyle = bg.color;
+  } else {
+    const l = gradientLine(bg.angleDeg, width, height);
+    const g = ctx.createLinearGradient(l.x0, l.y0, l.x1, l.y1);
+    g.addColorStop(0, bg.colors[0]);
+    g.addColorStop(1, bg.colors[1]);
+    ctx.fillStyle = g;
+  }
+  ctx.fillRect(0, 0, width, height);
+
+  if (f.shadow.opacity > 0 && f.shadow.blur > 0) {
+    const c = f.content;
+    ctx.save();
+    ctx.shadowColor = `rgba(0, 0, 0, ${f.shadow.opacity})`;
+    ctx.shadowBlur = f.shadow.blur;
+    const SHIFT = width * 2 + 1000;
+    ctx.shadowOffsetX = SHIFT;
+    ctx.shadowOffsetY = f.shadow.offsetY;
+    ctx.fillStyle = "#000000";
+    ctx.beginPath();
+    ctx.roundRect(c.x - SHIFT, c.y, c.width, c.height, f.radius);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 /**
@@ -111,7 +154,33 @@ export function composite(
 ): void {
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, width, height);
-  if (frame) drawSource(ctx, frame, fs, width, height);
+  const framing = fs.framing;
+  if (framing) drawChrome(ctx, framing, width, height);
+  if (frame) {
+    if (framing) {
+      const c = framing.content;
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(c.x, c.y, c.width, c.height, framing.radius);
+      ctx.clip();
+      drawSource(ctx, frame, fs, c);
+      ctx.restore();
+    } else {
+      drawSource(ctx, frame, fs, { x: 0, y: 0, width, height });
+    }
+  }
+
+  // The PiP and the pointer live ON the picture, so a framed take clips them to
+  // it: a pointer on another display is outside the capture, and unframed the
+  // canvas edge hides it — framed, it would otherwise be painted over the
+  // background. The keycast below is a caption on the canvas and is not clipped.
+  if (framing) {
+    const c = framing.content;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(c.x, c.y, c.width, c.height);
+    ctx.clip();
+  }
 
   // The PiP sits UNDER the cursor deliberately: a cursor over the bottom-right
   // corner must stay visible. render() has already decided the rectangle; this
@@ -137,6 +206,8 @@ export function composite(
     if (style === "circle") drawCircle(ctx, x, y, pxPerPoint);
     else drawCursor(ctx, shape, x, y, pxPerPoint);
   }
+
+  if (framing) ctx.restore();
 
   if (fs.keycast) drawKeycast(ctx, fs.keycast, width, height);
 }

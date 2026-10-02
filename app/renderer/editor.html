@@ -614,7 +614,7 @@
       <!-- STC-461: the camera PiP's look and place, in one popover — the
            shared inspector (pip-inspector.ts) is built into #pippanel.
            Present only for a take with a camera. Saved to the project
-           (project-15's pip.style). -->
+           (project-16's pip.style). -->
       <button type="button" id="pipbtn" class="audiobtn" popovertarget="pippanel" hidden
               aria-label="Camera" title="Camera picture-in-picture: shape, size, border, position">
         <span>Camera</span>
@@ -803,6 +803,16 @@
       <label for="outsize">Export size</label>
       <select id="outsize"></select>
       <span id="outsizenote" class="mono"></span>
+    </div>
+    <div class="dialogrow">
+      <label for="framepreset">Frame</label>
+      <select id="framepreset">
+        <option value="none">None</option>
+        <option value="clean">Clean</option>
+        <option value="dark">Dark</option>
+        <option value="solid">Solid</option>
+      </select>
+      <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
     </div>
     <div class="dialogrow">
       <label for="embedtarget">Shown at</label>

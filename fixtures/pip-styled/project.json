@@ -1,8 +1,8 @@
 {
-  "version": 15,
+  "version": 16,
   "output": { "fps": 60, "width": 640, "height": 360 },
   "cursor": { "style": "default", "scale": 1 },
-  "transform": { "version": 14 },
+  "transform": { "version": 15 },
   "pip": {
     "enabled": true, "corner": "bottom-right", "widthPct": 0.125, "marginPx": 32,
     "style": {

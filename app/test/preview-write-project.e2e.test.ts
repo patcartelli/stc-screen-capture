@@ -225,16 +225,33 @@ describe("preview:writeProject refuses a malformed document (STC-465 review)", (
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
     const pip = { enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32 };
     const style = { ...GOOD_STYLE, border: { widthPt: 2, color: "white" } };
-    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 15, pip: { ...pip, style } })).toMatch(/pip\.style/);
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 16, pip: { ...pip, style } })).toMatch(/pip\.style/);
     expect(existsSync(join(takeDir, "project.json"))).toBe(false);
   }, 120_000);
 
-  test("a project-15 with a valid pip.style writes (STC-461)", async () => {
+  test("a project-16 with a valid pip.style writes (STC-461)", async () => {
     const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
     app = a;
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
     const pip = { enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32 };
-    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 15, pip: { ...pip, style: GOOD_STYLE } })).toBe("wrote");
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 16, pip: { ...pip, style: GOOD_STYLE } })).toBe("wrote");
     expect(JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8")).pip.style.shape).toBe("circle");
+  }, 120_000);
+
+  test("refuses a malformed framing block (STC-396)", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 15, framing: { preset: "bogus" } })).toMatch(/framing/);
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 15, framing: { preset: "clean", paddingPct: 9 } })).toMatch(/framing/);
+    expect(existsSync(join(takeDir, "project.json"))).toBe(false);
+  }, 120_000);
+
+  test("a project-15 with a framing writes (STC-396)", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 15, framing: { preset: "clean" } })).toBe("wrote");
+    expect(JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8")).framing).toEqual({ preset: "clean" });
   }, 120_000);
 });

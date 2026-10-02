@@ -5,6 +5,18 @@
 **Branch:** `accounts/stc-461-customize-pip-webcam-image`
 **Related:** STC-497 (framing guides — filed during this design, out of scope here).
 
+> **Amended at merge with STC-396 (video framing), 2026-10-02.** STC-396 reached
+> `master` first and took `project-15` and `TRANSFORM_VERSION` 14, so this spec's
+> `project-15` is shipped as **`project-16`** (project-15 + `pip.style`) and its
+> transform bump as **`TRANSFORM_VERSION` 15**; `versionFor` checks `pip.style`
+> (→ 16) before framing (→ 15). Every "UV over the OUTPUT" below now means **UV
+> over the CONTENT RECT** — STC-396 rule 3 anchors the PiP to the framed picture,
+> not the canvas. With framing off the content rect IS the whole output, so
+> nothing about an unframed take changes. `render()` computes `pipRect` against
+> the content rect's size and offsets it by the rect's origin; the editor's drag,
+> snap, resize and reframe work in the same content-rect coordinates, read from
+> `framing.ts`'s own `framingLayout`.
+
 ## Intent
 
 Stated by Patrick, 2026-10-02:

@@ -58,7 +58,7 @@ export function recordTimeProject(choices: RecordTimeChoices): string | null {
   const body: Record<string, unknown> = {};
   let version = 0;
   if (!choices.showClicks) { body.showClicks = false; version = 13; }
-  if (choices.pipStyle) { body.pip = { ...DEFAULT_PIP_FIXED, style: choices.pipStyle }; version = 15; }
+  if (choices.pipStyle) { body.pip = { ...DEFAULT_PIP_FIXED, style: choices.pipStyle }; version = 16; }
   if (version === 0) return null;
   return JSON.stringify({ version, ...body }, null, 2) + "\n";
 }

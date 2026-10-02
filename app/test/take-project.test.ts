@@ -35,17 +35,17 @@ describe("the PiP default seeds a take (STC-461)", () => {
     expect(defaultStyleForTake(CIRCLE, false)).toBeNull();
     expect(recordTimeProject({ showClicks: true, pipStyle: null })).toBeNull();
   });
-  test("a non-default style with the camera on seeds a v15 pip, never a framing", () => {
+  test("a non-default style with the camera on seeds a v16 pip, never a framing", () => {
     const style = defaultStyleForTake({ ...CIRCLE, framing: { x: 0.3, y: 0.5, zoom: 2 } }, true)!;
     expect(style.framing).toBeUndefined();
     const doc = JSON.parse(recordTimeProject({ showClicks: true, pipStyle: style })!);
-    expect(doc.version).toBe(15);
+    expect(doc.version).toBe(16);
     expect(doc.pip).toEqual({ enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32, style });
     expect(doc.showClicks).toBeUndefined();
   });
-  test("both choices together keep both, at v15", () => {
+  test("both choices together keep both, at v16", () => {
     const doc = JSON.parse(recordTimeProject({ showClicks: false, pipStyle: CIRCLE })!);
-    expect(doc).toMatchObject({ version: 15, showClicks: false });
+    expect(doc).toMatchObject({ version: 16, showClicks: false });
     expect(doc.pip.style.shape).toBe("circle");
   });
   test("show-clicks alone is byte-for-byte what it was", () => {

@@ -18,12 +18,13 @@ const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
  * TRANSFORM_VERSION, add a TRANSFORM_HISTORY entry saying what changed, then
  * update this fingerprint. Never update the fingerprint alone.
  *
- * It last moved at version 14 (STC-461): PIP_SHADOW and DEFAULT_FRAMING were
- * added as inputs. (Version 13, STC-419, added the keycast's constants — hold
- * and fade, font, sizing, placement, both colours, every key label with and
- * without the modifier glyphs, and the ` ×N` count format.)
+ * It last moved at version 15 (STC-461): PIP_SHADOW and DEFAULT_FRAMING were
+ * added as inputs. (Version 14, STC-396, added the framing presets, solid
+ * default and padding/radius bounds; version 13, STC-419, added the keycast's
+ * constants — hold and fade, font, sizing, placement, both colours, every key
+ * label with and without the modifier glyphs, and the ` ×N` count format.)
  */
-const PINNED_FINGERPRINT = "43227443";
+const PINNED_FINGERPRINT = "5dfae8d8";
 
 describe("the transform version is honest about what it renders", () => {
   test("the fingerprint of every pixel-deciding constant is pinned to this version", () => {

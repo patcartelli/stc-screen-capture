@@ -4,6 +4,7 @@ import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
 import { TRANSFORM_VERSION } from "./transform-version.js";
 import { DEFAULT_PIP_FIXED, cleanPipStyle } from "./pip-style.js";
+import { cleanFraming } from "./framing.js";
 
 const NS_PER_S = 1_000_000_000;
 
@@ -163,7 +164,7 @@ export function parseProject(
   // lost on the next write. `pip` is validated by the schema, so it is carried
   // as-is rather than re-derived here.
   if (doc.pip && typeof doc.pip === "object") {
-    // project-15 (STC-461): a style this build cannot read is DROPPED, not the
+    // project-16 (STC-461): a style this build cannot read is DROPPED, not the
     // project — the take renders the fixed corner rather than losing its edits.
     const { style, ...fixed } = doc.pip;
     const pip: Pip = fixed;
@@ -223,6 +224,11 @@ export function parseProject(
   // project-14 (STC-419). Only a real `false` hides the keycast; anything else
   // is "no opinion" and shown.
   if (doc.keycast?.show === false) project.keycast = { show: false };
+  // project-15 (STC-396). A malformed block is DROPPED, not repaired: the take
+  // opens unframed rather than with a guessed frame, the rule every field in
+  // this parser follows.
+  const framing = cleanFraming(doc.framing);
+  if (framing) project.framing = framing;
   return project;
 }
 
@@ -382,12 +388,12 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 {
-  // Highest first: a document needing v15 needs it whatever its keycast,
-  // showClicks,
-  // mutes, mic level, cleanup, levels, bookmarks, slug, overrides, zoom or
-  // textPt say.
-  if (project.pip?.style) return 15;
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 {
+  // Highest first: a document needing v16 needs it whatever its framing,
+  // keycast, showClicks, mutes, mic level, cleanup, levels, bookmarks, slug,
+  // overrides, zoom or textPt say.
+  if (project.pip?.style) return 16;
+  if (project.framing) return 15;
   if (project.keycast?.show === false) return 14;
   if (project.showClicks === false) return 13;
   if (project.micMuted || project.systemAudioMuted) return 12;
@@ -416,7 +422,7 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   // Carried, not rebuilt from scratch. This function predates `pip`, and a
   // document reconstructed from a fixed field list silently drops anything
   // added since — so a take with a PiP would lose it on the next save.
-  // A style is carried with it; versionFor has already made this v15 (STC-461).
+  // A style is carried with it; versionFor has already made this v16 (STC-461).
   if (project.pip) out.pip = project.pip;
   if (!isFullTake(project, durationNs) && project.trim) out.trim = project.trim;
   // Only when it says something v3 cannot: writing the default block into
@@ -441,5 +447,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   }
   if (version >= 13) out.showClicks = project.showClicks !== false;
   if (version >= 14) out.keycast = { show: project.keycast?.show !== false };
+  if (version >= 15 && project.framing) out.framing = project.framing;
   return out;
 }

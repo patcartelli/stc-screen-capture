@@ -34,14 +34,15 @@ export interface PipFraming { x: number; y: number; zoom: number }
 
 export interface PipBorder { widthPt: number; color: string }
 
-/** Mirrors `pip.style` in schema/project-15.schema.json. */
+/** Mirrors `pip.style` in schema/project-16.schema.json. */
 export interface PipStyle {
   shape: PipShape;
   /** Fraction of the PiP's SHORT side, 0..0.5. Ignored for a circle. */
   cornerRadius: number;
-  /** UV over the OUTPUT. A centre that would put the PiP off-frame is clamped at render. */
+  /** UV over the CONTENT RECT — the whole output when there is no framing (STC-396
+   * rule 3). A centre that would put the PiP off-frame is clamped at render. */
   center: Point;
-  /** UV: fraction of the output width. Height is derived from the shape. */
+  /** UV: fraction of the content rect's width (the output's, with no framing). Height is derived from the shape. */
   width: number;
   /** Absent = `DEFAULT_FRAMING`. Per take: Settings never stores one. */
   framing?: PipFraming;
@@ -125,7 +126,8 @@ export function cleanPipStyle(v: unknown): PipStyle | null {
   return out;
 }
 
-/** Output pixels, capped to fit inside the output while keeping the shape's aspect.
+/** Output pixels, capped to fit inside `output` while keeping the shape's aspect. `output` is
+ * the CONTENT RECT's size (the whole output when there is no framing, STC-396 rule 3).
  * Width rounds FIRST and height derives from the rounded width — the same order
  * `fixedCornerPipUv` uses, so `styleFromFixedCorner` is exact. Only a PiP that
  * would overflow is touched (a portrait camera, an extreme-aspect output). */
@@ -145,7 +147,8 @@ export function pipSize(style: PipStyle, output: Size, camera: Size): Size {
   return { width, height };
 }
 
-/** Where the PiP lands, in whole output pixels, always inside the frame (the size is capped to fit). Rounded
+/** Where the PiP lands, in whole output pixels RELATIVE TO the content rect (render.ts offsets it by
+ * the rect's origin), always inside it (the size is capped to fit). Rounded
  * because it places a DECODED FRAME (render.ts's pipStateAt says why). */
 export function pipRect(style: PipStyle, output: Size, camera: Size): Rect {
   const { width, height } = pipSize(style, output, camera);

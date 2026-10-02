@@ -11,8 +11,8 @@ import {
 
 const Ajv = (AjvImport as any).default ?? AjvImport;
 const root = join(__dirname, "..", "..");
-const schema15 = JSON.parse(readFileSync(join(root, "schema/project-15.schema.json"), "utf8"));
-const validate15 = new Ajv({ allErrors: true, strict: true }).compile(schema15);
+const schema16 = JSON.parse(readFileSync(join(root, "schema/project-16.schema.json"), "utf8"));
+const validate16 = new Ajv({ allErrors: true, strict: true }).compile(schema16);
 const DUR = 5_000_000_000;
 const STYLE: PipStyle = { ...DEFAULT_PIP_STYLE, shape: "circle", shadow: true, mirror: true,
   border: { widthPt: 2, color: "#ffffff" }, framing: { x: 0.4, y: 0.5, zoom: 1.5 } };
@@ -21,22 +21,26 @@ const withStyle = (s: unknown) => {
   return { ...p, pip: { ...p.pip!, style: s as PipStyle } };
 };
 
-describe("project-15 pip.style (STC-461)", () => {
-  test("15 is a readable version", () => expect(PROJECT_VERSIONS).toContain(15));
-  test("an untouched camera project does not promote to 15", () => {
+describe("project-16 pip.style (STC-461)", () => {
+  test("16 is a readable version", () => expect(PROJECT_VERSIONS).toContain(16));
+  test("an untouched camera project does not promote to 16", () => {
     expect(projectForWrite(defaultProject(640, 360, undefined, true), DUR).version).toBeLessThan(15);
   });
-  test("a style writes a schema-valid v15 carrying it", () => {
+  test("a style writes a schema-valid v16 carrying it", () => {
     const out = projectForWrite(withStyle(STYLE), DUR);
-    expect(out.version).toBe(15);
+    expect(out.version).toBe(16);
     expect(out.pip!.style).toEqual(STYLE);
-    expect(validate15(out), JSON.stringify(validate15.errors, null, 2)).toBe(true);
+    expect(validate16(out), JSON.stringify(validate16.errors, null, 2)).toBe(true);
   });
-  test("v15 still carries every v14 field (>=, not ===)", () => {
-    const p = { ...withStyle(STYLE), keycast: { show: false }, showClicks: false };
+  test("v16 still carries every v14 and v15 field (>=, not ===)", () => {
+    const p = { ...withStyle(STYLE), keycast: { show: false }, showClicks: false,
+      framing: { preset: "solid" as const, color: "#112233" } };
     const out = projectForWrite(p, DUR);
+    expect(out.version).toBe(16);
     expect(out.keycast).toEqual({ show: false });
     expect(out.showClicks).toBe(false);
+    expect(out.framing).toEqual({ preset: "solid", color: "#112233" });
+    expect(validate16(out), JSON.stringify(validate16.errors, null, 2)).toBe(true);
   });
   test("parse round-trips a style", () => {
     const back = parseProject(projectForWrite(withStyle(STYLE), DUR), 640, 360, DUR, true);
@@ -51,7 +55,7 @@ describe("project-15 pip.style (STC-461)", () => {
     expect(back.pip!.style).toBeUndefined();
   });
   test("the schema's bounds are pip-style.ts's bounds", () => {
-    const s = schema15.properties.pip.properties.style.properties;
+    const s = schema16.properties.pip.properties.style.properties;
     expect([s.width.minimum, s.width.maximum]).toEqual([PIP_WIDTH_MIN, PIP_WIDTH_MAX]);
     expect(s.cornerRadius.maximum).toBe(PIP_RADIUS_MAX);
     expect(s.framing.properties.zoom.maximum).toBe(PIP_FRAMING_ZOOM_MAX);
@@ -62,6 +66,6 @@ describe("project-15 pip.style (STC-461)", () => {
   test("the schema refuses what cleanPipStyle refuses", () => {
     const bad = projectForWrite(withStyle(STYLE), DUR) as any;
     bad.pip.style = { ...STYLE, width: 0.9 };
-    expect(validate15(bad)).toBe(false);
+    expect(validate16(bad)).toBe(false);
   });
 });

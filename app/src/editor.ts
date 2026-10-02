@@ -77,6 +77,8 @@ import {
 } from "@transform/trim";
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
 import type { Size } from "@transform/spaces";
+import { holdFraming, restoreFraming, withHeldFraming, chosenFraming, type FramingHold } from "./framing-hold.js";
+import { contentFraction, framingLayout, DEFAULT_SOLID_COLOR, type Framing, type FramingPreset } from "@transform/framing";
 import { render } from "@transform/render";
 import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, effectivePointWidth, legibility, legibilitySentence, zoomFactorForCrop,
@@ -448,8 +450,10 @@ async function persistProject(): Promise<void> {
   // STC-461: while reframing, the LIVE project carries a temporary display
   // PiP (the whole camera frame) that must never reach disk. Every other edit
   // stays usable meanwhile, so the write still happens — of a COPY whose PiP
-  // is the one the reframe would commit right now (reframedProject).
-  const doc = projectForWrite(reframing ? reframedProject(openProject, reframing) : openProject, player.durationNs);
+  // is the one the reframe would commit right now (reframedProject). STC-396:
+  // a framing held aside by the override editor is put back on that copy.
+  const live = reframing ? reframedProject(openProject, reframing) : openProject;
+  const doc = projectForWrite(withHeldFraming(live, heldFraming), player.durationNs);
   await editor.writeProject(
     new TextEncoder().encode(JSON.stringify(doc, null, 2)).buffer as ArrayBuffer,
   );
@@ -775,6 +779,13 @@ window.addEventListener("resize", redrawLanes);
 // mode to just look and then leaving with no drag restores the original
 // override exactly rather than deleting it as a side effect.
 //
+// STC-396: the FRAME is set aside the same way. With project.framing set the
+// stage shows the picture INSET, so a pointer pixel on #stage is no longer
+// capture UV and #overridebox (a percentage of the overlay) would sit in the
+// wrong place. While editing, framing is held in `heldFraming` and removed
+// from the live project; every path that ends editing restores it, and
+// persistProject/export write the project WITH it (`withHeldFraming`).
+//
 // STC-331 adds a SECOND kind of editing target: a window with no derived
 // counterpart at all. `editingWindowId` (a derived window's own identity)
 // and `editingManualId` (a manual override's own `id`) are mutually
@@ -785,6 +796,7 @@ window.addEventListener("resize", redrawLanes);
 // End below), since there is no derived window to read them from.
 
 let editingWindowId: string | null = null;
+let heldFraming: FramingHold | null = null;
 let editingManualId: string | null = null;
 let draftRect: Rect | null = null;
 let draftEasing: ZoomPreset | "" = "";
@@ -1035,7 +1047,18 @@ async function commitCurrentEdit(): Promise<void> {
 /** The teardown half of leaving edit mode — shared by a normal close (which
  *  commits first) and a delete (which does not: there is nothing left to
  *  commit for a window that no longer exists). */
+function setAsideFraming(): void {
+  if (!openProject || heldFraming) return;
+  heldFraming = holdFraming(openProject);
+}
+
+function putBackFraming(): void {
+  if (openProject) restoreFraming(openProject, heldFraming);
+  heldFraming = null;
+}
+
 function resetEditingState(): void {
+  putBackFraming();
   editingWindowId = null;
   editingManualId = null;
   draftRect = null;
@@ -1054,6 +1077,7 @@ async function closeOverrideEditor(): Promise<void> {
   resetEditingState();
   layoutOverrideBlocks();
   updateManualDraftBlock();
+  if (player) await player.seek(player.currentNs); // repaint framed again
 }
 
 /**
@@ -1077,6 +1101,7 @@ async function deleteDerivedWindow(): Promise<void> {
   await persistProject();
   layoutOverrideBlocks();
   updateManualDraftBlock();
+  if (player) await player.seek(player.currentNs); // repaint framed again
 }
 
 async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
@@ -1093,6 +1118,7 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   draftManualStart = w.startNs;
   draftManualEnd = w.endNs;
   openProject.overrides = overridesWithoutWindow(openProject.overrides, id);
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((w.startNs + w.endNs) / 2));
   await player.seek(mid);
@@ -1113,6 +1139,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   draftRect = o.rect;
   draftEasing = o.easing;
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((o.startNs + o.endNs) / 2));
   await player.seek(mid);
@@ -1139,6 +1166,7 @@ async function createManualWindow(clickNs: number): Promise<void> {
   draftManualEnd = endNs;
   draftRect = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
   draftEasing = "";
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((startNs + endNs) / 2));
   await player.seek(mid);
@@ -1290,6 +1318,10 @@ $("outsize").addEventListener("change", () => {
 
 // ---- legibility + viewer's eye (STC-318), inside the export dialog ---------
 
+function frameFractionFor(p: Project): number {
+  return openCapture ? contentFraction(p === openProject ? chosenFraming(p, heldFraming) : p.framing, p.output, openCapture.width / openCapture.height) : 1;
+}
+
 function updateLegibilityUI(): void {
   if (!openProject || !openDisplay || !player || !openSession) return;
   const sel = $("embedtarget") as HTMLSelectElement;
@@ -1312,7 +1344,8 @@ function updateLegibilityUI(): void {
 
   const fs = render(openProject, openSession, player.currentNs);
   const l = legibility(openDisplay, openProject.textPt ?? DEFAULT_TEXT_PT,
-                       embedWidthPx, zoomFactorForCrop(fs.zoom.crop.width));
+                       embedWidthPx, zoomFactorForCrop(fs.zoom.crop.width),
+                       frameFractionFor(openProject));
   const out = $("legibility");
   // Warns below 9pt; never blocks (STC-373's own scope line) — the export
   // button beside it stays enabled either way.
@@ -1551,6 +1584,8 @@ async function closeTake(): Promise<void> {
   // going away regardless, and persisting a draft against a project about to
   // be discarded would be a write nobody asked for. Just drop the state.
   editingWindowId = null;
+  editingManualId = null;
+  heldFraming = null; // the project is discarded below; nothing to restore into
   draftRect = null;
   draftEasing = "";
   dragAnchorUv = null;
@@ -1693,6 +1728,7 @@ function updateAudioButton(): void {
   $("audiobtn").toggleAttribute("hidden", !has);
   updateWaveformToggle();
   updateKeycastUI();
+  updateFramingUI();
   if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
 }
 
@@ -1777,6 +1813,25 @@ function pipCamera(): Size | null {
   return cam?.present ? { width: cam.width, height: cam.height } : null;
 }
 
+/**
+ * The rect the PiP lives in, in output px (STC-396 rule 3): framing.ts's own
+ * content rect for the LIVE project — what the stage is drawing right now, so
+ * a framing held aside by the override editor counts as none — or the whole
+ * output when there is no framing. pip-style.ts's "output" is this rect's size;
+ * the overlay adds its origin. With no framing every number below is what it
+ * was before STC-396.
+ */
+function pipFrame(): Rect | null {
+  if (!openProject) return null;
+  const out = openProject.output;
+  const layout = openCapture && openCapture.height > 0
+    ? framingLayout(openProject.framing, out, openCapture.width / openCapture.height)
+    : undefined;
+  return layout?.content ?? { x: 0, y: 0, width: out.width, height: out.height };
+}
+
+const sizeOf = (r: Rect): Size => ({ width: r.width, height: r.height });
+
 /** The take's style, or the fixed corner expressed as one so a first edit cannot jump. */
 function currentPipStyle(): PipStyle | null {
   const cam = pipCamera();
@@ -1784,7 +1839,8 @@ function currentPipStyle(): PipStyle | null {
   // While reframing, the live project holds the temporary display style; the
   // take's REAL one (with the framing being edited) is held here.
   if (reframing) return reframing.real;
-  return openProject.pip.style ?? styleFromFixedCorner(openProject.pip, openProject.output, cam);
+  const frame = pipFrame()!;
+  return openProject.pip.style ?? styleFromFixedCorner(openProject.pip, sizeOf(frame), cam);
 }
 
 function persistPip(): void {
@@ -1847,12 +1903,13 @@ function layoutPipOverlay(): void {
   const cam = pipCamera();
   const shown = !reframing && !!style && !!cam && !!openProject?.pip?.enabled && (pipPanelOpen() || !!pipDrag);
   overlay.hidden = !shown;
-  if (!shown || !style || !cam || !openProject) return;
-  const r = pipRect(style, openProject.output, cam);
+  const frame = pipFrame();
+  if (!shown || !style || !cam || !openProject || !frame) return;
+  const r = pipRect(style, sizeOf(frame), cam);
   const { k } = stageScale();
   const box = overlay.querySelector<HTMLElement>(".pipbox")!;
   Object.assign(box.style, {
-    left: `${r.x * k}px`, top: `${r.y * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
+    left: `${(frame.x + r.x) * k}px`, top: `${(frame.y + r.y) * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
     borderRadius: style.shape === "circle" ? "50%" : `${style.cornerRadius * Math.min(r.width, r.height) * k}px`,
   });
 }
@@ -1894,14 +1951,16 @@ let pipDrag: { kind: "move" | "resize"; dx: number; dy: number } | null = null;
 $("pipoverlay").addEventListener("pointerdown", (e) => {
   const style = currentPipStyle();
   const cam = pipCamera();
-  if (!style || !cam || !openProject) return;
+  const frame = pipFrame();
+  if (!style || !cam || !openProject || !frame) return;
   const target = e.target as HTMLElement;
   if (!target.closest(".pipbox")) return;
   const { left, top, k } = stageScale();
-  const px = (e.clientX - left) / k, py = (e.clientY - top) / k;
+  // Content-rect px: output px less the rect's origin (both zero with no framing).
+  const px = (e.clientX - left) / k - frame.x, py = (e.clientY - top) / k - frame.y;
   pipDrag = target.id === "piphandle"
     ? { kind: "resize", dx: 0, dy: 0 }
-    : { kind: "move", dx: px - style.center.x * openProject.output.width, dy: py - style.center.y * openProject.output.height };
+    : { kind: "move", dx: px - style.center.x * frame.width, dy: py - style.center.y * frame.height };
   target.setPointerCapture(e.pointerId);
   e.preventDefault();
 });
@@ -1910,10 +1969,11 @@ $("pipoverlay").addEventListener("pointermove", (e) => {
   if (!pipDrag || !openProject) return;
   const style = currentPipStyle();
   const cam = pipCamera();
-  if (!style || !cam) return;
+  const frame = pipFrame();
+  if (!style || !cam || !frame) return;
   const { left, top, k } = stageScale();
-  const out = openProject.output;
-  const px = (e.clientX - left) / k, py = (e.clientY - top) / k;
+  const out = sizeOf(frame);
+  const px = (e.clientX - left) / k - frame.x, py = (e.clientY - top) / k - frame.y;
   if (pipDrag.kind === "resize") {
     setPipStyle(resizeFromCorner(style, { x: px, y: py }, out, cam), false);
     return;
@@ -1970,10 +2030,13 @@ function displayStyleFor(real: PipStyle): PipStyle {
     border: null, shadow: false, framing: undefined };
 }
 
-/** The shown (display-style) rect in output px, and stage CSS px per camera px / per output px. */
+/** The shown (display-style) rect in output px, and stage CSS px per camera px / per output px.
+ *  The display style is centred in the CONTENT rect, as render() places it (STC-396 rule 3). */
 function framingScale(real: PipStyle, cam: Size): { shown: Rect; s: number; k: number } | null {
-  if (!openProject) return null;
-  const shown = pipRect(displayStyleFor(real), openProject.output, cam);
+  const frame = pipFrame();
+  if (!openProject || !frame) return null;
+  const local = pipRect(displayStyleFor(real), sizeOf(frame), cam);
+  const shown = { ...local, x: local.x + frame.x, y: local.y + frame.y };
   const { k } = stageScale();
   return { shown, s: (shown.width / cam.width) * k, k };
 }
@@ -2108,6 +2171,56 @@ window.addEventListener("keydown", (e) => {
   e.stopImmediatePropagation();
   commitReframe();
 }, { capture: true });
+
+// ---- framing (STC-396) -------------------------------------------------
+// A preset (or none) saved to the project. Preview and export both go through
+// render(), so what is previewed is what exports.
+function updateFramingUI(): void {
+  const f = chosenFraming(openProject, heldFraming);
+  ($("framepreset") as HTMLSelectElement).value = f?.preset ?? "none";
+  const color = $("framecolor") as HTMLInputElement;
+  color.hidden = f?.preset !== "solid";
+  color.value = f?.color ?? DEFAULT_SOLID_COLOR;
+}
+
+async function setFraming(next: Framing | undefined): Promise<void> {
+  if (!openProject || !player) return;
+  // While an override editor has the frame set aside, a change replaces the
+  // held value and the live project stays unframed until editing ends.
+  const previous = chosenFraming(openProject, heldFraming);
+  const apply = (f: Framing | undefined): void => {
+    if (editingWindowId !== null || editingManualId !== null) {
+      heldFraming = f ? { framing: f } : null;
+    } else if (f) openProject!.framing = f; else delete openProject!.framing;
+  };
+  apply(next);
+  try {
+    await persistProject();
+  } catch (e) {
+    apply(previous);
+    updateFramingUI();
+    throw e;
+  }
+  updateFramingUI();
+  updateLegibilityUI();
+  layoutPipOverlay();                    // the PiP lives in the content rect, which just moved
+  await player.seek(player.currentNs);   // repaint this frame with the new choice
+}
+
+function framingFromControls(): Framing | undefined {
+  const v = ($("framepreset") as HTMLSelectElement).value;
+  if (v === "none") return undefined;
+  const preset = v as FramingPreset;
+  return preset === "solid"
+    ? { preset, color: ($("framecolor") as HTMLInputElement).value }
+    : { preset };
+}
+
+for (const id of ["framepreset", "framecolor"]) {
+  $(id).addEventListener("change", () => {
+    void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
+  });
+}
 
 $("micmute").addEventListener("click", () => {
   if (!openProject) return;
@@ -2749,12 +2862,14 @@ async function runExport(): Promise<void> {
   bar.removeAttribute("hidden");
   ($("export") as HTMLButtonElement).disabled = true;
   ($("outsize") as HTMLSelectElement).disabled = true;
+  ($("framepreset") as HTMLSelectElement).disabled = true;
+  ($("framecolor") as HTMLInputElement).disabled = true;
   progress.value = 0;
   status.textContent = "Exporting…";
   clearAlert();
 
   const started = performance.now();
-  const exporting: Project = structuredClone(openProject);
+  const exporting: Project = structuredClone(withHeldFraming(openProject, heldFraming));
   try {
     // STC-413: the bundle's stable identity, so the written MP4 can point
     // back at its source after a Finder rename or move. Best-effort, same as
@@ -2797,7 +2912,7 @@ async function runExport(): Promise<void> {
       output: exporting.output,
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {
-        const l = legibility(openDisplay!, exporting.textPt ?? DEFAULT_TEXT_PT, embedWidthPx);
+        const l = legibility(openDisplay!, exporting.textPt ?? DEFAULT_TEXT_PT, embedWidthPx, 1, frameFractionFor(exporting));
         return { textPt: l.textPt, embedWidthPx: l.embedWidthPx, textPx: l.textPx, verdict: l.verdict };
       })() : null,
       exportDurationMs: result.durationMs,
@@ -2811,6 +2926,8 @@ async function runExport(): Promise<void> {
     exportAbort = undefined;
     ($("export") as HTMLButtonElement).disabled = false;
     ($("outsize") as HTMLSelectElement).disabled = false;
+    ($("framepreset") as HTMLSelectElement).disabled = false;
+    ($("framecolor") as HTMLInputElement).disabled = false;
   }
 }
 

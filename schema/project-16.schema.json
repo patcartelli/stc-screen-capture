@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "stc:project-15",
-  "title": "stc project (edit document), v15",
-  "description": "v15 adds `framing` (STC-396): a background, padding, rounded corners and a shadow around the recording, fitted INSIDE the chosen output size. A preset (clean, dark, solid) plus optional explicit overrides, which win over the preset. Padding, radius and shadow are fractions of the output short edge. Absent means no framing, and a document without it stays at whatever version its other edits earned. v14 (STC-419): keycast.show — false hides the keycast in preview and export; the recorded keys are untouched. Written only when false. v13 adds `showClicks`: whether the click highlight (the translucent disc under the pointer while a button is held) is drawn (STC-420). Chosen on the Record options bar, written to project.json by the app when a take ends with it OFF, and editable afterwards like any other field. Absent means true, which is what every take did before this version, so a document that shows clicks stays at whatever version its other edits earned. Reaches render() through this document, never a live setting. Everything the user can change after recording. render(project, session, t) is a pure function of this document plus the session data. v12 adds `micMuted` and `systemAudioMuted`: a quick per-track mute in preview and export (STC-454 part 3) that KEEPS the track's level, so un-muting brings back exactly what was set. A muted track is left out of the export entirely, and a take with every track muted exports with no audio track at all. Per take, never a sticky app setting. Absent means false, and a document with nothing muted stays at whatever version its other edits earned. v11 adds `micLevel`: the recorded mic's level in preview and export (STC-454 part 2), a linear gain 0..3.9811 (+12 dB) — unlike systemAudioLevel it may BOOST, because narration is usually recorded well below system audio; the mix's hard limit catches peaks, and 0 mutes the mic while the recording is kept. Applied after the take, never at capture. Absent means 1 (as recorded), and a document at 1 stays at whatever version its other edits earned. v10 adds `narrationCleanup`: whether export cleans up the recorded mic narration (STC-455) and how hard, `{ enabled, strength }` with strength 0..1 — one switch and one strength driving an 80 Hz high-pass, noise reduction against a profile learned from the take's own pauses, and a de-esser (transform/src/narration-clean.ts). Applied at export, never at capture: mic.m4a is never rewritten, so the setting is always undoable. The strength is kept while the switch is off. Absent means off at 0.5, and a document at that default stays at whatever version its other edits earned. v9 adds `systemAudioLevel`: how loud the recorded system audio (anchors-6's system.m4a, STC-418) plays in preview and export, 0..1 — attenuate only, never boost, so it cannot clip; 0 mutes the track while the recording itself is kept. Absent means 1 (full level), and a document at full level stays at whatever version its other edits earned. v8 adds `bookmarks`: marked frames as session-relative integer ns, for the editor's Up/Down navigation (STC-444 slice 4) — ns rather than an export-frame index, so a bookmark still means the same instant if a later build's export fps ever changes. Sorted ascending, no duplicates; absent means none and parseProject fills []. v7 adds `slug`: the stable name this take publishes under (STC-444 slice 3) — absent means not yet decided, and share.ts's autoSlug(takeName) supplies a live default the editor shows without writing it here; only set on a successful share. Not validated against share.ts's SLUG_PATTERN in this schema (a stored slug that fails it is still a v8 document; planPublish is where an unusable one is refused). v6 adds `overrides`: manual zoom overrides — a discriminated union. The 'geometry' variant (STC-330) tunes a DERIVED window, keyed by its startNs (as a string). The 'manual' variant (STC-331) authors a window with no auto-zoom counterpart at all, carrying its own startNs/endNs and a REQUIRED easing, since there is no derived window or project default timing to fall back to. The 'removed' and 'retime' variants (STC-329) act on a DERIVED window without touching its crop: 'removed' drops it outright; 'retime' shifts its startNs and/or endNs (either optional, for a one-edge drag) while keeping the SAME windowId — the window's original derived startNs, unaffected by the retime. Every variant with a rect uses UV over the CAPTURE, the same space a redaction lives in. Absent on every document written before project-6; parseProject fills [].",
+  "$id": "stc:project-16",
+  "title": "stc project (edit document), v16",
+  "description": "v16 (STC-461): pip.style — the PiP's shape (rect at the camera's aspect, square, circle) and corner radius, its centre (UV over the CONTENT RECT — the whole output when there is no framing, the framed picture when v15's framing is set) and width (fraction of the content rect's width; height derives from the shape), its framing (a centre in UV over the CAMERA frame plus a zoom over the largest crop of the shape's aspect; absent = centred, zoom 1), mirror, an optional border (width in display points, #rrggbb) and a drop shadow. Absent means the fixed bottom-right corner every earlier version drew, and a document with no style stays at whatever version its other edits earned. v15 adds `framing` (STC-396): a background, padding, rounded corners and a shadow around the recording, fitted INSIDE the chosen output size. A preset (clean, dark, solid) plus optional explicit overrides, which win over the preset. Padding, radius and shadow are fractions of the output short edge. Absent means no framing, and a document without it stays at whatever version its other edits earned. v14 (STC-419): keycast.show — false hides the keycast in preview and export; the recorded keys are untouched. Written only when false. v13 adds `showClicks`: whether the click highlight (the translucent disc under the pointer while a button is held) is drawn (STC-420). Chosen on the Record options bar, written to project.json by the app when a take ends with it OFF, and editable afterwards like any other field. Absent means true, which is what every take did before this version, so a document that shows clicks stays at whatever version its other edits earned. Reaches render() through this document, never a live setting. Everything the user can change after recording. render(project, session, t) is a pure function of this document plus the session data. v12 adds `micMuted` and `systemAudioMuted`: a quick per-track mute in preview and export (STC-454 part 3) that KEEPS the track's level, so un-muting brings back exactly what was set. A muted track is left out of the export entirely, and a take with every track muted exports with no audio track at all. Per take, never a sticky app setting. Absent means false, and a document with nothing muted stays at whatever version its other edits earned. v11 adds `micLevel`: the recorded mic's level in preview and export (STC-454 part 2), a linear gain 0..3.9811 (+12 dB) — unlike systemAudioLevel it may BOOST, because narration is usually recorded well below system audio; the mix's hard limit catches peaks, and 0 mutes the mic while the recording is kept. Applied after the take, never at capture. Absent means 1 (as recorded), and a document at 1 stays at whatever version its other edits earned. v10 adds `narrationCleanup`: whether export cleans up the recorded mic narration (STC-455) and how hard, `{ enabled, strength }` with strength 0..1 — one switch and one strength driving an 80 Hz high-pass, noise reduction against a profile learned from the take's own pauses, and a de-esser (transform/src/narration-clean.ts). Applied at export, never at capture: mic.m4a is never rewritten, so the setting is always undoable. The strength is kept while the switch is off. Absent means off at 0.5, and a document at that default stays at whatever version its other edits earned. v9 adds `systemAudioLevel`: how loud the recorded system audio (anchors-6's system.m4a, STC-418) plays in preview and export, 0..1 — attenuate only, never boost, so it cannot clip; 0 mutes the track while the recording itself is kept. Absent means 1 (full level), and a document at full level stays at whatever version its other edits earned. v8 adds `bookmarks`: marked frames as session-relative integer ns, for the editor's Up/Down navigation (STC-444 slice 4) — ns rather than an export-frame index, so a bookmark still means the same instant if a later build's export fps ever changes. Sorted ascending, no duplicates; absent means none and parseProject fills []. v7 adds `slug`: the stable name this take publishes under (STC-444 slice 3) — absent means not yet decided, and share.ts's autoSlug(takeName) supplies a live default the editor shows without writing it here; only set on a successful share. Not validated against share.ts's SLUG_PATTERN in this schema (a stored slug that fails it is still a v8 document; planPublish is where an unusable one is refused). v6 adds `overrides`: manual zoom overrides — a discriminated union. The 'geometry' variant (STC-330) tunes a DERIVED window, keyed by its startNs (as a string). The 'manual' variant (STC-331) authors a window with no auto-zoom counterpart at all, carrying its own startNs/endNs and a REQUIRED easing, since there is no derived window or project default timing to fall back to. The 'removed' and 'retime' variants (STC-329) act on a DERIVED window without touching its crop: 'removed' drops it outright; 'retime' shifts its startNs and/or endNs (either optional, for a one-edge drag) while keeping the SAME windowId — the window's original derived startNs, unaffected by the retime. Every variant with a rect uses UV over the CAPTURE, the same space a redaction lives in. Absent on every document written before project-6; parseProject fills [].",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -48,7 +48,7 @@
   },
   "properties": {
     "version": {
-      "const": 15
+      "const": 16
     },
     "output": {
       "type": "object",
@@ -108,7 +108,7 @@
         "widthPct",
         "marginPx"
       ],
-      "description": "Fixed-corner picture-in-picture. Absent means no PiP.",
+      "description": "Picture-in-picture. Absent means no PiP. With no `style`, the fixed corner below; with one, `style` decides and the corner fields are carried but unused.",
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -128,6 +128,120 @@
         "marginPx": {
           "type": "integer",
           "minimum": 0
+        },
+        "style": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "shape",
+            "cornerRadius",
+            "center",
+            "width",
+            "mirror",
+            "border",
+            "shadow"
+          ],
+          "properties": {
+            "shape": {
+              "enum": [
+                "rect",
+                "square",
+                "circle"
+              ]
+            },
+            "cornerRadius": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.5,
+              "description": "fraction of the PiP's short side; ignored for a circle"
+            },
+            "center": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "x",
+                "y"
+              ],
+              "properties": {
+                "x": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "y": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "description": "UV over the content rect (the whole output when there is no framing)"
+            },
+            "width": {
+              "type": "number",
+              "minimum": 0.05,
+              "maximum": 0.5,
+              "description": "fraction of the content rect's width (the output's, when there is no framing)"
+            },
+            "framing": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "x",
+                "y",
+                "zoom"
+              ],
+              "properties": {
+                "x": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "y": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "zoom": {
+                  "type": "number",
+                  "minimum": 1,
+                  "maximum": 3
+                }
+              },
+              "description": "centre in UV over the camera frame; zoom over the largest crop of the shape's aspect"
+            },
+            "mirror": {
+              "type": "boolean"
+            },
+            "border": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "widthPt",
+                    "color"
+                  ],
+                  "properties": {
+                    "widthPt": {
+                      "type": "number",
+                      "minimum": 0.5,
+                      "maximum": 12
+                    },
+                    "color": {
+                      "type": "string",
+                      "pattern": "^#[0-9a-fA-F]{6}$"
+                    }
+                  }
+                }
+              ]
+            },
+            "shadow": {
+              "type": "boolean"
+            }
+          }
         }
       }
     },

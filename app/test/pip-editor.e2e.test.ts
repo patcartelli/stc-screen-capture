@@ -30,14 +30,14 @@ describe("the editor's Camera popover (STC-461)", () => {
     expect(await editorWin.isHidden("#pipbtn")).toBe(true);
   }, 120_000);
 
-  test("the Circle preset saves a v15 circle", async () => {
+  test("the Circle preset saves a v16 circle", async () => {
     const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ pip: true });
     app = a;
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
     await editorWin.click("#pipbtn");
     await editorWin.click('[data-pip-preset="circle"]');
     await expect.poll(() => savedPip(takeDir)?.style?.shape, { timeout: 10_000 }).toBe("circle");
-    expect(savedProject(takeDir).version).toBe(15);
+    expect(savedProject(takeDir).version).toBe(16);
   }, 120_000);
 
   test("dragging the PiP near the top-left corner snaps it onto the margin", async () => {

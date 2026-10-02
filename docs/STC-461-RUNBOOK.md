@@ -12,7 +12,7 @@ Spec: `docs/superpowers/specs/2026-10-02-stc-461-pip-customize-design.md` (amend
 
 A camera take's PiP can be given a shape (rect / square / circle, corner radius), a size, any position (free drag with snapping), a border, a shadow, a mirror, and a reframe of what the camera shows inside it. Four presets are one click from finished. The style is chosen per take in the editor's **Camera** popover, or as a sticky default in Settings that new camera takes inherit. One layout for the whole take.
 
-Every decision is in `transform/src/pip-style.ts`; `render()` is still pure and `TRANSFORM_VERSION` is 14. `schema/project-15.schema.json` adds optional `pip.style`; a document without it renders exactly as before.
+Every decision is in `transform/src/pip-style.ts`; `render()` is still pure and `TRANSFORM_VERSION` is 15. `schema/project-16.schema.json` adds optional `pip.style`; a document without it renders exactly as before. With STC-396's framing on, the PiP is placed (and dragged) inside the framed picture, not the whole canvas.
 
 Verified on the build machine (not a Mac with a camera): typecheck, unit suite, and `gate:identity` on `fixtures/pip-styled` and `fixtures/pip`. **Not run by a person:** everything below. **Not run in the VM:** the new e2e files (`app/test/pip-editor.e2e.test.ts`, `app/test/pip-settings.e2e.test.ts`, `app/test/preview-write-project.e2e.test.ts`); `docs/VM-TESTING.md`'s route installs the packaged app and cannot run Playwright files, and the camera PiP cannot be tested in a VM at all. They run on CI.
 

@@ -178,6 +178,15 @@ jobs:
           cp fixtures/pip-styled/project.json "$STY/"
           npm run gate:identity -- "$STY"
 
+      # STC-396: the same fixture, framed. Sink identity on the framed path.
+      - name: Sink identity, framed
+        run: |
+          CAM="$(mktemp -d)/2026-01-01_00-00-01"
+          mkdir -p "$CAM"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
+          STC_IDENTITY_FRAMING=clean npm run gate:identity -- "$CAM"
+
       # The decorated still (STC-291). Asserts PROPERTIES of the rendered
       # pixels — alpha zero outside the window's real shape, no dark fringe on
       # the corner curve, a shadow that decreases to zero, a background with no
@@ -189,6 +198,10 @@ jobs:
       # VideoDecoder.configure() to wedge on and nothing for STC-259 to skip.
       - name: Decorated still gate
         run: npm run gate:still
+
+      # Video framing (STC-396): pixel PROPERTIES of the framed picture, no decode.
+      - name: Video framing gate
+        run: npm run gate:framing
 
       # The helper has crashed three times on CI and each time produced only a
       # signal number (STC-254). The stack trace lives in the OS crash report,

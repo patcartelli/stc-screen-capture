@@ -392,8 +392,8 @@ describe("anchors-7 carries a refit geometry timeline (STC-235)", () => {
 });
 
 describe("the styled-PiP fixture (STC-461)", () => {
-  test("fixtures/pip-styled's project.json conforms to project-15 (STC-461)", () => {
-    const validate = compile("schema/project-15.schema.json");
+  test("fixtures/pip-styled's project.json conforms to project-16 (STC-461)", () => {
+    const validate = compile("schema/project-16.schema.json");
     const ok = validate(load("fixtures/pip-styled/project.json"));
     expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
   });
