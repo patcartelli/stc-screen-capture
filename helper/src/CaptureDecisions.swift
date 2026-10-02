@@ -375,6 +375,10 @@ struct StartRequest: Equatable {
     /// `true` is "off" — the same latitude `camera` gets, and the setting's
     /// own default (off) in the app.
     let systemAudio: Bool
+    /// STC-419: record keyboard COMMANDS (KeyDecisions.swift). Off unless a
+    /// literal `true` — the same latitude `systemAudio` gets. When off, keyDown
+    /// is not even in the tap's mask.
+    var keys: Bool = false
 }
 
 extension StartRequest {
@@ -388,6 +392,7 @@ extension StartRequest {
         self.init(dir: r.dir, displayId: displayId, region: r.region, windowId: r.windowId,
                   camera: r.camera, micDeviceUid: r.micDeviceUid,
                   cameraDeviceUid: r.cameraDeviceUid, systemAudio: r.systemAudio)
+        self.keys = r.keys
     }
 }
 
@@ -468,9 +473,11 @@ func parseStartRequest(_ cmd: [String: Any]) -> Result<StartRequest, StartReques
     let cameraRaw = cmd["cameraDeviceUid"] as? String
     let cameraDeviceUid = (cameraRaw?.isEmpty == false) ? cameraRaw : nil
     let systemAudio = cmd["systemAudio"] as? Bool ?? false
-    return .success(StartRequest(dir: dir, displayId: displayId, region: region,
-                                 windowId: windowId, camera: camera, micDeviceUid: micDeviceUid,
-                                 cameraDeviceUid: cameraDeviceUid, systemAudio: systemAudio))
+    var request = StartRequest(dir: dir, displayId: displayId, region: region,
+                               windowId: windowId, camera: camera, micDeviceUid: micDeviceUid,
+                               cameraDeviceUid: cameraDeviceUid, systemAudio: systemAudio)
+    request.keys = cmd["keys"] as? Bool ?? false
+    return .success(request)
 }
 
 

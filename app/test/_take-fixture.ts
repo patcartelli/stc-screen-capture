@@ -18,14 +18,14 @@ const root = join(__dirname, "..", "..");
  * time.
  */
 export function makeTakeFolder(takeName = "2026-08-24_10-00-00",
-                               opts: { into?: string } = {}): { dir: string; takeDir: string } {
+                               opts: { into?: string; source?: string } = {}): { dir: string; takeDir: string } {
   // `into` puts it in an EXISTING root, so a test can seed a mixed library
   // (STC-294) rather than getting one temp folder per fixture.
   const dir = opts.into ?? mkdtempSync(join(tmpdir(), "stc-takes-"));
   const takeDir = join(dir, takeName);
   mkdirSync(takeDir, { recursive: true });
   for (const f of ["anchors.json", "events.json", "display.mp4"]) {
-    cpSync(join(root, "fixtures", "basic", f), join(takeDir, f));
+    cpSync(join(root, opts.source ?? "fixtures/basic", f), join(takeDir, f));
   }
   return { dir, takeDir };
 }

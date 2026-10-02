@@ -124,6 +124,7 @@ try {
   // alone cannot catch it (STC-326/330's `frame.width` bug — found only by
   // watching a real take, not by this gate, until this check existed).
   console.log(`zoom: ${r.zoomFrames} sampled frame(s) meaningfully zoomed`);
+  console.log(`keycast: ${r.keycastFrames} of ${r.samples} sampled frames have one`);
   if (r.zoomFrames > 0) {
     if (r.zoomBlindMismatches > 0) {
       fail(`${r.zoomBlindMismatches} of ${r.zoomFrames} zoomed frames are byte-identical with the ` +

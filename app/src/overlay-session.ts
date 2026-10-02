@@ -303,7 +303,7 @@ export interface OpenOptions {
    * defaults each to its "off"/"none" value.
    */
   initialOptions?: Pick<OptionsState, "micDeviceUid" | "camera" | "mics">
-    & Partial<Pick<OptionsState, "systemAudio" | "cameraDeviceUid" | "cameras" | "showClicks">>;
+    & Partial<Pick<OptionsState, "systemAudio" | "keys" | "cameraDeviceUid" | "cameras" | "showClicks">>;
 }
 
 /**
@@ -368,6 +368,7 @@ class OverlaySession {
       micDeviceUid: opts.initialOptions?.micDeviceUid ?? null,
       camera: opts.initialOptions?.camera ?? false,
       systemAudio: opts.initialOptions?.systemAudio ?? false,
+      keys: opts.initialOptions?.keys ?? false,
       cameraDeviceUid: opts.initialOptions?.cameraDeviceUid ?? null,
       mics: opts.initialOptions?.mics ?? [],
       cameras: opts.initialOptions?.cameras ?? [],
@@ -665,13 +666,18 @@ class OverlaySession {
       case "camera":
         this.options = { ...this.options, openMenu: toggleMenu(this.options.openMenu, "camera") };
         return this.broadcast();
+      case "keys":
+        // STC-419: a plain toggle. A real press while a menu is open never
+        // reaches here: `barPress` swallows it and only the menu closes.
+        // `openMenu: null` is for a synthetic `control` event, which skips
+        // barPress and must not leave a menu hanging open.
+        this.options = { ...this.options, keys: !this.options.keys, openMenu: null };
+        return this.broadcast();
       case "clicks":
         // A plain toggle (STC-420). Closes an open menu like any other press
         // on the bar that is not a menu trigger.
         this.options = { ...this.options, showClicks: !this.options.showClicks, openMenu: null };
         return this.broadcast();
-      case "keys":
-        return;   // a disabled slot, STC-419
       case "record": {
         // FINDING 1 (STC-388 review, CRITICAL). `pending` used to be commit-
         // time truth unconditionally, but region mode's `reduce` (selection.ts)

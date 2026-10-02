@@ -23,6 +23,12 @@ describe("session schemas validate the fixture", () => {
     expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
   });
 
+  test("fixtures/keycast's events.json conforms to events-3 (STC-419)", () => {
+    const validate = compile("schema/events-3.schema.json");
+    const ok = validate(load("fixtures/keycast/events.json"));
+    expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
+  });
+
   test("events.json conforms to events-2 schema (it carries cursor-shape events)", () => {
     const validate = compile("schema/events-2.schema.json");
     const ok = validate(load("fixtures/basic/events.json"));

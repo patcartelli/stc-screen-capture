@@ -115,6 +115,9 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
     const blindHash = new Map<number, string>();
     let pipFrames = 0;
     let pipDrawnFrames = 0;
+    // STC-419: how many sampled frames carry a keycast, so a keycast fixture
+    // whose samples all miss the pill reads as such rather than as covered.
+    let keycastFrames = 0;
 
     // The same trap the PiP-blind check exists for, one layer over: two sinks
     // that both fail to draw a crop (STC-326/330's compositor bug — a raw
@@ -143,6 +146,7 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       blindHash.set(k, await hashCanvas(blindCtx, width, height));
       if (fs.pip) pipFrames++;
       if (fs.pip && cam) pipDrawnFrames++;
+      if (fs.keycast) keycastFrames++;
 
       if (fs.zoom.amount > ZOOM_BLIND_THRESHOLD) {
         composite(zoomBlindCtx, frame, cam, { ...fs, zoom: zoomFullFrame }, width, height);
@@ -193,6 +197,7 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       cameraPresent: !!session.cameraVideo,
       pipFrames, pipDrawnFrames, pipBlindMismatches,
       zoomFrames: zoomBlindHash.size, zoomBlindMismatches,
+      keycastFrames,
     };
   } catch (e: any) {
     return { fatal: String(e?.stack ?? e) };

@@ -136,6 +136,8 @@ export interface RecordFlowOptions {
    * Ignored with `windowAt` — expand only makes sense for a display take.
    */
   fullDisplay?: boolean;
+  /** Press the bar's Keys control once before Record (STC-419). */
+  keys?: boolean;
   /**
    * With `windowAt`: press `expand` AFTER the window is picked, rather than
    * skipping it (task 9, STC-388). `overlay-session.ts`'s `onControl("expand")`
@@ -202,5 +204,6 @@ export async function startRecordFlow(
   await awaitOptionsBar(overlay, ms);
   if (opts.fullDisplay && !opts.windowAt) await send(overlay, { t: "control", id: "expand" });
   if (opts.expandAfterWindow && opts.windowAt) await send(overlay, { t: "control", id: "expand" });
+  if (opts.keys) await send(overlay, { t: "control", id: "keys" });
   await send(overlay, { t: "control", id: "record" });
 }

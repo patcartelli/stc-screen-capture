@@ -94,6 +94,37 @@ describe("loadSession", () => {
     });
     expect(s.events.map((e) => e.t)).toEqual([100, 500]);
   });
+
+  test("events-3: key events are split into session.keys, sorted, and kept OUT of session.events", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors(),
+      events: { version: 3, events: [
+        { t: 9, kind: "key", key: "Tab", mods: [] },
+        { t: 0, kind: "move", x: 1, y: 2 },
+        { t: 3, kind: "key", key: "K", mods: ["cmd"] },
+      ] } as any,
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    });
+    expect(s.events.map((e) => e.kind)).toEqual(["move"]);
+    expect(s.keys?.map((k) => k.key)).toEqual(["K", "Tab"]);
+  });
+
+  test("events-3: a key event that is typing refuses the session, naming the index", async () => {
+    await expect(loadSession({
+      anchors: offsetAnchors(),
+      events: { version: 3, events: [{ t: 0, kind: "move", x: 1, y: 2 }, { t: 3, kind: "key", key: "A", mods: [] }] } as any,
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).rejects.toThrow(/key event 1/);
+  });
+
+  test("a v2 take has no keys field at all", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors(),
+      events: { version: 2, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    });
+    expect(s.keys).toBeUndefined();
+  });
 });
 
 describe("loader accepts v1 through v7 anchors", () => {
@@ -320,12 +351,12 @@ describe("loader accepts v1 through v7 anchors", () => {
     expect(s.events.length).toBe(2);
   });
 
-  test("a version 3 events document is rejected by name", async () => {
+  test("a version 4 events document is rejected by name", async () => {
     await expect(loadSession({
       anchors: offsetAnchors(),
-      events: { version: 3, events: [] } as any,
+      events: { version: 4, events: [] } as any,
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/events\.json version 3 is not supported/);
+    })).rejects.toThrow(/events\.json version 4 is not supported/);
   });
 
   // "a version 2 anchors document loads" above already covers a v2 anchors
