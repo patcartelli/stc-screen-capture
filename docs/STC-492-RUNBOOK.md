@@ -17,7 +17,7 @@ Placement is a judgement, not a measurement: it follows the Keys switch (STC-419
 - `transform/test/show-clicks-render.test.ts` — 3/3: absent is on, the switch flips what the compositor is handed both ways, nothing else in the frame changes.
 - `npm run typecheck` — all three passes.
 
-**Not run:** `app/test/show-clicks-editor.e2e.test.ts` (toggles both ways, checks `project.json`). Run it in the VM first (`docs/VM-TESTING.md`), not on this machine.
+- `app/test/show-clicks-editor.e2e.test.ts` — 1/1, run on the HOST (2026-10-02), not in the VM: the VM harness launches the packaged app and has no vitest/Playwright in the guest. It toggles both ways and checks `project.json`.
 
 ## 1. Does the control read clearly (the eye-check the ticket asks for)
 
