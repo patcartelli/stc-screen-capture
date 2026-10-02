@@ -173,6 +173,10 @@ check("a window with an occluder that misses it entirely is unaffected",
 check("a sliver poking out from under an occluder is not enough to count as fully visible",
       isFullyVisible(full, displays: [d0],
                      occluders: [StillRect(x: 100, y: 100, width: 395, height: 300)]), false)
+check("STC-481: a window 30% under another is still selectable",
+      isFullyVisible(full, displays: [d0], occluders: [StillRect(x: 100, y: 100, width: 120, height: 300)]), true)
+check("STC-481: a window 60% under another is not",
+      isFullyVisible(full, displays: [d0], occluders: [StillRect(x: 100, y: 100, width: 240, height: 300)]), false)
 check("a window behind is not consulted (occluders here empty on purpose)",
       isFullyVisible(full, displays: [d0], occluders: []), true)
 check("remainingFraction of an empty rect is 0, not NaN",
@@ -247,6 +251,13 @@ check("(d) an opaque window frame is selected-area, which parseShot accepts",
 check("(d) an empty title is omitted, not written empty",
       (d["window"] as? [String: Any])?["title"] == nil, true)
 emit("window-opaque", d)
+
+// ── z-order (STC-481) ───────────────────────────────────────────────────────
+// SCK listed Linear first though CG had it near the back; CG's order must win.
+check("frontToBack: CG rank overrides input order",
+      frontToBack([128, 119956, 118223], zRank: [118223: 0, 119956: 1, 128: 2]), [118223, 119956, 128])
+check("frontToBack: unranked ids go behind ranked ones, keeping input order",
+      frontToBack([5, 6, 7], zRank: [7: 0]), [7, 5, 6])
 
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
 exit(failures == 0 ? 0 : 1)

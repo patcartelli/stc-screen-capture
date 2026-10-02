@@ -368,12 +368,23 @@ enum WindowList {
             // front-to-back order — a window's occluders (STC-380) are exactly
             // the ones that sorted ahead of it in THIS list, not in
             // `content.windows`, which still carries the other layers.
-            let visible = content.windows.filter { $0.windowLayer == 0 && $0.frame.width > 0 && $0.frame.height > 0 }
+            // STC-481: SCK's array is not z-ordered; CoreGraphics' on-screen list is.
+            var zRank: [Int: Int] = [:]
+            var invisible = Set<Int>()   // alpha ~0: draws nothing, covers nothing
+            let cg = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+            for (rank, info) in cg.enumerated() {
+                guard let n = info[kCGWindowNumber as String] as? Int else { continue }
+                zRank[n] = rank
+                if let a = info[kCGWindowAlpha as String] as? Double, a < 0.01 { invisible.insert(n) }
+            }
+            let filtered = content.windows.filter { $0.windowLayer == 0 && $0.frame.width > 0 && $0.frame.height > 0 }
+            let byID = Dictionary(filtered.map { (Int($0.windowID), $0) }, uniquingKeysWith: { a, _ in a })
+            let visible = frontToBack(filtered.map { Int($0.windowID) }, zRank: zRank).compactMap { byID[$0] }
             var out: [[String: Any]] = []
             for (i, w) in visible.enumerated() {
                 let frame = StillRect(w.frame)
                 let mid = CGPoint(x: w.frame.midX, y: w.frame.midY)
-                let occluders = visible[..<i].map { StillRect($0.frame) }
+                let occluders = visible[..<i].filter { !invisible.contains(Int($0.windowID)) }.map { StillRect($0.frame) }
                 var o: [String: Any] = [
                     "id": Int(w.windowID),
                     "x": Double(w.frame.minX), "y": Double(w.frame.minY),
