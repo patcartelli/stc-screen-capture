@@ -291,6 +291,7 @@ export function gateFloorMs(script) {
     // One goto, one readiness wait, one evaluate. No reload, so no GC-retry
     // loop to re-enter the readiness wait.
     case "still-gate.mjs":    return launchAndTeardown + READY_MS + STILL_MS;
+    case "framing-gate.mjs":  return launchAndTeardown + READY_MS + STILL_MS;
     default: throw new Error(`no floor declared for scripts/${script}`);
   }
 }
@@ -321,6 +322,8 @@ export const GATE_PROCESS_MS = {
   // smallest value its floor allows, because a fifth gate's budget comes
   // straight out of the job's clearance against the cap.
   "still-gate.mjs": 220_000,
+  // STC-396: the still gate's twin — one goto, one readiness wait, one evaluate.
+  "framing-gate.mjs": 220_000,
 };
 
 /** Only the determinism gate is retried; the rest run once. */

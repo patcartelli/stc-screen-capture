@@ -71,7 +71,8 @@ const environment = (m) => {
   trail.dump();
 };
 try {
-  await page.goto("http://localhost:5205/sink-identity.html");
+  const framing = process.env.STC_IDENTITY_FRAMING;
+  await page.goto(`http://localhost:5205/sink-identity.html${framing ? `?framing=${encodeURIComponent(framing)}` : ""}`);
   await page.waitForFunction(() => window.__identityReady === true, { timeout: 60_000 });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__identityReady === true, { timeout: 60_000 });
