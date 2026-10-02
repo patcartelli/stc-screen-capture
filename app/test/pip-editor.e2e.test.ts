@@ -94,4 +94,21 @@ describe("the editor's Camera popover (STC-461)", () => {
     expect(savedPip(takeDir).style.shape).toBe("circle");
     expect(savedPip(takeDir).style.width).not.toBe(0.5);   // the temporary display style never leaked
   }, 120_000);
+
+  test("reframe: leaving the page mid-reframe commits it rather than dropping it", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ pip: true });
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await editorWin.click("#pipbtn");
+    await editorWin.click('[data-pip-preset="circle"]');
+    await expect.poll(() => savedPip(takeDir)?.style?.shape, { timeout: 10_000 }).toBe("circle");
+    await editorWin.click("#pipreframe");
+    await editorWin.fill("#pipzoom", "2");
+    await editorWin.dispatchEvent("#pipzoom", "change");
+    // No Done, no Escape: the page goes away with the reframe still open.
+    await editorWin.reload();
+    await expect.poll(() => savedPip(takeDir)?.style?.framing?.zoom, { timeout: 10_000 }).toBe(2);
+    expect(savedPip(takeDir).style.shape).toBe("circle");
+    expect(savedPip(takeDir).style.width).not.toBe(0.5);   // the temporary display style never leaked
+  }, 120_000);
 });

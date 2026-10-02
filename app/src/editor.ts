@@ -446,10 +446,10 @@ window.addEventListener("resize", () => { if (player) { updateTicks(); renderRul
 async function persistProject(): Promise<void> {
   if (!openProject || !player) return;
   // STC-461: while reframing, the LIVE project carries a temporary display
-  // PiP (the whole camera frame). Nothing is written until Done/Escape puts
-  // the real style back — an edit made meanwhile is saved then, with it.
-  if (reframing) return;
-  const doc = projectForWrite(openProject, player.durationNs);
+  // PiP (the whole camera frame) that must never reach disk. Every other edit
+  // stays usable meanwhile, so the write still happens — of a COPY whose PiP
+  // is the one the reframe would commit right now (reframedProject).
+  const doc = projectForWrite(reframing ? reframedProject(openProject, reframing) : openProject, player.durationNs);
   await editor.writeProject(
     new TextEncoder().encode(JSON.stringify(doc, null, 2)).buffer as ArrayBuffer,
   );
@@ -1541,8 +1541,11 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 
 async function closeTake(): Promise<void> {
   exportAbort?.abort();
-  // STC-461: a take closed (or reloaded) mid-reframe drops it — no write.
-  void exitReframe(false);
+  // STC-461: a take closed mid-reframe COMMITS it — dropping it would lose the
+  // reframe the user can see. exitReframe builds and sends the write
+  // synchronously, before the teardown below clears openProject/player; it is
+  // awaited at the end so the write has landed when closeTake settles.
+  const reframeWrite = exitReframe(true);
   $("framestatus").setAttribute("hidden", "");
   // Not commitDraft()+closeOverrideEditor(): the take (and its project) are
   // going away regardless, and persisting a draft against a project about to
@@ -1577,6 +1580,7 @@ async function closeTake(): Promise<void> {
   updatePipButton();
   applyStageDisplay();
   await editor.closePreview();
+  await reframeWrite.catch((e: any) => alertUser(String(e?.message ?? e)));
 }
 
 // ---- the header row's transport (STC-444) -----------------------------
@@ -1949,7 +1953,9 @@ window.addEventListener("resize", () => {
 // and dims the rest (#pipframewindow is the surface STC-497's guides draw
 // inside). Drag the window to pan, slider or wheel to zoom; every bound is
 // pip-style.ts's clampFraming. Done or Escape restores the real style with
-// the new framing and persists; persistProject refuses to write meanwhile.
+// the new framing and persists, and so does closing the take. A write made
+// meanwhile (a trim, a level) writes the reframe's committed style, never the
+// temporary display one — persistProject's reframedProject.
 //
 // Mirror: the display style keeps the real `mirror`, so the picture under the
 // window is the one the viewer sees. framingSource is in UNMIRRORED camera px,
@@ -1996,7 +2002,7 @@ function enterReframe(): void {
   if (!real) return;
   reframing = { real, before: openProject.pip.style };
   pipPanel.hidePopover?.();
-  openProject.pip.style = displayStyleFor(real); // LIVE project only — persistProject refuses meanwhile
+  openProject.pip.style = displayStyleFor(real); // LIVE project only — persistProject writes reframedProject meanwhile
   $("pipoverlay").hidden = true;
   $("pipframing").hidden = false;
   $("pipframebar").hidden = false;
@@ -2006,10 +2012,11 @@ function enterReframe(): void {
 
 /**
  * Leave reframe. `commit` puts the real style back WITH the new framing and
- * persists (Done, Escape, the Camera button, and every output entry point —
- * export, publish, a frame grab — before it reads the live project); the
- * returned promise settles when that write has. Not committing (the take
- * closing) restores the live project as it was and writes nothing.
+ * persists (Done, Escape, the Camera button, closing the take or the window,
+ * and every output entry point — export, publish, a frame grab — before it
+ * reads the live project); the returned promise settles when that write has.
+ * Not committing restores the live project as it was and writes nothing — no
+ * caller does that today; a reframe the user can see is never thrown away.
  * Synchronous up to the write: the live project is real again on return.
  */
 function exitReframe(commit: boolean): Promise<void> {
@@ -2021,16 +2028,35 @@ function exitReframe(commit: boolean): Promise<void> {
   $("pipframebar").hidden = true;
   if (!openProject?.pip) return Promise.resolve();
   if (!commit) { openProject.pip.style = before; return Promise.resolve(); }
-  // A take still on the fixed corner, left untouched, stays on it (and at its
-  // own project version) rather than being rewritten as an explicit style.
-  if (before === undefined && real.framing === undefined) {
+  const committed = committedReframeStyle({ real, before });
+  if (committed === undefined) {
     openProject.pip.style = undefined;
     updatePipButton();
     if (player) void player.seek(player.currentNs);
   } else {
-    setPipStyle(real, false);
+    setPipStyle(committed, false);
   }
   return persistProject();
+}
+
+/**
+ * The style a reframe commits to — the ONE rule exitReframe and persistProject
+ * share. A take still on the fixed corner whose framing was never touched stays
+ * on it (and at its own project version) rather than being rewritten as an
+ * explicit style: undefined. Otherwise the real style, with the framing as it
+ * stands right now.
+ */
+function committedReframeStyle(r: { real: PipStyle; before: PipStyle | undefined }): PipStyle | undefined {
+  return r.before === undefined && r.real.framing === undefined ? undefined : r.real;
+}
+
+/** A copy of the live project with the reframe's committed PiP in place of the
+ *  temporary display one — what persistProject writes mid-reframe. */
+function reframedProject(p: Project, r: { real: PipStyle; before: PipStyle | undefined }): Project {
+  if (!p.pip) return p;
+  const { style: _display, ...pip } = p.pip;
+  const style = committedReframeStyle(r);
+  return { ...p, pip: style === undefined ? pip : { ...pip, style } };
 }
 
 /** Fire-and-report form, for the UI's own ways out of reframe. */
@@ -2948,7 +2974,14 @@ document.addEventListener("keydown", (e) => {
 
 // ---- boot -------------------------------------------------------------
 
-window.addEventListener("beforeunload", () => { void editor.closePreview(); });
+// STC-461: the editor reloads its renderer per take, so closing the window or
+// opening another take mid-reframe never reaches closeTake. Commit here too:
+// exitReframe sends the write synchronously (the IPC message is out before the
+// page goes), so the reframe the user can see is not silently dropped.
+window.addEventListener("beforeunload", () => {
+  void exitReframe(true).catch(() => { /* the page is going; nowhere to report */ });
+  void editor.closePreview();
+});
 
 // STC-399: set once, not re-derived per render — the model code and version
 // do not change while the window is open.
