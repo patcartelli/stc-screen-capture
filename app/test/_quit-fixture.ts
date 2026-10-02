@@ -1,6 +1,22 @@
 import type { ElectronApplication } from "playwright";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { DEFAULT_REQUEST_TIMEOUT_MS, QUIT_GRACE_MS } from "../src/helper-client.js";
+import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { CLOSE_SAMPLE_MS, E2E_DIAG_DIR_ENV, sampleProcess } from "./_e2e-diagnostics.js";
+
+/**
+ * `sample` a process `closeApp` is about to kill, into the e2e diagnostics
+ * dir (STC-496). Returns the file, or undefined when there is no dir (the
+ * unit project, whose stub apps carry made-up pids), no pid, or no sample.
+ */
+async function sampleBeforeKill(pid: number | undefined): Promise<string | undefined> {
+  const dir = process.env[E2E_DIAG_DIR_ENV];
+  if (!dir || pid === undefined) return undefined;
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `close-gave-up-${pid}-${Date.now()}.txt`);
+  return (await sampleProcess(pid, file, CLOSE_SAMPLE_MS)) ? file : undefined;
+}
 
 /**
  * Answer the before-quit "unsaved takes" dialog (STC-392), so `app.close()`
@@ -119,8 +135,12 @@ export async function closeApp(app: ElectronApplication | undefined, hookBoundMs
   proc.stderr?.off("data", onData);
   const ms = Date.now() - t0;
   if (!closed) {
+    // STC-496: what the stuck main process was doing, taken BEFORE the kill
+    // destroys it. Inside the give-up margin, and only on the e2e project.
+    const sampled = await sampleBeforeKill(proc.pid);
     proc.kill("SIGKILL");
-    throw new Error(`app.close() did not finish within ${giveUpMs}ms, so pid ${proc.pid} was killed; ${seen()}`);
+    throw new Error(`app.close() did not finish within ${giveUpMs}ms, so pid ${proc.pid} was killed; ${seen()}`
+      + (sampled ? `; its stacks are in ${sampled}` : ""));
   }
   if (ms > SLOW_CLOSE_MS) {
     process.stderr.write(`[closeApp] app.close() took ${ms}ms (pid ${proc.pid}); ${seen()}\n`);

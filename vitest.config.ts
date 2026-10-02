@@ -1,5 +1,8 @@
 import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SCREENCAPTUREKIT_FILES } from "./vitest.screencapturekit-files.js";
 
 /**
@@ -22,6 +25,20 @@ import { SCREENCAPTUREKIT_FILES } from "./vitest.screencapturekit-files.js";
  * cost minutes for nothing.
  */
 const EXCLUDE = ["**/node_modules/**", "**/*.grant.test.ts", "**/*.slow.test.ts"];
+
+/**
+ * Where an e2e hang's diagnostics go (STC-496, app/test/_e2e-diagnostics.ts).
+ * CI names it with STC_E2E_DIAG_OUT so it can upload the folder; anywhere else
+ * it is a fresh temp dir per run. It also holds the run's hang-streak counter,
+ * so a folder handed in by STC_E2E_DIAG_OUT must start empty — a fresh CI
+ * workspace always does.
+ *
+ * It reaches the workers as STC_E2E_DIAG_DIR through each project's `env`,
+ * set for the e2e project and explicitly EMPTY for the unit project: the unit
+ * tests drive `closeApp` against stub apps with made-up pids, and a set dir
+ * would have it `sample` whatever real process owns that pid.
+ */
+const E2E_DIAG_DIR = process.env.STC_E2E_DIAG_OUT || mkdtempSync(join(tmpdir(), "stc-e2e-diag-"));
 
 /**
  * The same "@transform" alias harness/vite.config.ts serves the browser and
@@ -53,6 +70,7 @@ export default defineConfig({
           include: ["transform/test/**/*.test.ts", "helper/test/**/*.test.ts", "app/test/**/*.test.ts"],
           exclude: [...EXCLUDE, "**/*.e2e.test.ts", ...SCREENCAPTUREKIT_FILES],
           testTimeout: 15_000,
+          env: { STC_E2E_DIAG_DIR: "" },
         },
       },
       {
@@ -80,6 +98,10 @@ export default defineConfig({
           exclude: EXCLUDE,
           fileParallelism: false,
           testTimeout: 15_000,
+          // A hang's diagnostics, and skipping the rest once hangs cascade
+          // (STC-496).
+          setupFiles: ["./app/test/_e2e-setup.ts"],
+          env: { STC_E2E_DIAG_DIR: E2E_DIAG_DIR },
         },
       },
     ],
