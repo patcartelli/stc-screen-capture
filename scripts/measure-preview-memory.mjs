@@ -11,7 +11,24 @@
  * heap growth". A metric that cannot see the thing being measured produces
  * confident numbers about nothing.
  *
- * Usage: node scripts/measure-preview-memory.mjs <takeDir>
+ * GC before every sample that matters (STC-469). The steady-state "after" read
+ * used to land in the same tick the raw mic was dropped, before anything had
+ * collected it, so a real saving read as ~0. Electron is launched with
+ * `--js-flags=--expose-gc`, which Chromium forwards to renderer processes, so
+ * the editor page normally has a global `gc()`: `settle()` calls it, waits
+ * 1 s, and calls it again. If `gc` is NOT there (a different Electron, a
+ * flag that stopped propagating), `settle()` falls back to polling renderer
+ * RSS every 500 ms until three consecutive reads sit within 2 MB of each
+ * other. It prints which one it used — a number taken without either is not
+ * comparable to one taken with them.
+ *
+ * Runs against master too, by copying this file into a master worktree:
+ * `--cleanup` uses the `__stcPreviewAudio` hook where it exists and falls back
+ * to the `#previewaudio[data-cleaning]` indicator where it does not.
+ * `--export` needs `__stcExportForTest` and so is this branch only; its
+ * reuse=false run IS master's export behaviour (decode everything again).
+ *
+ * Usage: node scripts/measure-preview-memory.mjs <takeDir> [--cleanup] [--export]
  */
 import { _electron as electron } from "playwright";
 import { execFileSync } from "node:child_process";
@@ -22,7 +39,7 @@ import { join, basename } from "node:path";
 const root = join(import.meta.dirname, "..");
 const src = process.argv[2];
 if (!src || !existsSync(join(src, "anchors.json"))) {
-  console.error("usage: node scripts/measure-preview-memory.mjs <takeDir>");
+  console.error("usage: node scripts/measure-preview-memory.mjs <takeDir> [--cleanup] [--export]");
   process.exit(2);
 }
 
@@ -33,7 +50,7 @@ function stage(withCamera) {
   const dir = mkdtempSync(join(tmpdir(), "stc-mem-"));
   const takeDir = join(dir, basename(src));
   mkdirSync(takeDir, { recursive: true });
-  const files = ["anchors.json", "events.json", "display.mp4", "project.json"];
+  const files = ["anchors.json", "events.json", "display.mp4", "project.json", "mic.m4a", "system.m4a"];
   if (withCamera) files.push("camera.mp4");
   for (const f of files) {
     if (existsSync(join(src, f))) cpSync(join(src, f), join(takeDir, f));
@@ -64,11 +81,46 @@ async function rendererRss(app) {
   return renderers.reduce((n, m) => n + (m.memory?.workingSetSize ?? 0) * 1024, 0);
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Let the renderer drop what it no longer references before a sample: a
+ * forced GC when the page has `gc()`, otherwise wait for RSS to stop moving.
+ * Returns how it settled, for the printout.
+ */
+async function settle(app, page) {
+  const hasGc = await page.evaluate(() => typeof globalThis.gc === "function");
+  if (hasGc) {
+    await page.evaluate(() => globalThis.gc());
+    await sleep(1000);
+    await page.evaluate(() => globalThis.gc());
+    return "gc";
+  }
+  const reads = [await rendererRss(app)];
+  for (let i = 0; i < 120; i++) {
+    await sleep(500);
+    reads.push(await rendererRss(app));
+    const last3 = reads.slice(-3);
+    if (last3.length === 3 && Math.max(...last3) - Math.min(...last3) <= 2e6) return "rss-stable";
+  }
+  return "rss-unstable (60 s)";
+}
+
 async function measure(withCamera) {
   const { dir, bytes } = stage(withCamera);
+  // A throwaway profile, exactly as app/test/_editor-fixture.ts launches the
+  // app: since STC-412 a real profile's `saveFolder` OVERRIDES
+  // STC_RECORDINGS_DIR, so without this the run opens the first take in the
+  // user's real library — and toggling cleanup would write its project.json.
+  const userData = mkdtempSync(join(tmpdir(), "stc-mem-ud-"));
+  writeFileSync(join(userData, "settings.json"), JSON.stringify({ saveFolder: null }));
   const app = await electron.launch({
-    args: [root], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: dir },
+    args: ["--js-flags=--expose-gc", root, `--user-data-dir=${userData}`], cwd: root,
+    env: {
+      ...process.env, STC_RECORDINGS_DIR: dir,
+      // Same isolation as the fixture: never the real temp-takes folder.
+      STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-mem-temp-")),
+    },
   });
   try {
     const win = await app.firstWindow();
@@ -97,12 +149,73 @@ async function measure(withCamera) {
     await editorWin.waitForFunction(() => {
       const c = document.getElementById("stage");
       if (!c) return false;
-      const d = c.getContext("2d").getImageData(0, 0, 32, 32).data;
+      // The CENTRE, not the corner: a corner can be legitimately dark (a
+      // dark menu bar, a letterbox) and then this waits forever.
+      const d = c.getContext("2d").getImageData((c.width >> 1) - 16, (c.height >> 1) - 16, 32, 32).data;
       for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 24) return true;
       return false;
-    }, { timeout: 60_000 });
+    // `null` is the page-function ARG: options are the third parameter. Passed
+    // second, the timeout was silently Playwright's 30 s default — too short
+    // once a long take's audio has to be read and demuxed first (STC-469).
+    }, null, { timeout: 180_000 });
 
+    // STC-469: the audio is part of what the preview holds. Wait for it to
+    // decode, turn cleanup on if asked, and wait for the cleaned mic to play.
+    await editorWin.waitForFunction(() => {
+      const s = document.getElementById("previewaudio")?.dataset.state;
+      return s && s !== "loading";
+    }, null, { timeout: 600_000 });
+    if (process.argv.includes("--cleanup")) {
+      const state = await editorWin.getAttribute("#previewaudio", "data-state");
+      if (state !== "ready") {
+        throw new Error(`--cleanup needs a take whose preview audio is "ready"; #previewaudio is "${state}"`);
+      }
+      const hasHook = await editorWin.evaluate(() => typeof (window).__stcPreviewAudio === "function");
+      if (!hasHook) {
+        // master: no hook. The indicator goes "true" when cleaning starts and
+        // "false" when the cleaned mic lands; observe from BEFORE the click so
+        // a fast clean cannot flip both ways unseen.
+        await editorWin.evaluate(() => {
+          const b = document.getElementById("previewaudio");
+          new MutationObserver(() => { if (b.dataset.cleaning === "true") (window).__memSawCleaning = true; })
+            .observe(b, { attributes: true, attributeFilter: ["data-cleaning"] });
+        });
+      }
+      await editorWin.click("#audiobtn");
+      await editorWin.locator("#voicecleanon").check();
+      await editorWin.keyboard.press("Escape");
+      if (hasHook) {
+        await editorWin.waitForFunction(() => (window).__stcPreviewAudio().playing === "cleaned", null, { timeout: 600_000 });
+      } else {
+        await editorWin.waitForFunction(
+          () => (window).__memSawCleaning === true && document.getElementById("previewaudio").dataset.cleaning === "false",
+          null, { timeout: 600_000 });
+      }
+    }
+
+    const settledBy = await settle(app, editorWin);
     const after = await rendererRss(app);
+    console.log(`  steady state settled by: ${settledBy}`);
+    if (process.argv.includes("--export")) {
+      for (const reuse of [false, true]) {
+        await settle(app, editorWin);
+        const start = await rendererRss(app);
+        let peak = start;
+        let inFlight = Promise.resolve();
+        const timer = setInterval(() => {
+          inFlight = inFlight.then(async () => { peak = Math.max(peak, await rendererRss(app)); });
+        }, 250);
+        try {
+          await editorWin.evaluate((reuse) => (window).__stcExportForTest({ reuse }), reuse);
+        } finally {
+          clearInterval(timer);
+          await inFlight;
+        }
+        const end = await rendererRss(app);
+        peak = Math.max(peak, end);
+        console.log(`  export (reuse=${reuse}): renderer RSS ${mb(start)} MB before, peak ${mb(peak)} MB (+${mb(peak - start)}), ${mb(end)} MB after`);
+      }
+    }
     return { bytes, before, after, growth: after - before };
   } finally {
     await app.close().catch(() => {});

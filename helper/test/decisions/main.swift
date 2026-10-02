@@ -416,5 +416,21 @@ check("the same number in another domain is not it",
 check("no error at all is not it",
       runtimeErrorIsDeviceDisconnect(domain: nil, code: nil), false)
 
+// ── STC-419: keys is off unless literally true ──────────────────────────────
+func parsedKeys(_ cmd: [String: Any]) -> String {
+    switch parseStartRequest(cmd) {
+    case .success(let r): return "ok:keys=\(r.keys)"
+    case .failure(let e): return "err:\(e.code)"
+    }
+}
+check("keys defaults off", parsedKeys(["cmd": "start", "dir": "/tmp/x"]), "ok:keys=false")
+check("keys true", parsedKeys(["cmd": "start", "dir": "/tmp/x", "keys": true]), "ok:keys=true")
+check("keys non-bool is off", parsedKeys(["cmd": "start", "dir": "/tmp/x", "keys": "yes"]), "ok:keys=false")
+if case .success(let r) = parseStartRequest(["cmd": "start", "dir": "/tmp/x", "keys": true]) {
+    check("a refit copy keeps keys", StartRequest(copying: r, displayId: 7).keys, true)
+} else {
+    check("a refit copy keeps keys (parse)", false, true)
+}
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
 exit(failures == 0 ? 0 : 1)

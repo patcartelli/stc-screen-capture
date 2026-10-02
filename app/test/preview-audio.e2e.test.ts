@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach } from "vitest";
 import type { ElectronApplication, Page } from "playwright";
 import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
-import { makeTakeFolder, makeMicTakeFolder } from "./_take-fixture.js";
+import { makeTakeFolder, makeMicTakeFolder, makeAudibleMicAndSystemTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,15 +18,18 @@ import { join } from "node:path";
  *   picture (the fixture's mic.m4a is a valid AAC container over
  *   placeholder bytes — Linux has no AAC encoder to make a real one);
  * - mute is an app setting: it survives a restart and is never a take edit;
- * - the cleanup worker loads under the editor's CSP and cleans a track sent
- *   to it — bundling, `worker-src`, and the message shape, end to end.
+ * - the cleanup worker loads under the editor's CSP, decodes the compressed
+ *   mic it is sent, cleans it and answers — bundling, `worker-src`, and the
+ *   message shape, end to end.
  */
 let app: ElectronApplication | undefined;
+let mainWin: Page | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 async function openEditor(dir: string, userData?: string): Promise<Page> {
   const launched = await launchApp(dir, {}, { userData });
   app = launched.app;
+  mainWin = launched.win;
   const editorWin = await openEditorFromLibrary(app, launched.win);
   await editorWin.waitForSelector("#stage", { timeout: 20_000 });
   await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/\d/);
@@ -44,7 +47,7 @@ describe("preview sound", () => {
   }, 120_000);
 
   test("with sound ready, 1x plays on the AUDIO clock and 2x falls back to the wall clock", async () => {
-    // The fixture's placeholder AAC frames decode (to near-silence) in
+    // The fixture's placeholder AAC frames decode (to exact silence) in
     // Chromium, so the whole path runs here: decode, PreviewAudio, the
     // AudioContext, and the player following its clock.
     const { dir } = makeMicTakeFolder();
@@ -121,46 +124,108 @@ describe("preview sound", () => {
     await expect.poll(() => win.getAttribute("#previewaudio", "aria-pressed")).toBe(start);
   }, 120_000);
 
-  test("the cleanup worker loads under the editor's CSP and cleans what it is sent", async () => {
-    const { dir } = makeTakeFolder();
+  test("the cleanup worker loads under the editor's CSP, decodes the compressed mic, and cleans it", async () => {
+    // The AUDIBLE fixture (tone over hiss, with pauses): the placeholder one
+    // decodes to exact zeros, which every strength leaves as exact zeros.
+    const { dir } = makeAudibleMicAndSystemTakeFolder();
     const win = await openEditor(dir);
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
     const result = await win.evaluate(async () => {
-      const rate = 48_000, n = rate;
-      let seed = 7;
-      const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32) * 2 - 1;
-      // Half a second of tone, half a second of pause, all over hiss.
-      const x = Float32Array.from({ length: n }, (_, i) =>
-        (i < n / 2 ? 0.1 * Math.sin((2 * Math.PI * 200 * i) / rate) : 0) + rnd() * 0.005);
-      const sentLength = x.length;
-      const pause = (a: Float32Array) => {
-        let e = 0;
-        for (let i = Math.floor(n * 0.7); i < Math.floor(n * 0.95); i++) e += a[i]! * a[i]!;
-        return e;
-      };
-      // Measured BEFORE the post: transferring the buffer empties `x`.
-      const pauseBefore = pause(x);
+      const hook = (window as any).__stcPreviewAudio();
+      const audio = hook.micAudio;
       const w = new Worker("../dist/narration-worker.js");
-      const reply = await new Promise<any>((resolve, reject) => {
+      const ask = (id: number, strength: number) => new Promise<any>((resolve, reject) => {
         const t = setTimeout(() => reject(new Error("worker did not answer in 20 s")), 20_000);
         w.onmessage = (e) => { clearTimeout(t); resolve(e.data); };
         w.onerror = (e) => { clearTimeout(t); reject(new Error(`worker error: ${e.message}`)); };
-        w.postMessage({ id: 1, strength: 0.5, track: { startNs: 5, sampleRate: rate, channels: [x] } }, [x.buffer]);
+        w.postMessage({ id, strength, audio });
       });
+      // Strength 0 is narration-clean.ts's exact identity: the raw decode,
+      // through the same worker, is the control for the cleaning effect.
+      const reply = await ask(1, 0.5);
+      const ident = await ask(2, 0);
       w.terminate();
       const out: Float32Array = reply.track.channels[0];
+      const raw: Float32Array = ident.track.channels[0];
+      let diff = 0, rawPeak = 0;
+      for (let i = 0; i < Math.min(out.length, raw.length); i++) {
+        diff = Math.max(diff, Math.abs(out[i]! - raw[i]!));
+        rawPeak = Math.max(rawPeak, Math.abs(raw[i]!));
+      }
       return {
-        id: reply.id, error: reply.error, startNs: reply.track.startNs,
-        length: out.length, sentLength, finite: out.every(Number.isFinite),
-        // Cleaned: the hiss in the pause drops (by the floor, ~11 dB at 0.5).
-        pauseQuieter: pause(out) < pauseBefore / 4,
+        id: reply.id, error: reply.error, startNs: reply.track.startNs, length: out.length,
+        finite: out.every(Number.isFinite), micStillUsable: hook.micAudio.chunks.length > 0,
+        // The raw mic is playing (cleanup is off by default), so its length
+        // is what the worker's decode must produce.
+        expectedLength: hook.micLength,
+        rawLength: raw.length, diff, rawPeak,
       };
     });
     expect(result.error).toBeUndefined();
     expect(result.id).toBe(1);
-    expect(result.startNs).toBe(5);
-    expect(result.length).toBe(result.sentLength);
     expect(result.finite).toBe(true);
-    expect(result.pauseQuieter).toBe(true);
+    expect(result.length).toBe(result.expectedLength);
+    expect(result.rawLength).toBe(result.expectedLength);
+    // The mic is audible (a 0.2 tone), and cleaning at 0.5 changed it.
+    expect(result.rawPeak).toBeGreaterThan(0.05);
+    expect(result.diff).toBeGreaterThan(1e-3);
+    // Cloned, not transferred: the session keeps its compressed mic.
+    expect(result.micStillUsable).toBe(true);
   }, 120_000);
+
+  const held = (win: Page) => win.evaluate(() => {
+    const h = (window as any).__stcPreviewAudio();
+    return { raw: h.rawMicHeld, playing: h.playing, cleanedFor: h.cleanedFor, cleaning: h.cleaning };
+  });
+  async function setCleanup(win: Page, on: boolean): Promise<void> {
+    await win.click("#audiobtn");
+    const box = win.locator("#voicecleanon");
+    if ((await box.isChecked()) !== on) await box.click();
+    await win.keyboard.press("Escape");
+  }
+
+  test("cleanup on drops the raw mic once the cleaned one plays; off decodes it back", async () => {
+    const { dir } = makeMicTakeFolder();
+    const win = await openEditor(dir);
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
+    expect(await held(win)).toMatchObject({ raw: true, playing: "raw", cleanedFor: null });
+
+    await setCleanup(win, true);
+    await expect.poll(() => held(win), { timeout: 30_000 })
+      .toEqual({ raw: false, playing: "cleaned", cleanedFor: 0.5, cleaning: false });
+
+    await setCleanup(win, false);
+    await expect.poll(() => held(win), { timeout: 30_000 })
+      .toEqual({ raw: true, playing: "raw", cleanedFor: null, cleaning: false });
+  }, 120_000);
+
+  test("rapid toggles settle on the project's state", async () => {
+    const { dir } = makeMicTakeFolder();
+    const win = await openEditor(dir);
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
+    await win.click("#audiobtn");
+    const box = win.locator("#voicecleanon");
+    for (let i = 0; i < 5; i++) await box.click(); // off → on, five times: ends ON
+    await win.keyboard.press("Escape");
+    await expect.poll(() => held(win), { timeout: 30_000 })
+      .toEqual({ raw: false, playing: "cleaned", cleanedFor: 0.5, cleaning: false });
+  }, 120_000);
+
+  test("cleanup off persists across reopen; nothing cleaned survives", async () => {
+    const { dir } = makeMicTakeFolder();
+    let win = await openEditor(dir);
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
+    await setCleanup(win, true);
+    await expect.poll(() => held(win), { timeout: 30_000 }).toMatchObject({ raw: false, playing: "cleaned" });
+    // Off persists on the project; closing the window discards the renderer.
+    await setCleanup(win, false);
+    await win.close();
+    win = await openEditorFromLibrary(app!, mainWin!);
+    await win.waitForSelector("#stage", { timeout: 20_000 });
+    await expect.poll(() => audioState(win), { timeout: 30_000 }).toBe("ready");
+    // Reopened with cleanup OFF (persisted): raw, and nothing cleaned left over.
+    await expect.poll(() => held(win), { timeout: 30_000 })
+      .toEqual({ raw: true, playing: "raw", cleanedFor: null, cleaning: false });
+  }, 180_000);
 });
 

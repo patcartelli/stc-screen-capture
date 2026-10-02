@@ -26,9 +26,10 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  CAPTURE_DOC_FILE, captureDocForWrite, parseCaptureDoc,
+  CAPTURE_DOC_FILE, captureDocForWrite, parseCaptureDoc, salvageCaptureDocId,
 } from "@transform/capture-doc.js";
 import { mintCaptureId } from "@transform/capture-id.js";
+import type { ToastMessage } from "./toast-message.js";
 
 /**
  * Ids handed out for a bundle but not yet on disk (STC-413).
@@ -59,8 +60,55 @@ export async function readBundleId(bundleDir: string): Promise<string | undefine
   }
 }
 
-/** This bundle's id, minting and persisting one the first time it is asked for. */
-export function ensureCaptureId(bundleDir: string): Promise<string> {
+/**
+ * What `ensureCaptureId` did with a `capture.json` it could not read
+ * (STC-436). Only ever reported for a document that EXISTED — a bundle
+ * exported for the first time has no document, and minting for it is the
+ * ordinary path, not a repair.
+ *
+ * - `salvaged`: the id was recovered from the bytes and rewritten cleanly.
+ *   Nothing is lost, so nothing needs the user.
+ * - `reminted`: no single id could be recovered; a fresh one was written.
+ *   A finished file carrying the OLD id now lists as a second tile, and
+ *   that is what the user needs to be told.
+ */
+export type CaptureIdRepair =
+  | { kind: "salvaged"; path: string; id: string }
+  | { kind: "reminted"; path: string; id: string };
+
+/**
+ * The toast for a repair, or undefined when there is nothing to tell. Pure
+ * and here, beside the decision, so the wording is tested with it.
+ */
+export function captureIdRepairNotice(r: CaptureIdRepair): ToastMessage | undefined {
+  if (r.kind === "salvaged") return undefined;
+  return {
+    title: "A take's identity file was damaged",
+    body: "Its capture.json couldn't be read, so it was given a new identity. " +
+          "If this take was exported before, the old export may now show in " +
+          "the library as a separate item.",
+  };
+}
+
+/** The repair, on stderr — always, whether or not a toast follows. */
+function logRepair(r: CaptureIdRepair): void {
+  console.error(r.kind === "salvaged"
+    ? `[capture-identity] ${r.path} could not be parsed; recovered ${r.id} from its bytes and rewrote it.`
+    : `[capture-identity] ${r.path} could not be read and no single id could be recovered; ` +
+      `minted ${r.id}. Any finished file already carrying the old id will list separately.`);
+}
+
+/**
+ * This bundle's id, minting and persisting one the first time it is asked for.
+ *
+ * `onRepair` hears about a corrupt document this call fixed; main passes one
+ * that raises `captureIdRepairNotice` as a toast, since stderr is invisible
+ * in a packaged app. It is NOT called for a first export.
+ */
+export function ensureCaptureId(
+  bundleDir: string,
+  onRepair?: (r: CaptureIdRepair) => void,
+): Promise<string> {
   const existing = claimed.get(bundleDir);
   if (existing) return existing;
 
@@ -73,18 +121,25 @@ export function ensureCaptureId(bundleDir: string): Promise<string> {
     // rather than fatal: refusing to export because a bookkeeping file got
     // mangled would cost the user their take for nothing.
     //
-    // The residual cost is stated rather than hidden, because collapsing the
-    // three readers into one did not remove it: if the document WAS readable
-    // once, a top-level file already carries the old id, and nothing on disk
-    // can now link the two — so that capture will list as two tiles until
-    // one of them is deleted. Announced rather than done silently, since
-    // this is the only branch here that can produce that state.
+    // But replaced with its OWN id wherever the bytes still hold one
+    // (STC-436). If the document was readable once, a top-level file already
+    // carries that id, and a fresh one would strand it — one capture, two
+    // tiles. Salvage lives HERE, in the one writer, and never in
+    // `readBundleId`: a reader that repaired would be a second owner.
+    let repair: CaptureIdRepair["kind"] | undefined;
+    let id: string | undefined;
     if (existsSync(path)) {
-      console.error(`[capture-identity] ${path} could not be read; minting a fresh id. ` +
-                    "Any finished file already carrying the old id will list separately.");
+      try { id = salvageCaptureDocId(await readFile(path)); }
+      catch { /* unreadable at all (permissions, a directory): mint below */ }
+      repair = id ? "salvaged" : "reminted";
     }
-    const id = mintCaptureId();
+    id ??= mintCaptureId();
     await writeFile(path, JSON.stringify(captureDocForWrite(id), null, 2));
+    if (repair) {
+      const r: CaptureIdRepair = { kind: repair, path, id };
+      logRepair(r);
+      onRepair?.(r);
+    }
     return id;
   })().finally(() => { claimed.delete(bundleDir); });
 

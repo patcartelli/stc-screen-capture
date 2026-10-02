@@ -1,0 +1,223 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "stc:events-3",
+  "title": "stc session cursor and key events, v3",
+  "description": "events-2 plus the key event (STC-419). A key event is a COMMAND: a non-printing key (the enum) with any modifiers, or a single printable character under cmd or ctrl. Typing is dropped by the helper and never written; the if/then below makes a document that carries typing INVALID, so the guarantee does not rest on the helper alone. mods are unique, in ctrl/opt/shift/cmd order.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "events"
+  ],
+  "properties": {
+    "version": {
+      "const": 3
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/definitions/moveEvent"
+          },
+          {
+            "$ref": "#/definitions/buttonEvent"
+          },
+          {
+            "$ref": "#/definitions/cursorEvent"
+          },
+          {
+            "$ref": "#/definitions/keyEvent"
+          }
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "moveEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "t",
+        "kind",
+        "x",
+        "y"
+      ],
+      "properties": {
+        "t": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "const": "move"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      }
+    },
+    "buttonEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "t",
+        "kind",
+        "x",
+        "y",
+        "button"
+      ],
+      "properties": {
+        "t": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "enum": [
+            "down",
+            "up"
+          ]
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "button": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "cursorEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "t",
+        "kind",
+        "shape"
+      ],
+      "properties": {
+        "t": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "const": "cursor"
+        },
+        "shape": {
+          "enum": [
+            "arrow",
+            "ibeam",
+            "crosshair",
+            "pointingHand"
+          ],
+          "description": "exactly the set transform/src/cursor-art.ts can draw; cursor-art.test.ts keeps the two equal"
+        }
+      }
+    },
+    "keyEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "t",
+        "kind",
+        "key",
+        "mods"
+      ],
+      "properties": {
+        "t": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "const": "key"
+        },
+        "key": {
+          "anyOf": [
+            {
+              "enum": [
+                "ArrowUp",
+                "ArrowDown",
+                "ArrowLeft",
+                "ArrowRight",
+                "Return",
+                "Enter",
+                "Tab",
+                "Escape",
+                "Delete",
+                "ForwardDelete",
+                "Home",
+                "End",
+                "PageUp",
+                "PageDown",
+                "F1",
+                "F2",
+                "F3",
+                "F4",
+                "F5",
+                "F6",
+                "F7",
+                "F8",
+                "F9",
+                "F10",
+                "F11",
+                "F12"
+              ]
+            },
+            {
+              "type": "string",
+              "pattern": "^[!-`{-~]$"
+            }
+          ]
+        },
+        "mods": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "ctrl",
+              "opt",
+              "shift",
+              "cmd"
+            ]
+          }
+        }
+      },
+      "if": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[!-`{-~]$"
+          }
+        }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "mods": {
+            "type": "array",
+            "anyOf": [
+              {
+                "contains": {
+                  "type": "string",
+                  "const": "cmd"
+                }
+              },
+              {
+                "contains": {
+                  "type": "string",
+                  "const": "ctrl"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

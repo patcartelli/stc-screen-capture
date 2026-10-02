@@ -140,9 +140,9 @@ describe("the controls (STC-456)", () => {
     expect(barContains(padding, l)).toBe(true);
     expect(controlAt(padding, l)).toBeUndefined();
   });
-  test("keys and clicks are always disabled; mic and camera are always enabled (STC-456 review, Finding 1)", () => {
-    expect(controlEnabled("keys")).toBe(false);
-    expect(controlEnabled("clicks")).toBe(false);
+  test("keys (STC-419) and clicks (STC-420) are live; mic and camera are always enabled (STC-456 review, Finding 1)", () => {
+    expect(controlEnabled("keys")).toBe(true);
+    expect(controlEnabled("clicks")).toBe(true);
     // The mic trigger must stay reachable with ZERO mics — its menu holds
     // Include System Audio and Mute External, neither of which needs one.
     expect(controlEnabled("mic")).toBe(true);

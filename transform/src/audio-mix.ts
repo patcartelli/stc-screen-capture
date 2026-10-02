@@ -286,6 +286,33 @@ export function exportAudioPlan(opts: {
 }
 
 /**
+ * STC-469. A track the editor's preview has already decoded, offered to the
+ * export so it is not decoded (and cleaned) a second time. `cleanedAt` is the
+ * narration-cleanup strength it was cleaned at, or null for the raw mic.
+ */
+export interface DecodedMic { track: PcmTrack; cleanedAt: number | null }
+export interface ExportDecoded { system?: PcmTrack | null; mic?: DecodedMic | null }
+
+/**
+ * Is the offered track the one this export plan needs? The ONE place that is
+ * answered. A track is reused only when it is exactly what the export would
+ * have produced itself — same function, same input (decode-audio.ts's
+ * `decodeMicForMix`) — so reuse never changes a sample. Anything else
+ * (null) means: decode it yourself, exactly as before.
+ */
+export function reusableTracks(
+  plan: { mic: boolean; system: boolean; cleanMic: boolean },
+  cleanup: { enabled: boolean; strength: number } | undefined,
+  offered: ExportDecoded | undefined,
+): { mic: PcmTrack | null; system: PcmTrack | null } {
+  const system = plan.system ? offered?.system ?? null : null;
+  const m = plan.mic ? offered?.mic ?? null : null;
+  const wantCleanedAt = plan.cleanMic ? cleanup!.strength : null;
+  const mic = m && m.cleanedAt === wantCleanedAt ? m.track : null;
+  return { mic, system };
+}
+
+/**
  * The MIC level's taper (STC-454 part 2, Patrick 2026-09-25): like the
  * system-audio fader it moves in decibels, but it can BOOST — narration is
  * usually recorded well below the machine's own audio. The slider's

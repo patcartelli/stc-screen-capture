@@ -195,4 +195,21 @@ describe("preview:writeProject refuses a malformed document (STC-465 review)", (
     const written = JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8"));
     expect(written.pip.corner).toBe("bottom-right");
   }, 120_000);
+
+  test("refuses a malformed keycast block (STC-419)", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 14, keycast: { show: "no" } })).toMatch(/keycast/);
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 14, keycast: { show: false, at: "top" } })).toMatch(/keycast/);
+    expect(existsSync(join(takeDir, "project.json"))).toBe(false);
+  }, 120_000);
+
+  test("a project-14 with keycast hidden writes (STC-419)", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    expect(await attemptWrite(editorWin, { ...BASE_GOOD, version: 14, keycast: { show: false } })).toBe("wrote");
+    expect(JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8")).keycast).toEqual({ show: false });
+  }, 120_000);
 });

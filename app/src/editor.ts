@@ -58,14 +58,15 @@ import type { ByteSource } from "@transform/chunk-reader";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
 import {
-  levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack,
+  levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack, type ExportDecoded,
   micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
   nudgeLevelDb, MIC_LEVEL_MAX, MIC_UNITY_PCT,
 } from "@transform/audio-mix";
 import {
   meterStep, meterFill, clipLit, snapToUnity, METER_IDLE, type MeterState,
 } from "@transform/audio-meter";
-import { decodeAllAudio, pcmTrackOf } from "@transform/decode-audio";
+import { decodeMicForMix, decodeSystemForMix } from "@transform/decode-audio";
+import type { DemuxedAudio } from "@transform/demux-audio";
 import { PreviewAudio } from "@transform/preview-audio";
 import { mixPeaks } from "@transform/waveform";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
@@ -1427,6 +1428,36 @@ let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?:
     camera: openVideoSources?.camera?.bytesRead ?? 0,
   });
 
+// STC-469: what the preview is holding, for the e2e suite. Read-only.
+(window as unknown as { __stcPreviewAudio: () => unknown }).__stcPreviewAudio = () => {
+  const playing = previewAudio?.micTrack ?? null;
+  return {
+    micAudio: micSource,
+    rawMicHeld: rawMic !== null,
+    cleanedFor,
+    playing: playing === null ? null : playing === cleanedMic ? "cleaned" : playing === rawMic ? "raw" : null,
+    cleaning: ($("previewaudio") as HTMLButtonElement).dataset.cleaning === "true",
+    micLength: playing?.channels[0]?.length ?? null,
+  };
+};
+
+// STC-469: the export exactly as the editor runs it, with or without the
+// preview's tracks — for the e2e identity check and the memory measurement.
+// Nothing is written; the encoded file is discarded. Unlike the read-only
+// hooks above, this one does REAL work (a whole export's decode and encode),
+// and exists only for the e2e identity check and the memory measurement.
+(window as unknown as { __stcExportForTest: (o: { reuse: boolean }) => Promise<unknown> }).__stcExportForTest =
+  async ({ reuse }) => {
+    if (!openSession || !openProject) throw new Error("no take open");
+    // runExport holds exportAbort for its whole run (cleared in its finally,
+    // even after a cancel), so set means a real export is still in flight.
+    if (exportAbort) throw new Error("a real export is running");
+    const r = await exportSession(openSession, structuredClone(openProject), {
+      audioHash: true, decoded: reuse ? decodedForExport() : undefined,
+    });
+    return { audioHash: r.audioHash, audioReused: r.audioReused };
+  };
+
 async function openTakeOrThrow(dir: string): Promise<void> {
   await closeTake();
   await editor.openPreview(dir);
@@ -1509,6 +1540,8 @@ async function closeTake(): Promise<void> {
   previewAudio?.close();
   previewAudio = null;
   rawMic = null;
+  micSource = null;
+  rawLoading = false;
   cleanedMic = null;
   cleanedFor = null;
   cleanWanted = null;
@@ -1636,6 +1669,7 @@ function updateAudioButton(): void {
   const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);
   $("audiobtn").toggleAttribute("hidden", !has);
   updateWaveformToggle();
+  updateKeycastUI();
   if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
 }
 
@@ -1677,6 +1711,27 @@ function showMute(id: string, row: HTMLElement, muted: boolean, what: string): v
   btn.title = label;
   row.toggleAttribute("data-muted", muted);
 }
+
+// ---- keycast (STC-419) -------------------------------------------------
+// One switch, saved to the project. Hiding is project.keycast.show === false
+// and nothing else: the take's keys stay in events.json.
+function updateKeycastUI(): void {
+  const btn = $("keycastbtn") as HTMLButtonElement;
+  const has = !!openSession?.keys?.length;
+  btn.hidden = !has;
+  const shown = openProject?.keycast?.show !== false;
+  btn.setAttribute("aria-pressed", shown ? "true" : "false");
+  btn.title = shown ? "Hide keystrokes in the preview and export" : "Show keystrokes in the preview and export";
+}
+
+$("keycastbtn").addEventListener("click", () => {
+  if (!openProject || !player) return;
+  const shown = openProject.keycast?.show !== false;
+  openProject.keycast = { show: !shown };
+  updateKeycastUI();
+  void player.seek(player.currentNs);   // repaint this frame with the new choice
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
 
 $("micmute").addEventListener("click", () => {
   if (!openProject) return;
@@ -1914,10 +1969,13 @@ let previewAudio: PreviewAudio | null = null;
 let previewMuted = false;
 let audioGen = 0;
 let rawMic: PcmTrack | null = null;
+/** The take's COMPRESSED mic — what the cleanup worker and a raw re-decode start from (STC-469). Null when there is no playable mic. */
+let micSource: DemuxedAudio | null = null;
 let cleanedMic: PcmTrack | null = null;
 let cleanedFor: number | null = null;
 let cleanWanted: number | null = null;
 let cleanBusy = false;
+let rawLoading = false;
 let cleanSeq = 0;
 let cleanWorker: Worker | null = null;
 
@@ -1953,11 +2011,12 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
   setPreviewAudioState("loading");
   try {
     const [mic, system] = await Promise.all([
-      session.micAudio ? decodeAllAudio(session.micAudio).then((d) => pcmTrackOf(d, "mic.m4a")) : null,
-      session.systemAudio ? decodeAllAudio(session.systemAudio).then((d) => pcmTrackOf(d, "system.m4a")) : null,
+      session.micAudio ? decodeMicForMix(session.micAudio, null) : null,
+      session.systemAudio ? decodeSystemForMix(session.systemAudio) : null,
     ]);
     if (gen !== audioGen || !player) return;
     rawMic = mic;
+    micSource = mic ? session.micAudio! : null;
     // A muted track plays at 0 (STC-454 part 3): the sound keeps being
     // scheduled, so the clock the picture follows never changes under a mute.
     previewAudio = new PreviewAudio({ mic, system }, previewLevels);
@@ -1987,6 +2046,21 @@ function previewLevels(): { system: number; mic: number } {
   };
 }
 
+/**
+ * The tracks the preview holds, offered to the export (STC-469). The mic is
+ * tagged with what it IS — raw, or cleaned at a strength — and
+ * `reusableTracks` decides whether that is what this export needs.
+ */
+function decodedForExport(): ExportDecoded {
+  const mic = previewAudio?.micTrack ?? null;
+  const cleanedAt = mic !== null && mic === cleanedMic ? cleanedFor : null;
+  const known = mic !== null && (mic === cleanedMic || mic === rawMic);
+  return {
+    system: previewAudio?.systemTrack ?? null,
+    mic: known ? { track: mic!, cleanedAt } : null,
+  };
+}
+
 /** Swap the mic the preview plays, and redraw the waveform when it actually changed. */
 function useMic(track: PcmTrack | null): void {
   if (!previewAudio || previewAudio.micTrack === track) return;
@@ -1996,36 +2070,66 @@ function useMic(track: PcmTrack | null): void {
 
 /** Point the preview at the mic the export would use: raw, or cleaned at the project's strength. */
 function refreshCleanMic(): void {
-  if (!previewAudio || !rawMic) return;
+  if (!previewAudio || !micSource) return;
   const cleanup = openProject?.narrationCleanup;
   const { cleanMic } = exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup });
   if (!cleanMic) {
     cleanWanted = null;
-    useMic(rawMic);
+    if (rawMic) {
+      useMic(rawMic);
+      // STC-469: off means raw, so the cleaned copy is dead weight now.
+      cleanedMic = null;
+      cleanedFor = null;
+    } else {
+      // The raw mic was dropped while the cleaned one played: decode it back.
+      // Whatever is playing keeps playing until it arrives.
+      ensureRawMic();
+    }
     if (!cleanBusy) setCleaning(false);
     return;
   }
   if (cleanedMic && cleanedFor === cleanup!.strength) {
     cleanWanted = null;
     useMic(cleanedMic);
+    // STC-469: the cleaned mic is what plays; the worker re-cleans from the
+    // COMPRESSED track, so the raw decoded copy buys nothing any more.
+    rawMic = null;
     return;
   }
   cleanWanted = cleanup!.strength;
   pumpClean();
 }
 
+/** Decode the raw mic again (STC-469), then let `refreshCleanMic` re-decide — the project may have changed meanwhile. */
+function ensureRawMic(): void {
+  if (rawMic || rawLoading || !micSource) return;
+  rawLoading = true;
+  const gen = audioGen;
+  decodeMicForMix(micSource, null).then((track) => {
+    // Defensive: closeTake runs once per page today (the editor reloads its renderer per take), so this is live only if a take is ever switched in-page.
+    if (gen !== audioGen) return;
+    rawLoading = false;
+    // It decoded once already, so null here would mean the decoder changed
+    // its mind; with no raw to fall back to, there is no playable mic.
+    if (!track) { micSource = null; return; }
+    rawMic = track;
+    refreshCleanMic();
+  }, (e: any) => {
+    if (gen !== audioGen) return;
+    rawLoading = false;
+    console.warn(`preview mic re-decode failed: ${e?.message ?? e}`);
+  });
+}
+
 function pumpClean(): void {
-  if (cleanBusy || cleanWanted === null || !rawMic) return;
+  if (cleanBusy || cleanWanted === null || !micSource) return;
   const strength = cleanWanted;
   const id = ++cleanSeq;
   const gen = audioGen;
   cleanBusy = true;
   setCleaning(true);
-  // A COPY goes to the worker (and is transferred): the raw mic stays here,
-  // playable, for "off" and for the next strength.
-  const track: PcmTrack = { startNs: rawMic.startNs, sampleRate: rawMic.sampleRate, channels: rawMic.channels.map((c) => c.slice()) };
   const worker = cleanWorker ??= new Worker("../dist/narration-worker.js");
-  worker.onmessage = (e: MessageEvent<{ id: number; track?: PcmTrack; error?: string }>) => {
+  worker.onmessage = (e: MessageEvent<{ id: number; track?: PcmTrack | null; error?: string }>) => {
     if (e.data.id !== id) return;
     cleanBusy = false;
     if (gen !== audioGen) { setCleaning(false); return; }
@@ -2035,7 +2139,10 @@ function pumpClean(): void {
       if (cleanWanted === strength) {
         cleanWanted = null;
         useMic(cleanedMic);
+        rawMic = null; // STC-469: see refreshCleanMic
       }
+    } else if (e.data.track === null) {
+      cleanWanted = null; // a mic that decodes to nothing has nothing to clean
     } else {
       // The export cleans on its own; a preview that cannot is still a
       // preview. Keep playing what was playing and say so.
@@ -2044,8 +2151,22 @@ function pumpClean(): void {
     }
     if (cleanWanted !== null) pumpClean();
     else setCleaning(false);
+    // The one case this exists for: a cleaned mic landed AFTER cleanup was
+    // switched off, so the preview must hand back to raw (decoding it again
+    // if it was dropped). Gated on cleanup being OFF, not merely on nothing
+    // being wanted: mid strength-slider drag `input` updates the project
+    // without refreshing (only `change` does), and re-deciding here would
+    // start a clean at a strength the drag is only passing through. Gated on
+    // a successful track too: after an error or a null reply, re-deciding
+    // would re-request the same failing clean forever.
+    if (e.data.track && cleanWanted === null && !cleanBusy &&
+        !exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: openProject?.narrationCleanup }).cleanMic) {
+      refreshCleanMic();
+    }
   };
-  worker.postMessage({ id, strength, track }, track.channels.map((c) => c.buffer as ArrayBuffer));
+  // The COMPRESSED mic, cloned (STC-469): the worker decodes it itself, so
+  // nothing here has to keep a raw decoded copy alive just to send one.
+  worker.postMessage({ id, strength, audio: micSource });
 }
 
 $("previewaudio").addEventListener("click", () => {
@@ -2265,6 +2386,7 @@ async function runExport(): Promise<void> {
     const result = await exportSession(openSession, exporting, {
       hash: true,
       captureId,
+      decoded: decodedForExport(),
       signal: exportAbort.signal,
       onProgress: (done, total) => {
         progress.value = Math.round((done / total) * 1000);

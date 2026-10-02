@@ -3,6 +3,7 @@ import {
   MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks,
   LEVEL_FLOOR_DB, levelFromSliderPct, sliderPctFromLevel, exportAudioPlan,
   MIC_BOOST_DB, MIC_LEVEL_MAX, MIC_UNITY_PCT, micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb, nudgeLevelDb,
+  reusableTracks,
   type PcmChunk, type PcmTrack,
 } from "../src/audio-mix.js";
 
@@ -380,5 +381,52 @@ describe("STC-460: peaks, nudge, fine labels", () => {
     expect(formatLevelDb(10 ** (0.5 / 20))).toBe("+0.5 dB");
     expect(formatLevelDb(10 ** (-7.3 / 20))).toBe("−7.3 dB");
     expect(formatLevelDb(10 ** (-6.98 / 20))).toBe("−7 dB");
+  });
+});
+
+describe("reusableTracks: may export use what the preview already decoded", () => {
+  const t = (n: number): PcmTrack => ({ startNs: 0, sampleRate: 48_000, channels: [new Float32Array(n)] });
+  const sys = t(1), raw = t(2), clean50 = t(3);
+  const on = { enabled: true, strength: 0.5 };
+
+  test("system offered and planned → reused", () => {
+    expect(reusableTracks({ mic: false, system: true, cleanMic: false }, undefined, { system: sys }).system).toBe(sys);
+  });
+  test("system muted (plan.system false) → not reused", () => {
+    expect(reusableTracks({ mic: false, system: false, cleanMic: false }, undefined, { system: sys }).system).toBeNull();
+  });
+  test("cleaned at the plan's strength → reused", () => {
+    const plan = exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: on });
+    expect(reusableTracks(plan, on, { mic: { track: clean50, cleanedAt: 0.5 } }).mic).toBe(clean50);
+  });
+  test("cleaned at a different strength → not reused", () => {
+    const plan = exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: on });
+    expect(reusableTracks(plan, on, { mic: { track: clean50, cleanedAt: 0.7 } }).mic).toBeNull();
+  });
+  test("raw offered, plan wants cleaned (preview still cleaning) → not reused", () => {
+    const plan = exportAudioPlan({ encode: true, hasMic: true, hasSystem: false, cleanup: on });
+    expect(reusableTracks(plan, on, { mic: { track: raw, cleanedAt: null } }).mic).toBeNull();
+  });
+  test("cleaned offered, plan wants raw (cleanup just switched off) → not reused", () => {
+    const plan = exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: { enabled: false, strength: 0.5 } });
+    expect(reusableTracks(plan, { enabled: false, strength: 0.5 }, { mic: { track: clean50, cleanedAt: 0.5 } }).mic).toBeNull();
+  });
+  test("raw offered, plan wants raw → reused", () => {
+    const plan = exportAudioPlan({ encode: true, hasMic: true, hasSystem: true });
+    expect(reusableTracks(plan, undefined, { mic: { track: raw, cleanedAt: null } }).mic).toBe(raw);
+  });
+  test("strength 0 reuses only raw", () => {
+    const zero = { enabled: true, strength: 0 };
+    const plan = exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: zero });
+    expect(plan.cleanMic).toBe(false);
+    expect(reusableTracks(plan, zero, { mic: { track: raw, cleanedAt: null } }).mic).toBe(raw);
+    expect(reusableTracks(plan, zero, { mic: { track: clean50, cleanedAt: 0 } }).mic).toBeNull();
+  });
+  test("muted mic → nothing reused for mic", () => {
+    const plan = exportAudioPlan({ encode: true, hasMic: true, hasSystem: true, cleanup: on, micMuted: true });
+    expect(reusableTracks(plan, on, { mic: { track: clean50, cleanedAt: 0.5 } }).mic).toBeNull();
+  });
+  test("nothing offered → decode both", () => {
+    expect(reusableTracks({ mic: true, system: true, cleanMic: false }, undefined, undefined)).toEqual({ mic: null, system: null });
   });
 });

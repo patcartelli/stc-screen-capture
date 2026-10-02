@@ -1,5 +1,6 @@
 import type { DemuxedAudio } from "./demux-audio.js";
 import { withTimeout, TimeoutError } from "./timeout.js";
+import { cleanNarration } from "./narration-clean.js";
 import { trackFromChunks, type PcmChunk, type PcmTrack } from "./audio-mix.js";
 
 /** One constant, so the bound and the message it prints cannot disagree — decode.ts's own rule. */
@@ -75,4 +76,30 @@ export function pcmTrackOf(decoded: AudioData[], label: string): PcmTrack | null
     for (const d of decoded) d.close();
   }
   return trackFromChunks(chunks, label);
+}
+
+/**
+ * The ONE way a mic `PcmTrack` is made for playing or mixing (STC-469): the
+ * export, the editor and the narration worker all call this, so a track made
+ * in one of them is sample-for-sample the track any other would make — which
+ * is what lets the export reuse the preview's (audio-mix.ts `reusableTracks`).
+ * `cleanStrength` null is the raw mic; a number is that track through
+ * `cleanNarration`, on the WHOLE take (STC-455: the noise profile is learned
+ * from every pause).
+ */
+export async function decodeMicForMix(audio: DemuxedAudio, cleanStrength: number | null): Promise<PcmTrack | null> {
+  const track = pcmTrackOf(await decodeAllAudio(audio), "mic.m4a");
+  return track && cleanStrength !== null ? cleanNarration(track, cleanStrength) : track;
+}
+
+/**
+ * The ONE way a system-audio `PcmTrack` is made for playing or mixing
+ * (STC-469), `decodeMicForMix`'s twin: the export and the editor both call
+ * this, so the track the preview holds is sample-for-sample the track the
+ * export would decode — which is what lets the export reuse it (audio-mix.ts
+ * `reusableTracks`) by construction rather than by two call sites agreeing.
+ * There is no cleaning stage; system audio is never cleaned.
+ */
+export async function decodeSystemForMix(audio: DemuxedAudio): Promise<PcmTrack | null> {
+  return pcmTrackOf(await decodeAllAudio(audio), "system.m4a");
 }
