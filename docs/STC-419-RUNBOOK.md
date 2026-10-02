@@ -18,7 +18,8 @@ What has been verified on this Mac: unit suites, `npm run typecheck`, and `gate:
 - **`keys.grant.test.ts`: 3/3 pass** after the mask fix.
 - **§2, Keys on: passes.**
 - **§3: the export looks good** at column width. No change to `KEYCAST_HOLD_TICKS` or `KEYCAST_FONT_FRACTION`.
-- **Open:** §2 Keys OFF and the non-Latin layout check.
+- **§2, Keys OFF: passes** — `events.json` version 2, no key events, with ⌘K and arrows pressed. The mask is what keeps a Keys-off take keyless.
+- **Open:** the non-Latin layout check (optional).
 
 ## 0. Build and branch
 
