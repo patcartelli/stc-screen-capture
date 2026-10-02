@@ -74,7 +74,11 @@ describe("a start the helper refuses (STC-315)", () => {
       STC_FAKE_START_ERROR: "event-tap-unavailable",
     });
 
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
+    // The TEXT is polled, not just the window: the toast window is listed as
+    // soon as it commits navigation, before its DOM exists, and `toastText`
+    // answers "" until then (`_toast.ts`). Reading once after the window
+    // appeared raced that on PR #272's CI run.
+    await expect.poll(() => toastText(app!), { timeout: 10_000 }).toMatch(/Nothing was recorded/);
     const alert = await toastText(app!);
     // What it cost FIRST. A message that opens with the fix reads as advice
     // about the next take and lets someone assume the one they just made is
