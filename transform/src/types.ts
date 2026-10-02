@@ -8,6 +8,7 @@
  */
 import type { ZoomPreset } from "./zoom.js";
 import type { Changes } from "./changes.js";
+import type { Framing } from "./framing.js";
 
 /** Mirrors schema/events-1.schema.json and events-2.schema.json. All times are session-relative integer ns. */
 export interface MoveEvent {
@@ -248,7 +249,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -357,6 +358,12 @@ export interface Project {
    * present after a parse, defaulted to true — what every take did before.
    */
   showClicks?: boolean;
+  /**
+   * Video framing (project-15, STC-396): a background, padding, rounded corners
+   * and a shadow around the recording, fitted INSIDE `output`. Absent means
+   * none. A preset plus optional explicit overrides, which win. See framing.ts.
+   */
+  framing?: Framing;
 }
 
 /** project-10's `narrationCleanup` (STC-455). */
