@@ -21,6 +21,7 @@ import { parseShot, shotForWrite } from "@transform/shot.js";
 import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
+import { framingProblem } from "@transform/framing.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
@@ -39,6 +40,7 @@ import {
   markOfferedForRecovery, type TempTakeInfo, type OrphanedBundle,
 } from "./temp-takes.js";
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
+import { reclaimPrompt, reclaimResult } from "./reclaim.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
          recordingDurationMs, recordingScopeLabel } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
@@ -47,6 +49,7 @@ import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-wind
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
 import type { OptionsState } from "./record-options.js";
+import { recordTimeProject, type RecordTimeChoices } from "./take-project.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
@@ -63,7 +66,9 @@ import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
-import { ensureCaptureId, readBundleId } from "./capture-identity.js";
+import {
+  ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
+} from "./capture-identity.js";
 import { resolveHelperPath } from "./helper-path.js";
 
 /**
@@ -136,6 +141,13 @@ function showNotice(message: ToastInput | undefined): void {
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
 }
+
+/**
+ * Every `ensureCaptureId` call's `onRepair` (STC-436): a corrupt
+ * `capture.json` that could not be salvaged costs the user a second tile,
+ * and stderr is invisible in a packaged app.
+ */
+const noticeCaptureIdRepair = (r: CaptureIdRepair): void => showNotice(captureIdRepairNotice(r));
 /**
  * The take each WINDOW may currently read, set only by preview:open.
  *
@@ -449,6 +461,36 @@ async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): 
 }
 
 /**
+ * What the Record bar chose for a take still in flight, by its temp dir
+ * (STC-420). Set when `start` succeeds, consumed when the take ends. In
+ * memory on purpose: a take recovered after a crash was recorded with defaults
+ * as far as this process can tell, which is the safe direction (the highlight
+ * is ON, as before).
+ */
+const recordTimeChoices = new Map<string, RecordTimeChoices>();
+
+/**
+ * The reason Show Clicks reaches the transform at all: the choice is written
+ * into the take's project.json (project-13) so `render()` reads it from the
+ * project, never from a live setting (take-project.ts has the argument).
+ *
+ * Never throws and never overwrites. A take with no document is rendered with
+ * defaults, so a failure here costs the user's choice, not their recording —
+ * logged, not surfaced; and an existing project.json is the editor's and wins.
+ */
+async function writeRecordTimeProject(dir: string): Promise<void> {
+  const choices = recordTimeChoices.get(dir);
+  recordTimeChoices.delete(dir);
+  if (!choices) return;
+  try {
+    const text = recordTimeProject(choices);
+    if (text !== null) await writeFile(join(dir, "project.json"), text, { flag: "wx" });
+  } catch (e) {
+    console.error(`[record] could not write the take's project.json (${(e as Error).message}); it keeps the defaults`);
+  }
+}
+
+/**
  * A take ended cleanly (`HelperSupervisor`'s `take-ended`).
  *
  * Quitting does not present: `shutdown()` stops a live take, which fires this
@@ -457,7 +499,11 @@ async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): 
  * — the same backstop Quit Anyway already relies on.
  */
 async function onTakeEnded(dir: unknown): Promise<void> {
-  if (typeof dir !== "string" || quitting) return;
+  if (typeof dir !== "string") return;
+  // Before the `quitting` bail: a take that ended while quitting is recovered
+  // next launch, and it should recover with the choice it was recorded with.
+  await writeRecordTimeProject(dir);
+  if (quitting) return;
   // The panels hidden for this recording come back FIRST, so the new one is
   // unshifted in FRONT of them: it lands at the corner with the older stack
   // behind it, and its own focus-on-paint takes over from `afterCapture`'s
@@ -610,7 +656,7 @@ async function recoverUnsavedTakes(): Promise<void> {
         // never reached the clean stop that writes `anchors.json` — but no
         // document the library can open, and a `raw/` child with neither
         // document is not a bundle to its scan (nor an orphan to
-        // `sweepOrphanedBundles`, which needs `capture.json`). So Finder is
+        // `findOrphanedBundles`, which needs `capture.json`). So Finder is
         // where it can be seen.
         await reveal(t);
       }
@@ -780,25 +826,10 @@ app.whenReady().then(async () => {
   });
   setInterval(() => {
     void purgeStaleTempTakes(process.env).catch(() => {});
-    // Same timer, a different root (STC-413): `raw/` bundles are not temp
-    // takes and age from a different clock (a marker written on first
-    // sighting orphaned, not the bundle's own creation), but the cadence
-    // this app already sweeps on is exactly right for both. `temp-takes.ts`
-    // stays Electron-free, so `sweepOrphanedBundles` only DECIDES which
-    // bundles are due; trashing one is done HERE, through `shell.trashItem`
-    // — the same split `pendingTrash.due()` -> `shell.trashItem` uses a few
-    // lines down — so a mistaken sweep is one Finder restore away, never
-    // an `rm` nobody can undo.
-    const { saveFolder } = readSettings(app.getPath("userData"));
-    void findOrphanedBundles(process.env, saveFolder).then((report) => {
-      for (const b of report.orphans) {
-        shell.trashItem(b.dir).catch((e) => {
-          console.error("[orphan-sweep] could not trash an orphaned bundle:", b.dir, e);
-        });
-      }
-    }).catch((e) => {
-      console.error("[orphan-sweep] failed:", e);
-    });
+    // `raw/` bundles are NOT swept here any more (STC-435): an unattended
+    // pass could only ever act when orphanhood was provable, and told nobody
+    // when it was not. Reclaim space (`recorder:reclaimSpace`) is the one
+    // path that trashes a bundle, and only after the user has seen it.
   }, TEMP_PURGE_INTERVAL_MS);
   // Keeps every promise `panel:trash` makes (STC-392 Task 6): whatever
   // `pendingTrash.due()` hands back has had its whole undo window elapse, so
@@ -1040,6 +1071,58 @@ ipcMain.handle("recorder:resolvedSaveFolder", async (): Promise<string> =>
   takesRoot(process.env, readSettings(app.getPath("userData")).saveFolder));
 
 /**
+ * Reclaim space (STC-435): find, show, and only then trash — the one path
+ * that ever removes a `raw/` bundle now that the 12-hour sweep is gone.
+ * `findOrphanedBundles` decides and `reclaim.ts` words it; this handler only
+ * asks and moves.
+ *
+ * The find runs TWICE, on purpose. The dialog can sit open for as long as the
+ * user likes, and a file put back in the folder meanwhile makes its bundle
+ * live again — so what is trashed is what the user agreed to AND what is
+ * still orphaned now, never the stale list alone.
+ *
+ * `reclaiming` refuses a second press while the first is still finding or
+ * asking: the sheet is modal once it is up, but the find before it is not.
+ */
+let reclaiming = false;
+ipcMain.handle("recorder:reclaimSpace", async (): Promise<{ moved: number; failed: number }> => {
+  if (reclaiming) return { moved: 0, failed: 0 };
+  reclaiming = true;
+  try {
+    const { saveFolder } = readSettings(app.getPath("userData"));
+    const prompt = reclaimPrompt(await findOrphanedBundles(process.env, saveFolder));
+    if (prompt.kind === "toast") {
+      showNotice(prompt.message);
+      return { moved: 0, failed: 0 };
+    }
+    const { kind: _kind, dirs, ...box } = prompt;
+    const { response } = win && !win.isDestroyed()
+      ? await dialog.showMessageBox(win, { type: "warning", ...box })
+      : await dialog.showMessageBox({ type: "warning", ...box });
+    if (response !== 0) return { moved: 0, failed: 0 };
+
+    const agreed = new Set(dirs);
+    const still = (await findOrphanedBundles(process.env, saveFolder)).orphans
+      .filter((b) => agreed.has(b.dir));
+    const moved: OrphanedBundle[] = [];
+    let failed = 0;
+    for (const b of still) {
+      try {
+        await shell.trashItem(b.dir);
+        moved.push(b);
+      } catch (e) {
+        console.error("[reclaim] could not trash a bundle:", b.dir, e);
+        failed++;
+      }
+    }
+    showNotice(reclaimResult(moved, failed));
+    return { moved: moved.length, failed };
+  } finally {
+    reclaiming = false;
+  }
+});
+
+/**
  * The renderer's own preferences, minus the ones it may not name.
  *
  * `saveFolder` is main's alone (STC-412, replacing `still.destination`): it
@@ -1244,6 +1327,8 @@ function writeBarOptions(options: OptionsState): void {
   writeSettings(app.getPath("userData"), {
     camera: options.camera, micDeviceUid: options.micDeviceUid,
     systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+    recordKeys: options.keys,
+    showClicks: options.showClicks,
   });
   send("settings:changed", undefined);
 }
@@ -1257,7 +1342,8 @@ async function recordFlowBody(
     windows, mode: "region", purpose: "record",
     initialOptions: {
       micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics,
-      systemAudio: stored.systemAudio, cameraDeviceUid: stored.cameraDeviceUid, cameras,
+      systemAudio: stored.systemAudio, keys: stored.recordKeys, cameraDeviceUid: stored.cameraDeviceUid, cameras,
+      showClicks: stored.showClicks,
     },
     dist: here, renderer: join(here, "..", "renderer"),
   });
@@ -1308,6 +1394,8 @@ async function recordFlowBody(
   // only preference. Only when on; absent is "off" to the helper's
   // parseStartRequest — the existing pin this ticket keeps.
   if (options.systemAudio) startParams.systemAudio = true;
+  // STC-419: from the BAR's Keys toggle. Only when on; absent is "off" to parseStartRequest.
+  if (options.keys) startParams.keys = true;
   let countdownDisplay: number | undefined;
   if (outcome.kind === "window") {
     startParams.windowId = outcome.windowId;
@@ -1398,6 +1486,8 @@ async function recordFlowBody(
     const existing = existsSync(root) ? readdirSync(root) : [];
     const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup!.startRecording(dir, startParams);
+    // Only after a successful start: a refused one leaves no take to describe.
+    recordTimeChoices.set(dir, { showClicks: options.showClicks });
     console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
@@ -2260,14 +2350,15 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
 
 /**
  * Every top-level key a `project.json` this build wrote or can read might
- * carry (schema/project-1..12.schema.json's own union, STC-318's "one list"
+ * carry (schema/project-1..15.schema.json's own union, STC-318's "one list"
  * rule applied here by hand since the schemas themselves are not loaded at
  * runtime in this process — see the handler's own comment on why not).
  */
 const KNOWN_PROJECT_FIELDS = new Set([
   "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
   "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
-  "micLevel", "micMuted", "systemAudioMuted",
+  "micLevel", "micMuted", "systemAudioMuted", "showClicks", "keycast",
+  "framing",
 ]);
 
 /**
@@ -2403,6 +2494,19 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
   if (doc.systemAudioMuted !== undefined && typeof doc.systemAudioMuted !== "boolean") {
     throw new Error("project.json: systemAudioMuted must be a boolean");
   }
+  if (doc.showClicks !== undefined && typeof doc.showClicks !== "boolean") {
+    throw new Error("project.json: showClicks must be a boolean");
+  }
+  if (doc.keycast !== undefined) {
+    if (!isPlainObject(doc.keycast) || typeof doc.keycast.show !== "boolean"
+        || Object.keys(doc.keycast).some((k) => k !== "show")) {
+      throw new Error("project.json: keycast must be { show: boolean }");
+    }
+  }
+  if (doc.framing !== undefined) {
+    const problem = framingProblem(doc.framing);
+    if (problem) throw new Error(`project.json: ${problem}`);
+  }
   if (doc.bookmarks !== undefined) {
     if (!Array.isArray(doc.bookmarks) || !doc.bookmarks.every((b: unknown) => Number.isInteger(b) && (b as number) >= 0)) {
       throw new Error("project.json: bookmarks must be an array of non-negative integers");
@@ -2459,7 +2563,7 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
 
   const { saveFolder } = readSettings(app.getPath("userData"));
   const root = takesRoot(process.env, saveFolder);
-  const id = await ensureCaptureId(openTake);
+  const id = await ensureCaptureId(openTake, noticeCaptureIdRepair);
   const files = await scanFinishedFilesAt(process.env, saveFolder);
   const matched = files.find((f) => f.id === id)?.file;
   const dest = matched ?? join(root, name);
@@ -2488,7 +2592,7 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
 ipcMain.handle("take:captureId", async (e) => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
-  return await ensureCaptureId(openTake);
+  return await ensureCaptureId(openTake, noticeCaptureIdRepair);
 });
 
 /**
@@ -2569,7 +2673,7 @@ ipcMain.handle("still:export", async (_e, req: {
   // the capture the user is trying to save.
   let captureId: string | undefined;
   if (fallbackDir) {
-    try { captureId = await ensureCaptureId(fallbackDir); }
+    try { captureId = await ensureCaptureId(fallbackDir, noticeCaptureIdRepair); }
     catch (e) {
       console.error("[still] could not mint a capture id for", fallbackDir, e);
     }

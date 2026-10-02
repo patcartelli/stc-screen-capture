@@ -14,6 +14,8 @@ export declare const EVAL_SLOTS: number;
 export declare const SEEK_MS: number;
 export declare const SLOW_TESTS_MS: number;
 export declare const GATE_DECODER_PREFERENCE: string;
+export declare const TEST_STEP_MS: number;
+export declare const PRE_TEST_MS: number;
 export declare const PRE_GATE_BUDGET_MS: number;
 export declare const LAUNCH_MS: number;
 export declare const READY_MS: number;

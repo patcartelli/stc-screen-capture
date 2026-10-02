@@ -6,13 +6,34 @@ import {
   bounded, EVAL_MS, ENCODER_MS, EVAL_SLOTS, SEEK_MS, PRE_GATE_BUDGET_MS,
   worstCaseJobMs, attemptFloorMs, FLOOR_MARGIN, READY_MS, LAUNCH_MS, TEARDOWN_MS,
   GATE_PROCESS_MS, GATE_ATTEMPTS, gateFloorMs, GC_RETRIES, SLOW_TESTS_MS,
-  attachCheckpointTrail,
+  TEST_STEP_MS, PRE_TEST_MS, attachCheckpointTrail,
 } from "../../scripts/gate-bounds.mjs";
 import { ATTEMPTS, ATTEMPT_MS } from "../../scripts/gate-retry.mjs";
 import * as bounds from "../../scripts/gate-bounds.mjs";
 import { isEnvironmentFailure } from "../../scripts/gate-retry.mjs";
 
 const root = join(__dirname, "..", "..");
+
+/**
+ * A step's own `timeout-minutes`, found by the step's NAME. It used to be "the
+ * first eight-space `timeout-minutes` in the file", which was only right while
+ * test:slow was the one step with a bound. Once the Test step had one too
+ * (STC-498), that read Test's number as test:slow's. Returns null when the
+ * step exists but declares no bound; throws when the step is not there at all,
+ * so a renamed step fails loudly instead of reading as "unbounded".
+ */
+function stepTimeoutMs(ci: string, stepName: string): number | null {
+  const lines = ci.split("\n");
+  const at = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+  if (at < 0) throw new Error(`ci.yml has no step named "${stepName}"`);
+  for (let i = at + 1; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (/^ {6}- /.test(l)) break; // the next step
+    const m = l.match(/^ {8}timeout-minutes:\s*(\d+)\s*$/);
+    if (m) return Number(m[1]) * 60_000;
+  }
+  return null;
+}
 
 describe("gate bounds — the bound itself", () => {
   test("a promise that never settles is rejected, by name", async () => {
@@ -308,10 +329,37 @@ describe("gate bounds — clearance against the CI job timeout", () => {
   // came to say 21.5 min while one gate could take 30.
   test("the slow-test step's bound is the one the model counts", () => {
     const ci = readFileSync(join(root, ".github", "workflows", "ci.yml"), "utf8");
-    const m = ci.match(/^ {8}timeout-minutes:\s*(\d+)\s*$/m);
-    expect(m, "the test:slow step must declare its own timeout-minutes").not.toBeNull();
-    expect(Number(m![1]) * 60_000,
-      "ci.yml's test:slow step and SLOW_TESTS_MS disagree").toBe(SLOW_TESTS_MS);
+    const ms = stepTimeoutMs(ci, "Cross-implementation export identity (test:slow)");
+    expect(ms, "the test:slow step must declare its own timeout-minutes").not.toBeNull();
+    expect(ms, "ci.yml's test:slow step and SLOW_TESTS_MS disagree").toBe(SLOW_TESTS_MS);
+  });
+
+  // The same rule for `npm test` (STC-498). Until this, the largest term in the
+  // worst case was an estimate with nothing enforcing it, and it had gone stale
+  // by 14 min without anything noticing.
+  test("the Test step's bound is the one the model counts", () => {
+    const ci = readFileSync(join(root, ".github", "workflows", "ci.yml"), "utf8");
+    const ms = stepTimeoutMs(ci, "Test");
+    expect(ms, "the Test step must declare its own timeout-minutes").not.toBeNull();
+    expect(ms, "ci.yml's Test step and TEST_STEP_MS disagree").toBe(TEST_STEP_MS);
+  });
+
+  // Composition, not magnitude: the pre-gate term must COUNT the Test step's
+  // bound, or raising TEST_STEP_MS alone would leave the job cap unchecked.
+  test("the pre-gate budget is the Test step's bound plus the setup before it", () => {
+    expect(PRE_GATE_BUDGET_MS).toBe(PRE_TEST_MS + TEST_STEP_MS);
+  });
+
+  // An e2e or unit test's own timeout must be able to fire before the step's,
+  // or vitest never gets to name the test that hung.
+  test("a unit/e2e test's own timeout stays under the Test step's bound", () => {
+    const cfg = withoutComments(readFileSync(join(root, "vitest.config.ts"), "utf8"));
+    const perTest = [...cfg.matchAll(/(?:testTimeout|hookTimeout):\s*([\d_]+)/g)]
+      .map((m) => Number(m[1]!.replace(/_/g, "")));
+    expect(perTest.length, "vitest.config.ts must declare a testTimeout").toBeGreaterThan(0);
+    for (const ms of perTest) {
+      expect(ms, `a test may run ${ms}ms inside a ${TEST_STEP_MS}ms step`).toBeLessThan(TEST_STEP_MS);
+    }
   });
 
   // The inner bound must be able to fire before the outer one, or its message

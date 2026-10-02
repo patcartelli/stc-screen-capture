@@ -45,6 +45,13 @@ import { effectivePointWidthFromGeometry, type ScopeLike } from "./spaces.js";
  * "events.json already carries keystrokes"), and all three were found the same
  * way, in about a minute, by deriving the thing rather than accepting it.
  *
+ * ## Framing is the fourth input (STC-396)
+ *
+ * A frame insets the picture inside the output, so the text occupies only
+ * `frameFraction` of the width it otherwise would. Like the output width, the
+ * frame's own pixel size cancels: only the picture's SHARE of the width
+ * survives, and a frame shrinks the picture within the embed.
+ *
  * ## What deliberately does NOT appear
  *
  * **`backingScale`.** Points already account for it — that is what a point is.
@@ -79,6 +86,8 @@ export interface Legibility {
   textPt: number;
   embedWidthPx: number;
   zoomFactor: number;
+  /** The picture's share of the output width when framed (STC-396); 1 otherwise. */
+  frameFraction: number;
 }
 
 /** Just the display geometry this needs — not the whole anchors document. */
@@ -101,6 +110,7 @@ export function legibility(
   textPt: number,
   embedWidthPx: number,
   zoomFactor = 1,
+  frameFraction = 1,
 ): Legibility {
   // Guarded rather than trusted: a malformed anchors document should give a
   // useless answer loudly (0, which warns) rather than Infinity or NaN, which
@@ -109,11 +119,11 @@ export function legibility(
   const pointWidth = display.pointWidth > 0 ? display.pointWidth : 0;
   const textPx = pointWidth === 0
     ? 0
-    : (textPt * embedWidthPx * zoomFactor) / pointWidth;
+    : (textPt * embedWidthPx * zoomFactor * frameFraction) / pointWidth;
   return {
     textPx,
     verdict: textPx < LEGIBILITY_WARN_PX ? "warn" : "ok",
-    textPt, embedWidthPx, zoomFactor,
+    textPt, embedWidthPx, zoomFactor, frameFraction,
   };
 }
 
@@ -126,7 +136,8 @@ export function legibility(
 export function legibilitySentence(l: Legibility): string {
   const px = l.textPx.toFixed(1);
   const zoom = l.zoomFactor === 1 ? "" : ` at ${l.zoomFactor.toFixed(1)}× zoom`;
-  return `At ${l.embedWidthPx}px${zoom}, ${l.textPt}pt text renders at ${px}px`
+  const framed = l.frameFraction < 1 ? " inside the frame" : "";
+  return `At ${l.embedWidthPx}px${zoom}${framed}, ${l.textPt}pt text renders at ${px}px`
     + (l.verdict === "warn" ? ` — below ${LEGIBILITY_WARN_PX}px, hard to read` : "");
 }
 

@@ -210,3 +210,20 @@ describe("effectivePointWidth — the worst geometry (STC-235)", () => {
     expect(effectivePointWidth(a)).toBe(1920);
   });
 });
+
+describe("frame fraction (STC-396)", () => {
+  const display = { pointWidth: 1728 };
+  test("a frame shrinks the text by the picture's share of the width", () => {
+    const plain = legibility(display, 13, 1232);
+    const framed = legibility(display, 13, 1232, 1, 0.88);
+    expect(framed.textPx).toBeCloseTo(plain.textPx * 0.88, 9);
+    expect(framed.frameFraction).toBe(0.88);
+  });
+  test("the default fraction is 1 and changes nothing", () => {
+    expect(legibility(display, 13, 1232).textPx).toBe(legibility(display, 13, 1232, 1, 1).textPx);
+  });
+  test("the sentence names the frame only when there is one", () => {
+    expect(legibilitySentence(legibility(display, 13, 1232))).not.toMatch(/frame/);
+    expect(legibilitySentence(legibility(display, 13, 1232, 1, 0.88))).toMatch(/inside the frame/);
+  });
+});
