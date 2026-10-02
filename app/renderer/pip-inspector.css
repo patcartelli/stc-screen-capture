@@ -52,3 +52,13 @@
 #pipframewindow { position: absolute; cursor: grab; outline: 1px solid #fff; touch-action: none;
                   box-shadow: 0 0 0 9999px rgba(0,0,0,.55); }
 #pipframewindow:active { cursor: grabbing; }
+
+/* Settings sheet's mock frame (STC-461): a 16:9 stand-in for the output, and
+   the box that is the PiP. No camera is opened to set a preference. */
+#pipmock { position: relative; aspect-ratio: 16 / 9; width: 100%; background: var(--surface-hover);
+           border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: 8px; }
+#pipmockbox { position: absolute; overflow: hidden; cursor: move; background: var(--bg); box-sizing: border-box; touch-action: none; }
+#pipmockbox .silhouette { position: absolute; inset: 0;
+  background:
+    radial-gradient(circle at 50% 38%, var(--text-faint) 0 17%, transparent 18%),
+    radial-gradient(ellipse at 50% 100%, var(--text-faint) 0 40%, transparent 41%); }
