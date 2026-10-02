@@ -218,6 +218,24 @@ describe("framing (STC-396)", () => {
     expect(ops.some((o) => o === `drawImage(${String(bitmap)},128,144,640,360,${c.x},${c.y},${c.width},${c.height})`)).toBe(true);
   });
 
+  test("the shadow has no core: its shape is filled off-canvas and shadowOffsetX brings the shadow back", () => {
+    const ops = drawFramed({ visible: false });
+    const shift = W * 2 + 1000;
+    expect(ops).toContain(`shadowOffsetX=${shift}`);
+    expect(ops).toContain(`roundRect(${c.x - shift},${c.y},${c.width},${c.height},${layout.radius})`);
+    // and the picture's rounded clip is still at the content rect
+    expect(ops).toContain(`roundRect(${c.x},${c.y},${c.width},${c.height},${layout.radius})`);
+  });
+
+  test.each([["opacity", { opacity: 0 }], ["blur", { blur: 0 }]])("a zero %s skips the shadow entirely", (_n, over) => {
+    const { ctx, ops } = recorder();
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
+              { ...frameState({ visible: false }), framing: { ...layout, shadow: { ...layout.shadow, ...over } } }, W, H);
+    expect(ops.some((o) => o.startsWith("shadow"))).toBe(false);
+    const n = (k: string) => ops.filter((o) => o === k).length;
+    expect(n("save()")).toBe(n("restore()"));
+  });
+
   test("framing: null draws exactly the pre-framing sequence (no clip, no gradient, no shadow)", () => {
     const { ctx, ops } = recorder();
     composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,

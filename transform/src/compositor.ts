@@ -78,8 +78,15 @@ function drawSource(
 
 /**
  * The frame's chrome (STC-396): the background over the whole canvas, then the
- * shadow, cast from the rounded content rect. The picture is drawn over the
- * shadow's opaque core afterwards, so only the soft edge shows.
+ * shadow, cast from the rounded content rect.
+ *
+ * The shadow is drawn WITHOUT a core: the rounded rect is filled far off-canvas
+ * to the left and `shadowOffsetX` shifts its shadow back into place, so only the
+ * shadow lands on the canvas and no opaque shape is painted. A core would be
+ * covered by the picture's ANTIALIASED rounded clip, so at the corner the edge
+ * coverage applies twice (black core, then a partial picture over it) and the
+ * corner reads darker than the background — a seam. The shift exceeds the
+ * canvas width plus the blur's reach, so the shape itself is never visible.
  */
 function drawChrome(
   ctx: OffscreenCanvasRenderingContext2D, f: FramingLayout, width: number, height: number,
@@ -101,11 +108,12 @@ function drawChrome(
     ctx.save();
     ctx.shadowColor = `rgba(0, 0, 0, ${f.shadow.opacity})`;
     ctx.shadowBlur = f.shadow.blur;
-    ctx.shadowOffsetX = 0;
+    const SHIFT = width * 2 + 1000;
+    ctx.shadowOffsetX = SHIFT;
     ctx.shadowOffsetY = f.shadow.offsetY;
     ctx.fillStyle = "#000000";
     ctx.beginPath();
-    ctx.roundRect(c.x, c.y, c.width, c.height, f.radius);
+    ctx.roundRect(c.x - SHIFT, c.y, c.width, c.height, f.radius);
     ctx.fill();
     ctx.restore();
   }
