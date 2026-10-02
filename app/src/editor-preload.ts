@@ -31,8 +31,10 @@ contextBridge.exposeInMainWorld("editor", {
   // STC-454: the preview's mute button — the ONE setting this window writes,
   // so it gets a one-field call rather than the whole setSettings channel.
   setPreviewMuted: (muted: boolean) => ipcRenderer.invoke("recorder:setSettings", { previewMuted: muted === true }),
-  // STC-461: "Use as default" in the Camera popover. main.ts's write gate
-  // cleans it (settings.ts drops a take's framing) and refuses an invalid one.
+  // STC-461: "Use as default" in the Camera popover. writeSettings cleans it
+  // (settings.ts's cleanStoredPipStyle drops a take's framing); an invalid one
+  // is not refused — it is silently REPLACED by DEFAULT_PIP_STYLE, and the
+  // call still succeeds.
   setPipStyleDefault: (style: unknown) => ipcRenderer.invoke("recorder:setSettings", { pipStyle: style }),
   publish: () => ipcRenderer.invoke("share:publish"),
   revealPublished: () => ipcRenderer.invoke("share:reveal"),
