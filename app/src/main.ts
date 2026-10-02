@@ -21,6 +21,7 @@ import { parseShot, shotForWrite } from "@transform/shot.js";
 import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
+import { framingProblem } from "@transform/framing.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
@@ -2352,7 +2353,7 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
 
 /**
  * Every top-level key a `project.json` this build wrote or can read might
- * carry (schema/project-1..14.schema.json's own union, STC-318's "one list"
+ * carry (schema/project-1..15.schema.json's own union, STC-318's "one list"
  * rule applied here by hand since the schemas themselves are not loaded at
  * runtime in this process — see the handler's own comment on why not).
  */
@@ -2360,6 +2361,7 @@ const KNOWN_PROJECT_FIELDS = new Set([
   "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
   "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
   "micLevel", "micMuted", "systemAudioMuted", "showClicks", "keycast",
+  "framing",
 ]);
 
 /**
@@ -2503,6 +2505,10 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
         || Object.keys(doc.keycast).some((k) => k !== "show")) {
       throw new Error("project.json: keycast must be { show: boolean }");
     }
+  }
+  if (doc.framing !== undefined) {
+    const problem = framingProblem(doc.framing);
+    if (problem) throw new Error(`project.json: ${problem}`);
   }
   if (doc.bookmarks !== undefined) {
     if (!Array.isArray(doc.bookmarks) || !doc.bookmarks.every((b: unknown) => Number.isInteger(b) && (b as number) >= 0)) {

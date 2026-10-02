@@ -3,6 +3,7 @@ import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
 import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
 import { TRANSFORM_VERSION } from "./transform-version.js";
+import { cleanFraming } from "./framing.js";
 
 const NS_PER_S = 1_000_000_000;
 
@@ -217,6 +218,11 @@ export function parseProject(
   // project-14 (STC-419). Only a real `false` hides the keycast; anything else
   // is "no opinion" and shown.
   if (doc.keycast?.show === false) project.keycast = { show: false };
+  // project-15 (STC-396). A malformed block is DROPPED, not repaired: the take
+  // opens unframed rather than with a guessed frame, the rule every field in
+  // this parser follows.
+  const framing = cleanFraming(doc.framing);
+  if (framing) project.framing = framing;
   return project;
 }
 
@@ -376,10 +382,11 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 {
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 {
   // Highest first: a document needing v14 needs it whatever its showClicks,
   // mutes, mic level, cleanup, levels, bookmarks, slug, overrides, zoom or
   // textPt say.
+  if (project.framing) return 15;
   if (project.keycast?.show === false) return 14;
   if (project.showClicks === false) return 13;
   if (project.micMuted || project.systemAudioMuted) return 12;
@@ -432,5 +439,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   }
   if (version >= 13) out.showClicks = project.showClicks !== false;
   if (version >= 14) out.keycast = { show: project.keycast?.show !== false };
+  if (version >= 15 && project.framing) out.framing = project.framing;
   return out;
 }

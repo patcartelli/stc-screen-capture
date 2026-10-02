@@ -8,6 +8,7 @@ import { SeekingFrameSource } from "@transform/seeking-frame-source";
 import { composite } from "@transform/compositor";
 import type { Project } from "@transform/types";
 import { parseProject } from "@transform/trim";
+import { framingProblem } from "@transform/framing";
 import { applyDecoderPreference } from "./decoder.js";
 
 // STC-259: handed in by the runner (scripts/gate-bounds.mjs), never chosen
@@ -78,6 +79,21 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
       anchors.camera?.present === true,
     );
+
+    // STC-396: `?framing=clean` frames the take for this run, so the two sinks
+    // are compared on the framed path too (scripts/identity-gate.mjs passes it).
+    const framingParam = new URLSearchParams(location.search).get("framing");
+    if (framingParam) {
+      const f = { preset: framingParam };
+      const problem = framingProblem(f);
+      if (problem) throw new Error(problem);
+      project.framing = f as Project["framing"];
+      // Sinks that agree prove nothing about a framed picture unless the frame
+      // was applied at all: fail loudly if render() reports none.
+      if (!render(project, session, tickTimeNs(0)).framing) {
+        throw new Error(`?framing=${framingParam} was set but render() returned no framing`);
+      }
+    }
 
     const { width, height } = project.output;
     const mkCtx = () => new OffscreenCanvas(width, height)
