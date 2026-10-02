@@ -21,8 +21,10 @@ const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
  * It last moved at version 13 (STC-419): the keycast's constants were added
  * as inputs — hold and fade, font, sizing, placement, both colours, every
  * key label with and without the modifier glyphs, and the ` ×N` count format.
+ * It last moved at version 14 (STC-396): the framing presets, solid default
+ * and padding/radius bounds were added as inputs.
  */
-const PINNED_FINGERPRINT = "f5959acd";
+const PINNED_FINGERPRINT = "c6d8d3fa";
 
 describe("the transform version is honest about what it renders", () => {
   test("the fingerprint of every pixel-deciding constant is pinned to this version", () => {

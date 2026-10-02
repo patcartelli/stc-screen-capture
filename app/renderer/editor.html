@@ -768,6 +768,16 @@
       <span id="outsizenote" class="mono"></span>
     </div>
     <div class="dialogrow">
+      <label for="framepreset">Frame</label>
+      <select id="framepreset">
+        <option value="none">None</option>
+        <option value="clean">Clean</option>
+        <option value="dark">Dark</option>
+        <option value="solid">Solid</option>
+      </select>
+      <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
+    </div>
+    <div class="dialogrow">
       <label for="embedtarget">Shown at</label>
       <select id="embedtarget"></select>
       <input id="embedwidth" type="number" min="80" max="4096" step="1"

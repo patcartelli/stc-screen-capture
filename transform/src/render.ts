@@ -2,7 +2,7 @@ import type { CursorState, CursorStyle, Project, Session } from "./types.js";
 import { frameIndexAt, tickOf } from "./time.js";
 import {
   displayToOutput, fixedCornerPipUv, lerpRect, mapPoint, mapVector, outputRect, roundRect,
-  throughCrop, throughCropVector, uvRectToPixels, type Rect,
+  throughCrop, throughCropVector, uvRectToPixels, type Rect, type Size,
 } from "./spaces.js";
 import {
   ZOOM_PRESETS, createZoomSim, zoomWindows, type ZoomPreset, type ZoomSim, type ZoomWindow,
@@ -11,6 +11,7 @@ import {
   groupByEasing, manualWindows, nearestWindow, resolvedCrop, resolvedWindows, windowId,
   type CombinedZoomWindow,
 } from "./zoom-override.js";
+import { framingLayout, type FramingLayout } from "./framing.js";
 import { deriveZoomCrop } from "./zoom-change.js";
 import { geometryAt } from "./display-geometry.js";
 import { DEFAULT_ZOOM } from "./trim.js";
@@ -52,6 +53,13 @@ export interface FrameState {
   zoom: ZoomState;
   /** The keycast (STC-419): the keyboard command on screen, or null. Drawn on the OUTPUT canvas, never through the crop. */
   keycast: KeycastState | null;
+  /**
+   * Video framing (STC-396), or null when the project has none. The picture is
+   * drawn into `framing.content` (an inset of the output); the cursor, PiP and
+   * zoom crop in this state are already in OUTPUT pixels relative to that rect,
+   * so the compositor draws them where they are told and decides nothing.
+   */
+  framing: FramingLayout | null;
 }
 
 /**
@@ -107,7 +115,7 @@ export interface PipState {
  * anchors.camera, never from an assumed frame rate — the measured camera rate
  * varies run to run.
  */
-function pipStateAt(project: Project, session: Session, tNs: number): PipState | null {
+function pipStateAt(project: Project, session: Session, tNs: number, frame: Rect): PipState | null {
   const pip = project.pip;
   const cam = session.anchors.camera;
   const frames = session.cameraFrames;
@@ -125,8 +133,8 @@ function pipStateAt(project: Project, session: Session, tNs: number): PipState |
   // the PiP go". Rounded because this rectangle places a DECODED FRAME, and a
   // frame at a half-pixel offset is a frame resampled across every edge.
   const rect = roundRect(uvRectToPixels(
-    fixedCornerPipUv(pip, project.output, cam),
-    outputRect(project.output),
+    fixedCornerPipUv(pip, { width: frame.width, height: frame.height }, cam),
+    frame,
   ));
   return { frameIndex, framePtsNs: frames[frameIndex]!, ...rect };
 }
@@ -204,6 +212,14 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   }
 
   const zoom = project.zoom ?? DEFAULT_ZOOM;
+  // Video framing (STC-396). The picture is an INSET of the output; everything
+  // placed in output pixels below is placed relative to that rect. With no
+  // framing `frame` IS the whole output and `sized` IS project.output, so every
+  // number below is exactly what version 13 computed.
+  const cap = session.anchors.capture;
+  const layout = framingLayout(project.framing, project.output, cap.width / cap.height);
+  const frame: Rect = layout?.content ?? outputRect(project.output);
+  const sized: Size = layout ? { width: frame.width, height: frame.height } : project.output;
   // resolvedWindows (STC-329) applies `removed`/`retime` to the RAW,
   // override-independent memo — cheap, and NOT itself memoised, so it always
   // reflects the CURRENT project.overrides rather than whichever one first
@@ -235,7 +251,8 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   // conversion in the transform. The geometry is the one the SHOWN frame was
   // captured under (STC-235) — display-geometry.ts's header says why.
   const g = geometryAt(session.anchors, frameIndex === null ? null : session.frames[frameIndex]!);
-  const m = displayToOutput(g.shown, project.output, g.contentRect, session.anchors.capture);
+  const m0 = displayToOutput(g.shown, sized, g.contentRect, cap);
+  const m = layout ? { ...m0, ox: m0.ox + frame.x, oy: m0.oy + frame.y } : m0;
   const full = mapPoint(m, s);
   // A velocity is a DIFFERENCE of global points, so it scales without
   // translating — hence the second call rather than a flag.
@@ -281,7 +298,7 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   // the content is a 2x pointer. `throughCrop`'s whole-frame case is the
   // identity by construction, so a take with zoom off renders exactly what
   // it did before this step existed.
-  const at = throughCrop(full, crop, outputRect(project.output));
+  const at = throughCrop(full, crop, frame);
   const vel = throughCropVector(fullVel, crop);
   const magnification = throughCropVector({ x: 1, y: 1 }, crop).x;
 
@@ -301,8 +318,9 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
       style: project.cursor.style,
       pxPerPoint: project.cursor.scale * m.sx * magnification,
     },
-    pip: pipStateAt(project, session, tNs),
+    pip: pipStateAt(project, session, tNs, frame),
     zoom: { amount: zoomAmount, crop },
     keycast: keycastFor(project, session, tick),
+    framing: layout ?? null,
   };
 }
