@@ -10,7 +10,7 @@ Spec: `docs/superpowers/specs/2026-10-02-stc-396-video-framing-design.md`.
 
 ## What shipped
 
-A background, padding, rounded corners and a shadow around the recording, chosen in the export dialog: None, Clean, Dark, Solid (with a colour). The frame is an INSET: the output size is unchanged and the picture is fitted inside it, so no output-size rule moved. Padding is 6% of the output's short edge, radius about 1.2%, shadow 3% blur / 1.2% offset / 0.32 opacity (Dark 0.55); the gradient stops are in `transform/src/framing.ts`. The camera PiP is anchored to the picture, not the canvas, and the pointer and the zoom crop live inside the picture too, so a zoom still lands the cursor on its target. Keycast stays on the canvas. Framing None is identical to a v13/v14 render (nothing is drawn or moved). `TRANSFORM_VERSION` 14. Data: `schema/project-15.schema.json` (`framing`, written at the minimum version that can express it). The legibility line counts the inset (it now reads "inside the frame").
+A background, padding, rounded corners and a shadow around the recording, chosen in the export dialog: None, Clean, Dark, Solid (with a colour). The frame is an INSET: the output size is unchanged and the picture is fitted inside it, so no output-size rule moved. Padding is 6% of the output's short edge, radius about 1.2%, shadow 3% blur / 1.2% offset / 0.32 opacity (Dark 0.55); the gradient stops are in `transform/src/framing.ts`. The camera PiP is anchored to the picture, not the canvas, and the pointer and the zoom crop live inside the picture too, so a zoom still lands the cursor on its target. Keycast stays on the canvas. Framing None renders exactly what transform version 13 did (nothing is drawn or moved). `TRANSFORM_VERSION` 14. Data: `schema/project-15.schema.json` (`framing`, written at the minimum version that can express it). The legibility line counts the inset (it now reads "inside the frame").
 
 ## What was run and seen on this Mac (the controller, 2026-10-02)
 
@@ -18,7 +18,8 @@ Stated plainly, and only this:
 
 - `scripts/export-one.mjs` on a scratch copy of the real take `2026-09-23_10-27-09` (3326x2160 capture, camera present, auto-zoom on), with `project.json` framing `{"preset":"clean"}` (4 s from t=2 s) and `{"preset":"solid","color":"#b04a2f"}` (2 s). A decoded frame of each was LOOKED AT: padded inset picture, rounded corners, soft shadow, light gradient (Clean) / flat terracotta (Solid), the camera PiP inside the picture's bottom-right with its normal margin, the pointer on the picture.
 - `npm run gate:framing` passed locally for all three presets. Its first run found a real dark seam at the anti-aliased rounded corner, from an opaque shadow core; fixed in 118f096 (the shadow is drawn from an off-canvas shape, so no core shows). The tightened corner check was proven able to fail: restoring the core made it fail on clean, dark and solid.
-- The framed sink-identity run (`STC_IDENTITY_FRAMING=clean`, the pip fixture recipe) passed with 0 mismatches.
+- The framed sink-identity run was run by the Task 7 implementer subagent, not by Patrick: the CI recipe (the pip fixture copied to a temp take dir, then `STC_IDENTITY_FRAMING=clean npm run gate:identity -- <dir>`), after the shadow fix, 0 mismatches. It was re-run after the final review, and the harness now throws if `render()` reports no framing when `?framing=` is set, so a pass means the sinks agree on a framed picture.
+- `export-identity.slow.test.ts` (the software-pinned cross-process run) has no framed case, though the spec said it would. That is a follow-up, not a regression.
 
 **NOT run, NOT looked at:**
 
@@ -63,5 +64,7 @@ Merge this into the existing document rather than replacing it. Ranges: `padding
 ```
 npm run typecheck
 npx vitest run transform/ scripts/
-STC_STILL_GATE_BROWSER=~/Library/Caches/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-mac-arm64/chrome-headless-shell npm run gate:framing
+npm run gate:framing
 ```
+
+The gate falls back to Playwright's bundled Chromium. Where that build is missing, `STC_STILL_GATE_BROWSER` can name an installed chrome-headless-shell, for example `~/Library/Caches/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-mac-arm64/chrome-headless-shell` (an example path only; yours will differ).

@@ -76,6 +76,7 @@ import {
 } from "@transform/trim";
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
 import type { Size } from "@transform/spaces";
+import { holdFraming, restoreFraming, withHeldFraming, chosenFraming, type FramingHold } from "./framing-hold.js";
 import { contentFraction, DEFAULT_SOLID_COLOR, type Framing, type FramingPreset } from "@transform/framing";
 import { render } from "@transform/render";
 import {
@@ -439,7 +440,7 @@ window.addEventListener("resize", () => { if (player) { updateTicks(); renderRul
 
 async function persistProject(): Promise<void> {
   if (!openProject || !player) return;
-  const doc = projectForWrite(openProject, player.durationNs);
+  const doc = projectForWrite(withHeldFraming(openProject, heldFraming), player.durationNs);
   await editor.writeProject(
     new TextEncoder().encode(JSON.stringify(doc, null, 2)).buffer as ArrayBuffer,
   );
@@ -765,6 +766,13 @@ window.addEventListener("resize", redrawLanes);
 // mode to just look and then leaving with no drag restores the original
 // override exactly rather than deleting it as a side effect.
 //
+// STC-396: the FRAME is set aside the same way. With project.framing set the
+// stage shows the picture INSET, so a pointer pixel on #stage is no longer
+// capture UV and #overridebox (a percentage of the overlay) would sit in the
+// wrong place. While editing, framing is held in `heldFraming` and removed
+// from the live project; every path that ends editing restores it, and
+// persistProject/export write the project WITH it (`withHeldFraming`).
+//
 // STC-331 adds a SECOND kind of editing target: a window with no derived
 // counterpart at all. `editingWindowId` (a derived window's own identity)
 // and `editingManualId` (a manual override's own `id`) are mutually
@@ -775,6 +783,7 @@ window.addEventListener("resize", redrawLanes);
 // End below), since there is no derived window to read them from.
 
 let editingWindowId: string | null = null;
+let heldFraming: FramingHold | null = null;
 let editingManualId: string | null = null;
 let draftRect: Rect | null = null;
 let draftEasing: ZoomPreset | "" = "";
@@ -1025,7 +1034,18 @@ async function commitCurrentEdit(): Promise<void> {
 /** The teardown half of leaving edit mode — shared by a normal close (which
  *  commits first) and a delete (which does not: there is nothing left to
  *  commit for a window that no longer exists). */
+function setAsideFraming(): void {
+  if (!openProject || heldFraming) return;
+  heldFraming = holdFraming(openProject);
+}
+
+function putBackFraming(): void {
+  if (openProject) restoreFraming(openProject, heldFraming);
+  heldFraming = null;
+}
+
 function resetEditingState(): void {
+  putBackFraming();
   editingWindowId = null;
   editingManualId = null;
   draftRect = null;
@@ -1044,6 +1064,7 @@ async function closeOverrideEditor(): Promise<void> {
   resetEditingState();
   layoutOverrideBlocks();
   updateManualDraftBlock();
+  if (player) await player.seek(player.currentNs); // repaint framed again
 }
 
 /**
@@ -1067,6 +1088,7 @@ async function deleteDerivedWindow(): Promise<void> {
   await persistProject();
   layoutOverrideBlocks();
   updateManualDraftBlock();
+  if (player) await player.seek(player.currentNs); // repaint framed again
 }
 
 async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
@@ -1083,6 +1105,7 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   draftManualStart = w.startNs;
   draftManualEnd = w.endNs;
   openProject.overrides = overridesWithoutWindow(openProject.overrides, id);
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((w.startNs + w.endNs) / 2));
   await player.seek(mid);
@@ -1103,6 +1126,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   draftRect = o.rect;
   draftEasing = o.easing;
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((o.startNs + o.endNs) / 2));
   await player.seek(mid);
@@ -1129,6 +1153,7 @@ async function createManualWindow(clickNs: number): Promise<void> {
   draftManualEnd = endNs;
   draftRect = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
   draftEasing = "";
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((startNs + endNs) / 2));
   await player.seek(mid);
@@ -1281,7 +1306,7 @@ $("outsize").addEventListener("change", () => {
 // ---- legibility + viewer's eye (STC-318), inside the export dialog ---------
 
 function frameFractionFor(p: Project): number {
-  return openCapture ? contentFraction(p.framing, p.output, openCapture.width / openCapture.height) : 1;
+  return openCapture ? contentFraction(p === openProject ? chosenFraming(p, heldFraming) : p.framing, p.output, openCapture.width / openCapture.height) : 1;
 }
 
 function updateLegibilityUI(): void {
@@ -1536,6 +1561,8 @@ async function closeTake(): Promise<void> {
   // going away regardless, and persisting a draft against a project about to
   // be discarded would be a write nobody asked for. Just drop the state.
   editingWindowId = null;
+  editingManualId = null;
+  heldFraming = null; // the project is discarded below; nothing to restore into
   draftRect = null;
   draftEasing = "";
   dragAnchorUv = null;
@@ -1744,7 +1771,7 @@ $("keycastbtn").addEventListener("click", () => {
 // A preset (or none) saved to the project. Preview and export both go through
 // render(), so what is previewed is what exports.
 function updateFramingUI(): void {
-  const f = openProject?.framing;
+  const f = chosenFraming(openProject, heldFraming);
   ($("framepreset") as HTMLSelectElement).value = f?.preset ?? "none";
   const color = $("framecolor") as HTMLInputElement;
   color.hidden = f?.preset !== "solid";
@@ -1753,12 +1780,19 @@ function updateFramingUI(): void {
 
 async function setFraming(next: Framing | undefined): Promise<void> {
   if (!openProject || !player) return;
-  const previous = openProject.framing;
-  if (next) openProject.framing = next; else delete openProject.framing;
+  // While an override editor has the frame set aside, a change replaces the
+  // held value and the live project stays unframed until editing ends.
+  const previous = chosenFraming(openProject, heldFraming);
+  const apply = (f: Framing | undefined): void => {
+    if (editingWindowId !== null || editingManualId !== null) {
+      heldFraming = f ? { framing: f } : null;
+    } else if (f) openProject!.framing = f; else delete openProject!.framing;
+  };
+  apply(next);
   try {
     await persistProject();
   } catch (e) {
-    if (previous) openProject.framing = previous; else delete openProject.framing;
+    apply(previous);
     updateFramingUI();
     throw e;
   }
@@ -2423,7 +2457,7 @@ async function runExport(): Promise<void> {
   clearAlert();
 
   const started = performance.now();
-  const exporting: Project = structuredClone(openProject);
+  const exporting: Project = structuredClone(withHeldFraming(openProject, heldFraming));
   try {
     // STC-413: the bundle's stable identity, so the written MP4 can point
     // back at its source after a Finder rename or move. Best-effort, same as

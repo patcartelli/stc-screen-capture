@@ -88,6 +88,11 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       const problem = framingProblem(f);
       if (problem) throw new Error(problem);
       project.framing = f as Project["framing"];
+      // Sinks that agree prove nothing about a framed picture unless the frame
+      // was applied at all: fail loudly if render() reports none.
+      if (!render(project, session, tickTimeNs(0)).framing) {
+        throw new Error(`?framing=${framingParam} was set but render() returned no framing`);
+      }
     }
 
     const { width, height } = project.output;
