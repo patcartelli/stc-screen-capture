@@ -98,10 +98,23 @@ function unmadeTakeDir(): string {
   return join(mkdtempSync(join(tmpdir(), "stc-tap-req-")), "take");
 }
 
+/**
+ * The two ways a take can lack a cursor track, refused identically.
+ *
+ * `no-event-tap` is STC-315's: `tapCreate` returns nil. `tap-silent` is
+ * STC-480's: the tap IS created, for real, but the grant check reports
+ * neither Input Monitoring nor Accessibility — the clean VM's state, where a
+ * take started and recorded one cursor-shape sample and no input at all.
+ */
+const FAULTS = [
+  ["no-event-tap", "a tap that cannot be created"],
+  ["tap-silent", "a tap no grant will feed (STC-480)"],
+] as const;
+
 describe("cursor telemetry is a hard requirement (STC-315)", () => {
-  test("a tap that cannot be created refuses the start, once, and leaves no take behind", async () => {
+  test.each(FAULTS)("%s: %s refuses the start, once, and leaves no take behind", async (fault) => {
     const dir = unmadeTakeDir();
-    const h = spawnHelper({ STC_CAPTURE_FAULT: "no-event-tap" });
+    const h = spawnHelper({ STC_CAPTURE_FAULT: fault });
     await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
     h.send({ cmd: "start", dir, seq: 1 });
     const r = await waitFor(() => h.fd3.find((l) => l.seq === 1), 20_000, "start outcome");
@@ -149,6 +162,11 @@ describe("cursor telemetry is a hard requirement (STC-315)", () => {
     // take for ANY reason — a held display, a broken writer, a binary that
     // refuses everything. It is the only assertion here that says the fault
     // injector is what made the difference.
+    //
+    // Since STC-480 it is also the only automated check that the REAL grant
+    // probe (`IOHIDCheckAccess` / `AXIsProcessTrusted`) answers "granted" on a
+    // machine that records — a probe that misread a real grant would refuse
+    // here, with `event-tap-unavailable`, and fail loudly rather than skip.
     const dir = unmadeTakeDir();
     const h = spawnHelper();
     await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");

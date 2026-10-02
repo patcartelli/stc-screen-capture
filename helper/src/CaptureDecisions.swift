@@ -115,6 +115,56 @@ func decideCameraOpen(opened: Bool, stoppingBegan: Bool) -> CameraOpenDecision {
     return stoppingBegan ? .closeImmediately : .store
 }
 
+/// Input Monitoring's TCC state, as `IOHIDCheckAccess` reports it. Its own
+/// enum so the decision below is a function of values a test can write,
+/// not of IOKit constants.
+enum ListenEventAccess: Equatable {
+    case granted
+    case denied
+    case unknown
+}
+
+enum EventTapAccessDecision: Equatable {
+    /// The tap will deliver: record.
+    case proceed
+    /// Refuse the start, exactly as a nil `tapCreate` is refused (STC-315).
+    /// `requestAccess` is true when the system has never asked — calling
+    /// `IOHIDRequestAccess` then raises macOS's own prompt, which is what the
+    /// `event-tap-unavailable` refusal's sentence already tells the user to
+    /// expect. Once it is `denied`, macOS will not ask again; Settings is the
+    /// only way back, and the refusal's button opens it.
+    case refuse(requestAccess: Bool)
+}
+
+/// Will this take's event tap actually deliver input? (STC-480)
+///
+/// STC-315 refused a take whose `CGEvent.tapCreate` returned nil, on the
+/// assumption that a missing Input Monitoring grant always produces that nil.
+/// It does not always: in a clean VM (2026-09-30) `tapCreate` returned a port
+/// with the grant OFF, the take started, and `events.json` held one cursor-
+/// shape sample and no moves or clicks — a take with no cursor anywhere,
+/// which is precisely what STC-315 exists to forbid, and nothing warned.
+/// `tools/test-host`'s probe had already recorded the same hazard in a
+/// comment ("a port that never delivers"); the helper never checked.
+///
+/// So a created tap is not enough. It proceeds only when the grant that
+/// feeds it is present: Input Monitoring itself, or Accessibility, which
+/// macOS also accepts for a session event tap — refusing on Input
+/// Monitoring alone would break a machine that records correctly today
+/// through an Accessibility grant.
+///
+/// What this cannot see: a grant the probe reports wrongly. That needs a
+/// real Mac (`docs/STC-480-RUNBOOK.md`), as does whether this VM behaviour
+/// reproduces on hardware at all.
+func decideEventTapAccess(tapCreated: Bool, listenEvent: ListenEventAccess,
+                          accessibilityTrusted: Bool) -> EventTapAccessDecision {
+    // A nil tap is STC-315's case, unchanged. macOS raises its own prompt on
+    // that path (watched 2026-09-09), so asking again would be a second one.
+    guard tapCreated else { return .refuse(requestAccess: false) }
+    if listenEvent == .granted || accessibilityTrusted { return .proceed }
+    return .refuse(requestAccess: listenEvent == .unknown)
+}
+
 func decideCursorEvent(type: CGEventType, timestampNs: UInt64, t0Ns: UInt64) -> CursorEventDecision {
     if type == .tapDisabledByTimeout { return .reenableTap(reason: .timeout) }
     if type == .tapDisabledByUserInput { return .reenableTap(reason: .userInput) }
