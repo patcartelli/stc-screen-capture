@@ -374,3 +374,42 @@ describe("render(): the cursor follows the zoom crop (STC-421)", () => {
     expect(fs.cursor.pxPerPoint).toBe(1);
   });
 });
+
+import { DEFAULT_PIP_STYLE, pipRect, framingSource } from "../src/pip-style.js";
+
+describe("a styled PiP (STC-461)", () => {
+  const t = 2_000_000_000; // inside the fixture camera's 1.0355 s .. 3.0245 s
+  test("no style: no draw block, and the rect is exactly the fixed corner", () => {
+    const { project, session } = pipSession();
+    const fs = render(project, session, t);
+    expect(fs.pip).not.toBeNull();
+    expect(fs.pip!.draw).toBeUndefined();
+  });
+  test("a style resolves every drawing number", () => {
+    const { project, session } = pipSession();
+    const style = { ...DEFAULT_PIP_STYLE, shape: "circle" as const, width: 0.2, center: { x: 0.25, y: 0.3 },
+      mirror: true, shadow: true, border: { widthPt: 2, color: "#ffffff" }, framing: { x: 0.4, y: 0.5, zoom: 1.5 } };
+    // Zoom disabled: pipSession's click would otherwise open a window at t, and
+    // pxPerPoint carries the zoom magnification while the border deliberately does not.
+    const styled = { ...project, pip: { ...project.pip!, style }, zoom: { enabled: false, intensity: 1, preset: "standard" as const } };
+    const fs = render(styled, session, t);
+    const cam = session.anchors.camera!;
+    const rect = pipRect(style, styled.output, cam);
+    expect({ x: fs.pip!.x, y: fs.pip!.y, width: fs.pip!.width, height: fs.pip!.height }).toEqual(rect);
+    expect(fs.pip!.draw!.source).toEqual(framingSource(style, cam));
+    expect(fs.pip!.draw!.radiusPx).toBe(rect.width / 2);
+    expect(fs.pip!.draw!.mirror).toBe(true);
+    expect(fs.pip!.draw!.shadow).toBe(true);
+    // Border points scale exactly as the cursor's points do. The fixture has zoom
+    // off and cursor.scale 1, so pxPerPoint IS the display->output factor here.
+    expect(fs.zoom.amount).toBe(0);
+    expect(styled.cursor.scale).toBe(1);
+    expect(fs.pip!.draw!.border).toEqual({ px: 2 * fs.cursor.pxPerPoint, color: "#ffffff" });
+  });
+  test("a rounded rect's radius is a fraction of the short side", () => {
+    const { project, session } = pipSession();
+    const style = { ...DEFAULT_PIP_STYLE, shape: "rect" as const, cornerRadius: 0.25 };
+    const fs = render({ ...project, pip: { ...project.pip!, style } }, session, t);
+    expect(fs.pip!.draw!.radiusPx).toBe(0.25 * Math.min(fs.pip!.width, fs.pip!.height));
+  });
+});

@@ -145,3 +145,39 @@ describe("composite() draws the pointer at the hotspot", () => {
     expect(outline(draw(frameState({ shape: "ibeam" })))).not.toBe(outline(draw(frameState({ shape: "arrow" }))));
   });
 });
+
+describe("the styled PiP (STC-461) — drawing order", () => {
+  const cam = { displayWidth: 1280, displayHeight: 720 } as unknown as VideoFrame;
+  const base = { frameIndex: 0, framePtsNs: 0, x: 100, y: 50, width: 200, height: 200 };
+  const drawOps = (draw?: import("../src/render.js").PipDraw) => {
+    const { ctx, ops } = recorder();
+    const fs: FrameState = { ...frameState({ visible: false }), pip: { ...base, draw } };
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, null, cam, fs, 640, 360);
+    return ops;
+  };
+  test("no draw block: the single five-argument call, byte for byte the old one", () => {
+    expect(drawOps().filter((o) => o.startsWith("drawImage"))).toEqual(["drawImage([object Object],100,50,200,200)"]);
+    expect(drawOps()).not.toContain("clip()");
+  });
+  test("shadow is filled BEFORE the clip; the image is drawn inside it; the border after restore", () => {
+    const ops = drawOps({ source: { x: 280, y: 0, width: 720, height: 720 }, mirror: false, radiusPx: 100,
+      border: { px: 3, color: "#ffffff" }, shadow: true });
+    const i = (s: string) => ops.findIndex((o) => o.startsWith(s));
+    expect(i("shadowBlur=")).toBeGreaterThan(-1);
+    expect(i("fill()")).toBeLessThan(i("clip()"));
+    expect(i("clip()")).toBeLessThan(i("drawImage"));
+    expect(ops[i("drawImage")]).toBe("drawImage([object Object],280,0,720,720,100,50,200,200)");
+    expect(ops.lastIndexOf("restore()")).toBeLessThan(i("stroke()"));
+    expect(ops).toContain("roundRect(100,50,200,200,100)");
+    expect(ops).toContain("lineWidth=3");
+    expect(ops).toContain("strokeStyle=#ffffff");
+  });
+  test("mirror flips about the PiP's own centre", () => {
+    const ops = drawOps({ source: { x: 0, y: 0, width: 1280, height: 720 }, mirror: true, radiusPx: 0, border: null, shadow: false });
+    expect(ops).toContain("translate(400,0)");   // 2*x + width
+    expect(ops).toContain("scale(-1,1)");
+    expect(ops.indexOf("scale(-1,1)")).toBeLessThan(ops.findIndex((o) => o.startsWith("drawImage")));
+    expect(ops).not.toContain("stroke()");
+    expect(ops.some((o) => o.startsWith("shadowBlur="))).toBe(false);
+  });
+});

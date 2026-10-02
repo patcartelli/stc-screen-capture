@@ -9,6 +9,7 @@ import {
   MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION, VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION,
   CURSOR_DEAD_ZONE_UV,
 } from "./zoom-change.js";
+import { PIP_SHADOW, DEFAULT_FRAMING } from "./pip-style.js";
 import {
   KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
   KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
@@ -160,8 +161,15 @@ import {
  * what version 12 did: `fs.keycast` is null and the cursor branch is
  * unchanged. The fingerprint moved because the keycast constants now reach
  * the pixels. (Built as 12; STC-420 merged version 12 and project-13 first.)
+ *
+ * ## Version 14: the styled PiP (STC-461)
+ *
+ * project-15's `pip.style` draws a clipped, optionally mirrored, bordered and
+ * shadowed camera at an authored place and framing. A document with no style
+ * draws exactly what version 13 did (one 5-argument `drawImage`). The
+ * fingerprint moved because `PIP_SHADOW` and `DEFAULT_FRAMING` reach the pixels.
  */
-export const TRANSFORM_VERSION = 13;
+export const TRANSFORM_VERSION = 14;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -178,6 +186,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 11, since: "2026-09-30", changed: "a window that moves mid-take keeps the cursor on target (STC-482): anchors v8's optional scope.window.track records the window's origin over the take, and session.ts's loader takes that displacement out of the cursor events (window-track.ts's stabiliseEvents) BEFORE the spring sees them, so the pointer stays where it was relative to the window through a title-bar drag instead of trailing off by how far the window went. Applied to the events, not per render, so the spring's lag does not turn into a pointer trailing its own window and auto-zoom's cursor fallback reads the same corrected events. A take with no track returns the very events array it was given, so every take that did not move a window renders exactly what version 10 did. No constant reaches the pixels, so the fingerprint is unchanged" },
   { version: 12, since: "2026-10-01", changed: "the click highlight is optional (STC-420): project-13's showClicks (absent = true) decides whether render() lets the compositor draw the CLICK_HIGHLIGHT_PT disc under a held button. It reaches the pixels through the project, never a live setting. Every document without showClicks:false renders exactly what version 11 did; no constant moved, so the fingerprint is unchanged" },
   { version: 13, since: "2026-10-02", changed: "the keycast (STC-419): events-3 key events (keyboard COMMANDS only — named non-printing keys and cmd/ctrl chords; typing is never recorded) render as one bottom-centre pill on the output canvas, after the crop, with a repeat count; 1.2 s hold, 200 ms fade, in sim ticks (keycast.ts). project-14's keycast.show:false hides it. A take with no keys, or with it hidden, draws exactly what version 12 did. The fingerprint moved: the keycast constants reach the pixels" },
+  { version: 14, since: "2026-10-02", changed: "the styled PiP (STC-461): project-15's pip.style — shape (rect/square/circle) and corner radius, an authored centre and width, a framing crop of the camera, mirror, border in display points and one drop shadow, all resolved in render() and drawn by the one compositor. A document with no style draws exactly what version 13 did. The fingerprint moved: PIP_SHADOW and DEFAULT_FRAMING reach the pixels" },
 ];
 
 /**
@@ -202,6 +211,7 @@ export function transformFingerprint(): string {
       BURST_CONCENTRATION, MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION,
       VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION, CURSOR_DEAD_ZONE_UV,
     },
+    pip: [PIP_SHADOW, DEFAULT_FRAMING],
     keycast: [KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
       KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
       KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR,
