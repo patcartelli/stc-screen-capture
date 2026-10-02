@@ -805,6 +805,13 @@ const MIC_FAULTS: Record<string, string> = {
   "mic-disconnected":
     "The microphone disconnected, so the rest of this take has no microphone audio. " +
     "The recording itself continues.",
+  // STC-485: the helper's format guard ended the mic track because the
+  // device's audio stopped matching the format it is labelled as. Before the
+  // guard this was a take whose whole mic track was full-scale noise, with
+  // nothing said.
+  "mic-format-mismatch":
+    "The microphone started sending audio in a format the recording could not read, so the rest " +
+    "of this take has no microphone audio rather than a track of noise. The recording itself continues.",
 };
 
 /**
