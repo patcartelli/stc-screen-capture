@@ -181,10 +181,6 @@ jobs:
       - name: Video framing gate
         run: npm run gate:framing
 
-      # Video framing (STC-396): pixel PROPERTIES of the framed picture, no decode.
-      - name: Video framing gate
-        run: npm run gate:framing
-
       # The helper has crashed three times on CI and each time produced only a
       # signal number (STC-254). The stack trace lives in the OS crash report,
       # which is discarded with the runner unless collected here.

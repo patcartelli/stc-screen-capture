@@ -56,6 +56,13 @@ try {
       const floor = Math.min(L(f), L(p.background));
       console.log(`  measured ${tag}: corner lum ${L(k).toFixed(1)} (${k.r},${k.g},${k.b}), picture ${L(f).toFixed(1)}, background ${L(p.background).toFixed(1)}, same pixel with the shadow off ${L(p.cornerNoShadow).toFixed(1)}`);
       if (L(k) < floor - 12) fail(`${tag}: dark fringe at the rounded corner (corner ${L(k).toFixed(1)} vs floor ${floor.toFixed(1)})`);
+      // The sharper check: the corner may be darker than the same pixel with the
+      // shadow off only by the real shadow's legitimate share. Tolerance is 10% of
+      // that reference luminance (scales for the dark preset). Measured: legitimate
+      // drops are clean 10.0, dark 3.2, solid 4.2 (tolerances 23.5 / 4.6 / 8.5); the
+      // old opaque-core seam dropped clean 37.8, dark 9.0, solid 14.5.
+      const ref = L(p.cornerNoShadow), drop = ref - L(k), tol = 0.1 * ref;
+      if (drop > tol) fail(`${tag}: dark fringe at the rounded corner (corner ${L(k).toFixed(1)} is ${drop.toFixed(1)} below the shadow-off pixel ${ref.toFixed(1)}, tolerance ${tol.toFixed(1)})`);
       else ok(`${tag}: no dark fringe at the rounded corner`);
 
       // the background covers every pixel it should: opaque at both far corners
