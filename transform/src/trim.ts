@@ -3,6 +3,7 @@ import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
 import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
 import { TRANSFORM_VERSION } from "./transform-version.js";
+import { DEFAULT_PIP_FIXED } from "./pip-style.js";
 
 const NS_PER_S = 1_000_000_000;
 
@@ -60,13 +61,10 @@ export function estimateExportMs(maxFrames: number): number {
 
 /**
  * The PiP a camera take gets when its own project does not say otherwise.
- *
- * Matches `fixtures/pip/project.json`'s geometry so the fixture and the app
- * agree about what "default" means.
+ * The value lives in pip-style.ts (STC-461), which the main process can import
+ * and this file cannot be; one value, re-exported.
  */
-export const DEFAULT_PIP: Pip = {
-  enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32,
-};
+export const DEFAULT_PIP: Pip = { ...DEFAULT_PIP_FIXED };
 
 /**
  * Full level (STC-418). system.m4a is recorded at full level and this is the
