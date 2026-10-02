@@ -35,8 +35,8 @@ import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, renameCapture } from "./takes.js";
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
-  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, sweepOrphanedBundles,
-  markOfferedForRecovery, type TempTakeInfo,
+  purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, findOrphanedBundles,
+  markOfferedForRecovery, type TempTakeInfo, type OrphanedBundle,
 } from "./temp-takes.js";
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
@@ -790,10 +790,10 @@ app.whenReady().then(async () => {
     // lines down — so a mistaken sweep is one Finder restore away, never
     // an `rm` nobody can undo.
     const { saveFolder } = readSettings(app.getPath("userData"));
-    void sweepOrphanedBundles(process.env, saveFolder).then((due) => {
-      for (const dir of due) {
-        shell.trashItem(dir).catch((e) => {
-          console.error("[orphan-sweep] could not trash an orphaned bundle:", dir, e);
+    void findOrphanedBundles(process.env, saveFolder).then((report) => {
+      for (const b of report.orphans) {
+        shell.trashItem(b.dir).catch((e) => {
+          console.error("[orphan-sweep] could not trash an orphaned bundle:", b.dir, e);
         });
       }
     }).catch((e) => {
