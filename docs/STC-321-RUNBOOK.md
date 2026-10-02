@@ -1,10 +1,8 @@
 # STC-321 — Demo #2: the Vividly walkthrough, narrated
 
-A recording session: a Mac and a person. **It needs STC-419 (keystrokes),
-[#273](https://github.com/patcartelli/stc-screen-capture/pull/273).** Run it
-from `master` once #273 has merged. Until then, run it from
-`accounts/stc-419-show-keystrokes`. This sheet lives on
-`accounts/stc-321-vividly-runbook`.
+A recording session: a Mac and a person. It needs STC-419 (keystrokes), which
+merged in [#273](https://github.com/patcartelli/stc-screen-capture/pull/273), so
+**run it from `master`**.
 
 **Done means:** published, reachable by whoever can reach the case study, and
 made in **one working day** from first recording to live embed. That day is
