@@ -4,7 +4,7 @@ import {
   isDefaultPipStyle, pipStylesEqual, DEFAULT_PIP_STYLE, DEFAULT_PIP_FIXED, DEFAULT_FRAMING,
   PIP_WIDTH_MAX, PIP_FRAMING_ZOOM_MAX, type PipStyle,
   PIP_PRESETS, editPipStyle, snapCenter, resizeFromCorner, panFraming, zoomFraming,
-  PIP_SNAP_MARGIN_PX, PIP_WIDTH_MIN, DEFAULT_BORDER,
+  PIP_SNAP_MARGIN_PX, PIP_WIDTH_MIN, DEFAULT_BORDER, inspectorSide, inspectorLeftPx,
 } from "../src/pip-style.js";
 import { fixedCornerPipUv, uvRectToPixels, outputRect, roundRect } from "../src/spaces.js";
 import { DEFAULT_PIP } from "../src/trim.js";
@@ -220,5 +220,22 @@ describe("panFraming", () => {
     const f = zoomFraming(s, 1, CAM);
     const src = framingSource({ ...s, framing: f }, CAM);
     expect(src.x + src.width).toBeLessThanOrEqual(1280 + 1e-9);
+  });
+});
+
+describe("inspectorSide — the panel opens away from the PiP", () => {
+  test("a PiP in the right half puts the panel on the left, and vice versa", () => {
+    expect(inspectorSide(style({ center: { x: 0.9, y: 0.9 } }))).toBe("left");
+    expect(inspectorSide(style({ center: { x: 0.1, y: 0.1 } }))).toBe("right");
+    expect(inspectorSide(style({ center: { x: 0.5, y: 0.5 } }))).toBe("right");
+  });
+  test("the default (fixed bottom-right corner) PiP opens it on the left", () => {
+    const s = styleFromFixedCorner(DEFAULT_PIP, { width: 3840, height: 2160 }, CAM);
+    expect(inspectorSide(s)).toBe("left");
+  });
+  test("left edge in screen px, gap in from the chosen stage edge", () => {
+    const stage = { left: 10, right: 1010 };
+    expect(inspectorLeftPx(stage, "left", 300, 12)).toBe(22);
+    expect(inspectorLeftPx(stage, "right", 300, 12)).toBe(698);
   });
 });

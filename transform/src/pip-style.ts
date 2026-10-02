@@ -312,3 +312,19 @@ export function zoomFraming(style: PipStyle, zoom: number, camera: Size): PipFra
   const f = style.framing ?? DEFAULT_FRAMING;
   return clampFraming({ ...f, zoom: clamp(zoom, 1, PIP_FRAMING_ZOOM_MAX) }, style.shape, camera);
 }
+
+/**
+ * Which side of the stage an inspector over it opens on: AWAY from the PiP, so
+ * the PiP stays pressable while the inspector is open (the default PiP sits in
+ * the bottom-right, exactly where a panel anchored to the timecode row lands).
+ * A PiP dead centre counts as the left half, so the panel goes right.
+ */
+export function inspectorSide(style: Pick<PipStyle, "center">): "left" | "right" {
+  return style.center.x > 0.5 ? "left" : "right";
+}
+
+/** The inspector's left edge in screen px for that side, `gap` in from the stage's edge. */
+export function inspectorLeftPx(stage: { left: number; right: number }, side: "left" | "right",
+                                panelWidth: number, gap: number): number {
+  return side === "left" ? stage.left + gap : stage.right - gap - panelWidth;
+}

@@ -95,7 +95,7 @@ import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./sh
 import { clipActivity, zoomCurve, laneBitmap } from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, snapCenter, resizeFromCorner, styleFromFixedCorner,
-  PIP_SNAP_THRESHOLD_SCREEN_PX, type PipEdit, type PipStyle,
+  PIP_SNAP_THRESHOLD_SCREEN_PX, inspectorSide, inspectorLeftPx, type PipEdit, type PipStyle,
 } from "@transform/pip-style";
 import { buildPipInspector } from "./pip-inspector.js";
 
@@ -1754,6 +1754,8 @@ $("keycastbtn").addEventListener("click", () => {
 // hidden while a drag is in flight (layoutPipOverlay checks `pipDrag`), and a
 // drag that ends with the panel closed re-opens it — dragging is part of using
 // the inspector, not leaving it. (docs/STC-461-RUNBOOK.md §3 judges how it feels.)
+// The panel itself opens over the stage on the side away from the PiP
+// (placePipPanel), never on top of the thing it lets you drag.
 
 function pipCamera(): Size | null {
   const cam = openSession?.anchors.camera;
@@ -1837,6 +1839,32 @@ function layoutPipOverlay(): void {
   });
 }
 
+const PIP_PANEL_WIDTH_PX = 300;
+const PIP_PANEL_GAP_PX = 12;
+
+/**
+ * Put the inspector over the stage on the side AWAY from the PiP
+ * (pip-style.ts's inspectorSide) — anchored to its button it covered the
+ * default bottom-right PiP, the one thing it exists to let you drag. Runs on
+ * beforetoggle so there is no flash at the old spot; the panel re-opens after
+ * every drag, so it re-sides then.
+ */
+function placePipPanel(): void {
+  const style = currentPipStyle();
+  const stage = ($("stage") as HTMLCanvasElement).getBoundingClientRect();
+  const side = style ? inspectorSide(style) : "left";
+  const left = Math.max(0, inspectorLeftPx(stage, side, PIP_PANEL_WIDTH_PX, PIP_PANEL_GAP_PX));
+  const top = stage.top + PIP_PANEL_GAP_PX;
+  Object.assign(pipPanel.style, {
+    left: `${left}px`, top: `${top}px`, width: `${PIP_PANEL_WIDTH_PX}px`,
+    maxHeight: `${Math.max(120, innerHeight - top - PIP_PANEL_GAP_PX)}px`,
+  });
+  pipPanel.dataset.side = side;
+}
+
+pipPanel.addEventListener("beforetoggle", (e) => {
+  if ((e as ToggleEvent).newState === "open") placePipPanel();
+});
 pipPanel.addEventListener("toggle", () => layoutPipOverlay());
 
 let pipDrag: { kind: "move" | "resize"; dx: number; dy: number } | null = null;
@@ -1879,14 +1907,19 @@ function endPipDrag(): void {
   persistPip();
   // Light dismiss runs around this same pointerup; re-open once it has.
   setTimeout(() => {
-    if (!pipPanelOpen() && !$("pipbtn").hidden) pipPanel.showPopover?.();
+    // Re-opening re-sides it (beforetoggle); one that stayed open re-sides here.
+    if (pipPanelOpen()) placePipPanel();
+    else if (!$("pipbtn").hidden) pipPanel.showPopover?.();
     layoutPipOverlay();
   }, 0);
 }
 $("pipoverlay").addEventListener("pointerup", endPipDrag);
 $("pipoverlay").addEventListener("pointercancel", endPipDrag);
 
-window.addEventListener("resize", () => { if (!$("pipoverlay").hidden) layoutPipOverlay(); });
+window.addEventListener("resize", () => {
+  if (pipPanelOpen()) placePipPanel();
+  if (!$("pipoverlay").hidden) layoutPipOverlay();
+});
 
 $("micmute").addEventListener("click", () => {
   if (!openProject) return;

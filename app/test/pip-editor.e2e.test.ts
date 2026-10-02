@@ -47,8 +47,15 @@ describe("the editor's Camera popover (STC-461)", () => {
     const output = readJson(takeDir, "project.json").output as { width: number; height: number };
     const cam = readJson(takeDir, "anchors.json").camera as { width: number; height: number };
     await editorWin.click("#pipbtn");
+    // The overlay is unhidden by the popover's (async) toggle handler.
+    await editorWin.locator("#pipoverlay .pipbox").waitFor({ state: "visible", timeout: 10_000 });
     const box = (await editorWin.locator("#pipoverlay .pipbox").boundingBox())!;
     const stage = (await editorWin.locator("#stage").boundingBox())!;
+    // The default PiP is bottom-right, so the inspector must have opened on the
+    // LEFT and left the PiP pressable: the top element at its centre is the box.
+    expect(await editorWin.evaluate(() => document.getElementById("pippanel")!.dataset.side)).toBe("left");
+    expect(await editorWin.evaluate(([x, y]) => !!document.elementFromPoint(x!, y!)?.closest(".pipbox"),
+      [box.x + box.width / 2, box.y + box.height / 2])).toBe(true);
     await editorWin.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await editorWin.mouse.down();
     // Aim a few OUTPUT pixels short of the snapped spot; the snap must finish the job.
@@ -63,5 +70,7 @@ describe("the editor's Camera popover (STC-461)", () => {
     // The drag must not cost the person the inspector (light dismiss is re-opened).
     await expect.poll(() => editorWin.evaluate(() => document.getElementById("pippanel")!.matches(":popover-open")),
       { timeout: 5_000 }).toBe(true);
+    // ...and re-sided: the PiP is top-left now, so the panel is on the right.
+    expect(await editorWin.evaluate(() => document.getElementById("pippanel")!.dataset.side)).toBe("right");
   }, 120_000);
 });

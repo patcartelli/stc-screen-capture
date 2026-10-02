@@ -137,14 +137,17 @@
     #keycastbtn[aria-pressed="false"] { opacity: .6; }
     /* STC-461: the Camera button takes the auto margin (it comes first);
        Audio and Keys then sit 8px after it. */
-    #pipbtn { anchor-name: --pipbtn; }
+    #pipbtn { anchor-name: none; }
     #pipbtn:not([hidden]) ~ #audiobtn,
     #pipbtn:not([hidden]) ~ #keycastbtn { margin-left: 8px; }
-    #pippanel { position-anchor: --pipbtn; position-area: top span-left; margin: 0 0 6px;
-                position-try-fallbacks: flip-block; inset: auto;
+    /* Not anchored to the button: it opens OVER the stage on the side away
+       from the PiP (editor.ts's placePipPanel, pip-style.ts's inspectorSide),
+       so the PiP stays pressable while it is open. left/top/max-height are set
+       on beforetoggle; width is PIP_PANEL_WIDTH_PX there. */
+    #pippanel { position: fixed; inset: auto; margin: 0; overflow: auto; box-sizing: border-box;
                 padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                 background: var(--surface, var(--bg)); color: var(--text);
-                box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); width: 300px; }
+                box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
     /* STC-460: the pane, redesigned. A popover still (Patrick's default: it
