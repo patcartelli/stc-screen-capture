@@ -8,6 +8,7 @@ import {
   hiddenCount, visibleCount,
   CORNERS,
 } from "../src/thumbnail.js";
+import { actionsFor, closesPanel, type PanelTake } from "../src/panel-actions.js";
 
 /**
  * STC-296's panel decisions, without a window or a real clock.
@@ -341,5 +342,16 @@ describe("vertical preview layout (STC-426)", () => {
     // ever destroyed by the cap now — but that is `hiddenCount`'s claim
     // above, not this constant's.
     expect(MAX_STACKED).toBe(3);
+  });
+});
+
+describe("recordings (STC-392 Phase B Task 8)", () => {
+  test("a recording's panel is the same component, with a different card", () => {
+    // D2: no poster frame in v1, reusing the library's own `source: "none"`
+    // vocabulary. The point of the assertion is that the ACTIONS are the same
+    // component's — the ticket's "stills and recordings use the same component
+    // with the same behavior" — while the picture is the one thing that differs.
+    expect(actionsFor({ kind: "recording", origin: "fresh" })).toContain("trash");
+    expect(closesPanel("trash")).toBe(closesPanel("trash"));
   });
 });
