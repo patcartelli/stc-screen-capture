@@ -26,6 +26,9 @@ jobs:
     # 8 min to 30: it had said "~6 min" while build + typecheck + `npm test`
     # measured 11-22 min across 17 green runs, so the worst case went from
     # 60.5 min to 82.5 and 70 no longer cleared it with the 5 min margin.
+    # 90 -> 95 (STC-499) when STC-396's framing gate (220 s process bound)
+    # joined the worst-case sum: 86.2 min no longer cleared 90 with the 5 min
+    # margin. The two merged back to back, so neither PR's CI saw the other's.
     #
     # Rising is not a regression here. Every gate now carries its OWN process
     # bound, so a wedged gate dies at 7.5-13 min instead of holding the job to
@@ -36,7 +39,7 @@ jobs:
     # Minutes are free on a public repo. A healthy run was ~6 min when this was
     # first written; it is 12-25 min now (742-1469 s over the same 17 runs),
     # almost all of it `npm test`.
-    timeout-minutes: 90
+    timeout-minutes: 95
 
     # A post-merge master run re-verifies a tree CI already approved as a PR
     # head, which is the largest remaining duplication. It is NOT skipped by
