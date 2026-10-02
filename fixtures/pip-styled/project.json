@@ -1,0 +1,14 @@
+{
+  "version": 16,
+  "output": { "fps": 60, "width": 640, "height": 360 },
+  "cursor": { "style": "default", "scale": 1 },
+  "transform": { "version": 15 },
+  "pip": {
+    "enabled": true, "corner": "bottom-right", "widthPct": 0.125, "marginPx": 32,
+    "style": {
+      "shape": "circle", "cornerRadius": 0, "center": { "x": 0.22, "y": 0.3 }, "width": 0.25,
+      "framing": { "x": 0.42, "y": 0.5, "zoom": 1.5 },
+      "mirror": true, "border": { "widthPt": 2, "color": "#ffffff" }, "shadow": true
+    }
+  }
+}

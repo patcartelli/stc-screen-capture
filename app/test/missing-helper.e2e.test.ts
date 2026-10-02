@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
-import { toastText } from "./_toast.js";
+import { toastPage, toastText, waitForToastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
@@ -34,10 +34,7 @@ describe("a helper binary that does not exist", () => {
     });
     const win = await app.firstWindow();
     await win.waitForLoadState("domcontentloaded");
-    // Poll the TEXT, not the window: the toast window is listed as soon as it
-    // commits navigation, before its page has filled the label, and a single
-    // read in that gap returns "" (CI runs 37022291232, 37051723621; STC-496).
-    await expect.poll(() => toastText(app!), { timeout: 30_000 }).toMatch(/keeps failing to start/);
+    expect(await waitForToastText(app!, 30_000)).toMatch(/keeps failing to start/);
     // The library still works: the takes on disk do not need the helper.
     await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
   }, 120_000);

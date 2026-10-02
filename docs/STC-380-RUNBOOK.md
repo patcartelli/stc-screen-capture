@@ -40,14 +40,14 @@ remainder.
 * Same dashed/disabled treatment as §1, for the same reason: selecting it
   would capture bounds ScreenCaptureKit cannot render as what the user sees.
 
-## §3 — the epsilon (`VISIBILITY_EPSILON`, 2% of a window's own area)
+## §3 — the threshold (`MIN_VISIBLE_FRACTION`, 50% since STC-481; STC-380 shipped a 2% epsilon that refused any overlap)
 
 Hover a window that is essentially fully visible but for an ordinary sliver
 another window's title bar or drop shadow happens to clip — the everyday
 case, not the deliberately-broken one above.
 
 * This should NOT trip the dashed treatment. If ordinary, unremarkable
-  windows are being flagged not-fully-visible, `VISIBILITY_EPSILON`
+  windows are being flagged not-fully-visible, `MIN_VISIBLE_FRACTION`
   (`StillDecisions.swift`) is too tight and needs loosening; if the two cases
   above (§1, §2) are NOT being caught, it is too loose.
 
@@ -59,5 +59,5 @@ without being occluded and vice versa, and the fixture math in
 `helper/test/still/main.swift` cannot substitute for a real
 `SCShareableContent` window list, which may have front-to-back ordering
 surprises this file only assumed from `selection.ts`'s existing comment. If
-`VISIBILITY_EPSILON` needs to move, it is the one dial — no second copy of it
+`MIN_VISIBLE_FRACTION` needs to move, it is the one dial — no second copy of it
 exists.

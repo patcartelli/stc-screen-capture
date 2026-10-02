@@ -49,7 +49,8 @@ import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-wind
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
 import type { OptionsState } from "./record-options.js";
-import { recordTimeProject, type RecordTimeChoices } from "./take-project.js";
+import { recordTimeProject, defaultStyleForTake, type RecordTimeChoices } from "./take-project.js";
+import { cleanPipStyle } from "@transform/pip-style.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
@@ -1490,7 +1491,10 @@ async function recordFlowBody(
     const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup!.startRecording(dir, startParams);
     // Only after a successful start: a refused one leaves no take to describe.
-    recordTimeChoices.set(dir, { showClicks: options.showClicks });
+    recordTimeChoices.set(dir, {
+      showClicks: options.showClicks,
+      pipStyle: defaultStyleForTake(stored.pipStyle, options.camera === true),
+    });
     console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
@@ -2467,6 +2471,11 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
         || !isFiniteNum(p.widthPct) || p.widthPct <= 0 || p.widthPct > 1
         || !Number.isInteger(p.marginPx) || p.marginPx < 0) {
       throw new Error("project.json: malformed pip");
+    }
+    // project-16 (STC-461): the write gate REFUSES a style the transform would
+    // have to drop — a bad style must never reach disk.
+    if (p.style !== undefined && cleanPipStyle(p.style) === null) {
+      throw new Error("project.json: malformed pip.style");
     }
   }
   if (doc.transform !== undefined) {

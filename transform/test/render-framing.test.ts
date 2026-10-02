@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { DEFAULT_ZOOM, defaultProject } from "../src/trim.js";
 import { render } from "../src/render.js";
 import { framingLayout } from "../src/framing.js";
+import { DEFAULT_PIP_STYLE, pipRect, styleFromFixedCorner } from "../src/pip-style.js";
 import type { Project, Session, SessionEvent } from "../src/types.js";
 
 const MS = 1_000_000;
@@ -85,6 +86,25 @@ describe("render() with framing", () => {
     expect(fs.pip!.y).toBeGreaterThanOrEqual(c.y);
     expect(fs.pip!.x + fs.pip!.width).toBe(c.x + c.width - 32);
     expect(fs.pip!.y + fs.pip!.height).toBe(c.y + c.height - 32);
+  });
+
+  // STC-461 merged with STC-396: a STYLED PiP is UV over the content rect too.
+  test("a styled PiP is placed in UV over the content rect, offset by its origin", () => {
+    const pip = { enabled: true, corner: "bottom-right" as const, widthPct: 0.125, marginPx: 32,
+      style: { ...DEFAULT_PIP_STYLE, shape: "circle" as const, center: { x: 0.25, y: 0.3 }, width: 0.2 } };
+    const fs = render(framed({ zoom: noZoom, pip }), session(true), 3000 * MS);
+    const c = fs.framing!.content;
+    const local = pipRect(pip.style, { width: c.width, height: c.height }, { width: 1280, height: 720 });
+    expect(fs.pip).toMatchObject({ x: c.x + local.x, y: c.y + local.y, width: local.width, height: local.height });
+  });
+
+  test("the fixed corner expressed as a style lands where the fixed corner does, framed (no jump on first edit)", () => {
+    const fixed = { enabled: true, corner: "bottom-right" as const, widthPct: 0.125, marginPx: 32 };
+    const c = render(framed({ zoom: noZoom }), session(true), 3000 * MS).framing!.content;
+    const style = styleFromFixedCorner(fixed, { width: c.width, height: c.height }, { width: 1280, height: 720 });
+    const a = render(framed({ zoom: noZoom, pip: fixed }), session(true), 3000 * MS).pip!;
+    const b = render(framed({ zoom: noZoom, pip: { ...fixed, style } }), session(true), 3000 * MS).pip!;
+    expect([b.x, b.y, b.width, b.height]).toEqual([a.x, a.y, a.width, a.height]);
   });
 
   test("framing: absent changes nothing about the cursor or PiP (byte-identical to before)", () => {

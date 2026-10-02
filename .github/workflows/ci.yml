@@ -182,6 +182,17 @@ jobs:
           cp fixtures/pip/anchors.json fixtures/pip/events.json \
              fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
           npm run gate:identity -- "$CAM"
+          # STC-461: the same camera take with a STYLED PiP (circle, border,
+          # shadow, mirror, reframed). The step above pins the defaulted,
+          # unstyled path; this one makes the two sinks agree on the clip,
+          # the flip and the shadow. Media from fixtures/pip — never a second
+          # copy of camera.mp4 (STC-302).
+          STY="$(mktemp -d)/2026-01-01_00-00-00"
+          mkdir -p "$STY"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$STY/"
+          cp fixtures/pip-styled/project.json "$STY/"
+          npm run gate:identity -- "$STY"
 
       # STC-396: the same fixture, framed. Sink identity on the framed path.
       - name: Sink identity, framed
