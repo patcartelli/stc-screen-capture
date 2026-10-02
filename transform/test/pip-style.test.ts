@@ -40,12 +40,12 @@ describe("cleanPipStyle — the one validator", () => {
 
 describe("pipRect", () => {
   const outputs = [{ width: 640, height: 360 }, { width: 1920, height: 1080 }, { width: 3840, height: 2160 },
-    { width: 1080, height: 1920 }, { width: 1279, height: 721 }];
-  const cams = [CAM, { width: 640, height: 480 }, { width: 1920, height: 1080 }];
-  for (const output of outputs) for (const cam of cams) for (const shape of ["rect", "square", "circle"] as const) {
-    test(`integer and inside the frame — ${output.width}x${output.height}, cam ${cam.width}x${cam.height}, ${shape}`, () => {
+    { width: 1080, height: 1920 }, { width: 1279, height: 721 }, { width: 3840, height: 1080 }];
+  const cams = [CAM, { width: 640, height: 480 }, { width: 1920, height: 1080 }, { width: 1080, height: 1920 }];
+  for (const output of outputs) for (const cam of cams) for (const shape of ["rect", "square", "circle"] as const) for (const w of [0.3, PIP_WIDTH_MAX]) {
+    test(`integer and inside the frame — ${output.width}x${output.height}, cam ${cam.width}x${cam.height}, ${shape}, w ${w}`, () => {
       for (const cx of [0, 0.01, 0.5, 0.99, 1]) for (const cy of [0, 0.5, 1]) {
-        const r = pipRect(style({ shape, width: 0.3, center: { x: cx, y: cy } }), output, cam);
+        const r = pipRect(style({ shape, width: w, center: { x: cx, y: cy } }), output, cam);
         for (const v of [r.x, r.y, r.width, r.height]) expect(Number.isInteger(v)).toBe(true);
         expect(r.x).toBeGreaterThanOrEqual(0);
         expect(r.y).toBeGreaterThanOrEqual(0);
@@ -54,6 +54,10 @@ describe("pipRect", () => {
       }
     });
   }
+  test("a PiP taller than the output is capped to fit, keeping the camera aspect", () => {
+    const sz = pipSize(style({ shape: "rect", width: PIP_WIDTH_MAX }), { width: 1920, height: 1080 }, { width: 1080, height: 1920 });
+    expect(sz).toEqual({ width: Math.round(1080 * 1080 / 1920), height: 1080 });
+  });
   test("square and circle are 1:1; rect follows the camera aspect", () => {
     const out = { width: 1920, height: 1080 };
     expect(pipSize(style({ shape: "circle", width: 0.2 }), out, CAM)).toEqual({ width: 384, height: 384 });

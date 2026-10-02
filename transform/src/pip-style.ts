@@ -115,15 +115,27 @@ export function cleanPipStyle(v: unknown): PipStyle | null {
   return out;
 }
 
-/** Output pixels. Width rounds FIRST and height derives from the rounded width —
- * the same order `fixedCornerPipUv` uses, so `styleFromFixedCorner` is exact. */
+/** Output pixels, capped to fit inside the output while keeping the shape's aspect.
+ * Width rounds FIRST and height derives from the rounded width — the same order
+ * `fixedCornerPipUv` uses, so `styleFromFixedCorner` is exact. Only a PiP that
+ * would overflow is touched (a portrait camera, an extreme-aspect output). */
 export function pipSize(style: PipStyle, output: Size, camera: Size): Size {
-  const width = Math.round(output.width * style.width);
-  const height = style.shape === "rect" ? Math.round((width * camera.height) / camera.width) : width;
+  const rect = style.shape === "rect";
+  const aspect = rect ? camera.width / camera.height : 1;
+  let width = Math.round(output.width * style.width);
+  let height = rect ? Math.round((width * camera.height) / camera.width) : width;
+  if (height > output.height) {
+    height = output.height;
+    width = Math.round(height * aspect);
+  }
+  if (width > output.width) {
+    width = output.width;
+    height = rect ? Math.round(width / aspect) : width;
+  }
   return { width, height };
 }
 
-/** Where the PiP lands, in whole output pixels, always inside the frame. Rounded
+/** Where the PiP lands, in whole output pixels, always inside the frame (the size is capped to fit). Rounded
  * because it places a DECODED FRAME (render.ts's pipStateAt says why). */
 export function pipRect(style: PipStyle, output: Size, camera: Size): Rect {
   const { width, height } = pipSize(style, output, camera);
