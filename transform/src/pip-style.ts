@@ -14,8 +14,9 @@ import { fixedCornerPipUv, outputRect, uvRectToPixels, type Point, type Rect, ty
  *
  * `main.ts` (the write gate), `settings.ts` and `take-project.ts` validate a style
  * too, under `tsconfig.node.json`, which refuses anything that reaches the
- * DOM-typed `cursor-art.ts` — `trim.ts` does. So the fixed-corner default lives
- * here and `trim.ts` re-exports it, not the other way round.
+ * DOM-typed `cursor-art.ts` — `trim.ts` does. So the fixed-corner default
+ * (`DEFAULT_PIP_FIXED`) lives here and `trim.ts` builds its `DEFAULT_PIP` from
+ * it, not the other way round.
  *
  * ## Absent style = the old PiP
  *

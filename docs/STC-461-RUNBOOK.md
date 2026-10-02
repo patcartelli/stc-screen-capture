@@ -1,6 +1,6 @@
 # STC-461 — customizable camera PiP: what to run on the Mac
 
-**Not on `master` yet. Run this from `accounts/stc-461-customize-pip-webcam-image`** (unmerged, not pushed at the time of writing; push it or run it from the worktree). Run from `master` the runbook is absent and the app is the OLD build.
+**Until it merges, run this from `accounts/stc-461-customize-pip-webcam-image`; once it has merged, run it from `master`.** Run from a `master` that predates the merge, the runbook is absent and the app is the OLD build.
 
 ```
 git fetch && git checkout accounts/stc-461-customize-pip-webcam-image && helper/build.sh && npm run app:start
@@ -45,7 +45,7 @@ Try all four (Classic, Circle, Rounded square, Large circle). Judge each over a 
 - Does the dimmed window read as "what will show"?
 - Is the pan direction right with Mirror ON and with Mirror OFF? (This is the one place a mirrored picture is panned by hand; a wrong sign shows here and nowhere else.)
 - Is the wheel zoom speed right?
-- Edits made during reframe are only saved on **Done**: nothing persists mid-reframe. Quit mid-reframe and reopen: the take must have its pre-reframe style, not a half-panned one.
+- A reframe is never thrown away. An edit made during reframe (a trim, a level) saves at once, and what it writes is the take's REAL style with the framing as it stands — never the temporary whole-frame display. Close the editor (or open another take) mid-reframe and reopen: the take must have the framing you had reached, in its own shape and size, not the whole camera frame and not the pre-reframe framing.
 - Export, publish and frame-grab started during a reframe must commit it first (they read the live project): the output must show the framing you chose, not the whole camera frame.
 - A PiP that is switched off (Show camera unchecked) cannot enter reframe; confirm Reframe is unavailable rather than entering a mode with nothing to show.
 
