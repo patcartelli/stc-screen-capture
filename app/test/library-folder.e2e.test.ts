@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchApp } from "./_editor-fixture.js";
 import { hasWindow } from "./_windows.js";
-import { toastPage, toastText } from "./_toast.js";
+import { toastPage, toastText, waitForToastText } from "./_toast.js";
 import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
 import { captureDocForWrite, CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
@@ -250,8 +250,7 @@ describe("a partial trash failure does not strand the other half (STC-413 review
 
     // The widened failure message names BOTH halves, not just the one that
     // failed — "Its source materials were removed; the file could not be."
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
-    const alert = await toastText(app!);
+    const alert = await waitForToastText(app!);
     expect(alert).toContain("Its source materials");
     expect(alert).toContain("were removed");
     expect(alert).toContain("the file could not be");
@@ -355,8 +354,7 @@ describe("a partial trash failure does not strand the other half (STC-413 review
     await expect.poll(() => existsSync(join(root, "login-bug.mp4")), { timeout: 20_000 }).toBe(false);
     expect(existsSync(join(root, "raw", BUNDLE))).toBe(true);
 
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
-    const alert = await toastText(app!);
+    const alert = await waitForToastText(app!);
     // The singular branch of the sentence — "The file was removed", not
     // "were" — which the first test's plural label cannot reach.
     expect(alert).toContain("The file");
