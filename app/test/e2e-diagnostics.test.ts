@@ -94,7 +94,10 @@ describe("closeApp samples a stuck app before killing it", () => {
     process.env[E2E_DIAG_DIR_ENV] = dir;
     const err = await closeApp(stuckApp(child.pid!), CLOSE_GIVE_UP_MARGIN_MS + 200).catch((e: Error) => e);
     expect(String(err)).toMatch(/did not finish within 200ms.*its stacks are in /);
-    const file = readdirSync(dir).find((f) => f.startsWith(`close-gave-up-${child!.pid}-`));
+    // `.sample.txt` exactly: on CI the same snapshot also writes a screenshot
+    // beside it, which a bare prefix match picked up instead (run 37048218242).
+    const file = readdirSync(dir).find((f) =>
+      f.startsWith(`close-gave-up-${child!.pid}-`) && f.endsWith(".sample.txt"));
     expect(file, `no sample in ${dir}`).toBeDefined();
     expect(readFileSync(join(dir, file!), "utf8")).toContain("Call graph");
   }, CLOSE_GIVE_UP_MARGIN_MS + 5_000);
