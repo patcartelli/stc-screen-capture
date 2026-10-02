@@ -14,10 +14,10 @@ Each item is marked **host** (needs this Mac's real apps, hardware or performanc
 Run this first:
 
 ```bash
-npx vitest run helper/test/copy-file.grant.test.ts
+npx vitest run --config vitest.grant.config.ts helper/test/copy-file.grant.test.ts
 ```
 
-Must show 2 passed (the round trip, and a missing file refused as copy-refused). A failure means the helper never put the file on the pasteboard, and nothing below will paste.
+The `--config` is required: the default config excludes every `*.grant.test.ts`, so without it vitest reports "No test files found". The grant config's global setup builds and signs the helper first. Must show 2 passed (the round trip, and a missing file refused as copy-refused). A failure means the helper never put the file on the pasteboard, and nothing below will paste.
 
 ## 1. Paste targets (host)
 
