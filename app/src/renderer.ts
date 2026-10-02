@@ -456,6 +456,11 @@ const profileCloseBtn = $("profileclose") as HTMLButtonElement;
 
 function setProfileOpen(open: boolean): void {
   profileSheet.classList.toggle("open", open);
+  // STC-461: re-read the PiP default on every open. The editor's "Use as
+  // default" writes through recorder:setSettings, which does not broadcast
+  // settings:changed, so without this the sheet would show (and then edit
+  // from) a stale style and overwrite the editor's default.
+  if (open) void loadPipDefault();
 }
 profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
 profileCloseBtn.addEventListener("click", () => setProfileOpen(false));
