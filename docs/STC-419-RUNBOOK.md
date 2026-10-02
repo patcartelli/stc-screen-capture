@@ -1,6 +1,6 @@
 # STC-419 — show keystrokes (keycast): what to run on the Mac
 
-**Run this from `accounts/stc-419-show-keystrokes`. It is not on `master` yet.**
+**Run this from `master`** (merged in #273, 2026-10-02).
 
 Spec: `docs/superpowers/specs/2026-10-01-stc-419-keycast-design.md`.
 Plan: `docs/superpowers/plans/2026-10-01-stc-419-keycast.md`.
