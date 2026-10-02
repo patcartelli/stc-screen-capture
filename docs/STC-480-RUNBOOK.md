@@ -27,15 +27,21 @@ toast already tells the user to expect. The decision is
 Nothing below has been run. It was built and unit-tested from an agent shell,
 which cannot hold a capture grant.
 
-## §1 The grant test (your terminal, main checkout)
+## §1 The grant test (your own terminal)
 
-`npm run test:capture` fails spuriously from a worktree (`tools/test-host` is
-built in the main checkout only), so run it from the main checkout with this
-branch checked out:
+Run it in a terminal app that holds Screen Recording and Input Monitoring.
+An agent's shell does not. It can run from this branch's worktree: this
+file spawns `helper/build/stc-helper` directly, not through
+`tools/test-host`, and the grant config's global setup rebuilds that helper
+in place.
 
 ```bash
-cd ~/dev/stc-screen-recorder && git fetch && git checkout accounts/stc-480-input-monitoring-check && helper/build.sh && npx vitest run helper/test/event-tap-required.grant.test.ts
+cd ~/dev/stc-screen-recorder/.claude/worktrees/stc-480-input-monitoring-check && npx vitest run --config vitest.grant.config.ts helper/test/event-tap-required.grant.test.ts
 ```
+
+**`--config vitest.grant.config.ts` is not optional.** The default config
+excludes `*.grant.test.ts`, so without it vitest finds no tests to run.
+That outcome is easy to misread as a pass.
 
 Expect three passes:
 
