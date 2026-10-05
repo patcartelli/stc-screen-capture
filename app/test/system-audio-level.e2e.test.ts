@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import type { ElectronApplication, Page } from "playwright";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
+import { launchApp, openEditorFromLibrary, waitForTakeLoaded } from "./_editor-fixture.js";
 import { makeTakeFolder, makeSystemAudioTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { levelFromSliderPct, formatLevelDb } from "../../transform/src/audio-mix.js";
@@ -56,7 +56,7 @@ describe("the system-audio level", () => {
     const win = await openEditor(dir);
     // Wait for the take to have actually opened before asserting an absence,
     // or "hidden" would pass on a page that had not loaded anything yet.
-    await expect.poll(() => win.textContent("#clock"), { timeout: 20_000 }).toMatch(/\d/);
+    await waitForTakeLoaded(win);
     await expect.poll(() => win.getAttribute("#sysaudio", "hidden"), { timeout: 20_000 }).not.toBeNull();
   }, 120_000);
 

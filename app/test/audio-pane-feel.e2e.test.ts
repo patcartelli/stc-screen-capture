@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import type { ElectronApplication, Page } from "playwright";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
+import { launchApp, openEditorFromLibrary, waitForTakeLoaded } from "./_editor-fixture.js";
 import { makeMicTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
@@ -22,7 +22,7 @@ async function openEditor(dir: string): Promise<Page> {
   app = launched.app;
   const win = await openEditorFromLibrary(app, launched.win);
   await win.waitForSelector("#stage", { timeout: 20_000 });
-  await expect.poll(() => win.textContent("#clock"), { timeout: 20_000 }).toMatch(/\d/);
+  await waitForTakeLoaded(win);
   await expect.poll(() => win.getAttribute("#audiobtn", "hidden"), { timeout: 20_000 }).toBeNull();
   return win;
 }

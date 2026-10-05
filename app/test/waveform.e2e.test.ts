@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import type { ElectronApplication, Page } from "playwright";
-import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
+import { launchApp, openEditorFromLibrary, waitForTakeLoaded } from "./_editor-fixture.js";
 import { makeTakeFolder, makeMicTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
@@ -23,7 +23,7 @@ async function openEditor(dir: string): Promise<Page> {
   app = launched.app;
   const editorWin = await openEditorFromLibrary(app, launched.win);
   await editorWin.waitForSelector("#stage", { timeout: 20_000 });
-  await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/\d/);
+  await waitForTakeLoaded(editorWin);
   return editorWin;
 }
 

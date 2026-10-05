@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import type { ElectronApplication, Page } from "playwright";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
+import { launchApp, openEditorFromLibrary, waitForTakeLoaded } from "./_editor-fixture.js";
 import { makeTakeFolder, makeMicTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
@@ -54,7 +54,7 @@ describe("narration cleanup", () => {
     const { dir } = makeTakeFolder();
     const win = await openEditor(dir);
     // Wait for the take to have actually opened before asserting an absence.
-    await expect.poll(() => win.textContent("#clock"), { timeout: 20_000 }).toMatch(/\d/);
+    await waitForTakeLoaded(win);
     await expect.poll(() => win.getAttribute("#voiceclean", "hidden"), { timeout: 20_000 }).not.toBeNull();
   }, 120_000);
 
