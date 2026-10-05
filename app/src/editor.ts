@@ -1732,6 +1732,7 @@ function updateAudioButton(): void {
   $("audiobtn").toggleAttribute("hidden", !has);
   updateWaveformToggle();
   updateKeycastUI();
+  updateClicksUI();
   updateFramingUI();
   if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
 }
@@ -1792,6 +1793,24 @@ $("keycastbtn").addEventListener("click", () => {
   const shown = openProject.keycast?.show !== false;
   openProject.keycast = { show: !shown };
   updateKeycastUI();
+  void player.seek(player.currentNs);   // repaint this frame with the new choice
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- click highlight (STC-492) -----------------------------------------
+// One switch, saved to the project (project-13's showClicks; absent = on).
+// render() reads it for both sinks, so the preview and the export agree.
+function updateClicksUI(): void {
+  const btn = $("clicksbtn") as HTMLButtonElement;
+  const shown = openProject?.showClicks !== false;
+  btn.setAttribute("aria-pressed", shown ? "true" : "false");
+  btn.title = shown ? "Hide the click highlight in the preview and export" : "Show the click highlight in the preview and export";
+}
+
+$("clicksbtn").addEventListener("click", () => {
+  if (!openProject || !player) return;
+  openProject.showClicks = openProject.showClicks === false;
+  updateClicksUI();
   void player.seek(player.currentNs);   // repaint this frame with the new choice
   void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
 });

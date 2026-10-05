@@ -66,6 +66,7 @@ import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast, closeToastsForQuit } from "./toast-window.js";
+import { noteAppQuitting } from "./window-geometry.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
   ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
@@ -1005,6 +1006,7 @@ app.on("before-quit", (e) => {
   const decision = quitDecision({ unhandled, systemInitiated: systemShuttingDown });
   if (decision === "quit") {
     quitting = true;
+    noteAppQuitting();
     runQuitTeardown();
     return;
   }
@@ -1038,6 +1040,7 @@ app.on("before-quit", (e) => {
       }
     }
     quitting = true;
+    noteAppQuitting();
     runQuitTeardown();
   });
 });

@@ -132,14 +132,22 @@
        Audio button (which owns the auto margin), or takes it when Audio is
        hidden; aria-pressed="false" reads as off. */
     #keycastbtn { margin-left: 8px; anchor-name: none; }
-    #audiobtn[hidden] ~ #keycastbtn { margin-left: auto; }
-    #keycastbtn[aria-pressed="true"] { color: var(--accent); }
+    #keycastbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
+                                       box-shadow: inset 0 0 0 1px var(--accent); }
     #keycastbtn[aria-pressed="false"] { opacity: .6; }
-    /* STC-461: the Camera button takes the auto margin (it comes first);
-       Audio and Keys then sit 8px after it. */
-    #pipbtn { anchor-name: none; }
-    #pipbtn:not([hidden]) ~ #audiobtn,
-    #pipbtn:not([hidden]) ~ #keycastbtn { margin-left: 8px; }
+    /* STC-461 / STC-492: the first VISIBLE button of the row takes the auto
+       margin. Camera comes first when the take has one; Clicks is always
+       present, so it takes the margin otherwise. Audio and Keys follow, 8px
+       apart. */
+    #pipbtn, #clicksbtn { anchor-name: none; }
+    #pipbtn:not([hidden]) ~ #clicksbtn { margin-left: 8px; }
+    #audiobtn { margin-left: 8px; }
+    /* On is drawn with a thicker line (2px accent: the 1px border plus a 1px
+       inset ring, so nothing shifts) so on and off differ by weight, not only
+       by colour and opacity. */
+    #clicksbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
+                                      box-shadow: inset 0 0 0 1px var(--accent); }
+    #clicksbtn[aria-pressed="false"] { opacity: .6; }
     /* Not anchored to the button: it opens OVER the stage on the side away
        from the PiP (editor.ts's placePipPanel, pip-style.ts's inspectorSide),
        so the PiP stays pressable while it is open. left/top/max-height are set
@@ -620,6 +628,14 @@
         <span>Camera</span>
       </button>
       <div id="pippanel" popover="auto" aria-label="Camera"></div>
+      <!-- STC-492: show/hide the click highlight. Saved to the project
+           (project-13's showClicks; absent = on). Beside Keys and Audio, the
+           other per-take switches, because it changes the picture and not
+           the sound. -->
+      <button type="button" id="clicksbtn" class="audiobtn" aria-pressed="true"
+              title="Hide the click highlight in the preview and export">
+        <span>Clicks</span>
+      </button>
       <!-- STC-454 part 2: every audio control for the take, in one popover.
            All of it is saved to the project and heard in the preview at 1x
            and in the export; nothing here is ever baked in at capture. -->

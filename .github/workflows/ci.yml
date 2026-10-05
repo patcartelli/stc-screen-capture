@@ -94,6 +94,13 @@ jobs:
       # Everything that runs anywhere. Excludes *.grant.test.ts (needs a Screen
       # Recording grant, which no CI runner can give) and *.slow.test.ts.
       #
+      # STC_E2E_DIAG_OUT is where an e2e test that HANGS leaves its process
+      # table, `sample` stacks and a screenshot (STC-496,
+      # app/test/_e2e-diagnostics.ts), uploaded below with the crash reports.
+      # Three hangs in a row skip the rest of the e2e files, so a wedged run
+      # ends red with its failure summary instead of at the step bound below
+      # with none.
+      #
       # Bounded as one process (STC-498), like test:slow and every gate: 27 min
       # is TEST_STEP_MS in scripts/gate-bounds.mjs, ~1.3x the slowest healthy
       # run measured. gate-bounds.test.ts asserts the two agree. If it fires on
@@ -101,6 +108,8 @@ jobs:
       - name: Test
         timeout-minutes: 27
         run: npm test
+        env:
+          STC_E2E_DIAG_OUT: ${{ github.workspace }}/e2e-diag
 
       # Real Chrome, not bundled Chromium: the bundled build lacks H.264, and
       # every sink in this project is H.264 end to end.
@@ -214,7 +223,7 @@ jobs:
       # signal number (STC-254). The stack trace lives in the OS crash report,
       # which is discarded with the runner unless collected here.
       - name: Collect crash reports
-        if: failure()
+        if: failure() || cancelled()
         run: |
           mkdir -p crash-reports
           for d in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
@@ -226,7 +235,9 @@ jobs:
           ls -la crash-reports 2>/dev/null || true
 
       - name: Upload failure artifacts
-        if: failure()
+        # cancelled() too: a run that hits the job cap is exactly the one whose
+        # e2e-diag/ is worth having (STC-496).
+        if: failure() || cancelled()
         # v6, not v5: upload-artifact@v5 announced node24 support but still
         # declares `using: node20`, so aligning this on v5 with the two above
         # would look tidy and quietly keep the deprecated runtime. v6 is the
@@ -236,6 +247,7 @@ jobs:
           name: failure-logs
           path: |
             crash-reports/
+            e2e-diag/
             helper/build/
             app/dist/
           retention-days: 5
