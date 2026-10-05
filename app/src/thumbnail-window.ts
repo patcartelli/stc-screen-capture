@@ -7,6 +7,7 @@ import {
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import { type PanelTake } from "./panel-actions.js";
+import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
 
 /**
  * The post-capture floating thumbnail's window (STC-296, reworked by
@@ -542,6 +543,7 @@ class ThumbnailSession {
         backgroundThrottling: false,
       },
     });
+    trackClosing(this.win);
     this.win.setAlwaysOnTop(true, "screen-saver");
     this.win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     // `take` is what decides which buttons the card draws and what Save and
@@ -854,8 +856,8 @@ class ThumbnailSession {
 
   /** Move to wherever `layoutStack` decided this panel belongs. */
   moveTo(bounds: Bounds): void {
-    if (this.done || this.win.isDestroyed()) return;
-    this.win.setBounds(bounds);
+    if (this.done) return;
+    setBoundsUnlessClosing(this.win, bounds, "thumbnail moveTo");
   }
 }
 

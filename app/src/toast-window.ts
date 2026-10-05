@@ -5,6 +5,7 @@ import { PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import { UNDO_WINDOW_MS } from "./panel-actions.js";
 import { MESSAGE_TOAST_SIZE, UNDO_TOAST_SIZE, fitMessageHeight, messageToastMs } from "./toast.js";
 import { toToastMessage, type ToastInput } from "./toast-message.js";
+import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
 
 /**
  * The toast that appears when Trash PROMISES a deletion (STC-392 Task 6),
@@ -100,6 +101,7 @@ function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string
       backgroundThrottling: false,
     },
   });
+  trackClosing(win);
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.loadFile(join(opts.rendererDir, "toast.html"), { query });
@@ -180,7 +182,8 @@ export function showMessageToast(message: ToastInput, opts: ToastWindowOptions):
     const height = fitMessageHeight(Number(cardPx));
     const size = { width: MESSAGE_TOAST_SIZE.width, height };
     const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-    win.setBounds({ ...positionFor(opts.corner, workArea, size), ...size });
+    // Not shown either when the resize is refused: the window is going away.
+    if (!setBoundsUnlessClosing(win, { ...positionFor(opts.corner, workArea, size), ...size }, "toast:fit")) return;
     reveal();
   };
   ipcMain.on("toast:fit", onFit);
