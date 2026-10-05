@@ -49,7 +49,8 @@ import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-wind
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
 import type { OptionsState } from "./record-options.js";
-import { recordTimeProject, type RecordTimeChoices } from "./take-project.js";
+import { recordTimeProject, defaultStyleForTake, type RecordTimeChoices } from "./take-project.js";
+import { cleanPipStyle } from "@transform/pip-style.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
@@ -461,27 +462,20 @@ async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): 
 }
 
 /**
- * What the Record bar chose for a take still in flight, by its temp dir
- * (STC-420). Set when `start` succeeds, consumed when the take ends. In
- * memory on purpose: a take recovered after a crash was recorded with defaults
- * as far as this process can tell, which is the safe direction (the highlight
- * is ON, as before).
- */
-const recordTimeChoices = new Map<string, RecordTimeChoices>();
-
-/**
  * The reason Show Clicks reaches the transform at all: the choice is written
  * into the take's project.json (project-13) so `render()` reads it from the
  * project, never from a live setting (take-project.ts has the argument).
+ *
+ * Written right after `start` succeeds (STC-493), not when the take ends: a
+ * take the app or helper dies in is recovered next launch and must come back
+ * with the choice it was recorded with. The helper never touches project.json,
+ * and recovery and the library classify on anchors.json.
  *
  * Never throws and never overwrites. A take with no document is rendered with
  * defaults, so a failure here costs the user's choice, not their recording —
  * logged, not surfaced; and an existing project.json is the editor's and wins.
  */
-async function writeRecordTimeProject(dir: string): Promise<void> {
-  const choices = recordTimeChoices.get(dir);
-  recordTimeChoices.delete(dir);
-  if (!choices) return;
+async function writeRecordTimeProject(dir: string, choices: RecordTimeChoices): Promise<void> {
   try {
     const text = recordTimeProject(choices);
     if (text !== null) await writeFile(join(dir, "project.json"), text, { flag: "wx" });
@@ -500,9 +494,6 @@ async function writeRecordTimeProject(dir: string): Promise<void> {
  */
 async function onTakeEnded(dir: unknown): Promise<void> {
   if (typeof dir !== "string") return;
-  // Before the `quitting` bail: a take that ended while quitting is recovered
-  // next launch, and it should recover with the choice it was recorded with.
-  await writeRecordTimeProject(dir);
   if (quitting) return;
   // The panels hidden for this recording come back FIRST, so the new one is
   // unshifted in FRONT of them: it lands at the corner with the older stack
@@ -1487,7 +1478,10 @@ async function recordFlowBody(
     const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup!.startRecording(dir, startParams);
     // Only after a successful start: a refused one leaves no take to describe.
-    recordTimeChoices.set(dir, { showClicks: options.showClicks });
+    await writeRecordTimeProject(dir, {
+      showClicks: options.showClicks,
+      pipStyle: defaultStyleForTake(stored.pipStyle, options.camera === true),
+    });
     console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
@@ -2464,6 +2458,11 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
         || !isFiniteNum(p.widthPct) || p.widthPct <= 0 || p.widthPct > 1
         || !Number.isInteger(p.marginPx) || p.marginPx < 0) {
       throw new Error("project.json: malformed pip");
+    }
+    // project-16 (STC-461): the write gate REFUSES a style the transform would
+    // have to drop — a bad style must never reach disk.
+    if (p.style !== undefined && cleanPipStyle(p.style) === null) {
+      throw new Error("project.json: malformed pip.style");
     }
   }
   if (doc.transform !== undefined) {

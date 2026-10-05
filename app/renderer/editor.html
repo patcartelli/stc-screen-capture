@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; worker-src 'self'">
   <title>Capture</title>
   <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="pip-inspector.css">
   <style>
     /* Fonts, type ramp and light/dark color tokens live in tokens.css now
        (STC-443) — --clip/--zoom are this window's own semantic tokens, the
@@ -134,9 +135,12 @@
     #keycastbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
                                        box-shadow: inset 0 0 0 1px var(--accent); }
     #keycastbtn[aria-pressed="false"] { opacity: .6; }
-    /* STC-492: the Clicks switch is first of the three and always present, so
-       it owns the auto margin; Audio and Keys sit 8px after whatever precedes. */
-    #clicksbtn { anchor-name: none; }
+    /* STC-461 / STC-492: the first VISIBLE button of the row takes the auto
+       margin. Camera comes first when the take has one; Clicks is always
+       present, so it takes the margin otherwise. Audio and Keys follow, 8px
+       apart. */
+    #pipbtn, #clicksbtn { anchor-name: none; }
+    #pipbtn:not([hidden]) ~ #clicksbtn { margin-left: 8px; }
     #audiobtn { margin-left: 8px; }
     /* On is drawn with a thicker line (2px accent: the 1px border plus a 1px
        inset ring, so nothing shifts) so on and off differ by weight, not only
@@ -144,6 +148,14 @@
     #clicksbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
                                       box-shadow: inset 0 0 0 1px var(--accent); }
     #clicksbtn[aria-pressed="false"] { opacity: .6; }
+    /* Not anchored to the button: it opens OVER the stage on the side away
+       from the PiP (editor.ts's placePipPanel, pip-style.ts's inspectorSide),
+       so the PiP stays pressable while it is open. left/top/max-height are set
+       on beforetoggle; width is PIP_PANEL_WIDTH_PX there. */
+    #pippanel { position: fixed; inset: auto; margin: 0; overflow: auto; box-sizing: border-box;
+                padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
+                background: var(--surface, var(--bg)); color: var(--text);
+                box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
     /* STC-460: the pane, redesigned. A popover still (Patrick's default: it
@@ -513,6 +525,13 @@
          rect always shows the UNZOOMED frame (see editor.ts) so a pointer
          pixel maps 1:1 to capture UV with no crop math to invert. -->
     <div id="rectoverlay" hidden><div id="overridebox" hidden></div></div>
+    <!-- STC-461: the PiP, draggable (with snapping) and resizable from its
+         corner, shown only while the Camera popover is open. -->
+    <div id="pipoverlay" hidden><div class="pipbox"><div id="piphandle"></div></div></div>
+    <!-- STC-461: Reframe. The live project shows the whole camera frame large
+         and centred; #pipframewindow is the crop, in the PiP's shape, with the
+         rest dimmed. The surface STC-497's guides draw inside. -->
+    <div id="pipframing" hidden><div id="pipframewindow"></div></div>
     <svg id="stageplay" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2 12.6 8 5 12.8Z" fill="currentColor"/></svg>
   </div>
 
@@ -600,6 +619,15 @@
     <div class="timecoderow">
       <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
       <span id="shuttle" class="mono"></span>
+      <!-- STC-461: the camera PiP's look and place, in one popover — the
+           shared inspector (pip-inspector.ts) is built into #pippanel.
+           Present only for a take with a camera. Saved to the project
+           (project-16's pip.style). -->
+      <button type="button" id="pipbtn" class="audiobtn" popovertarget="pippanel" hidden
+              aria-label="Camera" title="Camera picture-in-picture: shape, size, border, position">
+        <span>Camera</span>
+      </button>
+      <div id="pippanel" popover="auto" aria-label="Camera"></div>
       <!-- STC-492: show/hide the click highlight. Saved to the project
            (project-13's showClicks; absent = on). Beside Keys and Audio, the
            other per-take switches, because it changes the picture and not
@@ -775,6 +803,13 @@
          existence, so there is nothing to reset it back to). -->
     <button id="overridedelete" hidden>Delete window</button>
     <button id="overridedone">Done</button>
+  </div>
+
+  <!-- STC-461: appears only while reframing the camera inside the PiP. -->
+  <div class="overridebar" id="pipframebar" hidden>
+    <span>Drag to reframe</span>
+    <label>Zoom <input id="pipzoom" type="range" min="1" max="3" step="0.05"></label>
+    <button id="pipframedone">Done</button>
   </div>
 
   </div><!-- /.editorbody -->

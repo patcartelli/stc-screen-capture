@@ -289,22 +289,39 @@ func remainingFraction(_ rect: StillRect, subtracting cutters: [StillRect]) -> D
     return total / (rect.width * rect.height)
 }
 
-/// Tolerance for "fully", as a fraction of the window's own area. Real display
-/// bounds and window frames are both floating point, so a window flush against
-/// a display edge must not fail on rounding alone; VISIBILITY_EPSILON is far
-/// looser than float error needs and far tighter than a sliver anyone would
-/// call "still visible" (2% of a 400x300 window is under 5x5 points).
-let VISIBILITY_EPSILON = 0.02
+/// The least fraction of a window's own area that must be on a display AND
+/// uncovered for the picker to let it be selected (STC-481). STC-380 shipped a
+/// 2% tolerance ("fully visible"), which on a real desktop refused every window
+/// with any overlap at all — a window 30% under another was unselectable. Half
+/// is enough to recognise a window as the thing it is. The wire flag is still
+/// named `fullyVisible`; this is the one dial for what it means.
+let MIN_VISIBLE_FRACTION = 0.5
 
-/// Whether `frame` sits (within tolerance) entirely inside the display union
-/// AND is not (within tolerance) covered by `occluders` — the two independent
-/// ways the picker used to offer a window nobody could actually see (STC-380).
-/// `occluders` must already be narrowed to windows strictly in front of this
-/// one; a window sitting behind is not this function's concern.
+/// Whether at least `MIN_VISIBLE_FRACTION` of `frame` is on a display and not
+/// covered by `occluders` (windows strictly in front of it, see `frontToBack`).
+/// Off-display and covered fractions are summed, which can only over-count
+/// where the two overlap — it errs toward refusing, never toward offering a
+/// window that is mostly unseen.
 func isFullyVisible(_ frame: StillRect, displays: [StillRect], occluders: [StillRect]) -> Bool {
     let offDisplay = remainingFraction(frame, subtracting: displays)
     let covered = 1 - remainingFraction(frame, subtracting: occluders)
-    return offDisplay <= VISIBILITY_EPSILON && covered <= VISIBILITY_EPSILON
+    return 1 - offDisplay - covered >= MIN_VISIBLE_FRACTION
+}
+
+/// Front-to-back order for `ids` (STC-481). SCShareableContent's `windows` array
+/// is NOT in z-order — measured on hardware, the frontmost app's window sat first
+/// and a window under everything sat in the middle, so "everything earlier in the
+/// list occludes me" flagged nearly every other window as buried. `zRank` maps a
+/// window id to its index in CGWindowListCopyWindowInfo's genuinely front-to-back
+/// list; an id it does not know sorts BEHIND every ranked one (it is not on screen
+/// as far as CoreGraphics can tell) and ties keep their input order.
+func frontToBack(_ ids: [Int], zRank: [Int: Int]) -> [Int] {
+    ids.enumerated()
+        .sorted { a, b in
+            let ra = zRank[a.element] ?? Int.max, rb = zRank[b.element] ?? Int.max
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }
+        .map { $0.element }
 }
 
 struct StillWindowInfo: Equatable {

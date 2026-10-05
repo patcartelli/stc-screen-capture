@@ -15,6 +15,7 @@ import {
 import {
   DEFAULT_EMBED_TEMPLATE,
 } from "./share.js";
+import { cleanPipStyle, DEFAULT_PIP_STYLE, type PipStyle } from "@transform/pip-style.js";
 
 /**
  * User preferences, owned by the main process.
@@ -100,6 +101,12 @@ export interface Settings {
    * (project-13) when a take ends with it off, and render() reads it there.
    */
   showClicks: boolean;
+  /**
+   * The PiP style new camera takes start with (STC-461). Never read at draw
+   * time: take-project.ts seeds it into a take's project.json when the take
+   * ends. Never holds a framing — framing is per take.
+   */
+  pipStyle: PipStyle;
   /**
    * Whether the editor's preview plays its sound (STC-454): the speaker
    * button in the editor's header. An app preference, not part of any take —
@@ -235,6 +242,7 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
 export const DEFAULT_SETTINGS: Settings = {
   camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false, recordKeys: false,
   showClicks: true,
+  pipStyle: { ...DEFAULT_PIP_STYLE, center: { ...DEFAULT_PIP_STYLE.center } },
   previewMuted: false,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
@@ -359,6 +367,14 @@ function cleanShortcuts(v: unknown): Shortcuts {
   return out;
 }
 
+/** A bad stored style is a preference with no opinion: the default, like every other field here. */
+function cleanStoredPipStyle(v: unknown): PipStyle {
+  const s = cleanPipStyle(v);
+  if (!s) return { ...DEFAULT_PIP_STYLE, center: { ...DEFAULT_PIP_STYLE.center } };
+  const { framing: _framing, ...rest } = s;
+  return rest;
+}
+
 const FILE = "settings.json";
 
 /**
@@ -386,6 +402,7 @@ export function readSettings(dir: string): Settings {
     systemAudio: doc.systemAudio === true,
     recordKeys: doc.recordKeys === true,
     showClicks: doc.showClicks !== false,
+    pipStyle: cleanStoredPipStyle(doc.pipStyle),
     previewMuted: doc.previewMuted === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
@@ -430,6 +447,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     systemAudio: merged.systemAudio === true,
     recordKeys: merged.recordKeys === true,
     showClicks: merged.showClicks !== false,
+    pipStyle: cleanStoredPipStyle(merged.pipStyle),
     previewMuted: merged.previewMuted === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),

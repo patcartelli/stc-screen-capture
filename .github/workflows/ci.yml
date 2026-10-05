@@ -36,7 +36,14 @@ jobs:
     # Minutes are free on a public repo. A healthy run was ~6 min when this was
     # first written; it is 12-25 min now (742-1469 s over the same 17 runs),
     # almost all of it `npm test`.
-    timeout-minutes: 90
+    #
+    # 90 -> 95 (STC-396): the video framing gate is the still gate's twin and
+    # declares the same 220 s process bound (scripts/gate-bounds.mjs), which
+    # took the margin against this cap from 450 s to 230 s — under the 300 s
+    # that gate-bounds.test.ts requires. 5 more minutes restores it (530 s).
+    # The gate itself costs seconds; the bound is dominated by launch,
+    # readiness and teardown, which every gate shares.
+    timeout-minutes: 95
 
     # A post-merge master run re-verifies a tree CI already approved as a PR
     # head, which is the largest remaining duplication. It is NOT skipped by
@@ -166,6 +173,17 @@ jobs:
           cp fixtures/pip/anchors.json fixtures/pip/events.json \
              fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
           npm run gate:identity -- "$CAM"
+          # STC-461: the same camera take with a STYLED PiP (circle, border,
+          # shadow, mirror, reframed). The step above pins the defaulted,
+          # unstyled path; this one makes the two sinks agree on the clip,
+          # the flip and the shadow. Media from fixtures/pip — never a second
+          # copy of camera.mp4 (STC-302).
+          STY="$(mktemp -d)/2026-01-01_00-00-00"
+          mkdir -p "$STY"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$STY/"
+          cp fixtures/pip-styled/project.json "$STY/"
+          npm run gate:identity -- "$STY"
 
       # STC-396: the same fixture, framed. Sink identity on the framed path.
       - name: Sink identity, framed

@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import type { ElectronApplication, Page } from "playwright";
 
 /**
@@ -44,4 +45,19 @@ export async function toastText(app: ElectronApplication): Promise<string> {
     const body = label.textContent ?? "";
     return title ? `${title}\n${body}` : body;
   }).catch(() => "");
+}
+
+/**
+ * Wait until the toast has actually SAID something, and return it.
+ *
+ * Use this whenever a test reads the text once. `toastPage` only means the
+ * window exists; its URL commits before the renderer fills in the message, and
+ * `toastText` is "" until it has. A test that polls for the window and then
+ * reads the text once is racing the renderer: it passes on a fast machine and
+ * reads "" on a slow one. A caller that already polls `toastText` itself does
+ * not need this.
+ */
+export async function waitForToastText(app: ElectronApplication, timeout = 10_000): Promise<string> {
+  await expect.poll(() => toastText(app), { timeout }).not.toBe("");
+  return toastText(app);
 }

@@ -16,6 +16,7 @@ import { deriveZoomCrop } from "./zoom-change.js";
 import { geometryAt } from "./display-geometry.js";
 import { DEFAULT_ZOOM } from "./trim.js";
 import { createCursorSim, type CursorSim } from "./cursor.js";
+import { pipRect, framingSource } from "./pip-style.js";
 import { buildKeycastPresses, keycastAt, type KeycastPress, type KeycastState } from "./keycast.js";
 
 /**
@@ -104,6 +105,19 @@ export interface PipState {
   y: number;
   width: number;
   height: number;
+  /** Absent = the fixed-corner PiP, drawn exactly as before project-16. */
+  draw?: PipDraw;
+}
+
+/** A styled PiP's drawing parameters, fully resolved (STC-461). The compositor decides nothing. */
+export interface PipDraw {
+  /** `drawImage`'s source rect, camera pixels. */
+  source: Rect;
+  mirror: boolean;
+  /** Output pixels; a circle is half its side. */
+  radiusPx: number;
+  border: { px: number; color: string } | null;
+  shadow: boolean;
 }
 
 /**
@@ -115,7 +129,9 @@ export interface PipState {
  * anchors.camera, never from an assumed frame rate — the measured camera rate
  * varies run to run.
  */
-function pipStateAt(project: Project, session: Session, tNs: number, frame: Rect): PipState | null {
+function pipStateAt(
+  project: Project, session: Session, tNs: number, frame: Rect, pxPerDisplayPoint: number,
+): PipState | null {
   const pip = project.pip;
   const cam = session.anchors.camera;
   const frames = session.cameraFrames;
@@ -126,6 +142,31 @@ function pipStateAt(project: Project, session: Session, tNs: number, frame: Rect
 
   const frameIndex = frameIndexAt(frames, tNs);
   if (frameIndex === null) return null;
+
+  if (pip.style) {
+    // STC-461: pip-style.ts decides; a style can never fall back to the
+    // corner silently, because parseProject only keeps a style it validated.
+    // The style is UV over the CONTENT RECT (STC-396 rule 3) — `frame`, which
+    // is the whole output when there is no framing, so an unframed take places
+    // it exactly as before. `frame`'s origin is whole pixels, so the offset
+    // keeps the rect on the pixel grid pipRect rounded it to.
+    const style = pip.style;
+    const local = pipRect(style, { width: frame.width, height: frame.height }, cam);
+    const styledRect = { ...local, x: local.x + frame.x, y: local.y + frame.y };
+    const short = Math.min(styledRect.width, styledRect.height);
+    return {
+      frameIndex, framePtsNs: frames[frameIndex]!, ...styledRect,
+      draw: {
+        source: framingSource(style, cam),
+        mirror: style.mirror,
+        radiusPx: style.shape === "circle" ? short / 2 : style.cornerRadius * short,
+        // Points, scaled the way the cursor's are: a 2 pt border is a 2 pt line
+        // on the recorded display, at whatever size the output is.
+        border: style.border ? { px: style.border.widthPt * pxPerDisplayPoint, color: style.border.color } : null,
+        shadow: style.shadow,
+      },
+    };
+  }
 
   // A crop in UV over the output, not a corner in output pixels (STC-314):
   // the camera lives in the same space as a zoom crop, so whatever comes to
@@ -318,7 +359,7 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
       style: project.cursor.style,
       pxPerPoint: project.cursor.scale * m.sx * magnification,
     },
-    pip: pipStateAt(project, session, tNs, frame),
+    pip: pipStateAt(project, session, tNs, frame, m.sx),
     zoom: { amount: zoomAmount, crop },
     keycast: keycastFor(project, session, tick),
     framing: layout ?? null,
