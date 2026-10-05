@@ -1,9 +1,9 @@
 # STC-492 — the editor's Clicks switch: what to run on the Mac
 
-**Not on `master` yet — run it from `accounts/stc-492-editor-showclicks-switch` (PR #284).**
+**Run this from `master`** (merged in #284, 2026-10-05).
 
 ```
-git fetch && git checkout accounts/stc-492-editor-showclicks-switch && npm run app:start
+git fetch && git checkout master && git pull && npm run app:start
 ```
 
 ## What this ticket does
@@ -50,3 +50,9 @@ Open a take with at least one click. Look at the timecode row, right side:
 
 - Is "Clicks" the right label next to "Keys", or does it want to say "Click highlight"?
 - Is first-of-three the right order, or should Audio keep its place at the edge?
+
+## Results (VM pass, 2026-10-05, Patrick by eye)
+
+- **Passes:** the Clicks button is present at the right of the clock, and its on state is drawn with a thicker line (2px accent) than off. That was Patrick's change request, applied to Keys as well.
+- **Not checked:** Keys by eye (the VM take had no keys), toggling the disc, save and reopen, light/dark, minimum width. The toggle and save are covered by the e2e, run on the host.
+- **Row order after STC-461:** master added a Camera button to the same row. The first visible button takes the auto margin: Camera if the take has one, otherwise Clicks, then Audio and Keys 8px apart. **A take with a camera has never been seen with this layout** (the VM has no camera), so that needs the host.
