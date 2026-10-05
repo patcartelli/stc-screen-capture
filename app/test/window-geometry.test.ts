@@ -22,11 +22,14 @@ describe("geometrySkip", () => {
   });
 });
 
-describe("every setBounds in the main process goes through the guard", () => {
+describe("every geometry change in the main process goes through the guard", () => {
   const src = join(__dirname, "..", "src");
-  const RAW = /\.setBounds\(/;
+  // Not only setBounds: setSize, setContentSize, setPosition and
+  // setContentBounds all reach the same NSWindow frame change, and so the same
+  // freed-layer crash. setBounds alone let pill-window.ts's setSize through.
+  const RAW = /\.(setBounds|setSize|setContentSize|setPosition|setContentBounds)\(/;
 
-  test("no other file in app/src calls setBounds directly", () => {
+  test("no other file in app/src changes a window's geometry directly", () => {
     const offenders = readdirSync(src).filter((f) => f.endsWith(".ts") && f !== "window-geometry.ts")
       .filter((f) => readFileSync(join(src, f), "utf8").split("\n")
         .some((l) => RAW.test(l) && !/^\s*(\/\/|\*)/.test(l)));
@@ -36,6 +39,14 @@ describe("every setBounds in the main process goes through the guard", () => {
   test("control: the pattern fires on the call the guard wraps", () => {
     expect(RAW.test("  win.setBounds({ ...positionFor(opts.corner, workArea, size), ...size });")).toBe(true);
     expect(RAW.test(readFileSync(join(src, "window-geometry.ts"), "utf8"))).toBe(true);
+  });
+
+  test("control: the pattern fires on the other setters, and not on getters", () => {
+    expect(RAW.test("  win.setSize(width, PILL_HEIGHT_PX);")).toBe(true);
+    expect(RAW.test("  win.setPosition(x, y);")).toBe(true);
+    expect(RAW.test("  win.setContentSize(w, h);")).toBe(true);
+    expect(RAW.test("  const b = win.getBounds();")).toBe(false);
+    expect(RAW.test("  win.setSizeConstraints();")).toBe(false);
   });
 });
 

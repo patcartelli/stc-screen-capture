@@ -91,6 +91,16 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # STC-496: after an Electron crash, macOS shows a modal "reopen windows?"
+      # alert on that bundle's NEXT launch (`NSPersistentUIRestorer
+      # promptToIgnorePersistentStateWithCrashHistory:`, before the app is
+      # ready). Nobody clicks it on CI, so every later e2e launch — all of them
+      # node_modules' com.github.Electron — hung until the job's time limit.
+      # Turning restore off makes a crash cost one failed test, not the run.
+      # app/test/ci-persistence.test.ts pins this step and its bundle id.
+      - name: Disable crash window-restore prompt for the e2e Electron
+        run: defaults write com.github.Electron ApplePersistenceIgnoreState -bool YES
+
       # Everything that runs anywhere. Excludes *.grant.test.ts (needs a Screen
       # Recording grant, which no CI runner can give) and *.slow.test.ts.
       #

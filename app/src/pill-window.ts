@@ -64,7 +64,10 @@ export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number)
   const workArea = screen.getDisplayMatching(previousBounds).workArea;
   const width = Math.min(clampPillWidth(measuredContentWidthPx), workArea.width);
   win.setResizable(false);
-  win.setSize(width, PILL_HEIGHT_PX);
+  // `setSize`'s meaning (top-left stays put; Electron fills x/y from the
+  // current bounds), through the same guard every geometry change takes
+  // (STC-496).
+  setBoundsUnlessClosing(win, { width, height: PILL_HEIGHT_PX }, "collapsePill");
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   setButtonsVisible(win, false);
