@@ -16,7 +16,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication } from "playwright";
 import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
-import { launchWithTakeInEditor, dragOnStage, closeEditorWindow, pressOverrideDone } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, dragOnStage, closeEditorWindow, pressOverrideDone, waitForTakeLoaded } from "./_editor-fixture.js";
 import { windowCount } from "./_windows.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
@@ -28,7 +28,7 @@ const WINDOW_ID = "1705000000";
 async function openPreview() {
   const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
   app = a;
-  await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
+  await waitForTakeLoaded(editorWin);
   await expect.poll(() => editorWin.locator(".zoomblock").count(), { timeout: 10_000 }).toBe(1);
   return { win: editorWin, takeDir };
 }

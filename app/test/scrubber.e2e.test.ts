@@ -16,7 +16,7 @@ import { type ElectronApplication } from "playwright";
 import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { MIN_TRIM_FRAMES, formatTimecode, frameToNs } from "../src/scrubber.js";
-import { launchWithTakeInEditor, openExportDialog } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, openExportDialog, waitForTakeLoaded } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 let app: ElectronApplication | undefined;
@@ -29,7 +29,7 @@ const DURATION_NS = 4_983_333_349;
 async function openPreview() {
   const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
   app = a;
-  await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
+  await waitForTakeLoaded(editorWin);
   // STC-378: wait for updateTicks() retries to complete — #ticks might be hidden
   // if the timeline width measurement hasn't completed yet.
   await expect.poll(() => editorWin.evaluate(() =>

@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import type { ElectronApplication, Page } from "playwright";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchApp, openEditorFromLibrary, openExportDialog } from "./_editor-fixture.js";
+import { launchApp, openEditorFromLibrary, openExportDialog, waitForTakeLoaded } from "./_editor-fixture.js";
 import { makeTakeFolder, makeMicTakeFolder, makeSystemAudioTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { MIC_LEVEL_MAX, micLevelFromSliderPct, formatLevelDb } from "../../transform/src/audio-mix.js";
@@ -27,7 +27,7 @@ async function openEditor(dir: string): Promise<Page> {
   app = launched.app;
   const editorWin = await openEditorFromLibrary(app, launched.win);
   await editorWin.waitForSelector("#stage", { timeout: 20_000 });
-  await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/\d/);
+  await waitForTakeLoaded(editorWin);
   return editorWin;
 }
 

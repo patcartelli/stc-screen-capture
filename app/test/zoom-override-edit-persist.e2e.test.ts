@@ -19,7 +19,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication } from "playwright";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { launchWithTakeInEditor, dragOnStage, pressOverrideDone, openExportDialog } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, dragOnStage, pressOverrideDone, openExportDialog, waitForTakeLoaded } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 let app: ElectronApplication | undefined;
@@ -30,7 +30,7 @@ const WINDOW_ID = "1705000000";
 async function openPreview() {
   const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
   app = a;
-  await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
+  await waitForTakeLoaded(editorWin);
   await expect.poll(() => editorWin.locator(".zoomblock").count(), { timeout: 10_000 }).toBe(1);
   return { win: editorWin, takeDir };
 }
@@ -74,7 +74,7 @@ describe("a save made while a block is selected", () => {
 
     // Leave the page with the edit still open — no Done, no Escape.
     await win.reload();
-    await expect.poll(() => win.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
+    await waitForTakeLoaded(win);
     await expect.poll(() => geometryFor(takeDir, WINDOW_ID)?.rect.width, { timeout: 10_000 })
       .not.toBeCloseTo(before.rect.width, 2);
     const after = geometryFor(takeDir, WINDOW_ID);
