@@ -410,6 +410,10 @@ export interface TempTakeInfo {
 async function hasContent(dir: string, names: string[]): Promise<boolean> {
   for (const n of names) {
     if (n.startsWith(".")) continue;
+    // The record-time seed (STC-493) is written the moment a take starts, so a
+    // take the helper never got a byte into holds only this. It is a preference,
+    // not a recording — counting it would offer an empty take for recovery.
+    if (n === "project.json") continue;
     try {
       const st = await lstat(join(dir, n));
       // A subdirectory is not something this app ever writes into a take;

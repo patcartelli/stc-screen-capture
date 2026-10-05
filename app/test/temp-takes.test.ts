@@ -314,6 +314,23 @@ describe("listTempTakes — crash recovery's input", () => {
     expect(items.map((i) => i.kind)).toEqual(["empty", "empty", "empty"]);
   });
 
+  test("a record-time project.json seed is not a recording (STC-493)", async () => {
+    // The seed lands the moment a take starts. A helper that died before a
+    // byte of media must still read as empty, and one that got a frame in as
+    // unknown — the seed neither creates content nor hides it.
+    const seed = '{"version":13,"showClicks":false}\n';
+    const bare = join(tempRoot, "2026-09-16_13-00-00");
+    mkdirSync(bare, { recursive: true });
+    writeFileSync(join(bare, "project.json"), seed);
+    const live = join(tempRoot, "2026-09-16_13-00-01");
+    mkdirSync(live, { recursive: true });
+    writeFileSync(join(live, "project.json"), seed);
+    writeFileSync(join(live, "display.mp4"), Buffer.alloc(1024, 1));
+    const kinds = Object.fromEntries((await listTempTakes(env)).map((i) => [i.name, i.kind]));
+    expect(kinds["2026-09-16_13-00-00"]).toBe("empty");
+    expect(kinds["2026-09-16_13-00-01"]).toBe("unknown");
+  });
+
   test("most recent first, matching the library grid's own sort", async () => {
     put("2026-09-16_09-00-00", ["shot.json"]);
     put("2026-09-16_11-00-00", ["shot.json"]);
