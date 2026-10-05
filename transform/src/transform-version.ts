@@ -9,6 +9,14 @@ import {
   MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION, VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION,
   CURSOR_DEAD_ZONE_UV,
 } from "./zoom-change.js";
+import { PIP_SHADOW, DEFAULT_FRAMING } from "./pip-style.js";
+import {
+  KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
+  KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
+  KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR,
+  NAMED_KEYS, keyLabel, keycastText,
+} from "./keycast.js";
+import { FRAMING_PRESETS, DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_RADIUS_MAX } from "./framing.js";
 
 /**
  * Which transform made the pixels (STC-308).
@@ -143,8 +151,39 @@ import {
  * `displayToOutput`'s scale is exactly 1, and `ox`/`oy` are exactly 0, so the
  * result is bit-identical rather than merely close. `render-refit.test.ts`'s
  * goldens, generated on the pre-STC-235 code, pin that claim.
+ *
+ * ## Version 13: the keycast (STC-419)
+ *
+ * events-3 may carry key events — keyboard COMMANDS only, never typing — and
+ * `render()` now answers `keycast` (keycast.ts's `keycastAt`), which the one
+ * compositor draws as a bottom-centre pill on the OUTPUT canvas, after the
+ * crop, with a repeat count. project-14's `keycast.show: false` hides it. A
+ * take with no key events, or with `keycast.show === false`, draws exactly
+ * what version 12 did: `fs.keycast` is null and the cursor branch is
+ * unchanged. The fingerprint moved because the keycast constants now reach
+ * the pixels. (Built as 12; STC-420 merged version 12 and project-13 first.)
+ *
+ * ## Version 14: video framing (STC-396)
+ *
+ * project-15's optional `framing` insets the recording inside the chosen output
+ * and draws a background, a shadow and rounded corners around it. `render()`
+ * carries the layout in `FrameState.framing` and maps the cursor, click
+ * highlight, pointer size, PiP and zoom crop into the inset rect; the one
+ * compositor draws the chrome and clips the picture and pointer to it. A project
+ * with no framing renders exactly what version 13 did. The fingerprint moved
+ * because the framing presets and bounds now reach the pixels.
+ *
+ * ## Version 15: the styled PiP (STC-461)
+ *
+ * project-16's `pip.style` draws a clipped, optionally mirrored, bordered and
+ * shadowed camera at an authored place and framing, placed in UV over the
+ * content rect (the whole output when there is no framing, STC-396 rule 3).
+ * A document with no style draws exactly what version 14 did (one
+ * 5-argument `drawImage`). The fingerprint moved because `PIP_SHADOW` and `DEFAULT_FRAMING` reach the pixels.
+ *
+ * (Built as 14; STC-396 merged version 14 and project-15 first.)
  */
-export const TRANSFORM_VERSION = 12;
+export const TRANSFORM_VERSION = 15;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -160,6 +199,9 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 10, since: "2026-09-30", changed: "a region or window take maps through its scope (STC-471): anchors write the WHOLE display into `display` and only the scope into `capture`, and render() used to stretch the display across a frame holding a fraction of it, so the cursor was misplaced for the whole take. spaces.ts's scopedDisplay narrows the display to the scope's origin and point size, geometryAt hands it out as `shown`, and render(), zoom-change.ts's cursor fallback and legibility's effective width all read that. A take with no scope gets its display back as the same object, so every one renders exactly what version 9 did, pinned by render-refit.test.ts's goldens. No constant reaches the pixels, so the fingerprint is unchanged" },
   { version: 11, since: "2026-09-30", changed: "a window that moves mid-take keeps the cursor on target (STC-482): anchors v8's optional scope.window.track records the window's origin over the take, and session.ts's loader takes that displacement out of the cursor events (window-track.ts's stabiliseEvents) BEFORE the spring sees them, so the pointer stays where it was relative to the window through a title-bar drag instead of trailing off by how far the window went. Applied to the events, not per render, so the spring's lag does not turn into a pointer trailing its own window and auto-zoom's cursor fallback reads the same corrected events. A take with no track returns the very events array it was given, so every take that did not move a window renders exactly what version 10 did. No constant reaches the pixels, so the fingerprint is unchanged" },
   { version: 12, since: "2026-10-01", changed: "the click highlight is optional (STC-420): project-13's showClicks (absent = true) decides whether render() lets the compositor draw the CLICK_HIGHLIGHT_PT disc under a held button. It reaches the pixels through the project, never a live setting. Every document without showClicks:false renders exactly what version 11 did; no constant moved, so the fingerprint is unchanged" },
+  { version: 13, since: "2026-10-02", changed: "the keycast (STC-419): events-3 key events (keyboard COMMANDS only — named non-printing keys and cmd/ctrl chords; typing is never recorded) render as one bottom-centre pill on the output canvas, after the crop, with a repeat count; 1.2 s hold, 200 ms fade, in sim ticks (keycast.ts). project-14's keycast.show:false hides it. A take with no keys, or with it hidden, draws exactly what version 12 did. The fingerprint moved: the keycast constants reach the pixels" },
+  { version: 14, since: "2026-10-02", changed: "video framing (STC-396): project-15's optional framing insets the recording inside the chosen output and draws a background, a shadow and rounded corners around it. render() carries the layout in FrameState.framing and maps the cursor, click highlight, pointer size, PiP and zoom crop into the inset rect (spaces.ts's existing owners); the one compositor draws background, shadow, then the picture clipped to a rounded rect, with the PiP and pointer clipped to the picture. A project with no framing renders exactly what version 13 did: framing is null, the compositor takes its previous code path argument for argument, and every position is computed from the same numbers. The fingerprint moved: the framing presets and bounds reach the pixels" },
+  { version: 15, since: "2026-10-02", changed: "the styled PiP (STC-461): project-16's pip.style — shape (rect/square/circle) and corner radius, an authored centre and width (UV over the content rect, i.e. the whole output when there is no framing), a framing crop of the camera, mirror, border in display points and one drop shadow, all resolved in render() and drawn by the one compositor. A document with no style draws exactly what version 14 did. The fingerprint moved: PIP_SHADOW and DEFAULT_FRAMING reach the pixels" },
 ];
 
 /**
@@ -184,6 +226,15 @@ export function transformFingerprint(): string {
       BURST_CONCENTRATION, MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION,
       VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION, CURSOR_DEAD_ZONE_UV,
     },
+    pip: [PIP_SHADOW, DEFAULT_FRAMING],
+    keycast: [KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
+      KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
+      KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR,
+      NAMED_KEYS.map((k) => keyLabel(k, [])),
+      // Every modifier glyph, and the repeat-count format.
+      NAMED_KEYS.map((k) => keyLabel(k, ["ctrl", "opt", "shift", "cmd"])),
+      keycastText({ label: "x", count: 2, opacity: 1 })],
+    framing: { FRAMING_PRESETS, DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_RADIUS_MAX },
   };
   const text = JSON.stringify(inputs);
   let h = 0x811c9dc5;

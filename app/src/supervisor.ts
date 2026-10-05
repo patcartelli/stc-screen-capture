@@ -133,6 +133,36 @@ export class HelperSupervisor {
     return r;
   }
 
+  private idleCheck: Promise<void> | undefined;
+
+  /**
+   * A heartbeat saying "idle" while we believe we are recording (STC-501).
+   *
+   * Not proof. The heartbeat rides stdout and `started` rides fd3, two pipes
+   * with no ordering between them: a line the helper wrote while still idle,
+   * before it handled `start`, can be read after `started` on a loaded
+   * machine, and believing it ended a live take at 0:00. The reliable channel
+   * IS ordered with `start`, so the question is put there; only an `idle` that
+   * survives it is the desync the heartbeat exists to heal. An unanswered
+   * `status` ends nothing: a helper too wedged to answer is the crash path's
+   * to report, not a heartbeat's.
+   */
+  private confirmIdle(): Promise<void> {
+    if (this.idleCheck) return this.idleCheck;
+    const c = this.client;
+    const dir = this._recordingDir;
+    if (!c) return Promise.resolve();
+    const check = c.request("status").then((r) => {
+      // Still the same take, on the same helper: a stop or respawn while the
+      // question was in flight has already settled the matter.
+      if (this.client === c && this._recordingDir === dir && r.state === "idle") {
+        return this.endRecording("helper-idle");
+      }
+    }).catch(() => {}).finally(() => { this.idleCheck = undefined; });
+    this.idleCheck = check;
+    return check;
+  }
+
   /**
    * The recording is over without us asking. Distinct from `recording-lost`:
    * there the helper died and the take is gone, here it stopped cleanly and the
@@ -201,7 +231,7 @@ export class HelperSupervisor {
       // we know about — including a `stopped` that never reached us because
       // it raced a respawn.
       if (this.state === "recording" && line.state === "idle") {
-        void this.endRecording("helper-idle");
+        void this.confirmIdle();
       }
     });
 

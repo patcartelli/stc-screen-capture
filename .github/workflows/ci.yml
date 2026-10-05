@@ -22,7 +22,10 @@ jobs:
     # transform/test/gate-bounds.test.ts asserts. 30 -> 45 -> 55 -> 65 as the
     # model stopped under-counting: first the retry (#39), then the readiness
     # wait, now the GC-retry path that was previously absorbed by margin and
-    # named in a comment.
+    # named in a comment. 70 -> 90 (STC-498) when PRE_GATE_BUDGET_MS went from
+    # 8 min to 30: it had said "~6 min" while build + typecheck + `npm test`
+    # measured 11-22 min across 17 green runs, so the worst case went from
+    # 60.5 min to 82.5 and 70 no longer cleared it with the 5 min margin.
     #
     # Rising is not a regression here. Every gate now carries its OWN process
     # bound, so a wedged gate dies at 7.5-13 min instead of holding the job to
@@ -30,8 +33,17 @@ jobs:
     # would now be killed at 7.5. This cap is a BACKSTOP behind four tighter
     # bounds rather than the thing that catches a wedge, which is exactly why it
     # can afford to state the worst case honestly instead of optimistically.
-    # Minutes are free on a public repo; a healthy run is ~6 min.
-    timeout-minutes: 70
+    # Minutes are free on a public repo. A healthy run was ~6 min when this was
+    # first written; it is 12-25 min now (742-1469 s over the same 17 runs),
+    # almost all of it `npm test`.
+    #
+    # 90 -> 95 (STC-396): the video framing gate is the still gate's twin and
+    # declares the same 220 s process bound (scripts/gate-bounds.mjs), which
+    # took the margin against this cap from 450 s to 230 s — under the 300 s
+    # that gate-bounds.test.ts requires. 5 more minutes restores it (530 s).
+    # The gate itself costs seconds; the bound is dominated by launch,
+    # readiness and teardown, which every gate shares.
+    timeout-minutes: 95
 
     # A post-merge master run re-verifies a tree CI already approved as a PR
     # head, which is the largest remaining duplication. It is NOT skipped by
@@ -79,10 +91,35 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # STC-496: after an Electron crash, macOS shows a modal "reopen windows?"
+      # alert on that bundle's NEXT launch (`NSPersistentUIRestorer
+      # promptToIgnorePersistentStateWithCrashHistory:`, before the app is
+      # ready). Nobody clicks it on CI, so every later e2e launch — all of them
+      # node_modules' com.github.Electron — hung until the job's time limit.
+      # Turning restore off makes a crash cost one failed test, not the run.
+      # app/test/ci-persistence.test.ts pins this step and its bundle id.
+      - name: Disable crash window-restore prompt for the e2e Electron
+        run: defaults write com.github.Electron ApplePersistenceIgnoreState -bool YES
+
       # Everything that runs anywhere. Excludes *.grant.test.ts (needs a Screen
       # Recording grant, which no CI runner can give) and *.slow.test.ts.
+      #
+      # STC_E2E_DIAG_OUT is where an e2e test that HANGS leaves its process
+      # table, `sample` stacks and a screenshot (STC-496,
+      # app/test/_e2e-diagnostics.ts), uploaded below with the crash reports.
+      # Three hangs in a row skip the rest of the e2e files, so a wedged run
+      # ends red with its failure summary instead of at the step bound below
+      # with none.
+      #
+      # Bounded as one process (STC-498), like test:slow and every gate: 27 min
+      # is TEST_STEP_MS in scripts/gate-bounds.mjs, ~1.3x the slowest healthy
+      # run measured. gate-bounds.test.ts asserts the two agree. If it fires on
+      # a healthy run, the suite has outgrown it: re-measure and raise both.
       - name: Test
+        timeout-minutes: 27
         run: npm test
+        env:
+          STC_E2E_DIAG_OUT: ${{ github.workspace }}/e2e-diag
 
       # Real Chrome, not bundled Chromium: the bundled build lacks H.264, and
       # every sink in this project is H.264 end to end.
@@ -155,6 +192,26 @@ jobs:
           cp fixtures/pip/anchors.json fixtures/pip/events.json \
              fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
           npm run gate:identity -- "$CAM"
+          # STC-461: the same camera take with a STYLED PiP (circle, border,
+          # shadow, mirror, reframed). The step above pins the defaulted,
+          # unstyled path; this one makes the two sinks agree on the clip,
+          # the flip and the shadow. Media from fixtures/pip — never a second
+          # copy of camera.mp4 (STC-302).
+          STY="$(mktemp -d)/2026-01-01_00-00-00"
+          mkdir -p "$STY"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$STY/"
+          cp fixtures/pip-styled/project.json "$STY/"
+          npm run gate:identity -- "$STY"
+
+      # STC-396: the same fixture, framed. Sink identity on the framed path.
+      - name: Sink identity, framed
+        run: |
+          CAM="$(mktemp -d)/2026-01-01_00-00-01"
+          mkdir -p "$CAM"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
+          STC_IDENTITY_FRAMING=clean npm run gate:identity -- "$CAM"
 
       # The decorated still (STC-291). Asserts PROPERTIES of the rendered
       # pixels — alpha zero outside the window's real shape, no dark fringe on
@@ -168,11 +225,15 @@ jobs:
       - name: Decorated still gate
         run: npm run gate:still
 
+      # Video framing (STC-396): pixel PROPERTIES of the framed picture, no decode.
+      - name: Video framing gate
+        run: npm run gate:framing
+
       # The helper has crashed three times on CI and each time produced only a
       # signal number (STC-254). The stack trace lives in the OS crash report,
       # which is discarded with the runner unless collected here.
       - name: Collect crash reports
-        if: failure()
+        if: failure() || cancelled()
         run: |
           mkdir -p crash-reports
           for d in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
@@ -184,7 +245,9 @@ jobs:
           ls -la crash-reports 2>/dev/null || true
 
       - name: Upload failure artifacts
-        if: failure()
+        # cancelled() too: a run that hits the job cap is exactly the one whose
+        # e2e-diag/ is worth having (STC-496).
+        if: failure() || cancelled()
         # v6, not v5: upload-artifact@v5 announced node24 support but still
         # declares `using: node20`, so aligning this on v5 with the two above
         # would look tidy and quietly keep the deprecated runtime. v6 is the
@@ -194,6 +257,7 @@ jobs:
           name: failure-logs
           path: |
             crash-reports/
+            e2e-diag/
             helper/build/
             app/dist/
           retention-days: 5

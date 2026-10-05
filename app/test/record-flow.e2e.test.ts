@@ -8,6 +8,7 @@ import { withCountdown, withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { HIDE_SETTLE_MS } from "../src/overlay-session.js";
 import { toastPage } from "./_toast.js";
+import { windowCount } from "./_windows.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { hasWindow, pageWithUrl } from "./_windows.js";
 
@@ -589,9 +590,14 @@ describe("recordFlowActive guards its own gap (Finding 6, STC-388 review)", () =
     });
 
     // Only ONE overlay ever opens — the second call never reached
-    // `recordFlowBody`/`openOverlay` at all.
+    // `recordFlowBody`/`openOverlay` at all. Wait for the first to APPEAR
+    // before judging, then give a second flow the same 300 ms it always had to
+    // show up. A bare sleep-then-count read 0 on a loaded runner (run
+    // 37356665916): `app.windows()` lists a new window 78-147 ms late, and the
+    // overlay needs a helper round trip first (`_windows.ts`).
+    await expect.poll(() => windowCount(app!, "overlay.html"), { timeout: 15_000 }).toBe(1);
     await sleep(300);
-    expect(app!.windows().filter((p) => p.url().includes("overlay.html")).length).toBe(1);
+    expect(await windowCount(app!, "overlay.html")).toBe(1);
 
     // Drive the one real flow through to a take, and confirm exactly ONE
     // `start` reached the helper — not two racing for the same temp dir.

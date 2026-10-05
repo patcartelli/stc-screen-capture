@@ -3,6 +3,7 @@ import { composite } from "../src/compositor.js";
 import { FULL_FRAME_UV, type FrameState } from "../src/render.js";
 import { CIRCLE_PT, CLICK_HIGHLIGHT_PT } from "../src/cursor-art.js";
 import { recorder } from "./_canvas-recorder.js";
+import { framingLayout } from "../src/framing.js";
 
 /**
  * Node has no canvas, so this cannot check pixels — the browser gates do that,
@@ -15,6 +16,8 @@ function frameState(over: Partial<FrameState["cursor"]> = {}): FrameState {
   return {
     tick: 0, frameIndex: null, framePtsNs: null, pip: null,
     zoom: { amount: 0, crop: FULL_FRAME_UV },
+    keycast: null,
+    framing: null,
     cursor: {
       x: 300.5, y: 200.25, vx: 0, vy: 0, pressed: false, showClicks: true, visible: true,
       shape: "arrow", style: "default", pxPerPoint: 1.5, ...over,
@@ -142,5 +145,147 @@ describe("composite() draws the pointer at the hotspot", () => {
     // every positional test above. Two shapes must produce two traces.
     const outline = (ops: string[]) => ops.filter((o) => /^(moveTo|lineTo|quadraticCurveTo)\(/.test(o)).join(";");
     expect(outline(draw(frameState({ shape: "ibeam" })))).not.toBe(outline(draw(frameState({ shape: "arrow" }))));
+  });
+});
+
+describe("the styled PiP (STC-461) — drawing order", () => {
+  const cam = { displayWidth: 1280, displayHeight: 720 } as unknown as VideoFrame;
+  const base = { frameIndex: 0, framePtsNs: 0, x: 100, y: 50, width: 200, height: 200 };
+  const drawOps = (draw?: import("../src/render.js").PipDraw) => {
+    const { ctx, ops } = recorder();
+    const fs: FrameState = { ...frameState({ visible: false }), pip: { ...base, draw } };
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, null, cam, fs, 640, 360);
+    return ops;
+  };
+  test("no draw block: the single five-argument call, byte for byte the old one", () => {
+    expect(drawOps().filter((o) => o.startsWith("drawImage"))).toEqual(["drawImage([object Object],100,50,200,200)"]);
+    expect(drawOps()).not.toContain("clip()");
+  });
+  test("shadow is filled BEFORE the clip; the image is drawn inside it; the border after restore", () => {
+    const ops = drawOps({ source: { x: 280, y: 0, width: 720, height: 720 }, mirror: false, radiusPx: 100,
+      border: { px: 3, color: "#ffffff" }, shadow: true });
+    const i = (s: string) => ops.findIndex((o) => o.startsWith(s));
+    expect(i("shadowBlur=")).toBeGreaterThan(-1);
+    expect(i("fill()")).toBeLessThan(i("clip()"));
+    expect(i("clip()")).toBeLessThan(i("drawImage"));
+    expect(ops[i("drawImage")]).toBe("drawImage([object Object],280,0,720,720,100,50,200,200)");
+    // The clip is released (the first restore after the image) before the border is stroked...
+    const clipRestore = ops.indexOf("restore()", i("drawImage"));
+    expect(clipRestore).toBeGreaterThan(-1);
+    expect(clipRestore).toBeLessThan(i("stroke()"));
+    // ...and the border has its own save/restore, so no stroke state outlives the frame.
+    const borderSave = ops.indexOf("save()", clipRestore);
+    expect(borderSave).toBeGreaterThan(clipRestore);
+    expect(borderSave).toBeLessThan(i("lineWidth="));
+    expect(ops.lastIndexOf("restore()")).toBeGreaterThan(i("stroke()"));
+    expect(ops.filter((o) => o === "save()").length).toBe(ops.filter((o) => o === "restore()").length);
+    expect(ops).toContain("roundRect(100,50,200,200,100)");
+    expect(ops).toContain("lineWidth=3");
+    expect(ops).toContain("strokeStyle=#ffffff");
+  });
+  test("mirror flips about the PiP's own centre", () => {
+    const ops = drawOps({ source: { x: 0, y: 0, width: 1280, height: 720 }, mirror: true, radiusPx: 0, border: null, shadow: false });
+    expect(ops).toContain("translate(400,0)");   // 2*x + width
+    expect(ops).toContain("scale(-1,1)");
+    expect(ops.indexOf("scale(-1,1)")).toBeLessThan(ops.findIndex((o) => o.startsWith("drawImage")));
+    expect(ops).not.toContain("stroke()");
+    expect(ops.some((o) => o.startsWith("shadowBlur="))).toBe(false);
+  });
+});
+
+describe("framing (STC-396)", () => {
+  const bitmap = { width: 1280, height: 720 } as unknown as ImageBitmap;
+  const W = 640, H = 360;
+  const layout = framingLayout({ preset: "clean" }, { width: W, height: H }, 16 / 9)!;
+  const c = layout.content;
+  const contentRect = `rect(${c.x},${c.y},${c.width},${c.height})`;
+
+  function drawFramed(over: Partial<FrameState["cursor"]> = {}, extra: Partial<FrameState> = {}) {
+    const { ctx, ops } = recorder();
+    (ctx as unknown as { measureText: unknown }).measureText = () => ({ width: 50 });
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
+              { ...frameState(over), framing: layout, ...extra }, W, H);
+    return ops;
+  }
+  const idx = (ops: string[], prefix: string, from = 0) => ops.findIndex((o, i) => i >= from && o.startsWith(prefix));
+
+  test("order: background, shadow, then a rounded clip, then the picture inside the content rect", () => {
+    const ops = drawFramed({ visible: false });
+    const gradient = idx(ops, "createLinearGradient");
+    const bgFill = idx(ops, `fillRect(0,0,${W},${H})`, gradient);
+    const shadow = idx(ops, `shadowBlur=${layout.shadow.blur}`);
+    const clip = idx(ops, "clip(");
+    const picture = idx(ops, `drawImage(${String(bitmap)},${c.x},${c.y},${c.width},${c.height})`);
+    expect(gradient).toBeGreaterThan(-1);
+    expect(bgFill).toBeGreaterThan(gradient);
+    expect(shadow).toBeGreaterThan(bgFill);
+    expect(clip).toBeGreaterThan(shadow);
+    expect(picture).toBeGreaterThan(clip);
+    expect(ops.some((o) => o === `roundRect(${c.x},${c.y},${c.width},${c.height},${layout.radius})`)).toBe(true);
+  });
+
+  test("the cursor is clipped to the content rect: save, rect, clip BEFORE it, restore AFTER it and before the keycast", () => {
+    const ops = drawFramed({ visible: true, pressed: true },
+      { keycast: { label: "A", count: 1, opacity: 1 } });
+    const picture = idx(ops, `drawImage(${String(bitmap)},`);
+    const rectOp = idx(ops, contentRect, picture);
+    const clipOp = idx(ops, "clip(", rectOp);
+    const saveOp = ops.lastIndexOf("save()", rectOp);
+    const cursorOp = idx(ops, "arc(", clipOp);          // the click highlight, the first cursor op
+    const lastCursorOp = ops.reduce((last, o, i) => (/^(moveTo|lineTo|quadraticCurveTo|arc)\(/.test(o) ? i : last), -1);
+    const restoreOp = idx(ops, "restore()", lastCursorOp);
+    const keycastSave = idx(ops, "save()", restoreOp);
+    expect(picture).toBeGreaterThan(-1);
+    expect(saveOp).toBeGreaterThan(picture);            // after the picture's own restore
+    expect(rectOp).toBeGreaterThan(saveOp);
+    expect(clipOp).toBeGreaterThan(rectOp);
+    expect(cursorOp).toBeGreaterThan(clipOp);
+    expect(restoreOp).toBeGreaterThan(lastCursorOp);
+    // the keycast is a caption on the canvas: drawn after the clip is undone
+    expect(keycastSave).toBeGreaterThan(restoreOp);
+    expect(idx(ops, "fillText(", keycastSave)).toBeGreaterThan(keycastSave);
+  });
+
+  test("a solid background fills with the colour, no gradient", () => {
+    const solid = framingLayout({ preset: "solid", color: "#112233" }, { width: W, height: H }, 16 / 9)!;
+    const { ctx, ops } = recorder();
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
+              { ...frameState({ visible: false }), framing: solid }, W, H);
+    expect(ops.some((o) => o.startsWith("createLinearGradient"))).toBe(false);
+    expect(ops).toContain("fillStyle=#112233");
+  });
+
+  test("a zoom crop under framing draws the crop's source rect into the content rect", () => {
+    const { ctx, ops } = recorder();
+    const crop = { x: 0.1, y: 0.2, width: 0.5, height: 0.5 };
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
+              { ...frameState({ visible: false }), zoom: { amount: 1, crop }, framing: layout }, W, H);
+    expect(ops.some((o) => o === `drawImage(${String(bitmap)},128,144,640,360,${c.x},${c.y},${c.width},${c.height})`)).toBe(true);
+  });
+
+  test("the shadow has no core: its shape is filled off-canvas and shadowOffsetX brings the shadow back", () => {
+    const ops = drawFramed({ visible: false });
+    const shift = W * 2 + 1000;
+    expect(ops).toContain(`shadowOffsetX=${shift}`);
+    expect(ops).toContain(`roundRect(${c.x - shift},${c.y},${c.width},${c.height},${layout.radius})`);
+    // and the picture's rounded clip is still at the content rect
+    expect(ops).toContain(`roundRect(${c.x},${c.y},${c.width},${c.height},${layout.radius})`);
+  });
+
+  test.each([["opacity", { opacity: 0 }], ["blur", { blur: 0 }]])("a zero %s skips the shadow entirely", (_n, over) => {
+    const { ctx, ops } = recorder();
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
+              { ...frameState({ visible: false }), framing: { ...layout, shadow: { ...layout.shadow, ...over } } }, W, H);
+    expect(ops.some((o) => o.startsWith("shadow"))).toBe(false);
+    const n = (k: string) => ops.filter((o) => o === k).length;
+    expect(n("save()")).toBe(n("restore()"));
+  });
+
+  test("framing: null draws exactly the pre-framing sequence (no clip, no gradient, no shadow)", () => {
+    const { ctx, ops } = recorder();
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
+              { ...frameState({ visible: false }), framing: null }, W, H);
+    expect(ops.some((o) => o.startsWith("clip(") || o.startsWith("createLinearGradient") || o.startsWith("shadow"))).toBe(false);
+    expect(ops).toContain(`drawImage(${String(bitmap)},0,0,${W},${H})`);
   });
 });

@@ -38,6 +38,9 @@ contextBridge.exposeInMainWorld("thumb", {
   save: (dir: string) => ipcRenderer.invoke("panel:save", dir),
   edit: (dir: string) => ipcRenderer.invoke("panel:edit", dir),
   trash: (dir: string) => ipcRenderer.invoke("panel:trash", dir),
+  // Copy a recording by cloning display.mp4 (STC-395). The clone outlives
+  // the take, so pasting still works after Trash.
+  copyRecording: (dir: string) => ipcRenderer.invoke("panel:copyRecording", dir),
   // Close without deciding (STC-412) — the X and Escape both funnel here
   // through `perform("dismiss")`; the take is untouched either way. See
   // `thumbnail-renderer.ts`'s own note on why click-outside (blur) is NOT

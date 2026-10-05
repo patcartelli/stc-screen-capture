@@ -71,7 +71,8 @@ const environment = (m) => {
   trail.dump();
 };
 try {
-  await page.goto("http://localhost:5205/sink-identity.html");
+  const framing = process.env.STC_IDENTITY_FRAMING;
+  await page.goto(`http://localhost:5205/sink-identity.html${framing ? `?framing=${encodeURIComponent(framing)}` : ""}`);
   await page.waitForFunction(() => window.__identityReady === true, { timeout: 60_000 });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__identityReady === true, { timeout: 60_000 });
@@ -124,6 +125,7 @@ try {
   // alone cannot catch it (STC-326/330's `frame.width` bug — found only by
   // watching a real take, not by this gate, until this check existed).
   console.log(`zoom: ${r.zoomFrames} sampled frame(s) meaningfully zoomed`);
+  console.log(`keycast: ${r.keycastFrames} of ${r.samples} sampled frames have one`);
   if (r.zoomFrames > 0) {
     if (r.zoomBlindMismatches > 0) {
       fail(`${r.zoomBlindMismatches} of ${r.zoomFrames} zoomed frames are byte-identical with the ` +

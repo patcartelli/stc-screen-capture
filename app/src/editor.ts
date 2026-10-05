@@ -45,6 +45,7 @@ declare const editor: {
   }>;
   getSettings: () => Promise<AppSettings>;
   setPreviewMuted: (muted: boolean) => Promise<unknown>;
+  setPipStyleDefault: (style: unknown) => Promise<unknown>;
   publish(): Promise<{
     ok: boolean; plan: string; message?: string;
     file?: string; name?: string; replaced?: boolean; snippet?: string;
@@ -76,6 +77,8 @@ import {
 } from "@transform/trim";
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
 import type { Size } from "@transform/spaces";
+import { holdFraming, restoreFraming, withHeldFraming, chosenFraming, type FramingHold } from "./framing-hold.js";
+import { contentFraction, framingLayout, DEFAULT_SOLID_COLOR, type Framing, type FramingPreset } from "@transform/framing";
 import { render } from "@transform/render";
 import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, effectivePointWidth, legibility, legibilitySentence, zoomFactorForCrop,
@@ -84,6 +87,7 @@ import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
 import { windowId, overrideFor, resolvedWindows, rectFromGesture } from "@transform/zoom-override";
+import { committedOverrides, overridesWithoutWindow, overridesWithoutManual, type OverrideEdit } from "./override-edit.js";
 import type { Rect } from "@transform/spaces";
 import {
   clampTrimFrame, decideKey, formatReadout, formatShuttle, frameAtFraction, frameToNs,
@@ -92,6 +96,12 @@ import {
 } from "./scrubber.js";
 import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
 import { clipActivity, zoomCurve, laneBitmap } from "./timeline-activity.js";
+import {
+  editPipStyle, pipRect, pipSize, snapCenter, resizeFromCorner, styleFromFixedCorner,
+  PIP_SNAP_THRESHOLD_SCREEN_PX, inspectorSide, inspectorLeftPx, type PipEdit, type PipStyle,
+  panFraming, zoomFraming, framingSource,
+} from "@transform/pip-style";
+import { buildPipInspector } from "./pip-inspector.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -438,7 +448,20 @@ window.addEventListener("resize", () => { if (player) { updateTicks(); renderRul
 
 async function persistProject(): Promise<void> {
   if (!openProject || !player) return;
-  const doc = projectForWrite(openProject, player.durationNs);
+  // STC-461: while reframing, the LIVE project carries a temporary display
+  // PiP (the whole camera frame) that must never reach disk. Every other edit
+  // stays usable meanwhile, so the write still happens — of a COPY whose PiP
+  // is the one the reframe would commit right now (reframedProject). STC-396:
+  // a framing held aside by the override editor is put back on that copy.
+  const reframed = reframing ? reframedProject(openProject, reframing) : openProject;
+  // STC-500: the same for an open zoom-override edit — the LIVE project has
+  // that window's own entry stripped (so the stage shows the unzoomed picture
+  // to draw on), and a save made meanwhile (trim, levels, a slug…) must not
+  // write it out without it. The copy carries the edit as Done would commit
+  // it right now; the live project stays stripped.
+  const overrides = editedOverrides();
+  const live = overrides ? { ...reframed, overrides } : reframed;
+  const doc = projectForWrite(withHeldFraming(live, heldFraming), player.durationNs);
   await editor.writeProject(
     new TextEncoder().encode(JSON.stringify(doc, null, 2)).buffer as ArrayBuffer,
   );
@@ -764,6 +787,13 @@ window.addEventListener("resize", redrawLanes);
 // mode to just look and then leaving with no drag restores the original
 // override exactly rather than deleting it as a side effect.
 //
+// STC-396: the FRAME is set aside the same way. With project.framing set the
+// stage shows the picture INSET, so a pointer pixel on #stage is no longer
+// capture UV and #overridebox (a percentage of the overlay) would sit in the
+// wrong place. While editing, framing is held in `heldFraming` and removed
+// from the live project; every path that ends editing restores it, and
+// persistProject/export write the project WITH it (`withHeldFraming`).
+//
 // STC-331 adds a SECOND kind of editing target: a window with no derived
 // counterpart at all. `editingWindowId` (a derived window's own identity)
 // and `editingManualId` (a manual override's own `id`) are mutually
@@ -774,6 +804,7 @@ window.addEventListener("resize", redrawLanes);
 // End below), since there is no derived window to read them from.
 
 let editingWindowId: string | null = null;
+let heldFraming: FramingHold | null = null;
 let editingManualId: string | null = null;
 let draftRect: Rect | null = null;
 let draftEasing: ZoomPreset | "" = "";
@@ -796,17 +827,28 @@ function manualEntries(): Extract<ZoomOverride, { kind: "manual" }>[] {
   return (openProject?.overrides ?? []).filter((o): o is Extract<ZoomOverride, { kind: "manual" }> => o.kind === "manual");
 }
 
-function overridesWithoutWindow(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
-  return (overrides ?? []).filter((o) => !(o.kind === "geometry" && o.windowId === id));
-}
+// overridesWithoutWindow / overridesWithoutRetime / overridesWithoutManual
+// moved to override-edit.ts (STC-500) with the commit rule that uses them.
 
-/** Strips a `retime` entry for `id` (STC-329) — the sibling of `overridesWithoutWindow`'s geometry-only filter, kept separate rather than folded in: a geometry drag and a retime drag commit independently (dragging the rect must not discard a prior retime, and vice versa). */
-function overridesWithoutRetime(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
-  return (overrides ?? []).filter((o) => !(o.kind === "retime" && o.windowId === id));
-}
-
-function overridesWithoutManual(overrides: Project["overrides"], id: string): NonNullable<Project["overrides"]> {
-  return (overrides ?? []).filter((o) => !(o.kind === "manual" && o.id === id));
+/**
+ * The open zoom-override edit as data, or null when none is open (STC-500) —
+ * what `committedOverrides` needs to say what the edit would commit to right
+ * now. Done, every save made mid-edit, and every output read it the same way.
+ */
+function editState(): OverrideEdit | null {
+  if (editingWindowId !== null) {
+    return {
+      kind: "derived", windowId: editingWindowId, rect: draftRect, easing: draftEasing,
+      startNs: draftManualStart, endNs: draftManualEnd,
+    };
+  }
+  if (editingManualId !== null) {
+    return {
+      kind: "manual", id: editingManualId, rect: draftRect, easing: draftEasing,
+      startNs: draftManualStart, endNs: draftManualEnd,
+    };
+  }
+  return null;
 }
 
 /**
@@ -902,64 +944,44 @@ function layoutOverrideBlocks(): void {
 }
 
 /**
- * Writes the current draft into project.overrides and persists — an empty
- * draft means "no geometry override" (unchanged since STC-330).
- *
- * A `retime` entry (STC-329) is written or cleared independently, alongside
- * whatever this call decides about geometry: dragging the rect must not
- * discard a prior retime, and dragging an edge must not discard a prior
- * geometry override — the two compose (render.ts's own header says why:
- * retime changes WHEN, geometry/stage 2 still decide WHERE). Whether a
- * retime is needed is decided against the window's TRUE derived bounds,
- * looked up fresh here rather than trusted from whatever seeded
- * `draftManualStart`/`End` — those were seeded from the ALREADY-resolved
- * (possibly already-retimed) window, so comparing against them would miss a
- * retime that exactly undoes a previous one.
+ * The live project's overrides with the open edit committed into it, or
+ * undefined when no edit is open (STC-500). `committedOverrides`
+ * (override-edit.ts) is the rule; its header says what a derived and a manual
+ * commit each write. Undefined, too, for a derived edit with no session
+ * loaded: its retime is decided against the events, and guessing without them
+ * would drop one. Used by Done (below) and by persistProject for a save made
+ * mid-edit — one rule, so the two cannot drift.
+ */
+function editedOverrides(): ZoomOverride[] | undefined {
+  const edit = editState();
+  if (!openProject || !edit || (edit.kind === "derived" && !openSession)) return undefined;
+  return committedOverrides(openProject.overrides, edit, openSession?.events ?? [], openProject.zoom?.preset);
+}
+
+/**
+ * Done for a DERIVED window: writes the draft into project.overrides and
+ * persists. An empty draft means "no geometry override" (STC-330); a retime
+ * (STC-329) is written or cleared independently, decided against the window's
+ * TRUE derived bounds — both are `committedOverrides`' rules now. The edit is
+ * still open while persistProject runs, so it commits the same edit into its
+ * copy again: a no-op, because the rule is idempotent (and tested to be).
  */
 async function commitDraft(): Promise<void> {
   if (!openProject || !editingWindowId || !openSession) return;
-  const id = editingWindowId;
-  const withoutGeometry = overridesWithoutWindow(openProject.overrides, id);
-  const withGeometry = draftRect
-    ? [...withoutGeometry, {
-        kind: "geometry" as const, windowId: id, rect: draftRect,
-        ...(draftEasing ? { easing: draftEasing } : {}),
-      }]
-    : withoutGeometry;
-
-  const raw = zoomWindows(openSession.events).find((w) => windowId(w) === id);
-  const withoutRetime = overridesWithoutRetime(withGeometry, id);
-  const startChanged = !!raw && draftManualStart !== raw.startNs;
-  const endChanged = !!raw && draftManualEnd !== raw.endNs;
-  openProject.overrides = (startChanged || endChanged)
-    ? [...withoutRetime, {
-        kind: "retime" as const, windowId: id,
-        ...(startChanged ? { startNs: draftManualStart } : {}),
-        ...(endChanged ? { endNs: draftManualEnd } : {}),
-      }]
-    : withoutRetime;
+  openProject.overrides = editedOverrides()!;
   await persistProject();
 }
 
 /**
- * Writes the current manual draft into project.overrides and persists.
- * `easing` is REQUIRED on the schema (types.ts's own note says why), so an
- * unresolved "Project default" picker selection is resolved to the
- * project's CURRENT preset at commit time — a snapshot, not a live link;
- * a manual window has no `undefined` to mean "whatever the project says",
- * unlike a geometry override which does. An empty draft (Remove pressed)
- * deletes the window outright — there is no "no override" state for a
- * manual window to fall back to, since its rect and timing ARE the window.
+ * Done for a MANUAL window (STC-331): writes the draft into project.overrides
+ * and persists. An unresolved "Project default" easing resolves to the
+ * project's CURRENT preset at commit time (a snapshot, not a live link), and
+ * an empty draft (Remove pressed) deletes the window outright — both are
+ * `committedOverrides`' rules now.
  */
 async function commitManualDraft(): Promise<void> {
   if (!openProject || !editingManualId) return;
-  const withoutThis = overridesWithoutManual(openProject.overrides, editingManualId);
-  openProject.overrides = draftRect
-    ? [...withoutThis, {
-        kind: "manual" as const, id: editingManualId, startNs: draftManualStart, endNs: draftManualEnd,
-        rect: draftRect, easing: draftEasing || openProject.zoom?.preset || "standard",
-      }]
-    : withoutThis;
+  openProject.overrides = editedOverrides()!;
   await persistProject();
 }
 
@@ -1024,7 +1046,18 @@ async function commitCurrentEdit(): Promise<void> {
 /** The teardown half of leaving edit mode — shared by a normal close (which
  *  commits first) and a delete (which does not: there is nothing left to
  *  commit for a window that no longer exists). */
+function setAsideFraming(): void {
+  if (!openProject || heldFraming) return;
+  heldFraming = holdFraming(openProject);
+}
+
+function putBackFraming(): void {
+  if (openProject) restoreFraming(openProject, heldFraming);
+  heldFraming = null;
+}
+
 function resetEditingState(): void {
+  putBackFraming();
   editingWindowId = null;
   editingManualId = null;
   draftRect = null;
@@ -1043,6 +1076,7 @@ async function closeOverrideEditor(): Promise<void> {
   resetEditingState();
   layoutOverrideBlocks();
   updateManualDraftBlock();
+  if (player) await player.seek(player.currentNs); // repaint framed again
 }
 
 /**
@@ -1066,6 +1100,7 @@ async function deleteDerivedWindow(): Promise<void> {
   await persistProject();
   layoutOverrideBlocks();
   updateManualDraftBlock();
+  if (player) await player.seek(player.currentNs); // repaint framed again
 }
 
 async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
@@ -1082,6 +1117,7 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   draftManualStart = w.startNs;
   draftManualEnd = w.endNs;
   openProject.overrides = overridesWithoutWindow(openProject.overrides, id);
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((w.startNs + w.endNs) / 2));
   await player.seek(mid);
@@ -1102,6 +1138,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   draftRect = o.rect;
   draftEasing = o.easing;
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((o.startNs + o.endNs) / 2));
   await player.seek(mid);
@@ -1128,6 +1165,7 @@ async function createManualWindow(clickNs: number): Promise<void> {
   draftManualEnd = endNs;
   draftRect = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
   draftEasing = "";
+  setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((startNs + endNs) / 2));
   await player.seek(mid);
@@ -1279,6 +1317,10 @@ $("outsize").addEventListener("change", () => {
 
 // ---- legibility + viewer's eye (STC-318), inside the export dialog ---------
 
+function frameFractionFor(p: Project): number {
+  return openCapture ? contentFraction(p === openProject ? chosenFraming(p, heldFraming) : p.framing, p.output, openCapture.width / openCapture.height) : 1;
+}
+
 function updateLegibilityUI(): void {
   if (!openProject || !openDisplay || !player || !openSession) return;
   const sel = $("embedtarget") as HTMLSelectElement;
@@ -1301,7 +1343,8 @@ function updateLegibilityUI(): void {
 
   const fs = render(openProject, openSession, player.currentNs);
   const l = legibility(openDisplay, openProject.textPt ?? DEFAULT_TEXT_PT,
-                       embedWidthPx, zoomFactorForCrop(fs.zoom.crop.width));
+                       embedWidthPx, zoomFactorForCrop(fs.zoom.crop.width),
+                       frameFractionFor(openProject));
   const out = $("legibility");
   // Warns below 9pt; never blocks (STC-373's own scope line) — the export
   // button beside it stays enabled either way.
@@ -1366,10 +1409,14 @@ $("vieweye").addEventListener("change", () => {
 // ---- the export dialog -------------------------------------------------
 
 const exportDialog = $("exportdialog") as HTMLDialogElement;
-$("openexport").addEventListener("click", () => {
+$("openexport").addEventListener("click", () => void (async () => {
+  // STC-461/STC-500: the dialog never opens over a reframe or an open zoom-
+  // override edit — every output it leads to reads the live project, which
+  // holds the temporary display PiP / the stripped override meanwhile.
+  await finishOpenEdits();
   if (!exportDialog.open) exportDialog.showModal();
-  void refreshShareRow();
-});
+  await refreshShareRow();
+})().catch((e: any) => alertUser(String(e?.message ?? e))));
 $("closeexport").addEventListener("click", () => exportDialog.close());
 
 // ---- opening and closing the take -------------------------------------
@@ -1413,6 +1460,7 @@ let openVideoSources: { display: CountingSource; camera?: CountingSource } | und
 (window as unknown as { __stcExportForTest: (o: { reuse: boolean }) => Promise<unknown> }).__stcExportForTest =
   async ({ reuse }) => {
     if (!openSession || !openProject) throw new Error("no take open");
+    await finishOpenEdits(); // STC-461/STC-500: never export a reframe or an override edit uncommitted
     // runExport holds exportAbort for its whole run (cleared in its finally,
     // even after a cancel), so set means a real export is still in flight.
     if (exportAbort) throw new Error("a real export is running");
@@ -1463,6 +1511,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   updateLegibilityUI();
   updateSystemAudioUI();
   updateVoiceCleanUI();
+  updatePipButton();
   void loadPreviewAudio(session, audioGen);
   applySpanTransform();
   redrawLanes();
@@ -1470,11 +1519,22 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 
 async function closeTake(): Promise<void> {
   exportAbort?.abort();
+  // STC-461: a take closed mid-reframe COMMITS it — dropping it would lose the
+  // reframe the user can see. STC-500: so does an open zoom-override edit. It
+  // used to be dropped here ("a write nobody asked for"), but the live project
+  // has that window's own entry stripped while it is open, so dropping the
+  // draft lost the window's EXISTING override from disk as soon as any other
+  // save had happened mid-edit — and the decision (2026-10-02) is that what
+  // you see is what's kept. postOpenEditWrites builds and SENDS both writes
+  // synchronously, before the teardown below clears openProject/player and
+  // the edit state; it is awaited at the end so the writes have landed when
+  // closeTake settles. No closeOverrideEditor(): its repaint is for a take
+  // that stays open.
+  const editWrites = postOpenEditWrites();
   $("framestatus").setAttribute("hidden", "");
-  // Not commitDraft()+closeOverrideEditor(): the take (and its project) are
-  // going away regardless, and persisting a draft against a project about to
-  // be discarded would be a write nobody asked for. Just drop the state.
   editingWindowId = null;
+  editingManualId = null;
+  heldFraming = null; // the project is discarded below; nothing to restore into
   draftRect = null;
   draftEasing = "";
   dragAnchorUv = null;
@@ -1501,8 +1561,10 @@ async function closeTake(): Promise<void> {
   openDisplay = undefined;
   updateSystemAudioUI();
   updateVoiceCleanUI();
+  updatePipButton();
   applyStageDisplay();
   await editor.closePreview();
+  await editWrites.catch((e: any) => alertUser(String(e?.message ?? e)));
 }
 
 // ---- the header row's transport (STC-444) -----------------------------
@@ -1614,6 +1676,9 @@ function updateAudioButton(): void {
   const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);
   $("audiobtn").toggleAttribute("hidden", !has);
   updateWaveformToggle();
+  updateKeycastUI();
+  updateClicksUI();
+  updateFramingUI();
   if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
 }
 
@@ -1654,6 +1719,513 @@ function showMute(id: string, row: HTMLElement, muted: boolean, what: string): v
   btn.setAttribute("aria-label", label);
   btn.title = label;
   row.toggleAttribute("data-muted", muted);
+}
+
+// ---- keycast (STC-419) -------------------------------------------------
+// One switch, saved to the project. Hiding is project.keycast.show === false
+// and nothing else: the take's keys stay in events.json.
+function updateKeycastUI(): void {
+  const btn = $("keycastbtn") as HTMLButtonElement;
+  const has = !!openSession?.keys?.length;
+  btn.hidden = !has;
+  const shown = openProject?.keycast?.show !== false;
+  btn.setAttribute("aria-pressed", shown ? "true" : "false");
+  btn.title = shown ? "Hide keystrokes in the preview and export" : "Show keystrokes in the preview and export";
+}
+
+$("keycastbtn").addEventListener("click", () => {
+  if (!openProject || !player) return;
+  const shown = openProject.keycast?.show !== false;
+  openProject.keycast = { show: !shown };
+  updateKeycastUI();
+  void player.seek(player.currentNs);   // repaint this frame with the new choice
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- click highlight (STC-492) -----------------------------------------
+// One switch, saved to the project (project-13's showClicks; absent = on).
+// render() reads it for both sinks, so the preview and the export agree.
+function updateClicksUI(): void {
+  const btn = $("clicksbtn") as HTMLButtonElement;
+  const shown = openProject?.showClicks !== false;
+  btn.setAttribute("aria-pressed", shown ? "true" : "false");
+  btn.title = shown ? "Hide the click highlight in the preview and export" : "Show the click highlight in the preview and export";
+}
+
+$("clicksbtn").addEventListener("click", () => {
+  if (!openProject || !player) return;
+  openProject.showClicks = openProject.showClicks === false;
+  updateClicksUI();
+  void player.seek(player.currentNs);   // repaint this frame with the new choice
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
+// ---- PiP (STC-461) ----------------------------------------------------------
+//
+// The Camera popover hosts pip-inspector.ts; #pipoverlay lets the PiP be
+// dragged (snapping, pip-style.ts's snapCenter) and resized from its corner.
+// Every decision is pip-style.ts's. The player shares `openProject`, so an edit
+// is a mutation plus a repaint; a COMMIT also persists.
+//
+// #pippanel is `popover="auto"`, and a press on #pipoverlay is OUTSIDE it, so
+// the browser's light dismiss closes the inspector on a drag. Two things keep
+// that from breaking the gesture or losing the panel: the overlay is never
+// hidden while a drag is in flight (layoutPipOverlay checks `pipDrag`), and a
+// drag that ends with the panel closed re-opens it — dragging is part of using
+// the inspector, not leaving it. (docs/STC-461-RUNBOOK.md §3 judges how it feels.)
+// The panel itself opens over the stage on the side away from the PiP
+// (placePipPanel), never on top of the thing it lets you drag.
+
+function pipCamera(): Size | null {
+  const cam = openSession?.anchors.camera;
+  return cam?.present ? { width: cam.width, height: cam.height } : null;
+}
+
+/**
+ * The rect the PiP lives in, in output px (STC-396 rule 3): framing.ts's own
+ * content rect for the LIVE project — what the stage is drawing right now, so
+ * a framing held aside by the override editor counts as none — or the whole
+ * output when there is no framing. pip-style.ts's "output" is this rect's size;
+ * the overlay adds its origin. With no framing every number below is what it
+ * was before STC-396.
+ */
+function pipFrame(): Rect | null {
+  if (!openProject) return null;
+  const out = openProject.output;
+  const layout = openCapture && openCapture.height > 0
+    ? framingLayout(openProject.framing, out, openCapture.width / openCapture.height)
+    : undefined;
+  return layout?.content ?? { x: 0, y: 0, width: out.width, height: out.height };
+}
+
+const sizeOf = (r: Rect): Size => ({ width: r.width, height: r.height });
+
+/** The take's style, or the fixed corner expressed as one so a first edit cannot jump. */
+function currentPipStyle(): PipStyle | null {
+  const cam = pipCamera();
+  if (!openProject?.pip || !cam) return null;
+  // While reframing, the live project holds the temporary display style; the
+  // take's REAL one (with the framing being edited) is held here.
+  if (reframing) return reframing.real;
+  const frame = pipFrame()!;
+  return openProject.pip.style ?? styleFromFixedCorner(openProject.pip, sizeOf(frame), cam);
+}
+
+function persistPip(): void {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+function setPipStyle(style: PipStyle, persist: boolean): void {
+  if (!openProject?.pip || !player) return;
+  openProject.pip.style = style;
+  pipInspector.render(style, openProject.pip.enabled);
+  layoutPipOverlay();
+  void player.seek(player.currentNs);
+  if (persist) persistPip();
+}
+
+const pipInspector = buildPipInspector($("pippanel"), {
+  surface: "editor",
+  onEdit(edit: PipEdit, phase) {
+    const style = currentPipStyle();
+    const cam = pipCamera();
+    if (!style || !cam) return;
+    setPipStyle(editPipStyle(style, edit, cam), phase === "commit");
+  },
+  onEnabled(enabled) {
+    if (!openProject?.pip || !player) return;
+    openProject.pip.enabled = enabled;
+    layoutPipOverlay();
+    void player.seek(player.currentNs);
+    persistPip();
+  },
+  onReframe: () => enterReframe(),
+  onUseAsDefault() {
+    const style = currentPipStyle();
+    if (style) void editor.setPipStyleDefault(style).catch((e: any) => alertUser(String(e?.message ?? e)));
+  },
+});
+
+const pipPanel = $("pippanel") as HTMLElement & { hidePopover?: () => void; showPopover?: () => void };
+const pipPanelOpen = (): boolean => pipPanel.matches(":popover-open");
+
+function updatePipButton(): void {
+  const has = !!openProject?.pip && !!pipCamera();
+  $("pipbtn").toggleAttribute("hidden", !has);
+  if (!has) pipPanel.hidePopover?.();
+  const style = currentPipStyle();
+  if (style && openProject?.pip) pipInspector.render(style, openProject.pip.enabled);
+  layoutPipOverlay();
+}
+
+/** Output px → stage CSS px, from the stage's live box (it already reflects any CSS transform). */
+function stageScale(): { left: number; top: number; k: number } {
+  const r = ($("stage") as HTMLCanvasElement).getBoundingClientRect();
+  return { left: r.left, top: r.top, k: openProject ? r.width / openProject.output.width : 1 };
+}
+
+/** Shown while the inspector is open (or a drag is still finishing) for a PiP that is drawn. */
+function layoutPipOverlay(): void {
+  const overlay = $("pipoverlay");
+  const style = currentPipStyle();
+  const cam = pipCamera();
+  const shown = !reframing && !!style && !!cam && !!openProject?.pip?.enabled && (pipPanelOpen() || !!pipDrag);
+  overlay.hidden = !shown;
+  const frame = pipFrame();
+  if (!shown || !style || !cam || !openProject || !frame) return;
+  const r = pipRect(style, sizeOf(frame), cam);
+  const { k } = stageScale();
+  const box = overlay.querySelector<HTMLElement>(".pipbox")!;
+  Object.assign(box.style, {
+    left: `${(frame.x + r.x) * k}px`, top: `${(frame.y + r.y) * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
+    borderRadius: style.shape === "circle" ? "50%" : `${style.cornerRadius * Math.min(r.width, r.height) * k}px`,
+  });
+}
+
+const PIP_PANEL_WIDTH_PX = 300;
+const PIP_PANEL_GAP_PX = 12;
+
+/**
+ * Put the inspector over the stage on the side AWAY from the PiP
+ * (pip-style.ts's inspectorSide) — anchored to its button it covered the
+ * default bottom-right PiP, the one thing it exists to let you drag. Runs on
+ * beforetoggle so there is no flash at the old spot; the panel re-opens after
+ * every drag, so it re-sides then.
+ */
+function placePipPanel(): void {
+  const style = currentPipStyle();
+  const stage = ($("stage") as HTMLCanvasElement).getBoundingClientRect();
+  const side = style ? inspectorSide(style) : "left";
+  const left = Math.max(0, inspectorLeftPx(stage, side, PIP_PANEL_WIDTH_PX, PIP_PANEL_GAP_PX));
+  const top = stage.top + PIP_PANEL_GAP_PX;
+  Object.assign(pipPanel.style, {
+    left: `${left}px`, top: `${top}px`, width: `${PIP_PANEL_WIDTH_PX}px`,
+    maxHeight: `${Math.max(120, innerHeight - top - PIP_PANEL_GAP_PX)}px`,
+  });
+  pipPanel.dataset.side = side;
+}
+
+pipPanel.addEventListener("beforetoggle", (e) => {
+  if ((e as ToggleEvent).newState !== "open") return;
+  // The Camera button pressed mid-reframe: finish the reframe first, so the
+  // inspector edits the real style and never the temporary display one.
+  commitReframe();
+  placePipPanel();
+});
+pipPanel.addEventListener("toggle", () => layoutPipOverlay());
+
+let pipDrag: { kind: "move" | "resize"; dx: number; dy: number } | null = null;
+
+$("pipoverlay").addEventListener("pointerdown", (e) => {
+  const style = currentPipStyle();
+  const cam = pipCamera();
+  const frame = pipFrame();
+  if (!style || !cam || !openProject || !frame) return;
+  const target = e.target as HTMLElement;
+  if (!target.closest(".pipbox")) return;
+  const { left, top, k } = stageScale();
+  // Content-rect px: output px less the rect's origin (both zero with no framing).
+  const px = (e.clientX - left) / k - frame.x, py = (e.clientY - top) / k - frame.y;
+  pipDrag = target.id === "piphandle"
+    ? { kind: "resize", dx: 0, dy: 0 }
+    : { kind: "move", dx: px - style.center.x * frame.width, dy: py - style.center.y * frame.height };
+  target.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+$("pipoverlay").addEventListener("pointermove", (e) => {
+  if (!pipDrag || !openProject) return;
+  const style = currentPipStyle();
+  const cam = pipCamera();
+  const frame = pipFrame();
+  if (!style || !cam || !frame) return;
+  const { left, top, k } = stageScale();
+  const out = sizeOf(frame);
+  const px = (e.clientX - left) / k - frame.x, py = (e.clientY - top) / k - frame.y;
+  if (pipDrag.kind === "resize") {
+    setPipStyle(resizeFromCorner(style, { x: px, y: py }, out, cam), false);
+    return;
+  }
+  const raw = { x: (px - pipDrag.dx) / out.width, y: (py - pipDrag.dy) / out.height };
+  const snapped = snapCenter(raw, pipSize(style, out, cam), out, PIP_SNAP_THRESHOLD_SCREEN_PX / k);
+  setPipStyle(editPipStyle(style, { kind: "move", center: snapped }, cam), false);
+});
+
+function endPipDrag(): void {
+  if (!pipDrag) return;
+  pipDrag = null;
+  persistPip();
+  // Light dismiss runs around this same pointerup; re-open once it has.
+  setTimeout(() => {
+    // Re-opening re-sides it (beforetoggle); one that stayed open re-sides here.
+    if (pipPanelOpen()) placePipPanel();
+    else if (!$("pipbtn").hidden) pipPanel.showPopover?.();
+    layoutPipOverlay();
+  }, 0);
+}
+$("pipoverlay").addEventListener("pointerup", endPipDrag);
+$("pipoverlay").addEventListener("pointercancel", endPipDrag);
+
+window.addEventListener("resize", () => {
+  if (pipPanelOpen()) placePipPanel();
+  if (!$("pipoverlay").hidden) layoutPipOverlay();
+  layoutFramingWindow();
+});
+
+// ---- PiP reframe (STC-461) ----------------------------------------------------
+//
+// STC-330's override editing, for the camera: the LIVE project the player
+// reads gets a temporary PiP — the whole camera frame, large and centred, same
+// mirror — so render() itself draws the full frame and no second drawing path
+// exists. #pipframing draws the crop window over it in the PiP's real shape
+// and dims the rest (#pipframewindow is the surface STC-497's guides draw
+// inside). Drag the window to pan, slider or wheel to zoom; every bound is
+// pip-style.ts's clampFraming. Done or Escape restores the real style with
+// the new framing and persists, and so does closing the take. A write made
+// meanwhile (a trim, a level) writes the reframe's committed style, never the
+// temporary display one — persistProject's reframedProject.
+//
+// Mirror: the display style keeps the real `mirror`, so the picture under the
+// window is the one the viewer sees. framingSource is in UNMIRRORED camera px,
+// so the window is drawn flipped about the shown rect's centre; a drag passes
+// its delta AS SEEN and panFraming flips x back itself.
+
+let reframing: { real: PipStyle; before: PipStyle | undefined } | null = null;
+let frameDrag: { x: number; y: number } | null = null;
+
+function displayStyleFor(real: PipStyle): PipStyle {
+  return { ...real, shape: "rect", cornerRadius: 0, width: 0.5, center: { x: 0.5, y: 0.5 },
+    border: null, shadow: false, framing: undefined };
+}
+
+/** The shown (display-style) rect in output px, and stage CSS px per camera px / per output px.
+ *  The display style is centred in the CONTENT rect, as render() places it (STC-396 rule 3). */
+function framingScale(real: PipStyle, cam: Size): { shown: Rect; s: number; k: number } | null {
+  const frame = pipFrame();
+  if (!openProject || !frame) return null;
+  const local = pipRect(displayStyleFor(real), sizeOf(frame), cam);
+  const shown = { ...local, x: local.x + frame.x, y: local.y + frame.y };
+  const { k } = stageScale();
+  return { shown, s: (shown.width / cam.width) * k, k };
+}
+
+function layoutFramingWindow(): void {
+  const cam = pipCamera();
+  if (!reframing || !cam) return;
+  const sc = framingScale(reframing.real, cam);
+  if (!sc) return;
+  const { shown, s, k } = sc;
+  const real = reframing.real;
+  const src = framingSource(real, cam);
+  const srcX = real.mirror ? cam.width - src.x - src.width : src.x;
+  Object.assign($("pipframewindow").style, {
+    left: `${shown.x * k + srcX * s}px`, top: `${shown.y * k + src.y * s}px`,
+    width: `${src.width * s}px`, height: `${src.height * s}px`,
+    borderRadius: real.shape === "circle" ? "50%"
+      : `${real.cornerRadius * Math.min(src.width, src.height) * s}px`,
+  });
+  ($("pipzoom") as HTMLInputElement).value = String(real.framing?.zoom ?? 1);
+}
+
+function enterReframe(): void {
+  if (reframing || !openProject?.pip?.enabled || !player) return;
+  const real = currentPipStyle();
+  if (!real) return;
+  reframing = { real, before: openProject.pip.style };
+  pipPanel.hidePopover?.();
+  openProject.pip.style = displayStyleFor(real); // LIVE project only — persistProject writes reframedProject meanwhile
+  $("pipoverlay").hidden = true;
+  $("pipframing").hidden = false;
+  $("pipframebar").hidden = false;
+  void player.seek(player.currentNs);
+  layoutFramingWindow();
+}
+
+/**
+ * Leave reframe. `commit` puts the real style back WITH the new framing and
+ * persists (Done, Escape, the Camera button, closing the take or the window,
+ * and every output entry point — export, publish, a frame grab — before it
+ * reads the live project); the returned promise settles when that write has.
+ * Not committing restores the live project as it was and writes nothing — no
+ * caller does that today; a reframe the user can see is never thrown away.
+ * Synchronous up to the write: the live project is real again on return.
+ */
+function exitReframe(commit: boolean): Promise<void> {
+  if (!reframing) return Promise.resolve();
+  const { real, before } = reframing;
+  reframing = null;
+  frameDrag = null;
+  $("pipframing").hidden = true;
+  $("pipframebar").hidden = true;
+  if (!openProject?.pip) return Promise.resolve();
+  if (!commit) { openProject.pip.style = before; return Promise.resolve(); }
+  const committed = committedReframeStyle({ real, before });
+  if (committed === undefined) {
+    openProject.pip.style = undefined;
+    updatePipButton();
+    if (player) void player.seek(player.currentNs);
+  } else {
+    setPipStyle(committed, false);
+  }
+  return persistProject();
+}
+
+/**
+ * The style a reframe commits to — the ONE rule exitReframe and persistProject
+ * share. A take still on the fixed corner whose framing was never touched stays
+ * on it (and at its own project version) rather than being rewritten as an
+ * explicit style: undefined. Otherwise the real style, with the framing as it
+ * stands right now.
+ */
+function committedReframeStyle(r: { real: PipStyle; before: PipStyle | undefined }): PipStyle | undefined {
+  return r.before === undefined && r.real.framing === undefined ? undefined : r.real;
+}
+
+/** A copy of the live project with the reframe's committed PiP in place of the
+ *  temporary display one — what persistProject writes mid-reframe. */
+function reframedProject(p: Project, r: { real: PipStyle; before: PipStyle | undefined }): Project {
+  if (!p.pip) return p;
+  const { style: _display, ...pip } = p.pip;
+  const style = committedReframeStyle(r);
+  return { ...p, pip: style === undefined ? pip : { ...pip, style } };
+}
+
+/** Fire-and-report form, for the UI's own ways out of reframe. */
+function commitReframe(): void {
+  void exitReframe(true).catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+/**
+ * Before any OUTPUT (export dialog, export, publish, frame copy/save, the
+ * export test hook): commit a reframe (STC-461) and an open zoom-override
+ * edit (STC-500), so what goes out is what the user sees and keeps. The
+ * override editor is CLOSED, not just committed — an export of a project
+ * whose window is still stripped from the live copy would leave it out — and
+ * closing repaints the stage framed again. Every output reads the live
+ * project, so this must settle before it does.
+ */
+async function finishOpenEdits(): Promise<void> {
+  await exitReframe(true);
+  if (editingWindowId !== null || editingManualId !== null) await closeOverrideEditor();
+}
+
+/**
+ * The going-away form, for closeTake and beforeunload: commit a reframe and an
+ * open override edit WITHOUT any teardown of the UI. Both writes are POSTED
+ * synchronously, before this returns — exitReframe is synchronous up to its
+ * write, and so are commitDraft/commitManualDraft (editedOverrides is
+ * synchronous and persistProject's first await is `editor.writeProject`,
+ * whose IPC invoke is sent as it is called) — so the caller may clear
+ * openProject/player/the edit state straight after. The returned promise
+ * settles when both writes have landed.
+ */
+function postOpenEditWrites(): Promise<void> {
+  const reframeWrite = exitReframe(true);
+  // With BOTH a reframe and an override edit open, this is a second write,
+  // and main's `preview:writeProject` (a plain `writeFile` of the same path)
+  // may run the two concurrently. Safe because they are the SAME bytes: the
+  // reframe's write already carried the edit (persistProject composes
+  // editedOverrides()), and this one carries the reframe (exitReframe has just
+  // put the real PiP back on the live project). Whichever lands last, the
+  // file holds that one document. Not skipped, because exitReframe can
+  // return without writing at all (no PiP), and then this is the only write.
+  const editWrite = commitCurrentEdit();
+  return Promise.all([reframeWrite, editWrite]).then(() => undefined);
+}
+
+$("pipframewindow").addEventListener("pointerdown", (e) => {
+  if (!reframing) return;
+  frameDrag = { x: e.clientX, y: e.clientY };
+  $("pipframewindow").setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+$("pipframewindow").addEventListener("pointermove", (e) => {
+  const cam = pipCamera();
+  if (!frameDrag || !reframing || !cam) return;
+  const sc = framingScale(reframing.real, cam);
+  if (!sc || sc.s <= 0) return;
+  // Stage px -> camera px, as seen; panFraming un-mirrors x itself.
+  const delta = { x: (e.clientX - frameDrag.x) / sc.s, y: (e.clientY - frameDrag.y) / sc.s };
+  frameDrag = { x: e.clientX, y: e.clientY };
+  reframing.real = { ...reframing.real, framing: panFraming(reframing.real, delta, cam) };
+  layoutFramingWindow();
+});
+const endFrameDrag = (): void => { frameDrag = null; };
+$("pipframewindow").addEventListener("pointerup", endFrameDrag);
+$("pipframewindow").addEventListener("pointercancel", endFrameDrag);
+
+function setFramingZoom(zoom: number): void {
+  const cam = pipCamera();
+  if (!reframing || !cam || !Number.isFinite(zoom)) return;
+  reframing.real = { ...reframing.real, framing: zoomFraming(reframing.real, zoom, cam) };
+  layoutFramingWindow();
+}
+for (const type of ["input", "change"] as const) {
+  $("pipzoom").addEventListener(type, () => setFramingZoom(Number(($("pipzoom") as HTMLInputElement).value)));
+}
+$("pipframing").addEventListener("wheel", (e) => {
+  if (!reframing) return;
+  e.preventDefault();
+  setFramingZoom((reframing.real.framing?.zoom ?? 1) * Math.exp(-e.deltaY / 500));
+}, { passive: false });
+$("pipframedone").addEventListener("click", commitReframe);
+// Capture phase + stopImmediatePropagation: Escape here ends the reframe and
+// nothing else (not the override editor's, not the frame menu's, not the timeline's).
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !reframing) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  commitReframe();
+}, { capture: true });
+
+// ---- framing (STC-396) -------------------------------------------------
+// A preset (or none) saved to the project. Preview and export both go through
+// render(), so what is previewed is what exports.
+function updateFramingUI(): void {
+  const f = chosenFraming(openProject, heldFraming);
+  ($("framepreset") as HTMLSelectElement).value = f?.preset ?? "none";
+  const color = $("framecolor") as HTMLInputElement;
+  color.hidden = f?.preset !== "solid";
+  color.value = f?.color ?? DEFAULT_SOLID_COLOR;
+}
+
+async function setFraming(next: Framing | undefined): Promise<void> {
+  if (!openProject || !player) return;
+  // While an override editor has the frame set aside, a change replaces the
+  // held value and the live project stays unframed until editing ends.
+  const previous = chosenFraming(openProject, heldFraming);
+  const apply = (f: Framing | undefined): void => {
+    if (editingWindowId !== null || editingManualId !== null) {
+      heldFraming = f ? { framing: f } : null;
+    } else if (f) openProject!.framing = f; else delete openProject!.framing;
+  };
+  apply(next);
+  try {
+    await persistProject();
+  } catch (e) {
+    apply(previous);
+    updateFramingUI();
+    throw e;
+  }
+  updateFramingUI();
+  updateLegibilityUI();
+  layoutPipOverlay();                    // the PiP lives in the content rect, which just moved
+  await player.seek(player.currentNs);   // repaint this frame with the new choice
+}
+
+function framingFromControls(): Framing | undefined {
+  const v = ($("framepreset") as HTMLSelectElement).value;
+  if (v === "none") return undefined;
+  const preset = v as FramingPreset;
+  return preset === "solid"
+    ? { preset, color: ($("framecolor") as HTMLInputElement).value }
+    : { preset };
+}
+
+for (const id of ["framepreset", "framecolor"]) {
+  $(id).addEventListener("change", () => {
+    void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
+  });
 }
 
 $("micmute").addEventListener("click", () => {
@@ -2134,6 +2706,10 @@ window.addEventListener("keydown", (e) => {
   // this the timeline takes it as play/pause and the switch never toggles —
   // measured: the e2e's mutation check fails on exactly that.
   if (e.target === $("voicecleanon") && (e.key === " " || e.key === "Enter")) return;
+  // And for every control in the Camera popover (STC-461): its sliders' arrow
+  // keys move the slider, its buttons and switches take Space/Enter.
+  if ($("pippanel").contains(e.target as Node)
+      && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
   // And for the ruler's toggles (STC-454 part 4): Space on a focused one
@@ -2281,6 +2857,9 @@ $("trim-out").addEventListener("pointercancel", onHandleUp);
 
 async function runExport(): Promise<void> {
   if (!openSession || !openProject || exportAbort) return;
+  // STC-461/STC-500: commit a reframe and an open override edit first — the
+  // export reads the live project.
+  await finishOpenEdits();
   player?.pause();
   exportAbort = new AbortController();
 
@@ -2290,12 +2869,14 @@ async function runExport(): Promise<void> {
   bar.removeAttribute("hidden");
   ($("export") as HTMLButtonElement).disabled = true;
   ($("outsize") as HTMLSelectElement).disabled = true;
+  ($("framepreset") as HTMLSelectElement).disabled = true;
+  ($("framecolor") as HTMLInputElement).disabled = true;
   progress.value = 0;
   status.textContent = "Exporting…";
   clearAlert();
 
   const started = performance.now();
-  const exporting: Project = structuredClone(openProject);
+  const exporting: Project = structuredClone(withHeldFraming(openProject, heldFraming));
   try {
     // STC-413: the bundle's stable identity, so the written MP4 can point
     // back at its source after a Finder rename or move. Best-effort, same as
@@ -2338,7 +2919,7 @@ async function runExport(): Promise<void> {
       output: exporting.output,
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {
-        const l = legibility(openDisplay!, exporting.textPt ?? DEFAULT_TEXT_PT, embedWidthPx);
+        const l = legibility(openDisplay!, exporting.textPt ?? DEFAULT_TEXT_PT, embedWidthPx, 1, frameFractionFor(exporting));
         return { textPt: l.textPt, embedWidthPx: l.embedWidthPx, textPx: l.textPx, verdict: l.verdict };
       })() : null,
       exportDurationMs: result.durationMs,
@@ -2352,6 +2933,8 @@ async function runExport(): Promise<void> {
     exportAbort = undefined;
     ($("export") as HTMLButtonElement).disabled = false;
     ($("outsize") as HTMLSelectElement).disabled = false;
+    ($("framepreset") as HTMLSelectElement).disabled = false;
+    ($("framecolor") as HTMLInputElement).disabled = false;
   }
 }
 
@@ -2388,6 +2971,11 @@ async function refreshShareRow(): Promise<void> {
 
 async function publish(): Promise<void> {
   if (!openProject || !player) return;
+  // STC-461/STC-500: commit a reframe and an open override edit first, so the
+  // take main publishes is the one the user ends up with — the live project
+  // still holds the temporary display style / the stripped override until
+  // they are committed.
+  await finishOpenEdits();
   const btn = $("share") as HTMLButtonElement;
   const slug = ($("shareslug") as HTMLInputElement).value.trim();
   if (!slugIsValid(slug)) {
@@ -2451,6 +3039,9 @@ async function withFrame(action: "copy" | "save"): Promise<void> {
   if (!player || frameBusy) return;
   frameBusy = true;
   try {
+    // STC-461/STC-500: commit a reframe and an open override edit first —
+    // captureFrame re-renders the live project.
+    await finishOpenEdits();
     const { tNs, rgba, width, height } = await player.captureFrame();
     const settings = (await editor.getSettings()).still;
     const r = await editor.exportStill({
@@ -2510,7 +3101,15 @@ document.addEventListener("keydown", (e) => {
 
 // ---- boot -------------------------------------------------------------
 
-window.addEventListener("beforeunload", () => { void editor.closePreview(); });
+// STC-461: the editor reloads its renderer per take, so closing the window or
+// opening another take mid-reframe never reaches closeTake. Commit here too:
+// postOpenEditWrites sends the writes synchronously (the IPC messages are out
+// before the page goes), so the reframe the user can see — and, STC-500, an
+// open zoom-override edit — is not silently dropped.
+window.addEventListener("beforeunload", () => {
+  void postOpenEditWrites().catch(() => { /* the page is going; nowhere to report */ });
+  void editor.closePreview();
+});
 
 // STC-399: set once, not re-derived per render — the model code and version
 // do not change while the window is open.

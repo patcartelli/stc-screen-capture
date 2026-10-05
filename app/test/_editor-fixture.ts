@@ -94,9 +94,12 @@ export async function openEditorFromLibrary(app: ElectronApplication, win: Page,
  * `scrub.max = String(lastFrame(...))`), before anything draws — so a max other
  * than "0" is the exact "the take is open" signal. Filling `#scrub` before it
  * throws `page.fill: Malformed value`, which is how this surfaced on CI.
- * Tests that already wait for real pixels (`inkiness`) or for `#clock` are
- * past this point by construction; call this before touching `#scrub` when
- * nothing else has waited.
+ * Tests that already wait for real pixels (`inkiness`) are past this point by
+ * construction. A wait on `#clock` is NOT: `editor.html` ships it as
+ * "0:00:00 / 0:00:00", so `/\d/` or `/^\d:\d\d:\d\d /` matches before the
+ * player exists, and an input sent then is dropped by the editor's own
+ * `if (!player) return` guards. Call this before the first input when nothing
+ * else has waited.
  */
 export async function waitForTakeLoaded(editorWin: Page, timeout = 30_000): Promise<void> {
   await expect.poll(() => editorWin.getAttribute("#scrub", "max"), { timeout }).not.toBe("0");
@@ -107,11 +110,11 @@ export async function waitForTakeLoaded(editorWin: Page, timeout = 30_000): Prom
  * window's own page — the player moved there, out of the main window's old
  * in-page `#player`.
  */
-export async function launchWithTakeInEditor(opts: { pip?: boolean; env?: Record<string, string> } = {}):
+export async function launchWithTakeInEditor(opts: { pip?: boolean; env?: Record<string, string>; source?: string } = {}):
     Promise<{
       app: ElectronApplication; win: Page; editorWin: Page; takeDir: string; dir: string;
     }> {
-  const { dir, takeDir } = opts.pip ? makePipTakeFolder() : makeTakeFolder();
+  const { dir, takeDir } = opts.pip ? makePipTakeFolder() : makeTakeFolder(undefined, { source: opts.source });
   const { app, win } = await launchApp(dir, opts.env ?? {});
   const editorWin = await openEditorFromLibrary(app, win);
   return { app, win, editorWin, takeDir, dir };

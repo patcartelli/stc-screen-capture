@@ -62,6 +62,14 @@ describe("closeApp (STC-449)", () => {
     expect(stderr.listenerCount("data")).toBe(0);
   });
 
+  test("a resize refused at quit is printed even on a fast close (STC-496)", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { app } = stubApp(10, ["[geometry] skipped setBounds from toast:fit: the app is quitting (STC-496)"]);
+    await closeApp(app);
+    expect(write.mock.calls.map((c) => String(c[0])).join(""))
+      .toContain("[closeApp] pid 4242: [geometry] skipped setBounds from toast:fit");
+  });
+
   test("a close that rejects is swallowed, as the old afterEach's .catch did", async () => {
     const { app } = stubApp(10, [], true);
     await expect(closeApp(app)).resolves.toBeUndefined();

@@ -118,6 +118,12 @@ process.stdin.on("data", (chunk) => {
         session = cmd.dir ?? null;
         recordingStartedAt = Date.now();
         send("started", { seq, session });
+        // STC-501. The heartbeat rides stdout and `started` rides fd3: two pipes
+        // with no ordering between them. A stats line the helper wrote while
+        // still idle, BEFORE it processed `start`, can be read after `started`
+        // on a loaded machine. Here it is written on purpose, once, right after
+        // `started` — the line that used to end the take at 0:00.
+        if (process.env.STC_FAKE_STALE_IDLE) stat({ state: "idle" });
         // STC-287. The real helper opens the camera OFF the critical path, so
         // `started` goes out first and the camera reports separately, a beat
         // later — success and failure both. That ordering is the whole subject:

@@ -23,6 +23,12 @@ describe("session schemas validate the fixture", () => {
     expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
   });
 
+  test("fixtures/keycast's events.json conforms to events-3 (STC-419)", () => {
+    const validate = compile("schema/events-3.schema.json");
+    const ok = validate(load("fixtures/keycast/events.json"));
+    expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
+  });
+
   test("events.json conforms to events-2 schema (it carries cursor-shape events)", () => {
     const validate = compile("schema/events-2.schema.json");
     const ok = validate(load("fixtures/basic/events.json"));
@@ -382,5 +388,13 @@ describe("anchors-7 carries a refit geometry timeline (STC-235)", () => {
     const v = compile("schema/anchors-6.schema.json");
     const d: any = base(); d.version = 6;
     expect(v(d)).toBe(false);
+  });
+});
+
+describe("the styled-PiP fixture (STC-461)", () => {
+  test("fixtures/pip-styled's project.json conforms to project-16 (STC-461)", () => {
+    const validate = compile("schema/project-16.schema.json");
+    const ok = validate(load("fixtures/pip-styled/project.json"));
+    expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
   });
 });

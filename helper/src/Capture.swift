@@ -1,6 +1,8 @@
 import Foundation
 import ScreenCaptureKit
 import CoreGraphics
+import IOKit.hid
+import ApplicationServices
 // AVFoundation here is AVAssetWriter only — a file writer, no capture devices.
 // PHASE-0 §2a's hazard was AVCaptureDevice taking the default audio input;
 // phase 1 has no camera or mic, and nothing below opens a device.
@@ -72,6 +74,15 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// "asked, got nothing" in anchors.json's `system` block, as
     /// `wantCamera`/`wantMicUid` do for theirs.
     private var wantSystemAudio = false
+    /// STC-419: keyDown is in the tap's mask only when this is true. Set once,
+    /// in `begin`, from the request, like `wantSystemAudio`.
+    private var wantKeys = false
+    /// Taken on main by the caller (`start(request:keyLayout:)`, see
+    /// KeyLayout.swift for why not here); nil means chords are dropped.
+    private var keyLayout: KeyLayoutSnapshot?
+    /// Guarded by `lock`, like `eventsPaused`.
+    private var keysRecorded = 0
+    private var keysDropped = 0
     private var stoppingBegan = false
     /// A mic or camera torn down MID-TAKE by a disconnect (`handleMicDisconnected`,
     /// `handleCameraDisconnected`) is no longer in `mic`/`camera` by the time
@@ -336,8 +347,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - start
 
-    func start(request: StartRequest,
+    func start(request: StartRequest, keyLayout: KeyLayoutSnapshot? = nil,
                completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        self.keyLayout = keyLayout
         // The backstop is armed HERE, before the first callback API is called,
         // so it covers the whole request rather than only the part after
         // SCShareableContent answers (STC-258).
@@ -378,7 +390,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.finishStart(.failure(e))
             case .success(let target):
                 self.begin(target: target, camera: request.camera, micDeviceUid: request.micDeviceUid,
-                          cameraDeviceUid: request.cameraDeviceUid, systemAudio: request.systemAudio)
+                          cameraDeviceUid: request.cameraDeviceUid, systemAudio: request.systemAudio,
+                          keys: request.keys)
             }
         }
     }
@@ -465,7 +478,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `finishStart`, which is call-once. Handing this a second reference to the
     /// same completion is how a request gets answered twice.
     private func begin(target: CaptureTarget, camera wantCamera: Bool, micDeviceUid: String?,
-                       cameraDeviceUid: String? = nil, systemAudio wantSystemAudio: Bool) {
+                       cameraDeviceUid: String? = nil, systemAudio wantSystemAudio: Bool,
+                       keys wantKeys: Bool = false) {
         // Recorded before anything can fail below: writeSidecars must know
         // whether a camera was ever asked for, independent of whether this
         // particular start succeeds at opening one.
@@ -473,6 +487,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         self.wantCameraDeviceUid = cameraDeviceUid
         self.wantMicUid = micDeviceUid
         self.wantSystemAudio = wantSystemAudio
+        self.wantKeys = wantKeys
 
         // CaptureDecisions.swift hardcodes this so it can be compiled without
         // ScreenCaptureKit. If the framework ever renumbers, refuse to start
@@ -526,7 +541,27 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // answered without. Nothing about the tap needs its creating thread —
         // it is the run loop the source is added to that decides where the
         // callback lands, and that is still the dedicated thread below.
+        // STC-419: the layout snapshot was taken on main by the caller (see
+        // KeyLayout.swift); missing it costs chords only, never the take.
+        if wantKeys && keyLayout == nil {
+            IO.log("STC-419: no keyboard layout snapshot; chords will be dropped, named keys still recorded")
+        }
         guard let tap = makeEventTap() else {
+            finishStart(.failure(CaptureError.eventTapUnavailable))
+            return
+        }
+        // STC-480: a created tap is not proof it will deliver. With Input
+        // Monitoring off, a clean VM handed back a working-looking port that
+        // never saw an event, and the take had no cursor anywhere. Same
+        // refusal, same place — before anything of the take exists on disk.
+        let access = eventTapAccess()
+        if case .refuse(let requestAccess) = decideEventTapAccess(
+            tapCreated: true, listenEvent: access.listenEvent,
+            accessibilityTrusted: access.accessibilityTrusted) {
+            IO.log("event tap created but Input Monitoring is \(access.listenEvent) and " +
+                   "Accessibility is \(access.accessibilityTrusted ? "on" : "off"); refusing (STC-480)")
+            CFMachPortInvalidate(tap)
+            if requestAccess { _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
             finishStart(.failure(CaptureError.eventTapUnavailable))
             return
         }
@@ -543,6 +578,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     self.finishStart(.failure(CaptureError.streamFailed(err)))
                 } else {
                     self.runEventTap(tap)
+                    self.startKeyInjection()
                     self.startCursorSampler()
                     // Optional subsystem: it must not sit on the critical path. PHASE-0
                     // recorded camera/mic setup blocking startup once already, and
@@ -1724,7 +1760,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             return nil
         }
 
-        let mask: CGEventMask =
+        var mask: CGEventMask =
             (1 << CGEventType.mouseMoved.rawValue) |
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.leftMouseUp.rawValue) |
@@ -1732,6 +1768,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             (1 << CGEventType.rightMouseDown.rawValue) |
             (1 << CGEventType.rightMouseUp.rawValue) |
             (1 << CGEventType.rightMouseDragged.rawValue)
+        // STC-419: a Keys-off take never even asks for keyDown. Under
+        // STC_KEY_INJECT the injection REPLACES the keyboard as the source
+        // (as STC_CAPTURE_FAULT=window-moved replaces the window sampler):
+        // first grant run, 2026-10-02, a real ⌘H pressed mid-test landed in
+        // the take and failed an exact-sequence assertion.
+        if wantKeys && !Self.keyInjectionActive { mask |= (1 << CGEventType.keyDown.rawValue) }
 
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo else { return Unmanaged.passUnretained(event) }
@@ -1745,6 +1787,25 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             options: .listenOnly, eventsOfInterest: mask,
             callback: callback,
             userInfo: Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    /// The grants that decide whether a created tap will actually deliver
+    /// (STC-480): Input Monitoring, and Accessibility, which also feeds a
+    /// session tap. Both are READS — neither call prompts.
+    ///
+    /// `STC_CAPTURE_FAULT=tap-silent` reports both as absent while the tap
+    /// itself is created for real, which is exactly the VM's state: a port
+    /// that exists and will never deliver. Same reason `no-event-tap` exists —
+    /// the honest way to produce it costs a machine its grants.
+    private func eventTapAccess() -> (listenEvent: ListenEventAccess, accessibilityTrusted: Bool) {
+        if ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "tap-silent" {
+            IO.log("STC_CAPTURE_FAULT=tap-silent: reporting Input Monitoring denied and no Accessibility")
+            return (.denied, false)
+        }
+        let raw = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+        let listen: ListenEventAccess = raw == kIOHIDAccessTypeGranted ? .granted
+            : raw == kIOHIDAccessTypeDenied ? .denied : .unknown
+        return (listen, AXIsProcessTrusted())
     }
 
     /// Runs the tap on its own thread and run loop. If the tap's run loop is
@@ -1834,7 +1895,65 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         t.start()
     }
 
+    /// STC-419. Same clock, same pause gate and same lock as a mouse event.
+    /// Everything that is not a command is COUNTED and forgotten here.
+    private func handleKeyEvent(_ event: CGEvent) {
+        guard wantKeys else { return }
+        let ts = event.timestamp
+        guard ts >= t0Ns else { return }
+        let t = Int(ts - t0Ns)
+        if pauseGate.isPaused(atNs: Int64(t)) {
+            lock.lock(); eventsPaused += 1; lock.unlock()
+            return
+        }
+        let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let mods = keyMods(from: event.flags)
+        let autorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        let base = (mods.cmd || mods.ctrl) && NAMED_KEY_CODES[code] == nil
+            ? keyLayout?.baseCharacter(keyCode: code) : nil
+        switch decideKeyEvent(keyCode: code, mods: mods, autorepeat: autorepeat, baseCharacter: base) {
+        case .drop:
+            lock.lock(); keysDropped += 1; lock.unlock()
+        case .record(let key, let names):
+            lock.lock()
+            events.append(["t": t, "kind": "key", "key": key, "mods": names])
+            keysRecorded += 1
+            lock.unlock()
+        }
+    }
+
+    /// `STC_KEY_INJECT=<path>`: a JSON list of `{afterMs, keyCode, flags, autorepeat}`.
+    /// Builds REAL CGEvents (no permission needed to build one, only to post
+    /// one) and feeds them through `handleTapEvent`, timestamped on the take's
+    /// clock. Proves everything but the tap delivering keyDown — that is
+    /// docs/STC-419-RUNBOOK.md's job. Same shape as STC_CAPTURE_FAULT. While it
+    /// is set the real keyboard is NOT in the tap's mask (`makeEventTap`).
+    private static var keyInjectionActive: Bool {
+        !(ProcessInfo.processInfo.environment["STC_KEY_INJECT"] ?? "").isEmpty
+    }
+
+    private func startKeyInjection() {
+        guard Self.keyInjectionActive, let path = ProcessInfo.processInfo.environment["STC_KEY_INJECT"] else { return }
+        guard let data = FileManager.default.contents(atPath: path),
+              let list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+            IO.log("STC_KEY_INJECT: could not read \(path)"); return
+        }
+        IO.log("STC_KEY_INJECT: \(list.count) synthetic key events from \(path)")
+        for item in list {
+            let afterMs = item["afterMs"] as? Int ?? 0
+            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(afterMs)) { [weak self] in
+                guard let self, let code = item["keyCode"] as? Int,
+                      let ev = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: true) else { return }
+                ev.flags = CGEventFlags(rawValue: UInt64(item["flags"] as? Int ?? 0))
+                ev.setIntegerValueField(.keyboardEventAutorepeat, value: (item["autorepeat"] as? Bool ?? false) ? 1 : 0)
+                ev.timestamp = CGEventTimestamp(Clock.nowNs())
+                self.handleTapEvent(type: .keyDown, event: ev)
+            }
+        }
+    }
+
     private func handleTapEvent(type: CGEventType, event: CGEvent) {
+        if type == .keyDown { handleKeyEvent(event); return }
         // CGEvent.timestamp is ALREADY nanoseconds on the same epoch as the
         // converted displayTime — converting it would be a 41.667x error in the
         // other direction. The mapping lives in CaptureDecisions.swift.
@@ -2130,6 +2249,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             // answers `paused: true` here even though anchors.json will carry
             // a CLOSED interval once writeSidecars has run.
             var s = self.stats()
+            // STC-419: the key counters go in the stop reply ONLY. `stats()`
+            // also feeds the 200 ms heartbeat, and a live `keysDropped` there
+            // would hand the renderer the user's typing rhythm.
+            self.lock.lock()
+            s["keysRecorded"] = self.keysRecorded
+            s["keysDropped"] = self.keysDropped
+            self.lock.unlock()
             if actualReason != reason { s["stopWarning"] = "writer did not finalise in time" }
             self.writeSidecars(reason: actualReason)
             self.lock.lock()
@@ -2262,7 +2388,14 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // events-2 since STC-309: v1 plus `{t, kind: "cursor", shape}`. The
         // loader accepts both; fixtures/basic was already v2. Time-ordered on
         // the way out because two clocks feed `events` (see orderedEvents).
-        write(["version": 2, "events": orderedEvents(evs)] as [String: Any], to: "events.json")
+        //
+        // events-3 since STC-419, but ONLY when a key was actually recorded —
+        // the minimum version that can express the document, the rule
+        // anchorsDocument/projectForWrite/shotForWrite already follow, so a
+        // Keys-off take is byte-for-byte the events-2 it always was.
+        let ordered = orderedEvents(evs)
+        let hasKeys = ordered.contains { ($0["kind"] as? String) == "key" }
+        write(["version": hasKeys ? 3 : 2, "events": ordered] as [String: Any], to: "events.json")
         // Stop while paused: the open span closes at the stop instant, so the
         // sidecar describes the whole take rather than trailing off.
         let stopTNs = Int64(Clock.nowNs() - t0Ns)
@@ -2309,8 +2442,9 @@ enum CaptureError: Error, CustomStringConvertible {
     case frameStatusMismatch(actual: Int)
     /// STC-247: `start` named a display SCK did not list.
     case displayNotFound(requested: CGDirectDisplayID, available: [CGDirectDisplayID])
-    /// STC-315: `CGEvent.tapCreate` returned nil, so this take could carry no
-    /// cursor track. Refusing is the policy, not a fallback — see `begin()`.
+    /// STC-315: `CGEvent.tapCreate` returned nil — or (STC-480) it returned a
+    /// tap that no grant will feed — so this take could carry no cursor
+    /// track. Refusing is the policy, not a fallback — see `begin()`.
     case eventTapUnavailable
     /// STC-370: `start` named a windowId SCK's on-screen list does not have —
     /// closed, on another space, or never existed.
@@ -2334,8 +2468,8 @@ enum CaptureError: Error, CustomStringConvertible {
             return "SCFrameStatus.complete is \(actual), not \(SCFrameStatusCompleteRaw) — "
                  + "CaptureDecisions.swift must be updated or every frame will be discarded"
         case .eventTapUnavailable:
-            return "cursor input could not be recorded (CGEvent.tapCreate returned nil) — "
-                 + "Input Monitoring is the usual cause. The cursor is never only in the "
+            return "cursor input could not be recorded (no event tap, or one Input Monitoring "
+                 + "would leave silent) — Input Monitoring is the usual cause. The cursor is never only in the "
                  + "video, so a take with no cursor track is not started at all."
         case .windowNotFound(let id):
             return "no on-screen window with id \(id) — it may have closed, or never existed"

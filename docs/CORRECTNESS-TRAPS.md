@@ -1686,3 +1686,26 @@ configuration. Don't re-discover these.
   run a long suite under `caffeinate -d`); clean up with `pkill -9 -f
   "<worktree>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron -r .*playwright-core"`,
   which matches only Playwright-launched test instances, never a hand-started app.
+- **`isDestroyed()` false does not mean a window can be resized, and on CI's GPU-less Mac the
+  difference is a SIGSEGV (STC-496).** Measured on Electron 43.4.1: after `destroy()`,
+  `isDestroyed()` is true synchronously and `closed` has already fired; after `close()` (which
+  is what `app.quit()` does to every window) it stays false, and `setBounds()` is accepted, until
+  `closed`. On the GitHub `macos-15` runner (`VirtualMac2,1`, no GPU) a `setBounds()` landing at
+  quit crashed in `ui::Layer::SetBounds` on freed memory (`0xcdcd…`). It did not crash on a GPU Mac
+  or in the Tart VM (macOS 26), so it cannot be reproduced locally; the crash reports CI uploads are
+  the only evidence. **Every window move goes through `window-geometry.ts`'s
+  `setBoundsUnlessClosing`**, and a test refuses a raw `setBounds` anywhere in `app/src`.
+  Two things it cost to find, worth keeping. **The crash looked like something else**: the crashing
+  test PASSED (the process died, so its close "resolved"), and every launch AFTER it hung, so the
+  stall was blamed on whichever file came next, a different file every run. **A cancelled vitest
+  prints no failure summary**, so a stall at the job cap carried no evidence at all; three hangs in
+  a row now skip the remaining e2e tests (`_e2e-setup.ts`) so the run ends red WITH its summary, and
+  CI uploads `e2e-diag/` and crash reports on cancel as well as failure. Same symptom, different
+  cause: the display-asleep entry above. Check `e2e-diag/` and the crash reports before believing
+  either.
+- **`sample` cannot attach to the test Electron without root.** Electron ships with the hardened
+  runtime and no `get-task-allow`, so an unprivileged `/usr/bin/sample <pid>` fails with only
+  `Command failed` (run 37053837355). It works on `/bin/sleep`, which is why a unit test of the
+  sampler passes while the real sample is empty. CI now runs it via `sudo -n` (`_e2e-diagnostics.ts`'s
+  `sampleProcess`), which GitHub's runners allow; **no run has hung since that went in, so it has not
+  yet produced a real Electron sample**. On a developer's Mac, use `sudo sample` by hand.

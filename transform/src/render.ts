@@ -2,7 +2,7 @@ import type { CursorState, CursorStyle, Project, Session } from "./types.js";
 import { frameIndexAt, tickOf } from "./time.js";
 import {
   displayToOutput, fixedCornerPipUv, lerpRect, mapPoint, mapVector, outputRect, roundRect,
-  throughCrop, throughCropVector, uvRectToPixels, type Rect,
+  throughCrop, throughCropVector, uvRectToPixels, type Rect, type Size,
 } from "./spaces.js";
 import {
   ZOOM_PRESETS, createZoomSim, zoomWindows, type ZoomPreset, type ZoomSim, type ZoomWindow,
@@ -11,10 +11,13 @@ import {
   groupByEasing, manualWindows, nearestWindow, resolvedCrop, resolvedWindows, windowId,
   type CombinedZoomWindow,
 } from "./zoom-override.js";
+import { framingLayout, type FramingLayout } from "./framing.js";
 import { deriveZoomCrop } from "./zoom-change.js";
 import { geometryAt } from "./display-geometry.js";
 import { DEFAULT_ZOOM } from "./trim.js";
 import { createCursorSim, type CursorSim } from "./cursor.js";
+import { pipRect, framingSource } from "./pip-style.js";
+import { buildKeycastPresses, keycastAt, type KeycastPress, type KeycastState } from "./keycast.js";
 
 /**
  * THE non-negotiable: render(project, session, t) → FrameState is a pure
@@ -49,6 +52,15 @@ export interface FrameState {
   pip: PipState | null;
   /** auto-zoom (STC-325/330/331). Always present; `crop` is the whole frame unless an override supplies a target */
   zoom: ZoomState;
+  /** The keycast (STC-419): the keyboard command on screen, or null. Drawn on the OUTPUT canvas, never through the crop. */
+  keycast: KeycastState | null;
+  /**
+   * Video framing (STC-396), or null when the project has none. The picture is
+   * drawn into `framing.content` (an inset of the output); the cursor, PiP and
+   * zoom crop in this state are already in OUTPUT pixels relative to that rect,
+   * so the compositor draws them where they are told and decides nothing.
+   */
+  framing: FramingLayout | null;
 }
 
 /**
@@ -93,6 +105,19 @@ export interface PipState {
   y: number;
   width: number;
   height: number;
+  /** Absent = the fixed-corner PiP, drawn exactly as before project-16. */
+  draw?: PipDraw;
+}
+
+/** A styled PiP's drawing parameters, fully resolved (STC-461). The compositor decides nothing. */
+export interface PipDraw {
+  /** `drawImage`'s source rect, camera pixels. */
+  source: Rect;
+  mirror: boolean;
+  /** Output pixels; a circle is half its side. */
+  radiusPx: number;
+  border: { px: number; color: string } | null;
+  shadow: boolean;
 }
 
 /**
@@ -104,7 +129,9 @@ export interface PipState {
  * anchors.camera, never from an assumed frame rate — the measured camera rate
  * varies run to run.
  */
-function pipStateAt(project: Project, session: Session, tNs: number): PipState | null {
+function pipStateAt(
+  project: Project, session: Session, tNs: number, frame: Rect, pxPerDisplayPoint: number,
+): PipState | null {
   const pip = project.pip;
   const cam = session.anchors.camera;
   const frames = session.cameraFrames;
@@ -116,19 +143,54 @@ function pipStateAt(project: Project, session: Session, tNs: number): PipState |
   const frameIndex = frameIndexAt(frames, tNs);
   if (frameIndex === null) return null;
 
+  if (pip.style) {
+    // STC-461: pip-style.ts decides; a style can never fall back to the
+    // corner silently, because parseProject only keeps a style it validated.
+    // The style is UV over the CONTENT RECT (STC-396 rule 3) — `frame`, which
+    // is the whole output when there is no framing, so an unframed take places
+    // it exactly as before. `frame`'s origin is whole pixels, so the offset
+    // keeps the rect on the pixel grid pipRect rounded it to.
+    const style = pip.style;
+    const local = pipRect(style, { width: frame.width, height: frame.height }, cam);
+    const styledRect = { ...local, x: local.x + frame.x, y: local.y + frame.y };
+    const short = Math.min(styledRect.width, styledRect.height);
+    return {
+      frameIndex, framePtsNs: frames[frameIndex]!, ...styledRect,
+      draw: {
+        source: framingSource(style, cam),
+        mirror: style.mirror,
+        radiusPx: style.shape === "circle" ? short / 2 : style.cornerRadius * short,
+        // Points, scaled the way the cursor's are: a 2 pt border is a 2 pt line
+        // on the recorded display, at whatever size the output is.
+        border: style.border ? { px: style.border.widthPt * pxPerDisplayPoint, color: style.border.color } : null,
+        shadow: style.shadow,
+      },
+    };
+  }
+
   // A crop in UV over the output, not a corner in output pixels (STC-314):
   // the camera lives in the same space as a zoom crop, so whatever comes to
   // move a zoom can move the camera without a second answer to "where does
   // the PiP go". Rounded because this rectangle places a DECODED FRAME, and a
   // frame at a half-pixel offset is a frame resampled across every edge.
   const rect = roundRect(uvRectToPixels(
-    fixedCornerPipUv(pip, project.output, cam),
-    outputRect(project.output),
+    fixedCornerPipUv(pip, { width: frame.width, height: frame.height }, cam),
+    frame,
   ));
   return { frameIndex, framePtsNs: frames[frameIndex]!, ...rect };
 }
 
 const simCache = new WeakMap<Session, CursorSim>();
+
+/** Keycast presses, memoised per session like the cursor sim — a pure function of session.keys. */
+const keycastCache = new WeakMap<Session, KeycastPress[]>();
+
+function keycastFor(project: Project, session: Session, tick: number): KeycastState | null {
+  if (project.keycast?.show === false || !session.keys || session.keys.length === 0) return null;
+  let presses = keycastCache.get(session);
+  if (!presses) { presses = buildKeycastPresses(session.keys); keycastCache.set(session, presses); }
+  return keycastAt(presses, tick);
+}
 
 /** The take's derived windows, memoised per session — independent of preset or overrides, unlike the sims below. */
 const windowsCache = new WeakMap<Session, ZoomWindow[]>();
@@ -191,6 +253,14 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   }
 
   const zoom = project.zoom ?? DEFAULT_ZOOM;
+  // Video framing (STC-396). The picture is an INSET of the output; everything
+  // placed in output pixels below is placed relative to that rect. With no
+  // framing `frame` IS the whole output and `sized` IS project.output, so every
+  // number below is exactly what version 13 computed.
+  const cap = session.anchors.capture;
+  const layout = framingLayout(project.framing, project.output, cap.width / cap.height);
+  const frame: Rect = layout?.content ?? outputRect(project.output);
+  const sized: Size = layout ? { width: frame.width, height: frame.height } : project.output;
   // resolvedWindows (STC-329) applies `removed`/`retime` to the RAW,
   // override-independent memo — cheap, and NOT itself memoised, so it always
   // reflects the CURRENT project.overrides rather than whichever one first
@@ -222,7 +292,8 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   // conversion in the transform. The geometry is the one the SHOWN frame was
   // captured under (STC-235) — display-geometry.ts's header says why.
   const g = geometryAt(session.anchors, frameIndex === null ? null : session.frames[frameIndex]!);
-  const m = displayToOutput(g.shown, project.output, g.contentRect, session.anchors.capture);
+  const m0 = displayToOutput(g.shown, sized, g.contentRect, cap);
+  const m = layout ? { ...m0, ox: m0.ox + frame.x, oy: m0.oy + frame.y } : m0;
   const full = mapPoint(m, s);
   // A velocity is a DIFFERENCE of global points, so it scales without
   // translating — hence the second call rather than a flag.
@@ -268,7 +339,7 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   // the content is a 2x pointer. `throughCrop`'s whole-frame case is the
   // identity by construction, so a take with zoom off renders exactly what
   // it did before this step existed.
-  const at = throughCrop(full, crop, outputRect(project.output));
+  const at = throughCrop(full, crop, frame);
   const vel = throughCropVector(fullVel, crop);
   const magnification = throughCropVector({ x: 1, y: 1 }, crop).x;
 
@@ -288,7 +359,9 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
       style: project.cursor.style,
       pxPerPoint: project.cursor.scale * m.sx * magnification,
     },
-    pip: pipStateAt(project, session, tNs),
+    pip: pipStateAt(project, session, tNs, frame, m.sx),
     zoom: { amount: zoomAmount, crop },
+    keycast: keycastFor(project, session, tick),
+    framing: layout ?? null,
   };
 }

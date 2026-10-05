@@ -1,6 +1,9 @@
-import type { FrameState } from "./render.js";
-import { isWholeFrame, uvRectToPixels } from "./spaces.js";
+import type { FrameState, PipDraw, PipState } from "./render.js";
+import { PIP_SHADOW } from "./pip-style.js";
+import { isWholeFrame, uvRectToPixels, type Rect } from "./spaces.js";
+import { gradientLine, type FramingLayout } from "./framing.js";
 import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
+import { KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR, keycastFont, keycastFontPx, keycastLayout, keycastText } from "./keycast.js";
 
 /**
  * The one compositor. Both sinks call exactly this with identical inputs, and
@@ -62,17 +65,83 @@ function drawSource(
   ctx: OffscreenCanvasRenderingContext2D,
   frame: DecodedFrame,
   fs: FrameState,
-  width: number,
-  height: number,
+  dest: Rect,
 ): void {
   const c = fs.zoom.crop;
   if (isWholeFrame(c)) {
-    ctx.drawImage(frame, 0, 0, width, height);
+    ctx.drawImage(frame, dest.x, dest.y, dest.width, dest.height);
     return;
   }
   const { width: fw, height: fh } = frameSize(frame);
   const src = uvRectToPixels(c, { x: 0, y: 0, width: fw, height: fh });
-  ctx.drawImage(frame, src.x, src.y, src.width, src.height, 0, 0, width, height);
+  ctx.drawImage(frame, src.x, src.y, src.width, src.height, dest.x, dest.y, dest.width, dest.height);
+}
+
+/**
+ * The frame's chrome (STC-396): the background over the whole canvas, then the
+ * shadow, cast from the rounded content rect.
+ *
+ * The shadow is drawn WITHOUT a core: the rounded rect is filled far off-canvas
+ * to the left and `shadowOffsetX` shifts its shadow back into place, so only the
+ * shadow lands on the canvas and no opaque shape is painted. A core would be
+ * covered by the picture's ANTIALIASED rounded clip, so at the corner the edge
+ * coverage applies twice (black core, then a partial picture over it) and the
+ * corner reads darker than the background — a seam. The shift exceeds the
+ * canvas width plus the blur's reach, so the shape itself is never visible.
+ */
+function drawChrome(
+  ctx: OffscreenCanvasRenderingContext2D, f: FramingLayout, width: number, height: number,
+): void {
+  const bg = f.background;
+  if (bg.kind === "solid") {
+    ctx.fillStyle = bg.color;
+  } else {
+    const l = gradientLine(bg.angleDeg, width, height);
+    const g = ctx.createLinearGradient(l.x0, l.y0, l.x1, l.y1);
+    g.addColorStop(0, bg.colors[0]);
+    g.addColorStop(1, bg.colors[1]);
+    ctx.fillStyle = g;
+  }
+  ctx.fillRect(0, 0, width, height);
+
+  if (f.shadow.opacity > 0 && f.shadow.blur > 0) {
+    const c = f.content;
+    ctx.save();
+    ctx.shadowColor = `rgba(0, 0, 0, ${f.shadow.opacity})`;
+    ctx.shadowBlur = f.shadow.blur;
+    const SHIFT = width * 2 + 1000;
+    ctx.shadowOffsetX = SHIFT;
+    ctx.shadowOffsetY = f.shadow.offsetY;
+    ctx.fillStyle = "#000000";
+    ctx.beginPath();
+    ctx.roundRect(c.x - SHIFT, c.y, c.width, c.height, f.radius);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/**
+ * The keycast pill (STC-419), on the OUTPUT canvas after everything else —
+ * a caption, not part of the picture, so the zoom never moves or scales it.
+ * keycast.ts decides the text and the box; this only draws them.
+ */
+function drawKeycast(
+  ctx: OffscreenCanvasRenderingContext2D, k: NonNullable<FrameState["keycast"]>, width: number, height: number,
+): void {
+  const text = keycastText(k);
+  ctx.save();
+  ctx.font = keycastFont(keycastFontPx(width));
+  const box = keycastLayout(width, height, ctx.measureText(text).width);
+  ctx.globalAlpha = k.opacity;
+  ctx.fillStyle = `rgba(${KEYCAST_BG_RGB}, ${KEYCAST_BG_ALPHA})`;
+  ctx.beginPath();
+  ctx.roundRect(box.x, box.y, box.width, box.height, box.radius);
+  ctx.fill();
+  ctx.fillStyle = KEYCAST_TEXT_COLOR;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, box.textX, box.textY, box.maxTextWidth);
+  ctx.restore();
 }
 
 export function composite(
@@ -85,29 +154,107 @@ export function composite(
 ): void {
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, width, height);
-  if (frame) drawSource(ctx, frame, fs, width, height);
+  const framing = fs.framing;
+  if (framing) drawChrome(ctx, framing, width, height);
+  if (frame) {
+    if (framing) {
+      const c = framing.content;
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(c.x, c.y, c.width, c.height, framing.radius);
+      ctx.clip();
+      drawSource(ctx, frame, fs, c);
+      ctx.restore();
+    } else {
+      drawSource(ctx, frame, fs, { x: 0, y: 0, width, height });
+    }
+  }
+
+  // The PiP and the pointer live ON the picture, so a framed take clips them to
+  // it: a pointer on another display is outside the capture, and unframed the
+  // canvas edge hides it — framed, it would otherwise be painted over the
+  // background. The keycast below is a caption on the canvas and is not clipped.
+  if (framing) {
+    const c = framing.content;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(c.x, c.y, c.width, c.height);
+    ctx.clip();
+  }
 
   // The PiP sits UNDER the cursor deliberately: a cursor over the bottom-right
   // corner must stay visible. render() has already decided the rectangle; this
   // only draws it. Drawn only when both the geometry and a decoded frame exist
   // — no frame yet is a black gap, not a stretched stale one.
   if (fs.pip && camera) {
-    ctx.drawImage(camera, fs.pip.x, fs.pip.y, fs.pip.width, fs.pip.height);
+    if (fs.pip.draw) drawStyledPip(ctx, camera, fs.pip, fs.pip.draw);
+    else ctx.drawImage(camera, fs.pip.x, fs.pip.y, fs.pip.width, fs.pip.height);
   }
 
-  if (!fs.cursor.visible) return;
+  if (fs.cursor.visible) {
+    // The click highlight sits UNDER the pointer, centred on the hotspot, so the
+    // artwork stays legible through a click. (x, y) IS the hotspot: macOS
+    // reports event locations at the hotspot, and cursor-art.ts puts each
+    // shape's hotspot at its origin.
+    const { x, y, pxPerPoint, pressed, showClicks, shape, style } = fs.cursor;
+    if (pressed && showClicks) {
+      ctx.beginPath();
+      ctx.arc(x, y, CLICK_HIGHLIGHT_PT * pxPerPoint, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+      ctx.fill();
+    }
+    if (style === "circle") drawCircle(ctx, x, y, pxPerPoint);
+    else drawCursor(ctx, shape, x, y, pxPerPoint);
+  }
 
-  // The click highlight sits UNDER the pointer, centred on the hotspot, so the
-  // artwork stays legible through a click. (x, y) IS the hotspot: macOS
-  // reports event locations at the hotspot, and cursor-art.ts puts each
-  // shape's hotspot at its origin.
-  const { x, y, pxPerPoint, pressed, showClicks, shape, style } = fs.cursor;
-  if (pressed && showClicks) {
-    ctx.beginPath();
-    ctx.arc(x, y, CLICK_HIGHLIGHT_PT * pxPerPoint, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+  if (framing) ctx.restore();
+
+  if (fs.keycast) drawKeycast(ctx, fs.keycast, width, height);
+}
+
+function pipPath(ctx: OffscreenCanvasRenderingContext2D, p: PipState, radiusPx: number): void {
+  ctx.beginPath();
+  ctx.roundRect(p.x, p.y, p.width, p.height, radiusPx);
+}
+
+/**
+ * A styled PiP (STC-461). Order is the whole design:
+ *  1. the shadow is a FILL of the shape, drawn before any clip — a clip would cut it off;
+ *  2. the camera is drawn inside the clip, through a flip about the PiP's own centre when mirrored;
+ *  3. the border is stroked after the clip is released, centred on the edge.
+ */
+function drawStyledPip(
+  ctx: OffscreenCanvasRenderingContext2D, camera: DecodedFrame, p: PipState, d: PipDraw,
+): void {
+  const short = Math.min(p.width, p.height);
+  ctx.save();
+  if (d.shadow) {
+    ctx.save();
+    ctx.shadowColor = PIP_SHADOW.color;
+    ctx.shadowBlur = PIP_SHADOW.blurFraction * short;
+    ctx.shadowOffsetY = PIP_SHADOW.offsetYFraction * short;
+    ctx.fillStyle = "#000000";
+    pipPath(ctx, p, d.radiusPx);
     ctx.fill();
+    ctx.restore();
   }
-  if (style === "circle") drawCircle(ctx, x, y, pxPerPoint);
-  else drawCursor(ctx, shape, x, y, pxPerPoint);
+  pipPath(ctx, p, d.radiusPx);
+  ctx.clip();
+  if (d.mirror) {
+    ctx.translate(2 * p.x + p.width, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(camera, d.source.x, d.source.y, d.source.width, d.source.height, p.x, p.y, p.width, p.height);
+  ctx.restore();
+  if (d.border) {
+    // Its own save/restore: the context outlives the frame, and a lineWidth or
+    // strokeStyle left set here would make the next frame depend on whether the
+    // sink got there by seeking or by stepping.
+    ctx.save();
+    ctx.lineWidth = d.border.px;
+    ctx.strokeStyle = d.border.color;
+    pipPath(ctx, p, d.radiusPx);
+    ctx.stroke();
+    ctx.restore();
+  }
 }

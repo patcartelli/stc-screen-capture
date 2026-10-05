@@ -1,6 +1,7 @@
 import { demuxTrack, type DemuxedVideo } from "./demux.js";
 import { demuxAudioTrack, type DemuxedAudio } from "./demux-audio.js";
-import type { Anchors, Session, SessionEvent } from "./types.js";
+import type { Anchors, KeyEvent, RecordedEvent, Session, SessionEvent } from "./types.js";
+import { checkKeyEvent } from "./keycast.js";
 import type { Changes } from "./changes.js";
 import type { ByteSource } from "./chunk-reader.js";
 import { checkGeometry } from "./display-geometry.js";
@@ -21,7 +22,7 @@ export { SessionLoadError };
 
 export interface SessionInput {
   anchors: Anchors;
-  events: { version: number; events: SessionEvent[] };
+  events: { version: number; events: RecordedEvent[] };
   displayMp4: ByteSource;
   cameraMp4?: ByteSource;
   /** STC-233. mic.m4a, when anchors.mic.present is true. */
@@ -203,9 +204,18 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   checkWindowTrack(anchors);
   // events-2 adds the cursor-shape event; a v1 document simply has none, and
   // the sim shows the arrow throughout — which is what v1 always meant.
-  if (events?.version !== 1 && events?.version !== 2) {
-    throw new SessionLoadError(`events.json version ${events?.version} is not supported (expected 1 or 2)`);
+  // events-3 (STC-419) adds keyboard COMMANDS. They are split out below into
+  // session.keys: every cursor/zoom consumer reads x/y off session.events,
+  // and a key has neither.
+  if (events?.version !== 1 && events?.version !== 2 && events?.version !== 3) {
+    throw new SessionLoadError(`events.json version ${events?.version} is not supported (expected 1, 2 or 3)`);
   }
+  const pointerEvents: SessionEvent[] = [];
+  const keyEvents: KeyEvent[] = [];
+  events.events.forEach((e, i) => {
+    if (e.kind === "key") keyEvents.push(checkKeyEvent(e, i));
+    else pointerEvents.push(e);
+  });
 
   // A claimed camera with no file supplied, and a file supplied with no
   // claim, are both cases where the two sources disagree about what was
@@ -296,7 +306,8 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     // checkGeometry above ran on the helper's ORIGINAL document; this is the
     // same timeline read on the file's clock — see snapGeometryToFrames.
     anchors: snapGeometryToFrames(anchors, video.framesNs),
-    events: [...stabiliseEvents(anchors, events.events)].sort((a, b) => a.t - b.t),
+    events: [...stabiliseEvents(anchors, pointerEvents)].sort((a, b) => a.t - b.t),
+    ...(keyEvents.length > 0 ? { keys: keyEvents.sort((a, b) => a.t - b.t) } : {}),
     frames: video.framesNs,
     cameraFrames: cameraVideo?.framesNs,
     changes: input.changes,

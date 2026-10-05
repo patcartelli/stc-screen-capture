@@ -8,6 +8,7 @@ import {
 } from "../src/settings.js";
 import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
+import { DEFAULT_PIP_STYLE } from "@transform/pip-style.js";
 
 /**
  * The camera preference is opt-in, default off, and sticky (design spec).
@@ -22,7 +23,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, showClicks: true, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -63,7 +64,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, showClicks: true, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -119,7 +120,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, showClicks: true, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -616,6 +617,16 @@ test("a settings file from before STC-388 keeps a stray scope key, harmlessly", 
   expect((s as unknown as Record<string, unknown>).scope).toBeUndefined();
 });
 
+describe("recordKeys (STC-419)", () => {
+  test("off by default, only a literal true turns it on, and it round-trips", () => {
+    const d = mkdtempSync(join(tmpdir(), "stc-set-"));
+    expect(readSettings(d).recordKeys).toBe(false);
+    expect(writeSettings(d, { recordKeys: true }).recordKeys).toBe(true);
+    expect(readSettings(d).recordKeys).toBe(true);
+    expect(writeSettings(d, { recordKeys: "yes" as never }).recordKeys).toBe(false);
+  });
+});
+
 describe("the show-clicks preference (STC-420)", () => {
   test("defaults to ON — the highlight existed before the control did", () => {
     expect(readSettings(dir()).showClicks).toBe(true);
@@ -644,5 +655,23 @@ describe("the show-clicks preference (STC-420)", () => {
     writeSettings(d, { showClicks: false });
     writeSettings(d, { systemAudio: true });
     expect(readSettings(d).showClicks).toBe(false);
+  });
+});
+
+describe("pipStyle (STC-461)", () => {
+  test("defaults to DEFAULT_PIP_STYLE", () => {
+    expect(readSettings(dir()).pipStyle).toEqual(DEFAULT_PIP_STYLE);
+  });
+  test("round-trips, and never stores a framing", () => {
+    const d = dir();
+    writeSettings(d, { pipStyle: { ...DEFAULT_PIP_STYLE, shape: "circle", framing: { x: 0.3, y: 0.5, zoom: 2 } } });
+    const back = readSettings(d).pipStyle;
+    expect(back.shape).toBe("circle");
+    expect(back.framing).toBeUndefined();
+  });
+  test("a bad stored style falls back to the default", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ pipStyle: { shape: "hexagon" } }));
+    expect(readSettings(d).pipStyle).toEqual(DEFAULT_PIP_STYLE);
   });
 });

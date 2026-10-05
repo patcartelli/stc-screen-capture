@@ -3,6 +3,8 @@ import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
 import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
 import { TRANSFORM_VERSION } from "./transform-version.js";
+import { DEFAULT_PIP_FIXED, cleanPipStyle } from "./pip-style.js";
+import { cleanFraming } from "./framing.js";
 
 const NS_PER_S = 1_000_000_000;
 
@@ -60,13 +62,10 @@ export function estimateExportMs(maxFrames: number): number {
 
 /**
  * The PiP a camera take gets when its own project does not say otherwise.
- *
- * Matches `fixtures/pip/project.json`'s geometry so the fixture and the app
- * agree about what "default" means.
+ * The value lives in pip-style.ts (STC-461), which the main process can import
+ * and this file cannot be; one value, re-exported.
  */
-export const DEFAULT_PIP: Pip = {
-  enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32,
-};
+export const DEFAULT_PIP: Pip = { ...DEFAULT_PIP_FIXED };
 
 /**
  * Full level (STC-418). system.m4a is recorded at full level and this is the
@@ -164,7 +163,15 @@ export function parseProject(
   // Same reasoning as projectForWrite: anything this parser does not copy is
   // lost on the next write. `pip` is validated by the schema, so it is carried
   // as-is rather than re-derived here.
-  if (doc.pip && typeof doc.pip === "object") project.pip = doc.pip;
+  if (doc.pip && typeof doc.pip === "object") {
+    // project-16 (STC-461): a style this build cannot read is DROPPED, not the
+    // project — the take renders the fixed corner rather than losing its edits.
+    const { style, ...fixed } = doc.pip;
+    const pip: Pip = fixed;
+    project.pip = pip;
+    const clean = style === undefined ? null : cleanPipStyle(style);
+    if (clean) pip.style = clean;
+  }
 
   const t = doc.trim;
   if (t && Number.isInteger(t.startNs) && Number.isInteger(t.endNs) && t.startNs >= 0 && t.endNs >= 0) {
@@ -214,6 +221,14 @@ export function parseProject(
   // `false` turns the highlight off, because ON is what every older take drew
   // and a malformed value must not quietly change a take's pixels.
   project.showClicks = doc.showClicks !== false;
+  // project-14 (STC-419). Only a real `false` hides the keycast; anything else
+  // is "no opinion" and shown.
+  if (doc.keycast?.show === false) project.keycast = { show: false };
+  // project-15 (STC-396). A malformed block is DROPPED, not repaired: the take
+  // opens unframed rather than with a guessed frame, the rule every field in
+  // this parser follows.
+  const framing = cleanFraming(doc.framing);
+  if (framing) project.framing = framing;
   return project;
 }
 
@@ -373,9 +388,13 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 {
-  // Highest first: a document needing v13 needs it whatever its mutes, mic
-  // level, cleanup, levels, bookmarks, slug, overrides, zoom or textPt say.
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 {
+  // Highest first: a document needing v16 needs it whatever its framing,
+  // keycast, showClicks, mutes, mic level, cleanup, levels, bookmarks, slug,
+  // overrides, zoom or textPt say.
+  if (project.pip?.style) return 16;
+  if (project.framing) return 15;
+  if (project.keycast?.show === false) return 14;
   if (project.showClicks === false) return 13;
   if (project.micMuted || project.systemAudioMuted) return 12;
   if (project.micLevel !== undefined && project.micLevel !== DEFAULT_MIC_LEVEL) return 11;
@@ -403,6 +422,7 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   // Carried, not rebuilt from scratch. This function predates `pip`, and a
   // document reconstructed from a fixed field list silently drops anything
   // added since — so a take with a PiP would lose it on the next save.
+  // A style is carried with it; versionFor has already made this v16 (STC-461).
   if (project.pip) out.pip = project.pip;
   if (!isFullTake(project, durationNs) && project.trim) out.trim = project.trim;
   // Only when it says something v3 cannot: writing the default block into
@@ -426,5 +446,7 @@ export function projectForWrite(project: Project, durationNs: number): Project {
     out.systemAudioMuted = !!project.systemAudioMuted;
   }
   if (version >= 13) out.showClicks = project.showClicks !== false;
+  if (version >= 14) out.keycast = { show: project.keycast?.show !== false };
+  if (version >= 15 && project.framing) out.framing = project.framing;
   return out;
 }

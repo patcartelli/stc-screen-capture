@@ -8,6 +8,7 @@ import { SeekingFrameSource } from "@transform/seeking-frame-source";
 import { composite } from "@transform/compositor";
 import type { Project } from "@transform/types";
 import { parseProject } from "@transform/trim";
+import { framingProblem } from "@transform/framing";
 import { applyDecoderPreference } from "./decoder.js";
 
 // STC-259: handed in by the runner (scripts/gate-bounds.mjs), never chosen
@@ -79,6 +80,21 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       anchors.camera?.present === true,
     );
 
+    // STC-396: `?framing=clean` frames the take for this run, so the two sinks
+    // are compared on the framed path too (scripts/identity-gate.mjs passes it).
+    const framingParam = new URLSearchParams(location.search).get("framing");
+    if (framingParam) {
+      const f = { preset: framingParam };
+      const problem = framingProblem(f);
+      if (problem) throw new Error(problem);
+      project.framing = f as Project["framing"];
+      // Sinks that agree prove nothing about a framed picture unless the frame
+      // was applied at all: fail loudly if render() reports none.
+      if (!render(project, session, tickTimeNs(0)).framing) {
+        throw new Error(`?framing=${framingParam} was set but render() returned no framing`);
+      }
+    }
+
     const { width, height } = project.output;
     const mkCtx = () => new OffscreenCanvas(width, height)
       .getContext("2d", { alpha: false, willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
@@ -115,6 +131,9 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
     const blindHash = new Map<number, string>();
     let pipFrames = 0;
     let pipDrawnFrames = 0;
+    // STC-419: how many sampled frames carry a keycast, so a keycast fixture
+    // whose samples all miss the pill reads as such rather than as covered.
+    let keycastFrames = 0;
 
     // The same trap the PiP-blind check exists for, one layer over: two sinks
     // that both fail to draw a crop (STC-326/330's compositor bug — a raw
@@ -143,6 +162,7 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       blindHash.set(k, await hashCanvas(blindCtx, width, height));
       if (fs.pip) pipFrames++;
       if (fs.pip && cam) pipDrawnFrames++;
+      if (fs.keycast) keycastFrames++;
 
       if (fs.zoom.amount > ZOOM_BLIND_THRESHOLD) {
         composite(zoomBlindCtx, frame, cam, { ...fs, zoom: zoomFullFrame }, width, height);
@@ -193,6 +213,7 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       cameraPresent: !!session.cameraVideo,
       pipFrames, pipDrawnFrames, pipBlindMismatches,
       zoomFrames: zoomBlindHash.size, zoomBlindMismatches,
+      keycastFrames,
     };
   } catch (e: any) {
     return { fatal: String(e?.stack ?? e) };

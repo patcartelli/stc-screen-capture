@@ -244,7 +244,12 @@ final class App {
                 self.stop(reason: reason)
             }
         }
-        session.start(request: request) { [weak self] result in
+        // STC-419: the keyboard layout is read HERE because this is main (every
+        // command arrives via IO.readCommands' `DispatchQueue.main.async`) and
+        // the Text Input Source APIs require it; `begin()` runs on
+        // ScreenCaptureKit's callback queue. See KeyLayout.swift.
+        let keyLayout = request.keys ? KeyLayoutSnapshot() : nil
+        session.start(request: request, keyLayout: keyLayout) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
