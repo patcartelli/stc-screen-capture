@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication, type Page } from "playwright";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchWithTakeInEditor } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, waitForTakeLoaded } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
@@ -51,7 +51,11 @@ async function openTake():
     Promise<{ win: Page; mainWin: Page; takeDir: string; root: string }> {
   const { app: a, win: mainWin, editorWin, takeDir, dir } = await launchWithTakeInEditor();
   app = a;
-  await expect.poll(() => editorWin.textContent("#clock"), { timeout: 20_000 }).toMatch(/^\d:\d\d:\d\d /);
+  // Not `#clock`: its HTML placeholder is already "0:00:00 / 0:00:00", so a
+  // poll for a time-shaped string passes before the player exists, and the
+  // ⌃⇧S test's keypress then lands on `if (!player) return` and is dropped
+  // (CI run 37322656399, attempt 2).
+  await waitForTakeLoaded(editorWin);
   // `dir` is the capture folder's top level (STC_RECORDINGS_DIR); `takeDir`
   // is the take's own bundle inside it.
   return { win: editorWin, mainWin, takeDir, root: dir };
