@@ -40,8 +40,10 @@ describe("a recording never reaches a shot-only path", () => {
     });
   }
 
-  test("Copy and drag-out are refused for a recording at their entries", () => {
-    expect(bodyOf("async function run(")).toMatch(/if \(take\.kind !== "shot"\) return false;/);
+  test("drag-out is refused for a recording at its entry; Copy branches on kind (STC-395)", () => {
+    // Copy now handles both shots and recordings with branching (not an early return).
+    expect(bodyOf("async function run(")).toMatch(/if \(action === "copy"\)[^}]*?if \(take\.kind === "shot"\)/s);
+    // Drag-out is still shot-only, refused at the entry point.
     expect(src).toMatch(/card\.addEventListener\("pointerdown", \(e\) => \{[^}]*?if \(take\.kind !== "shot"\) return;/s);
   });
 

@@ -106,11 +106,11 @@ describe("a recording gets the panel", () => {
     const panel = await panelWindow();
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className),
                        { timeout: 15_000 }).toContain("in");
-    // The card, not the picture; Edit and no Copy (`actionsFor`'s recording set).
+    // The card, not the picture; Copy, Edit, Save, Trash (`actionsFor`'s recording set, STC-395).
     expect(await panel.isVisible("#takecard")).toBe(true);
     expect(await panel.isVisible("#thumbwrap")).toBe(false);
+    expect(await panel.isVisible("#copy")).toBe(true);
     expect(await panel.isVisible("#edit")).toBe(true);
-    expect(await panel.isVisible("#copy")).toBe(false);
     // Duration and scope, read from the take's own anchors.json.
     expect(await panel.textContent("#takemeta")).toBe("0:42 · Safari");
     // Nobody has decided: still in temp, and nothing in the library.
