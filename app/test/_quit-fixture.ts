@@ -1,6 +1,18 @@
 import type { ElectronApplication } from "playwright";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { DEFAULT_REQUEST_TIMEOUT_MS, QUIT_GRACE_MS } from "../src/helper-client.js";
+import { E2E_DIAG_DIR_ENV, snapshotHungApp } from "./_e2e-diagnostics.js";
+
+/**
+ * Snapshot a process `closeApp` is about to kill, into the e2e diagnostics
+ * dir (STC-496). Undefined when there is no dir (the unit project, whose stub
+ * apps carry made-up pids) or no pid.
+ */
+async function snapshotBeforeKill(pid: number | undefined): Promise<string | undefined> {
+  const dir = process.env[E2E_DIAG_DIR_ENV];
+  if (!dir || pid === undefined) return undefined;
+  return snapshotHungApp(pid, dir);
+}
 
 /**
  * Answer the before-quit "unsaved takes" dialog (STC-392), so `app.close()`
@@ -51,7 +63,9 @@ export async function stubQuitDialog(app: ElectronApplication): Promise<void> {
  *   - `sup.shutdown()` stops a live recording (one request, under the
  *     client's `DEFAULT_REQUEST_TIMEOUT_MS`), sends `quit` (another request
  *     under the same bound), then gives the helper `QUIT_GRACE_MS` to exit;
- *   - plus a margin for the window teardown and process exit around them.
+ *   - plus a margin for the window teardown and process exit around them,
+ *     and for `CLOSE_GIVE_UP_MARGIN_MS` (STC-496 widened both by 5 s so a
+ *     hung app can be sampled before it is killed).
  *
  * A test that ends mid-recording goes through all of it, and on the macOS
  * runner that has overrun 10 s. The typical close is ~100 ms, so this bound
@@ -59,7 +73,7 @@ export async function stubQuitDialog(app: ElectronApplication): Promise<void> {
  * chain room to finish and name its slow stage (see `closeApp`).
  */
 export const APP_CLOSE_MS =
-  TRASH_COMMIT_AT_QUIT_MS + 2 * DEFAULT_REQUEST_TIMEOUT_MS + QUIT_GRACE_MS + 10_000;
+  TRASH_COMMIT_AT_QUIT_MS + 2 * DEFAULT_REQUEST_TIMEOUT_MS + QUIT_GRACE_MS + 15_000;
 
 /** A close slower than this prints its duration and the app's `[quit]` lines. */
 export const SLOW_CLOSE_MS = 3_000;
@@ -69,7 +83,7 @@ export const SLOW_CLOSE_MS = 3_000;
  * time to kill the process and say why, so the report is printed before
  * vitest abandons the hook.
  */
-export const CLOSE_GIVE_UP_MARGIN_MS = 5_000;
+export const CLOSE_GIVE_UP_MARGIN_MS = 10_000;
 
 /**
  * Close an app the way every e2e `afterEach` should (STC-449).
@@ -104,6 +118,10 @@ export async function closeApp(app: ElectronApplication | undefined, hookBoundMs
   const onData = (chunk: Buffer | string) => {
     for (const line of String(chunk).split("\n")) {
       if (line.includes("[quit]")) quitLines.push(line.trim());
+      // STC-496: a resize refused because the app is quitting. It is rare by
+      // design and names the caller that crashed CI, so it is printed however
+      // fast the close was.
+      if (line.includes("[geometry]")) process.stderr.write(`[closeApp] pid ${proc.pid}: ${line.trim()}\n`);
     }
   };
   proc.stderr?.on("data", onData);
@@ -119,8 +137,12 @@ export async function closeApp(app: ElectronApplication | undefined, hookBoundMs
   proc.stderr?.off("data", onData);
   const ms = Date.now() - t0;
   if (!closed) {
+    // STC-496: what the stuck main process was doing, taken BEFORE the kill
+    // destroys it. Inside the give-up margin, and only on the e2e project.
+    const snapshot = await snapshotBeforeKill(proc.pid);
     proc.kill("SIGKILL");
-    throw new Error(`app.close() did not finish within ${giveUpMs}ms, so pid ${proc.pid} was killed; ${seen()}`);
+    throw new Error(`app.close() did not finish within ${giveUpMs}ms, so pid ${proc.pid} was killed; ${seen()}`
+      + (snapshot ? `; ${snapshot}` : ""));
   }
   if (ms > SLOW_CLOSE_MS) {
     process.stderr.write(`[closeApp] app.close() took ${ms}ms (pid ${proc.pid}); ${seen()}\n`);

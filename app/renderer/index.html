@@ -6,6 +6,7 @@
   <title>Capture</title>
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="device-menu.css">
+  <link rel="stylesheet" href="pip-inspector.css">
   <style>
     /* ── instrument visual language (STC-372) ───────────────────────────────
        A restyle only: renderer.ts and library-view.ts reach the document
@@ -253,6 +254,7 @@
     .shortcut .why.ok { color: var(--text-dim); opacity: 1; }
     #shortcutfoot { display: flex; gap: 10px; align-items: baseline; padding-top: 8px; }
     #shortcutfoot button { padding: 3px 10px; font-size: var(--type-body); }
+    #pipsettingshint { font-size: var(--type-meta); color: var(--text-faint); margin: 0 0 8px; }
     #shortcuthint { font-size: var(--type-meta); color: var(--text-faint); }
 
     /* ── the profile sheet (STC-374) ──────────────────────────────────────
@@ -550,6 +552,13 @@
         down for <select id="countdownms"></select></label>
       <span id="countdownhint">Applies to Record, and to Shot with Self-Timer.</span>
     </div>
+
+    <!-- STC-461: the PiP default. The editor's inspector over a mock frame —
+         no camera is opened to set a preference. -->
+    <div class="subhead">Camera</div>
+    <p id="pipsettingshint">How the camera looks in new recordings. Each recording can still be changed in the editor.</p>
+    <div id="pipmock" aria-hidden="true"><div id="pipmockbox"><div class="silhouette"></div></div></div>
+    <div id="pipsettings"></div>
 
     <!-- STC-430: same as Countdown above — a Preferences field, not a
          fourth section, so `.subhead` rather than `<h2>`. -->

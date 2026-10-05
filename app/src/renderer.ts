@@ -27,6 +27,8 @@ interface AppSettings {
   systemAudio: boolean;
   /** STC-292. */
   shutterSound: boolean;
+  /** STC-461: the PiP style new camera takes start with. */
+  pipStyle: PipStyle;
   /** STC-391: how long Record and the self-timer count down, ms. */
   countdownMs: number;
   /** STC-293. */
@@ -126,6 +128,10 @@ import {
   type DeviceLike, type DeviceChoice, type PopoverId, type DeviceSelection, type MenuRow,
 } from "./device-picker.js";
 import { buildMenuRow } from "./device-menu-dom.js";
+import {
+  editPipStyle, pipRect, pipSize, snapCenter, PIP_SNAP_THRESHOLD_SCREEN_PX, PIP_SHADOW, type PipStyle,
+} from "@transform/pip-style.js";
+import { buildPipInspector } from "./pip-inspector.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
@@ -450,6 +456,11 @@ const profileCloseBtn = $("profileclose") as HTMLButtonElement;
 
 function setProfileOpen(open: boolean): void {
   profileSheet.classList.toggle("open", open);
+  // STC-461: re-read the PiP default on every open. The editor's "Use as
+  // default" writes through recorder:setSettings, which does not broadcast
+  // settings:changed, so without this the sheet would show (and then edit
+  // from) a stale style and overwrite the editor's default.
+  if (open) void loadPipDefault();
 }
 profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
 profileCloseBtn.addEventListener("click", () => setProfileOpen(false));
@@ -727,6 +738,9 @@ recorder.on("settings:changed", () => {
     storedSystemAudio = s.systemAudio;
     storedCamera = s.camera;
     storedCameraUid = s.cameraDeviceUid;
+    pipDefault = s.pipStyle;
+    pipSettingsInspector.render(pipDefault, true);
+    drawPipMock();
     await refreshDevices();
   })();
 });
@@ -1422,6 +1436,93 @@ shutterBox.addEventListener("change", async () => {
     shutterBox.checked = !shutterBox.checked;
     alertUser(`Could not save the shutter sound setting: ${String(e)}`);
   }
+});
+
+// ---- PiP default (STC-461) ----------------------------------------------------
+// The same inspector as the editor's, over a mock 16:9 frame: no camera is
+// opened to set a preference. Framing is per take, so there is no Reframe here.
+const MOCK_OUT = { width: 1920, height: 1080 };
+const MOCK_CAM = { width: 1280, height: 720 };
+let pipDefault: PipStyle | null = null;
+
+function drawPipMock(): void {
+  if (!pipDefault) return;
+  const frame = $("pipmock").getBoundingClientRect();
+  const k = frame.width / MOCK_OUT.width;
+  const r = pipRect(pipDefault, MOCK_OUT, MOCK_CAM);
+  const short = Math.min(r.width, r.height);
+  const box = $("pipmockbox");
+  // The border's widthPt x 2 x k assumes a 2x (retina) display — 2 output px
+  // per point — an approximation, fine for a preview.
+  Object.assign(box.style, {
+    left: `${r.x * k}px`, top: `${r.y * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
+    borderRadius: pipDefault.shape === "circle" ? "50%" : `${pipDefault.cornerRadius * short * k}px`,
+    border: pipDefault.border ? `${pipDefault.border.widthPt * k * 2}px solid ${pipDefault.border.color}` : "none",
+    boxShadow: pipDefault.shadow
+      ? `0 ${PIP_SHADOW.offsetYFraction * short * k}px ${PIP_SHADOW.blurFraction * short * k}px ${PIP_SHADOW.color}` : "none",
+  });
+  (box.firstElementChild as HTMLElement).style.transform = pipDefault.mirror ? "scaleX(-1)" : "";
+}
+
+async function savePipDefault(style: PipStyle, persist: boolean): Promise<void> {
+  pipDefault = style;
+  pipSettingsInspector.render(style, true);
+  drawPipMock();
+  if (persist) {
+    try {
+      pipDefault = (await recorder.setSettings({ pipStyle: style })).pipStyle;
+    } catch (e) {
+      alertUser(`Could not save the camera default: ${String(e)}`);
+    }
+    pipSettingsInspector.render(pipDefault, true);
+    drawPipMock();
+  }
+}
+
+const pipSettingsInspector = buildPipInspector($("pipsettings"), {
+  surface: "settings",
+  onEdit(edit, phase) {
+    if (pipDefault) void savePipDefault(editPipStyle(pipDefault, edit, MOCK_CAM), phase === "commit");
+  },
+});
+
+async function loadPipDefault(): Promise<void> {
+  try {
+    pipDefault = (await recorder.getSettings()).pipStyle;
+    pipSettingsInspector.render(pipDefault, true);
+    drawPipMock();
+  } catch { /* the sheet simply shows no mock until settings load */ }
+}
+void loadPipDefault();
+// The mock's scale follows the sheet's width.
+window.addEventListener("resize", drawPipMock);
+
+let mockDrag: { dx: number; dy: number } | null = null;
+$("pipmockbox").addEventListener("pointerdown", (e) => {
+  if (!pipDefault) return;
+  const frame = $("pipmock").getBoundingClientRect();
+  const k = frame.width / MOCK_OUT.width;
+  mockDrag = {
+    dx: (e.clientX - frame.left) / k - pipDefault.center.x * MOCK_OUT.width,
+    dy: (e.clientY - frame.top) / k - pipDefault.center.y * MOCK_OUT.height,
+  };
+  $("pipmockbox").setPointerCapture(e.pointerId);
+});
+$("pipmockbox").addEventListener("pointermove", (e) => {
+  if (!mockDrag || !pipDefault) return;
+  const frame = $("pipmock").getBoundingClientRect();
+  const k = frame.width / MOCK_OUT.width;
+  const raw = {
+    x: ((e.clientX - frame.left) / k - mockDrag.dx) / MOCK_OUT.width,
+    y: ((e.clientY - frame.top) / k - mockDrag.dy) / MOCK_OUT.height,
+  };
+  const c = snapCenter(raw, pipSize(pipDefault, MOCK_OUT, MOCK_CAM), MOCK_OUT, PIP_SNAP_THRESHOLD_SCREEN_PX / k);
+  void savePipDefault(editPipStyle(pipDefault, { kind: "move", center: c }, MOCK_CAM), false);
+});
+$("pipmockbox").addEventListener("pointerup", () => {
+  if (!mockDrag || !pipDefault) return;
+  mockDrag = null;
+  void savePipDefault(pipDefault, true);
 });
 
 ($("resetshortcuts") as HTMLButtonElement).addEventListener("click", async () => {

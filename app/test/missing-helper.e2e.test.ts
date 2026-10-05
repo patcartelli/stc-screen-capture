@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
-import { toastPage, toastText } from "./_toast.js";
+import { toastPage, toastText, waitForToastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
@@ -34,8 +34,7 @@ describe("a helper binary that does not exist", () => {
     });
     const win = await app.firstWindow();
     await win.waitForLoadState("domcontentloaded");
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 30_000 }).toBe(true);
-    expect(await toastText(app!)).toMatch(/keeps failing to start/);
+    expect(await waitForToastText(app!, 30_000)).toMatch(/keeps failing to start/);
     // The library still works: the takes on disk do not need the helper.
     await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
   }, 120_000);

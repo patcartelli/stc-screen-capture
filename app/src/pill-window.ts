@@ -1,6 +1,7 @@
 import { BrowserWindow, screen, type Rectangle } from "electron";
 import type { HelperSupervisor } from "./supervisor.js";
 import { PILL_HEIGHT_PX, clampPillWidth, decidePillAction, type PillWindowState } from "./pill.js";
+import { setBoundsUnlessClosing } from "./window-geometry.js";
 
 /**
  * The pill's real window mechanics (STC-375). `pill.ts` decides WHAT the
@@ -80,7 +81,9 @@ export function restorePill(win: BrowserWindow, bounds: Rectangle): void {
   if (win.isDestroyed()) return;
   win.setAlwaysOnTop(false);
   win.setResizable(true);
-  win.setBounds(bounds);
+  // A take the helper ends during quit's shutdown restores the pill too
+  // (STC-496: a resize at quit is what crashes on CI).
+  setBoundsUnlessClosing(win, bounds, "restorePill");
   setButtonsVisible(win, true);
   sendPillState(win, "expanded");
 }

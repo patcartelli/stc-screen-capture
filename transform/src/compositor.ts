@@ -1,4 +1,5 @@
-import type { FrameState } from "./render.js";
+import type { FrameState, PipDraw, PipState } from "./render.js";
+import { PIP_SHADOW } from "./pip-style.js";
 import { isWholeFrame, uvRectToPixels, type Rect } from "./spaces.js";
 import { gradientLine, type FramingLayout } from "./framing.js";
 import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
@@ -186,7 +187,8 @@ export function composite(
   // only draws it. Drawn only when both the geometry and a decoded frame exist
   // — no frame yet is a black gap, not a stretched stale one.
   if (fs.pip && camera) {
-    ctx.drawImage(camera, fs.pip.x, fs.pip.y, fs.pip.width, fs.pip.height);
+    if (fs.pip.draw) drawStyledPip(ctx, camera, fs.pip, fs.pip.draw);
+    else ctx.drawImage(camera, fs.pip.x, fs.pip.y, fs.pip.width, fs.pip.height);
   }
 
   if (fs.cursor.visible) {
@@ -208,4 +210,51 @@ export function composite(
   if (framing) ctx.restore();
 
   if (fs.keycast) drawKeycast(ctx, fs.keycast, width, height);
+}
+
+function pipPath(ctx: OffscreenCanvasRenderingContext2D, p: PipState, radiusPx: number): void {
+  ctx.beginPath();
+  ctx.roundRect(p.x, p.y, p.width, p.height, radiusPx);
+}
+
+/**
+ * A styled PiP (STC-461). Order is the whole design:
+ *  1. the shadow is a FILL of the shape, drawn before any clip — a clip would cut it off;
+ *  2. the camera is drawn inside the clip, through a flip about the PiP's own centre when mirrored;
+ *  3. the border is stroked after the clip is released, centred on the edge.
+ */
+function drawStyledPip(
+  ctx: OffscreenCanvasRenderingContext2D, camera: DecodedFrame, p: PipState, d: PipDraw,
+): void {
+  const short = Math.min(p.width, p.height);
+  ctx.save();
+  if (d.shadow) {
+    ctx.save();
+    ctx.shadowColor = PIP_SHADOW.color;
+    ctx.shadowBlur = PIP_SHADOW.blurFraction * short;
+    ctx.shadowOffsetY = PIP_SHADOW.offsetYFraction * short;
+    ctx.fillStyle = "#000000";
+    pipPath(ctx, p, d.radiusPx);
+    ctx.fill();
+    ctx.restore();
+  }
+  pipPath(ctx, p, d.radiusPx);
+  ctx.clip();
+  if (d.mirror) {
+    ctx.translate(2 * p.x + p.width, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(camera, d.source.x, d.source.y, d.source.width, d.source.height, p.x, p.y, p.width, p.height);
+  ctx.restore();
+  if (d.border) {
+    // Its own save/restore: the context outlives the frame, and a lineWidth or
+    // strokeStyle left set here would make the next frame depend on whether the
+    // sink got there by seeking or by stepping.
+    ctx.save();
+    ctx.lineWidth = d.border.px;
+    ctx.strokeStyle = d.border.color;
+    pipPath(ctx, p, d.radiusPx);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
