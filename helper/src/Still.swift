@@ -311,7 +311,10 @@ final class StillCapture {
         let alpha = Self.hasAlpha(image)
         let frame = StillFrameInfo(file: request.file, width: image.width, height: image.height,
                                    alpha: request.kind == .window && alpha)
-        let colorSpace = image.colorSpace?.name.map { $0 as String }
+        // STC-478: an ICC-based space has no name, so fall back to the profile's description.
+        let colorSpace = resolveColorSpaceName(
+            name: image.colorSpace?.name.map { $0 as String },
+            iccDescription: (image.colorSpace?.copyICCData()).flatMap { iccDescription($0 as Data) })
         let doc = shotDocument(kind: request.kind, capturedAtNs: capturedAtNs,
                                timebase: (Int(Clock.timebase.numer), Int(Clock.timebase.denom)),
                                display: geometry, colorSpace: colorSpace,
