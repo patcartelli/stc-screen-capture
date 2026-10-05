@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  actionsFor, closesPanel, promotes, trashStyle, UNDO_WINDOW_MS,
+  actionsFor, closesPanel, promotes, trashStyle, UNDO_WINDOW_MS, lockedWhileCopying,
   type PanelAction, type PanelTake,
 } from "../src/panel-actions.js";
 
@@ -25,9 +25,8 @@ describe("which actions a take has", () => {
   });
 
   test("a fresh recording has copy, save, edit and trash", () => {
-    // Copy on a recording uses clonefile (STC-395): an APFS copy-on-write clone
-    // that survives deletion of the original take, so the paste still works
-    // after Trash.
+    // STC-488: Copy RENDERS a recording (cursor and zoom included) to a file
+    // in the copies folder, so a Trash afterwards cannot break the paste.
     expect(actionsFor(fresh("recording"))).toEqual(["copy", "save", "edit", "trash"]);
   });
 
@@ -97,5 +96,15 @@ describe("the reconcile (D1)", () => {
   test("the undo window is long enough to read the toast and reach it", () => {
     expect(UNDO_WINDOW_MS).toBeGreaterThanOrEqual(5_000);
     expect(UNDO_WINDOW_MS).toBeLessThanOrEqual(15_000);
+  });
+});
+
+describe("what a recording's copy locks while it renders (STC-488)", () => {
+  test("copy, save and edit lock; trash and dismiss never do", () => {
+    // Save would move the take out from under the render reading it, and Edit
+    // promotes first, the same move. A second Copy would start a second job.
+    // Trash and dismiss are the panel's way out, and they cancel the render.
+    const all: PanelAction[] = ["copy", "save", "edit", "trash", "dismiss"];
+    expect(all.filter(lockedWhileCopying)).toEqual(["copy", "save", "edit"]);
   });
 });

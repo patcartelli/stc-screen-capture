@@ -48,7 +48,7 @@ export function tempTakesRoot(env: NodeJS.ProcessEnv): string {
 }
 
 /** `~/Library/Application Support/<name>` — the one place that shape is spelled. */
-function appSupportDir(name: string): string {
+export function appSupportDir(name: string): string {
   return join(homedir(), "Library", "Application Support", name);
 }
 

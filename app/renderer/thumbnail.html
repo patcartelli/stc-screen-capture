@@ -63,6 +63,8 @@
     #takecard { flex: 1; display: flex; flex-direction: column;
                 align-items: center; justify-content: center; text-align: center; }
     #takemeta { opacity: 0.7; margin-top: 2px; }
+    #copyprogress { width: 100%; height: 4px; margin-top: 6px; accent-color: var(--accent); }
+    #copyprogress[hidden] { display: none; }
     #controls { padding: 8px 10px 10px; }
     .row { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
     select, button {
@@ -131,6 +133,8 @@
          thumbnail (`library-items.ts`'s `source: "none"`). -->
     <div id="takecard" hidden>
       <div id="takemeta"></div>
+      <!-- STC-488: a recording's Copy renders first. Hidden unless one is running. -->
+      <progress id="copyprogress" max="1000" value="0" hidden></progress>
     </div>
     <div id="controls">
       <div class="row" id="actions">

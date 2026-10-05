@@ -18,14 +18,16 @@
  * like four cases rather than two independent questions, and the next kind or
  * the next origin would double it again.
  *
- * ## Copy mechanism (STC-395)
+ * ## A recording's Copy renders (STC-488)
  *
- * **Both kinds get Copy now.** A shot's Copy writes image data to the
- * clipboard. A recording's Copy writes an APFS clone (`clonefile`) to temp;
- * the clipboard references the clone as a file URL. Trash deletes only the
- * take, so the paste still works. Clones purge after 24h, except a clone that
- * is still the current clipboard item at purge time (one pasteboard check at
- * purge, no polling).
+ * This used to be the deliberate absence: a fresh take's only video is
+ * `display.mp4`, which has `showsCursor` off by design, so copying it would
+ * hand someone a file that looks like their recording and is missing the
+ * pointer. STC-488 makes Copy RENDER the take, with cursor and zoom, through
+ * the same `exportSession` the editor's Export uses, into `copiesRoot`
+ * (`recording-copy.ts`). The rendered file belongs to nobody's take, so
+ * "Copy, then Trash" still pastes. While that render runs, `lockedWhileCopying`
+ * says which actions must wait.
  *
  * ## A shot's Edit opens a still editor now (STC-300)
  *
@@ -75,7 +77,7 @@ export interface PanelTake {
  */
 export function actionsFor(take: PanelTake): readonly PanelAction[] {
   const out: PanelAction[] = [];
-  // Both kinds get Copy now (STC-395) — see the module doc for the mechanism.
+  // Both kinds copy. A recording's Copy renders first (STC-488, module doc).
   out.push("copy");
   // Nothing to promote for something already in the library.
   if (take.origin === "fresh") out.push("save");
@@ -113,6 +115,20 @@ export function closesPanel(action: PanelAction): boolean {
  */
 export function promotes(action: PanelAction): boolean {
   return action === "save" || action === "edit";
+}
+
+/**
+ * Whether this action must wait while a recording's Copy is rendering
+ * (STC-488).
+ *
+ * Save moves the take into the library, and the render is reading it. Edit
+ * promotes first, the same move. A second Copy would start a second render of
+ * the same take. Trash and dismiss do NOT wait: a panel that never closes on
+ * its own must always have a way out, so they cancel the render instead
+ * (`main.ts`'s `panel:trash`/`panel:dismiss`).
+ */
+export function lockedWhileCopying(action: PanelAction): boolean {
+  return action === "copy" || action === "save" || action === "edit";
 }
 
 /**

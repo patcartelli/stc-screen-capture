@@ -8,7 +8,7 @@ import {
 } from "./thumbnail.js";
 import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import {
-  actionsFor, closesPanel, type PanelAction, type PanelTake,
+  actionsFor, closesPanel, lockedWhileCopying, type PanelAction, type PanelTake,
 } from "./panel-actions.js";
 import { composeStill, stillPixelBytes } from "./still-compose.js";
 
@@ -66,7 +66,9 @@ declare global {
         /** Present when the take moved out of temp storage into the library (STC-393). */
         dir?: string;
       }>;
-      menu(ctx: { take: PanelTake; busy: boolean }): Promise<string | null>;
+      menu(ctx: { take: PanelTake; busy: boolean; copying?: boolean }): Promise<string | null>;
+      copyRecording(dir: string): Promise<{ ok: boolean; cancelled?: boolean; ready?: boolean; detail?: string }>;
+      onCopyProgress(cb: (done: number, total: number) => void): () => void;
       revealShot(dir: string): Promise<boolean>;
       /** The three actions that CHANGE where a take lives (STC-392) — see `panel-actions.ts`. */
       save(dir: string): Promise<{ ok: boolean; dir?: string; detail?: string }>;
@@ -80,8 +82,6 @@ declare global {
       }>;
       /** Close without deciding (STC-412) — the take is untouched. */
       dismiss(dir: string): Promise<{ ok: boolean; detail?: string }>;
-      /** Copy a recording via clonefile (STC-395). */
-      copyRecording(dir: string): Promise<{ ok: boolean; detail?: string }>;
       dragFile(req: Record<string, unknown>): Promise<{ ok: boolean; file?: string; detail?: string }>;
       startDrag(file: string): void;
       reveal(): Promise<boolean>;
@@ -185,6 +185,19 @@ let composite: HTMLCanvasElement | undefined;
  * action on the same take while the first is still deciding its outcome.
  */
 let busy = false;
+/**
+ * A recording's Copy is rendering (STC-488). Not `busy`: busy holds EVERY
+ * action for the length of `perform()`, and a render can take a minute, during
+ * which Trash and dismiss must still work (they cancel it). `lockedWhileCopying`
+ * says which buttons wait.
+ */
+let copying = false;
+const copyProgress = $("copyprogress") as HTMLProgressElement;
+window.thumb.onCopyProgress((done, total) => {
+  if (!copying || total <= 0) return;
+  copyProgress.value = Math.round((done / total) * 1000);
+  setStatus(`Rendering… ${Math.round((done / total) * 100)}%`);
+});
 /**
  * The source rectangle of `composite` the view is cropped to, so the canvas
  * fills its pane instead of a smaller picture letterboxed inside it
@@ -333,7 +346,9 @@ function setActionsEnabled(on: boolean): void {
   // waiting take is not an action ON this one, so an in-flight Save/Edit/
   // Trash on THIS take has no reason to block it.
   for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button[data-action]")) {
-    if (!btn.hidden) btn.disabled = !on;
+    if (btn.hidden) continue;
+    const action = btn.dataset.action as PanelAction;
+    btn.disabled = !on || (copying && lockedWhileCopying(action));
   }
 }
 
@@ -357,6 +372,33 @@ async function awaitComposite(): Promise<boolean> {
 }
 
 /**
+ * A recording's Copy: render, then the pasteboard. Runs OUTSIDE `perform()`'s
+ * `busy`, so Trash and dismiss stay live for its whole length.
+ */
+async function copyRecording(): Promise<boolean> {
+  // `busy` is checked HERE, not only by the buttons: ⌘C reaches perform() by key
+  // while a Save/Edit/Trash is deciding, and must not render a take mid-promote.
+  if (copying || busy) return false;
+  copying = true;
+  copyProgress.value = 0;
+  copyProgress.hidden = false;
+  setActionsEnabled(!busy);          // applies the copying locks
+  setStatus("Rendering… 0%");
+  try {
+    const r = await window.thumb.copyRecording(dir);
+    if (r.ok) setStatus("Copied, paste anywhere");
+    else if (r.ready) setStatus("Ready, press Copy to put it on the clipboard");
+    else if (r.cancelled) setStatus("");
+    else setStatus(`Could not copy: ${r.detail ?? "unknown error"}`);
+    return r.ok;
+  } finally {
+    copying = false;
+    copyProgress.hidden = true;
+    setActionsEnabled(!busy);
+  }
+}
+
+/**
  * Perform one action, and do to the panel whatever `panel-actions.ts` says
  * that action does to it.
  *
@@ -368,6 +410,8 @@ async function awaitComposite(): Promise<boolean> {
  * own visual state to restore on failure (`discard`'s slide-out) can tell.
  */
 async function perform(action: PanelAction): Promise<boolean> {
+  if (copying && lockedWhileCopying(action)) return false;   // a key or menu id reaching a locked action
+  if (action === "copy" && take.kind === "recording") return copyRecording();
   if (busy) return false;
   busy = true;
   setActionsEnabled(false);
@@ -387,29 +431,13 @@ async function perform(action: PanelAction): Promise<boolean> {
 
 async function run(action: PanelAction): Promise<boolean> {
   if (action === "copy") {
+    // A recording's Copy never reaches here: `perform` routes it to
+    // `copyRecording`, outside `busy` (STC-488).
+    if (take.kind !== "shot") return false;
     setStatus("Copying…");
-    if (take.kind === "shot") {
-      // A shot's Copy writes image data to clipboard (still:export).
-      if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
-      return runExport("copy");
-    } else {
-      // A recording's Copy writes an APFS clone (clonefile) to temp and puts
-      // the file URL on clipboard (STC-395). The clone outlives the take, so
-      // pasting still works after Trash.
-      try {
-        const result = await window.thumb.copyRecording(dir);
-        if (result.ok) {
-          setStatus("Copied to clipboard");
-          return true;
-        } else {
-          setStatus(`Could not copy: ${result.detail ?? "unknown error"}`);
-          return false;
-        }
-      } catch (e) {
-        setStatus(`Could not copy: ${(e as Error).message}`);
-        return false;
-      }
-    }
+    // A shot's Copy writes image data to the clipboard (still:export).
+    if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
+    return runExport("copy");
   }
   if (action === "save") {
     setStatus("Saving…");
@@ -772,7 +800,7 @@ async function discard(): Promise<void> {
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   void (async () => {
-    const id = await window.thumb.menu({ take, busy });
+    const id = await window.thumb.menu({ take, busy, copying });
     if (id === null) return;
     if (id === "copy" || id === "save" || id === "edit" || id === "trash") {
       void perform(id);

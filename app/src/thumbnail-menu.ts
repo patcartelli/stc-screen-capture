@@ -1,4 +1,4 @@
-import { actionsFor, type PanelAction, type PanelTake } from "./panel-actions.js";
+import { actionsFor, lockedWhileCopying, type PanelAction, type PanelTake } from "./panel-actions.js";
 
 /**
  * The floating thumbnail's right-click menu (STC-296 follow-up, rebuilt on
@@ -62,6 +62,12 @@ export interface ThumbMenuContext {
    * enabled; neither does Reveal or Trash.
    */
   busy?: boolean;
+  /**
+   * A recording's Copy is rendering (STC-488). `lockedWhileCopying` decides
+   * which rows that disables. Not folded into `busy`: busy leaves Edit
+   * enabled, and a copy must not.
+   */
+  copying?: boolean;
 }
 
 /** What each of `panel-actions.ts`'s four actions is called on this menu. */
@@ -85,6 +91,7 @@ function touchesExporter(action: PanelAction): boolean {
  */
 export function buildThumbMenu(ctx: ThumbMenuContext): ThumbMenuItem[] {
   const busy = ctx.busy === true;
+  const copying = ctx.copying === true;
   const actions = actionsFor(ctx.take);
   const items: ThumbMenuItem[] = [];
   for (const action of actions) {
@@ -93,7 +100,7 @@ export function buildThumbMenu(ctx: ThumbMenuContext): ThumbMenuItem[] {
     if (action === "trash") continue;
     items.push({
       id: action, label: ACTION_LABEL[action],
-      enabled: touchesExporter(action) ? !busy : true,
+      enabled: !(copying && lockedWhileCopying(action)) && (touchesExporter(action) ? !busy : true),
     });
   }
   // The ellipsis is not decoration: macOS spells "this opens a dialog" that

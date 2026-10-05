@@ -104,6 +104,22 @@ export class HelperSupervisor {
     return this.client.request("export-still", params);
   }
 
+  /**
+   * Put a finished file on the pasteboard as a file reference (STC-488).
+   * State-free, like `exportStill`: a copy must not be refused because a take
+   * is running.
+   */
+  async copyFile(path: string): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("copy-file", { path });
+  }
+
+  /** The file paths on the pasteboard right now: the copy purge's one check. */
+  async pasteboardFiles(): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("pasteboard-files", {});
+  }
+
   async stopRecording(): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");
     const dir = this._recordingDir;

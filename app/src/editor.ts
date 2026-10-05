@@ -54,8 +54,8 @@ declare const editor: {
   getVersion(): Promise<string>;
 };
 
-import { loadSession, type LoadedSession } from "@transform/session";
-import type { ByteSource } from "@transform/chunk-reader";
+import type { LoadedSession } from "@transform/session";
+import { loadTake, type TakeIO, type CountingSource } from "./session-io.js";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
 import {
@@ -72,7 +72,7 @@ import { PreviewAudio } from "@transform/preview-audio";
 import { mixPeaks } from "@transform/waveform";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
 import {
-  parseProject, projectForWrite, exportWindow, estimateExportMs,
+  projectForWrite, exportWindow, estimateExportMs,
   clampTrim, isFullTake, minTrimNs, DEFAULT_NARRATION_CLEANUP,
 } from "@transform/trim";
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
@@ -1421,50 +1421,14 @@ $("closeexport").addEventListener("click", () => exportDialog.close());
 
 // ---- opening and closing the take -------------------------------------
 
-const VIDEO_CHUNK_BYTES = 32 * 1024 * 1024;
+/** This window's bridge as session-io.ts's TakeIO (STC-488). */
+const takeIO: TakeIO = {
+  read: (n) => editor.readTakeFile(n),
+  size: (n) => editor.takeFileSize(n),
+  chunk: (n, o, l) => editor.readTakeChunk(n, o, l),
+};
 
-async function readVideo(name = "display.mp4"): Promise<ArrayBuffer> {
-  const size = await editor.takeFileSize(name);
-  const out = new Uint8Array(size);
-  for (let offset = 0; offset < size; offset += VIDEO_CHUNK_BYTES) {
-    const length = Math.min(VIDEO_CHUNK_BYTES, size - offset);
-    out.set(new Uint8Array(await editor.readTakeChunk(name, offset, length)), offset);
-  }
-  return out.buffer;
-}
-
-/**
- * A take file read by range (STC-236), over the same preview:size /
- * preview:chunk channels readVideo uses — the renderer still never names a
- * path. The video tracks go through this; the audio tracks still go through
- * readVideo, whole (decoded PCM is their real cost, a separate ticket).
- *
- * preview:chunk returns fewer bytes than asked at EOF rather than failing, so
- * the length is checked here: a short chunk handed to the decoder would be a
- * corrupt frame, not an error anyone could see.
- */
-async function ipcSource(name: string): Promise<ByteSource & { readonly bytesRead: number }> {
-  const size = await editor.takeFileSize(name);
-  let bytesRead = 0;
-  return {
-    size,
-    get bytesRead() { return bytesRead; },
-    async read(offset: number, length: number): Promise<Uint8Array> {
-      if (!Number.isInteger(offset) || !Number.isInteger(length) || offset < 0 || length < 0 || offset + length > size) {
-        throw new Error(`${name}: read [${offset}, ${offset + length}) is outside the ${size}-byte file`);
-      }
-      if (length === 0) return new Uint8Array(0);
-      const got = new Uint8Array(await editor.readTakeChunk(name, offset, length));
-      if (got.byteLength !== length) {
-        throw new Error(`${name}: short read at ${offset} — asked for ${length} bytes, got ${got.byteLength}. Was the file changed while open?`);
-      }
-      bytesRead += length;
-      return got;
-    },
-  };
-}
-
-let openVideoSources: { display: Awaited<ReturnType<typeof ipcSource>>; camera?: Awaited<ReturnType<typeof ipcSource>> } | undefined;
+let openVideoSources: { display: CountingSource; camera?: CountingSource } | undefined;
 
 // Test hook (app/test/preview.e2e.test.ts): how much of each video file the
 // open take has actually read. Read-only, and zero when nothing is open.
@@ -1510,27 +1474,8 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   await closeTake();
   await editor.openPreview(dir);
 
-  const dec = new TextDecoder();
-  const [anchors, events, displaySrc, projectRaw] = await Promise.all([
-    editor.readTakeFile("anchors.json").then((b) => JSON.parse(dec.decode(b))),
-    editor.readTakeFile("events.json").then((b) => JSON.parse(dec.decode(b)))
-      .catch(() => ({ version: 1, events: [] })),
-    ipcSource("display.mp4"),
-    editor.readTakeFile("project.json").then((b) => JSON.parse(dec.decode(b)))
-      .catch(() => null),
-  ]);
-  const cameraSrc = anchors.files?.camera ? await ipcSource(anchors.files.camera) : undefined;
-  // STC-233: same reasoning as cameraSrc above (only when the anchors claim the track), one track over.
-  const micM4a = anchors.files?.mic ? await readVideo(anchors.files.mic) : undefined;
-  // STC-418: and again for system audio — loadSession refuses a claimed track that was not supplied.
-  const systemM4a = anchors.files?.system ? await readVideo(anchors.files.system) : undefined;
-  const session = await loadSession({ anchors, events, displayMp4: displaySrc, cameraMp4: cameraSrc, micM4a, systemM4a });
-  openVideoSources = { display: displaySrc, camera: cameraSrc };
-  const durationNs = session.frames[session.frames.length - 1] ?? 0;
-  const project = parseProject(
-    projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
-    anchors.camera?.present === true,
-  );
+  const { session, project, anchors, sources } = await loadTake(takeIO);
+  openVideoSources = sources;
 
   openSession = session;
   openProject = project;

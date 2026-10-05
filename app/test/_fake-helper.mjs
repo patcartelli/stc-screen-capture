@@ -28,6 +28,7 @@ let session = null;
 // field comes from, and a stand-in reporting 0 forever cannot exercise
 // "the timer actually moves" — the one property that test needs.
 let recordingStartedAt = null;
+let pasteboardFirstRead;   // STC-488 F1: when the first pasteboard-files was read
 
 /** fd3 = reliable: responses and lifecycle. */
 const send = (ev, o = {}) => writeSync(3, JSON.stringify({ ev, ...o }) + "\n");
@@ -345,6 +346,37 @@ process.stdin.on("data", (chunk) => {
         } catch (e) {
           send("error", { seq, code: "write-failed", detail: String(e) });
         }
+        break;
+      }
+      // ── STC-488: a recording's copy on the pasteboard ───────────────────
+      case "copy-file": {
+        if (process.env.STC_FAKE_COPY_LOG) {
+          try { writeFileSync(process.env.STC_FAKE_COPY_LOG, JSON.stringify(cmd) + "\n", { flag: "a" }); }
+          catch { /* a test seam is not worth killing the stand-in */ }
+        }
+        if (process.env.STC_FAKE_COPY_ERROR) {
+          send("error", { seq, code: process.env.STC_FAKE_COPY_ERROR, detail: "stand-in refused the pasteboard" });
+          break;
+        }
+        send("copied-file", { seq, changeCount: 1 });
+        break;
+      }
+      case "pasteboard-files": {
+        // Unset: an error, so a test machine's copy purge always SKIPS rather
+        // than deleting a developer's real copies (purgeDecision's undefined).
+        if (!process.env.STC_FAKE_PASTEBOARD) {
+          send("error", { seq, code: "unavailable", detail: "stand-in has no pasteboard" });
+          break;
+        }
+        let paths = [];
+        try { paths = JSON.parse(process.env.STC_FAKE_PASTEBOARD); } catch { /* keep [] */ }
+        // changeCount (STC-488 F1): 100 until STC_FAKE_PASTEBOARD_CHANGE_AFTER_MS has
+        // passed since the FIRST read, then 101, so a test can simulate "the
+        // person copied something else while the render ran".
+        const after = Number(process.env.STC_FAKE_PASTEBOARD_CHANGE_AFTER_MS);
+        if (pasteboardFirstRead === undefined) pasteboardFirstRead = Date.now();
+        const moved = Number.isFinite(after) && after > 0 && Date.now() - pasteboardFirstRead >= after;
+        send("pasteboard-files", { seq, paths, changeCount: moved ? 101 : 100 });
         break;
       }
       case "quit":

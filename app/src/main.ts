@@ -2,8 +2,6 @@ import {
   app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage, clipboard,
   powerMonitor, type IpcMainInvokeEvent,
 } from "electron";
-import { execSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
@@ -32,6 +30,10 @@ import {
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
+import { startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight } from "./copy-render-window.js";
+import {
+  copyPathFor, copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
+} from "./recording-copy.js";
 import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
@@ -58,7 +60,7 @@ import {
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
   unsavedTakeDirs, takeFor,
 } from "./thumbnail-window.js";
-import { promotes, trashStyle } from "./panel-actions.js";
+import { promotes, trashStyle, lockedWhileCopying } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
 import { openEditor } from "./editor-window.js";
 import { openStillEditor } from "./still-editor-window.js";
@@ -238,6 +240,9 @@ const pendingTrash = new PendingTrash();
  * enough that the toast's own bar (driven by the identical `UNDO_WINDOW_MS`)
  * and the moment the file actually moves cannot drift far apart. */
 const TRASH_SWEEP_INTERVAL_MS = 1_000;
+// STC-488: how long quit waits for a cancelled copy render to finish removing
+// its partial; an in-flight write is one buffer, so a few seconds is generous.
+const COPY_CANCEL_AT_QUIT_MS = 5_000;
 
 // The renderer is sandboxed and cannot read files. It gets bytes over IPC and
 // never names a path: it may ask for one of a few fixed filenames, and only
@@ -440,8 +445,8 @@ function reconcileWindowRecording(): void {
  * failure must never cost the take (the STC-296 rule).
  *
  * Never `silent`: `thumbnail.skip` means "straight to the clipboard", and a
- * recording has no Copy until STC-395, so a silent one would have no outcome
- * at all (decided with Patrick, 2026-09-30).
+ * recording's Copy is a render with progress (STC-488) that wants the panel
+ * to show it (decided with Patrick, 2026-09-30).
  */
 async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): Promise<boolean> {
   let recording = { durationMs: 0, scope: "Screen" };
@@ -835,6 +840,10 @@ app.whenReady().then(async () => {
       });
     }
   }, TRASH_SWEEP_INTERVAL_MS);
+  // STC-488: its own timer (see COPY_PURGE_INTERVAL_MS), and the first round
+  // after startup rather than during it, since it asks the helper.
+  setTimeout(() => { void purgeCopies(); }, COPY_PURGE_FIRST_DELAY_MS);
+  setInterval(() => { void purgeCopies(); }, COPY_PURGE_INTERVAL_MS);
 
   startSupervisor();
   shortcuts = readSettings(app.getPath("userData")).shortcuts;
@@ -921,6 +930,11 @@ function runQuitTeardown(): void {
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
   cancelCountdown();
+  // STC-488: a Copy render at quit is abandoned and its partial deleted. The
+  // take itself is the unsaved-takes warning's business. Called NOW so the
+  // windows die at once; the promise is awaited as a stage of the chain below,
+  // because the cleanup (wait out a write, rm the partial) outlives this tick.
+  const copyCancelled = cancelAllCopyRenders();
   // Not just `hideToast()`: the awaits below take seconds, and a toast put up
   // during them is closed by Electron's own quit with its `toast:fit` still in
   // flight — the use-after-free behind STC-496's stalls.
@@ -945,9 +959,14 @@ function runQuitTeardown(): void {
   // that exact path reachable on demand; its natural trigger is the OS.
   const commit = (d: string): Promise<void> =>
     process.env.STC_QUIT_FAULT === "trash-hangs" ? new Promise<void>(() => {}) : shell.trashItem(d);
-  Promise.all(pendingTrash.drainAll().map((d) =>
+  // Bounded like the trash commits: a cancel that never settles must not
+  // make the app unquittable.
+  const copyStage = withTimeout(copyCancelled, COPY_CANCEL_AT_QUIT_MS, "cancelling copy renders at quit")
+    .catch((e) => console.error("[copy] could not finish cancelling at quit:", e))
+    .then(() => { mark("copy"); });
+  Promise.all([copyStage, ...pendingTrash.drainAll().map((d) =>
     withTimeout(commit(d), TRASH_COMMIT_AT_QUIT_MS, `committing a promised deletion at quit (${d})`)
-      .catch((e) => console.error("[trash] could not commit at quit — the take stays in temp storage:", d, e))))
+      .catch((e) => console.error("[trash] could not commit at quit — the take stays in temp storage:", d, e)))])
     .then(() => { mark("trash"); return closeThumbnail(); })
     .catch(() => {})
     .then(() => { mark("thumbnail"); return closeOverlay(); })
@@ -1035,6 +1054,10 @@ app.on("before-quit", (e) => {
       // storage, which is the same backstop Quit Anyway already relies on —
       // STC-393's recovery prompt finds it on the next launch either way.
       const { saveFolder } = readSettings(app.getPath("userData"));
+      // A live Copy render is still READING these takes; end it (bounded like
+      // the teardown's own cancel) before promotion moves them out from under it.
+      await withTimeout(cancelAllCopyRenders(), COPY_CANCEL_AT_QUIT_MS, "cancelling copy renders before Save All")
+        .catch((err) => console.error("[copy] could not finish cancelling before Save All:", err));
       for (const dir of unsavedTakeDirs()) {
         await promoteTake(process.env, saveFolder, dir).catch((err) => {
           console.error("[quit] could not save a take before quitting:", dir, err);
@@ -2785,6 +2808,7 @@ ipcMain.handle("thumbnail:menu", async (e, ctx: ThumbMenuContext) => {
       // ever calls.
       take: ctx?.take ?? { kind: "shot", origin: "fresh" },
       busy: ctx?.busy === true,
+      copying: ctx?.copying === true,
     }).map((item) => item.type === "separator"
       ? { type: "separator" as const }
       : { label: item.label, enabled: item.enabled !== false, click: () => answer(item.id) }));
@@ -2892,11 +2916,69 @@ ipcMain.handle("still:revealShot", async (_e, dir: string) => {
  * Every one validates the directory against the capture roots before it acts.
  * The renderer names a take; it never hands main a path to act on.
  */
+/**
+ * A recording's Copy (STC-488): render the take to `copiesRoot`, then put the
+ * file on the pasteboard. A finished copy that still exists is reused, so a
+ * second Copy is instant. Only a recording comes here; a shot's Copy is still
+ * `still:export`.
+ */
+ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
+  if (typeof dir !== "string" || !insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
+    return { ok: false, detail: "not a recording on a panel" };
+  }
+  const helper = sup;   // captured: the render below is long and `sup` can go away under it
+  if (!helper) return { ok: false, detail: "the helper is not running" };
+  const out = copyPathFor(process.env, dir);
+  // A render takes long enough for the person to copy something else. The
+  // clipboard's changeCount is read before it and after it; a courtesy, not a
+  // gate: if it cannot be read (the client rejects on an error reply), write.
+  const readChangeCount = async (): Promise<number | undefined> => {
+    try {
+      const n = Number((await helper.pasteboardFiles()).changeCount);
+      return Number.isFinite(n) ? n : undefined;
+    } catch { return undefined; }
+  };
+  let changeBefore: number | undefined;
+  let rendered = false;
+  if (!existsSync(out)) {
+    rendered = true;
+    changeBefore = await readChangeCount();
+    const panel = e.sender;
+    const r = await startCopyRender({
+      takeDir: dir, outPath: out, dist: here, rendererDir: join(here, "..", "renderer"),
+      delayMs: Number(process.env.STC_COPY_RENDER_DELAY_MS) || undefined,
+      grant: (id, d) => openTakes.set(id, d),
+      revoke: (id) => openTakes.delete(id),
+      onProgress: (done, total) => {
+        if (!panel.isDestroyed()) panel.send("thumb:copyProgress", done, total);
+      },
+    });
+    if (!r.ok) return r.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: r.detail };
+  }
+  // A queued start can outlive a cancel; a gone panel gets no pasteboard write.
+  if (takeFor(dir)?.kind !== "recording") return { ok: false, cancelled: true };
+  if (rendered && changeBefore !== undefined) {
+    const after = await readChangeCount();
+    // Moved: something newer is on the clipboard. Keep the file; the next Copy
+    // is a cache hit and writes at once.
+    if (after !== undefined && after !== changeBefore) return { ok: false, ready: true };
+  }
+  try {
+    // HelperClient.request REJECTS with a HelperError on an error reply.
+    await helper.copyFile(out);
+  } catch (err: any) {
+    return { ok: false, detail: String(err?.detail ?? err?.code ?? err?.message ?? err) };
+  }
+  return { ok: true };
+});
+
 ipcMain.handle("panel:save", async (_e, dir: string) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
+  // main enforces the lock too (panel-actions.ts's rule), not only the panel.
+  if (lockedWhileCopying("save") && copyRenderInFlight(dir)) return { ok: false, detail: "a copy is still rendering" };
   try {
     // Asked, not assumed: `promotes("save")` is `panel-actions.ts`'s own
     // answer, not a second place this handler decides "save promotes" for
@@ -2929,6 +3011,7 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
+  if (lockedWhileCopying("edit") && copyRenderInFlight(dir)) return { ok: false, detail: "a copy is still rendering" };
   try {
     // Same reasoning as `panel:save` above: `promotes("edit")` is asked, not
     // hardcoded — this handler has no opinion of its own about whether Edit
@@ -2949,6 +3032,36 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
 });
 
 /**
+ * STC-488: delete copies older than 24 h, except the one on the clipboard.
+ * The clipboard is asked ONCE, here. If it can't be read (the client rejects
+ * on an error reply), the round is skipped (`purgeDecision`'s undefined): a
+ * file that might be on the clipboard is worth one more hour on disk. Only
+ * ever deletes bare names `purgeDecision` returns, joined to `copiesRoot`. A
+ * reused copy keeps its original mtime, so the 24 h clock runs from the
+ * render, not from the last Copy.
+ */
+async function purgeCopies(): Promise<void> {
+  const root = copiesRoot(process.env);
+  let names: string[];
+  try { names = await readdir(root); } catch { return; }
+  let onClipboard: Set<string> | undefined;
+  try {
+    const line = await sup?.pasteboardFiles();
+    const paths = line?.paths;
+    if (Array.isArray(paths)) onClipboard = new Set(paths.map(String));
+  } catch { /* undefined: skip this round */ }
+  const entries: Array<{ name: string; mtimeMs: number }> = [];
+  for (const name of names) {
+    try { entries.push({ name, mtimeMs: (await stat(join(root, name))).mtimeMs }); } catch { /* gone */ }
+  }
+  for (const name of purgeDecision(entries, Date.now(), onClipboard, root)) {
+    await rm(join(root, name), { force: true }).catch((e) => {
+      console.error("[copy-purge] could not delete:", name, e);
+    });
+  }
+}
+
+/**
  * Close the panel without deciding anything (STC-412) — the take is
  * untouched: still in temp storage if it was fresh, still in the library if
  * it was re-opened. Governed entirely by STC-393's existing purge and
@@ -2960,7 +3073,11 @@ ipcMain.handle("panel:dismiss", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
+  // STC-488: closing the panel ends any render of its Copy. Nobody is
+  // waiting for it any more.
+  // The panel goes first: it need not wait out a large write's cleanup.
   dismissThumbnail(dir);
+  await cancelCopyRender(dir);
   return { ok: true };
 });
 
@@ -2993,9 +3110,18 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
   const origin = takeFor(dir)?.origin
     ?? (insideTempTakesRoot(process.env, dir) ? "fresh" : "library");
   if (trashStyle(origin) === "confirm") {
-    return trashWithConfirmation([{ path: dir, label: "this take", plural: false }]);
+    const r = await trashWithConfirmation([{ path: dir, label: "this take", plural: false }]);
+    // STC-488: only once the Trash went through; a declined confirmation
+    // leaves the render running. UNREACHABLE today: every recording panel is
+    // origin "fresh" and `panel:copyRecording` requires the temp root, so no
+    // render exists on a "confirm"-style take. If that ever changes, the
+    // cancel belongs BEFORE `trashOne`, not after it.
+    if (r.ok) await cancelCopyRender(dir);
+    return r;
   }
 
+  // STC-488: a Trash cancels a running Copy render, once the Trash is decided.
+  await cancelCopyRender(dir);
   if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
   pendingTrash.promise(dir);
   dismissThumbnail(dir);
@@ -3004,69 +3130,6 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
     dist: here, rendererDir: join(here, "..", "renderer"),
   });
   return { ok: true };
-});
-
-/**
- * Copy a recording via APFS clonefile, placing the clone on the clipboard
- * (STC-395). The clone outlives the take, so the paste still works after
- * Trash. Clones purge after 24h, except one still the current clipboard item
- * (one check at purge time, no polling).
- */
-ipcMain.handle("panel:copyRecording", async (_e, dir: string) => {
-  const { saveFolder } = readSettings(app.getPath("userData"));
-  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
-    return { ok: false, detail: "not a take this app wrote" };
-  }
-  try {
-    const displayMp4 = join(dir, "display.mp4");
-    if (!existsSync(displayMp4)) {
-      return { ok: false, detail: "recording not found" };
-    }
-
-    // Clone to temp with clonefile (copy-on-write, survives original deletion).
-    // On macOS, `cp -c` uses the clonefile(2) syscall for APFS volumes.
-    const cloneDir = join(tmpdir(), "stc-recordings");
-    mkdirSync(cloneDir, { recursive: true });
-    const cloneName = `${basename(dir)}-${Date.now()}.mp4`;
-    const clonePath = join(cloneDir, cloneName);
-
-    // Use `cp -c` to create an APFS clone (copy-on-write).
-    try {
-      execSync(`cp -c "${displayMp4}" "${clonePath}"`, { stdio: "pipe" });
-    } catch (e) {
-      return { ok: false, detail: "clonefile failed" };
-    }
-
-    // Put file URL on clipboard.
-    const fileUrl = `file://${clonePath}`;
-    clipboard.write({ text: fileUrl });
-
-    // Schedule 24h cleanup (simplified: just log for now, full implementation
-    // would persist cleanup tasks). In production, this needs:
-    // - A cleanup task saved to disk (survives app restart)
-    // - Check at cleanup time whether file is still on clipboard
-    // - Delete only if not current clipboard item
-    // For now, rely on system temp cleanup and the 24h intent in the comment.
-    setTimeout(() => {
-      try {
-        if (existsSync(clonePath)) {
-          // Check if still on clipboard before deleting
-          const clipboardText = clipboard.readText();
-          if (clipboardText !== fileUrl) {
-            rm(clonePath, { recursive: false }).catch(() => {
-              // File may have been cleaned up already
-            });
-          }
-        }
-      } catch (e) {
-        // Cleanup errors are not critical
-      }
-    }, 24 * 60 * 60 * 1000); // 24 hours
-
-    return { ok: true };
-  } catch (e: any) {
-    return { ok: false, detail: String(e?.message ?? e) };
-  }
 });
 
 /**

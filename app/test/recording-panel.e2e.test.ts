@@ -98,7 +98,7 @@ async function recordAndStop({ win, temp }: Launched): Promise<string> {
  * `recordAndStop`'s own poll + six 15 s polls in the body = 210 s, under 240 s.
  */
 describe("a recording gets the panel", () => {
-  test("a clean stop puts up a recording card with no Copy, and saves nothing", async () => {
+  test("a clean stop puts up a recording card with Copy, and saves nothing", async () => {
     const l = await launch();
     const dir = await recordAndStop(l);
 
@@ -106,7 +106,7 @@ describe("a recording gets the panel", () => {
     const panel = await panelWindow();
     await expect.poll(() => panel.evaluate(() => document.getElementById("card")!.className),
                        { timeout: 15_000 }).toContain("in");
-    // The card, not the picture; Copy, Edit, Save, Trash (`actionsFor`'s recording set, STC-395).
+    // The card, not the picture; Edit and Copy (`actionsFor`'s recording set).
     expect(await panel.isVisible("#takecard")).toBe(true);
     expect(await panel.isVisible("#thumbwrap")).toBe(false);
     expect(await panel.isVisible("#copy")).toBe(true);

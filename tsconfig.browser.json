@@ -19,7 +19,8 @@
               "app/src/thumbnail-renderer.ts", "app/src/editor.ts",
               "app/src/countdown-renderer.ts", "app/src/toast-renderer.ts",
               "app/src/still-editor-renderer.ts", "app/src/narration-worker.ts",
-              "app/src/still-compose.ts"],
+              "app/src/still-compose.ts", "app/src/session-io.ts",
+              "app/src/copy-render.ts"],
   // vite's own config is node — it belongs to the node pass.
   "exclude": ["harness/vite.config.ts"]
 }
