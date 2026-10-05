@@ -345,6 +345,53 @@ struct StillFrameInfo: Equatable {
     let alpha: Bool
 }
 
+/// The description string of an ICC profile (its `desc` tag), or nil if the
+/// bytes are not a profile we can read. Handles both encodings: v2 `desc`
+/// (ASCII) and v4 `mluc` (UTF-16BE, first record). Pure, so the rule below is
+/// tested without a display (STC-478).
+func iccDescription(_ data: Data) -> String? {
+    let b = [UInt8](data)
+    func u32(_ o: Int) -> Int? {
+        guard o >= 0, o + 4 <= b.count else { return nil }
+        return Int(b[o]) << 24 | Int(b[o + 1]) << 16 | Int(b[o + 2]) << 8 | Int(b[o + 3])
+    }
+    guard b.count >= 132, let count = u32(128), count < 1000 else { return nil }
+    for i in 0..<count {
+        let e = 132 + i * 12
+        guard let sig = u32(e), let off = u32(e + 4), let size = u32(e + 8) else { return nil }
+        guard sig == 0x64657363 /* 'desc' */, off + size <= b.count, let type = u32(off) else { continue }
+        if type == 0x64657363 { // v2 textDescriptionType: u32 ascii count incl. NUL
+            guard let n = u32(off + 8), n > 0, off + 12 + n <= b.count else { return nil }
+            return String(bytes: b[(off + 12)..<(off + 12 + n - 1)], encoding: .ascii)
+        }
+        if type == 0x6D6C7563 { // 'mluc': first record's UTF-16BE string
+            guard let recs = u32(off + 8), recs > 0,
+                  let len = u32(off + 20), let so = u32(off + 24),
+                  off + so + len <= b.count else { return nil }
+            return String(bytes: b[(off + so)..<(off + so + len)], encoding: .utf16BigEndian)
+        }
+        return nil
+    }
+    return nil
+}
+
+/// The `display.colorSpace` string for a captured image (STC-478).
+///
+/// CoreGraphics gives an ICC-based colour space — what a Mac's own display
+/// profile arrives as — no name, so `name` is nil for a perfectly good Display
+/// P3 capture, and the key used to be dropped, which every consumer reads as
+/// sRGB. A name wins when there is one; otherwise the profile's own
+/// description decides. Anything unrecognised stays nil: omitting the key is
+/// the honest answer for a space we cannot name, and it is what the loaders
+/// already treat as sRGB.
+func resolveColorSpaceName(name: String?, iccDescription: String?) -> String? {
+    if let name, !name.isEmpty { return name }
+    guard let d = iccDescription?.lowercased() else { return nil }
+    if d.contains("display p3") || d.contains("displayp3") { return "kCGColorSpaceDisplayP3" }
+    if d.contains("srgb") { return "kCGColorSpaceSRGB" }
+    return nil
+}
+
 /// Builds shot.json (schema/shot-1.schema.json).
 ///
 /// Pure on purpose, like `anchorsDocument`: the shape of this document is a

@@ -144,6 +144,13 @@ Open the saved PNG and the original side by side, full screen, on that display.
 **They must look the same.** A washed-out export is a missing or wrong profile;
 an oversaturated one is a P3 buffer tagged sRGB.
 
+**STC-478:** first check the capture's own `shot.json`. It must say
+`"colorSpace": "kCGColorSpaceDisplayP3"` under `display`. Before the fix the
+key was absent on a Mac whose display profile has no CoreGraphics name, and
+every export came out sRGB even though `frame.png` was tagged Display P3. An
+absent key on a P3 display is that bug. (An sRGB display records
+`kCGColorSpaceSRGB`.)
+
 Confirm the tag independently:
 
 ```

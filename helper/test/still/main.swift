@@ -206,6 +206,40 @@ func emit(_ label: String, _ doc: [String: Any]) {
     print("shot-json \(label) " + String(data: data, encoding: .utf8)!)
 }
 
+// ── colour space identification (STC-478) ───────────────────────────────────
+func be32(_ v: Int) -> [UInt8] { [UInt8(v >> 24 & 255), UInt8(v >> 16 & 255), UInt8(v >> 8 & 255), UInt8(v & 255)] }
+/// A minimal profile: 128-byte header, one tag table entry, one `desc` tag.
+func profile(tag: [UInt8]) -> Data {
+    var d = [UInt8](repeating: 0, count: 128)
+    d += be32(1) + be32(0x64657363) + be32(144) + be32(tag.count)
+    return Data(d + tag)
+}
+let v2Tag: [UInt8] = be32(0x64657363) + be32(0) + be32(11) + Array("Display P3".utf8) + [0]
+let u16: [UInt8] = "Display P3".utf16.flatMap { [UInt8($0 >> 8), UInt8($0 & 255)] }
+let v4Tag: [UInt8] = be32(0x6D6C7563) + be32(0) + be32(1) + be32(12) + [0x65, 0x6E, 0x55, 0x53]
+    + be32(u16.count) + be32(28) + u16
+check("v2 desc tag is read", iccDescription(profile(tag: v2Tag)) ?? "nil", "Display P3")
+check("v4 mluc tag is read", iccDescription(profile(tag: v4Tag)) ?? "nil", "Display P3")
+check("garbage is not a profile", iccDescription(Data([1, 2, 3])) ?? "nil", "nil")
+check("a name wins over the profile",
+      resolveColorSpaceName(name: "kCGColorSpaceSRGB", iccDescription: "Display P3") ?? "nil", "kCGColorSpaceSRGB")
+check("no name, Display P3 profile -> P3",
+      resolveColorSpaceName(name: nil, iccDescription: "Display P3") ?? "nil", "kCGColorSpaceDisplayP3")
+check("no name, sRGB profile -> sRGB",
+      resolveColorSpaceName(name: nil, iccDescription: "sRGB IEC61966-2.1") ?? "nil", "kCGColorSpaceSRGB")
+check("no name, unknown profile stays unnamed",
+      resolveColorSpaceName(name: nil, iccDescription: "Color LCD") ?? "nil", "nil")
+check("no name, no profile stays unnamed", resolveColorSpaceName(name: nil, iccDescription: nil) ?? "nil", "nil")
+// The real OS profile, so the parser is checked against what CoreGraphics emits.
+if let p3 = CGColorSpace(name: CGColorSpace.displayP3)?.copyICCData() {
+    check("the OS's own Display P3 profile resolves to P3",
+          resolveColorSpaceName(name: nil, iccDescription: iccDescription(p3 as Data)) ?? "nil", "kCGColorSpaceDisplayP3")
+}
+if let s = CGColorSpace(name: CGColorSpace.sRGB)?.copyICCData() {
+    check("the OS's own sRGB profile resolves to sRGB",
+          resolveColorSpaceName(name: nil, iccDescription: iccDescription(s as Data)) ?? "nil", "kCGColorSpaceSRGB")
+}
+
 // (a) a display crop with the pointer on the display
 let a = shotDocument(kind: .displayCrop, capturedAtNs: 1_000_000_000, timebase: (numer: 125, denom: 3),
                      display: display, colorSpace: "kCGColorSpaceDisplayP3",
