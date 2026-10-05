@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage,
+  app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage, clipboard,
   powerMonitor, type IpcMainInvokeEvent,
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
@@ -21,6 +21,7 @@ import { parseShot, shotForWrite } from "@transform/shot.js";
 import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
+import { framingProblem } from "@transform/framing.js";
 import { withTimeout } from "@transform/timeout.js";
 import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
@@ -52,7 +53,8 @@ import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-wind
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
 import type { OptionsState } from "./record-options.js";
-import { recordTimeProject, type RecordTimeChoices } from "./take-project.js";
+import { recordTimeProject, defaultStyleForTake, type RecordTimeChoices } from "./take-project.js";
+import { cleanPipStyle } from "@transform/pip-style.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
@@ -67,7 +69,8 @@ import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
-import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
+import { showUndoToast, showMessageToast, hideToast, closeToastsForQuit } from "./toast-window.js";
+import { noteAppQuitting } from "./window-geometry.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
   ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
@@ -442,8 +445,8 @@ function reconcileWindowRecording(): void {
  * failure must never cost the take (the STC-296 rule).
  *
  * Never `silent`: `thumbnail.skip` means "straight to the clipboard", and a
- * recording has no Copy until STC-395, so a silent one would have no outcome
- * at all (decided with Patrick, 2026-09-30).
+ * recording's Copy is a render with progress (STC-488) that wants the panel
+ * to show it (decided with Patrick, 2026-09-30).
  */
 async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): Promise<boolean> {
   let recording = { durationMs: 0, scope: "Screen" };
@@ -467,27 +470,20 @@ async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): 
 }
 
 /**
- * What the Record bar chose for a take still in flight, by its temp dir
- * (STC-420). Set when `start` succeeds, consumed when the take ends. In
- * memory on purpose: a take recovered after a crash was recorded with defaults
- * as far as this process can tell, which is the safe direction (the highlight
- * is ON, as before).
- */
-const recordTimeChoices = new Map<string, RecordTimeChoices>();
-
-/**
  * The reason Show Clicks reaches the transform at all: the choice is written
  * into the take's project.json (project-13) so `render()` reads it from the
  * project, never from a live setting (take-project.ts has the argument).
+ *
+ * Written right after `start` succeeds (STC-493), not when the take ends: a
+ * take the app or helper dies in is recovered next launch and must come back
+ * with the choice it was recorded with. The helper never touches project.json,
+ * and recovery and the library classify on anchors.json.
  *
  * Never throws and never overwrites. A take with no document is rendered with
  * defaults, so a failure here costs the user's choice, not their recording —
  * logged, not surfaced; and an existing project.json is the editor's and wins.
  */
-async function writeRecordTimeProject(dir: string): Promise<void> {
-  const choices = recordTimeChoices.get(dir);
-  recordTimeChoices.delete(dir);
-  if (!choices) return;
+async function writeRecordTimeProject(dir: string, choices: RecordTimeChoices): Promise<void> {
   try {
     const text = recordTimeProject(choices);
     if (text !== null) await writeFile(join(dir, "project.json"), text, { flag: "wx" });
@@ -506,9 +502,6 @@ async function writeRecordTimeProject(dir: string): Promise<void> {
  */
 async function onTakeEnded(dir: unknown): Promise<void> {
   if (typeof dir !== "string") return;
-  // Before the `quitting` bail: a take that ended while quitting is recovered
-  // next launch, and it should recover with the choice it was recorded with.
-  await writeRecordTimeProject(dir);
   if (quitting) return;
   // The panels hidden for this recording come back FIRST, so the new one is
   // unshifted in FRONT of them: it lands at the corner with the older stack
@@ -942,7 +935,10 @@ function runQuitTeardown(): void {
   // windows die at once; the promise is awaited as a stage of the chain below,
   // because the cleanup (wait out a write, rm the partial) outlives this tick.
   const copyCancelled = cancelAllCopyRenders();
-  hideToast();
+  // Not just `hideToast()`: the awaits below take seconds, and a toast put up
+  // during them is closed by Electron's own quit with its `toast:fit` still in
+  // flight — the use-after-free behind STC-496's stalls.
+  closeToastsForQuit();
   // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
   // is still armed for as long as this chain's own `await`s give the event
   // loop a turn, and reading non-destructively would let it ALSO pick up
@@ -1031,6 +1027,7 @@ app.on("before-quit", (e) => {
   const decision = quitDecision({ unhandled, systemInitiated: systemShuttingDown });
   if (decision === "quit") {
     quitting = true;
+    noteAppQuitting();
     runQuitTeardown();
     return;
   }
@@ -1068,6 +1065,7 @@ app.on("before-quit", (e) => {
       }
     }
     quitting = true;
+    noteAppQuitting();
     runQuitTeardown();
   });
 });
@@ -1351,6 +1349,7 @@ function writeBarOptions(options: OptionsState): void {
   writeSettings(app.getPath("userData"), {
     camera: options.camera, micDeviceUid: options.micDeviceUid,
     systemAudio: options.systemAudio, cameraDeviceUid: options.cameraDeviceUid,
+    recordKeys: options.keys,
     showClicks: options.showClicks,
   });
   send("settings:changed", undefined);
@@ -1365,7 +1364,7 @@ async function recordFlowBody(
     windows, mode: "region", purpose: "record",
     initialOptions: {
       micDeviceUid: stored.micDeviceUid, camera: stored.camera, mics,
-      systemAudio: stored.systemAudio, cameraDeviceUid: stored.cameraDeviceUid, cameras,
+      systemAudio: stored.systemAudio, keys: stored.recordKeys, cameraDeviceUid: stored.cameraDeviceUid, cameras,
       showClicks: stored.showClicks,
     },
     dist: here, renderer: join(here, "..", "renderer"),
@@ -1417,6 +1416,8 @@ async function recordFlowBody(
   // only preference. Only when on; absent is "off" to the helper's
   // parseStartRequest — the existing pin this ticket keeps.
   if (options.systemAudio) startParams.systemAudio = true;
+  // STC-419: from the BAR's Keys toggle. Only when on; absent is "off" to parseStartRequest.
+  if (options.keys) startParams.keys = true;
   let countdownDisplay: number | undefined;
   if (outcome.kind === "window") {
     startParams.windowId = outcome.windowId;
@@ -1508,7 +1509,10 @@ async function recordFlowBody(
     const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup!.startRecording(dir, startParams);
     // Only after a successful start: a refused one leaves no take to describe.
-    recordTimeChoices.set(dir, { showClicks: options.showClicks });
+    await writeRecordTimeProject(dir, {
+      showClicks: options.showClicks,
+      pipStyle: defaultStyleForTake(stored.pipStyle, options.camera === true),
+    });
     console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
@@ -2371,14 +2375,15 @@ ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
 
 /**
  * Every top-level key a `project.json` this build wrote or can read might
- * carry (schema/project-1..12.schema.json's own union, STC-318's "one list"
+ * carry (schema/project-1..15.schema.json's own union, STC-318's "one list"
  * rule applied here by hand since the schemas themselves are not loaded at
  * runtime in this process — see the handler's own comment on why not).
  */
 const KNOWN_PROJECT_FIELDS = new Set([
   "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
   "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
-  "micLevel", "micMuted", "systemAudioMuted", "showClicks",
+  "micLevel", "micMuted", "systemAudioMuted", "showClicks", "keycast",
+  "framing",
 ]);
 
 /**
@@ -2485,6 +2490,11 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
         || !Number.isInteger(p.marginPx) || p.marginPx < 0) {
       throw new Error("project.json: malformed pip");
     }
+    // project-16 (STC-461): the write gate REFUSES a style the transform would
+    // have to drop — a bad style must never reach disk.
+    if (p.style !== undefined && cleanPipStyle(p.style) === null) {
+      throw new Error("project.json: malformed pip.style");
+    }
   }
   if (doc.transform !== undefined) {
     if (!isPlainObject(doc.transform) || !Number.isInteger(doc.transform.version) || doc.transform.version < 1) {
@@ -2516,6 +2526,16 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
   }
   if (doc.showClicks !== undefined && typeof doc.showClicks !== "boolean") {
     throw new Error("project.json: showClicks must be a boolean");
+  }
+  if (doc.keycast !== undefined) {
+    if (!isPlainObject(doc.keycast) || typeof doc.keycast.show !== "boolean"
+        || Object.keys(doc.keycast).some((k) => k !== "show")) {
+      throw new Error("project.json: keycast must be { show: boolean }");
+    }
+  }
+  if (doc.framing !== undefined) {
+    const problem = framingProblem(doc.framing);
+    if (problem) throw new Error(`project.json: ${problem}`);
   }
   if (doc.bookmarks !== undefined) {
     if (!Array.isArray(doc.bookmarks) || !doc.bookmarks.every((b: unknown) => Number.isInteger(b) && (b as number) >= 0)) {

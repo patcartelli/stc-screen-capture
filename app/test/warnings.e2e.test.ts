@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withoutCountdown } from "./_countdown-fixture.js";
-import { toastPage, toastText } from "./_toast.js";
+import { toastPage, toastText, waitForToastText } from "./_toast.js";
 import { MESSAGE_TOAST_MIN_MS } from "../src/toast.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
@@ -74,12 +74,7 @@ describe("a start the helper refuses (STC-315)", () => {
       STC_FAKE_START_ERROR: "event-tap-unavailable",
     });
 
-    // The TEXT is polled, not just the window: the toast window is listed as
-    // soon as it commits navigation, before its DOM exists, and `toastText`
-    // answers "" until then (`_toast.ts`). Reading once after the window
-    // appeared raced that on PR #272's CI run.
-    await expect.poll(() => toastText(app!), { timeout: 10_000 }).toMatch(/Nothing was recorded/);
-    const alert = await toastText(app!);
+    const alert = await waitForToastText(app!);
     // What it cost FIRST. A message that opens with the fix reads as advice
     // about the next take and lets someone assume the one they just made is
     // fine — and there is no take, which is the entire point of the ticket.
@@ -243,10 +238,7 @@ describe("helper warnings during a take", () => {
 
   test("a code the UI has no words for is still shown, by name", async () => {
     const win = await recordWithWarning("some-new-fault");
-    // Polled, not read once: the toast window is listed as soon as it commits
-    // navigation, before its DOM exists, and `toastText` answers "" until then
-    // (`_toast.ts`). A single read raced that on a loaded CI runner.
-    await expect.poll(() => toastText(app!), { timeout: 10_000 }).toContain("some-new-fault");
+    expect(await waitForToastText(app!)).toContain("some-new-fault");
   }, 120_000);
 
   test("a display stream that dies ends the take, and the UI says so (STC-306)", async () => {

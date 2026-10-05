@@ -52,7 +52,8 @@ export type TakeKind = "shot" | "recording";
  * Whether anyone has said yes to it yet. Decides what Save and Trash mean.
  *
  * `fresh` is a capture still sitting in temp storage (STC-393) — nothing has
- * kept it, so Save promotes and Trash is cheap. `library` is STC-294's
+ * kept it, so Save promotes and Trash is cheap. Copy on a recording does NOT
+ * promote (STC-395: the clone outlives the take). `library` is STC-294's
  * re-open: already on disk, already kept, so there is nothing to Save and
  * Trash is destroying something the user chose.
  */

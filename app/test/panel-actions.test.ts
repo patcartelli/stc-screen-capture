@@ -32,7 +32,8 @@ describe("which actions a take has", () => {
 
   test("a take re-opened from the library cannot be saved again", () => {
     // STC-294's re-open: it is already in the library, and a second Save would
-    // be the app inventing work nobody asked for.
+    // be the app inventing work nobody asked for. Copy stays (STC-395) because
+    // it doesn't promote — the clone outlives the original anyway.
     expect(actionsFor({ kind: "shot", origin: "library" })).toEqual(["copy", "edit", "trash"]);
     expect(actionsFor({ kind: "recording", origin: "library" })).toEqual(["copy", "edit", "trash"]);
   });

@@ -109,8 +109,8 @@ describe("a recording gets the panel", () => {
     // The card, not the picture; Edit and Copy (`actionsFor`'s recording set).
     expect(await panel.isVisible("#takecard")).toBe(true);
     expect(await panel.isVisible("#thumbwrap")).toBe(false);
+    expect(await panel.isVisible("#copy")).toBe(true);
     expect(await panel.isVisible("#edit")).toBe(true);
-    expect(await panel.isVisible("#copy")).toBe(true); // STC-488 gave a recording Copy.
     // Duration and scope, read from the take's own anchors.json.
     expect(await panel.textContent("#takemeta")).toBe("0:42 · Safari");
     // Nobody has decided: still in temp, and nothing in the library.

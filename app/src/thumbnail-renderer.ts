@@ -435,6 +435,7 @@ async function run(action: PanelAction): Promise<boolean> {
     // `copyRecording`, outside `busy` (STC-488).
     if (take.kind !== "shot") return false;
     setStatus("Copying…");
+    // A shot's Copy writes image data to the clipboard (still:export).
     if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
     return runExport("copy");
   }
