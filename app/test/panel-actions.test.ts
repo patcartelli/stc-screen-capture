@@ -24,19 +24,19 @@ describe("which actions a take has", () => {
     expect(actionsFor(fresh("shot"))).toEqual(["copy", "save", "edit", "trash"]);
   });
 
-  test("a fresh recording has save, edit and trash — and no copy", () => {
-    // Copy needs a format, and a recording's format picker is STC-395. The only
-    // video in a fresh take is display.mp4, which by design has no cursor in
-    // it: copying that hands someone a file that looks like their recording
-    // and is not.
-    expect(actionsFor(fresh("recording"))).toEqual(["save", "edit", "trash"]);
+  test("a fresh recording has copy, save, edit and trash", () => {
+    // Copy on a recording uses clonefile (STC-395): an APFS copy-on-write clone
+    // that survives deletion of the original take, so the paste still works
+    // after Trash.
+    expect(actionsFor(fresh("recording"))).toEqual(["copy", "save", "edit", "trash"]);
   });
 
   test("a take re-opened from the library cannot be saved again", () => {
     // STC-294's re-open: it is already in the library, and a second Save would
-    // be the app inventing work nobody asked for.
+    // be the app inventing work nobody asked for. Copy stays (STC-395) because
+    // it doesn't promote — the clone outlives the original anyway.
     expect(actionsFor({ kind: "shot", origin: "library" })).toEqual(["copy", "edit", "trash"]);
-    expect(actionsFor({ kind: "recording", origin: "library" })).toEqual(["edit", "trash"]);
+    expect(actionsFor({ kind: "recording", origin: "library" })).toEqual(["copy", "edit", "trash"]);
   });
 
   test("every take has trash, and it is always last", () => {
