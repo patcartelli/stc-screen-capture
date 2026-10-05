@@ -51,7 +51,15 @@ describe("quitting while recording", () => {
     await withoutCountdown(win);
     await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
     await startRecordFlow(app!, win);
-    await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
+    try {
+      await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
+    } catch (e) {
+      // STC-501: a take that ends before this poll sees it leaves nothing but
+      // "expected idle". The command order says what ended it.
+      console.error("[quit.e2e] never recording; helper commands:\n" +
+                    (existsSync(log) ? readFileSync(log, "utf8") : "(none)"));
+      throw e;
+    }
 
     // Playwright's close() quits the app the way Cmd-Q does: through app.quit()
     // and the before-quit listener.

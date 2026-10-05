@@ -42,6 +42,26 @@ describe("HelperSupervisor — keeping a helper alive", () => {
     expect(r.state).toBe("idle");
   }, 20_000);
 
+  test("a stale idle heartbeat read after `started` does not end the take (STC-501)", async () => {
+    // The heartbeat (stdout) and the `started` reply (fd3) are separate pipes,
+    // so an idle line written BEFORE the helper handled `start` can land after
+    // it. The helper IS recording; only the reliable channel may say otherwise.
+    process.env.STC_FAKE_STALE_IDLE = "1";
+    try {
+      const s = sup({}, FAKE_BIN);
+      await s.ready();
+      const ended: unknown[] = [];
+      s.on("take-ended", (e) => ended.push(e));
+      s.on("recording-ended", (e) => ended.push(e));
+      await s.startRecording(session());
+      // Several heartbeats' worth, so the stale line has certainly been read
+      // and any status check it provoked has been answered.
+      await sleep(400);
+      expect(ended).toEqual([]);
+      expect(s.state).toBe("recording");
+    } finally { delete process.env.STC_FAKE_STALE_IDLE; }
+  }, 20_000);
+
   test("a crash mid-recording surfaces as a lost recording, not a silent reset", async () => {
     // Against the REAL helper this has to fake the recording, and the fake is
     // one the helper contradicts: it is idle, its heartbeat says so, and the
