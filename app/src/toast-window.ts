@@ -71,6 +71,27 @@ export interface ShowUndoToastOptions extends ToastWindowOptions {
 let current: { win: BrowserWindow; timer: NodeJS.Timeout } | undefined;
 
 /**
+ * Set once the quit teardown begins; never cleared, because a quit that has
+ * begun its teardown does not come back (STC-496).
+ *
+ * `runQuitTeardown` awaits pending trash, the panels and the helper's shutdown
+ * before it calls `app.quit()`, and a warning raised in that gap used to put
+ * up a NEW toast. Electron's own quit then closed that window asynchronously,
+ * and a `toast:fit` from its page landed on a native window host already
+ * freed while `isDestroyed()` still said false: an `EXC_BAD_ACCESS` in
+ * `ui::Layer::SetBounds`, one in every stalled CI run on 2026-10-02, and
+ * every Electron launch after it hung. A notice nobody will see is not worth
+ * a window during a quit.
+ */
+let quitting = false;
+
+/** The quit teardown's first step: take any toast down and refuse new ones. */
+export function closeToastsForQuit(): void {
+  quitting = true;
+  hideToast();
+}
+
+/**
  * Everything the undo and message toasts share: replacing whatever toast is
  * already up, positioning at the chosen corner, and the window's own
  * construction. Callers append their own mode's query params, hand in their
@@ -126,6 +147,7 @@ function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string
  * duration written twice.
  */
 export function showUndoToast(opts: ShowUndoToastOptions): void {
+  if (quitting) return;
   const win = buildToastWindow(opts, { mode: "undo", dir: opts.dir, ms: String(UNDO_WINDOW_MS) },
                                UNDO_TOAST_SIZE);
   const timer = setTimeout(() => {
@@ -159,7 +181,8 @@ export function showUndoToast(opts: ShowUndoToastOptions): void {
  * there is no promise that an early close would abandon.
  */
 export function showMessageToast(message: ToastInput, opts: ToastWindowOptions): void {
-  const m = toToastMessage(message);
+  if (quitting) return;
+  const m =toToastMessage(message);
   const ms = messageToastMs(m);
   const query: Record<string, string> = { mode: "message", text: m.body, ms: String(ms) };
   if (m.title) query.title = m.title;
@@ -188,7 +211,14 @@ export function showMessageToast(message: ToastInput, opts: ToastWindowOptions):
   };
   ipcMain.on("toast:fit", onFit);
   const fallback = setTimeout(reveal, FIT_FALLBACK_MS);
-  win.on("closed", () => { ipcMain.removeListener("toast:fit", onFit); clearTimeout(fallback); });
+  // Stop listening at "close", not only "closed": a window Electron closes
+  // itself (the app's quit) tears down its native host while `isDestroyed()`
+  // still says false, and a `toast:fit` already in flight must not reach
+  // `setBounds` in that gap (STC-496). `destroy()` skips "close", so
+  // "closed" stays for `hideToast`'s path.
+  const stop = () => { ipcMain.removeListener("toast:fit", onFit); clearTimeout(fallback); };
+  win.once("close", stop);
+  win.on("closed", stop);
 
   const timer = setTimeout(hideToast, ms);
   current = { win, timer };

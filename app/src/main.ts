@@ -65,7 +65,7 @@ import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
-import { showUndoToast, showMessageToast, hideToast } from "./toast-window.js";
+import { showUndoToast, showMessageToast, hideToast, closeToastsForQuit } from "./toast-window.js";
 import { noteAppQuitting } from "./window-geometry.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
@@ -919,7 +919,10 @@ function runQuitTeardown(): void {
   // recording it was counting down to never happens — which is the only safe
   // answer when the process is going away underneath it.
   cancelCountdown();
-  hideToast();
+  // Not just `hideToast()`: the awaits below take seconds, and a toast put up
+  // during them is closed by Electron's own quit with its `toast:fit` still in
+  // flight — the use-after-free behind STC-496's stalls.
+  closeToastsForQuit();
   // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
   // is still armed for as long as this chain's own `await`s give the event
   // loop a turn, and reading non-destructively would let it ALSO pick up
