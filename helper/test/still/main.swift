@@ -211,13 +211,18 @@ func be32(_ v: Int) -> [UInt8] { [UInt8(v >> 24 & 255), UInt8(v >> 16 & 255), UI
 /// A minimal profile: 128-byte header, one tag table entry, one `desc` tag.
 func profile(tag: [UInt8]) -> Data {
     var d = [UInt8](repeating: 0, count: 128)
-    d += be32(1) + be32(0x64657363) + be32(144) + be32(tag.count)
-    return Data(d + tag)
+    d += be32(1); d += be32(0x64657363); d += be32(144); d += be32(tag.count)
+    d += tag
+    return Data(d)
 }
-let v2Tag: [UInt8] = be32(0x64657363) + be32(0) + be32(11) + Array("Display P3".utf8) + [0]
+var v2Tag: [UInt8] = []
+v2Tag += be32(0x64657363); v2Tag += be32(0); v2Tag += be32(11)
+v2Tag += Array("Display P3".utf8); v2Tag.append(0)
 let u16: [UInt8] = "Display P3".utf16.flatMap { [UInt8($0 >> 8), UInt8($0 & 255)] }
-let v4Tag: [UInt8] = be32(0x6D6C7563) + be32(0) + be32(1) + be32(12) + [0x65, 0x6E, 0x55, 0x53]
-    + be32(u16.count) + be32(28) + u16
+var v4Tag: [UInt8] = []
+v4Tag += be32(0x6D6C7563); v4Tag += be32(0); v4Tag += be32(1); v4Tag += be32(12)
+v4Tag += [0x65, 0x6E, 0x55, 0x53]
+v4Tag += be32(u16.count); v4Tag += be32(28); v4Tag += u16
 check("v2 desc tag is read", iccDescription(profile(tag: v2Tag)) ?? "nil", "Display P3")
 check("v4 mluc tag is read", iccDescription(profile(tag: v4Tag)) ?? "nil", "Display P3")
 check("garbage is not a profile", iccDescription(Data([1, 2, 3])) ?? "nil", "nil")
