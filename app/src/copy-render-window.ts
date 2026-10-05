@@ -48,6 +48,8 @@ interface Job {
   state: "live" | "settling";
   /** The in-flight `copy:write`, so cleanup can wait for it. */
   writing?: Promise<void>;
+  /** Render timeout watchdog handle (STC-488 headless CI fix). */
+  renderTimeoutHandle?: NodeJS.Timeout;
   /** The rename ran: outPath belongs to this job and is removed if it settles unsuccessfully. */
   renamed: boolean;
   settle(o: CopyOutcome): void;
@@ -93,13 +95,24 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   if (existing?.state === "live") return existing.settled;
   // A job still cleaning up owns this take's files; start only once it is done.
   if (existing) return existing.settled.then(() => startCopyRender(opts));
+
+  // Headless/Xvfb on CI: hidden windows may not render frames. Watchdog ensures
+  // the job settles even if copy:write never arrives, preventing test hangs.
+  // Default 120s matches the e2e test's inner bounds; override with STC_COPY_RENDER_TIMEOUT_MS.
+  const RENDER_TIMEOUT_MS = Number(process.env.STC_COPY_RENDER_TIMEOUT_MS) || 120_000;
+
   const win = new BrowserWindow({
-    show: false, width: 64, height: 64, skipTaskbar: true,
+    // STC_COPY_RENDER_VISIBLE=1 for CI/headless: shows the render window for debugging
+    show: process.env.STC_COPY_RENDER_VISIBLE === "1",
+    width: process.env.STC_COPY_RENDER_VISIBLE === "1" ? 800 : 64,
+    height: process.env.STC_COPY_RENDER_VISIBLE === "1" ? 600 : 64,
+    skipTaskbar: process.env.STC_COPY_RENDER_VISIBLE !== "1",
     webPreferences: {
       preload: join(opts.dist, "copy-render-preload.cjs"),
       contextIsolation: true, nodeIntegration: false,
-      // A hidden window is throttled by default, which would stretch a
-      // 40 s render well past it.
+      // Hidden windows are throttled by default. backgroundThrottling: false
+      // doesn't guarantee rendering on headless systems (Xvfb), so render
+      // timeout is necessary. Visible windows render normally.
       backgroundThrottling: false,
     },
   });
@@ -107,10 +120,17 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   let resolve!: (o: CopyOutcome) => void;
   const settled = new Promise<CopyOutcome>((res) => { resolve = res; });
   const job: Job = {
-    opts, win, senderId, cancelled: false, state: "live", renamed: false, settled,
+    opts, win, senderId, cancelled: false, state: "live", renderTimeoutHandle: undefined, renamed: false, settled,
     settle: (o) => {
       if (job.state !== "live") return;               // one outcome per job
       job.state = "settling";
+
+      // Clear the render timeout watchdog
+      if (job.renderTimeoutHandle) {
+        clearTimeout(job.renderTimeoutHandle);
+        job.renderTimeoutHandle = undefined;
+      }
+
       bySender.delete(senderId);
       opts.revoke(senderId);
       if (!win.isDestroyed()) win.destroy();
@@ -131,6 +151,20 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   jobs.set(opts.takeDir, job);
   bySender.set(senderId, job);
   opts.grant(senderId, opts.takeDir);
+
+  // Start render timeout watchdog. If copy:write doesn't arrive within
+  // RENDER_TIMEOUT_MS, settle as a timeout error. This prevents hangs on CI
+  // where hidden windows don't render (Xvfb, headless Docker, etc).
+  // The timeout is cancelled when the job settles (above in settle()).
+  job.renderTimeoutHandle = setTimeout(() => {
+    if (job.state === "live") {
+      job.settle({
+        ok: false,
+        detail: `render timeout after ${RENDER_TIMEOUT_MS}ms (likely headless/hidden window rendering issue)`,
+      });
+    }
+  }, RENDER_TIMEOUT_MS);
+
   // Destroyed by anything but settle (settle's own destroy lands here too, and
   // is a no-op: a job settles once).
   win.on("closed", () => job.settle({ ok: false, detail: "the render window closed" }));
