@@ -16,6 +16,7 @@ extraResources:
 mac:
   target:
     - target: dir
+  icon: build/Capture.icns
   identity: "STC Dev Signing"
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist

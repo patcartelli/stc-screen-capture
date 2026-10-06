@@ -1,5 +1,6 @@
 # build output
 helper/build/
+build/
 *.o
 node_modules/
 app/dist/

@@ -12,7 +12,7 @@
     "gate:once": "node scripts/gate.mjs",
     "app:build": "node app/build.mjs",
     "app:start": "npm run app:build && electron .",
-    "app:package": "npm run app:build && helper/build.sh && electron-builder --mac dir --publish never",
+    "app:package": "npm run app:build && bash scripts/build-app-icon.sh && helper/build.sh && electron-builder --mac dir --publish never",
     "gate:export": "node scripts/gate-retry.mjs scripts/export-gate.mjs",
     "test:capture": "vitest run --config vitest.grant.config.ts",
     "gate:seek": "node scripts/gate-retry.mjs scripts/seek-gate.mjs",
@@ -21,7 +21,9 @@
     "gate:still": "node scripts/gate-retry.mjs scripts/still-gate.mjs",
     "test:slow": "vitest run --config vitest.slow.config.ts",
     "merge": "node scripts/merge-when-green.mjs",
-    "ticket": "NODE_USE_ENV_PROXY=1 node scripts/ticket-check.mjs"
+    "ticket": "NODE_USE_ENV_PROXY=1 node scripts/ticket-check.mjs",
+    "build:icon-png": "node scripts/svg-to-png.mjs",
+    "build:icons": "node scripts/svg-to-png.mjs && bash scripts/build-app-icon.sh"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
