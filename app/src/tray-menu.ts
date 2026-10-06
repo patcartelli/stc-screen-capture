@@ -87,43 +87,97 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
 // ── the icon ────────────────────────────────────────────────────────────────
 
 /**
- * The glyph: a selection marquee's four corner brackets.
+ * Menu bar glyph (STC-503): a video camera icon.
  *
  * Drawn from geometry rather than shipped as a PNG, for two reasons. A binary
  * asset is the one thing in this repo a reviewer cannot read in the diff, and
  * a menu-bar icon is small enough that being one pixel off is the whole
  * difference between crisp and smudged — so the shape is a function of the
- * size, and `tray-menu.test.ts` checks the properties that make it legible
- * (symmetric, on the frame, corners only) at both scales.
+ * size, and properties that make it legible are tested at both scales.
  *
- * Returns one byte of alpha per pixel, row-major. A macOS template image is
- * pure alpha: the system paints it black or white to match the menu bar, which
- * is why no colour is chosen here.
+ * A stylized camera body with a lens, recognizable in both light and dark
+ * modes as a template image. Returns one byte of alpha per pixel, row-major.
+ * A macOS template image is pure alpha: the system paints it black or white
+ * to match the menu bar, which is why no colour is chosen here.
  */
 export function marqueeMask(size: number): Uint8Array {
   const mask = new Uint8Array(size * size);
-  const inset = Math.round(size / 8);
-  const arm = Math.round(size / 4);
-  const thick = Math.max(1, Math.round(size / 16));
-  const lo = inset;
-  const hi = size - 1 - inset;
-
+  const thick = Math.max(1, Math.round(size / 8));
   const set = (x: number, y: number) => {
     if (x < 0 || y < 0 || x >= size || y >= size) return;
     mask[y * size + x] = 255;
   };
-  // Each corner is a horizontal arm and a vertical arm of `thick` lines,
-  // grown INWARD from the frame so the bracket never leaves the rect.
-  for (const [cx, dx] of [[lo, 1], [hi, -1]] as const) {
-    for (const [cy, dy] of [[lo, 1], [hi, -1]] as const) {
-      for (let t = 0; t < thick; t++) {
-        for (let i = 0; i < arm; i++) {
-          set(cx + dx * i, cy + dy * t);
-          set(cx + dx * t, cy + dy * i);
+
+  if (size <= 16) {
+    // Small size: simplified camera outline (body only)
+    const x0 = Math.round(size * 0.2);
+    const y0 = Math.round(size * 0.35);
+    const w = Math.round(size * 0.6);
+    const h = Math.round(size * 0.4);
+
+    // Camera body (rectangle with rounded corners)
+    for (let y = y0; y < y0 + h; y++) {
+      for (let x = x0; x < x0 + w; x++) {
+        set(x, y);
+      }
+    }
+
+    // Lens (small circle)
+    const cx = Math.round(x0 + w / 2);
+    const cy = Math.round(y0 + h / 2);
+    const r = Math.round(size * 0.12);
+    for (let y = cy - r; y <= cy + r; y++) {
+      for (let x = cx - r; x <= cx + r; x++) {
+        const dx = x - cx;
+        const dy = y - cy;
+        if (dx * dx + dy * dy <= r * r) set(x, y);
+      }
+    }
+  } else {
+    // Larger size: detailed camera with viewfinder
+    const bodyLeft = Math.round(size * 0.15);
+    const bodyTop = Math.round(size * 0.3);
+    const bodyWidth = Math.round(size * 0.5);
+    const bodyHeight = Math.round(size * 0.45);
+
+    // Camera body outline
+    for (let y = bodyTop; y < bodyTop + bodyHeight; y++) {
+      for (let x = bodyLeft; x < bodyLeft + bodyWidth; x++) {
+        // Outer border
+        if (y === bodyTop || y === bodyTop + bodyHeight - 1 ||
+            x === bodyLeft || x === bodyLeft + bodyWidth - 1) {
+          set(x, y);
         }
       }
     }
+
+    // Lens (circle in center)
+    const lensX = Math.round(bodyLeft + bodyWidth / 2);
+    const lensY = Math.round(bodyTop + bodyHeight / 2);
+    const lensR = Math.round(size * 0.15);
+    for (let y = lensY - lensR; y <= lensY + lensR; y++) {
+      for (let x = lensX - lensR; x <= lensX + lensR; x++) {
+        const dx = x - lensX;
+        const dy = y - lensY;
+        const distSq = dx * dx + dy * dy;
+        // Lens ring (filled circle)
+        if (distSq <= lensR * lensR) {
+          set(x, y);
+        }
+      }
+    }
+
+    // Viewfinder notch at top right
+    const notchSize = Math.round(size * 0.1);
+    const notchX = bodyLeft + bodyWidth - notchSize - 2;
+    const notchY = bodyTop + 2;
+    for (let y = notchY; y < notchY + notchSize; y++) {
+      for (let x = notchX; x < notchX + notchSize; x++) {
+        set(x, y);
+      }
+    }
   }
+
   return mask;
 }
 
