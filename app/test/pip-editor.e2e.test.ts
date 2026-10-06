@@ -71,7 +71,10 @@ describe("the editor's Camera popover (STC-461)", () => {
     await expect.poll(() => editorWin.evaluate(() => document.getElementById("pippanel")!.matches(":popover-open")),
       { timeout: 5_000 }).toBe(true);
     // ...and re-sided: the PiP is top-left now, so the panel is on the right.
-    expect(await editorWin.evaluate(() => document.getElementById("pippanel")!.dataset.side)).toBe("right");
+    // endPipDrag re-sides in a setTimeout(0), and the panel may already read as
+    // :popover-open before it runs, so the poll above does not order this read.
+    await expect.poll(() => editorWin.evaluate(() => document.getElementById("pippanel")!.dataset.side),
+      { timeout: 5_000 }).toBe("right");
   }, 120_000);
 
   test("reframe: dragging the window right moves framing.x right, and Done saves it", async () => {
