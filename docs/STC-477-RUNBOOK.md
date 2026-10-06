@@ -238,7 +238,17 @@ node scripts/compare-still-exports.mjs --dir "$SAVE"
 ```
 
 **Expected: exit 1**, `FAIL — pixels: N in FLAT areas differ by more than 4 …`, with NO `note:` line.
-If the note appears, STC-478 did not take: stop.
+If the note appears, STC-478 did not take: stop. Two things made it appear on 2026-10-06, check both
+before blaming the helper:
+
+- **The capture was not on a P3 display.** With the Mac's lid closed on an external monitor the only
+  display is that monitor (an HP Z27, sRGB), and `shot.json`'s `display.id` is its id. Look at
+  `display.id` and `sips -g profile frame.png` in the newest `raw/<stamp>/` before comparing.
+- **STC-511.** On the real built-in screen the helper once recorded no colour space either, because
+  it named the profile by its description ("Display") instead of its colorants. Fixed in STC-511;
+  a helper built before it prints the `note:` on a genuine P3 capture.
+- **`thumbnail.skip` (straight to clipboard) must be off.** With it on there is no panel, so no panel
+  Save: one PNG appears, not two, and the script compares the wrong pair.
 
 Move those aside as in §2. Then the fix, on whatever has #245 (`origin/master`
 once merged, or the branch), at `1x`, with the same `helper/build/stc-helper`:
