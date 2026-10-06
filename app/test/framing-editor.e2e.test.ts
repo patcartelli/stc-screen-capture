@@ -40,10 +40,13 @@ describe("the export dialog's Frame control (STC-396)", () => {
 
     await editorWin.selectOption("#framepreset", "solid");
     await expect.poll(() => readProject(takeDir)?.framing?.preset, { timeout: 10_000 }).toBe("solid");
-    expect(await editorWin.isVisible("#framecolor")).toBe(true);
+    // STC-514: setFraming writes project.json BEFORE updateFramingUI() shows or
+    // hides #framecolor, so the disk poll above can return while the DOM is
+    // still one step behind. Poll the DOM itself; a one-shot read races it.
+    await expect.poll(() => editorWin.isVisible("#framecolor"), { timeout: 10_000 }).toBe(true);
 
     await editorWin.selectOption("#framepreset", "none");
     await expect.poll(() => readProject(takeDir)?.framing, { timeout: 10_000 }).toBeUndefined();
-    expect(await editorWin.isHidden("#framecolor")).toBe(true);
+    await expect.poll(() => editorWin.isHidden("#framecolor"), { timeout: 10_000 }).toBe(true);
   }, 120_000);
 });
