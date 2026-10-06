@@ -245,6 +245,70 @@ if let s = CGColorSpace(name: CGColorSpace.sRGB)?.copyICCData() {
           resolveColorSpaceName(name: nil, iccDescription: iccDescription(s as Data)) ?? "nil", "kCGColorSpaceSRGB")
 }
 
+// ── colour space by colorants (STC-511) ─────────────────────────────────────
+// STC-478 named a profile by its DESCRIPTION, and the real built-in screen's profile says only
+// "Display" (CGColorSpace calls it "Color LCD"), so a real P3 still recorded no colour space at
+// all. What a profile IS is its colorants; what it is CALLED is up to whoever made it.
+func s15(_ v: Double) -> [UInt8] { be32(Int(UInt32(bitPattern: Int32((v * 65536).rounded())))) }
+/// A matrix/TRC-less RGB profile: a `desc` tag and the three colorant tags, D50-adapted XYZ.
+func rgbProfile(desc: String, r: [Double], g: [Double], b: [Double]) -> Data {
+    var descTag: [UInt8] = be32(0x64657363) + be32(0) + be32(desc.utf8.count + 1)
+    descTag += Array(desc.utf8); descTag.append(0)
+    func xyz(_ v: [Double]) -> [UInt8] { be32(0x58595A20) + be32(0) + s15(v[0]) + s15(v[1]) + s15(v[2]) }
+    let first = 128 + 4 + 4 * 12
+    var table: [UInt8] = be32(4)
+    var body: [UInt8] = []
+    var off = first
+    for (sig, tag) in [(0x64657363, descTag), (0x7258595A, xyz(r)), (0x6758595A, xyz(g)), (0x6258595A, xyz(b))] {
+        table += be32(sig) + be32(off) + be32(tag.count)
+        body += tag; off += tag.count
+    }
+    return Data([UInt8](repeating: 0, count: 128) + table + body)
+}
+let p3R = [0.5151, 0.2412, -0.0011], p3G = [0.2920, 0.6922, 0.0419], p3B = [0.1571, 0.0666, 0.7841]
+let srgbR = [0.4361, 0.2225, 0.0139], srgbG = [0.3851, 0.7169, 0.0971], srgbB = [0.1431, 0.0606, 0.7141]
+func nudged(_ v: [Double], _ d: Double) -> [Double] { v.map { $0 + d } }
+
+check("the colorants are read back",
+      iccColorants(rgbProfile(desc: "x", r: p3R, g: p3G, b: p3B)).map { $0.map { ($0 * 10000).rounded() / 10000 } } ?? [],
+      p3R + p3G + p3B)
+check("a profile with no colorant tags has none", iccColorants(profile(tag: v2Tag)) == nil, true)
+check("garbage has no colorants", iccColorants(Data([1, 2, 3])) == nil, true)
+
+let builtIn = rgbProfile(desc: "Display", r: p3R, g: p3G, b: p3B)
+check("the built-in screen's profile (described just \"Display\") is P3",
+      resolveColorSpaceName(name: nil, iccDescription: iccDescription(builtIn), iccData: builtIn) ?? "nil",
+      "kCGColorSpaceDisplayP3")
+let monitor = rgbProfile(desc: "HP Z27", r: srgbR, g: srgbG, b: srgbB)
+check("an sRGB monitor's profile (described \"HP Z27\") is sRGB",
+      resolveColorSpaceName(name: nil, iccDescription: iccDescription(monitor), iccData: monitor) ?? "nil",
+      "kCGColorSpaceSRGB")
+let wide = rgbProfile(desc: "Display", r: [0.6097, 0.3111, 0.0195], g: [0.2053, 0.6257, 0.0609], b: [0.1492, 0.0632, 0.7446])
+check("a space that is neither (Adobe RGB colorants) stays unnamed",
+      resolveColorSpaceName(name: nil, iccDescription: "Display", iccData: wide) ?? "nil", "nil")
+check("a small calibration drift still matches P3",
+      resolveColorSpaceName(name: nil, iccDescription: nil,
+                            iccData: rgbProfile(desc: "d", r: nudged(p3R, 0.004), g: nudged(p3G, -0.004), b: nudged(p3B, 0.004))) ?? "nil",
+      "kCGColorSpaceDisplayP3")
+check("a large departure does not",
+      resolveColorSpaceName(name: nil, iccDescription: nil,
+                            iccData: rgbProfile(desc: "d", r: nudged(p3R, 0.03), g: p3G, b: p3B)) ?? "nil", "nil")
+let liar = rgbProfile(desc: "Display P3", r: srgbR, g: srgbG, b: srgbB)
+check("the colorants outrank a misleading description",
+      resolveColorSpaceName(name: nil, iccDescription: iccDescription(liar), iccData: liar) ?? "nil", "kCGColorSpaceSRGB")
+check("no colorants in the data falls back to the description",
+      resolveColorSpaceName(name: nil, iccDescription: "Display P3", iccData: Data([1, 2, 3])) ?? "nil", "kCGColorSpaceDisplayP3")
+check("a name still wins over colorants",
+      resolveColorSpaceName(name: "kCGColorSpaceSRGB", iccDescription: nil, iccData: builtIn) ?? "nil", "kCGColorSpaceSRGB")
+if let p3 = CGColorSpace(name: CGColorSpace.displayP3)?.copyICCData() {
+    check("the OS's own Display P3 profile resolves to P3 by colorants alone",
+          resolveColorSpaceName(name: nil, iccDescription: nil, iccData: p3 as Data) ?? "nil", "kCGColorSpaceDisplayP3")
+}
+if let s = CGColorSpace(name: CGColorSpace.sRGB)?.copyICCData() {
+    check("the OS's own sRGB profile resolves to sRGB by colorants alone",
+          resolveColorSpaceName(name: nil, iccDescription: nil, iccData: s as Data) ?? "nil", "kCGColorSpaceSRGB")
+}
+
 // (a) a display crop with the pointer on the display
 let a = shotDocument(kind: .displayCrop, capturedAtNs: 1_000_000_000, timebase: (numer: 125, denom: 3),
                      display: display, colorSpace: "kCGColorSpaceDisplayP3",
