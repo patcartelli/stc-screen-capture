@@ -108,7 +108,7 @@ export function marqueeMask(size: number): Uint8Array {
   // as a camera: an earlier version painted a solid lens over a solid body,
   // which is invisible, and no amount of boldness fixes a shape with no detail.
   const u = size / 16;
-  const inset = Math.round(size / 8);
+  const inset = Math.round(size / 16);
   const half = size / 2;
 
   for (let y = 0; y < size; y++) {
@@ -117,12 +117,12 @@ export function marqueeMask(size: number): Uint8Array {
       // construction, which is cheaper to trust than four mirrored writes.
       const dx = Math.abs(x + 0.5 - half);
       const dy = Math.abs(y + 0.5 - half);
-      const inBody = dx <= 6 * u && dy <= 5 * u;
+      const inBody = dx <= 7 * u && dy <= 5.5 * u;
       // Knock the four corners off the body so it is not a bare slab.
-      const corner = dx > 6 * u - 1 * u && dy > 5 * u - 1 * u;
+      const corner = dx > 6 * u && dy > 4.5 * u;
       if (!inBody || corner) continue;
       const d = Math.hypot(dx, dy);
-      const ring = d > 1.6 * u && d < 3.6 * u;
+      const ring = d > 1.8 * u && d < 4 * u;
       if (ring) continue;
       if (x < inset || x > size - 1 - inset || y < inset || y > size - 1 - inset) continue;
       mask[y * size + x] = 255;

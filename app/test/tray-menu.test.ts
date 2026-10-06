@@ -113,7 +113,7 @@ describe("the icon", () => {
       });
 
       test("never leaves the inset rect, so nothing is clipped by the menu bar", () => {
-        const inset = Math.round(size / 8);
+        const inset = Math.round(size / 16);
         for (let y = 0; y < size; y++) {
           for (let x = 0; x < size; x++) {
             if (!at(mask, size, x, y)) continue;
