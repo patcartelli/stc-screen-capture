@@ -55,8 +55,11 @@ print("TAG_MATRIX=\(tag(kCMFormatDescriptionExtension_YCbCrMatrix))")
 
 let gen = AVAssetImageGenerator(asset: asset)
 gen.appliesPreferredTrackTransform = true
-gen.requestedTimeToleranceBefore = .zero
-gen.requestedTimeToleranceAfter = .zero
+// NOT zero tolerance, unlike frame-probe: this asks what colour a frame holds,
+// not which frame. A static screen is VFR-sparse (a flat take can be one or two
+// frames), and an exact-time request between them fails with -11832.
+gen.requestedTimeToleranceBefore = .positiveInfinity
+gen.requestedTimeToleranceAfter = .positiveInfinity
 var actual = CMTime.zero
 let image: CGImage
 do { image = try gen.copyCGImage(at: CMTime(seconds: t, preferredTimescale: 600), actualTime: &actual) }

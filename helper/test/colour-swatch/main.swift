@@ -21,6 +21,19 @@ for (i, colour) in [NSColor(displayP3Red: 0, green: 1, blue: 0, alpha: 1),
     v.layer?.backgroundColor = colour.cgColor
     win.contentView?.addSubview(v)
 }
+// A moving bar across the top 5%, clear of the sampled rects. A perfectly still
+// screen is a VFR take of one or two frames, which is not the question here;
+// frames have to keep arriving for the take to look like a real one.
+let bar = NSView(frame: NSRect(x: 0, y: h * 0.95, width: w * 0.05, height: h * 0.05))
+bar.wantsLayer = true
+bar.layer?.backgroundColor = NSColor.black.cgColor
+win.contentView?.addSubview(bar)
+var phase = 0.0
+Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { _ in
+    phase += 0.02
+    let x = (sin(phase) * 0.5 + 0.5) * Double(w) * 0.95
+    bar.setFrameOrigin(NSPoint(x: x, y: h * 0.95))
+}
 win.makeKeyAndOrderFront(nil)
 print("SWATCH_READY")
 fflush(stdout)

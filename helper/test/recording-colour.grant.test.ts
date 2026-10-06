@@ -69,6 +69,7 @@ describe("recording colour (STC-510)", () => {
         proc.stdin!.write(JSON.stringify({ cmd: "stop", seq: 2 }) + "\n");
         const stopped = await waitFor(() => fd3.find((l) => l.seq === 2), 30_000, "stopped");
         expect(stopped.ev).toBe("stopped");
+        process.stderr.write(`[colour] stopped: ${JSON.stringify(stopped)}\n`);
       } finally { proc.kill("SIGKILL"); }
     } finally { swatch.kill("SIGKILL"); }
 
@@ -76,10 +77,11 @@ describe("recording colour (STC-510)", () => {
     const w = capture.width as number, h = capture.height as number;
     // Well inside each half, away from the seam and the edges.
     const rect = (fx: number) => [Math.round(w * fx), Math.round(h * 0.4), Math.round(w * 0.3), Math.round(h * 0.2)];
+    process.stderr.write(`[colour] take: ${dir}\n`); // before the probe, so a probe failure still names the take
     const out = await runSwiftHarness({
       label: "colour-probe",
       sources: ["helper/test/colour-probe/main.swift"],
-      args: [join(dir, "display.mp4"), "2", ...rect(0.1), ...rect(0.6)].map(String),
+      args: [join(dir, "display.mp4"), "0", ...rect(0.1), ...rect(0.6)].map(String),
     });
 
     process.stderr.write(`[colour] take: ${dir}\n[colour] capture ${w}x${h}\n${out}`);
