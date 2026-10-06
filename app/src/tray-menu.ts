@@ -102,78 +102,62 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
  */
 export function marqueeMask(size: number): Uint8Array {
   const mask = new Uint8Array(size * size);
-  const thick = Math.max(1, Math.round(size / 8));
-  const set = (x: number, y: number) => {
+
+  // Helper: set a pixel symmetrically (both mirror positions at once)
+  const setSym = (x: number, y: number) => {
     if (x < 0 || y < 0 || x >= size || y >= size) return;
     mask[y * size + x] = 255;
+    // Mirror horizontally and vertically for perfect symmetry
+    if (x !== size - 1 - x) mask[y * size + (size - 1 - x)] = 255;
+    if (y !== size - 1 - y) mask[(size - 1 - y) * size + x] = 255;
+    if (x !== size - 1 - x && y !== size - 1 - y) {
+      mask[(size - 1 - y) * size + (size - 1 - x)] = 255;
+    }
   };
 
-  if (size <= 16) {
-    // Small size: simplified camera outline (body only)
-    const x0 = Math.round(size * 0.2);
-    const y0 = Math.round(size * 0.35);
-    const w = Math.round(size * 0.6);
-    const h = Math.round(size * 0.4);
+  const center = Math.floor(size / 2);
+  const inset = Math.round(size / 8);
 
-    // Camera body (rectangle with rounded corners)
-    for (let y = y0; y < y0 + h; y++) {
-      for (let x = x0; x < x0 + w; x++) {
-        set(x, y);
+  if (size <= 16) {
+    // Small size: simplified camera (body + lens)
+    const bodyHalf = 2;
+    const lensR = 1;
+
+    // Camera body (filled rectangle, centered)
+    for (let y = center - bodyHalf; y <= center + bodyHalf; y++) {
+      for (let x = center - bodyHalf - 1; x <= center + bodyHalf + 1; x++) {
+        setSym(x, y);
       }
     }
 
-    // Lens (small circle)
-    const cx = Math.round(x0 + w / 2);
-    const cy = Math.round(y0 + h / 2);
-    const r = Math.round(size * 0.12);
-    for (let y = cy - r; y <= cy + r; y++) {
-      for (let x = cx - r; x <= cx + r; x++) {
-        const dx = x - cx;
-        const dy = y - cy;
-        if (dx * dx + dy * dy <= r * r) set(x, y);
+    // Lens (circle at center)
+    for (let dy = -lensR; dy <= lensR; dy++) {
+      for (let dx = -lensR; dx <= lensR; dx++) {
+        if (dx * dx + dy * dy <= lensR * lensR) {
+          setSym(center + dx, center + dy);
+        }
       }
     }
   } else {
-    // Larger size: detailed camera with viewfinder
-    const bodyLeft = Math.round(size * 0.15);
-    const bodyTop = Math.round(size * 0.3);
-    const bodyWidth = Math.round(size * 0.5);
-    const bodyHeight = Math.round(size * 0.45);
+    // Larger size: camera body outline + lens
+    const bodyHalf = Math.round(size * 0.2);
+    const lensR = Math.round(size * 0.1);
 
-    // Camera body outline
-    for (let y = bodyTop; y < bodyTop + bodyHeight; y++) {
-      for (let x = bodyLeft; x < bodyLeft + bodyWidth; x++) {
-        // Outer border
-        if (y === bodyTop || y === bodyTop + bodyHeight - 1 ||
-            x === bodyLeft || x === bodyLeft + bodyWidth - 1) {
-          set(x, y);
-        }
+    // Camera body rectangle outline
+    for (let y = center - bodyHalf; y <= center + bodyHalf; y++) {
+      for (let x = center - bodyHalf - 1; x <= center + bodyHalf + 1; x++) {
+        const isEdge = (y === center - bodyHalf || y === center + bodyHalf ||
+                        x === center - bodyHalf - 1 || x === center + bodyHalf + 1);
+        if (isEdge) setSym(x, y);
       }
     }
 
-    // Lens (circle in center)
-    const lensX = Math.round(bodyLeft + bodyWidth / 2);
-    const lensY = Math.round(bodyTop + bodyHeight / 2);
-    const lensR = Math.round(size * 0.15);
-    for (let y = lensY - lensR; y <= lensY + lensR; y++) {
-      for (let x = lensX - lensR; x <= lensX + lensR; x++) {
-        const dx = x - lensX;
-        const dy = y - lensY;
-        const distSq = dx * dx + dy * dy;
-        // Lens ring (filled circle)
-        if (distSq <= lensR * lensR) {
-          set(x, y);
+    // Lens (filled circle)
+    for (let dy = -lensR; dy <= lensR; dy++) {
+      for (let dx = -lensR; dx <= lensR; dx++) {
+        if (dx * dx + dy * dy <= lensR * lensR) {
+          setSym(center + dx, center + dy);
         }
-      }
-    }
-
-    // Viewfinder notch at top right
-    const notchSize = Math.round(size * 0.1);
-    const notchX = bodyLeft + bodyWidth - notchSize - 2;
-    const notchY = bodyTop + 2;
-    for (let y = notchY; y < notchY + notchSize; y++) {
-      for (let x = notchX; x < notchX + notchSize; x++) {
-        set(x, y);
       }
     }
   }

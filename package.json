@@ -21,7 +21,9 @@
     "gate:still": "node scripts/gate-retry.mjs scripts/still-gate.mjs",
     "test:slow": "vitest run --config vitest.slow.config.ts",
     "merge": "node scripts/merge-when-green.mjs",
-    "ticket": "NODE_USE_ENV_PROXY=1 node scripts/ticket-check.mjs"
+    "ticket": "NODE_USE_ENV_PROXY=1 node scripts/ticket-check.mjs",
+    "build:icon-png": "node scripts/svg-to-png.mjs",
+    "build:icons": "node scripts/svg-to-png.mjs && bash scripts/build-app-icon.sh"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
