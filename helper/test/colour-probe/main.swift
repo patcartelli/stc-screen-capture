@@ -133,6 +133,56 @@ func rawMeans() -> [(Double, Double, Double)]? {
     }
     return res
 }
+// YUV: the file's own 4:2:0 planes, read with NO conversion to RGB anywhere, then
+// turned into RGB by hand with the BT.709 video-range matrix the tags claim. This
+// is the stored colour with no decoder opinion in it, which is what settles
+// whether RAW's numbers come from the file or from the BGRA conversion.
+func yuvMeans() -> [(Double, Double, Double)]? {
+    guard let reader = try? AVAssetReader(asset: asset) else { return nil }
+    var vt: AVAssetTrack?
+    let s = DispatchSemaphore(value: 0)
+    Task { vt = try? await asset.loadTracks(withMediaType: .video).first; s.signal() }
+    s.wait()
+    guard let vt else { return nil }
+    let out = AVAssetReaderTrackOutput(track: vt, outputSettings: [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange])
+    reader.add(out)
+    guard reader.startReading() else { return nil }
+    var sample: CMSampleBuffer?
+    for _ in 0..<30 { guard let n = out.copyNextSampleBuffer() else { break }; sample = n }
+    guard let sample, let pb = CMSampleBufferGetImageBuffer(sample),
+          CVPixelBufferGetPlaneCount(pb) == 2 else { return nil }
+    CVPixelBufferLockBaseAddress(pb, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+    guard let yBase = CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+          let cBase = CVPixelBufferGetBaseAddressOfPlane(pb, 1) else { return nil }
+    let yBpr = CVPixelBufferGetBytesPerRowOfPlane(pb, 0), cBpr = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
+    let yp = yBase.assumingMemoryBound(to: UInt8.self), cp = cBase.assumingMemoryBound(to: UInt8.self)
+    var res: [(Double, Double, Double)] = []
+    for k in [0, 4] {
+        var sy = 0.0, scb = 0.0, scr = 0.0, ny = 0.0, nc = 0.0
+        for row in nums[k + 1]..<(nums[k + 1] + nums[k + 3]) {
+            for col in nums[k]..<(nums[k] + nums[k + 2]) {
+                sy += Double(yp[row * yBpr + col]); ny += 1
+                if row % 2 == 0 && col % 2 == 0 {
+                    scb += Double(cp[(row / 2) * cBpr + (col / 2) * 2])
+                    scr += Double(cp[(row / 2) * cBpr + (col / 2) * 2 + 1]); nc += 1
+                }
+            }
+        }
+        let y = (sy / ny - 16) / 219, cb = (scb / nc - 128) / 224, cr = (scr / nc - 128) / 224
+        let r = y + 1.5748 * cr, b = y + 1.8556 * cb
+        let g = (y - 0.2126 * r - 0.0722 * b) / 0.7152
+        res.append((r, g, b))
+    }
+    return res
+}
+if let yuv = yuvMeans() {
+    print(String(format: "YUV1=%.3f,%.3f,%.3f", yuv[0].0, yuv[0].1, yuv[0].2))
+    print(String(format: "YUV2=%.3f,%.3f,%.3f", yuv[1].0, yuv[1].1, yuv[1].2))
+} else {
+    print("YUV=unavailable")
+}
 if let raw = rawMeans() {
     print(String(format: "RAW1=%.3f,%.3f,%.3f", raw[0].0, raw[0].1, raw[0].2))
     print(String(format: "RAW2=%.3f,%.3f,%.3f", raw[1].0, raw[1].1, raw[1].2))
