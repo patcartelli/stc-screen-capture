@@ -11,7 +11,7 @@
  */
 import { describe, test, expect } from "vitest";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import AjvImport from "ajv";
@@ -111,6 +111,15 @@ async function probe(mp4: string, w: number, h: number): Promise<string> {
  * 1.5 s from 3 s: the first frame of a still-screen take arrives ~2 s in.
  */
 async function exportAndProbe(dir: string, w: number, h: number): Promise<string> {
+  // Auto-zoom OFF. The helper records the REAL pointer, so a click while this runs
+  // (the first hardware run had two) opens a zoom window, the export crops into one
+  // swatch half, and both probe rects read the same colour: a failure that looks
+  // exactly like the bug under test and is not. A project that says so removes it.
+  writeFileSync(join(dir, "project.json"), JSON.stringify({
+    version: 4, output: { fps: 60, width: w, height: h },
+    cursor: { style: "default", scale: 1 },
+    zoom: { enabled: false, intensity: 1, preset: "standard" },
+  }));
   const log = await new Promise<string>((res, rej) => {
     const p = spawn("node", [join(root, "scripts/export-one.mjs"), dir, "1.5", "3"], { cwd: root });
     let all = "";
