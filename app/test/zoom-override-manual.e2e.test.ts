@@ -114,7 +114,8 @@ describe("clicking the lane's empty background authors a new window", () => {
     await clickEmptyLane(win);
     await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
-    expect(await win.locator(".zoomblock").count()).toBe(2); // 1 derived + 1 manual
+    // STC-516: same ordering as the delete case: persist first, lane redraw after.
+    await expect.poll(() => win.locator(".zoomblock").count(), { timeout: 10_000 }).toBe(2); // 1 derived + 1 manual
   }, 30_000);
 });
 
@@ -189,7 +190,9 @@ describe("deleting a manual window", () => {
     await win.click("#overrideclear");
 
     await expect.poll(() => readProject(takeDir).overrides?.length ?? 0, { timeout: 10_000 }).toBe(0);
-    expect(await win.locator(".zoomblock.manual").count()).toBe(0);
+    // STC-516: closeOverrideEditor persists BEFORE layoutOverrideBlocks redraws
+    // the lane, so the disk poll above can pass while the block is still there.
+    await expect.poll(() => win.locator(".zoomblock.manual").count(), { timeout: 10_000 }).toBe(0);
   }, 60_000);
 });
 
