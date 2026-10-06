@@ -1174,7 +1174,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             AVVideoColorPropertiesKey: [
                 AVVideoColorPrimariesKey: captureColour == .displayP3
                     ? AVVideoColorPrimaries_P3_D65 : AVVideoColorPrimaries_ITU_R_709_2,
-                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoTransferFunctionKey: captureColour == .displayP3
+                    ? AVVideoTransferFunction_IEC_sRGB : AVVideoTransferFunction_ITU_R_709_2,
                 AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
             ] as [String: Any],
         ])
@@ -1732,6 +1733,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             if captureColour == .displayP3 {
                 CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey,
                                       kCVImageBufferColorPrimaries_P3_D65, .shouldPropagate)
+                // Display P3's own curve is sRGB's, and the buffer says 709: the same
+                // lie as the primaries, small but measurable (a mid-tone decoded 0.499
+                // against 0.456 stored). The writer below carries the matching tag.
+                CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey,
+                                      kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
             }
 
             // The gate decides whether this frame may still be written, and

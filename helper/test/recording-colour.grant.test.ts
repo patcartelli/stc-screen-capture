@@ -96,8 +96,22 @@ describe("recording colour (STC-510)", () => {
     });
 
     process.stderr.write(`[colour] take: ${dir}\n[colour] capture ${w}x${h}\n${out}`);
-    expect(out).toMatch(/TAG_PRIMARIES=/);
-    expect(out).toMatch(/RECT1_P3=[\d.]+,[\d.]+,[\d.]+/);
-    expect(out).toMatch(/RECT2_P3=[\d.]+,[\d.]+,[\d.]+/);
+    // The fix, held. The display here is wide-gamut (the test refuses otherwise),
+    // so the take must be tagged P3 AND hold P3 pixels: the left swatch is
+    // `color(display-p3 0 1 0)`, the right sRGB #00ff00 expressed in P3. RAW is the
+    // stored value with no colour management; RECT is a colour-managed decode, which
+    // only agrees with it when the tags tell the truth about the pixels.
+    const nums = (k: string) => {
+      const m = new RegExp(`^${k}=(-?[\\d.]+),(-?[\\d.]+),(-?[\\d.]+)$`, "m").exec(out);
+      expect(m, `${k} missing from:\n${out}`).not.toBeNull();
+      return m!.slice(1).map(Number);
+    };
+    const near = (got: number[], want: number[], what: string) =>
+      want.forEach((w, i) => expect(Math.abs(got[i]! - w), `${what}: ${got} vs ${want}`).toBeLessThan(0.03));
+    expect(out).toMatch(/TAG_PRIMARIES=P3_D65/);
+    near(nums("RAW1"), [0, 1, 0], "P3 swatch, stored");
+    near(nums("RAW2"), [0.458, 0.985, 0.299], "sRGB swatch, stored");
+    near(nums("RECT1_P3"), [0, 1, 0], "P3 swatch, colour-managed decode");
+    near(nums("RECT2_P3"), [0.458, 0.985, 0.299], "sRGB swatch, colour-managed decode");
   }, 180_000);
 });
