@@ -418,6 +418,24 @@ do {
           "and writes no track")
     printJSON(still, marker: "JSON-WINDOW-STILL:")
 
+    // STC-510: a P3 take is v9 and says so; a take without a colour space stays at
+    // whatever its other blocks earned. The two prints are the document anchors-9
+    // must accept and the one anchors-2 still must.
+    let p3 = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                             capture: capture, camera: nil, requested: false,
+                             pauses: [], colorSpace: "displayP3",
+                             stopReason: "user", stopTNs: 20_000_000_000)
+    check(p3["version"] as? Int == 9, "a P3 take must write version 9")
+    check((p3["capture"] as? [String: Any])?["colorSpace"] as? String == "displayP3", "and name its colour space")
+    printJSON(p3, marker: "JSON-P3:")
+    let srgb = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                               capture: capture, camera: nil, requested: false,
+                               pauses: [], colorSpace: nil,
+                               stopReason: "user", stopTNs: 20_000_000_000)
+    check(srgb["version"] as? Int == 2, "a take with no colour space stays v2")
+    check((srgb["capture"] as? [String: Any])?["colorSpace"] == nil, "and writes no colorSpace key")
+    printJSON(srgb, marker: "JSON-SRGB:")
+
     // A track handed to a take that is NOT a window scope must not be written:
     // it would describe a window the take does not have.
     let region = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,

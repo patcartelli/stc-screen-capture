@@ -2458,6 +2458,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             geometry: geo,
             windowTrack: track,
             pauses: pauses,
+            colorSpace: anchorsColorSpace(captureColour),
             stopReason: reason,
             stopTNs: Int(stopTNs))
         write(doc, to: "anchors.json")

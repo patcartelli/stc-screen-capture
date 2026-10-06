@@ -51,8 +51,8 @@ export function windowTrackOf(anchors: Anchors): readonly WindowTrackEntry[] | u
 /**
  * Refuses rather than defaults, the loader's rule everywhere. Entry 0 must be
  * the start (t 0, the recorded bounds); times strictly increase; everything
- * finite. A `track` on anything but a v8 window take is a document that says
- * one thing in its version and another in its body.
+ * finite. A `track` on anything older than v8, or on anything but a window take,
+ * is a document that says one thing in its version and another in its body.
  */
 export function checkWindowTrack(anchors: Anchors): void {
   const s = anchors.scope;
@@ -61,7 +61,9 @@ export function checkWindowTrack(anchors: Anchors): void {
     throw new SessionLoadError("anchors v8 has no window track — a take whose window never moved is written as v7 or lower");
   }
   if (!track) return;
-  if (anchors.version !== 8) throw new SessionLoadError(`window.track is new at anchors v8, found on v${anchors.version}`);
+  // v8 or later: v9 (STC-510) is anchors-8 plus a colour space, so a P3 window take
+  // that also moved carries both. v8 itself exists ONLY for a track (checked above).
+  if (anchors.version < 8) throw new SessionLoadError(`window.track is new at anchors v8, found on v${anchors.version}`);
   if (track.length < 2) throw new SessionLoadError("window.track has fewer than 2 entries");
   const b = (s as Extract<NonNullable<Anchors["scope"]>, { kind: "window" }>).window.bounds;
   const first = track[0]!;

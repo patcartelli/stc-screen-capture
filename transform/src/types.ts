@@ -129,7 +129,7 @@ export type CaptureScope =
 
 /** Mirrors schema/anchors-1.schema.json through anchors-7.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {
@@ -142,7 +142,15 @@ export interface Anchors {
     originX: number;
     originY: number;
   };
-  capture: { width: number; height: number; codec: "h264"; firstFrameNs?: number };
+  capture: {
+    width: number; height: number; codec: "h264"; firstFrameNs?: number;
+    /**
+     * STC-510, anchors-9. The colour space the pixels are in, present only when it is
+     * NOT sRGB; absent means sRGB, as it does on every earlier take. See
+     * capture-colour.ts for what a sink does with it.
+     */
+    colorSpace?: "displayP3";
+  };
   /** STC-235. Present only after a refit; see display-geometry.ts. */
   geometry?: import("./display-geometry.js").GeometryEntry[];
   camera?: CameraTrack;

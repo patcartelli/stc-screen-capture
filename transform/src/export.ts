@@ -13,6 +13,7 @@ import {
   type PcmTrack, type ExportDecoded,
 } from "./audio-mix.js";
 import { tagMp4 } from "./media-tag.js";
+import { canvasColorSpace } from "./capture-colour.js";
 
 /**
  * The export sink. ONE implementation, called by both the CLI gates and the
@@ -124,6 +125,9 @@ export async function exportSession(
   const ctx = new OffscreenCanvas(width, height).getContext("2d", {
     alpha: false,
     willReadFrequently: opts.softwareRaster ?? wantHash,
+    // STC-510: the take's own space (capture-colour.ts, shared with the preview), so a
+    // Display P3 take is not clipped to sRGB on the way out.
+    colorSpace: canvasColorSpace(session.anchors),
   }) as OffscreenCanvasRenderingContext2D;
 
   const lastFrameNs = session.frames[session.frames.length - 1]!;

@@ -160,6 +160,9 @@ struct SystemAudioTrack {
 /// `windowTrack` forces version 8 (STC-482) when a window-scope take's window
 /// moved (2 or more entries); entry 0 is the start and matches `bounds`.
 ///
+/// `colorSpace` forces version 9 (STC-510) when non-nil: the name of a colour space
+/// the take's pixels are in OTHER than sRGB. `nil` writes no key and no bump.
+///
 /// `geometry` forces version 7 (STC-235) when it has 2 or more entries — a
 /// single entry (or none) is written as no `geometry` key at all and no
 /// version bump, the same minimum-version rule every other block above
@@ -180,6 +183,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                      geometry: [GeometryEntryDoc] = [],
                      windowTrack: [WindowTrackEntryDoc] = [],
                      pauses: [PauseInterval],
+                     colorSpace: String? = nil,
                      stopReason: String,
                      stopTNs: Int) -> [String: Any] {
     var files: [String: Any] = ["display": "display.mp4"]
@@ -238,6 +242,12 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     // every existing window take stays at whatever version it was.
     let writesTrack = scope.kind == .window && windowTrack.count >= 2
     if writesTrack { version = max(version, 8) }
+    // STC-510: a take whose pixels are not sRGB. Written ONLY then, so a take on an
+    // sRGB display keeps whatever version its other blocks earned, byte for byte.
+    if colorSpace != nil { version = max(version, 9) }
+    var capturedBlock: [String: Any] = ["width": capture.width, "height": capture.height, "codec": "h264",
+                                         "firstFrameNs": max(0, capture.firstFrameNs)]
+    if let colorSpace { capturedBlock["colorSpace"] = colorSpace }
     var doc: [String: Any] = [
         "version": version,
         "timebase": ["numer": timebase.numer, "denom": timebase.denom],
@@ -245,8 +255,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
         // uptime, and a JSON number would round.
         "t0Ns": String(t0Ns),
         "display": displayJSON(display),
-        "capture": ["width": capture.width, "height": capture.height, "codec": "h264",
-                    "firstFrameNs": max(0, capture.firstFrameNs)] as [String: Any],
+        "capture": capturedBlock,
         "files": files,
         "stop": ["t": stopTNs, "reason": stopReason] as [String: Any],
     ]

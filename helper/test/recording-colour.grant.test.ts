@@ -14,15 +14,18 @@ import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import AjvImport from "ajv";
 import { runSwiftHarness } from "./_swift-harness.js";
 import { explainFailedStart } from "./_start-outcome.js";
+
+const Ajv = (AjvImport as any).default ?? AjvImport;
 
 const root = join(__dirname, "..", "..");
 const BIN = join(root, "helper", "build", "stc-helper");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Records ~3 s of the swatch on a display of `kind` and returns the probe's report. */
-async function recordSwatch(kind: "wide" | "narrow"): Promise<string> {
+async function recordSwatch(kind: "wide" | "narrow") {
   const dir = mkdtempSync(join(tmpdir(), "stc-colour-"));
 
   // The swatch is its own process: the helper must not record a window of
@@ -83,17 +86,42 @@ async function recordSwatch(kind: "wide" | "narrow"): Promise<string> {
     } finally { proc.kill("SIGKILL"); }
   } finally { swatch.kill("SIGKILL"); }
 
-  const { capture } = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
-  const w = capture.width as number, h = capture.height as number;
-  // Well inside each half, away from the seam and the edges.
-  const rect = (fx: number) => [Math.round(w * fx), Math.round(h * 0.4), Math.round(w * 0.3), Math.round(h * 0.2)];
+  const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
+  const w = anchors.capture.width as number, h = anchors.capture.height as number;
   process.stderr.write(`[colour] take: ${dir}\n`); // before the probe, so a probe failure still names the take
-  const out = await runSwiftHarness({
+  const out = await probe(join(dir, "display.mp4"), w, h);
+  process.stderr.write(`[colour] capture ${w}x${h}\n${out}`);
+  return { out, dir, w, h, anchors };
+}
+
+/** The colour probe on `mp4`, reading the swatch rects well inside each half (away from the seam). */
+async function probe(mp4: string, w: number, h: number): Promise<string> {
+  const rect = (fx: number) => [Math.round(w * fx), Math.round(h * 0.4), Math.round(w * 0.3), Math.round(h * 0.2)];
+  return runSwiftHarness({
     label: "colour-probe",
     sources: ["helper/test/colour-probe/main.swift"],
-    args: [join(dir, "display.mp4"), "0", ...rect(0.1), ...rect(0.6)].map(String),
+    args: [mp4, "0", ...rect(0.1), ...rect(0.6)].map(String),
   });
-  process.stderr.write(`[colour] capture ${w}x${h}\n${out}`);
+}
+
+/**
+ * The take, exported by the REAL pipeline (scripts/export-one.mjs: vite + Chrome),
+ * then probed. The recorded take is the input, so this is the whole chain: what the
+ * helper wrote in anchors.json is what tells the export which canvas to draw into.
+ * 1.5 s from 3 s: the first frame of a still-screen take arrives ~2 s in.
+ */
+async function exportAndProbe(dir: string, w: number, h: number): Promise<string> {
+  const log = await new Promise<string>((res, rej) => {
+    const p = spawn("node", [join(root, "scripts/export-one.mjs"), dir, "1.5", "3"], { cwd: root });
+    let all = "";
+    p.stdout.on("data", (c: Buffer) => { all += c.toString(); });
+    p.stderr.on("data", (c: Buffer) => { all += c.toString(); });
+    p.on("exit", (code) => code === 0 ? res(all) : rej(new Error(`export-one exited ${code}:\n${all}`)));
+  });
+  const wrote = /wrote (\S+\.mp4)/.exec(log);
+  expect(wrote, `export-one did not say what it wrote:\n${log}`).not.toBeNull();
+  const out = await probe(wrote![1]!, w, h);
+  process.stderr.write(`[colour] EXPORT ${wrote![1]}\n${out}`);
   return out;
 }
 
@@ -111,24 +139,50 @@ describe("recording colour (STC-510)", () => {
   // RECT is a colour-managed decode, which only agrees with it when the tags tell
   // the truth about the pixels.
   test("a wide-gamut display's take is tagged P3 and holds P3 pixels", async () => {
-    const out = await recordSwatch("wide");
+    const { out, dir, w, h, anchors } = await recordSwatch("wide");
     expect(out).toMatch(/TAG_PRIMARIES=P3_D65/);
     expect(out).toMatch(/TAG_TRANSFER=IEC_sRGB/);
     near(nums(out, "RAW1"), [0, 1, 0], "P3 swatch, stored");
     near(nums(out, "RAW2"), [0.458, 0.985, 0.299], "sRGB swatch, stored");
     near(nums(out, "RECT1_P3"), [0, 1, 0], "P3 swatch, colour-managed decode");
     near(nums(out, "RECT2_P3"), [0.458, 0.985, 0.299], "sRGB swatch, colour-managed decode");
-  }, 180_000);
+
+    // The sidecar says what the pixels are, which is what the export reads.
+    expect(anchors.version).toBe(9);
+    expect(anchors.capture.colorSpace).toBe("displayP3");
+    const validate = new Ajv({ allErrors: true, strict: true })
+      .compile(JSON.parse(readFileSync(join(root, "schema/anchors-9.schema.json"), "utf8")));
+    expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
+
+    // ...and the EXPORT keeps it: the swatches are still different greens, tagged P3,
+    // not both flattened to sRGB green as they were before the export knew.
+    const exported = await exportAndProbe(dir, w, h);
+    expect(exported).toMatch(/TAG_PRIMARIES=P3_D65/);
+    near(nums(exported, "RAW1"), [0, 1, 0], "P3 swatch, exported");
+    near(nums(exported, "RAW2"), [0.458, 0.985, 0.299], "sRGB swatch, exported");
+    near(nums(exported, "RECT2_P3"), [0.458, 0.985, 0.299], "sRGB swatch, exported, colour-managed decode");
+  }, 240_000);
 
   // "Unchanged": what an sRGB take has always been. BT.709 on all three tags (what
   // the unfixed helper wrote on this monitor), and an sRGB display cannot show P3
   // green, so BOTH swatches are sRGB green: stored (0,1,0), the same on each side.
   test("a narrow-gamut display's take keeps its BT.709 tags and holds clipped sRGB pixels", async () => {
-    const out = await recordSwatch("narrow");
+    const { out, dir, w, h, anchors } = await recordSwatch("narrow");
     expect(out).toMatch(/TAG_PRIMARIES=ITU_R_709_2/);
     expect(out).toMatch(/TAG_TRANSFER=ITU_R_709_2/);
     expect(out).toMatch(/TAG_MATRIX=ITU_R_709_2/);
     near(nums(out, "RAW1"), [0, 1, 0], "left swatch, stored");
     near(nums(out, "RAW2"), [0, 1, 0], "right swatch, stored");
-  }, 180_000);
+
+    // The sidecar is what it always was: no colour space, and no version it did not
+    // earn (a display-only take with no pauses is v2).
+    expect(anchors.capture.colorSpace).toBeUndefined();
+    expect(anchors.version).toBe(2);
+
+    // The export of an sRGB take is unchanged: sRGB green on both sides, 709-family tags.
+    const exported = await exportAndProbe(dir, w, h);
+    expect(exported).toMatch(/TAG_PRIMARIES=ITU_R_709_2/);
+    near(nums(exported, "RAW1"), [0, 1, 0], "left swatch, exported");
+    near(nums(exported, "RAW2"), [0, 1, 0], "right swatch, exported");
+  }, 240_000);
 });

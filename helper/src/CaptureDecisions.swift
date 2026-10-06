@@ -58,6 +58,13 @@ enum CaptureColour: Equatable {
     case displayP3
 }
 
+/// What `anchors.json` records for a take's colour (`capture.colorSpace`, anchors-9).
+/// nil for sRGB, on purpose: absence IS sRGB, so an sRGB take's sidecar and version
+/// are unchanged and nothing is "defaulted" by a reader.
+func anchorsColorSpace(_ c: CaptureColour) -> String? {
+    c == .displayP3 ? "displayP3" : nil
+}
+
 /// Wide gamut is what decides it, not a name. The first version keyed on
 /// `resolveColorSpaceName` (STC-478) and was wrong on real hardware: a display's
 /// own ICC profile is vendor-named ("HP Z27", "Color LCD"), so the name is nil

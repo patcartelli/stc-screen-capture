@@ -439,5 +439,8 @@ check("a nameless wide-gamut panel (vendor ICC profile) captures in P3", decideC
 check("an sRGB display stays sRGB", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceSRGB", isWideGamut: false), CaptureColour.srgb)
 check("a nameless narrow-gamut display stays sRGB, as every take was", decideCaptureColour(displayColorSpaceName: nil, isWideGamut: false), CaptureColour.srgb)
 
+check("a P3 take records its colour space", anchorsColorSpace(.displayP3) ?? "nil", "displayP3")
+check("an sRGB take records nothing (absence is sRGB)", anchorsColorSpace(.srgb) ?? "nil", "nil")
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
 exit(failures == 0 ? 0 : 1)
