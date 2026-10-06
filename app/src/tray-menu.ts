@@ -119,21 +119,19 @@ export function marqueeMask(size: number): Uint8Array {
   const inset = Math.round(size / 8);
 
   if (size <= 16) {
-    // Small size: simplified camera (body + lens)
-    const bodyHalf = 2;
-    const lensR = 1;
-
-    // Camera body (filled rectangle, centered)
-    for (let y = center - bodyHalf; y <= center + bodyHalf; y++) {
-      for (let x = center - bodyHalf - 1; x <= center + bodyHalf + 1; x++) {
+    // Small size (16px): EXTREMELY BOLD solid rectangle + large lens
+    // Fill entire camera body area heavily
+    for (let y = center - 2; y <= center + 2; y++) {
+      for (let x = center - 3; x <= center + 3; x++) {
         setSym(x, y);
       }
     }
 
-    // Lens (circle at center)
+    // Very large filled lens circle - solid block of pixels
+    const lensR = 2;
     for (let dy = -lensR; dy <= lensR; dy++) {
       for (let dx = -lensR; dx <= lensR; dx++) {
-        if (dx * dx + dy * dy <= lensR * lensR) {
+        if (dx * dx + dy * dy <= lensR * lensR + 1) {
           setSym(center + dx, center + dy);
         }
       }
