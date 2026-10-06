@@ -87,45 +87,41 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
 // ── the icon ────────────────────────────────────────────────────────────────
 
 /**
- * Menu bar glyph (STC-503): a video camera icon.
+ * The glyph: a selection marquee's four corner brackets.
  *
  * Drawn from geometry rather than shipped as a PNG, for two reasons. A binary
  * asset is the one thing in this repo a reviewer cannot read in the diff, and
  * a menu-bar icon is small enough that being one pixel off is the whole
  * difference between crisp and smudged — so the shape is a function of the
- * size, and properties that make it legible are tested at both scales.
+ * size, and `tray-menu.test.ts` checks the properties that make it legible
+ * (symmetric, on the frame, corners only) at both scales.
  *
- * A stylized camera body with a lens, recognizable in both light and dark
- * modes as a template image. Returns one byte of alpha per pixel, row-major.
- * A macOS template image is pure alpha: the system paints it black or white
- * to match the menu bar, which is why no colour is chosen here.
+ * Returns one byte of alpha per pixel, row-major. A macOS template image is
+ * pure alpha: the system paints it black or white to match the menu bar, which
+ * is why no colour is chosen here.
  */
 export function marqueeMask(size: number): Uint8Array {
   const mask = new Uint8Array(size * size);
+  const inset = Math.round(size / 8);
+  const arm = Math.round(size / 4);
+  const thick = Math.max(1, Math.round(size / 16));
+  const lo = inset;
+  const hi = size - 1 - inset;
 
-  // Everything is a function of `u`, so the 16 and 32 px masks are the same
-  // drawing. A solid body with a TRANSPARENT lens ring is what makes it read
-  // as a camera: an earlier version painted a solid lens over a solid body,
-  // which is invisible, and no amount of boldness fixes a shape with no detail.
-  const u = size / 16;
-  const inset = Math.round(size / 16);
-  const half = size / 2;
-
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      // Distances from the centre in pixel-centre coordinates; symmetric by
-      // construction, which is cheaper to trust than four mirrored writes.
-      const dx = Math.abs(x + 0.5 - half);
-      const dy = Math.abs(y + 0.5 - half);
-      const inBody = dx <= 7 * u && dy <= 5.5 * u;
-      // Knock the four corners off the body so it is not a bare slab.
-      const corner = dx > 6 * u && dy > 4.5 * u;
-      if (!inBody || corner) continue;
-      const d = Math.hypot(dx, dy);
-      const ring = d > 1.8 * u && d < 4 * u;
-      if (ring) continue;
-      if (x < inset || x > size - 1 - inset || y < inset || y > size - 1 - inset) continue;
-      mask[y * size + x] = 255;
+  const set = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    mask[y * size + x] = 255;
+  };
+  // Each corner is a horizontal arm and a vertical arm of `thick` lines,
+  // grown INWARD from the frame so the bracket never leaves the rect.
+  for (const [cx, dx] of [[lo, 1], [hi, -1]] as const) {
+    for (const [cy, dy] of [[lo, 1], [hi, -1]] as const) {
+      for (let t = 0; t < thick; t++) {
+        for (let i = 0; i < arm; i++) {
+          set(cx + dx * i, cy + dy * t);
+          set(cx + dx * t, cy + dy * i);
+        }
+      }
     }
   }
   return mask;

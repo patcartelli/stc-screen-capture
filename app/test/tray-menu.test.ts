@@ -101,19 +101,23 @@ describe("the icon", () => {
         }
       });
 
-      test("draws a camera icon with recognizable features", () => {
-        // STC-503: camera icon — has a body (outline) and lens (center),
-        // recognizable at both 1x and 2x. At minimum, some pixels are set,
-        // some are clear, and it is not uniformly solid.
-        const setPixels = Array.from(mask).filter((p) => p === 255).length;
-        const totalPixels = size * size;
-        // Camera icon should occupy 20-40% of the icon box (not sparse, not solid)
-        expect(setPixels).toBeGreaterThan(totalPixels * 0.1);
-        expect(setPixels).toBeLessThan(totalPixels * 0.5);
+      test("draws corner brackets: corners set, edge midpoints clear", () => {
+        // The positive discriminator. "Some pixels are set" would pass for a
+        // solid square, a dot, or a frame — none of which is this glyph.
+        const inset = Math.round(size / 8);
+        expect(at(mask, size, inset, inset)).toBe(255);
+        expect(at(mask, size, size - 1 - inset, inset)).toBe(255);
+        expect(at(mask, size, inset, size - 1 - inset)).toBe(255);
+        expect(at(mask, size, size - 1 - inset, size - 1 - inset)).toBe(255);
+        // A full frame would have these set; a bracket glyph does not.
+        expect(at(mask, size, size >> 1, inset)).toBe(0);
+        expect(at(mask, size, inset, size >> 1)).toBe(0);
+        // And nothing in the middle at all.
+        expect(at(mask, size, size >> 1, size >> 1)).toBe(0);
       });
 
       test("never leaves the inset rect, so nothing is clipped by the menu bar", () => {
-        const inset = Math.round(size / 16);
+        const inset = Math.round(size / 8);
         for (let y = 0; y < size; y++) {
           for (let x = 0; x < size; x++) {
             if (!at(mask, size, x, y)) continue;
