@@ -1723,6 +1723,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
 
+            // STC-510: on the 4:2:0 format ScreenCaptureKit stamps every buffer
+            // ITU_R_709_2 primaries even when asked for Display P3 and delivering P3
+            // pixels (measured on hardware, helper/test/colour-sck). The writer is
+            // tagged P3, and a buffer that says "709" under a "P3" writer is
+            // CONVERTED 709 -> P3, which is a second, wrong conversion of pixels
+            // that were already P3. Make the label tell the truth first.
+            if captureColour == .displayP3 {
+                CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey,
+                                      kCVImageBufferColorPrimaries_P3_D65, .shouldPropagate)
+            }
+
             // The gate decides whether this frame may still be written, and
             // holds its own lock across the append so a concurrent stop cannot
             // tear the track down mid-append. A frame that arrives during
