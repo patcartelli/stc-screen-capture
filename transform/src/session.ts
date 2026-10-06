@@ -6,6 +6,7 @@ import type { Changes } from "./changes.js";
 import type { ByteSource } from "./chunk-reader.js";
 import { checkGeometry } from "./display-geometry.js";
 import { checkWindowTrack, stabiliseEvents } from "./window-track.js";
+import { checkCaptureColour } from "./capture-colour.js";
 import { SessionLoadError } from "./session-error.js";
 
 /**
@@ -194,10 +195,13 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
-    anchors?.version !== 7 && anchors?.version !== 8
+    anchors?.version !== 7 && anchors?.version !== 8 && anchors?.version !== 9
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7 or 8)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8 or 9)`);
   }
+  // v9's `capture.colorSpace` (STC-510): which space the pixels are in, so a sink does
+  // not draw a Display P3 take into an sRGB canvas. Refused if unknown, never defaulted.
+  checkCaptureColour(anchors);
   checkGeometry(anchors);
   // v8's `scope.window.track` (STC-482): a window that moved. Validated here,
   // applied below by taking its displacement out of the cursor events.

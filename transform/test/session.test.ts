@@ -211,17 +211,17 @@ describe("loader accepts v1 through v7 anchors", () => {
     expect(s.systemAudio).toBeUndefined();
   });
 
-  test("a version 9 anchors document is rejected by name", async () => {
-    // Widening must not become "accept anything". Version 9, not 8: STC-482
-    // made 8 a real, supported version (a window's `track`), so it is no
+  test("a version 10 anchors document is rejected by name", async () => {
+    // Widening must not become "accept anything". Version 10, not 9: STC-510
+    // made 9 a real, supported version (`capture.colorSpace`), so it is no
     // longer a stand-in for "unknown future version" — the same thing
-    // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240), 6 (STC-418)
-    // and 7 (STC-235).
+    // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240), 6 (STC-418),
+    // 7 (STC-235) and 8 (STC-482).
     await expect(loadSession({
-      anchors: offsetAnchors({ version: 9 as any }),
+      anchors: offsetAnchors({ version: 10 as any }),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 9 is not supported/);
+    })).rejects.toThrow(/version 10 is not supported/);
   });
 
   // STC-482: a v8 window track is validated at load and its displacement taken

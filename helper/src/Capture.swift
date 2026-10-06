@@ -203,6 +203,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// set from the resolved `CaptureTarget` in `begin()`. Read by
     /// `writeSidecars` to decide anchors.json's version and `scope` block.
     private var captureScope: CaptureScopeDoc = .display
+    /// STC-510: fixed for the take at start, read by the SCK configuration
+    /// (including a refit's) and by the writer's colour tags.
+    private var captureColour: CaptureColour = .srgb
     /// Polls a window-scope take's own window for a resize or a close
     /// (STC-370) — ScreenCaptureKit has no delegate callback for either, the
     /// way it does for the stream dying. Guarded by `lock`, same reason as
@@ -506,6 +509,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         setCurrentDisplay(target.geometry)
         lock.unlock()
         captureScope = target.scope
+        let displaySpace = CGDisplayCopyColorSpace(CGDirectDisplayID(target.geometry.id))
+        captureColour = decideCaptureColour(
+            displayColorSpaceName: resolveColorSpaceName(
+                name: displaySpace.name.map { $0 as String },
+                iccDescription: displaySpace.copyICCData().flatMap { iccDescription($0 as Data) }),
+            isWideGamut: displaySpace.isWideGamutRGB)
         (captureW, captureH) = captureSize(target.pixelSize.width, target.pixelSize.height)
         lock.lock()
         currentShape = RefitShape(geometry: target.geometry,
@@ -1160,6 +1169,15 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoAllowFrameReorderingKey: false,
             ] as [String: Any],
+            // STC-510: declared, never left to the encoder's choice. Matches the
+            // SCK configuration below; only the primaries differ between the two.
+            AVVideoColorPropertiesKey: [
+                AVVideoColorPrimariesKey: captureColour == .displayP3
+                    ? AVVideoColorPrimaries_P3_D65 : AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: captureColour == .displayP3
+                    ? AVVideoTransferFunction_IEC_sRGB : AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+            ] as [String: Any],
         ])
         inp.expectsMediaDataInRealTime = true
         // Sample times survive as exact integer nanoseconds, so the demuxed
@@ -1205,6 +1223,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         cfg.queueDepth = 8
         cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        // STC-510: without these SCK delivers sRGB on a P3 display, clipping its
+        // saturated colours before the encoder sees them.
+        cfg.colorSpaceName = captureColour == .displayP3 ? CGColorSpace.displayP3 : CGColorSpace.sRGB
+        cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
         cfg.scalesToFit = false
         // The transform composites the cursor from events.json, so the captured
         // pixels must not already contain one — otherwise every export shows two.
@@ -1700,6 +1722,22 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 refitQueue.async {
                     self.refitLanded(ptsNs: ptsNs, pending: p, reportedRect: reported, scaleFactor: scale)
                 }
+            }
+
+            // STC-510: on the 4:2:0 format ScreenCaptureKit stamps every buffer
+            // ITU_R_709_2 primaries even when asked for Display P3 and delivering P3
+            // pixels (measured on hardware, helper/test/colour-sck). The writer is
+            // tagged P3, and a buffer that says "709" under a "P3" writer is
+            // CONVERTED 709 -> P3, which is a second, wrong conversion of pixels
+            // that were already P3. Make the label tell the truth first.
+            if captureColour == .displayP3 {
+                CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey,
+                                      kCVImageBufferColorPrimaries_P3_D65, .shouldPropagate)
+                // Display P3's own curve is sRGB's, and the buffer says 709: the same
+                // lie as the primaries, small but measurable (a mid-tone decoded 0.499
+                // against 0.456 stored). The writer below carries the matching tag.
+                CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey,
+                                      kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
             }
 
             // The gate decides whether this frame may still be written, and
@@ -2420,6 +2458,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             geometry: geo,
             windowTrack: track,
             pauses: pauses,
+            colorSpace: anchorsColorSpace(captureColour),
             stopReason: reason,
             stopTNs: Int(stopTNs))
         write(doc, to: "anchors.json")

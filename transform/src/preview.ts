@@ -2,6 +2,7 @@ import { render } from "./render.js";
 import { tickTimeNs, tickOf, SIM_HZ, exportFrameOf } from "./time.js";
 import { SeekingFrameSource } from "./seeking-frame-source.js";
 import { composite } from "./compositor.js";
+import { canvasColorSpace } from "./capture-colour.js";
 import type { LoadedSession } from "./session.js";
 import type { Project } from "./types.js";
 
@@ -76,7 +77,8 @@ export class PreviewPlayer {
               private readonly project: Project) {
     canvas.width = project.output.width;
     canvas.height = project.output.height;
-    this.ctx = canvas.getContext("2d", { alpha: false })!;
+    // STC-510: the take's own colour space, from the one function export asks too.
+    this.ctx = canvas.getContext("2d", { alpha: false, colorSpace: canvasColorSpace(session.anchors) })!;
     this.source = new SeekingFrameSource(session.video);
     // A second SeekingFrameSource, not a shared one. Each serialises its own
     // requests (ticket/chain), so the one-in-flight-per-decoder rule holds by

@@ -297,6 +297,20 @@ describe("anchors document", () => {
       JSON.parse(readFileSync(join(root, "schema/anchors-7.schema.json"), "utf8")),
     );
     expect(validate7w(winMoved), "anchors-7 must refuse a window track").toBe(false);
+    // STC-510: a P3 take validates against anchors-9 and is refused by anchors-8
+    // (additionalProperties: false); an sRGB take is unchanged and still a v2
+    // document that anchors-2 accepts.
+    const p3 = extractJSON(out, "JSON-P3:");
+    const validate9 = new Ajv({ allErrors: true, strict: true }).compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-9.schema.json"), "utf8")),
+    );
+    expect(validate9(p3), JSON.stringify(validate9.errors, null, 2)).toBe(true);
+    expect(validate8(p3), "anchors-8 must refuse a colourSpace-bearing document").toBe(false);
+    const srgb = extractJSON(out, "JSON-SRGB:");
+    const validate2s = new Ajv({ allErrors: true, strict: true }).compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-2.schema.json"), "utf8")),
+    );
+    expect(validate2s(srgb), JSON.stringify(validate2s.errors, null, 2)).toBe(true);
     const winStill = extractJSON(out, "JSON-WINDOW-STILL:");
     const validate3 = new Ajv({ allErrors: true, strict: true }).compile(
       JSON.parse(readFileSync(join(root, "schema/anchors-3.schema.json"), "utf8")),
