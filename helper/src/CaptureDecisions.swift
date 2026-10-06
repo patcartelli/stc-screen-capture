@@ -58,12 +58,16 @@ enum CaptureColour: Equatable {
     case displayP3
 }
 
-/// `displayColorSpaceName` is `resolveColorSpaceName`'s answer for the display
-/// (STC-478), which names an ICC-based Mac display profile that CoreGraphics
-/// leaves nameless. Anything not recognisably Display P3 — including nil, a
-/// space we cannot name — stays sRGB, which is what every take was before.
-func decideCaptureColour(displayColorSpaceName: String?) -> CaptureColour {
-    displayColorSpaceName == "kCGColorSpaceDisplayP3" ? .displayP3 : .srgb
+/// Wide gamut is what decides it, not a name. The first version keyed on
+/// `resolveColorSpaceName` (STC-478) and was wrong on real hardware: a display's
+/// own ICC profile is vendor-named ("HP Z27", "Color LCD"), so the name is nil
+/// or unrecognisable for a perfectly good P3 panel. `isWideGamut` is
+/// `CGColorSpace.isWideGamutRGB` on the display's space. P3 is a superset of what
+/// any display narrower than it can show, so a wide display that is not exactly
+/// P3 is still better served by P3 than by sRGB. Not wide, or unknown, stays sRGB,
+/// which is what every take was before.
+func decideCaptureColour(displayColorSpaceName: String?, isWideGamut: Bool) -> CaptureColour {
+    displayColorSpaceName == "kCGColorSpaceDisplayP3" || isWideGamut ? .displayP3 : .srgb
 }
 
 enum FrameDecision: Equatable {

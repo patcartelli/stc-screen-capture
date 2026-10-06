@@ -7,7 +7,18 @@ import AppKit
 let seconds = CommandLine.arguments.count > 1 ? Double(CommandLine.arguments[1]) ?? 10 : 10
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
-guard let screen = NSScreen.main else { exit(1) }
+// A wide-gamut display, not NSScreen.main: main is whichever display has the menu
+// bar, and on a desk with an external sRGB monitor that is the wrong one — the
+// first hardware run drew and recorded the sRGB monitor and read as a finding.
+func displayID(_ s: NSScreen) -> CGDirectDisplayID {
+    CGDirectDisplayID((s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
+}
+guard let screen = NSScreen.screens.first(where: { CGDisplayCopyColorSpace(displayID($0)).isWideGamutRGB }) else {
+    print("NO_WIDE_GAMUT_DISPLAY")
+    fflush(stdout)
+    exit(2)
+}
+print("SWATCH_DISPLAY=\(displayID(screen))")
 
 let win = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
 win.level = .screenSaver

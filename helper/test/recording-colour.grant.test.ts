@@ -32,11 +32,22 @@ describe("recording colour (STC-510)", () => {
     execFileSync("swiftc", ["-O", join(root, "helper/test/colour-swatch/main.swift"), "-o", swatchBin],
       { timeout: 60_000 });
     const swatch = spawn(swatchBin, ["10"], { stdio: ["ignore", "pipe", "ignore"] });
+    let displayId = 0;
     try {
-      await new Promise<void>((res, rej) => {
+      displayId = await new Promise<number>((res, rej) => {
         const t = setTimeout(() => rej(new Error("swatch window never reported ready")), 10_000);
-        swatch.stdout!.on("data", (c: Buffer) => { if (c.toString().includes("SWATCH_READY")) { clearTimeout(t); res(); } });
+        let seen = "";
+        swatch.stdout!.on("data", (c: Buffer) => {
+          seen += c.toString();
+          if (seen.includes("NO_WIDE_GAMUT_DISPLAY")) {
+            clearTimeout(t);
+            rej(new Error("no wide-gamut display is connected: on an sRGB display the two swatches are the same green and this test says nothing"));
+          }
+          const m = /SWATCH_DISPLAY=(\d+)/.exec(seen);
+          if (m && seen.includes("SWATCH_READY")) { clearTimeout(t); res(Number(m[1])); }
+        });
       });
+      process.stderr.write(`[colour] recording wide-gamut display ${displayId}\n`);
       await sleep(1000); // let the window reach the display before the first frame
 
       const proc = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe", "pipe"] });
@@ -62,7 +73,7 @@ describe("recording colour (STC-510)", () => {
       };
       try {
         await waitFor(() => fd3.find((l) => l.ev === "ready"), 10_000, "ready");
-        proc.stdin!.write(JSON.stringify({ cmd: "start", dir, seq: 1 }) + "\n");
+        proc.stdin!.write(JSON.stringify({ cmd: "start", dir, displayId, seq: 1 }) + "\n");
         const started = await waitFor(() => fd3.find((l) => l.seq === 1), 20_000, "start outcome");
         if (started.ev !== "started") throw explainFailedStart(started, "the colour recording");
         await sleep(3000);

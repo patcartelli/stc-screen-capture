@@ -510,9 +510,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.unlock()
         captureScope = target.scope
         let displaySpace = CGDisplayCopyColorSpace(CGDirectDisplayID(target.geometry.id))
-        captureColour = decideCaptureColour(displayColorSpaceName: resolveColorSpaceName(
-            name: displaySpace.name.map { $0 as String },
-            iccDescription: displaySpace.copyICCData().flatMap { iccDescription($0 as Data) }))
+        captureColour = decideCaptureColour(
+            displayColorSpaceName: resolveColorSpaceName(
+                name: displaySpace.name.map { $0 as String },
+                iccDescription: displaySpace.copyICCData().flatMap { iccDescription($0 as Data) }),
+            isWideGamut: displaySpace.isWideGamutRGB)
         (captureW, captureH) = captureSize(target.pixelSize.width, target.pixelSize.height)
         lock.lock()
         currentShape = RefitShape(geometry: target.geometry,

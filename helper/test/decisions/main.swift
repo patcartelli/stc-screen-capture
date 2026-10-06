@@ -433,10 +433,11 @@ if case .success(let r) = parseStartRequest(["cmd": "start", "dir": "/tmp/x", "k
 }
 
 // ── capture colour (STC-510) ────────────────────────────────────────────────
-check("a Display P3 display captures in P3", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceDisplayP3"), CaptureColour.displayP3)
-check("an sRGB display stays sRGB", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceSRGB"), CaptureColour.srgb)
-check("an unnameable display stays sRGB, as every take was", decideCaptureColour(displayColorSpaceName: nil), CaptureColour.srgb)
-check("another named space is not mistaken for P3", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceAdobeRGB1998"), CaptureColour.srgb)
+check("a Display P3 display captures in P3", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceDisplayP3", isWideGamut: true), CaptureColour.displayP3)
+check("a named P3 wins even if the wide flag is absent", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceDisplayP3", isWideGamut: false), CaptureColour.displayP3)
+check("a nameless wide-gamut panel (vendor ICC profile) captures in P3", decideCaptureColour(displayColorSpaceName: nil, isWideGamut: true), CaptureColour.displayP3)
+check("an sRGB display stays sRGB", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceSRGB", isWideGamut: false), CaptureColour.srgb)
+check("a nameless narrow-gamut display stays sRGB, as every take was", decideCaptureColour(displayColorSpaceName: nil, isWideGamut: false), CaptureColour.srgb)
 
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
 exit(failures == 0 ? 0 : 1)
