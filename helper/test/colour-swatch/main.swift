@@ -13,8 +13,11 @@ app.setActivationPolicy(.accessory)
 func displayID(_ s: NSScreen) -> CGDirectDisplayID {
     CGDirectDisplayID((s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
 }
-guard let screen = NSScreen.screens.first(where: { CGDisplayCopyColorSpace(displayID($0)).isWideGamutRGB }) else {
-    print("NO_WIDE_GAMUT_DISPLAY")
+// `narrow` picks a display that is NOT wide-gamut, for the "an sRGB display's take
+// is unchanged" half of STC-510.
+let wantWide = !(CommandLine.arguments.count > 2 && CommandLine.arguments[2] == "narrow")
+guard let screen = NSScreen.screens.first(where: { CGDisplayCopyColorSpace(displayID($0)).isWideGamutRGB == wantWide }) else {
+    print(wantWide ? "NO_WIDE_GAMUT_DISPLAY" : "NO_NARROW_GAMUT_DISPLAY")
     fflush(stdout)
     exit(2)
 }
