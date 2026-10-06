@@ -103,63 +103,31 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
 export function marqueeMask(size: number): Uint8Array {
   const mask = new Uint8Array(size * size);
 
-  // Helper: set a pixel symmetrically (both mirror positions at once)
-  const setSym = (x: number, y: number) => {
-    if (x < 0 || y < 0 || x >= size || y >= size) return;
-    mask[y * size + x] = 255;
-    // Mirror horizontally and vertically for perfect symmetry
-    if (x !== size - 1 - x) mask[y * size + (size - 1 - x)] = 255;
-    if (y !== size - 1 - y) mask[(size - 1 - y) * size + x] = 255;
-    if (x !== size - 1 - x && y !== size - 1 - y) {
-      mask[(size - 1 - y) * size + (size - 1 - x)] = 255;
-    }
-  };
-
-  const center = Math.floor(size / 2);
+  // Everything is a function of `u`, so the 16 and 32 px masks are the same
+  // drawing. A solid body with a TRANSPARENT lens ring is what makes it read
+  // as a camera: an earlier version painted a solid lens over a solid body,
+  // which is invisible, and no amount of boldness fixes a shape with no detail.
+  const u = size / 16;
   const inset = Math.round(size / 8);
+  const half = size / 2;
 
-  if (size <= 16) {
-    // Small size (16px): EXTREMELY BOLD solid rectangle + large lens
-    // Fill entire camera body area heavily
-    for (let y = center - 2; y <= center + 2; y++) {
-      for (let x = center - 3; x <= center + 3; x++) {
-        setSym(x, y);
-      }
-    }
-
-    // Very large filled lens circle - solid block of pixels
-    const lensR = 2;
-    for (let dy = -lensR; dy <= lensR; dy++) {
-      for (let dx = -lensR; dx <= lensR; dx++) {
-        if (dx * dx + dy * dy <= lensR * lensR + 1) {
-          setSym(center + dx, center + dy);
-        }
-      }
-    }
-  } else {
-    // Larger size: camera body outline + lens
-    const bodyHalf = Math.round(size * 0.2);
-    const lensR = Math.round(size * 0.1);
-
-    // Camera body rectangle outline
-    for (let y = center - bodyHalf; y <= center + bodyHalf; y++) {
-      for (let x = center - bodyHalf - 1; x <= center + bodyHalf + 1; x++) {
-        const isEdge = (y === center - bodyHalf || y === center + bodyHalf ||
-                        x === center - bodyHalf - 1 || x === center + bodyHalf + 1);
-        if (isEdge) setSym(x, y);
-      }
-    }
-
-    // Lens (filled circle)
-    for (let dy = -lensR; dy <= lensR; dy++) {
-      for (let dx = -lensR; dx <= lensR; dx++) {
-        if (dx * dx + dy * dy <= lensR * lensR) {
-          setSym(center + dx, center + dy);
-        }
-      }
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      // Distances from the centre in pixel-centre coordinates; symmetric by
+      // construction, which is cheaper to trust than four mirrored writes.
+      const dx = Math.abs(x + 0.5 - half);
+      const dy = Math.abs(y + 0.5 - half);
+      const inBody = dx <= 6 * u && dy <= 5 * u;
+      // Knock the four corners off the body so it is not a bare slab.
+      const corner = dx > 6 * u - 1 * u && dy > 5 * u - 1 * u;
+      if (!inBody || corner) continue;
+      const d = Math.hypot(dx, dy);
+      const ring = d > 1.6 * u && d < 3.6 * u;
+      if (ring) continue;
+      if (x < inset || x > size - 1 - inset || y < inset || y > size - 1 - inset) continue;
+      mask[y * size + x] = 255;
     }
   }
-
   return mask;
 }
 
