@@ -92,3 +92,50 @@ let a = mean(nums[0], nums[1], nums[2], nums[3])
 let b = mean(nums[4], nums[5], nums[6], nums[7])
 print(String(format: "RECT1_P3=%.3f,%.3f,%.3f", a.0, a.1, a.2))
 print(String(format: "RECT2_P3=%.3f,%.3f,%.3f", b.0, b.1, b.2))
+
+// RAW: the encoded values exactly as the decoder hands them over, with NO colour
+// management in between. The RECT*_P3 lines above go through AVAssetImageGenerator
+// and a CGContext conversion, and on the first P3 take they read like one extra
+// sRGB->P3 conversion — so either the file is wrong or this probe's decode is.
+// If the file's pixels are right, RAW1 is ~(0,1,0) and RAW2 ~(0.46,0.99,0.30).
+func rawMeans() -> [(Double, Double, Double)]? {
+    guard let reader = try? AVAssetReader(asset: asset) else { return nil }
+    var vt: AVAssetTrack?
+    let s2 = DispatchSemaphore(value: 0)
+    Task { vt = try? await asset.loadTracks(withMediaType: .video).first; s2.signal() }
+    s2.wait()
+    guard let vt else { return nil }
+    let out = AVAssetReaderTrackOutput(track: vt, outputSettings: [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+    reader.add(out)
+    guard reader.startReading() else { return nil }
+    // The 30th frame, not the first: the first one a take delivers can precede the
+    // swatch reaching the screen and reads as all-zero, which is not a colour.
+    var sample: CMSampleBuffer?
+    for _ in 0..<30 { guard let s = out.copyNextSampleBuffer() else { break }; sample = s }
+    guard let sample, let pb = CMSampleBufferGetImageBuffer(sample) else { return nil }
+    CVPixelBufferLockBaseAddress(pb, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+    guard let base = CVPixelBufferGetBaseAddress(pb) else { return nil }
+    let bpr = CVPixelBufferGetBytesPerRow(pb)
+    let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
+    let p = base.assumingMemoryBound(to: UInt8.self)
+    var res: [(Double, Double, Double)] = []
+    for k in [0, 4] {
+        var r = 0.0, g = 0.0, b = 0.0, n = 0.0
+        for row in nums[k + 1]..<min(nums[k + 1] + nums[k + 3], h) {
+            for col in nums[k]..<min(nums[k] + nums[k + 2], w) {
+                let i = row * bpr + col * 4
+                b += Double(p[i]); g += Double(p[i + 1]); r += Double(p[i + 2]); n += 1
+            }
+        }
+        res.append(n == 0 ? (0, 0, 0) : (r / n / 255, g / n / 255, b / n / 255))
+    }
+    return res
+}
+if let raw = rawMeans() {
+    print(String(format: "RAW1=%.3f,%.3f,%.3f", raw[0].0, raw[0].1, raw[0].2))
+    print(String(format: "RAW2=%.3f,%.3f,%.3f", raw[1].0, raw[1].1, raw[1].2))
+} else {
+    print("RAW=unavailable")
+}

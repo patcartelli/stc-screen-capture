@@ -22,6 +22,9 @@ print("SWATCH_DISPLAY=\(displayID(screen))")
 
 let win = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
 win.level = .screenSaver
+// Explicit, or the window may be matched to sRGB and a P3 colour is clipped before
+// anything can capture it — which would make this swatch a test of itself.
+win.colorSpace = NSColorSpace.displayP3
 win.isOpaque = true
 win.backgroundColor = .black
 let w = screen.frame.width, h = screen.frame.height
