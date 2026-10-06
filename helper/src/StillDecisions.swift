@@ -375,17 +375,67 @@ func iccDescription(_ data: Data) -> String? {
     return nil
 }
 
-/// The `display.colorSpace` string for a captured image (STC-478).
+/// The red, green and blue colorants of an ICC profile as nine numbers
+/// (rX rY rZ gX gY gZ bX bY bZ, D50-adapted, as the profile stores them), or nil
+/// when the profile has no `rXYZ`/`gXYZ`/`bXYZ` tags (a LUT-based profile) or is
+/// not a profile at all (STC-511). Pure, like `iccDescription`.
+func iccColorants(_ data: Data) -> [Double]? {
+    let b = [UInt8](data)
+    func u32(_ o: Int) -> Int? {
+        guard o >= 0, o + 4 <= b.count else { return nil }
+        return Int(b[o]) << 24 | Int(b[o + 1]) << 16 | Int(b[o + 2]) << 8 | Int(b[o + 3])
+    }
+    func s15Fixed16(_ o: Int) -> Double? {
+        guard let v = u32(o) else { return nil }
+        return Double(Int32(truncatingIfNeeded: v)) / 65536.0
+    }
+    guard b.count >= 132, let count = u32(128), count < 1000 else { return nil }
+    var found: [Int: [Double]] = [:]
+    for i in 0..<count {
+        let e = 132 + i * 12
+        guard let sig = u32(e), let off = u32(e + 4), let size = u32(e + 8) else { return nil }
+        guard sig == 0x7258595A || sig == 0x6758595A || sig == 0x6258595A else { continue } // rXYZ gXYZ bXYZ
+        guard size >= 20, off + 20 <= b.count, u32(off) == 0x58595A20 /* 'XYZ ' */,
+              let x = s15Fixed16(off + 8), let y = s15Fixed16(off + 12), let z = s15Fixed16(off + 16)
+        else { return nil }
+        found[sig] = [x, y, z]
+    }
+    guard let r = found[0x7258595A], let g = found[0x6758595A], let bl = found[0x6258595A] else { return nil }
+    return r + g + bl
+}
+
+/// Display P3's and sRGB's colorants, D50-adapted, as the OS's own profiles
+/// carry them. The built-in screen's profile matches the first to four decimals
+/// and an sRGB monitor's the second (STC-511); the two differ from each other
+/// by ~0.08 on the red X, so `COLORANT_TOLERANCE` is nowhere near ambiguous.
+private let displayP3Colorants: [Double] = [0.5151, 0.2412, -0.0011, 0.2920, 0.6922, 0.0419, 0.1571, 0.0666, 0.7841]
+private let srgbColorants: [Double] = [0.4361, 0.2225, 0.0139, 0.3851, 0.7169, 0.0971, 0.1431, 0.0606, 0.7141]
+private let COLORANT_TOLERANCE = 0.01
+
+private func colorantsMatch(_ a: [Double], _ b: [Double]) -> Bool {
+    a.count == b.count && zip(a, b).allSatisfy { abs($0 - $1) <= COLORANT_TOLERANCE }
+}
+
+/// The `display.colorSpace` string for a captured image (STC-478, STC-511).
 ///
 /// CoreGraphics gives an ICC-based colour space — what a Mac's own display
 /// profile arrives as — no name, so `name` is nil for a perfectly good Display
 /// P3 capture, and the key used to be dropped, which every consumer reads as
-/// sRGB. A name wins when there is one; otherwise the profile's own
-/// description decides. Anything unrecognised stays nil: omitting the key is
-/// the honest answer for a space we cannot name, and it is what the loaders
-/// already treat as sRGB.
-func resolveColorSpaceName(name: String?, iccDescription: String?) -> String? {
+/// sRGB. A name wins when there is one. Otherwise the profile's COLORANTS
+/// decide, because what a profile is does not depend on what it is called:
+/// STC-478 matched the description alone, and the built-in screen's profile
+/// is described just "Display" (CoreGraphics calls it "Color LCD"), so a real
+/// P3 still still recorded nothing. The description is the fallback for a
+/// profile whose colorants cannot be read. Anything unrecognised stays nil:
+/// omitting the key is the honest answer for a space we cannot name, and it
+/// is what the loaders already treat as sRGB.
+func resolveColorSpaceName(name: String?, iccDescription: String?, iccData: Data? = nil) -> String? {
     if let name, !name.isEmpty { return name }
+    if let iccData, let c = iccColorants(iccData) {
+        if colorantsMatch(c, displayP3Colorants) { return "kCGColorSpaceDisplayP3" }
+        if colorantsMatch(c, srgbColorants) { return "kCGColorSpaceSRGB" }
+        return nil
+    }
     guard let d = iccDescription?.lowercased() else { return nil }
     if d.contains("display p3") || d.contains("displayp3") { return "kCGColorSpaceDisplayP3" }
     if d.contains("srgb") { return "kCGColorSpaceSRGB" }
