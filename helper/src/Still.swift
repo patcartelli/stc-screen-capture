@@ -311,10 +311,13 @@ final class StillCapture {
         let alpha = Self.hasAlpha(image)
         let frame = StillFrameInfo(file: request.file, width: image.width, height: image.height,
                                    alpha: request.kind == .window && alpha)
-        // STC-478: an ICC-based space has no name, so fall back to the profile's description.
+        // STC-478/STC-511: an ICC-based space has no name, so identify it from the profile —
+        // its colorants first (the built-in screen's profile is described just "Display").
+        let iccData = (image.colorSpace?.copyICCData()).map { $0 as Data }
         let colorSpace = resolveColorSpaceName(
             name: image.colorSpace?.name.map { $0 as String },
-            iccDescription: (image.colorSpace?.copyICCData()).flatMap { iccDescription($0 as Data) })
+            iccDescription: iccData.flatMap { iccDescription($0) },
+            iccData: iccData)
         let doc = shotDocument(kind: request.kind, capturedAtNs: capturedAtNs,
                                timebase: (Int(Clock.timebase.numer), Int(Clock.timebase.denom)),
                                display: geometry, colorSpace: colorSpace,
