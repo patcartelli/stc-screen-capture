@@ -13,6 +13,7 @@
     "app:build": "node app/build.mjs",
     "app:start": "npm run app:build && electron .",
     "app:package": "npm run app:build && bash scripts/build-app-icon.sh && helper/build.sh && electron-builder --mac dir --publish never",
+    "release:dmg": "node scripts/release-dmg.mjs",
     "gate:export": "node scripts/gate-retry.mjs scripts/export-gate.mjs",
     "test:capture": "vitest run --config vitest.grant.config.ts",
     "gate:seek": "node scripts/gate-retry.mjs scripts/seek-gate.mjs",
