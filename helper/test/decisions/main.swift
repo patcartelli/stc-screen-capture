@@ -432,5 +432,11 @@ if case .success(let r) = parseStartRequest(["cmd": "start", "dir": "/tmp/x", "k
     check("a refit copy keeps keys (parse)", false, true)
 }
 
+// ── capture colour (STC-510) ────────────────────────────────────────────────
+check("a Display P3 display captures in P3", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceDisplayP3"), CaptureColour.displayP3)
+check("an sRGB display stays sRGB", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceSRGB"), CaptureColour.srgb)
+check("an unnameable display stays sRGB, as every take was", decideCaptureColour(displayColorSpaceName: nil), CaptureColour.srgb)
+check("another named space is not mistaken for P3", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceAdobeRGB1998"), CaptureColour.srgb)
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
 exit(failures == 0 ? 0 : 1)

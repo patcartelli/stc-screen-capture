@@ -45,6 +45,27 @@ func machToNs(_ ticks: UInt64, numer: UInt32, denom: UInt32) -> UInt64 {
 /// behind, which is exactly the case this ticket exists for.
 let movieFragmentIntervalSec: Double = 2.0
 
+/// The colour space a take is captured and tagged in (STC-510).
+///
+/// ScreenCaptureKit was never told, so a Display P3 screen was delivered as
+/// sRGB and its saturated colours were clipped before the encoder saw them; the
+/// BT.709 tags the file carried were an honest description of already-clipped
+/// pixels. A take now captures in the display's own gamut when that is P3 and
+/// is declared either way. One value per take: `AVAssetWriter` cannot retag
+/// mid-file, so a refit onto a different display keeps the take's choice.
+enum CaptureColour: Equatable {
+    case srgb
+    case displayP3
+}
+
+/// `displayColorSpaceName` is `resolveColorSpaceName`'s answer for the display
+/// (STC-478), which names an ICC-based Mac display profile that CoreGraphics
+/// leaves nameless. Anything not recognisably Display P3 — including nil, a
+/// space we cannot name — stays sRGB, which is what every take was before.
+func decideCaptureColour(displayColorSpaceName: String?) -> CaptureColour {
+    displayColorSpaceName == "kCGColorSpaceDisplayP3" ? .displayP3 : .srgb
+}
+
 enum FrameDecision: Equatable {
     /// Not a complete frame, or older than the session start. VFR emits
     /// nothing here — deliberately not a repeated frame (PHASE-0 §4).
