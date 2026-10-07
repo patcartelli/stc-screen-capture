@@ -23,8 +23,13 @@ if [ -z "${SIGN_ID:-}" ]; then
   [ -n "${SIGN_ID:-}" ] && echo "  (using untrusted-but-usable identity: $SIGN_ID)"
 fi
 
+# A Developer ID signature needs a secure timestamp or notarization rejects it (STC-508b); the
+# self-signed dev cert does not, and `--timestamp` would make every dev rebuild need the network.
+TS_FLAG="--timestamp=none"
+case "${SIGN_ID:-}" in "Developer ID Application"*) TS_FLAG="--timestamp" ;; esac
+
 if [ -n "${SIGN_ID:-}" ]; then
-  codesign --force --options runtime --timestamp=none --sign "$SIGN_ID" build/stc-helper
+  codesign --force --options runtime "$TS_FLAG" --sign "$SIGN_ID" build/stc-helper
   echo "built helper/build/stc-helper  [signed: $SIGN_ID]"
 else
   codesign --force --sign - build/stc-helper

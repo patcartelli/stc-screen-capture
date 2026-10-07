@@ -1,7 +1,8 @@
 # electron-builder.yml — STC-401. Dev-machine packaging only: this produces
 # a signed .app for local use, keeping TCC grants alive across rebuilds the
 # same way helper/build.sh already does for the Swift helper. No
-# notarization, no zip, no auto-update — see the design spec.
+# zip, no auto-update — see the design spec. `identity` below is the DEV one;
+# `npm run release:dmg` overrides it with Developer ID and notarizes (STC-508b).
 # STC-508a adds the `dmg` target. `npm run app:package` still passes
 # `--mac dir` (fast, local); `npm run release:dmg` passes `--mac dmg`.
 appId: com.studiocartelli.capture
