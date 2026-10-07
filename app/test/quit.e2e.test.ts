@@ -69,11 +69,14 @@ describe("quitting while recording", () => {
     // The subject is the ORDER of the lifecycle: stop before quit. Enumeration
     // commands (`devices`, which the display picker issues when the helper
     // comes up — STC-247; `windows`, which `runRecordFlow` issues to list the
-    // overlay's window-mode targets before it ever opens — STC-388) are not
-    // part of that order and may land anywhere before the take, so they are
-    // filtered rather than pinned.
+    // overlay's window-mode targets before it ever opens — STC-388; `status`,
+    // which the supervisor asks over fd3 to confirm a heartbeat's "idle"
+    // during a take — STC-501, STC-517: the fake helper's own heartbeat can be
+    // read after `start` on a loaded runner) are not part of that order and
+    // may land anywhere around the take, so they are filtered rather than
+    // pinned.
     const lifecycle = readFileSync(log, "utf8").trim().split("\n")
-      .filter((c) => c !== "devices" && c !== "windows");
+      .filter((c) => c !== "devices" && c !== "windows" && c !== "status");
     expect(lifecycle).toEqual(["start", "stop", "quit"]);
   }, 120_000);
 });
