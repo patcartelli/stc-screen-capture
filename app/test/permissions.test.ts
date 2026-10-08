@@ -6,21 +6,21 @@ import {
 
 const fresh: PermissionsMemory = { screenAtLaunch: null, requested: new Set() };
 const report = (o: Partial<PermissionsReport> = {}): PermissionsReport =>
-  ({ screenRecording: false, inputMonitoring: "unknown", accessibility: false, ...o });
+  ({ screenRecording: false, inputMonitoring: "unknown", ...o });
 const at = (r: PermissionsReport, requested: string[] = []) =>
   permissionsState(r, { ...remember(fresh, r), requested: new Set(requested as any) });
 const row = (s: ReturnType<typeof permissionsState>, g: string) => s.rows.find((r) => r.grant === g)!;
 
 describe("parsePermissions", () => {
   test("accepts exactly the helper's reply", () => {
-    expect(parsePermissions({ ev: "permissions", seq: 1, screenRecording: true, inputMonitoring: "denied", accessibility: false }))
-      .toEqual({ screenRecording: true, inputMonitoring: "denied", accessibility: false });
+    expect(parsePermissions({ ev: "permissions", seq: 1, screenRecording: true, inputMonitoring: "denied" }))
+      .toEqual({ screenRecording: true, inputMonitoring: "denied" });
   });
   test("refuses an error, a wrong event and a wrong field", () => {
     expect(parsePermissions({ ev: "error", code: "unknown-command" })).toBeNull();
-    expect(parsePermissions({ ev: "status", screenRecording: true, inputMonitoring: "granted", accessibility: true })).toBeNull();
-    expect(parsePermissions({ ev: "permissions", screenRecording: "yes", inputMonitoring: "granted", accessibility: true })).toBeNull();
-    expect(parsePermissions({ ev: "permissions", screenRecording: true, inputMonitoring: "maybe", accessibility: true })).toBeNull();
+    expect(parsePermissions({ ev: "status", screenRecording: true, inputMonitoring: "granted" })).toBeNull();
+    expect(parsePermissions({ ev: "permissions", screenRecording: "yes", inputMonitoring: "granted" })).toBeNull();
+    expect(parsePermissions({ ev: "permissions", screenRecording: true, inputMonitoring: "maybe" })).toBeNull();
     expect(parsePermissions(undefined)).toBeNull();
   });
 });
@@ -45,12 +45,6 @@ describe("permissionsState", () => {
     const s = at(report({ screenRecording: true, inputMonitoring: "denied" }));
     expect(blocksCapture(s, "still")).toBe(false);
     expect(blocksCapture(s, "record")).toBe(true);
-  });
-
-  test("Accessibility counts as Input Monitoring, as the helper's tap check does", () => {
-    const s = at(report({ screenRecording: true, inputMonitoring: "denied", accessibility: true }));
-    expect(row(s, "input-monitoring").status).toBe("granted");
-    expect(s.needed).toBe(false);
   });
 
   test("Screen Recording granted mid-run is RELAUNCH, never granted", () => {

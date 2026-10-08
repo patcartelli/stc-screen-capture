@@ -167,7 +167,7 @@ describe("reliable channel — fd3, request/response with sequence numbers", () 
     expect((r.displays as any[]).filter((d) => d.main).length).toBeLessThanOrEqual(1);
   });
 
-  test("permissions answers on fd3 with the panel's three fields, granted or not (STC-476)", async () => {
+  test("permissions answers on fd3 with the panel's two fields, granted or not (STC-476)", async () => {
     // What this machine has granted is its own business; the SHAPE is the
     // contract `app/src/permissions.ts` parses.
     const h = spawnHelper();
@@ -177,7 +177,9 @@ describe("reliable channel — fd3, request/response with sequence numbers", () 
     expect(r.ev).toBe("permissions");
     expect(typeof r.screenRecording).toBe("boolean");
     expect(["granted", "denied", "unknown"]).toContain(r.inputMonitoring);
-    expect(typeof r.accessibility).toBe("boolean");
+    // No Accessibility: reading it on a never-asked Mac blocks the Input
+    // Monitoring prompt (STC-518), so the report must not touch it.
+    expect(r.accessibility).toBeUndefined();
   });
 
   test("request-permission refuses a grant it does not know, without prompting (STC-476)", async () => {

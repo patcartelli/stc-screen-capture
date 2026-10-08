@@ -16,9 +16,11 @@
  * 4. Input Monitoring's "denied" is not believed: `IOHIDCheckAccess` says it
  *    for a Mac that has never asked (VM, 2026-10-08). Grant is offered until
  *    this run has asked; macOS prompts at most once, so asking is safe.
- * 5. Accessibility also feeds the event tap (`decideEventTapAccess`), so a
- *    machine recording through it today has Input Monitoring's row granted.
- *    Asking it for a second grant would be asking for nothing.
+ * 5. No Accessibility. Reading it on a never-asked Mac writes a denied row
+ *    that makes tccd refuse the Input Monitoring request with no prompt
+ *    (STC-518, VM 2026-10-08), and this read runs at every launch. A machine
+ *    that records through Accessibility alone sees the Input Monitoring row;
+ *    one Grant click settles it.
  * 6. A report that could not be read is NOT a panel. An old or missing
  *    helper fails open. The helper's own refusals still cover the take.
  * 7. A shot needs Screen Recording only. A Record needs both.
@@ -33,7 +35,6 @@ export type ListenEvent = "granted" | "denied" | "unknown";
 export interface PermissionsReport {
   screenRecording: boolean;
   inputMonitoring: ListenEvent;
-  accessibility: boolean;
 }
 
 /** What this run of the app remembers between checks. */
@@ -77,9 +78,9 @@ export function parsePermissions(line: unknown): PermissionsReport | null {
   if (!line || typeof line !== "object") return null;
   const l = line as Record<string, unknown>;
   if (l.ev !== "permissions") return null;
-  if (typeof l.screenRecording !== "boolean" || typeof l.accessibility !== "boolean") return null;
+  if (typeof l.screenRecording !== "boolean") return null;
   if (l.inputMonitoring !== "granted" && l.inputMonitoring !== "denied" && l.inputMonitoring !== "unknown") return null;
-  return { screenRecording: l.screenRecording, inputMonitoring: l.inputMonitoring, accessibility: l.accessibility };
+  return { screenRecording: l.screenRecording, inputMonitoring: l.inputMonitoring };
 }
 
 function screenRow(r: PermissionsReport, m: PermissionsMemory): PermissionRow {
@@ -109,7 +110,7 @@ function inputRow(r: PermissionsReport, m: PermissionsMemory): PermissionRow {
     title: "Input Monitoring",
     why: "Capture draws the pointer, clicks and auto-zoom from it. A recording without it has no cursor, so Capture won't record without it.",
   };
-  if (r.inputMonitoring === "granted" || r.accessibility) {
+  if (r.inputMonitoring === "granted") {
     return { ...base, status: "granted", statusText: "Granted", actions: [] };
   }
   // NOT `inputMonitoring === "denied"`: on a Mac that has never asked,

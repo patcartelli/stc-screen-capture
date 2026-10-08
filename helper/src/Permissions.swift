@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 import IOKit.hid
-import ApplicationServices
+
 
 /// The two grants a take cannot be made without (STC-476's MVP slice), read
 /// and requested in ONE place — the ticket's "pick one place and keep it
@@ -24,9 +24,14 @@ enum Permissions {
 
     /// The `permissions` reply. Screen Recording is a bool because that is all
     /// `CGPreflightScreenCaptureAccess` says — "never asked" and "denied" are
-    /// the same `false` to it. Accessibility is reported because it also
-    /// feeds the event tap (`decideEventTapAccess`), so the panel must not
-    /// ask for Input Monitoring on a machine that records through it today.
+    /// the same `false` to it.
+    ///
+    /// NO Accessibility, on purpose (STC-518, clean VM 2026-10-08): on a
+    /// never-asked Mac `AXIsProcessTrusted()` writes a denied Accessibility
+    /// row for Capture, and tccd then refuses the Input Monitoring request
+    /// with no prompt. This read runs at every launch, so it must not touch
+    /// it. The event tap still accepts Accessibility, read only after Input
+    /// Monitoring has been asked (`CaptureSession.eventTapAccess`).
     static func report() -> [String: Any] {
         let listen: String
         switch listenEvent() {
@@ -35,8 +40,7 @@ enum Permissions {
         case .unknown: listen = "unknown"
         }
         return ["screenRecording": CGPreflightScreenCaptureAccess(),
-                "inputMonitoring": listen,
-                "accessibility": AXIsProcessTrusted()]
+                "inputMonitoring": listen]
     }
 
     /// Ask macOS for one grant. Each call raises the system prompt only when

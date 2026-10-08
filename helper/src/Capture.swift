@@ -556,14 +556,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             IO.log("STC-419: no keyboard layout snapshot; chords will be dropped, named keys still recorded")
         }
         guard let tap = makeEventTap() else {
-            // STC-518: the nil path asks too, while the state is still unknown.
-            let access = eventTapAccess()
-            if case .refuse(true) = decideEventTapAccess(
-                tapCreated: false, listenEvent: access.listenEvent,
-                accessibilityTrusted: access.accessibilityTrusted) {
-                IO.log("event tap not created and Input Monitoring was never asked; asking (STC-518)")
-                Permissions.requestListenEvent()
-            }
+            // STC-518: read (and, when missing, request) the grant anyway, so
+            // a nil tap still asks macOS. The refusal is STC-315's, unchanged.
+            _ = eventTapAccess()
             finishStart(.failure(CaptureError.eventTapUnavailable))
             return
         }
@@ -572,13 +567,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // never saw an event, and the take had no cursor anywhere. Same
         // refusal, same place — before anything of the take exists on disk.
         let access = eventTapAccess()
-        if case .refuse(let requestAccess) = decideEventTapAccess(
-            tapCreated: true, listenEvent: access.listenEvent,
-            accessibilityTrusted: access.accessibilityTrusted) {
+        if decideEventTapAccess(tapCreated: true, listenEvent: access.listenEvent,
+                                accessibilityTrusted: access.accessibilityTrusted) == .refuse {
             IO.log("event tap created but Input Monitoring is \(access.listenEvent) and " +
                    "Accessibility is \(access.accessibilityTrusted ? "on" : "off"); refusing (STC-480)")
             CFMachPortInvalidate(tap)
-            if requestAccess { Permissions.requestListenEvent() }
             finishStart(.failure(CaptureError.eventTapUnavailable))
             return
         }
@@ -1837,7 +1830,15 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// The grants that decide whether a created tap will actually deliver
     /// (STC-480): Input Monitoring, and Accessibility, which also feeds a
-    /// session tap. Both are READS — neither call prompts.
+    /// session tap.
+    ///
+    /// ORDER IS LOAD-BEARING (STC-518, clean VM 2026-10-08). When Input
+    /// Monitoring is missing it is REQUESTED here, and only then is
+    /// Accessibility read. `AXIsProcessTrusted()` on a never-asked Mac writes a
+    /// denied Accessibility row for Capture, and tccd then answers the first
+    /// Input Monitoring request with an instant denial and no prompt. A granted
+    /// machine reads nothing but Input Monitoring. Asking when macOS already
+    /// has an answer is a no-op: it prompts at most once.
     ///
     /// `STC_CAPTURE_FAULT=tap-silent` reports both as absent while the tap
     /// itself is created for real, which is exactly the VM's state: a port
@@ -1848,7 +1849,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             IO.log("STC_CAPTURE_FAULT=tap-silent: reporting Input Monitoring denied and no Accessibility")
             return (.denied, false)
         }
-        return (Permissions.listenEvent(), AXIsProcessTrusted())
+        let listen = Permissions.listenEvent()
+        if listen == .granted { return (listen, false) }
+        IO.log("Input Monitoring is \(listen); asking before reading Accessibility (STC-518)")
+        Permissions.requestListenEvent()
+        return (listen, AXIsProcessTrusted())
     }
 
     /// Runs the tap on its own thread and run loop. If the tap's run loop is

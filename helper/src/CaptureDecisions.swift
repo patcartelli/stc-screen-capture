@@ -160,10 +160,10 @@ enum EventTapAccessDecision: Equatable {
     /// The tap will deliver: record.
     case proceed
     /// Refuse the start, exactly as a nil `tapCreate` is refused (STC-315).
-    /// `requestAccess` is true whenever the grant that feeds the tap is
-    /// missing: `Permissions.requestListenEvent` raises macOS's own prompt if
-    /// it has never asked, and is a no-op if it has (macOS prompts once).
-    case refuse(requestAccess: Bool)
+    /// Asking macOS is not decided here: `CaptureSession.eventTapAccess` asks
+    /// whenever Input Monitoring is missing, BEFORE Accessibility is read
+    /// (STC-518), so the order cannot depend on this answer.
+    case refuse
 }
 
 /// Will this take's event tap actually deliver input? (STC-480)
@@ -188,15 +188,8 @@ enum EventTapAccessDecision: Equatable {
 /// reproduces on hardware at all.
 func decideEventTapAccess(tapCreated: Bool, listenEvent: ListenEventAccess,
                           accessibilityTrusted: Bool) -> EventTapAccessDecision {
-    // STC-518, measured in a clean VM 2026-10-08: `IOHIDCheckAccess` reports
-    // DENIED for an app macOS has never asked (no ListenEvent row in TCC.db at
-    // all), so "ask only while `.unknown`" never asked anyone, on either path.
-    // Asking whenever the grant is missing is safe because macOS prompts at
-    // most once; after a real answer the request is a no-op.
-    if listenEvent == .granted || accessibilityTrusted {
-        return tapCreated ? .proceed : .refuse(requestAccess: false)
-    }
-    return .refuse(requestAccess: true)
+    guard tapCreated else { return .refuse }
+    return listenEvent == .granted || accessibilityTrusted ? .proceed : .refuse
 }
 
 func decideCursorEvent(type: CGEventType, timestampNs: UInt64, t0Ns: UInt64) -> CursorEventDecision {

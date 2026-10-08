@@ -30,7 +30,7 @@ let session = null;
 let recordingStartedAt = null;
 let pasteboardFirstRead;   // STC-488 F1: when the first pasteboard-files was read
 const [fakeScreen, fakeInput] = (process.env.STC_FAKE_PERMISSIONS ?? "1,granted").split(",");
-const permissions = { screenRecording: fakeScreen === "1", inputMonitoring: fakeInput, accessibility: false };
+const permissions = { screenRecording: fakeScreen === "1", inputMonitoring: fakeInput };
 
 /** fd3 = reliable: responses and lifecycle. */
 const send = (ev, o = {}) => writeSync(3, JSON.stringify({ ev, ...o }) + "\n");
