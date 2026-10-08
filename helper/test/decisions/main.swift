@@ -126,8 +126,11 @@ check("Accessibility alone also feeds a session tap — a machine that works tod
 check("no tap at all is still STC-315's refusal, whatever the probe says",
       decideEventTapAccess(tapCreated: false, listenEvent: .granted, accessibilityTrusted: true),
       EventTapAccessDecision.refuse(requestAccess: false))
-check("no tap is not asked about twice — macOS prompted on that path itself",
+check("no tap and never asked: refused AND asked (STC-518 — macOS did not list Capture on its own)",
       decideEventTapAccess(tapCreated: false, listenEvent: .unknown, accessibilityTrusted: false),
+      EventTapAccessDecision.refuse(requestAccess: true))
+check("no tap after macOS already asked: not asked twice",
+      decideEventTapAccess(tapCreated: false, listenEvent: .denied, accessibilityTrusted: false),
       EventTapAccessDecision.refuse(requestAccess: false))
 
 // ── which camera to open (STC-286) ──────────────────────────────────────────

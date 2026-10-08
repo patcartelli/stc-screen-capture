@@ -556,6 +556,14 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             IO.log("STC-419: no keyboard layout snapshot; chords will be dropped, named keys still recorded")
         }
         guard let tap = makeEventTap() else {
+            // STC-518: the nil path asks too, while the state is still unknown.
+            let access = eventTapAccess()
+            if case .refuse(true) = decideEventTapAccess(
+                tapCreated: false, listenEvent: access.listenEvent,
+                accessibilityTrusted: access.accessibilityTrusted) {
+                IO.log("event tap not created and Input Monitoring was never asked; asking (STC-518)")
+                _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+            }
             finishStart(.failure(CaptureError.eventTapUnavailable))
             return
         }
@@ -1840,10 +1848,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             IO.log("STC_CAPTURE_FAULT=tap-silent: reporting Input Monitoring denied and no Accessibility")
             return (.denied, false)
         }
-        let raw = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
-        let listen: ListenEventAccess = raw == kIOHIDAccessTypeGranted ? .granted
-            : raw == kIOHIDAccessTypeDenied ? .denied : .unknown
-        return (listen, AXIsProcessTrusted())
+        return (Permissions.listenEvent(), AXIsProcessTrusted())
     }
 
     /// Runs the tap on its own thread and run loop. If the tap's run loop is

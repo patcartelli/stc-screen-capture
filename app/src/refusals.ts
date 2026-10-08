@@ -131,7 +131,9 @@ export interface RecordOutcome {
  *    a capture).
  */
 export function recordRefusalText(r: RecordOutcome): ToastMessage | undefined {
-  if (r.ok || r.cancelled || r.code === "record-in-flight") return undefined;
+  // `permissions-needed` (STC-476): the permissions panel was brought forward
+  // instead, and it says more than a toast could.
+  if (r.ok || r.cancelled || r.code === "record-in-flight" || r.code === "permissions-needed") return undefined;
   const code = String(r.code);
   return START_FAULTS[code] ?? {
     title: "Couldn't start recording",
@@ -156,7 +158,7 @@ export interface StillOutcome {
  * not).
  */
 export function stillNoticeText(r: StillOutcome): ToastMessage | undefined {
-  if (r.cancelled) return undefined;
+  if (r.cancelled || r.code === "permissions-needed") return undefined;
   if (r.ok) {
     return r.warning ? { title: "Shot saved with a warning", body: r.warning } : undefined;
   }

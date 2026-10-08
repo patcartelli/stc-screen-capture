@@ -112,6 +112,17 @@ final class App {
                 deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
                 mediaType: .video, position: .unspecified).devices.map { $0.localizedName }
             IO.send("camera-probe", seq: seq, ["auth": auth, "devices": devices])
+        case "permissions":
+            // STC-476: the app's permissions panel. Reads only; never prompts.
+            IO.send("permissions", seq: seq, Permissions.report())
+        case "request-permission":
+            // STC-476/518: raises macOS's own prompt when it has never asked.
+            // State-free, like `permissions`: it touches no take.
+            let grant = cmd["grant"] as? String ?? ""
+            guard Permissions.request(grant) else {
+                IO.send("error", seq: seq, ["code": "bad-request", "detail": "unknown grant \(grant)"]); return
+            }
+            IO.send("permissions", seq: seq, Permissions.report())
         case "capture-still":
             captureStill(cmd, seq: seq)
         case "copy-file":

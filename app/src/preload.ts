@@ -54,6 +54,10 @@ contextBridge.exposeInMainWorld("recorder", {
   // Reclaim space (STC-435). Takes nothing: main finds, asks and reports
   // through its own dialog and toast, so the renderer never names a path.
   reclaimSpace: () => ipcRenderer.invoke("recorder:reclaimSpace"),
+  // The required-grants panel (STC-476). The renderer names a grant and an
+  // action; main owns every URL and every call that follows.
+  permissions: () => ipcRenderer.invoke("permissions:get"),
+  permissionsAct: (grant: string, action: string) => ipcRenderer.invoke("permissions:act", grant, action),
   // The library (STC-294): one index over both kinds. The renderer asks for a
   // filtered list and is handed items it renders without knowing what kinds
   // exist — the filtering happens on this side of the bridge for exactly that
@@ -115,7 +119,10 @@ contextBridge.exposeInMainWorld("recorder", {
                       // and focuses this window, then sends this so the
                       // renderer opens the SAME sheet the profile button
                       // already does, rather than a second implementation.
-                      "ui:open-settings"];
+                      "ui:open-settings",
+                      // STC-476: the grants changed, or a capture was
+                      // refused for them and the panel must come back.
+                      "permissions:changed"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);

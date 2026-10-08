@@ -190,9 +190,13 @@ enum EventTapAccessDecision: Equatable {
 /// reproduces on hardware at all.
 func decideEventTapAccess(tapCreated: Bool, listenEvent: ListenEventAccess,
                           accessibilityTrusted: Bool) -> EventTapAccessDecision {
-    // A nil tap is STC-315's case, unchanged. macOS raises its own prompt on
-    // that path (watched 2026-09-09), so asking again would be a second one.
-    guard tapCreated else { return .refuse(requestAccess: false) }
+    // A nil tap is STC-315's case. It used to never ask, on the reasoning
+    // that macOS raises its own prompt there (watched 2026-09-09, in
+    // tools/test-host). STC-518 says it does not always: a clean VM running
+    // the notarized Capture.app never listed Capture under Input Monitoring.
+    // Asking only while the state is still `.unknown` cannot be a second
+    // prompt — a prompt macOS already showed has moved it to `.denied`.
+    guard tapCreated else { return .refuse(requestAccess: listenEvent == .unknown && !accessibilityTrusted) }
     if listenEvent == .granted || accessibilityTrusted { return .proceed }
     return .refuse(requestAccess: listenEvent == .unknown)
 }
