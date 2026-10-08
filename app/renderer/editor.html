@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html data-surface="dark">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; worker-src 'self'">
@@ -26,31 +26,15 @@
        "follow the OS" default (the still editor was moved OFF forced dark
        with his sign-off; this is the mirror-image decision for the video
        editor, asked and confirmed before writing it). Every value but --bg
-       is tokens.css's own dark media block, duplicated rather than shared
-       because this window alone deviates — index.html and still-editor.html
+       is tokens.css's own dark media block, now taken from tokens.css's own
+       `data-surface="dark"` block (STC-504; it was a pasted copy) — index.html and still-editor.html
        still track prefers-color-scheme untouched. --bg alone goes darker
        than that block's #131315: Patrick picked the near-black panel from
        an HTML variant comparison (2026-09-24, variant "B") over the shared
        dark tokens' own background — --surface and the rest stay put since
        only --bg was compared. */
-    :root {
-      color-scheme: dark;
-      --bg: #0a0a0b;
-      --surface: #1c1c1f;
-      --surface-hover: #26262a;
-      --border: rgba(255, 255, 255, .12);
-      --border-strong: rgba(255, 255, 255, .26);
-      --text: #f1f1ee;
-      --text-dim: rgba(241, 241, 238, .64);
-      --text-faint: rgba(241, 241, 238, .42);
-      --accent: #7aa2ff;
-      --accent-soft: rgba(122, 162, 255, .18);
-      --rec: #ff6b6b;
-      --rec-soft: rgba(255, 107, 107, .16);
-      --warn: #e0925a;
-      --warn-soft: rgba(224, 146, 90, .16);
-      --focus: #7aa2ff;
-    }
+    /* Same specificity as tokens.css's data-surface block; this sheet loads later. */
+    :root[data-surface="dark"] { --bg: var(--bg-deep); }
     * { box-sizing: border-box; }
     /* Full-bleed video (STC-444 Figma pass): no body padding, no gap between
        the video and the panel below it. `.editorbody` carries the padding
@@ -69,13 +53,13 @@
                     border: 1px solid var(--border); border-radius: 5px; }
     .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
-    #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid rgba(200,80,60,.5);
-             background: rgba(200,80,60,.1); display: none; white-space: pre-wrap; }
+    #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+             background: var(--warn-soft); display: none; white-space: pre-wrap; }
     #alert.show { display: block; }
 
     /* Full-bleed (STC-444 Figma pass): no rounded corners — the video runs
        edge to edge against the window's own top/left/right. */
-    #stage { width: 100%; height: auto; background: #000; border-radius: 0; display: block; }
+    #stage { width: 100%; height: auto; background: var(--black); border-radius: 0; display: block; }
     #stage[data-vieweye] { width: var(--vieweye-w); max-width: none; }
     #stagewrap { overflow-x: auto; position: relative; }
 
@@ -88,7 +72,7 @@
     #rectoverlay { position: absolute; inset: 0; cursor: crosshair; }
     #rectoverlay[hidden] { display: none; }
     #overridebox { position: absolute; border: 1.5px solid var(--zoom);
-                   background: rgba(216,138,59,.12); pointer-events: none; }
+                   background: color-mix(in srgb, var(--zoom) 12%, transparent); pointer-events: none; }
 
     /* ── the header row (STC-444, Figma pass): transport LEFT, output right
        ────────────────────────────────────────────────────────────────────
@@ -155,7 +139,7 @@
     #pippanel { position: fixed; inset: auto; margin: 0; overflow: auto; box-sizing: border-box;
                 padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                 background: var(--surface, var(--bg)); color: var(--text);
-                box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); }
+                box-shadow: var(--shadow-card); }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
     /* STC-460: the pane, redesigned. A popover still (Patrick's default: it
@@ -170,7 +154,7 @@
                   position-try-fallbacks: flip-block; inset: auto;
                   padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                   background: var(--surface, var(--bg)); color: var(--text);
-                  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+                  box-shadow: var(--shadow-card);
                   font-size: var(--type-body); width: 360px; }
     #audiopanel .audiorows { display: grid; grid-template-columns: 22px 84px minmax(0, 1fr) 7ch; gap: 14px 10px;
                              align-items: start; }
@@ -266,10 +250,10 @@
        drawn a second time, not a second control: #stage's click calls the
        same toggle, and the glyph only shows while paused. */
     #stageplay { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px;
-                 margin: -22px 0 0 -22px; pointer-events: none; color: #fff; }
+                 margin: -22px 0 0 -22px; pointer-events: none; color: var(--text); }
     /* A dark hairline rather than a CSS drop-shadow: a filter over a canvas
        that repaints every frame re-rasterises with it. */
-    #stageplay path { stroke: rgba(0,0,0,.45); stroke-width: .6; paint-order: stroke; }
+    #stageplay path { stroke: var(--handle-edge); stroke-width: .6; paint-order: stroke; }
     #stageplay[hidden] { display: none; }
     #stage { cursor: pointer; }
 
@@ -278,7 +262,7 @@
        preload bridge exposes no menu channel, and this is a rough-in. */
     #framemenu { position: fixed; z-index: 20; min-width: 170px; padding: 4px;
                  background: var(--surface); border: 1px solid var(--border-strong);
-                 border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+                 border-radius: 8px; box-shadow: var(--shadow-card);
                  display: flex; flex-direction: column; }
     #framemenu[hidden] { display: none; }
     #framemenu button { border: none; border-radius: 5px; text-align: left; padding: 5px 8px;
@@ -336,8 +320,8 @@
        dots and glow were tried and dropped; the Zoom lane's dithered fill is
        the only place that texture survived. */
     #ruler-ticks { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; pointer-events: none; }
-    .ruler-tick { position: absolute; bottom: 0; height: 8px; background: rgba(241, 241, 238, .55); }
-    .ruler-tick.minor { height: 4px; background: rgba(241, 241, 238, .25); }
+    .ruler-tick { position: absolute; bottom: 0; height: 8px; background: color-mix(in srgb, var(--text) 55%, transparent); }
+    .ruler-tick.minor { height: 4px; background: color-mix(in srgb, var(--text) 25%, transparent); }
     #ruler-played { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); pointer-events: none; }
     #ruler-playhead { position: absolute; bottom: 0; height: 14px; margin-left: -1px; background: var(--text); pointer-events: none; }
     /* Bookmarks (STC-444 slice 4): one marker per project.bookmarks entry,
@@ -361,7 +345,7 @@
        — the ticket's own "dimming across lanes". #cut-head/#cut-tail (Clip)
        and #zoom-cut-head/#zoom-cut-tail (Zoom) all just place one of these;
        editor.ts's updateTrimUI sets left/width on all four the same way. */
-    .lanedim { position: absolute; top: 0; height: 100%; background: rgba(0, 0, 0, .45); pointer-events: none; }
+    .lanedim { position: absolute; top: 0; height: 100%; background: var(--scrim); pointer-events: none; }
     .laneviewport { position: relative; overflow: hidden; height: 30px;
                     border-bottom: 1px solid var(--border); }
     /* 2026-09-24 hardware pass: a clear break before Zoom rather than the
@@ -410,7 +394,7 @@
     .zoomblock { position: absolute; top: 0; height: 100%; min-width: 6px;
                  background: transparent; border: none; padding: 0; margin: 0;
                  cursor: pointer; border-radius: 3px; }
-    .zoomblock:hover { background: rgba(216,138,59,.15); }
+    .zoomblock:hover { background: color-mix(in srgb, var(--zoom) 15%, transparent); }
     .zoomblock.selected { outline: 1.5px solid var(--zoom); outline-offset: -1.5px; }
     .zoomblock.overridden::after { content: ""; position: absolute; left: 2px; right: 2px;
                                     bottom: 1px; height: 2px; background: var(--zoom); border-radius: 1px; }
@@ -418,7 +402,7 @@
        than solid, the one visual cue distinguishing "authored from nothing"
        from "tuning something auto-zoom already opened". #manualdraft reuses
        this plus .selected, since it is only ever shown while being edited. */
-    .zoomblock.manual { border: 1px dashed var(--zoom); background: rgba(216,138,59,.08); }
+    .zoomblock.manual { border: 1px dashed var(--zoom); background: color-mix(in srgb, var(--zoom) 8%, transparent); }
     #manualdraft[hidden] { display: none; }
     /* The two edges a window's own timing is dragged from — a manual
        window's (STC-331) or, since STC-329, a DERIVED window's own retime —
@@ -438,8 +422,8 @@
                        pointer-events: none; opacity: .5;
                        background-image: repeating-linear-gradient(to right,
                          currentColor 0 1px, transparent 1px var(--tick-px, 12px));
-                       -webkit-mask-image: linear-gradient(to bottom, #000 0 4px, transparent 4px);
-                       mask-image: linear-gradient(to bottom, #000 0 4px, transparent 4px); }
+                       -webkit-mask-image: linear-gradient(to bottom, black 0 4px, transparent 4px);
+                       mask-image: linear-gradient(to bottom, black 0 4px, transparent 4px); }
     .timeline .ticks[hidden] { display: none; }
     /* Trim brackets (STC-444 slice 2, HTML variant comparison): `[`/`]`
        glyphs at a 1px stroke, replacing the old filled rectangle — chosen
@@ -489,7 +473,7 @@
     dialog#exportdialog { border: 1px solid var(--border); border-radius: 10px;
                           padding: 16px; background: var(--surface); color: inherit;
                           width: min(420px, 90vw); }
-    dialog#exportdialog::backdrop { background: rgba(0,0,0,.35); }
+    dialog#exportdialog::backdrop { background: var(--scrim); }
     .dialogrow { display: flex; align-items: center; gap: 8px; font-size: var(--type-body);
                 margin-top: 8px; flex-wrap: wrap; }
     .dialogrow:first-child { margin-top: 0; }

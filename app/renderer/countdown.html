@@ -1,31 +1,32 @@
 <!doctype html>
-<html>
+<html data-surface="dark">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'">
   <title>countdown</title>
+  <link rel="stylesheet" href="tokens.css">
   <style>
     /*
       STC-391. The window is transparent and borderless — everything that reads
       as "a panel" is this card's own background and shadow, the same
       arrangement `thumbnail.html` uses.
     */
-    :root { color-scheme: light dark; }
+    /* Dark always — it sits on the user's screen (STC-504, tokens.css). */
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
       background: transparent; overflow: hidden;
-      font: 12px/1.4 -apple-system, system-ui, sans-serif;
+      font: var(--type-body-weight) var(--type-body)/var(--type-body-lh) var(--font-sans);
       -webkit-user-select: none; user-select: none;
     }
     #card {
       position: absolute; inset: 8px;
-      border-radius: 16px;
-      background: rgba(30, 30, 32, 0.86);
-      color: #f2f2f2;
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      border-radius: var(--radius-card);
+      background: var(--card-bg);
+      color: var(--text);
+      box-shadow: var(--shadow-card);
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      gap: 6px;
+      gap: var(--space-2);
     }
     #dial { position: relative; width: 72px; height: 72px; }
     #ring { position: absolute; inset: 0; }
@@ -34,29 +35,30 @@
       is where an SVG circle's dash offset would otherwise begin.
     */
     #ring { transform: rotate(-90deg); }
-    #track { fill: none; stroke: rgba(255, 255, 255, 0.16); stroke-width: 4; }
+    #track { fill: none; stroke: var(--overlay-fill-hover); stroke-width: 4; }
     #sweep {
-      fill: none; stroke: #7aa2ff; stroke-width: 4; stroke-linecap: round;
-      transition: stroke-dashoffset 120ms linear;
+      fill: none; stroke: var(--accent); stroke-width: 4; stroke-linecap: round;
+      transition: stroke-dashoffset var(--dur-quick) linear;
     }
     #count {
       position: absolute; inset: 0;
       display: flex; align-items: center; justify-content: center;
-      font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums;
+      font-size: var(--type-count); font-weight: var(--type-count-weight); line-height: var(--type-count-lh);
+      font-variant-numeric: tabular-nums;
     }
-    #caption { font-size: 12px; opacity: 0.72; }
-    #actions { display: flex; gap: 8px; margin-top: 4px; }
+    #caption { font-size: var(--type-body); color: var(--text-dim); }
+    #actions { display: flex; gap: var(--space-3); margin-top: var(--space-1); }
     button {
-      font: inherit; font-size: 12px;
-      padding: 5px 14px; border-radius: 999px;
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      background: rgba(255, 255, 255, 0.08); color: inherit;
+      font: inherit; font-size: var(--type-body);
+      padding: 5px 14px; border-radius: var(--radius-pill);
+      border: 1px solid var(--border);
+      background: var(--overlay-fill-faint); color: inherit;
       cursor: pointer;
     }
-    button:hover { background: rgba(255, 255, 255, 0.16); }
-    #skip { border-color: rgba(122, 162, 255, 0.5); }
+    button:hover { background: var(--overlay-fill); }
+    #skip { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
     kbd {
-      font: inherit; font-size: 10px; opacity: 0.6; margin-left: 4px;
+      font: inherit; font-size: var(--type-label); color: var(--text-dim); margin-left: var(--space-1);
     }
     /*
       Reduced motion (STC-391 rule 5): the ring goes, the COUNT goes on

@@ -185,8 +185,8 @@
     /* The one fact a picture-less recording CAN still state (STC-429) — the
        duration already sits in `summary` too, but a corner chip is what a
        glance actually reads, the same idiom Finder/Photos use. */
-    .libdur { position: absolute; right: 6px; bottom: 6px; background: rgba(0, 0, 0, .68);
-              color: #fff; font-family: var(--font-mono); font-size: 10px;
+    .libdur { position: absolute; right: 6px; bottom: 6px; background: var(--on-image-scrim);
+              color: var(--on-image); font-family: var(--font-mono); font-size: 10px;
               padding: 2px 6px; border-radius: 4px; letter-spacing: .02em; }
     /* A second door to "open" (STC-429) — see `wireOpenOnThumb`. */
     .libthumb.clickable { cursor: pointer; }
@@ -266,7 +266,7 @@
     #profilesheet {
       position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 92vw);
       background: var(--surface); border-left: 1px solid var(--border);
-      box-shadow: -12px 0 28px rgba(0, 0, 0, .16);
+      box-shadow: var(--shadow-sheet);
       transform: translateX(100%); transition: transform .18s ease;
       padding: 20px; box-sizing: border-box; overflow-y: auto;
       display: flex; flex-direction: column; gap: 16px; z-index: 10;

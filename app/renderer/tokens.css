@@ -86,6 +86,60 @@
   --warn-soft: rgba(185, 80, 44, .12);
   --focus: #4f86ff;
 
+  /* ── Short-lived surfaces (STC-504) ───────────────────────────────────
+     The countdown, the floating panel and the selection overlay. Theme rule
+     (2026-09-12): a surface's theme follows WHAT IT SITS ON.
+       · selection overlay  — on the user's screen        → DARK ALWAYS
+       · countdown          — on the user's screen        → DARK ALWAYS
+       · floating panel     — in a desktop corner, over    → DARK ALWAYS
+                              someone else's content (decided STC-504)
+       · the pill           — dark always (index.html / pill.ts)
+     Those pages opt in with <html data-surface="dark"> (block below), so the
+     OS appearance cannot make a translucent card unreadable over a bright or
+     dark desktop. Every value here is theme-INVARIANT: it is only ever read
+     inside a dark surface, so it lives once, outside the media query. */
+  --scrim: rgba(0, 0, 0, .42);                    /* the dim over the display */
+  --surface-deep: #0f0f0f;                        /* Record options bar / menus */
+  --surface-deep-hover: #1f1f1f;
+  --card-bg: rgba(30, 30, 32, .86);               /* translucent card (countdown, panel) */
+  --chip-bg: rgba(20, 20, 22, .86);               /* readout chips, legend */
+  --overlay-fill-faint: rgba(255, 255, 255, .08);  /* hover wash on dark */
+  --overlay-fill: rgba(255, 255, 255, .12);        /* control / track / key-cap fill */
+  --overlay-fill-hover: rgba(255, 255, 255, .20);
+  --handle-edge: rgba(0, 0, 0, .55);              /* hairline round a white handle */
+  --shadow-chip: 0 2px 8px rgba(0, 0, 0, .35);
+  --shadow-card: 0 6px 24px rgba(0, 0, 0, .35);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, .45);
+  --shadow-sheet: -12px 0 28px rgba(0, 0, 0, .16); /* the profile slide-over */
+  --bg-deep: #0a0a0b;        /* the video editor's near-black panel (STC-444, variant B) */
+  --black: #000000;          /* video letterbox / stage */
+  --on-image: #ffffff;       /* text over a thumbnail, in either theme */
+  --on-image-scrim: rgba(0, 0, 0, .68);
+
+  /* Radius — named by use. */
+  --radius-xs: 2px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-card: 16px;   /* the countdown card, the panel card, the bar */
+  --radius-pill: 999px;
+
+  /* Spacing — only the steps these surfaces repeat. Off-scale one-offs (a 5px
+     button pad, a 7px legend pad) are left as written: snapping them would be
+     a layout change, and this ticket is values only. */
+  --space-1: 4px; --space-2: 6px; --space-3: 8px;
+  --space-4: 10px; --space-5: 12px; --space-6: 16px;
+
+  /* Duration */
+  --dur-quick: 120ms;   /* hover fades, the countdown sweep */
+  --dur-base: 160ms;    /* panel enter / swipe release */
+  --dur-move: 180ms;    /* Expand's marquee glide */
+
+  /* Countdown numerals. NOT --type-timer: that is Silkscreen and Silkscreen
+     renders elapsed take time and nothing else. The countdown is time until a
+     take STARTS, so it is Geist (STC-504 checked — it was already a system
+     sans, never pixel; this keeps it that way, on the token system). */
+  --type-count: 34px; --type-count-weight: 600; --type-count-lh: 1;
+
   font-family: var(--font-sans);
   font-size: var(--type-body);
   line-height: 1.5;
@@ -108,4 +162,27 @@
     --warn-soft: rgba(224, 146, 90, .16);
     --focus: #7aa2ff;
   }
+}
+
+/* Dark-always surfaces (STC-504). Same values as the prefers-color-scheme
+   block above, repeated — CSS cannot share one declaration list between a
+   media query and an attribute selector. `tokens-parity.test.ts` holds the two
+   lists equal, so a change to one that forgets the other fails. */
+:root[data-surface="dark"] {
+  color-scheme: dark;
+  --bg: #131315;
+  --surface: #1c1c1f;
+  --surface-hover: #26262a;
+  --border: rgba(255, 255, 255, .12);
+  --border-strong: rgba(255, 255, 255, .26);
+  --text: #f1f1ee;
+  --text-dim: rgba(241, 241, 238, .64);
+  --text-faint: rgba(241, 241, 238, .42);
+  --accent: #7aa2ff;
+  --accent-soft: rgba(122, 162, 255, .18);
+  --rec: #ff6b6b;
+  --rec-soft: rgba(255, 107, 107, .16);
+  --warn: #e0925a;
+  --warn-soft: rgba(224, 146, 90, .16);
+  --focus: #7aa2ff;
 }

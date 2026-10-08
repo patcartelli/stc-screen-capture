@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html data-surface="dark">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'">
@@ -17,7 +17,7 @@
     margin: 0; padding: 0; width: 100%; height: 100%;
     overflow: hidden; background: transparent;
     user-select: none; -webkit-user-select: none; cursor: crosshair;
-    font: 12px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    font: var(--type-body-weight) var(--type-body)/var(--type-body-lh) var(--font-sans);
   }
   body.window-mode { cursor: default; }
 
@@ -29,20 +29,20 @@
      moves, and there is exactly one thing to keep in sync with the state. */
   #marquee {
     position: absolute; box-sizing: border-box;
-    box-shadow: 0 0 0 100000px rgba(0, 0, 0, 0.42);
-    border: 1px solid rgba(255, 255, 255, 0.95);
+    box-shadow: 0 0 0 100000px var(--scrim);
+    border: 1px solid var(--text);
     display: none;
   }
   /* Only Expand adds this class. Drawing and resizing a marquee must stay
      under the pointer, rather than easing after it. */
   #marquee.expand-transition {
-    transition: left 180ms ease-out, top 180ms ease-out,
-                width 180ms ease-out, height 180ms ease-out;
+    transition: left var(--dur-move) ease-out, top var(--dur-move) ease-out,
+                width var(--dur-move) ease-out, height var(--dur-move) ease-out;
   }
   /* Before the first drag the whole display is dimmed, with no hole at all. */
   #scrim {
     position: absolute; inset: 0;
-    background: rgba(0, 0, 0, 0.42);
+    background: var(--scrim);
   }
   body.has-selection #scrim, body.window-mode #scrim { display: none; }
   body.window-mode #marquee { display: none; }
@@ -51,8 +51,8 @@
      hairline so they read against both a bright and a dark backdrop. */
   .handle {
     position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px;
-    background: #fff; border: 1px solid rgba(0, 0, 0, 0.55); border-radius: 1px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    background: var(--text); border: 1px solid var(--handle-edge); border-radius: var(--radius-xs);
+    box-shadow: var(--shadow-chip);
   }
   .handle.nw { cursor: nwse-resize } .handle.se { cursor: nwse-resize }
   .handle.ne { cursor: nesw-resize } .handle.sw { cursor: nesw-resize }
@@ -63,81 +63,81 @@
      target reads as picked rather than merely outlined. */
   #highlight {
     position: absolute; display: none; box-sizing: border-box;
-    border: 2px solid rgba(120, 180, 255, 0.95);
-    background: rgba(90, 160, 255, 0.16);
-    border-radius: 6px;
+    border: 2px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: var(--radius-sm);
   }
   /* Hovering a window the picker refuses to pick (STC-380) — dashed and dim
      rather than the solid blue "this is what Return takes", and no fill, so
      it reads as "here, but not selectable" rather than "selected". */
   #highlight.not-fully-visible {
-    border: 2px dashed rgba(255, 255, 255, 0.55);
+    border: 2px dashed var(--text-dim);
     background: transparent;
   }
 
   /* Readouts. Positioned by script; styled to stay legible over anything. */
   .chip {
     position: absolute; display: none;
-    padding: 4px 8px; border-radius: 6px;
-    background: rgba(20, 20, 22, 0.86); color: #fff;
+    padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm);
+    background: var(--chip-bg); color: var(--text);
     font-variant-numeric: tabular-nums;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow-chip);
     white-space: nowrap; pointer-events: none;
   }
-  #size { font-weight: 600; }
+  #size { font-weight: var(--type-body-strong-weight); }
   #title { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
 
   /* The legend. The overlay has no chrome, so the keys have to be stated. */
   #legend {
     position: absolute; left: 50%; transform: translateX(-50%);
-    padding: 7px 12px; border-radius: 8px;
-    background: rgba(20, 20, 22, 0.82); color: rgba(255, 255, 255, 0.92);
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    padding: 7px var(--space-5); border-radius: var(--radius-md);
+    background: var(--chip-bg); color: var(--text);
+    box-shadow: var(--shadow-chip);
     pointer-events: none; white-space: nowrap;
   }
   #legend kbd {
-    font: inherit; font-weight: 600;
-    padding: 1px 5px; margin: 0 2px; border-radius: 4px;
-    background: rgba(255, 255, 255, 0.16);
+    font: inherit; font-weight: var(--type-body-strong-weight);
+    padding: 1px 5px; margin: 0 2px; border-radius: var(--radius-xs);
+    background: var(--overlay-fill);
   }
   #legend .sep { opacity: 0.4; margin: 0 6px; }
 
   /* The Record options bar (STC-456; Patrick's Figma, Capture SK 016 Frame 9).
-     Dark in BOTH OS appearances: surface #0f0f0f, on-surface #fff. Geist for
+     Dark in BOTH OS appearances (data-surface="dark"): --surface-deep on --text. Geist for
      everything but the size field, which is JetBrains Mono. Every rect is
      decided by record-options.ts and placed by overlay.ts; this only paints.
      #pane is a background with no children, so every control is a sibling
      positioned in the same window-local space. */
-  :root { --menu-surface: #0f0f0f; --menu-on-surface: #ffffff; }
+  :root { --menu-surface: var(--surface-deep); --menu-on-surface: var(--text); }
   #bar { position: fixed; pointer-events: none; }
   #pane, #ctl-record {
-    position: fixed; box-sizing: border-box; border-radius: 16px;
-    background: #0f0f0f; color: #ffffff; pointer-events: auto; cursor: default;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+    position: fixed; box-sizing: border-box; border-radius: var(--radius-card);
+    background: var(--surface-deep); color: var(--text); pointer-events: auto; cursor: default;
+    box-shadow: var(--shadow-pop);
     font: 400 13px/1 var(--font-sans);
   }
   .ctl { position: fixed; box-sizing: border-box; display: flex; align-items: center;
-         justify-content: center; border-radius: 8px; color: rgba(255,255,255,.72);
+         justify-content: center; border-radius: var(--radius-md); color: var(--text-dim);
          pointer-events: auto; cursor: default; }
-  .ctl:hover { color: #fff; background: rgba(255,255,255,.08); }
-  .ctl[data-on="1"] { color: #fff; }
+  .ctl:hover { color: var(--text); background: var(--overlay-fill-faint); }
+  .ctl[data-on="1"] { color: var(--text); }
   #ctl-clicks[data-on="0"] { opacity: .45; }   /* a toggle: off must read as off, not as hover-less */
   .ctl[data-enabled="0"] { opacity: .32; }
-  .ctl[data-enabled="0"]:hover { background: none; color: rgba(255,255,255,.72); }
+  .ctl[data-enabled="0"]:hover { background: none; color: var(--text-dim); }
   .ctl svg { width: 20px; height: 20px; flex: none; fill: currentColor; }
   .ctl svg.caret { width: 16px; height: 16px; margin-left: 2px; }
-  #ctl-size { justify-content: flex-start; gap: 8px; padding: 0 4px; color: #fff;
+  #ctl-size { justify-content: flex-start; gap: var(--space-3); padding: 0 var(--space-1); color: var(--text);
               font: 400 24px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
   #ctl-size:hover { background: none; }
   #ctl-size input { all: unset; field-sizing: content; min-width: 1ch; font: inherit;
-                    color: inherit; caret-color: #fff; cursor: text; }
-  #ctl-size input:focus { box-shadow: 0 1px 0 rgba(255,255,255,.6); }
+                    color: inherit; caret-color: var(--text); cursor: text; }
+  #ctl-size input:focus { box-shadow: 0 1px 0 var(--text-dim); }
   #ctl-size .x { opacity: .72; }
   #ctl-expand::before { content: ""; position: absolute; left: -9px; top: 6px; bottom: 6px;
-                        width: 1px; background: rgba(255,255,255,.18); }
-  #ctl-record { justify-content: flex-start; gap: 10px; padding: 0 16px; color: #fff;
+                        width: 1px; background: var(--border); }
+  #ctl-record { justify-content: flex-start; gap: var(--space-4); padding: 0 var(--space-6); color: var(--text);
                 font: 500 14px/1 var(--font-sans); }
-  #ctl-record:hover { background: #1f1f1f; }
+  #ctl-record:hover { background: var(--surface-deep-hover); }
   #ctl-record .label { flex: 1; }
   #ctl-record .kbd { display: flex; opacity: .56; }
   #menu { cursor: default; }

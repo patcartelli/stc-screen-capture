@@ -1,15 +1,16 @@
 <!doctype html>
-<html>
+<html data-surface="dark">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:">
   <title>shot</title>
+  <link rel="stylesheet" href="tokens.css">
   <style>
-    :root { color-scheme: light dark; }
+    /* Dark always — over someone else's desktop corner (STC-504, tokens.css). */
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
       background: transparent; overflow: hidden;
-      font: 12px/1.4 -apple-system, system-ui, sans-serif;
+      font: var(--type-body-weight) var(--type-body)/var(--type-body-lh) var(--font-sans);
     }
     /*
       The window itself is transparent and borderless (STC-296) — everything
@@ -19,14 +20,14 @@
     */
     #card {
       position: absolute; inset: 8px;
-      border-radius: 14px;
-      background: rgba(30, 30, 32, 0.82);
-      color: #f2f2f2;
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      border-radius: var(--radius-card);
+      background: var(--card-bg);
+      color: var(--text);
+      box-shadow: var(--shadow-card);
       display: flex; flex-direction: column;
       overflow: hidden;
       opacity: 0; transform: scale(0.92);
-      transition: opacity 160ms ease-out, transform 160ms ease-out;
+      transition: opacity var(--dur-base) ease-out, transform var(--dur-base) ease-out;
       cursor: default;
     }
     #card.in { opacity: 1; transform: scale(1); }
@@ -46,42 +47,42 @@
     #dismiss {
       position: absolute; top: 6px; right: 6px; z-index: 1;
       width: 20px; height: 20px; padding: 0; line-height: 1;
-      border: none; border-radius: 999px;
-      background: rgba(255, 255, 255, 0.12); color: #f2f2f2;
-      font-size: 15px; cursor: pointer;
+      border: none; border-radius: var(--radius-pill);
+      background: var(--overlay-fill); color: var(--text);
+      font-size: var(--type-title); cursor: pointer;
     }
-    #dismiss:hover { background: rgba(255, 255, 255, 0.22); }
+    #dismiss:hover { background: var(--overlay-fill-hover); }
     #thumbwrap {
       flex: 1; display: flex; align-items: center; justify-content: center;
-      padding: 10px 10px 0;
+      padding: var(--space-4) var(--space-4) 0;
       min-height: 0;
     }
-    #thumbcanvas { max-width: 100%; max-height: 100%; display: block; border-radius: 6px; }
+    #thumbcanvas { max-width: 100%; max-height: 100%; display: block; border-radius: var(--radius-sm); }
     /* A recording has no picture in v1 (D2) — see thumbnail.html's own markup
        comment below. Sized and centered the same as #thumbwrap so the card's
        layout does not jump between the two takecard kinds. */
     #takecard { flex: 1; display: flex; flex-direction: column;
                 align-items: center; justify-content: center; text-align: center; }
     #takemeta { opacity: 0.7; margin-top: 2px; }
-    #copyprogress { width: 100%; height: 4px; margin-top: 6px; accent-color: var(--accent); }
+    #copyprogress { width: 100%; height: var(--space-1); margin-top: var(--space-2); accent-color: var(--accent); }
     #copyprogress[hidden] { display: none; }
-    #controls { padding: 8px 10px 10px; }
-    .row { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    #controls { padding: var(--space-3) var(--space-4) var(--space-4); }
+    .row { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
     select, button {
-      font: inherit; color: inherit; background: rgba(255, 255, 255, 0.12);
-      border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 6px;
-      padding: 4px 8px; cursor: pointer;
+      font: inherit; color: inherit; background: var(--overlay-fill);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: var(--space-1) var(--space-3); cursor: pointer;
     }
-    button:hover { background: rgba(255, 255, 255, 0.2); }
+    button:hover { background: var(--overlay-fill-hover); }
     button:disabled { opacity: 0.4; cursor: default; }
-    button:disabled:hover { background: rgba(255, 255, 255, 0.12); }
+    button:disabled:hover { background: var(--overlay-fill); }
     button[hidden] { display: none; }
     /* An author `display: flex` outranks the UA's `[hidden] { display: none }`,
        so without this the renderer's `hidden = true` on one of these two did
        nothing: a recording's card kept an empty picture area above it, and a
        shot's panel drew an empty card (STC-487, caught by recording-panel.e2e). */
     #thumbwrap[hidden], #takecard[hidden] { display: none; }
-    #trash { margin-left: auto; padding: 4px 9px; }
+    #trash { margin-left: auto; padding: var(--space-1) 9px; }
     /*
       Controls show on hover (STC-426 revision) — the card at rest is just
       the picture; the actions fade in once the pointer is actually over it.
@@ -106,7 +107,7 @@
       default costs nothing real and keeps every existing click-driven test
       working unmodified.
     */
-    #actions button[data-action] { opacity: 0; transition: opacity 120ms ease-out; }
+    #actions button[data-action] { opacity: 0; transition: opacity var(--dur-quick) ease-out; }
     #card:hover #actions button[data-action] { opacity: 1; }
     /* A disabled button (an action in flight, STC-392 review M6) stays
        dimmed even while hovering — :disabled here outweighs the rule above
@@ -120,7 +121,7 @@
       `thumbnail-renderer.ts` scopes its action-row queries to
       `[data-action]` specifically so this button is left alone by both.
     */
-    #overflow { font-weight: 600; }
+    #overflow { font-weight: var(--type-body-strong-weight); }
     #status { opacity: 0.75; margin-top: 4px; min-height: 1.2em; }
   </style>
 </head>
