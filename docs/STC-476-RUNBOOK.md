@@ -7,59 +7,72 @@ a Mac that has never run Capture. Run it from branch
 
 ## What changed
 
-- **Helper:** two new commands, `permissions` (reads Screen Recording,
-  Input Monitoring and Accessibility; never prompts) and `request-permission`
-  (`grant: "screen-recording" | "input-monitoring"`), in `helper/src/Permissions.swift`.
+- **Helper:** two new commands in `helper/src/Permissions.swift`.
+  - `permissions` reads Screen Recording and Input Monitoring. It never prompts and
+    **never reads Accessibility**.
+  - `request-permission` takes `grant: "screen-recording" | "input-monitoring"`.
+
   Electron has no Input Monitoring API, so the helper is the one place both grants
-  are read and requested. Capture.app spawns it, so TCC should charge Capture.app,
-  the same way it already does for Screen Recording. §2 checks this.
-- **STC-518's likely cause:** when `CGEvent.tapCreate` returned nil, the helper
-  never called `IOHIDRequestAccess`. It assumed macOS would prompt on its own, and on
-  the clean VM it did not. That path now asks too, but only while the state is still
-  "never asked" (`decideEventTapAccess`).
-- **App:** on launch, main reads both grants. If either is missing, a panel covers
-  the main window (`#permissionsheet`, decisions in `app/src/permissions.ts`). While a
-  grant is missing, Record (any door) and every shot bring the panel forward instead
-  of opening an overlay. macOS's Screen Recording prompt used to land under the
-  overlay's scrim.
+  are read and requested. tccd charges the helper's calls to Capture.app as the
+  responsible process (seen in the VM's TCC log), and the grants land on
+  `com.studiocartelli.capture`.
+- **App:** on launch, main reads both grants. If either is missing, a panel that
+  cannot be closed covers the main window (`#permissionsheet`, decisions in
+  `app/src/permissions.ts`). While a grant is missing, Record (every door) and every
+  shot bring the panel forward instead of opening an overlay. macOS's Screen
+  Recording prompt used to land under the overlay's scrim.
 - A Screen Recording grant that arrives during this run shows as "Relaunch Capture",
-  never as granted. Accessibility counts as Input Monitoring, matching the helper's
-  tap check.
+  never as Granted.
 
-## Checks (all VM, `npm run app:package` first)
+## Why STC-518 happened: three faults, found in four VM passes (2026-10-08)
 
-1. `bash tools/vm/fresh.sh` (clean). **Pass:** the panel is up on launch with both
-   rows "Not granted yet", and no overlay has appeared.
-2. **STC-518's done-when.** Click **Grant…** on Input Monitoring. **Pass:** macOS's
-   Input Monitoring prompt appears, or Capture is listed in System Settings › Privacy
-   & Security › Input Monitoring with no + step. Also record whether the list shows
-   **Capture** or **stc-helper**. Turn it on, return to Capture: the row reads Granted
-   with no restart.
-3. Click **Grant…** on Screen Recording, allow it in System Settings, and come back.
-   **Pass:** the row never reads "Granted" before a relaunch. It reads
-   "Relaunch Capture", or "Turn on Capture… then relaunch", with a Relaunch button.
-   Click Relaunch. **Pass:** Capture comes back with no panel.
-4. Press Record. **Pass:** straight to the overlay, with no Screen Recording or Input
-   Monitoring prompt. Note whether macOS's "bypass the system private window picker"
-   dialog appears (the panel's footnote warns about it).
-5. Before step 2 (or after `tools/vm/reset-tcc.sh <vm>` and a relaunch): close the
-   panel with ×, then press Record, then ⌃⌥⇧⌘4. **Pass:** the panel comes back each
-   time, and no overlay or scrim opens.
-6. `bash tools/vm/fresh.sh --granted`. **Pass:** no panel at all.
-7. `bash tools/vm/reset-tcc.sh <vm>`, then relaunch. **Pass:** the panel comes back.
+Each was read from tccd's own log (`log show --predicate 'subsystem ==
+"com.apple.TCC"'` in the guest). `preflight=no` means a real request, and
+`preflight=yes` means a read.
 
-## Open questions only the VM can answer
+1. **`IOHIDRequestAccess` never asked.** From the helper it produced only reads,
+   never a request. The helper now asks with `CGRequestListenEventAccess()`, in one
+   place (`Permissions.requestListenEvent`).
+2. **"Denied" doesn't mean "already asked".** On a Mac that has never asked,
+   `IOHIDCheckAccess` reports **denied**, even though TCC.db has no Input Monitoring
+   row for the app. The old rule asked only while the state was "unknown", so nothing
+   ever asked. Both the panel and the tap now ask whenever the grant is missing.
+   macOS prompts at most once per app, so asking again does nothing.
+3. **Reading Accessibility blocks the prompt.** On a never-asked Mac,
+   `AXIsProcessTrusted()` writes a *denied* Accessibility row for Capture. With that
+   row present, tccd answered the first real Input Monitoring request with an instant
+   denial (`authReason=4`) and no prompt. The panel's read no longer touches
+   Accessibility. The event tap asks for Input Monitoring first and reads
+   Accessibility only afterwards, when Input Monitoring is still missing.
 
-- Does Input Monitoring take effect without a relaunch? The panel assumes it does,
-  because `IOHIDCheckAccess` is live and the tap is made fresh for every take. If
-  step 2's first Record still refuses, the Input Monitoring row needs Relaunch as well.
-- Does `IOHIDRequestAccess` return at once, or wait for the user's answer? It runs
-  on the helper's main thread. The app gives up after 5 s and re-reads, so a
-  blocking call costs one stale row. Check `/tmp/stc-capture-launch.log` for a
-  `[permissions] request failed` timeout or a helper respawn around step 2.
-- If step 2 lists **stc-helper** rather than Capture, the attribution assumption is
-  wrong. The fallback is a native addon in main. That is the route that was decided
-  against on 2026-10-08.
+   Cost: a Mac that records through Accessibility alone now sees the Input
+   Monitoring row. One Grant… click settles it, and the tap still accepts
+   Accessibility.
+
+## Checks (all VM, `npm run app:package` first) — VM pass 2026-10-08, build `9baa447`
+
+| # | check | result |
+|---|---|---|
+| 1 | `fresh.sh` (clean): the panel is up on launch, both rows "Not granted yet", no overlay, no close button | **pass** (Patrick) |
+| 2 | **STC-518's done-when.** Click **Grant…** on Input Monitoring. Pass: macOS prompts, Capture is listed with no + step, and the row turns Granted | **pass**, VM 4 (Patrick). TCC.db: `kTCCServiceListenEvent / com.studiocartelli.capture / allowed` (agent, SSH) |
+| 3 | Grant Screen Recording. The row never reads Granted before a relaunch. Relaunch, then no panel | **pass** (Patrick) |
+| 4 | Record goes straight to the overlay, with no SR or IM prompt | **pass** (Patrick). The take had 357 events, 9 clicks (agent, SSH). macOS's "bypass the system private window picker" dialog still appears once a stream starts. See below |
+| 5 | With a grant missing, Record (⌃⌥⇧⌘4) keeps the panel up and opens no overlay or scrim | **pass** (Patrick) |
+| 6 | `fresh.sh --granted`: no panel at all | see PR |
+| 7 | `reset-tcc.sh <vm>` + relaunch: the panel comes back | **pass** (Patrick) |
+
+To re-run 2 on a VM that has already asked: `reset-tcc.sh` clears the grants, but
+`CGRequestListenEventAccess` asks only once per process, so relaunch Capture
+before clicking Grant… again.
+
+## Still open
+
+- **The picker-bypass consent** ("Capture is requesting to bypass the system private
+  window picker…") appears when the first stream starts, so it lands in the first
+  take. It's raised at stream start, not by the window list, so the panel can't
+  trigger it in advance without a throwaway stream. Not built.
+- Does `CGRequestListenEventAccess` block the helper until the user answers? It
+  didn't visibly stall in VM 4. The app gives up after 5 s anyway.
 
 ## Not in this slice (STC-520)
 
