@@ -1323,6 +1323,9 @@ async function refreshTakes(): Promise<void> {
 }
 
 
+// STC-519: main promoted a take into the library (a panel's Save or Edit).
+recorder.on("library:changed", () => { void refreshTakes(); });
+
 recorder.status().then((s) => {
   if (s.pid) $("pid").textContent = String(s.pid);
   // STC-388 review, Finding 2: a window opened (or reopened via "Open

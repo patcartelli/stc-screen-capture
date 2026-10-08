@@ -93,6 +93,10 @@ contextBridge.exposeInMainWorld("recorder", {
                       // menu bar (STC-292). The shot is on disk either way;
                       // this is only so an open window stays truthful.
                       "still:captured",
+                      // STC-519: a take was promoted into the library from
+                      // main (a panel's Save or Edit) — rescan, whatever chip
+                      // is selected.
+                      "library:changed",
                       // STC-375: the window just collapsed to (or restored
                       // from) the pill. The renderer has no other way to know
                       // its own window shrank — `pill-window.ts` drives the

@@ -117,6 +117,24 @@ describe("promoteTake — the decision point", () => {
     expect(existsSync(join(dest, "shot.json"))).toBe(true);
   });
 
+  // STC-519: a promotion changes what the library holds, and the library
+  // window cannot see it happen — Save/Edit run in main. `onPromoted` is how
+  // main finds out; it must fire for a real move and ONLY for a real move.
+  test("onPromoted fires once, with the new path, when the take actually moved (STC-519)", async () => {
+    const dir = makeTempTake("2026-09-16_10-00-00");
+    const seen: string[] = [];
+    const dest = await promoteTake(env, null, dir, (d) => seen.push(d));
+    expect(seen).toEqual([dest]);
+  });
+
+  test("onPromoted does not fire for a dir that was never in temp storage (STC-519)", async () => {
+    const already = join(libRoot, "2026-09-16_10-00-00");
+    mkdirSync(already, { recursive: true });
+    const seen: string[] = [];
+    await promoteTake(env, null, already, (d) => seen.push(d));
+    expect(seen).toEqual([]);
+  });
+
   test("creates raw/ if this is the first promotion ever", async () => {
     rmSync(libRoot, { recursive: true, force: true });
     const dir = makeTempTake("2026-09-16_10-00-00");

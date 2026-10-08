@@ -263,6 +263,16 @@ function send(channel: string, payload: unknown): void {
 }
 
 /**
+ * `promoteTake`, plus telling the library window (STC-519). Every promotion
+ * outside quit adds a take to the library the window is showing, and the grid
+ * only rescans on a chip click or `still:captured` — so a recording saved from
+ * its panel stayed invisible under the selected chip until the user changed it.
+ */
+function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<string> {
+  return promoteTake(process.env, saveFolder, dir, () => send("library:changed", undefined));
+}
+
+/**
  * STC-432: with no `trafficLightPosition`, macOS draws the inset lights
  * roughly where `index.html`'s `body { padding: 20px }` also starts
  * `#title-row` — the two were never coordinated and landed on top of each
@@ -670,7 +680,7 @@ async function recoverUnsavedTakes(): Promise<void> {
      */
     const reveal = async (t: TempTakeInfo): Promise<void> => {
       try {
-        shell.showItemInFolder(await promoteTake(process.env, saveFolder, t.dir));
+        shell.showItemInFolder(await promoteIntoLibrary(saveFolder, t.dir));
       } catch (e) {
         console.error("[recovery] could not move a recovered take out of temp storage:", t.dir, e);
         failed++;
@@ -2752,7 +2762,7 @@ ipcMain.handle("still:export", async (_e, req: {
   let dir = req.dir && insideCaptureRoot(process.env, settingsNow.saveFolder, req.dir)
     ? req.dir : undefined;
   if (dir && req.target.file) {
-    try { dir = await promoteTake(process.env, settingsNow.saveFolder, dir); }
+    try { dir = await promoteIntoLibrary(settingsNow.saveFolder, dir); }
     catch (e) {
       console.error("[still] could not move the shot into the library:", dir, e);
     }
@@ -3061,7 +3071,7 @@ ipcMain.handle("panel:save", async (_e, dir: string) => {
     // copies of "save promotes" this repo has already paid for five ways
     // (CLAUDE.md) would be back, just split across a renderer file and this
     // one instead of two renderer files.
-    const promoted = promotes("save") ? await promoteTake(process.env, saveFolder, dir) : dir;
+    const promoted = promotes("save") ? await promoteIntoLibrary(saveFolder, dir) : dir;
     dismissThumbnail(dir);
     return { ok: true, dir: promoted };
   } catch (e: any) {
@@ -3092,7 +3102,7 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
     // hardcoded — this handler has no opinion of its own about whether Edit
     // promotes.
     const kind = takeFor(dir)?.kind ?? "shot";
-    const opened = promotes("edit") ? await promoteTake(process.env, saveFolder, dir) : dir;
+    const opened = promotes("edit") ? await promoteIntoLibrary(saveFolder, dir) : dir;
     if (kind === "shot") {
       openStillEditor({ dir: opened, dist: here, rendererDir: join(here, "..", "renderer") });
     } else {
