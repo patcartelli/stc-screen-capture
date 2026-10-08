@@ -397,7 +397,14 @@ function reconcileIcons(): void {
  */
 function reconcileIconsSoon(): void {
   setImmediate(reconcileIcons);
+  // Measured (STC-502, e2e on macOS): `app.dock.hide()` called as the last
+  // window closes does not take, and the same call about a second later does.
+  // Reconciling is idempotent, so asking once more after that costs nothing
+  // when the first already worked.
+  setTimeout(reconcileIcons, DOCK_HIDE_RETRY_MS).unref();
 }
+
+const DOCK_HIDE_RETRY_MS = 1500;
 
 /** The way back to a window from the menu bar. */
 function openLibrary(): void {

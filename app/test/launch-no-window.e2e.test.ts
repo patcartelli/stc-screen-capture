@@ -17,6 +17,13 @@ import { windowCount } from "./_windows.js";
 const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 const darwin = process.platform === "darwin";
+/**
+ * `app.dock.hide()` takes about a second to show in `isVisible()` after the
+ * last window closes (measured: repeated hide calls change nothing; it flips
+ * ~1.1 s in), so a dock read that expects a CHANGE gets more than vitest's 1 s
+ * poll default.
+ */
+const DOCK_POLL = { timeout: 5_000 };
 
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
@@ -47,6 +54,9 @@ const dockUp = (a: ElectronApplication) => a.evaluate(({ app: electronApp }) => 
 const activate = (a: ElectronApplication) => a.evaluate(({ app: electronApp }) => { electronApp.emit("activate"); });
 
 async function openLibraryPage(a: ElectronApplication): Promise<Page> {
+  // `activate` is only listened for once startup has finished, and the tray is
+  // the last thing it puts up; emitted any earlier the event is simply lost.
+  await expect.poll(() => trayUp(a)).toBe(true);
   await activate(a);
   const page = await a.firstWindow();
   await page.waitForLoadState("domcontentloaded");
@@ -103,10 +113,10 @@ describe("launch to the menu bar", () => {
     const page = await openLibraryPage(a);
     await choose(page, "menubar");
     await expect.poll(() => trayUp(a)).toBe(true);
-    if (darwin) await expect.poll(() => dockUp(a)).toBe(true);
+    if (darwin) await expect.poll(() => dockUp(a), DOCK_POLL).toBe(true);
     await page.close();
     await expect.poll(() => windowCount(a)).toBe(0);
-    if (darwin) await expect.poll(() => dockUp(a)).toBe(false);
+    if (darwin) await expect.poll(() => dockUp(a), DOCK_POLL).toBe(false);
     // And the Dock click is not how you come back from here — the menu bar is.
     expect(await trayUp(a)).toBe(true);
   });

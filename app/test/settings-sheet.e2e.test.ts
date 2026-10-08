@@ -98,7 +98,8 @@ describe("the settings sheet", () => {
 
     const subheads = await win.locator("#profilesheet .subhead").allTextContents();
     // STC-461 added Camera (the PiP default) between them, as a subhead too.
-    expect(subheads).toEqual(["Countdown", "Camera", "Shot shortcuts"]);
+    // STC-502 added "Show icon in" after them, the same way.
+    expect(subheads).toEqual(["Countdown", "Camera", "Shot shortcuts", "Show icon in"]);
 
     // Both sit under the Preferences <h2>, not Profile's — read positionally,
     // the same way the save-location test above pins its own placement.
