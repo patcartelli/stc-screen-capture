@@ -290,9 +290,14 @@ function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<str
 const TRAFFIC_LIGHT_X_PX = 20;
 const TRAFFIC_LIGHT_Y_PX = 24;
 
-function createWindow(): void {
+function createWindow(opts: { asPill?: boolean } = {}): void {
   win = new BrowserWindow({
     width: 520, height: 680, title: PRODUCT_NAME,
+    // STC-502: a window made because a take is already running (the hotkey
+    // started it with no window open) is born hidden, becomes the pill, and is
+    // shown without taking focus. Shown as the full library first, it would
+    // sit over the screen being recorded for a heartbeat and pull focus off it.
+    show: !opts.asPill,
     // STC-375 (Pill): a fully frameless window was the other option on the
     // table and was passed over — see pill.ts's header. "hidden" keeps the
     // native traffic lights as an inset overlay (no drawn title strip), which
@@ -313,10 +318,21 @@ function createWindow(): void {
   // window closable and re-creatable (menu-bar-first) and a stale listener on
   // a destroyed window is not a live one.
   if (sup) {
-    const detachPill = attachPillToSupervisor(win, sup, {
+    const pill = attachPillToSupervisor(win, sup, {
       getContentWidthPx: () => pillContentWidthPx,
     });
-    win.once("closed", detachPill);
+    win.once("closed", pill.detach);
+    if (opts.asPill) {
+      const w = win;
+      pill.reconcileNow();
+      // `collapsePill` told the renderer while it was still loading, which
+      // drops the message; say it again once the page can hear it.
+      w.webContents.once("did-finish-load", () => {
+        if (w.isDestroyed()) return;
+        w.webContents.send("pill:state", { collapsed: true });
+        w.showInactive();
+      });
+    }
   }
   reconcileIcons();
 }
@@ -571,6 +587,10 @@ function reconcileTrayRecording(): void {
  */
 function reconcileWindowRecording(): void {
   const recording = sup?.state === "recording";
+  // STC-502: nothing opens a window at launch any more, so a take started from
+  // the hotkey or the menu bar has no pill to stop it with. The pill IS the
+  // main window collapsed (pill-window.ts), so make one.
+  if (recording && (!win || win.isDestroyed())) createWindow({ asPill: true });
   send("recorder:recording-state", { recording, dir: recording ? sup?.recordingDir : undefined });
 }
 

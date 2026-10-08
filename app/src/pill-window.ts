@@ -131,7 +131,7 @@ export interface AttachOptions {
  * reaches this the exact same way a take the user stopped does, so the pill
  * cannot outlive a recording that has already ended.
  *
- * Returns an unsubscribe function; the caller owns the window's lifetime.
+ * Returns `detach` and `reconcileNow`; the caller owns the window's lifetime.
  * A caller must re-attach after replacing `win` — STC-292 made the main
  * window closable and re-creatable (menu-bar-first), and this does not
  * survive that on its own; `main.ts` would call this again inside its own
@@ -141,7 +141,7 @@ export function attachPillToSupervisor(
   win: BrowserWindow,
   sup: HelperSupervisor,
   opts: AttachOptions,
-): () => void {
+): PillAttachment {
   let current: PillWindowState = "expanded";
   let expandedBounds: Rectangle | undefined;
 
@@ -162,5 +162,17 @@ export function attachPillToSupervisor(
   const offStats = sup.on("stats", reconcile);
   const offEnded = sup.on("recording-ended", reconcile);
   const offLost = sup.on("recording-lost", reconcile);
-  return () => { offStats(); offEnded(); offLost(); };
+  return { detach: () => { offStats(); offEnded(); offLost(); }, reconcileNow: reconcile };
+}
+
+export interface PillAttachment {
+  /** Stop listening. The caller owns the window's lifetime. */
+  detach: () => void;
+  /**
+   * Reconcile against the supervisor's state right now, instead of waiting for
+   * the next heartbeat. A window created while a take is already running
+   * (STC-502: the hotkey started it with no window open) uses this to become
+   * the pill BEFORE it is ever shown, so it never appears as the full library.
+   */
+  reconcileNow: () => void;
 }
