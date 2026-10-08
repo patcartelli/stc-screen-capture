@@ -4,6 +4,7 @@ import {
   BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
 } from "./hotkeys.js";
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
+import { cleanIconPlacement, DEFAULT_ICON_PLACEMENT, type IconPlacement } from "./icon-placement.js";
 import {
   DEFAULT_EXPORT_OPTIONS, DEFAULT_FILENAME_TEMPLATE, clampQuality, parseFormat, parseScale,
   type ExportOptions,
@@ -189,6 +190,8 @@ export interface Settings {
    * view stays chosen across launches.
    */
   libraryView: "grid" | "list";
+  /** STC-502: where the app's icon lives. `icon-placement.ts` is the rule. */
+  iconPlacement: IconPlacement;
 }
 
 export interface ShareSettings {
@@ -250,6 +253,7 @@ export const DEFAULT_SETTINGS: Settings = {
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
   share: { ...DEFAULT_SHARE_SETTINGS },
   saveFolder: null, showDiagnostics: false, libraryView: "grid",
+  iconPlacement: DEFAULT_ICON_PLACEMENT,
 };
 
 /**
@@ -415,6 +419,7 @@ export function readSettings(dir: string): Settings {
     showDiagnostics: typeof doc.showDiagnostics === "boolean"
       ? doc.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
     libraryView: cleanLibraryView(doc.libraryView),
+    iconPlacement: cleanIconPlacement(doc.iconPlacement),
   };
 }
 
@@ -463,6 +468,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     showDiagnostics: typeof merged.showDiagnostics === "boolean"
       ? merged.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,
     libraryView: cleanLibraryView(merged.libraryView),
+    iconPlacement: cleanIconPlacement(merged.iconPlacement),
   };
   try {
     writeFileSync(join(dir, FILE), JSON.stringify(clean, null, 2));
