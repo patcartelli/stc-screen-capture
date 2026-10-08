@@ -120,6 +120,8 @@ async function measure(withCamera) {
       ...process.env, STC_RECORDINGS_DIR: dir,
       // Same isolation as the fixture: never the real temp-takes folder.
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-mem-temp-")),
+      // STC-502: launch shows no window unless asked.
+      STC_OPEN_LIBRARY_ON_LAUNCH: "1",
     },
   });
   try {

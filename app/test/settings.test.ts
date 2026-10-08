@@ -28,7 +28,7 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both" });
     expect(DEFAULT_SETTINGS.camera).toBe(false);
   });
 
@@ -69,7 +69,7 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both" });
   });
 
   test("an unwritable directory does not throw — the preference is not worth a crash", () => {
@@ -125,7 +125,7 @@ describe("the display preference (STC-247)", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both" });
   });
 });
 
@@ -673,5 +673,21 @@ describe("pipStyle (STC-461)", () => {
     const d = dir();
     writeFileSync(join(d, "settings.json"), JSON.stringify({ pipStyle: { shape: "hexagon" } }));
     expect(readSettings(d).pipStyle).toEqual(DEFAULT_PIP_STYLE);
+  });
+});
+
+describe("iconPlacement (STC-502)", () => {
+  test("defaults to Menu bar and Dock, and keeps a valid choice across other writes", () => {
+    const d = mkdtempSync(join(tmpdir(), "stc-settings-"));
+    expect(readSettings(d).iconPlacement).toBe("both");
+    writeSettings(d, { iconPlacement: "menubar" });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).iconPlacement).toBe("menubar");
+  });
+
+  test("a value that is not one of the three is dropped, never stored", () => {
+    const d = mkdtempSync(join(tmpdir(), "stc-settings-"));
+    writeSettings(d, { iconPlacement: "none" as never });
+    expect(readSettings(d).iconPlacement).toBe("both");
   });
 });

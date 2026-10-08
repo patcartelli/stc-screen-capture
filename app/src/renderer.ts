@@ -41,6 +41,8 @@ interface AppSettings {
   showDiagnostics: boolean;
   /** STC-429: the take library's layout. */
   libraryView: "grid" | "list";
+  /** STC-502: where the app's icon lives. */
+  iconPlacement: IconPlacement;
   /** STC-444 slice 3: the site folder, moved here from the editor window's
    *  own sharebar — one setting for the whole app, not a per-take one. */
   share: { destination: string | null };
@@ -110,6 +112,7 @@ declare const recorder: {
 };
 
 import { COUNTDOWN_OPTIONS } from "./countdown.js";
+import { ICON_PLACEMENTS, ICON_PLACEMENT_LABELS, cleanIconPlacement, type IconPlacement } from "./icon-placement.js";
 import {
   ACTION_LABELS, BINDABLE_ACTIONS, acceleratorFromKeyStroke, explainShortcut,
   formatAccelerator, parseAccelerator,
@@ -1035,8 +1038,28 @@ for (const { ms, label } of COUNTDOWN_OPTIONS) {
   countdownSel.append(opt);
 }
 
+const iconPlacementSel = $("iconplacement") as HTMLSelectElement;
+for (const value of ICON_PLACEMENTS) {
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = ICON_PLACEMENT_LABELS[value];
+  iconPlacementSel.append(opt);
+}
+iconPlacementSel.addEventListener("change", async () => {
+  try {
+    // Show what was actually stored, not what was picked. Main applies it
+    // before this resolves, so there is no relaunch.
+    iconPlacementSel.value = (await recorder.setSettings({
+      iconPlacement: cleanIconPlacement(iconPlacementSel.value),
+    })).iconPlacement;
+  } catch (e) {
+    alertUser(`Could not save where the icon shows: ${String(e)}`);
+  }
+});
+
 async function loadStillPreferences(): Promise<void> {
-  const { thumbnail, countdownMs, showDiagnostics } = await recorder.getSettings();
+  const { thumbnail, countdownMs, showDiagnostics, iconPlacement } = await recorder.getSettings();
+  iconPlacementSel.value = iconPlacement;
   thumbCornerSel.value = thumbnail.corner;
   thumbSkipBox.checked = thumbnail.skip;
   showDiagnosticsBox.checked = showDiagnostics;

@@ -23,6 +23,13 @@ import {
  */
 process.env.STC_ASSUME_PERMISSIONS ??= "granted";
 
+/**
+ * STC-502: launch shows no window, but nearly every e2e file drives the
+ * library's page through `firstWindow()`. `launch-no-window.e2e.test.ts`
+ * sets it to "" to see the real launch.
+ */
+process.env.STC_OPEN_LIBRARY_ON_LAUNCH ??= "1";
+
 const dir = process.env[E2E_DIAG_DIR_ENV];
 
 beforeEach((ctx) => {
