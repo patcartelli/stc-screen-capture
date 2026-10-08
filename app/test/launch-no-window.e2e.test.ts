@@ -3,8 +3,9 @@ import { _electron as electron, type ElectronApplication, type Page } from "play
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
-import { windowCount } from "./_windows.js";
+import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
+import { windowCount, pageWithUrl } from "./_windows.js";
+import { startRecordFlow } from "./_record-flow.js";
 
 /**
  * Launch to the menu bar (STC-502), through the real app.
@@ -129,4 +130,36 @@ describe("launch to the menu bar", () => {
     await choose(page, "both");
     await expect.poll(() => trayUp(a)).toBe(true);
   });
+
+  test("a take started with no window open still gets its pill, born collapsed and unfocused", async () => {
+    const a = await launch();
+    // A stopped take leaves a panel, and quitting over one raises a modal.
+    await stubQuitDialog(a);
+    await expect.poll(() => trayUp(a)).toBe(true);
+    expect(await windowCount(a, "index.html")).toBe(0);
+
+    // The menu-bar door: the same `onSelect` a click on the item calls, with
+    // no library window anywhere. `win` is only used by the window door.
+    await startRecordFlow(a, undefined as unknown as Page, { door: "menu-bar" });
+
+    // Before STC-502's follow-up nothing made a window here, so the only way
+    // to see the timer or stop the take was to open the library by hand.
+    await expect.poll(() => windowCount(a, "index.html"), { timeout: 45_000 }).toBe(1);
+    const page = await pageWithUrl(a, "index.html");
+    const handle = await a.browserWindow(page);
+    await expect.poll(
+      () => handle.evaluate((w) => ({
+        resizable: w.isResizable(), alwaysOnTop: w.isAlwaysOnTop(), focused: w.isFocused(),
+      })),
+      { timeout: 20_000 },
+    ).toEqual({ resizable: false, alwaysOnTop: true, focused: false });
+    await expect.poll(() => page.evaluate(() => document.body.classList.contains("pill-collapsed")),
+      { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => page.textContent("#pill-timer"), { timeout: 20_000 }).toMatch(/^\d{2}:\d{2}$/);
+
+    // And it stops the take it belongs to.
+    await page.click("#pill");
+    await expect.poll(() => page.evaluate(() => document.body.classList.contains("pill-collapsed")),
+      { timeout: 20_000 }).toBe(false);
+  }, 180_000);
 });
