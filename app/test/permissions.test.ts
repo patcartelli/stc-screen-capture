@@ -66,9 +66,14 @@ describe("permissionsState", () => {
     expect(row(s, "screen-recording")).toMatchObject({ status: "denied", actions: ["open-settings", "relaunch"] });
   });
 
-  test("Input Monitoring denied links to Settings and never asks again", () => {
+  test("Input Monitoring 'denied' still offers Grant: a never-asked Mac reports denied (STC-518)", () => {
     const s = at(report({ inputMonitoring: "denied" }));
-    expect(row(s, "input-monitoring")).toMatchObject({ status: "denied", actions: ["open-settings"] });
+    expect(row(s, "input-monitoring")).toMatchObject({ status: "not-yet", actions: ["request"] });
+  });
+
+  test("Input Monitoring asked this run and still off: Settings first, Grant kept", () => {
+    const s = at(report({ inputMonitoring: "denied" }), ["input-monitoring"]);
+    expect(row(s, "input-monitoring")).toMatchObject({ status: "denied", actions: ["open-settings", "request"] });
   });
 
   test("an unreadable report is not a panel (an old helper fails open)", () => {

@@ -13,12 +13,15 @@
  *    during this run is shown as "relaunch", never as "granted". A request
  *    made this run also offers Relaunch, because the helper's
  *    `CGPreflightScreenCaptureAccess` may not see a mid-run grant at all.
- * 4. Accessibility also feeds the event tap (`decideEventTapAccess`), so a
+ * 4. Input Monitoring's "denied" is not believed: `IOHIDCheckAccess` says it
+ *    for a Mac that has never asked (VM, 2026-10-08). Grant is offered until
+ *    this run has asked; macOS prompts at most once, so asking is safe.
+ * 5. Accessibility also feeds the event tap (`decideEventTapAccess`), so a
  *    machine recording through it today has Input Monitoring's row granted.
  *    Asking it for a second grant would be asking for nothing.
- * 5. A report that could not be read is NOT a panel. An old or missing
+ * 6. A report that could not be read is NOT a panel. An old or missing
  *    helper fails open. The helper's own refusals still cover the take.
- * 6. A shot needs Screen Recording only. A Record needs both.
+ * 7. A shot needs Screen Recording only. A Record needs both.
  */
 
 import { TOAST_ACTION_URLS } from "./toast-message.js";
@@ -69,7 +72,7 @@ export const PERMISSION_ACTION_LABELS: Record<RowAction, string> = {
   relaunch: "Relaunch Capture",
 };
 
-/** Refuses anything that is not exactly the helper's reply (rule 5). */
+/** Refuses anything that is not exactly the helper's reply (rule 6). */
 export function parsePermissions(line: unknown): PermissionsReport | null {
   if (!line || typeof line !== "object") return null;
   const l = line as Record<string, unknown>;
@@ -109,21 +112,25 @@ function inputRow(r: PermissionsReport, m: PermissionsMemory): PermissionRow {
   if (r.inputMonitoring === "granted" || r.accessibility) {
     return { ...base, status: "granted", statusText: "Granted", actions: [] };
   }
-  if (r.inputMonitoring === "denied" || m.requested.has("input-monitoring")) {
+  // NOT `inputMonitoring === "denied"`: on a Mac that has never asked,
+  // `IOHIDCheckAccess` already says denied (VM, 2026-10-08), so a row keyed on
+  // it never offered Grant and nothing ever prompted. That was STC-518. Asking
+  // after a real answer is a no-op, so Grant stays until this run has asked.
+  if (m.requested.has("input-monitoring")) {
     return { ...base, status: "denied", statusText: "Turn on Capture in System Settings.",
-             actions: ["open-settings"] };
+             actions: ["open-settings", "request"] };
   }
   return { ...base, status: "not-yet", statusText: "Not granted yet", actions: ["request"] };
 }
 
-/** The panel for one report. `null` (unreadable) is never a panel (rule 5). */
+/** The panel for one report. `null` (unreadable) is never a panel (rule 6). */
 export function permissionsState(r: PermissionsReport | null, m: PermissionsMemory): PermissionsState {
   if (!r) return { needed: false, rows: [] };
   const rows = [screenRow(r, m), inputRow(r, m)];
   return { needed: rows.some((row) => row.status !== "granted"), rows };
 }
 
-/** Does this state stop a capture before its overlay opens? (rule 6) */
+/** Does this state stop a capture before its overlay opens? (rule 7) */
 export function blocksCapture(s: PermissionsState, kind: "record" | "still"): boolean {
   return s.rows.some((row) => row.status !== "granted"
     && (kind === "record" || row.grant === "screen-recording"));

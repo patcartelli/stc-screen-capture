@@ -355,7 +355,7 @@ let permState: PermissionsState = { needed: false, rows: [] };
 
 /**
  * Read both grants from the helper and tell the window. Never throws: an
- * unreadable report is no panel (permissions.ts rule 5).
+ * unreadable report is no panel (permissions.ts rule 6).
  *
  * `STC_ASSUME_PERMISSIONS=granted` is the e2e suite's seam (`_e2e-setup.ts`):
  * CI has no grants, and a panel over the main window would stand between

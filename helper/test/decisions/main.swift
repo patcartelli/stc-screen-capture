@@ -111,9 +111,9 @@ check("a failed open is still just a failure even if a stop arrived — there is
 // ── will the event tap deliver? (STC-480) ───────────────────────────────────
 // The VM case: tapCreate handed back a port with Input Monitoring OFF, and the
 // take recorded no cursor at all. A created tap is not enough on its own.
-check("a created tap with the grant OFF and no Accessibility is REFUSED (the VM case)",
+check("a created tap with the grant OFF and no Accessibility is REFUSED, and asked (the VM case)",
       decideEventTapAccess(tapCreated: true, listenEvent: .denied, accessibilityTrusted: false),
-      EventTapAccessDecision.refuse(requestAccess: false))
+      EventTapAccessDecision.refuse(requestAccess: true))
 check("never asked: refused, and macOS is asked so its prompt appears",
       decideEventTapAccess(tapCreated: true, listenEvent: .unknown, accessibilityTrusted: false),
       EventTapAccessDecision.refuse(requestAccess: true))
@@ -123,15 +123,15 @@ check("Input Monitoring granted: record",
 check("Accessibility alone also feeds a session tap — a machine that works today keeps working",
       decideEventTapAccess(tapCreated: true, listenEvent: .denied, accessibilityTrusted: true),
       EventTapAccessDecision.proceed)
-check("no tap at all is still STC-315's refusal, whatever the probe says",
+check("no tap at all is still STC-315's refusal, whatever the probe says, and a granted machine is not asked",
       decideEventTapAccess(tapCreated: false, listenEvent: .granted, accessibilityTrusted: true),
       EventTapAccessDecision.refuse(requestAccess: false))
-check("no tap and never asked: refused AND asked (STC-518 — macOS did not list Capture on its own)",
+check("no tap and never asked: refused AND asked (STC-518)",
       decideEventTapAccess(tapCreated: false, listenEvent: .unknown, accessibilityTrusted: false),
       EventTapAccessDecision.refuse(requestAccess: true))
-check("no tap after macOS already asked: not asked twice",
+check("no tap and DENIED is still asked: on a never-asked Mac IOHIDCheckAccess says denied (STC-518, VM 2026-10-08)",
       decideEventTapAccess(tapCreated: false, listenEvent: .denied, accessibilityTrusted: false),
-      EventTapAccessDecision.refuse(requestAccess: false))
+      EventTapAccessDecision.refuse(requestAccess: true))
 
 // ── which camera to open (STC-286) ──────────────────────────────────────────
 // Measured on this machine 2026-08-29: the helper opened "Elgato Virtual
