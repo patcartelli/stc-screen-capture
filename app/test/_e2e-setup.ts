@@ -15,6 +15,14 @@ import {
  * `onTestFinished` runs after every hook, sees the hook's error on the
  * result, and is awaited.
  */
+/**
+ * STC-476: every e2e launch spreads `process.env`, so this reaches them all.
+ * CI has no grants, and the permissions panel would otherwise cover the main
+ * window in every file that uses the real helper. `permissions.e2e.test.ts`
+ * sets it to "" to see the panel.
+ */
+process.env.STC_ASSUME_PERMISSIONS ??= "granted";
+
 const dir = process.env[E2E_DIAG_DIR_ENV];
 
 beforeEach((ctx) => {

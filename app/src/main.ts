@@ -76,6 +76,10 @@ import {
   ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
 } from "./capture-identity.js";
 import { resolveHelperPath } from "./helper-path.js";
+import {
+  blocksCapture, isGrant, isRowAction, parsePermissions, permissionsState, remember, SETTINGS_URLS,
+  type PermissionsMemory, type PermissionsReport, type PermissionsState,
+} from "./permissions.js";
 
 /**
  * Electron main process. Owns the helper: it is spawned as a CHILD of this
@@ -349,6 +353,72 @@ function openLibrary(): void {
   // frontmost, which reads as the click having done nothing.
   app.focus({ steal: true });
 }
+
+// ---- required grants (STC-476 MVP slice, STC-518) ---------------------------
+//
+// `permissions.ts` decides; this reads the helper, remembers what this run has
+// seen, and carries out a row's action. The panel itself is the main window's
+// `#permissionsheet`, which pulls on load and is pushed on every change.
+
+let permMemory: PermissionsMemory = { screenAtLaunch: null, requested: new Set() };
+let permState: PermissionsState = { needed: false, rows: [] };
+
+/**
+ * Read both grants from the helper and tell the window. Never throws: an
+ * unreadable report is no panel (permissions.ts rule 6).
+ *
+ * `STC_ASSUME_PERMISSIONS=granted` is the e2e suite's seam (`_e2e-setup.ts`):
+ * CI has no grants, and a panel over the main window would stand between
+ * every e2e file and the buttons it clicks. It skips the helper entirely, so
+ * no command-order test sees an extra command.
+ */
+async function checkPermissions(): Promise<PermissionsState> {
+  if (process.env.STC_ASSUME_PERMISSIONS === "granted") return permState;
+  let report: PermissionsReport | null = null;
+  try {
+    await sup?.ready();
+    report = parsePermissions(await sup?.permissions());
+  } catch (e) {
+    console.error("[permissions] could not read the grants:", e);
+  }
+  permMemory = remember(permMemory, report);
+  permState = permissionsState(report, permMemory);
+  send("permissions:changed", permState);
+  return permState;
+}
+
+/**
+ * Before any overlay opens: true when this capture must not start, with the
+ * panel brought forward instead. macOS's own Screen Recording prompt lands
+ * UNDER the overlay's scrim (STC-476, 2026-10-02), so the overlay is the one
+ * thing that must not come first. Re-reads only when the last read said
+ * blocked; a grant revoked after launch is STC-520's.
+ */
+async function permissionsBlock(kind: "record" | "still"): Promise<boolean> {
+  if (!blocksCapture(permState, kind)) return false;
+  if (!blocksCapture(await checkPermissions(), kind)) return false;
+  openLibrary();
+  return true;
+}
+
+ipcMain.handle("permissions:get", async (): Promise<PermissionsState> => checkPermissions());
+ipcMain.handle("permissions:act", async (_e, grant: unknown, action: unknown): Promise<PermissionsState> => {
+  if (!isGrant(grant) || !isRowAction(action)) return permState;
+  if (action === "open-settings") {
+    await shell.openExternal(SETTINGS_URLS[grant]).catch((e) => console.error("[permissions] open settings:", e));
+    return permState;
+  }
+  if (action === "relaunch") {
+    // Through `quit`, not `exit`: the quit path stops the helper cleanly.
+    app.relaunch();
+    app.quit();
+    return permState;
+  }
+  permMemory = { ...permMemory, requested: new Set([...permMemory.requested, grant]) };
+  try { await sup?.requestPermission(grant); }
+  catch (e) { console.error("[permissions] request failed:", grant, e); }
+  return checkPermissions();
+});
 
 function startSupervisor(): void {
   sup = HelperSupervisor.start(HELPER, {
@@ -880,6 +950,9 @@ app.whenReady().then(async () => {
   });
   applyShortcuts(shortcuts);
   createWindow();
+  // STC-476: before the first capture can be asked for. The window also pulls
+  // on load; whichever lands first is this run's launch state.
+  void checkPermissions();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   // Fire-and-forget: a window already exists for "Review" to bring forward,
   // and nothing else in startup depends on this finishing first.
@@ -1309,6 +1382,7 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
   // in, so there is no gap left for a second flow to exist at all.
   recordFlowActive = true;
   try {
+    if (await permissionsBlock("record")) return { ok: false, code: "permissions-needed" };
     let windows: WindowInfo[] = [];
     try {
       windows = windowsFromReply(await sup.listWindows());
@@ -1672,6 +1746,7 @@ async function captureStill(action: ShotAction, source: CaptureSource): Promise<
   capturing = true;
   tray?.update({ shortcuts, busy: true, recording: sup?.state === "recording" });
   try {
+    if (await permissionsBlock("still")) return { ok: false, code: "permissions-needed", source };
     // Whatever panel is on screen from a PREVIOUS capture must be out of this
     // one's pixels (STC-296's acceptance list: "including a full-display
     // capture on the same display") and out from underneath the overlay, if

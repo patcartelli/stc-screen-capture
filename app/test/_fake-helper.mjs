@@ -29,6 +29,8 @@ let session = null;
 // "the timer actually moves" — the one property that test needs.
 let recordingStartedAt = null;
 let pasteboardFirstRead;   // STC-488 F1: when the first pasteboard-files was read
+const [fakeScreen, fakeInput] = (process.env.STC_FAKE_PERMISSIONS ?? "1,granted").split(",");
+const permissions = { screenRecording: fakeScreen === "1", inputMonitoring: fakeInput };
 
 /** fd3 = reliable: responses and lifecycle. */
 const send = (ev, o = {}) => writeSync(3, JSON.stringify({ ev, ...o }) + "\n");
@@ -379,6 +381,18 @@ process.stdin.on("data", (chunk) => {
         send("pasteboard-files", { seq, paths, changeCount: moved ? 101 : 100 });
         break;
       }
+      // STC-476. `STC_FAKE_PERMISSIONS` = `<screen 0|1>,<granted|denied|unknown>`;
+      // unset is everything granted. A request stands in for the user
+      // pressing Allow, except a Screen Recording grant, which (as on a real
+      // Mac) is not seen until a relaunch.
+      case "permissions":
+        send("permissions", { seq, ...permissions });
+        break;
+      case "request-permission":
+        if (cmd.grant === "input-monitoring") permissions.inputMonitoring = "granted";
+        else if (cmd.grant !== "screen-recording") { send("error", { seq, code: "bad-request" }); break; }
+        send("permissions", { seq, ...permissions });
+        break;
       case "quit":
         send("bye", { seq });
         process.exit(0);

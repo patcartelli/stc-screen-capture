@@ -114,6 +114,18 @@ export class HelperSupervisor {
     return this.client.request("copy-file", { path });
   }
 
+  /** Screen Recording and Input Monitoring as the helper sees them (STC-476). Never prompts. */
+  async permissions(): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("permissions", {}, { timeoutMs: 5000 });
+  }
+
+  /** Raise macOS's own prompt for one grant, then report again (STC-476/518). */
+  async requestPermission(grant: string): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("request-permission", { grant }, { timeoutMs: 5000 });
+  }
+
   /** The file paths on the pasteboard right now: the copy purge's one check. */
   async pasteboardFiles(): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");

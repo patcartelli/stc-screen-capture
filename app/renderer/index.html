@@ -288,6 +288,30 @@
                letter-spacing: var(--type-label-tracking); text-transform: uppercase;
                color: var(--text-faint); }
 
+    /* ── the required-grants panel (STC-476) ─────────────────────────────
+       Covers the whole window, above the profile sheet: while it is up there
+       is nothing in the window a capture could usefully start from. */
+    #permissionsheet {
+      position: fixed; inset: 0; z-index: 20; background: var(--surface);
+      padding: 56px 28px 28px; box-sizing: border-box; overflow-y: auto;
+      flex-direction: column; gap: 14px;
+      -webkit-app-region: no-drag;
+    }
+    #permissionsheet:not(.open) { display: none; }
+    #permissionsheet.open { display: flex; }
+    #permissionsheet h1 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); }
+    .permintro, .permnote { margin: 0; color: var(--text-dim); }
+    .permnote { font-size: var(--type-meta); color: var(--text-faint); }
+    #permissionrows { display: flex; flex-direction: column; gap: 10px; }
+    .permrow { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+    .permtitle { display: flex; justify-content: space-between; gap: 12px; font-weight: 600; }
+    .permstatus { font-weight: 400; color: var(--warn); text-align: right; }
+    .permrow[data-status="granted"] .permstatus { color: var(--text-dim); }
+    .permrow[data-status="relaunch"] .permstatus { color: var(--accent); }
+    .permwhy { margin: 6px 0 10px; color: var(--text-dim); }
+    .permactions { display: flex; gap: 8px; }
+    .permactions:empty { display: none; }
+
     /* ── the pill (STC-375) ──────────────────────────────────────────────
        Record collapses this real window to a 26px-tall pill (pill-window.ts);
        the renderer only learns about it via the `pill:state` IPC event
@@ -571,6 +595,22 @@
       <span id="shortcuthint">Work with the app in the background. Click a shortcut, then press the keys.</span>
     </div>
   </aside>
+
+  <!--
+    The required-grants panel (STC-476 MVP slice). Covers the window while a
+    grant a capture needs is missing; Record and every shot bring it back
+    rather than open an overlay macOS's prompt would land under. Rows come
+    from `permissions.ts`; this is only where they are drawn.
+  -->
+  <section id="permissionsheet" role="dialog" aria-labelledby="permissionhead">
+    <!-- No close button, on purpose (VM pass, 2026-10-08): there is nothing
+         in the window worth reaching while a grant a capture needs is missing,
+         and a closable panel is one more way to reach a refusal. -->
+    <h1 id="permissionhead">Before your first capture</h1>
+    <p class="permintro">Capture needs two macOS permissions. macOS asks once for each. After that, they live in System Settings › Privacy &amp; Security.</p>
+    <div id="permissionrows"></div>
+    <p class="permnote">On your first recording, macOS may also ask whether Capture can record without its window picker. Choose Allow.</p>
+  </section>
   <script src="../dist/renderer.js"></script>
 </body>
 </html>

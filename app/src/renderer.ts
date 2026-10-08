@@ -96,7 +96,10 @@ declare const recorder: {
   resolvedSaveFolder(): Promise<string>;
   /** STC-435: find unused `raw/` bundles, ask, trash. Main shows every result itself. */
   reclaimSpace(): Promise<{ moved: number; failed: number }>;
-  start(): Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
+  /** STC-476: re-read the grants; main pushes the same shape on `permissions:changed`. */
+  permissions(): Promise<PermissionsState>;
+  permissionsAct(grant: Grant, action: RowAction): Promise<PermissionsState>;
+  start():Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
   on(event: string, cb: (p: any) => void): () => void;
@@ -120,6 +123,7 @@ import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
 import { MODEL_CODE } from "./product.js";
+import { PERMISSION_ACTION_LABELS, type Grant, type PermissionsState, type RowAction } from "./permissions.js";
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
 import type { ToastInput } from "./toast-message.js";
 import { micDevices, type MicInfo } from "./mic-devices.js";
@@ -471,6 +475,56 @@ recorder.on("ui:open-settings", () => setProfileOpen(true));
 document.addEventListener("keydown", (e) => {
   if (e.code === "Escape") { setProfileOpen(false); closePopover(); }
 });
+
+// ---- required grants (STC-476) ---------------------------------------------
+//
+// Draws what main decided (`permissions.ts`) and reports which button was
+// pressed; decides nothing. Shown exactly while a state says something is
+// still needed, with no way to close it (VM pass, 2026-10-08). Re-read on
+// focus, which is how it notices a change made in System Settings without a
+// restart.
+const permSheet = $("permissionsheet");
+const permRows = $("permissionrows");
+
+function renderPermissions(s: PermissionsState): void {
+  permSheet.classList.toggle("open", s.needed);
+  permRows.replaceChildren(...s.rows.map((row) => {
+    const el = document.createElement("div");
+    el.className = "permrow";
+    el.dataset.grant = row.grant;
+    el.dataset.status = row.status;
+    const title = document.createElement("div");
+    title.className = "permtitle";
+    title.textContent = row.title;
+    const status = document.createElement("span");
+    status.className = "permstatus";
+    status.textContent = row.statusText;
+    title.append(status);
+    const why = document.createElement("p");
+    why.className = "permwhy";
+    why.textContent = row.why;
+    const actions = document.createElement("div");
+    actions.className = "permactions";
+    for (const action of row.actions) {
+      const b = document.createElement("button");
+      b.textContent = PERMISSION_ACTION_LABELS[action];
+      b.dataset.action = action;
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        try { renderPermissions(await recorder.permissionsAct(row.grant, action)); }
+        finally { b.disabled = false; }
+      });
+      actions.append(b);
+    }
+    el.append(title, why, actions);
+    return el;
+  }));
+}
+recorder.on("permissions:changed", (s: PermissionsState) => renderPermissions(s));
+window.addEventListener("focus", () => {
+  if (permSheet.classList.contains("open")) void recorder.permissions().then(renderPermissions);
+});
+void recorder.permissions().then(renderPermissions);
 
 let currentDir: string | undefined;
 
