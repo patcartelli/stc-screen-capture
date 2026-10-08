@@ -62,8 +62,9 @@ import {
 } from "./thumbnail-window.js";
 import { promotes, trashStyle, lockedWhileCopying } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
-import { openEditor } from "./editor-window.js";
-import { openStillEditor } from "./still-editor-window.js";
+import { editorIsOpen, openEditor } from "./editor-window.js";
+import { openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
+import { decideIcons } from "./icon-placement.js";
 import { attachPillToSupervisor } from "./pill-window.js";
 import { MIN_PILL_WIDTH_PX } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
@@ -290,7 +291,6 @@ const TRAFFIC_LIGHT_X_PX = 20;
 const TRAFFIC_LIGHT_Y_PX = 24;
 
 function createWindow(): void {
-  setDockVisible(true);
   win = new BrowserWindow({
     width: 520, height: 680, title: PRODUCT_NAME,
     // STC-375 (Pill): a fully frameless window was the other option on the
@@ -318,21 +318,23 @@ function createWindow(): void {
     });
     win.once("closed", detachPill);
   }
+  reconcileIcons();
 }
 
 /**
- * Menu-bar first (STC-292): no Dock icon while no window is open.
+ * The Dock icon follows the "Show icon in" preference (STC-502), not whether a
+ * window happens to be open. `icon-placement.ts` is the rule; `reconcileIcons`
+ * is the one caller that applies it.
  *
- * The whole point of the hotkey and the menu-bar item is that a capture never
- * needs the app brought forward, and an app that keeps a bouncing Dock icon
- * for a window nobody has open contradicts that every time the user looks at
- * the Dock. The icon comes back the moment there IS a window, because a window
- * with no Dock icon cannot be found again after it is hidden behind something.
+ * The exception is "Menu bar only": macOS lists an app in Cmd-Tab only if it
+ * has a Dock icon, so there the icon is shown while a document window (the
+ * library, the editor, the still editor) is open and goes when the last one
+ * closes. Before STC-502 that slide-in/slide-out was every user's behaviour
+ * (STC-292); now only that setting has it.
  *
- * The cost is stated rather than hidden: with the icon gone, `app.on("activate")`
- * can no longer fire, so the menu bar is the only way back in. That is why
- * `installTray` runs before the first window and why its Quit item is not
- * optional.
+ * With no Dock icon and no menu-bar item `app.on("activate")` could never
+ * fire and the hotkeys would be the only way back in, which is why there is no
+ * setting for neither.
  */
 function setDockVisible(visible: boolean): void {
   if (process.platform !== "darwin") return;
@@ -344,11 +346,71 @@ function setDockVisible(visible: boolean): void {
   }
 }
 
+/**
+ * Puts the menu-bar item up with whatever state the app is in now. Called at
+ * launch and again whenever the "Show icon in" preference brings the item back
+ * (STC-502), so the rebuilt menu says Stop if a take is live.
+ */
+function mountTray(): TrayHandle {
+  const ctx = { shortcuts, busy: capturing, recording: sup?.state === "recording" };
+  return installTray(ctx, (id) => {
+    if (id === "library") return openLibrary();
+    if (id === "quit") return app.quit();
+    const action = BINDABLE_ACTIONS.find((a) => id === `action:${a}`);
+    if (!action) return;
+    if (action === "record") {
+      if (sup?.state === "recording") { void onRecordHotkey(); return; }
+      // `recordAndAnnounce` logs and toasts a refusal itself; the catch is for
+      // anything it throws on the way, since a bare `void` has no caller to
+      // reject to (STC-468).
+      void recordAndAnnounce("menu-bar").catch((e) => console.error("[record] menu-bar record failed:", e));
+      return;
+    }
+    // Through `captureAndAnnounce`, like the hotkey: a menu-bar shot used to
+    // call `captureStill` bare, so its refusal was dropped AND an open window
+    // never heard about the shot at all (STC-465 review).
+    if (isShotAction(action)) void captureAndAnnounce(action, "menu-bar");
+  });
+}
+
+/** Document windows only: see icon-placement.ts rule 4. */
+function documentWindowCount(): number {
+  return (win && !win.isDestroyed() ? 1 : 0) + (editorIsOpen() ? 1 : 0) + (stillEditorIsOpen() ? 1 : 0);
+}
+
+/**
+ * Makes the menu bar and the Dock match the preference (STC-502). Idempotent:
+ * every trigger (a window opening or closing, the preference changing, launch)
+ * just calls it.
+ */
+function reconcileIcons(): void {
+  if (quitting) return;
+  const want = decideIcons(readSettings(app.getPath("userData")).iconPlacement, documentWindowCount());
+  setDockVisible(want.dock);
+  if (want.tray && !tray) tray = mountTray();
+  else if (!want.tray && tray) { tray.destroy(); tray = undefined; }
+}
+
+/**
+ * For windows that open and close outside `createWindow` (the editors): their
+ * own `closed` handlers run after ours, so look a tick later.
+ */
+function reconcileIconsSoon(): void {
+  setImmediate(reconcileIcons);
+  // Measured (STC-502, e2e on macOS): `app.dock.hide()` called as the last
+  // window closes does not take, and the same call about a second later does.
+  // Reconciling is idempotent, so asking once more after that costs nothing
+  // when the first already worked.
+  setTimeout(reconcileIcons, DOCK_HIDE_RETRY_MS).unref();
+}
+
+const DOCK_HIDE_RETRY_MS = 1500;
+
 /** The way back to a window from the menu bar. */
 function openLibrary(): void {
-  setDockVisible(true);
   if (!win || win.isDestroyed()) createWindow();
   else { win.show(); win.focus(); }
+  reconcileIcons();
   // Without this an accessory app raises the window behind whatever is
   // frontmost, which reads as the click having done nothing.
   app.focus({ steal: true });
@@ -927,33 +989,23 @@ app.whenReady().then(async () => {
 
   startSupervisor();
   shortcuts = readSettings(app.getPath("userData")).shortcuts;
-  // The menu bar first, and deliberately: from here on the app is allowed to
-  // have no window, and installing the item afterwards would leave a gap in
-  // which a user who closed the window had no way back.
-  tray = installTray({ shortcuts, busy: capturing }, (id) => {
-    if (id === "library") return openLibrary();
-    if (id === "quit") return app.quit();
-    const action = BINDABLE_ACTIONS.find((a) => id === `action:${a}`);
-    if (!action) return;
-    if (action === "record") {
-      if (sup?.state === "recording") { void onRecordHotkey(); return; }
-      // `recordAndAnnounce` logs and toasts a refusal itself; the catch is for
-      // anything it throws on the way, since a bare `void` has no caller to
-      // reject to (STC-468).
-      void recordAndAnnounce("menu-bar").catch((e) => console.error("[record] menu-bar record failed:", e));
-      return;
-    }
-    // Through `captureAndAnnounce`, like the hotkey: a menu-bar shot used to
-    // call `captureStill` bare, so its refusal was dropped AND an open window
-    // never heard about the shot at all (STC-465 review).
-    if (isShotAction(action)) void captureAndAnnounce(action, "menu-bar");
-  });
+  // The menu bar first, and deliberately: with no window at launch, this is
+  // the way in (unless the preference is Dock only).
+  reconcileIcons();
   applyShortcuts(shortcuts);
-  createWindow();
+  // STC-502: launch shows no window. The e2e suite opts back in
+  // (`_e2e-setup.ts`) because most of its tests drive the library's page.
+  if (process.env.STC_OPEN_LIBRARY_ON_LAUNCH === "1") createWindow();
   // STC-476: before the first capture can be asked for. The window also pulls
   // on load; whichever lands first is this run's launch state.
   void checkPermissions();
-  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  // The Dock icon opens the library; `openLibrary` raises the one that exists
+  // rather than making a second.
+  app.on("activate", openLibrary);
+  app.on("browser-window-created", (_e, w) => {
+    w.once("closed", reconcileIconsSoon);
+    reconcileIconsSoon();
+  });
   // Fire-and-forget: a window already exists for "Review" to bring forward,
   // and nothing else in startup depends on this finishing first.
   void recoverUnsavedTakes();
@@ -969,9 +1021,9 @@ app.on("window-all-closed", async () => {
   // that was "stopped" for good — every Record failed with "helper already
   // exited" until the app was relaunched. Elsewhere, quitting shuts it down.
   if (process.platform !== "darwin") { app.quit(); return; }
-  // Nothing on screen: the app is now only its menu-bar item and its hotkeys,
-  // which is the state the ticket's acceptance criterion describes.
-  setDockVisible(false);
+  // Nothing on screen: the app is now only its menu-bar item and its hotkeys.
+  // Whether the Dock icon stays is the preference's call (STC-502).
+  reconcileIcons();
 });
 
 // Devices are released on a deliberate quit, not left to process teardown —
@@ -1256,6 +1308,8 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
     clean.share = rest as Partial<Settings>["share"];
   }
   const saved = writeSettings(app.getPath("userData"), clean);
+  // Applies right away, no relaunch (STC-502).
+  if (clean.iconPlacement !== undefined) reconcileIcons();
   return saved;
 });
 
