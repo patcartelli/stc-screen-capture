@@ -300,8 +300,6 @@
     #permissionsheet:not(.open) { display: none; }
     #permissionsheet.open { display: flex; }
     #permissionsheet h1 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); }
-    #permissionsheet-head { justify-content: space-between; }
-    #permissionclose { padding: 3px 9px; font-size: var(--type-body); line-height: 1; }
     .permintro, .permnote { margin: 0; color: var(--text-dim); }
     .permnote { font-size: var(--type-meta); color: var(--text-faint); }
     #permissionrows { display: flex; flex-direction: column; gap: 10px; }
@@ -605,10 +603,10 @@
     from `permissions.ts`; this is only where they are drawn.
   -->
   <section id="permissionsheet" role="dialog" aria-labelledby="permissionhead">
-    <div class="row" id="permissionsheet-head">
-      <h1 id="permissionhead">Before your first capture</h1>
-      <button id="permissionclose" aria-label="Close">×</button>
-    </div>
+    <!-- No close button, on purpose (VM pass, 2026-10-08): there is nothing
+         in the window worth reaching while a grant a capture needs is missing,
+         and a closable panel is one more way to reach a refusal. -->
+    <h1 id="permissionhead">Before your first capture</h1>
     <p class="permintro">Capture needs two macOS permissions. macOS asks once for each. After that, they live in System Settings › Privacy &amp; Security.</p>
     <div id="permissionrows"></div>
     <p class="permnote">On your first recording, macOS may also ask whether Capture can record without its window picker. Choose Allow.</p>

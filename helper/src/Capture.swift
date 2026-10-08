@@ -562,7 +562,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 tapCreated: false, listenEvent: access.listenEvent,
                 accessibilityTrusted: access.accessibilityTrusted) {
                 IO.log("event tap not created and Input Monitoring was never asked; asking (STC-518)")
-                _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+                Permissions.requestListenEvent()
             }
             finishStart(.failure(CaptureError.eventTapUnavailable))
             return
@@ -578,7 +578,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             IO.log("event tap created but Input Monitoring is \(access.listenEvent) and " +
                    "Accessibility is \(access.accessibilityTrusted ? "on" : "off"); refusing (STC-480)")
             CFMachPortInvalidate(tap)
-            if requestAccess { _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
+            if requestAccess { Permissions.requestListenEvent() }
             finishStart(.failure(CaptureError.eventTapUnavailable))
             return
         }

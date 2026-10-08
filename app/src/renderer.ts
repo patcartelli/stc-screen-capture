@@ -479,10 +479,10 @@ document.addEventListener("keydown", (e) => {
 // ---- required grants (STC-476) ---------------------------------------------
 //
 // Draws what main decided (`permissions.ts`) and reports which button was
-// pressed; decides nothing. Shown whenever a state arrives that still needs
-// something, so a capture refused for a grant brings it back. × hides it until
-// then. Re-read on focus, which is how it notices a change made in System
-// Settings without a restart.
+// pressed; decides nothing. Shown exactly while a state says something is
+// still needed, with no way to close it (VM pass, 2026-10-08). Re-read on
+// focus, which is how it notices a change made in System Settings without a
+// restart.
 const permSheet = $("permissionsheet");
 const permRows = $("permissionrows");
 
@@ -521,7 +521,6 @@ function renderPermissions(s: PermissionsState): void {
   }));
 }
 recorder.on("permissions:changed", (s: PermissionsState) => renderPermissions(s));
-$("permissionclose").addEventListener("click", () => permSheet.classList.remove("open"));
 window.addEventListener("focus", () => {
   if (permSheet.classList.contains("open")) void recorder.permissions().then(renderPermissions);
 });

@@ -161,7 +161,7 @@ enum EventTapAccessDecision: Equatable {
     case proceed
     /// Refuse the start, exactly as a nil `tapCreate` is refused (STC-315).
     /// `requestAccess` is true when the system has never asked — calling
-    /// `IOHIDRequestAccess` then raises macOS's own prompt, which is what the
+    /// `Permissions.requestListenEvent` then raises macOS's own prompt, which is what the
     /// `event-tap-unavailable` refusal's sentence already tells the user to
     /// expect. Once it is `denied`, macOS will not ask again; Settings is the
     /// only way back, and the refusal's button opens it.

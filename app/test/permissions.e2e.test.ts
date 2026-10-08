@@ -50,12 +50,13 @@ describe("the required-grants panel (STC-476)", () => {
     expect(await status(win, "screen-recording")).toBe("not-yet");
     expect(await status(win, "input-monitoring")).toBe("not-yet");
 
-    // Closed, then Record: the panel comes back instead of the overlay.
-    await win.click("#permissionclose");
-    await expect.poll(() => win.isVisible("#permissionsheet")).toBe(false);
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await win.click("#record");
-    await expect.poll(() => win.isVisible("#permissionsheet"), { timeout: 15_000 }).toBe(true);
+    // No way to close it (VM pass, 2026-10-08).
+    expect(await win.locator("#permissionsheet button[aria-label='Close']").count()).toBe(0);
+    // Record through the same IPC the (now covered) button uses, and through
+    // the hotkey/menu door's code: refused, the panel stays, no overlay.
+    const r = await win.evaluate(() => (window as any).recorder.start());
+    expect(r).toMatchObject({ ok: false, code: "permissions-needed" });
+    expect(await win.isVisible("#permissionsheet")).toBe(true);
     expect(await hasWindow(app!, "overlay")).toBe(false);
     expect(cmds()).not.toContain("windows");
     expect(cmds()).not.toContain("start");
