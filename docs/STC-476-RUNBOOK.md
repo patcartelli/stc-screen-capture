@@ -58,7 +58,7 @@ Each was read from tccd's own log (`log show --predicate 'subsystem ==
 | 3 | Grant Screen Recording. The row never reads Granted before a relaunch. Relaunch, then no panel | **pass** (Patrick) |
 | 4 | Record goes straight to the overlay, with no SR or IM prompt | **pass** (Patrick). The take had 357 events, 9 clicks (agent, SSH). macOS's "bypass the system private window picker" dialog still appears once a stream starts. See below |
 | 5 | With a grant missing, Record (⌃⌥⇧⌘4) keeps the panel up and opens no overlay or scrim | **pass** (Patrick) |
-| 6 | `fresh.sh --granted`: no panel at all | see PR |
+| 6 | `fresh.sh --granted`: no panel at all | **pass** (Patrick) |
 | 7 | `reset-tcc.sh <vm>` + relaunch: the panel comes back | **pass** (Patrick) |
 
 To re-run 2 on a VM that has already asked: `reset-tcc.sh` clears the grants, but
@@ -70,7 +70,7 @@ before clicking Grant… again.
 - **The picker-bypass consent** ("Capture is requesting to bypass the system private
   window picker…") appears when the first stream starts, so it lands in the first
   take. It's raised at stream start, not by the window list, so the panel can't
-  trigger it in advance without a throwaway stream. Not built.
+  trigger it in advance without a throwaway stream. Filed as STC-522.
 - Does `CGRequestListenEventAccess` block the helper until the user answers? It
   didn't visibly stall in VM 4. The app gives up after 5 s anyway.
 
