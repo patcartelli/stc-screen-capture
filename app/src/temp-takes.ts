@@ -138,7 +138,7 @@ async function moveDir(from: string, to: string): Promise<void> {
  * second-resolution stamp both surviving to promotion.
  */
 export async function promoteTake(env: NodeJS.ProcessEnv, saveFolder: string | null,
-                                  dir: string): Promise<string> {
+                                  dir: string, onPromoted?: (dest: string) => void): Promise<string> {
   if (!insideTempTakesRoot(env, dir)) return dir;
   const root = rawRoot(env, saveFolder);
   await mkdir(root, { recursive: true });
@@ -149,6 +149,10 @@ export async function promoteTake(env: NodeJS.ProcessEnv, saveFolder: string | n
   // storage — and `raw/` is the user's own folder, so it is not left there.
   // Best-effort: a marker that survives costs a few bytes, never the take.
   await rm(join(dest, RECOVERY_OFFERED_FILE), { force: true }).catch(() => {});
+  // STC-519: the library just gained a take and nothing in the window saw it
+  // happen (Save/Edit run in main). Told only on a real move, after the take
+  // is in place, so a rescan triggered by it finds it.
+  onPromoted?.(dest);
   return dest;
 }
 
