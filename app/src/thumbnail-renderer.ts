@@ -397,14 +397,28 @@ function drawGif(): void {
 
 function gifEvent(e: GifEvent): void { gif = reduceGif(gif, e); drawGif(); }
 
+/**
+ * Which pick is the newest. A cancelled job's reply arrives only after main has
+ * cleaned it up, and by then a newer pick may have started another conversion:
+ * that late "cancelled" must not undo the newer pick, so only the newest pick's
+ * reply reaches the reducer (Review Focus 4).
+ */
+let pickSeq = 0;
+
 async function pickFormat(format: OutputFormat): Promise<void> {
+  const mine = ++pickSeq;
   const effect = effectOfPick(gif, format);
   gifEvent({ kind: "pick", format });
   if (effect === "cancel") { await window.thumb.cancelGif(dir); return; }
   if (effect !== "start") return;
   let r: Awaited<ReturnType<typeof window.thumb.gif>>;
   try { r = await window.thumb.gif(dir); }
-  catch (err) { gifEvent({ kind: "failed", detail: err instanceof Error ? err.message : String(err) }); return; }
+  catch (err) {
+    if (mine !== pickSeq) return;
+    gifEvent({ kind: "failed", detail: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  if (mine !== pickSeq) return;
   if (r.ok) gifEvent({ kind: "done", bytes: r.bytes });
   else if (r.cancelled) gifEvent({ kind: "cancelled" });
   else gifEvent({ kind: "failed", detail: r.detail ?? "unknown error" });

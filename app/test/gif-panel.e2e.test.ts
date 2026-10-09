@@ -231,9 +231,17 @@ describe("a recording's GIF (STC-395)", () => {
     const dir = await recordAndStop(l);
     const panel = await readyPanel();
 
-    await panel.click(GIF);
-    await panel.click(VIDEO);
-    await panel.click(GIF);
+    // All three picks in ONE renderer tick, so the second pick's cancel is
+    // still settling in main when the third pick starts a new conversion.
+    // The first pick's "cancelled" reply then arrives AFTER the third pick,
+    // every time, which is the ordering that used to knock the panel back to
+    // Video. Three Playwright clicks are tens of ms apart and usually let the
+    // cancel finish first, so that version could not catch the bug.
+    await panel.evaluate(() => {
+      for (const f of ["gif", "video", "gif"]) {
+        document.querySelector<HTMLButtonElement>(`#format button[data-format="${f}"]`)!.click();
+      }
+    });
     expect(await checked(panel)).toBe("gif");
 
     // The first job's late "cancelled" must not knock the second conversion back to Video.

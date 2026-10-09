@@ -67,6 +67,28 @@ describe("STC-395: a failed GIF refuses Copy and Save by key as well as by butto
   });
 });
 
+describe("STC-395: only the newest pick's reply reaches the reducer (Review Focus 4)", () => {
+  const STALE = /if \(mine !== pickSeq\) return;/;
+  test("every pick takes a token first", () => {
+    expect(bodyOf("async function pickFormat(")).toMatch(/^format: OutputFormat\): Promise<void> \{\s*const mine = \+\+pickSeq;/);
+  });
+  test("every outcome after the reply is behind the staleness check", () => {
+    const b = bodyOf("async function pickFormat(");
+    const reply = b.indexOf("await window.thumb.gif(dir)");
+    expect(reply).toBeGreaterThan(-1);
+    const after = b.slice(reply);
+    const events = [...after.matchAll(/gifEvent\(\{ kind: "(done|failed|cancelled)"/g)];
+    expect(events.map((m) => m[1]).sort()).toEqual(["cancelled", "done", "failed", "failed"]);
+    expect(after).toMatch(/catch \(err\) \{\s*if \(mine !== pickSeq\) return;\s*gifEvent\(\{ kind: "failed"/);
+    expect(after).toMatch(/\}\s*if \(mine !== pickSeq\) return;\s*if \(r\.ok\) gifEvent\(\{ kind: "done"/);
+  });
+  test("control: the pattern does not fire on an unguarded reply", () => {
+    const unguarded = "try { r = await window.thumb.gif(dir); }\n  if (r.ok) gifEvent({ kind: \"done\", bytes: r.bytes });";
+    expect(unguarded).not.toMatch(STALE);
+    expect(unguarded).not.toMatch(/\}\s*if \(mine !== pickSeq\) return;\s*if \(r\.ok\) gifEvent\(\{ kind: "done"/);
+  });
+});
+
 describe("the recording card's duration", () => {
   test("is the library's own formatter", () => {
     expect(fmtDuration(42_000)).toBe("0:42");
