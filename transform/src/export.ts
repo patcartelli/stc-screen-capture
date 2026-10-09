@@ -137,6 +137,8 @@ export interface CompositedFrame {
 export async function* compositeFrames(
   session: LoadedSession, project: Project, opts: FrameLoopOptions,
 ): AsyncGenerator<CompositedFrame> {
+  const step = opts.step ?? 1;
+  if (!Number.isInteger(step) || step < 1) throw new Error(`compositeFrames: step must be a positive integer, got ${step}`);
   const source = new ForwardFrameSource(session.video);
   // A SECOND decoder, never a shared one. PHASE-0 §4b's one-in-flight rule is
   // per decoder, and ForwardFrameSource serialises internally, so two instances
@@ -147,7 +149,6 @@ export async function* compositeFrames(
   // the track's bounds rather than clamping backwards into it.
   const cameraSource = session.cameraVideo ? new ForwardFrameSource(session.cameraVideo) : null;
   const { width, height } = project.output;
-  const step = opts.step ?? 1;
   const ctx = new OffscreenCanvas(width, height).getContext("2d", {
     alpha: false,
     willReadFrequently: opts.readback ?? false,
