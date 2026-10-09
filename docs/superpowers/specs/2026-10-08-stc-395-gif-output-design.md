@@ -67,16 +67,20 @@ it does for an MP4.
   colours.
 - **Dither only smooth gradients.** The first hardware pass (runbook §2) found
   gradients a little posterized with no dither at all. A pixel whose largest
-  per-channel step to a 4-neighbour is small but not zero (`0 < d <=
-  SMOOTH_MAX`, measured on the original frame) gets an ordered 4x4 Bayer
-  offset, equal on R, G and B, before palette indexing. Edges (text, icons,
-  borders: a big step) and flat fills (no step) are never dithered, so they
-  stay exactly as crisp and clean as before. `SMOOTH_MAX` and `DITHER_SPREAD`
-  are tuned by eye. Ordered, not error-diffusion (Floyd-Steinberg): diffusion
+  per-channel step to a 4-neighbour is small but real (`SMOOTH_MIN <= d <=
+  SMOOTH_MAX`, measured on the original frame) and that has no edge
+  (`d > SMOOTH_MAX`) anywhere in its 3x3 neighbourhood gets an ordered 4x4
+  Bayer offset, equal on R, G and B, before palette indexing. Edges (text,
+  icons, borders), the ring beside them (an anti-aliased fringe), flat fills
+  and one-level codec noise on a flat fill are never dithered, so they stay
+  exactly as crisp and clean as before. `SMOOTH_MIN`, `SMOOTH_MAX` and
+  `DITHER_SPREAD` are starting values, to be tuned by eye in runbook §2. Ordered, not error-diffusion (Floyd-Steinberg): diffusion
   carries error from pixel to pixel, so one changed pixel reshuffles its
   neighbours' indices, which shimmers between frames and defeats the
-  transparency diff below. The Bayer offset depends only on position, so an
-  unchanged pixel gets the same index every frame. The palette is still built
+  transparency diff below. The Bayer offset depends only on position and the
+  mask only on the 3x3 neighbourhood, so an unchanged pixel in an unchanged
+  neighbourhood gets the same index every frame (one beside a moving edge can
+  switch for a frame). The palette is still built
   from the undithered frames.
 - **Unchanged pixels are transparent** relative to the previous frame (one
   palette slot reserved as the transparent index). On a screen recording this

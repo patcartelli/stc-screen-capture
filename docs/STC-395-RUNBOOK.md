@@ -29,7 +29,7 @@ node scripts/gif-one.mjs <sessionDir> --check --out /tmp/stc-395-dither/on
 node scripts/gif-one.mjs <sessionDir> --check --no-dither --out /tmp/stc-395-dither/off
 ```
 
-(`/tmp/stc-395-dither/on` and `off` already hold this pair for the 2026-10-09_15-31-44 take.) Open both side by side. Judge: gradients and shadows smoother with dither on; text and icons exactly as crisp as off; no shimmer or crawling pattern on a still gradient while something else moves. If the pattern is visible as grain, `DITHER_SPREAD` (gif-encode.ts) is too high; if bands remain, too low or `SMOOTH_MAX` too small. Note the two file sizes: dither costs bytes.
+`--check` also prints `dithered: frame 0 …%, overall …%`. Measured on the 2026-10-09_15-31-44 take (22.53 s, 338 frames at 960x694): on 4.18 MB in 13.5 s, 5.4% of pixels dithered; off 3.62 MB in 8.6 s. Open both side by side. Judge: gradients and shadows smoother with dither on; text and icons exactly as crisp as off; flat areas free of a stipple; no shimmer or crawling pattern on a still gradient while something else moves. The three constants in gif-encode.ts are starting values: a stipple on flat areas means `SMOOTH_MIN` is too low (but on a slow, dark wallpaper 3 brought the banding back); grain on gradients means `DITHER_SPREAD` is too high; bands that remain mean it is too low or `SMOOTH_MAX` is too small.
 
 ## §3 Time
 
