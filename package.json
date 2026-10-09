@@ -34,9 +34,13 @@
     "esbuild": "^0.28.2",
     "mp4-muxer": "^5.2.2",
     "mp4box": "^2.4.1",
+    "omggif": "^1.0.10",
     "playwright": "^1.62.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },
-  "main": "app/dist/main.mjs"
+  "main": "app/dist/main.mjs",
+  "dependencies": {
+    "gifenc": "^1.0.3"
+  }
 }
