@@ -7,7 +7,9 @@
  * Usage: node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check] [--no-dither] [--out <dir>]
  *
  * --no-dither turns off the gradient-only dither (gif-encode.ts), for a
- * before/after comparison; the app always dithers.
+ * before/after comparison; the app always dithers. --check also prints the
+ * fraction of pixels dithered (frame 0, and over every frame), so SMOOTH_MIN /
+ * SMOOTH_MAX are tuned on a number rather than a guess.
  */
 import { createServer } from "vite";
 import { chromium } from "playwright";
@@ -85,6 +87,8 @@ try {
     if (Number.isFinite(expectCs) && Math.abs(sum - expectCs) > Math.ceil(100 / fps)) fail.push(`duration ${sum} cs, expected ~${expectCs}`);
     if (fail.length) { console.error("CHECK FAILED: " + fail.join("; ")); out = 1; }
     else console.log("check ok");
+    const pct = (f) => `${(f * 100).toFixed(1)}%`;
+    console.log(`dithered: frame 0 ${pct(r.ditherStats.firstFrame)}, overall ${pct(r.ditherStats.overall)}`);
   }
 } catch (e) {
   console.error("FAILED:", String(e?.stack ?? e));

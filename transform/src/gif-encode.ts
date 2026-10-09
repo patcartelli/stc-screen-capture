@@ -7,12 +7,18 @@
  *   (`buildPalette`). Per-frame palettes flicker, and screen content has few
  *   colours.
  * - Dither ONLY smooth gradients (`ditherSmooth`): a 4x4 ordered (Bayer) offset
- *   on pixels whose largest step to a neighbour is small but not zero. Text,
- *   edges and icons (a big step) and flat fills (no step) are indexed exactly
- *   as they are, so they stay crisp and clean. Ordered, not error-diffusion:
- *   the offset depends only on (x, y), so an unchanged pixel gets the same
- *   index every frame and the transparency diff below still works, and nothing
- *   shimmers between frames.
+ *   on pixels whose largest step to a neighbour is small but real
+ *   (SMOOTH_MIN..SMOOTH_MAX) and that have no edge anywhere in their 3x3
+ *   neighbourhood. Text, edges and icons (a big step, and the ring around one,
+ *   which covers an anti-aliased fringe), flat fills (no step) and codec noise
+ *   on a flat fill (a step of 1) are indexed exactly as they are, so they stay
+ *   crisp and clean. Ordered, not error-diffusion: the offset depends only on
+ *   (x, y), and whether a pixel is dithered only on its own 3x3 neighbourhood,
+ *   so an unchanged pixel in an unchanged neighbourhood gets the same index
+ *   every frame and the transparency diff below still works. A static gradient
+ *   pixel next to something that MOVES can switch between dithered and not for
+ *   a frame (deterministic by position AND neighbourhood); that costs a few
+ *   bytes at a moving edge, never a shimmer.
  * - From frame 1 on, a pixel whose palette index is the same as the previous
  *   frame's is written as the reserved transparent index, with disposal 1
  *   ("leave in place"). On a screen recording most of the screen is still most
@@ -37,31 +43,44 @@ export function buildPalette(samples: readonly Uint8ClampedArray[]): Palette {
 }
 
 /**
- * The largest per-channel step to a 4-neighbour at or below which a pixel counts
- * as part of a smooth gradient (shadows, soft fills, wallpaper). Above it is an
- * edge: text, icons, borders. TUNED BY EYE (runbook §2), not derived.
+ * STARTING VALUES, to be tuned by eye in runbook §2; none of the three is derived.
+ *
+ * SMOOTH_MIN / SMOOTH_MAX: the range of a pixel's largest per-channel step to a
+ * 4-neighbour that counts as a smooth gradient (shadows, soft fills, wallpaper).
+ * Below SMOOTH_MIN is a flat fill, or a flat fill carrying decode noise: real
+ * frames are decoded H.264 and canvas-downscaled, so "flat" UI sits at a step
+ * of 0-1 across whole surfaces, and dithering that is grain and bytes, not a
+ * smoother picture. Above SMOOTH_MAX is an edge: text, icons, borders.
  */
+export const SMOOTH_MIN = 2;
 export const SMOOTH_MAX = 12;
 /**
  * Peak-to-peak size of the ordered-dither offset, in 8-bit levels, added equally
- * to R, G and B. TUNED BY EYE. Starting value: a 255-colour palette over a
- * screen take spends most of its entries on UI greys and accents, so a gradient
- * typically sees palette neighbours ~16-32 levels apart; an offset spanning ±8
- * (about half that step) moves a pixel across at most one band boundary, which
- * breaks the band edge into a pattern without adding visible grain.
+ * to R, G and B. A 255-colour palette over a screen take spends most of its
+ * entries on UI greys and accents, so a gradient typically sees palette
+ * neighbours ~16-32 levels apart; an offset spanning about ±8 (half that step)
+ * moves a pixel across at most one band boundary, which breaks the band edge
+ * into a pattern without adding visible grain.
  */
 export const DITHER_SPREAD = 16;
 /** 4x4 Bayer matrix, row-major by (y & 3, x & 3). */
 const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
-const DITHER_OFFSET = BAYER4.map((b) => (b / 16 - 0.5 + 1 / 32) * DITHER_SPREAD);
+/**
+ * Whole-level offsets, centred on zero: (b - 7.5) * SPREAD / 16 truncated toward
+ * zero gives -7..7 at SPREAD 16, symmetric. Half-levels would be resolved by the
+ * clamped array's round-half-to-even, which favours even levels.
+ */
+const DITHER_OFFSET = Int16Array.from(BAYER4, (b) => Math.trunc(((b - 7.5) * DITHER_SPREAD) / 16));
 
 /**
  * Write `src` into `out` with the ordered-dither offset added to every smooth
- * pixel (0 < d <= SMOOTH_MAX, d measured on `src`). `step` is scratch, one byte
- * per pixel. Pure in its inputs: the same frame always gives the same output.
+ * pixel: SMOOTH_MIN <= d <= SMOOTH_MAX (d measured on `src`) and no pixel in its
+ * 3x3 neighbourhood has d > SMOOTH_MAX. `step` and `near` are scratch, one byte
+ * per pixel each. Returns how many pixels were dithered. Pure in its inputs: the
+ * same frame always gives the same output.
  */
 export function ditherSmooth(src: Uint8ClampedArray, w: number, h: number,
-                             out: Uint8ClampedArray, step: Uint8Array): void {
+                             out: Uint8ClampedArray, step: Uint8Array, near: Uint8Array): number {
   step.fill(0);
   const diff = (a: number, b: number) => Math.max(
     Math.abs(src[a]! - src[b]!), Math.abs(src[a + 1]! - src[b + 1]!), Math.abs(src[a + 2]! - src[b + 2]!));
@@ -83,16 +102,41 @@ export function ditherSmooth(src: Uint8ClampedArray, w: number, h: number,
       }
     }
   }
+  // near = max step over the row neighbours (x-1..x+1); the 3x3 max is then
+  // the max of `near` over y-1..y+1, read in the final pass. Separable, O(pixels).
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      const p = row + x;
+      let m = step[p]!;
+      if (x > 0 && step[p - 1]! > m) m = step[p - 1]!;
+      if (x + 1 < w && step[p + 1]! > m) m = step[p + 1]!;
+      near[p] = m;
+    }
+  }
   out.set(src);
+  let n = 0;
   for (let y = 0; y < h; y++) {
     const row = y * w, by = (y & 3) * 4;
     for (let x = 0; x < w; x++) {
-      const d = step[row + x]!;
-      if (d === 0 || d > SMOOTH_MAX) continue;
-      const o = DITHER_OFFSET[by + (x & 3)]!, i = (row + x) * 4;
+      const p = row + x, d = step[p]!;
+      if (d < SMOOTH_MIN || d > SMOOTH_MAX) continue;
+      if (near[p]! > SMOOTH_MAX || (y > 0 && near[p - w]! > SMOOTH_MAX) ||
+          (y + 1 < h && near[p + w]! > SMOOTH_MAX)) continue;
+      const o = DITHER_OFFSET[by + (x & 3)]!, i = p * 4;
       out[i] = src[i]! + o; out[i + 1] = src[i + 1]! + o; out[i + 2] = src[i + 2]! + o;   // clamped by the array
+      n++;
     }
   }
+  return n;
+}
+
+/** How much of the GIF was dithered: a measurement, so SMOOTH_MIN/MAX are tuned on numbers. */
+export interface DitherStats {
+  /** Fraction of frame 0's pixels dithered. */
+  firstFrame: number;
+  /** Fraction of all pixels of all frames written so far. */
+  overall: number;
 }
 
 export interface GifWriterOptions {
@@ -109,6 +153,9 @@ export class GifWriter {
   /** Reused every frame. Each owns its WHOLE buffer: gifenc's applyPalette reads `rgba.buffer`. */
   private readonly scratch: Uint8ClampedArray | null;
   private readonly step: Uint8Array | null;
+  private readonly near: Uint8Array | null;
+  private dithered = 0;
+  private ditheredFirst = 0;
 
   constructor(readonly width: number, readonly height: number,
               private readonly palette: Palette, private readonly delaysCs: readonly number[],
@@ -118,9 +165,16 @@ export class GifWriter {
     const dither = opts.dither ?? true;
     this.scratch = dither ? new Uint8ClampedArray(width * height * 4) : null;
     this.step = dither ? new Uint8Array(width * height) : null;
+    this.near = dither ? new Uint8Array(width * height) : null;
   }
 
   get frameCount(): number { return this.n; }
+
+  get ditherStats(): DitherStats {
+    const px = this.width * this.height;
+    return { firstFrame: this.n > 0 ? this.ditheredFirst / px : 0,
+             overall: this.n > 0 ? this.dithered / (px * this.n) : 0 };
+  }
 
   addFrame(rgba: Uint8ClampedArray): void {
     if (rgba.length !== this.width * this.height * 4) {
@@ -130,8 +184,10 @@ export class GifWriter {
       throw new Error(`GifWriter: more frames than the ${this.delaysCs.length} delays given`);
     }
     let src = rgba;
-    if (this.scratch && this.step) {
-      ditherSmooth(rgba, this.width, this.height, this.scratch, this.step);
+    if (this.scratch && this.step && this.near) {
+      const k = ditherSmooth(rgba, this.width, this.height, this.scratch, this.step, this.near);
+      if (this.n === 0) this.ditheredFirst = k;
+      this.dithered += k;
       src = this.scratch;
     }
     // Index against the palette WITHOUT the transparent slot, so no real pixel lands on it.

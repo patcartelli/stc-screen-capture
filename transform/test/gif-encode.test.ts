@@ -99,7 +99,7 @@ describe("buildPalette", () => {
 });
 
 describe("gradient-only dither", () => {
-  const GW = 256, GH = 4;
+  const GW = 128, GH = 4;
   /** A palette with a 16-level grey step: what a real 255-colour palette spent mostly elsewhere looks like to one gradient. */
   const greys: number[][] = [];
   for (let v = 0; v <= 240; v += 16) greys.push([v, v, v]);
@@ -129,12 +129,18 @@ describe("gradient-only dither", () => {
     for (let i = 1; i < row.length; i++) { run = row[i] === row[i - 1] ? run + 1 : 1; best = Math.max(best, run); }
     return best;
   }
+  /** Played back (disposal 1), every frame. */
+  function playedWith(fs: Uint8ClampedArray[], palette: number[][], dither: boolean) {
+    return playAll(encodeWith(GW, GH, palette, fs, dither));
+  }
+  const same = (a: ArrayLike<number> & ArrayBufferView, b: ArrayLike<number> & ArrayBufferView) => Buffer.from(a).equals(Buffer.from(b));
   function transitions(row: number[]): number {
     let n = 0;
     for (let i = 1; i < row.length; i++) if (row[i] !== row[i - 1]) n++;
     return n;
   }
-  const gradient = frameOf(GW, GH, (x) => x);                    // 0..255, one level per pixel
+  // 0..254, two levels per pixel: a step of 2, inside SMOOTH_MIN..SMOOTH_MAX.
+  const gradient = frameOf(GW, GH, (x) => 2 * x);
 
   test("a flat fill and hard-edged text encode byte-identically with dither on and off", () => {
     const flat = frameOf(GW, GH, () => 200);
@@ -151,10 +157,10 @@ describe("gradient-only dither", () => {
     const off = greysOf(encodeWith(GW, GH, greys, [gradient], false), 0);
     const row = (a: number[], y: number) => a.slice(y * GW, (y + 1) * GW);
     for (let y = 0; y < GH; y++) {
-      expect(longestRun(row(off, y))).toBeGreaterThanOrEqual(15);    // posterized: 16-px bands
+      expect(longestRun(row(off, y))).toBeGreaterThanOrEqual(8);     // posterized: 8-px bands
       expect(longestRun(row(on, y))).toBeLessThan(longestRun(row(off, y)));
       // Band edges become patterns: far more index changes along the row.
-      expect(transitions(row(on, y))).toBeGreaterThan(3 * transitions(row(off, y)));
+      expect(transitions(row(on, y))).toBeGreaterThan(2 * transitions(row(off, y)));
     }
   });
 
@@ -164,5 +170,47 @@ describe("gradient-only dither", () => {
     const canvas = new Uint8ClampedArray(GW * GH * 4).fill(7);
     r.decodeAndBlitFrameRGBA(1, canvas);            // transparent pixels leave the canvas untouched
     expect(canvas.every((v) => v === 7)).toBe(true);
+  });
+
+  test("codec noise on a flat fill (a step of 1) is not dithered", () => {
+    // Decoded H.264 + a canvas downscale: "flat" UI wobbles by a level.
+    const noisy = frameOf(GW, GH, (x, y) => 200 + (((x * 7 + y * 13) % 5) < 2 ? 1 : 0));
+    for (const palette of [buildPalette([noisy]), greys]) {
+      expect(same(encodeWith(GW, GH, palette, [noisy, noisy], true),
+                  encodeWith(GW, GH, palette, [noisy, noisy], false))).toBe(true);
+    }
+  });
+
+  test("an anti-aliased glyph edge is not ringed with dither", () => {
+    // A light background, then a soft edge 200 -> 190 -> 128 -> 0 into a black stem,
+    // and back out. The background pixel beside the faint 190 fringe has a step of
+    // 10, inside SMOOTH_MIN..SMOOTH_MAX; only the 3x3 edge check keeps it clean.
+    // Not white: gifenc indexes through an RGB565 key, so 248..255 share one bucket
+    // and a dithered white could never change index, hiding the ring.
+    const edge = [200, 190, 128, 0, 0, 0, 128, 190];
+    const glyph = frameOf(GW, GH, (x) => (x >= 40 && x < 48 ? edge[x - 40]! : 200));
+    for (const palette of [buildPalette([glyph]), greys]) {
+      expect(same(encodeWith(GW, GH, palette, [glyph, glyph], true),
+                  encodeWith(GW, GH, palette, [glyph, glyph], false))).toBe(true);
+    }
+  });
+
+  test("a gradient, then a different flat frame: the flat frame plays back the same with dither on and off", () => {
+    const flat = frameOf(GW, GH, () => 96);
+    const on = playedWith([gradient, flat], greys, true);
+    const off = playedWith([gradient, flat], greys, false);
+    expect(same(on[1]!, off[1]!)).toBe(true);
+    expect(same(on[1]!, flat)).toBe(true);
+  });
+
+  test("writer reports how much it dithered, and nothing with dither off", () => {
+    const g = new GifWriter(GW, GH, greys, [10, 10], { dither: true });
+    g.addFrame(gradient); g.addFrame(frameOf(GW, GH, () => 96));
+    const s = g.ditherStats;
+    expect(s.firstFrame).toBeGreaterThan(0.9);       // all but the frame's own border-free gradient
+    expect(s.overall).toBeCloseTo(s.firstFrame / 2, 5);
+    const off = new GifWriter(GW, GH, greys, [10], { dither: false });
+    off.addFrame(gradient);
+    expect(off.ditherStats).toEqual({ firstFrame: 0, overall: 0 });
   });
 });

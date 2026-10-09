@@ -49,6 +49,7 @@ applyDecoderPreference();
   mark("gif: exportGif returned");
   let s = "";
   for (let i = 0; i < r.bytes.length; i += 0x8000) s += String.fromCharCode(...r.bytes.subarray(i, i + 0x8000));
-  return { base64: btoa(s), frames: r.frames, width: r.width, height: r.height, durationCs: r.durationCs, elapsedMs: r.elapsedMs };
+  return { base64: btoa(s), frames: r.frames, width: r.width, height: r.height, durationCs: r.durationCs, elapsedMs: r.elapsedMs,
+           ditherStats: r.ditherStats };
 };
 (window as any).__gifReady = true;

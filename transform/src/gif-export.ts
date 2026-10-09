@@ -14,7 +14,7 @@ import { exportWindow, availableFrames } from "./trim.js";
 import type { LoadedSession } from "./session.js";
 import type { Project } from "./types.js";
 import { type GifSettings, gifFrameStep, gifFrameCount, gifDelaysCs, gifSize } from "./gif-options.js";
-import { buildPalette, GifWriter } from "./gif-encode.js";
+import { buildPalette, GifWriter, type DitherStats } from "./gif-encode.js";
 
 export interface GifExportOptions {
   settings: GifSettings;
@@ -27,6 +27,8 @@ export interface GifExportOptions {
 export interface GifExportResult {
   bytes: Uint8Array; frames: number; width: number; height: number;
   durationCs: number; elapsedMs: number;
+  /** How much was dithered (all zero with dither off): for tuning, not for the UI. */
+  ditherStats: DitherStats;
 }
 
 export const PALETTE_SAMPLES = 8;
@@ -87,5 +89,5 @@ export async function exportGif(session: LoadedSession, project: Project,
   const bytes = writer.finish();
   report(1);
   return { bytes, frames: count, ...size, durationCs: delays.reduce((a, b) => a + b, 0),
-           elapsedMs: Math.round(performance.now() - t0) };
+           elapsedMs: Math.round(performance.now() - t0), ditherStats: writer.ditherStats };
 }
