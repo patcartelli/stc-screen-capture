@@ -85,10 +85,7 @@ no recording Copy there). One predicate, `offersFormat(kind, origin)` in
 `panel-actions.ts`, answers it for the renderer, the context menu and main.
 
 **The control.** A two-segment `Video | GIF` switch. It never closes the
-panel and always starts on **Video**. Flipping it doesn't reset the panel's
-auto-dismiss timer (STC-343's rules), and a panel with a GIF job in flight
-**holds its timer** until the job settles, so a timeout can't dismiss a GIF
-mid-encode.
+panel and always starts on **Video**. The panel has had no auto-dismiss timer since STC-392, so nothing can close it mid-encode except Trash, dismiss or quit — each of which cancels the job.
 
 **States (`app/src/gif-panel.ts`, a pure reducer, no DOM):**
 
