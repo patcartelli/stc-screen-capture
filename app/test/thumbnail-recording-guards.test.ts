@@ -69,8 +69,21 @@ describe("STC-395: a failed GIF refuses Copy and Save by key as well as by butto
 
 describe("STC-395: only the newest pick's reply reaches the reducer (Review Focus 4)", () => {
   const STALE = /if \(mine !== pickSeq\) return;/;
-  test("every pick takes a token first", () => {
-    expect(bodyOf("async function pickFormat(")).toMatch(/^format: OutputFormat\): Promise<void> \{\s*const mine = \+\+pickSeq;/);
+  // Only a pick that starts or cancels a job takes a token. A "none" pick (GIF
+  // re-clicked mid-conversion) that bumped it would orphan the running job's
+  // reply and leave the panel converting forever.
+  const TOKEN_AFTER_NONE = /if \(effect === "none"\) return;\s*(?:\/\/[^\n]*\n\s*)*const mine = \+\+pickSeq;/;
+  test("a pick takes a token only once it is known to start or cancel a job", () => {
+    const b = bodyOf("async function pickFormat(");
+    expect(b).toMatch(/const effect = effectOfPick\(gif, format\);[\s\S]*?if \(effect === "none"\) return;[\s\S]*?const mine = \+\+pickSeq;\s*if \(effect === "cancel"\)/);
+    expect(b).toMatch(TOKEN_AFTER_NONE);
+    expect((b.match(/\+\+pickSeq/g) ?? [])).toHaveLength(1);
+  });
+  test("control: the token taken before the effect is known does not pass", () => {
+    const early = "(format: OutputFormat): Promise<void> {\n  const mine = ++pickSeq;\n  const effect = effectOfPick(gif, format);\n"
+      + "  gifEvent({ kind: \"pick\", format });\n  if (effect === \"none\") return;\n  if (effect === \"cancel\") {";
+    expect(early).not.toMatch(/const effect = effectOfPick\(gif, format\);[\s\S]*?if \(effect === "none"\) return;[\s\S]*?const mine = \+\+pickSeq;\s*if \(effect === "cancel"\)/);
+    expect(early).not.toMatch(TOKEN_AFTER_NONE);
   });
   test("every outcome after the reply is behind the staleness check", () => {
     const b = bodyOf("async function pickFormat(");

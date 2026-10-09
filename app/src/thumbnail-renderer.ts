@@ -406,11 +406,13 @@ function gifEvent(e: GifEvent): void { gif = reduceGif(gif, e); drawGif(); }
 let pickSeq = 0;
 
 async function pickFormat(format: OutputFormat): Promise<void> {
-  const mine = ++pickSeq;
   const effect = effectOfPick(gif, format);
   gifEvent({ kind: "pick", format });
+  // Only a pick that starts or cancels a job takes a token: a re-click of GIF
+  // mid-conversion changes nothing, and must not orphan the running job's reply.
+  if (effect === "none") return;
+  const mine = ++pickSeq;
   if (effect === "cancel") { await window.thumb.cancelGif(dir); return; }
-  if (effect !== "start") return;
   let r: Awaited<ReturnType<typeof window.thumb.gif>>;
   try { r = await window.thumb.gif(dir); }
   catch (err) {

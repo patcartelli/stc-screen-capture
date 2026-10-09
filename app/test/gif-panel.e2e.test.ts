@@ -38,9 +38,10 @@ import { RAW_SUBDIR } from "../src/takes.js";
 //   test 4 (back to Video): 15 + 45 + #copyprogress 15 + render window 15 + window gone 15
 //     + label hidden 15 = 120 s (+ 1 s settle)
 //   test 5 (GIF → Video → GIF): 15 + 45 + label 120 + window gone 15 = 195 s
-//   test 6 (Trash mid-conversion): 15 + 45 + render window 15 + clickThatCloses 15
+//   test 6 (GIF, GIF): 15 + 45 + label 120 + window gone 15 = 195 s
+//   test 7 (Trash mid-conversion): 15 + 45 + render window 15 + clickThatCloses 15
 //     + window gone 15 = 105 s (+ 1 s settle)
-//   test 7 (a still's panel): thumbnail 15 + pageWithUrl 15 + card 15 = 45 s
+//   test 8 (a still's panel): thumbnail 15 + pageWithUrl 15 + card 15 = 45 s
 // Inner bounds (240 s worst) clear 300 s strictly; the rest is launch,
 // teardown and startRecordFlow's hidden bounds (judgement headroom).
 const root = join(__dirname, "..", "..");
@@ -213,7 +214,9 @@ describe("a recording's GIF (STC-395)", () => {
 
     await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: 15_000 }).toBe(0);
     await expect.poll(() => panel.isVisible("#giflabel"), { timeout: 15_000 }).toBe(false);
-    // Past the 3 s delay: a render that survived the cancel would have written by now.
+    // Sound without waiting out the 3 s delay: the render window is gone (polled
+    // above), and `copy:write` refuses a job that is no longer live, so a cancelled
+    // render cannot write later. The 1 s only lets the cancel's own cleanup land.
     await new Promise((r) => setTimeout(r, 1_000));
     expect(named(l.copies, ".partial")).toEqual([]);
     expect(named(l.copies, ".gif")).toEqual([]);
@@ -254,6 +257,29 @@ describe("a recording's GIF (STC-395)", () => {
     expect(copyRequests(l.copyLog)).toEqual([]);
   }, 300_000);
 
+  test("GIF clicked twice in one tick still ends ready (a no-op pick must not orphan the reply)", async () => {
+    const l = await launch();
+    const dir = await recordAndStop(l);
+    const panel = await readyPanel();
+
+    // The second click is a "none" pick (already converting). If it took a
+    // stale-reply token, the first pick's `done` would be dropped and the panel
+    // would sit at "GIF N%" forever while the GIF sat finished in the cache.
+    await panel.evaluate(() => {
+      for (const f of ["gif", "gif"]) {
+        document.querySelector<HTMLButtonElement>(`#format button[data-format="${f}"]`)!.click();
+      }
+    });
+    expect(await checked(panel)).toBe("gif");
+
+    await expect.poll(() => panel.textContent("#giflabel"), { timeout: 120_000 }).toMatch(READY);
+    expect(await checked(panel)).toBe("gif");
+    expect(await panel.isVisible("#copyprogress"), "the bar goes once the GIF is ready").toBe(false);
+    await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: 15_000 }).toBe(0);
+    expect(named(l.copies, ".gif")).toEqual([`${dir.split("/").pop()}.gif`]);
+    expect(named(l.copies, ".partial")).toEqual([]);
+  }, 300_000);
+
   test("Trash mid-conversion cancels it", async () => {
     const l = await launch();
     await recordAndStop(l);
@@ -265,7 +291,9 @@ describe("a recording's GIF (STC-395)", () => {
     await clickThatCloses(panel, "[data-action=trash]");
 
     await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: 15_000 }).toBe(0);
-    // Past the 3 s delay: a render that survived the Trash would have written by now.
+    // Sound without waiting out the 3 s delay: the render window is gone (polled
+    // above), and `copy:write` refuses a job that is no longer live, so a cancelled
+    // render cannot write later. The 1 s only lets the cancel's own cleanup land.
     await new Promise((r) => setTimeout(r, 1_000));
     expect(named(l.copies, ".gif")).toEqual([]);
     expect(named(l.copies, ".partial")).toEqual([]);
