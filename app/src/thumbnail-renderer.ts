@@ -11,6 +11,7 @@ import {
   actionsFor, closesPanel, lockedWhileCopying, type PanelAction, type PanelTake,
 } from "./panel-actions.js";
 import { composeStill, stillPixelBytes } from "./still-compose.js";
+import type { OutputFormat } from "./gif-panel.js";
 
 /**
  * The floating thumbnail's view (STC-296, rebuilt on `panel-actions.ts` by
@@ -67,11 +68,19 @@ declare global {
         dir?: string;
       }>;
       menu(ctx: { take: PanelTake; busy: boolean; copying?: boolean }): Promise<string | null>;
-      copyRecording(dir: string): Promise<{ ok: boolean; cancelled?: boolean; ready?: boolean; detail?: string }>;
+      copyRecording(dir: string, format?: OutputFormat): Promise<{ ok: boolean; cancelled?: boolean; ready?: boolean; detail?: string }>;
+      /** STC-395: start-or-reuse the take's GIF; resolves when it is ready (progress on onCopyProgress). */
+      gif(dir: string): Promise<{ ok: true; bytes: number } | { ok: false; cancelled?: true; detail?: string }>;
+      /** STC-395: flipping back to Video mid-conversion. */
+      cancelGif(dir: string): Promise<void>;
       onCopyProgress(cb: (done: number, total: number) => void): () => void;
       revealShot(dir: string): Promise<boolean>;
       /** The three actions that CHANGE where a take lives (STC-392) — see `panel-actions.ts`. */
-      save(dir: string): Promise<{ ok: boolean; dir?: string; detail?: string }>;
+      save(dir: string, format?: OutputFormat): Promise<{
+        ok: boolean; dir?: string; detail?: string;
+        /** STC-395: the take was kept, but its GIF could not be written. */
+        gifError?: string;
+      }>;
       edit(dir: string): Promise<{ ok: boolean; detail?: string }>;
       trash(dir: string): Promise<{
         ok: boolean; detail?: string;
