@@ -384,7 +384,7 @@ function drawGif(): void {
   for (const b of formatGroup.querySelectorAll<HTMLButtonElement>("button[data-format]")) {
     b.setAttribute("aria-checked", String(b.dataset.format === formatOf(gif)));
     // An mp4 Copy in flight cannot be cancelled without losing a Copy someone asked for.
-    b.disabled = copying;
+    b.disabled = copying || busy;
   }
   const l = gifLabel(gif);
   gifLabelEl.hidden = !l;
@@ -402,7 +402,9 @@ async function pickFormat(format: OutputFormat): Promise<void> {
   gifEvent({ kind: "pick", format });
   if (effect === "cancel") { await window.thumb.cancelGif(dir); return; }
   if (effect !== "start") return;
-  const r = await window.thumb.gif(dir);
+  let r: Awaited<ReturnType<typeof window.thumb.gif>>;
+  try { r = await window.thumb.gif(dir); }
+  catch (err) { gifEvent({ kind: "failed", detail: err instanceof Error ? err.message : String(err) }); return; }
   if (r.ok) gifEvent({ kind: "done", bytes: r.bytes });
   else if (r.cancelled) gifEvent({ kind: "cancelled" });
   else gifEvent({ kind: "failed", detail: r.detail ?? "unknown error" });
@@ -483,10 +485,12 @@ async function copyRecording(): Promise<boolean> {
  */
 async function perform(action: PanelAction): Promise<boolean> {
   if (copying && lockedWhileCopying(action)) return false;   // a key or menu id reaching a locked action
+  // The buttons are disabled in this state, but a key (⌘C/⌘S) reaches here without them.
+  if ((action === "copy" || action === "save") && formatOf(gif) === "gif" && !copySaveEnabled(gif)) return false;
   if (action === "copy" && take.kind === "recording") return copyRecording();
   if (busy) return false;
   busy = true;
-  setActionsEnabled(false);
+  drawGif();
   try {
     const ok = await run(action);
     // Only a SUCCESSFUL action closes. A failed Save leaves the panel exactly
@@ -497,7 +501,7 @@ async function perform(action: PanelAction): Promise<boolean> {
     return ok;
   } finally {
     busy = false;
-    setActionsEnabled(true);
+    drawGif();
   }
 }
 
@@ -883,11 +887,11 @@ document.addEventListener("contextmenu", (e) => {
     if (id === "save-as") {
       if (busy) return;
       busy = true;
-      setActionsEnabled(false);
+      drawGif();
       setStatus("Saving…");
       const ok = await runExport("save-as");
       busy = false;
-      setActionsEnabled(true);
+      drawGif();
       // Same rule Save follows: a successful save ends the interaction.
       // Cancelling the panel returns false, so it correctly does not close.
       if (ok) window.thumb.event({ kind: "done" });

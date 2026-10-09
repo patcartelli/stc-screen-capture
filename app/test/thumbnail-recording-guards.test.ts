@@ -57,6 +57,16 @@ describe("a recording never reaches a shot-only path", () => {
   });
 });
 
+describe("STC-395: a failed GIF refuses Copy and Save by key as well as by button", () => {
+  test("perform() returns false for copy/save in GIF mode when copySaveEnabled is false", () => {
+    expect(bodyOf("async function perform(")).toMatch(
+      /\(action === "copy" \|\| action === "save"\) && formatOf\(gif\) === "gif" && !copySaveEnabled\(gif\)\) return false;/);
+  });
+  test("the switch is disabled while an action is in flight", () => {
+    expect(src).toMatch(/b\.disabled = copying \|\| busy;/);
+  });
+});
+
 describe("the recording card's duration", () => {
   test("is the library's own formatter", () => {
     expect(fmtDuration(42_000)).toBe("0:42");
