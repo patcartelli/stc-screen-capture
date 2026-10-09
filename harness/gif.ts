@@ -14,7 +14,8 @@ applyDecoderPreference();
  * the app also uses. `projectRaw` is the take's project.json as read from
  * disk, or null — parseProject decides every default, exactly as in export.ts.
  */
-(window as any).exportGif = async (dir: string, projectRaw: unknown, settings: GifSettings) => {
+(window as any).exportGif = async (dir: string, projectRaw: unknown, settings: GifSettings,
+                                 opts: { dither?: boolean } = {}) => {
   const [anchors, events, displayMp4] = await Promise.all([
     fetch(`${dir}/anchors.json`).then((r) => r.json()),
     fetch(`${dir}/events.json`).then((r) => r.json()),
@@ -44,7 +45,7 @@ applyDecoderPreference();
     anchors.camera?.present === true,
   );
   mark("gif: exportGif");
-  const r = await exportGif(session, project, { settings });
+  const r = await exportGif(session, project, { settings, dither: opts.dither });
   mark("gif: exportGif returned");
   let s = "";
   for (let i = 0; i < r.bytes.length; i += 0x8000) s += String.fromCharCode(...r.bytes.subarray(i, i + 0x8000));

@@ -4,7 +4,10 @@
  * the reported duration, and (EXPECT_DURATION_CS) that the GIF covers the trim
  * window rather than the whole take.
  *
- * Usage: node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check] [--out <dir>]
+ * Usage: node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check] [--no-dither] [--out <dir>]
+ *
+ * --no-dither turns off the gradient-only dither (gif-encode.ts), for a
+ * before/after comparison; the app always dithers.
  */
 import { createServer } from "vite";
 import { chromium } from "playwright";
@@ -13,6 +16,7 @@ import { join } from "node:path";
 
 const args = process.argv.slice(2);
 const check = args.includes("--check");
+const dither = !args.includes("--no-dither");
 const oi = args.indexOf("--out");
 const outDir = oi >= 0 ? args[oi + 1] : null;
 const pos = args.filter((a, i) => !a.startsWith("--") && !(oi >= 0 && i === oi + 1));
@@ -20,7 +24,7 @@ const sessionDir = pos[0];
 const fps = Number(pos[1] ?? 15);
 const maxWidth = pos[2] === "original" ? "original" : Number(pos[2] ?? 960);
 if (!sessionDir || !existsSync(join(sessionDir, "display.mp4"))) {
-  console.error("usage: node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check] [--out <dir>]");
+  console.error("usage: node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check] [--no-dither] [--out <dir>]");
   process.exit(2);
 }
 
@@ -55,8 +59,8 @@ try {
   await page.waitForFunction(() => window.__gifReady === true, { timeout: 60_000 });
   const projectPath = join(sessionDir, "project.json");
   const projectRaw = existsSync(projectPath) ? JSON.parse(readFileSync(projectPath, "utf8")) : null;
-  const r = await page.evaluate(([p, s]) => window.exportGif("/session", p, s),
-    [projectRaw, { fps, maxWidth }]);
+  const r = await page.evaluate(([p, s, o]) => window.exportGif("/session", p, s, o),
+    [projectRaw, { fps, maxWidth }, { dither }]);
 
   const bytes = Buffer.from(r.base64, "base64");
   const dir = outDir ?? sessionDir;
@@ -64,7 +68,7 @@ try {
   const dest = join(dir, `gif-${fps}fps-${maxWidth}.gif`);
   writeFileSync(dest, bytes);
   console.log(`${r.frames} frames ${r.width}x${r.height}, ${(r.durationCs / 100).toFixed(2)} s, ` +
-              `${(bytes.length / 1e6).toFixed(2)} MB in ${(r.elapsedMs / 1000).toFixed(1)} s → ${dest}`);
+              `${(bytes.length / 1e6).toFixed(2)} MB in ${(r.elapsedMs / 1000).toFixed(1)} s${dither ? "" : " (no dither)"} → ${dest}`);
   out = 0;
   if (check) {
     const { GifReader } = await import("omggif");

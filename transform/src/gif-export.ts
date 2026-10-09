@@ -21,6 +21,8 @@ export interface GifExportOptions {
   /** done/total in "units" across both passes; the panel shows done/total as a percentage. */
   onProgress?: (done: number, total: number) => void;
   signal?: AbortSignal;
+  /** Ordered dither on smooth gradients (GifWriter's own default, true). Off for comparisons only. */
+  dither?: boolean;
 }
 export interface GifExportResult {
   bytes: Uint8Array; frames: number; width: number; height: number;
@@ -68,7 +70,8 @@ export async function exportGif(session: LoadedSession, project: Project,
   }
   if (opts.signal?.aborted) throw new DOMException("cancelled", "AbortError");
   const delays = gifDelaysCs(count, opts.settings.fps);
-  const writer = new GifWriter(size.width, size.height, buildPalette(samples), delays);
+  const writer = new GifWriter(size.width, size.height, buildPalette(samples), delays,
+                               { dither: opts.dither ?? true });
   samples.length = 0;
 
   // Pass 2: every GIF frame.

@@ -5,9 +5,9 @@
  * with a moving box and a blinking caret, so the transparency diff does what
  * it does on a real take.
  *
- * Usage: node --import tsx scripts/gif-bench.mjs [width=960] [frames=150] [rich]
- * (tsx is not a dependency here; `npx vite-node scripts/gif-bench.mjs 960 150`
- * also works, as does bundling with esbuild.)
+ * Usage (it imports .ts, so bundle it first; esbuild is already a devDependency):
+ *   npx esbuild scripts/gif-bench.mjs --bundle --platform=node --format=esm \
+ *     --outfile=/tmp/gif-bench.mjs && node /tmp/gif-bench.mjs [width=960] [frames=150] [rich]
  */
 import { buildPalette, GifWriter } from "../transform/src/gif-encode.ts";
 import { gifDelaysCs } from "../transform/src/gif-options.ts";
