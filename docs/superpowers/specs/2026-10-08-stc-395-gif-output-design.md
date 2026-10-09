@@ -57,7 +57,7 @@ than downscaled afterwards.
 the export grid. Allowed rates are the divisors that make sense: **10, 12, 15,
 20, 30**. GIF delays are whole centiseconds, so 15 fps (6.67 cs) can't be
 exact; delays are rounded **cumulatively** (frame `i` ends at
-`round((i+1) × 100 / fps)` cs), which gives 7, 7, 6, … and a total that never
+`round((i+1) × 100 / fps)` cs), which at 15 fps gives 7, 6, 7, 7, 6, 7, … and a total that never
 drifts from the take's duration. The trim (`exportWindow`) applies exactly as
 it does for an MP4.
 
@@ -182,7 +182,7 @@ formatting.
   extension, frame count, the delay total against the duration, one global
   palette of at most 256 colours, transparency on unchanged pixels, and
   decoded pixels matching the input within the palette's error.
-- Timing: cumulative delays (15 fps gives 7, 7, 6, …; the total never
+- Timing: cumulative delays (15 fps gives 7, 6, 7, 7, 6, 7, … — frames end at 7, 13, 20 cs; the total never
   drifts); an fps that doesn't divide `EXPORT_FPS` is refused.
 - Size: even, aspect kept, never upscaled, `"original"` at the take's own
   size.

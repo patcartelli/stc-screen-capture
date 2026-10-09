@@ -33,6 +33,8 @@ node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check]
 
 Reference: a real 2162x1300, 8 s take gave 120 frames at 960x578, 2.21 MB, in 4.6 s. P3 readback is forced to sRGB and may cost extra per frame at 4K.
 
+Known limit (not fixed): pass 1 (the palette) reports progress only once per palette sample, and between samples it still decodes every frame. On an hour-plus 4K take one gap can run past the render's 120 s inactivity watchdog, and the GIF fails with `render timeout: no progress for 120000ms`. If you see that, write down the take's length and capture size here: ______
+
 ## §4 Large warning
 
 A long take (2+ minutes, lots of motion) at 1280 / 30 fps.
@@ -44,7 +46,15 @@ Save in GIF mode. The take appears in the library as before, `<take>.gif` sits i
 
 ## §6 Settings
 
-Change frame rate or width on the profile sheet. A GIF already showing `ready` on an open panel does not change; a new flip uses the new settings.
+Settings are read once, when a conversion starts (spec §3). This section checks that changing one never re-renders a GIF that is already ready.
+
+1. Flip a panel to GIF and wait for `GIF · <size>`. Note the size.
+2. On the profile sheet, change the frame rate AND the width (e.g. 10 fps, 480).
+3. Press Copy on that panel. It must be instant: no `GIF N%`, no progress bar, status goes straight to `Copied GIF, paste anywhere`, and the size shown has not changed. Paste it: it is the OLD settings' GIF (the old width; check with Finder's Get Info or Preview's inspector).
+4. Same with Save on a second ready panel (changed settings again first): the take saves at once, and `<take>.gif` in the save folder is the old settings' GIF.
+5. On a third ready panel, flip to Video, then back to GIF. That is a NEW flip: it converts again (`GIF N%`), and the result has the NEW frame rate and width.
+
+Fail if step 3 or 4 shows any conversion, if the status sits on `Copying GIF…`, or if Edit or Video Save then refuse with "a copy is still rendering": that was the bug the final review found.
 
 ## Not here
 
