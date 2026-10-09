@@ -46,19 +46,23 @@ export async function exportGif(session: LoadedSession, project: Project,
   if (count === 0) throw new Error("the take has no frames to make a GIF from");
   // A GIF carries no colour profile and viewers assume sRGB, while the canvas may be
   // Display P3 (STC-510). getImageData defaults to the canvas's own space, so ask for
-  // sRGB and let the browser convert. The array owns its whole buffer (offset 0),
-  // which gifenc requires.
+  // sRGB and let the browser convert. Every call returns a FRESH ImageData whose
+  // array owns its whole buffer (offset 0), which gifenc requires — and which is
+  // why pass 1 can keep the arrays it reads without copying them.
   const read = (ctx: OffscreenCanvasRenderingContext2D) =>
     ctx.getImageData(0, 0, size.width, size.height, { colorSpace: "srgb" }).data;
   const units = 1000;
   const report = (f: number) => opts.onProgress?.(Math.min(units, Math.round(f * units)), units);
 
   // Pass 1: sample frames, evenly spaced over the GIF frames (always includes frame 0).
-  const sampleStep = Math.max(1, Math.floor(count / PALETTE_SAMPLES)) * step;
+  // CEIL, so there are at most PALETTE_SAMPLES of them: a floor gave 8-15 (a
+  // 15-frame GIF sampled every frame), and at "original" on a 4K take each
+  // sample is ~33 MB held until the palette is built.
+  const sampleStep = Math.ceil(count / PALETTE_SAMPLES) * step;
   const samples: Uint8ClampedArray[] = [];
   for await (const { k, ctx } of compositeFrames(session, gp,
       { from, total, step: sampleStep, readback: true, signal: opts.signal })) {
-    samples.push(read(ctx).slice());
+    samples.push(read(ctx));
     report((PALETTE_SHARE * (k + 1)) / total);
     await new Promise((r) => setTimeout(r, 0));
   }
