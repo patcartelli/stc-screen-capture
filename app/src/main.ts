@@ -2982,6 +2982,7 @@ ipcMain.handle("thumbnail:menu", async (e, ctx: ThumbMenuContext) => {
       take: ctx?.take ?? { kind: "shot", origin: "fresh" },
       busy: ctx?.busy === true,
       copying: ctx?.copying === true,
+      converting: ctx?.converting === true,
     }).map((item) => item.type === "separator"
       ? { type: "separator" as const }
       : { label: item.label, enabled: item.enabled !== false, click: () => answer(item.id) }));

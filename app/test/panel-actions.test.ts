@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  actionsFor, closesPanel, promotes, trashStyle, UNDO_WINDOW_MS, lockedWhileCopying, offersFormat,
+  actionsFor, closesPanel, promotes, trashStyle, UNDO_WINDOW_MS, lockedWhileCopying, lockedWhileConverting, offersFormat,
   type PanelAction, type PanelTake,
 } from "../src/panel-actions.js";
 
@@ -106,6 +106,13 @@ describe("what a recording's copy locks while it renders (STC-488)", () => {
     // Trash and dismiss are the panel's way out, and they cancel the render.
     const all: PanelAction[] = ["copy", "save", "edit", "trash", "dismiss"];
     expect(all.filter(lockedWhileCopying)).toEqual(["copy", "save", "edit"]);
+  });
+});
+
+describe("what a GIF conversion locks (STC-395, spec §2)", () => {
+  test("only edit: copy and save wait on the conversion and join it; trash and dismiss cancel it", () => {
+    const all: PanelAction[] = ["copy", "save", "edit", "trash", "dismiss"];
+    expect(all.filter(lockedWhileConverting)).toEqual(["edit"]);
   });
 });
 

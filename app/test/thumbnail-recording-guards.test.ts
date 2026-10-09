@@ -67,6 +67,23 @@ describe("STC-395: a failed GIF refuses Copy and Save by key as well as by butto
   });
 });
 
+describe("STC-395: Edit waits on a GIF conversion (spec §2), by button, key and menu", () => {
+  test("the buttons, perform() and the menu all ask lockedWhileConverting about a live GIF job", () => {
+    expect(src).toMatch(/function gifJobLive\(\): boolean \{ return gif\.kind === "converting" \|\| copyingGif; \}/);
+    expect(bodyOf("function setActionsEnabled(")).toMatch(/\|\| \(gifJobLive\(\) && lockedWhileConverting\(action\)\)/);
+    expect(bodyOf("async function perform(")).toMatch(/if \(gifJobLive\(\) && lockedWhileConverting\(action\)\) return false;/);
+    expect(src).toMatch(/window\.thumb\.menu\(\{ take, busy, copying, converting: gifJobLive\(\) \}\)/);
+  });
+  test("control: a perform() that checks only the mp4 copy lock does not pass", () => {
+    const old = "async function perform(action: PanelAction): Promise<boolean> {\n"
+      + "  if (copying && lockedWhileCopying(action)) return false;\n";
+    expect(old).not.toMatch(/if \(gifJobLive\(\) && lockedWhileConverting\(action\)\) return false;/);
+  });
+  test("Copy's waiting status follows the percentage, as Save's does (M7)", () => {
+    expect(src).toMatch(/if \(copyWaitingGif && gif\.kind === "converting"\) setStatus\(`Waiting for the GIF… \$\{Math\.floor\(gif\.permille \/ 10\)\}%`\);/);
+  });
+});
+
 describe("STC-395: only the newest pick's reply reaches the reducer (Review Focus 4)", () => {
   const STALE = /if \(mine !== pickSeq\) return;/;
   // Only a pick that starts or cancels a job takes a token. A "none" pick (GIF

@@ -141,6 +141,19 @@ export function lockedWhileCopying(action: PanelAction): boolean {
 }
 
 /**
+ * Whether this action must wait while a fresh recording's GIF is converting
+ * (STC-395, spec §2). The conversion is a copy job like an mp4 Copy's render,
+ * so what `lockedWhileCopying` holds back waits on it too — EXCEPT Copy and
+ * Save, which deliberately wait on the conversion and join it rather than
+ * being refused. That leaves Edit: it promotes the take out from under the
+ * render reading it, and `main.ts`'s `panel:edit` refuses it while a render
+ * is live, so the panel must not offer it.
+ */
+export function lockedWhileConverting(action: PanelAction): boolean {
+  return lockedWhileCopying(action) && action !== "copy" && action !== "save";
+}
+
+/**
  * The ticket's Reconcile item, settled (D1): confirm what the user chose to
  * keep, undo what they never saved.
  *

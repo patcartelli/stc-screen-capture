@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, existsSync, readdirSync, readFileSync, writeFileSync, cpSync } from "node:fs";
+import { mkdtempSync, existsSync, readdirSync, readFileSync, writeFileSync, cpSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
@@ -42,8 +42,11 @@ import { RAW_SUBDIR } from "../src/takes.js";
 //   test 7 (Trash mid-conversion): 15 + 45 + render window 15 + clickThatCloses 15
 //     + window gone 15 = 105 s (+ 1 s settle)
 //   test 8 (a still's panel): thumbnail 15 + pageWithUrl 15 + card 15 = 45 s
-// Inner bounds (240 s worst) clear 300 s strictly; the rest is launch,
-// teardown and startRecordFlow's hidden bounds (judgement headroom).
+//   test 9 (a setting changed with a GIF ready; declares 420_000, two conversions):
+//     15 + 45 + label 120 + copy-file 15 + status 15 + render window 15 + label 120 = 345 s
+// Inner bounds (240 s worst, 345 s for test 9 against its own 420 s) clear
+// their outer bounds strictly; the rest is launch, teardown and
+// startRecordFlow's hidden bounds (judgement headroom).
 const root = join(__dirname, "..", "..");
 const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
 const POLL_MS = 15_000;
@@ -54,7 +57,7 @@ const RECORDED = ["anchors.json", "events.json", "display.mp4", "camera.mp4"];
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
-interface Launched { win: Page; recordings: string; temp: string; copies: string; copyLog: string }
+interface Launched { win: Page; recordings: string; temp: string; copies: string; copyLog: string; userData: string }
 
 async function launch(env: Record<string, string> = {}): Promise<Launched> {
   const { dir: recordings } = makeTakeFolder();
@@ -80,7 +83,7 @@ async function launch(env: Record<string, string> = {}): Promise<Launched> {
   const win = await app.firstWindow();
   await win.waitForSelector("#record");
   await withoutCountdown(win);
-  return { win, recordings, temp, copies, copyLog };
+  return { win, recordings, temp, copies, copyLog, userData };
 }
 
 /** Record and stop through the real flow, with a REAL renderable take in the temp dir. */
@@ -138,8 +141,15 @@ describe("a recording's GIF (STC-395)", () => {
     expect(await checked(panel)).toBe("gif");
     await expect.poll(() => panel.isVisible("#copyprogress"), { timeout: 15_000 }).toBe(true);
     expect(await panel.textContent("#giflabel")).toMatch(/^GIF \d+%$/);
+    // Spec §2: Edit waits on a conversion as it waits on an mp4 Copy (main
+    // would refuse it as "a copy is still rendering"); Copy and Save stay live
+    // because they join it.
+    expect(await panel.isEnabled("[data-action=edit]"), "Edit waits on the conversion").toBe(false);
+    expect(await panel.isEnabled("[data-action=copy]")).toBe(true);
+    expect(await panel.isEnabled("[data-action=save]")).toBe(true);
     await expect.poll(() => panel.textContent("#giflabel"), { timeout: 120_000 }).toMatch(READY);
     expect(await panel.isVisible("#copyprogress"), "no bar once the GIF is ready").toBe(false);
+    expect(await panel.isEnabled("[data-action=edit]"), "Edit is back once the GIF is ready").toBe(true);
 
     const gifs = named(l.copies, ".gif");
     expect(gifs).toEqual([`${dir.split("/").pop()}.gif`]);
@@ -317,4 +327,42 @@ describe("a recording's GIF (STC-395)", () => {
     expect(await panel.isVisible("#format")).toBe(false);
     expect(await panel.isVisible("#giflabel")).toBe(false);
   }, 300_000);
+
+  test("a setting changed with a GIF ready: Copy uses that GIF at once; a new flip uses the new setting", async () => {
+    const l = await launch();
+    const dir = await recordAndStop(l);
+    const panel = await readyPanel();
+
+    await panel.click(GIF);
+    await expect.poll(() => panel.textContent("#giflabel"), { timeout: 120_000 }).toMatch(READY);
+    const out = join(l.copies, `${dir.split("/").pop()}.gif`);
+    const made = statSync(out).mtimeMs;
+    const label = await panel.textContent("#giflabel");
+    // The fixture is 640 px wide; the default (960) leaves it at 640.
+    expect(readFileSync(out).readUInt16LE(6), "GIF logical width").toBe(640);
+
+    // What the Settings sheet writes; main reads settings.json fresh on every call.
+    writeFileSync(join(l.userData, "settings.json"),
+      JSON.stringify({ saveFolder: null, gif: { fps: 10, maxWidth: 480 } }));
+
+    // Spec §3: a ready GIF is not re-rendered by a setting change. Copy is a
+    // cache hit: on the pasteboard at once, the same file, no render window.
+    await panel.click("[data-action=copy]");
+    await expect.poll(() => copyRequests(l.copyLog).length, { timeout: 15_000 }).toBe(1);
+    expect(copyRequests(l.copyLog)[0]!.path).toBe(out);
+    await expect.poll(() => panel.textContent("#status"), { timeout: 15_000 }).toContain("Copied GIF");
+    expect(await windowCount(app!, "copy-render.html"), "a ready GIF is not rendered again").toBe(0);
+    expect(statSync(out).mtimeMs, "the old settings' GIF, untouched").toBe(made);
+    expect(await panel.textContent("#giflabel")).toBe(label);
+    expect(await checked(panel)).toBe("gif");
+
+    // A NEW flip reads the settings again and converts with them.
+    await panel.click(VIDEO);
+    await panel.click(GIF);
+    await expect.poll(() => windowCount(app!, "copy-render.html"), { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => panel.textContent("#giflabel"), { timeout: 120_000 }).toMatch(READY);
+    expect(readFileSync(out).readUInt16LE(6), "made with the new width").toBe(480);
+    expect(named(l.copies, ".gif")).toEqual([`${dir.split("/").pop()}.gif`]);
+    expect(named(l.copies, ".partial")).toEqual([]);
+  }, 420_000);
 });

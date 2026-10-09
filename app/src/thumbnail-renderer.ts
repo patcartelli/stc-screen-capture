@@ -8,7 +8,7 @@ import {
 } from "./thumbnail.js";
 import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import {
-  actionsFor, closesPanel, lockedWhileCopying, offersFormat, type PanelAction, type PanelTake,
+  actionsFor, closesPanel, lockedWhileCopying, lockedWhileConverting, offersFormat, type PanelAction, type PanelTake,
 } from "./panel-actions.js";
 import { composeStill, stillPixelBytes } from "./still-compose.js";
 import {
@@ -70,7 +70,7 @@ declare global {
         /** Present when the take moved out of temp storage into the library (STC-393). */
         dir?: string;
       }>;
-      menu(ctx: { take: PanelTake; busy: boolean; copying?: boolean }): Promise<string | null>;
+      menu(ctx: { take: PanelTake; busy: boolean; copying?: boolean; converting?: boolean }): Promise<string | null>;
       copyRecording(dir: string, format?: OutputFormat): Promise<{ ok: boolean; cancelled?: boolean; ready?: boolean; detail?: string }>;
       /** STC-395: start-or-reuse the take's GIF; resolves when it is ready (progress on onCopyProgress). */
       gif(dir: string): Promise<{ ok: true; bytes: number } | { ok: false; cancelled?: true; detail?: string }>;
@@ -211,10 +211,19 @@ let gif: GifState = INITIAL_GIF_STATE;
 let savingGif = false;
 /** A GIF-mode Copy is already joined to the job; a second click must not join again. */
 let copyingGif = false;
+/**
+ * A GIF job may be live for this take (spec §2): a conversion is showing, or a
+ * GIF Copy is waiting on (or starting) one. `lockedWhileConverting` says what
+ * waits — Edit, which main would refuse as "a copy is still rendering".
+ */
+function gifJobLive(): boolean { return gif.kind === "converting" || copyingGif; }
+/** Copy's "Waiting for the GIF… N%" follows the percentage, as Save's does (M7). */
+let copyWaitingGif = false;
 window.thumb.onCopyProgress((done, total) => {
   if (gif.kind === "converting") {
     gifEvent({ kind: "progress", done, total });
     if (savingGif && gif.kind === "converting") setStatus(`Saving… (GIF ${Math.floor(gif.permille / 10)}%)`);
+    if (copyWaitingGif && gif.kind === "converting") setStatus(`Waiting for the GIF… ${Math.floor(gif.permille / 10)}%`);
     return;
   }
   if (!copying || total <= 0) return;
@@ -372,6 +381,7 @@ function setActionsEnabled(on: boolean): void {
     if (btn.hidden) continue;
     const action = btn.dataset.action as PanelAction;
     btn.disabled = !on || (copying && lockedWhileCopying(action))
+      || (gifJobLive() && lockedWhileConverting(action))
       || ((action === "copy" || action === "save") && formatOf(gif) === "gif" && !copySaveEnabled(gif));
   }
 }
@@ -465,6 +475,8 @@ async function copyRecording(): Promise<boolean> {
   const asGif = formatOf(gif) === "gif";
   if (asGif) {
     copyingGif = true;
+    copyWaitingGif = gif.kind === "converting";
+    drawGif();                       // Edit waits on the GIF job this Copy joins
     setStatus(gif.kind === "converting" ? `Waiting for the GIF… ${Math.floor(gif.permille / 10)}%` : "Copying GIF…");
   } else {
     copying = true;
@@ -483,6 +495,7 @@ async function copyRecording(): Promise<boolean> {
   } finally {
     copying = false;
     copyingGif = false;
+    copyWaitingGif = false;
     copyProgress.hidden = true;
     drawGif();                       // re-shows the bar if a GIF is still converting
   }
@@ -501,6 +514,7 @@ async function copyRecording(): Promise<boolean> {
  */
 async function perform(action: PanelAction): Promise<boolean> {
   if (copying && lockedWhileCopying(action)) return false;   // a key or menu id reaching a locked action
+  if (gifJobLive() && lockedWhileConverting(action)) return false;   // Edit during a GIF conversion (STC-395)
   // The buttons are disabled in this state, but a key (⌘C/⌘S) reaches here without them.
   if ((action === "copy" || action === "save") && formatOf(gif) === "gif" && !copySaveEnabled(gif)) return false;
   if (action === "copy" && take.kind === "recording") return copyRecording();
@@ -894,7 +908,7 @@ async function discard(): Promise<void> {
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   void (async () => {
-    const id = await window.thumb.menu({ take, busy, copying });
+    const id = await window.thumb.menu({ take, busy, copying, converting: gifJobLive() });
     if (id === null) return;
     if (id === "copy" || id === "save" || id === "edit" || id === "trash") {
       void perform(id);
