@@ -8,10 +8,13 @@ import {
 } from "./thumbnail.js";
 import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import {
-  actionsFor, closesPanel, lockedWhileCopying, type PanelAction, type PanelTake,
+  actionsFor, closesPanel, lockedWhileCopying, offersFormat, type PanelAction, type PanelTake,
 } from "./panel-actions.js";
 import { composeStill, stillPixelBytes } from "./still-compose.js";
-import type { OutputFormat } from "./gif-panel.js";
+import {
+  INITIAL_GIF_STATE, reduceGif, effectOfPick, formatOf, gifLabel, copySaveEnabled,
+  type GifState, type GifEvent, type OutputFormat,
+} from "./gif-panel.js";
 
 /**
  * The floating thumbnail's view (STC-296, rebuilt on `panel-actions.ts` by
@@ -202,7 +205,18 @@ let busy = false;
  */
 let copying = false;
 const copyProgress = $("copyprogress") as HTMLProgressElement;
+/** STC-395: a fresh recording's output format. Late events after a flip back to Video are ignored by the reducer. */
+let gif: GifState = INITIAL_GIF_STATE;
+/** A Save is waiting on (or about to wait on) the GIF job; its status line follows the percentage. */
+let savingGif = false;
+/** A GIF-mode Copy is already joined to the job; a second click must not join again. */
+let copyingGif = false;
 window.thumb.onCopyProgress((done, total) => {
+  if (gif.kind === "converting") {
+    gifEvent({ kind: "progress", done, total });
+    if (savingGif && gif.kind === "converting") setStatus(`Saving… (GIF ${Math.floor(gif.permille / 10)}%)`);
+    return;
+  }
   if (!copying || total <= 0) return;
   copyProgress.value = Math.round((done / total) * 1000);
   setStatus(`Rendering… ${Math.round((done / total) * 100)}%`);
@@ -357,9 +371,49 @@ function setActionsEnabled(on: boolean): void {
   for (const btn of document.querySelectorAll<HTMLButtonElement>("#actions button[data-action]")) {
     if (btn.hidden) continue;
     const action = btn.dataset.action as PanelAction;
-    btn.disabled = !on || (copying && lockedWhileCopying(action));
+    btn.disabled = !on || (copying && lockedWhileCopying(action))
+      || ((action === "copy" || action === "save") && formatOf(gif) === "gif" && !copySaveEnabled(gif));
   }
 }
+
+// ---- the GIF / Video switch (STC-395) ---------------------------------------
+const formatGroup = $("format") as HTMLDivElement;
+const gifLabelEl = $("giflabel") as HTMLDivElement;
+
+function drawGif(): void {
+  for (const b of formatGroup.querySelectorAll<HTMLButtonElement>("button[data-format]")) {
+    b.setAttribute("aria-checked", String(b.dataset.format === formatOf(gif)));
+    // An mp4 Copy in flight cannot be cancelled without losing a Copy someone asked for.
+    b.disabled = copying;
+  }
+  const l = gifLabel(gif);
+  gifLabelEl.hidden = !l;
+  gifLabelEl.textContent = l?.text ?? "";
+  gifLabelEl.classList.toggle("warn", l?.warn === true);
+  copyProgress.hidden = gif.kind !== "converting" && !copying;
+  if (gif.kind === "converting") copyProgress.value = gif.permille;
+  setActionsEnabled(!busy);
+}
+
+function gifEvent(e: GifEvent): void { gif = reduceGif(gif, e); drawGif(); }
+
+async function pickFormat(format: OutputFormat): Promise<void> {
+  const effect = effectOfPick(gif, format);
+  gifEvent({ kind: "pick", format });
+  if (effect === "cancel") { await window.thumb.cancelGif(dir); return; }
+  if (effect !== "start") return;
+  const r = await window.thumb.gif(dir);
+  if (r.ok) gifEvent({ kind: "done", bytes: r.bytes });
+  else if (r.cancelled) gifEvent({ kind: "cancelled" });
+  else gifEvent({ kind: "failed", detail: r.detail ?? "unknown error" });
+}
+
+formatGroup.addEventListener("click", (ev) => {
+  const b = (ev.target as HTMLElement).closest<HTMLButtonElement>("button[data-format]");
+  if (b && !b.disabled) void pickFormat(b.dataset.format as OutputFormat);
+});
+formatGroup.hidden = !offersFormat(take);
+drawGif();
 
 /**
  * Bounded wait for the panel's first composite (SETTLE_READY_MS,
@@ -387,23 +441,32 @@ async function awaitComposite(): Promise<boolean> {
 async function copyRecording(): Promise<boolean> {
   // `busy` is checked HERE, not only by the buttons: ⌘C reaches perform() by key
   // while a Save/Edit/Trash is deciding, and must not render a take mid-promote.
-  if (copying || busy) return false;
-  copying = true;
-  copyProgress.value = 0;
-  copyProgress.hidden = false;
-  setActionsEnabled(!busy);          // applies the copying locks
-  setStatus("Rendering… 0%");
+  if (copying || busy || copyingGif) return false;
+  // GIF mode: Copy joins the running (or finished) conversion. It is not an mp4
+  // render, so no `copying` and no mp4 bar; the GIF state already shows progress.
+  const asGif = formatOf(gif) === "gif";
+  if (asGif) {
+    copyingGif = true;
+    setStatus(gif.kind === "converting" ? `Waiting for the GIF… ${Math.floor(gif.permille / 10)}%` : "Copying GIF…");
+  } else {
+    copying = true;
+    copyProgress.value = 0;
+    copyProgress.hidden = false;
+    drawGif();                       // applies the copying locks, disables the switch
+    setStatus("Rendering… 0%");
+  }
   try {
-    const r = await window.thumb.copyRecording(dir);
-    if (r.ok) setStatus("Copied, paste anywhere");
+    const r = await window.thumb.copyRecording(dir, formatOf(gif));
+    if (r.ok) setStatus(asGif ? "Copied GIF, paste anywhere" : "Copied, paste anywhere");
     else if (r.ready) setStatus("Ready, press Copy to put it on the clipboard");
     else if (r.cancelled) setStatus("");
     else setStatus(`Could not copy: ${r.detail ?? "unknown error"}`);
     return r.ok;
   } finally {
     copying = false;
+    copyingGif = false;
     copyProgress.hidden = true;
-    setActionsEnabled(!busy);
+    drawGif();                       // re-shows the bar if a GIF is still converting
   }
 }
 
@@ -449,7 +512,7 @@ async function run(action: PanelAction): Promise<boolean> {
     return runExport("copy");
   }
   if (action === "save") {
-    setStatus("Saving…");
+    setStatus(gif.kind === "converting" ? `Saving… (GIF ${Math.floor(gif.permille / 10)}%)` : "Saving…");
     // STC-446: Save WRITES THE FINISHED FILE, it does not only promote.
     //
     // It used to call `panel:save` alone, which promotes the bundle into
@@ -472,7 +535,9 @@ async function run(action: PanelAction): Promise<boolean> {
       if (!(await awaitComposite())) { setStatus("Could not prepare the shot in time."); return false; }
       if (!(await runExport("save"))) return false;
     }
-    const r = await window.thumb.save(dir);
+    savingGif = formatOf(gif) === "gif";
+    let r: Awaited<ReturnType<typeof window.thumb.save>>;
+    try { r = await window.thumb.save(dir, formatOf(gif)); } finally { savingGif = false; }
     if (!r.ok) { setStatus(`Could not save: ${r.detail ?? "unknown error"}`); return false; }
     // The take has moved out of temp storage — every later call in this window
     // (reveal, trash) must use its new home. Same reason `dir` is a `let`.
