@@ -577,6 +577,15 @@
       <span id="countdownhint">Applies to Record, and to Shot with Self-Timer.</span>
     </div>
 
+    <!-- STC-395: what a recording's GIF is converted with. The options are
+         built from gif-options.ts's lists, like the countdown's, so the list
+         and the validator cannot drift. -->
+    <div class="subhead">GIF</div>
+    <div class="stillrow">
+      <label>Frame rate <select id="giffps"></select></label>
+      <label>Max width <select id="gifwidth"></select></label>
+    </div>
+
     <!-- STC-461: the PiP default. The editor's inspector over a mock frame —
          no camera is opened to set a preference. -->
     <div class="subhead">Camera</div>

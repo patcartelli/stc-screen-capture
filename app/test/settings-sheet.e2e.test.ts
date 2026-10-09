@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication } from "playwright";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
@@ -210,4 +210,15 @@ describe("the settings sheet", () => {
     expect(await win.isVisible("#pid")).toBe(false);
     expect(await win.isVisible("#frames")).toBe(false);
   });
+
+  test("STC-395: the GIF row persists frame rate and max width", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+    const win = await launch({ userData, recordings: makeTakeFolder().dir });
+    await win.click("#settings");
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+    await win.selectOption("#giffps", "30");
+    await win.selectOption("#gifwidth", "original");
+    await expect.poll(() => JSON.parse(readFileSync(join(userData, "settings.json"), "utf8")).gif,
+      { timeout: 15_000 }).toEqual({ fps: 30, maxWidth: "original" });
+  }, 60_000);
 });
