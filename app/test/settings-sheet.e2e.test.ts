@@ -99,7 +99,8 @@ describe("the settings sheet", () => {
     const subheads = await win.locator("#profilesheet .subhead").allTextContents();
     // STC-461 added Camera (the PiP default) between them, as a subhead too.
     // STC-502 added "Show icon in" after them, the same way.
-    expect(subheads).toEqual(["Countdown", "Camera", "Shot shortcuts", "Show icon in"]);
+    // STC-395 added GIF (frame rate, max width) after Countdown, as a subhead too.
+    expect(subheads).toEqual(["Countdown", "GIF", "Camera", "Shot shortcuts", "Show icon in"]);
 
     // Both sit under the Preferences <h2>, not Profile's — read positionally,
     // the same way the save-location test above pins its own placement.
@@ -111,9 +112,10 @@ describe("the settings sheet", () => {
         while (prev && prev.tagName !== "H2") prev = prev.previousElementSibling;
         return prev?.textContent ?? null;
       };
-      return { countdown: bySubhead("Countdown"), camera: bySubhead("Camera"), shortcuts: bySubhead("Shot shortcuts") };
+      return { countdown: bySubhead("Countdown"), gif: bySubhead("GIF"), camera: bySubhead("Camera"),
+               shortcuts: bySubhead("Shot shortcuts") };
     });
-    expect(sectionOf).toEqual({ countdown: "Preferences", camera: "Preferences", shortcuts: "Preferences" });
+    expect(sectionOf).toEqual({ countdown: "Preferences", gif: "Preferences", camera: "Preferences", shortcuts: "Preferences" });
   });
 
   /**
