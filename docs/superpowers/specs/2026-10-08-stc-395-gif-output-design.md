@@ -65,7 +65,19 @@ it does for an MP4.
 - **One global palette**, quantized from a sample of frames spread evenly
   across the take. Per-frame palettes flicker, and screen content has few
   colours.
-- **No dithering.** Dither makes UI text and flat fills noisy.
+- **Dither only smooth gradients.** The first hardware pass (runbook §2) found
+  gradients a little posterized with no dither at all. A pixel whose largest
+  per-channel step to a 4-neighbour is small but not zero (`0 < d <=
+  SMOOTH_MAX`, measured on the original frame) gets an ordered 4x4 Bayer
+  offset, equal on R, G and B, before palette indexing. Edges (text, icons,
+  borders: a big step) and flat fills (no step) are never dithered, so they
+  stay exactly as crisp and clean as before. `SMOOTH_MAX` and `DITHER_SPREAD`
+  are tuned by eye. Ordered, not error-diffusion (Floyd-Steinberg): diffusion
+  carries error from pixel to pixel, so one changed pixel reshuffles its
+  neighbours' indices, which shimmers between frames and defeats the
+  transparency diff below. The Bayer offset depends only on position, so an
+  unchanged pixel gets the same index every frame. The palette is still built
+  from the undithered frames.
 - **Unchanged pixels are transparent** relative to the previous frame (one
   palette slot reserved as the transparent index). On a screen recording this
   is the biggest size saving, since most of the screen is still most of the

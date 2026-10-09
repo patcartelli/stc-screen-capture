@@ -1,6 +1,6 @@
 # STC-395 runbook — GIF as an output format
 
-What only a Mac can settle. Nothing here has been run: the e2e has not run anywhere yet (CI on draft PR #309 is its first run) and this runbook is unrun.
+What only a Mac can settle. The e2e has passed on CI (run 37943538767, 9/9 `gif-panel` tests). This runbook is partly run: §1, §5 and §6 pass; §2 found gradient banding, fixed since by gradient-only dither (re-check below); §3 was slow on a MacBook display and the 4K take is still to do; §4 has not been run.
 
 ## §0 Branch
 
@@ -20,7 +20,16 @@ Must: it animates inline in each, and the filename is `<take>.gif`.
 ## §2 Look
 
 Default settings (15 fps, 960). Try a text-heavy window (an editor, a settings pane) and something with a gradient.
-Judge: text crisp, no colour flicker between frames, gradient banding acceptable. Dithering is deliberately off (spec §1); if banding is not acceptable, note which content.
+Judge: text crisp, no colour flicker between frames, gradient banding acceptable.
+
+First pass found gradients a little posterized. The encoder now dithers smooth gradients only (spec §1: ordered 4x4 Bayer, never on edges or flat fills). Before/after on any take, without writing into it:
+
+```
+node scripts/gif-one.mjs <sessionDir> --check --out /tmp/stc-395-dither/on
+node scripts/gif-one.mjs <sessionDir> --check --no-dither --out /tmp/stc-395-dither/off
+```
+
+(`/tmp/stc-395-dither/on` and `off` already hold this pair for the 2026-10-09_15-31-44 take.) Open both side by side. Judge: gradients and shadows smoother with dither on; text and icons exactly as crisp as off; no shimmer or crawling pattern on a still gradient while something else moves. If the pattern is visible as grain, `DITHER_SPREAD` (gif-encode.ts) is too high; if bands remain, too low or `SMOOTH_MAX` too small. Note the two file sizes: dither costs bytes.
 
 ## §3 Time
 
@@ -28,7 +37,7 @@ A one-minute take at 4K capture. Time from flipping to GIF until `GIF · …` ap
 Compare against the script on the same take:
 
 ```
-node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check] [--out <dir>]
+node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check] [--no-dither] [--out <dir>]
 ```
 
 Reference: a real 2162x1300, 8 s take gave 120 frames at 960x578, 2.21 MB, in 4.6 s. P3 readback is forced to sRGB and may cost extra per frame at 4K.
