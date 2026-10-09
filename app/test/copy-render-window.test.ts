@@ -125,3 +125,31 @@ describe("a live job and a second caller (STC-395)", () => {
     await m.cancelCopyRender("/t/a");
   });
 });
+
+describe("a start queued behind a settling job asks whether it is still wanted (STC-395 M4)", () => {
+  const g = { format: "gif", gif: { fps: 15, maxWidth: 960 } };
+  test("a queued GIF that was cancelled while it waited renders nothing", async () => {
+    const m = await freshModule();
+    const first = m.startCopyRender(opts(g));
+    const cancelling = m.cancelCopyRender("/t/a");          // settling, not yet gone
+    let wanted = true;
+    const queued = m.startCopyRender(opts({ ...g, stillWanted: () => wanted }));
+    expect(m.copyRenderFormat("/t/a"), "no live job while the first settles").toBeUndefined();
+    wanted = false;                                          // the Video pick's forget
+    await cancelling; await first;
+    expect(await queued).toEqual({ ok: false, cancelled: true });
+    expect(FakeWindow.all, "the queued start made no window").toHaveLength(1);
+    expect(m.copyRenderFormat("/t/a")).toBeUndefined();
+  });
+  test("control: a queued GIF still wanted starts once the old job is gone", async () => {
+    const m = await freshModule();
+    void m.startCopyRender(opts(g));
+    const cancelling = m.cancelCopyRender("/t/a");
+    const queued = m.startCopyRender(opts({ ...g, stillWanted: () => true }));
+    await cancelling;
+    await expect.poll(() => FakeWindow.all.length).toBe(2);
+    expect(m.copyRenderFormat("/t/a")).toBe("gif");
+    await m.cancelCopyRender("/t/a");
+    expect(await queued).toEqual({ ok: false, cancelled: true });
+  });
+});

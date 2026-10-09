@@ -42,6 +42,13 @@ export interface CopyJobOptions {
   /** main's openTakes.delete */
   revoke(webContentsId: number): void;
   onProgress(done: number, total: number): void;
+  /**
+   * STC-395: asked just before a window is made — including when a start was
+   * QUEUED behind an older job's cleanup. False settles this call as cancelled
+   * without rendering: a GIF cancelled (or superseded) while it waited in the
+   * queue must not run the whole conversion for a panel showing Video.
+   */
+  stillWanted?(): boolean;
 }
 
 interface Job {
@@ -112,6 +119,9 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   if (existing?.state === "live") return existing.settled;
   // A job still cleaning up owns this take's files; start only once it is done.
   if (existing) return existing.settled.then(() => startCopyRender(opts));
+  // Asked here, after the queue: a queued start re-enters this function once
+  // the old job is gone, so this one check covers both paths.
+  if (opts.stillWanted && !opts.stillWanted()) return Promise.resolve({ ok: false, cancelled: true });
 
   // Headless/Xvfb on CI: hidden windows may not render frames. Watchdog ensures
   // the job settles even if copy:write never arrives, preventing test hangs.

@@ -3103,21 +3103,28 @@ type GifOutcome = { ok: true; path: string; bytes: number; rendered: boolean }
 
 /**
  * Start (or reuse) this take's GIF and resolve when it is ready (STC-395).
- * Settings are read HERE, once, at the start of a conversion (spec §3): a
- * change made while a GIF is ready does not touch it. Progress goes out on
- * `thumb:copyProgress`, the channel the panel already listens on.
+ * Settings are read once, at the start of a conversion (spec §3), and only a
+ * PICK compares them with the cache: `"pick"` is the GIF button, which makes
+ * a GIF with today's settings (reusing one only if it was made with them).
+ * `"use"` is Copy and Save, which take the GIF the panel is showing — any
+ * cached one, whatever it was made with — so changing a setting while a GIF
+ * is ready never turns a Copy into a hidden re-render the panel cannot show.
+ * Progress goes out on `thumb:copyProgress`, the channel the panel already
+ * listens on.
  *
  * Only the caller that STARTED the job (`gifCache.begin`) records it in the
  * cache. A caller that arrives while a GIF job is live — Copy or Save pressed
  * mid-conversion — joins it through `startCopyRender`'s duplicate path, gets
  * that job's outcome, and settles nothing. `panel:cancelGif` forgets the take
  * (bumping its generation), so a cancelled job finishing late cannot claim
- * the cache. `rendered` is true whenever this caller WAITED on a render
- * (started or joined), which is what Copy's clipboard courtesy asks.
+ * the cache, and a start still QUEUED behind an older job's cleanup asks
+ * `stillWanted` before it renders anything. `rendered` is true whenever this
+ * caller WAITED on a render (started or joined), which is what Copy's
+ * clipboard courtesy asks.
  */
-async function ensureGif(dir: string, panel: Electron.WebContents): Promise<GifOutcome> {
+async function ensureGif(dir: string, panel: Electron.WebContents, mode: "pick" | "use"): Promise<GifOutcome> {
   const settings = readSettings(app.getPath("userData")).gif;
-  const hit = gifCache.lookup(dir, settings);
+  const hit = gifCache.lookup(dir, mode === "pick" ? settings : "any");
   if (hit && existsSync(hit.path)) return { ok: true, path: hit.path, bytes: hit.bytes, rendered: false };
   const running = copyRenderFormat(dir);
   if (running === "mp4") return { ok: false, detail: "a video copy is still rendering" };
@@ -3130,6 +3137,8 @@ async function ensureGif(dir: string, panel: Electron.WebContents): Promise<GifO
     grant: (id, d) => openTakes.set(id, d),
     revoke: (id) => openTakes.delete(id),
     onProgress: (done, total) => { if (!panel.isDestroyed()) panel.send("thumb:copyProgress", done, total); },
+    // A joiner (gen undefined) is answered by the live job and never reaches this.
+    stillWanted: () => gen === undefined || gifCache.isCurrent(dir, gen),
   });
   if (!r.ok) return r.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: r.detail };
   let bytes: number;
@@ -3143,15 +3152,21 @@ ipcMain.handle("panel:gif", async (e, dir: string) => {
   if (typeof dir !== "string" || !insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
     return { ok: false, detail: "not a recording on a panel" };
   }
-  const r = await ensureGif(dir, e.sender);
+  const r = await ensureGif(dir, e.sender, "pick");
   return r.ok ? { ok: true, bytes: r.bytes } : r;
 });
 
-/** STC-395: flipping back to Video mid-conversion. Never touches an mp4 Copy's render. */
+/**
+ * STC-395: flipping back to Video mid-conversion. ALWAYS forgets the take's
+ * GIF, even when no GIF job is live: a GIF pick whose start is still queued
+ * behind a cancelled job's cleanup has no live job yet, and the forget is
+ * what makes that queued start give up (`stillWanted`). Cancels only a live
+ * GIF job — never an mp4 Copy's render.
+ */
 ipcMain.handle("panel:cancelGif", async (_e, dir: string) => {
-  if (typeof dir !== "string" || copyRenderFormat(dir) !== "gif") return;
+  if (typeof dir !== "string") return;
   gifCache.forget(dir);
-  await cancelCopyRender(dir);
+  if (copyRenderFormat(dir) === "gif") await cancelCopyRender(dir);
 });
 
 ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) => {
@@ -3177,7 +3192,7 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) =>
     // this waits for it). Read before, so a render this caller waited on
     // keeps the same courtesy the mp4 path has.
     changeBefore = await readChangeCount();
-    const g = await ensureGif(dir, e.sender);
+    const g = await ensureGif(dir, e.sender, "use");
     if (!g.ok) return g.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: g.detail };
     out = g.path;
     rendered = g.rendered;
@@ -3239,7 +3254,7 @@ ipcMain.handle("panel:save", async (e, dir: string, format: unknown) => {
     if (!insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
       return { ok: false, detail: "a GIF is saved only from a fresh recording" };
     }
-    const g = await ensureGif(dir, e.sender);
+    const g = await ensureGif(dir, e.sender, "use");
     if (!g.ok) {
       return { ok: false, detail: g.cancelled ? "the GIF was cancelled" : `the GIF could not be made: ${g.detail}` };
     }

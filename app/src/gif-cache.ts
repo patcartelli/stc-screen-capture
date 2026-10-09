@@ -7,6 +7,11 @@
  * Every job takes a generation; only the newest job for a take may record its
  * result, so a cancelled or superseded job finishing late cannot claim the file.
  * `forget` bumps the generation too, which is what makes a cancel stick.
+ *
+ * Settings are compared ONLY when the person picks GIF (spec §3). Copy and
+ * Save ask with `"any"`: they take whatever GIF the panel is showing, made
+ * with whatever settings were current when it started. A setting changed
+ * while a GIF is ready must not turn a Copy into a hidden re-render.
  */
 import type { GifSettings } from "@transform/gif-options.js";
 
@@ -16,9 +21,15 @@ export class GifCache {
   private readonly entries = new Map<string, GifEntry>();
   private readonly gens = new Map<string, number>();
 
-  lookup(takeDir: string, settings: GifSettings): GifEntry | undefined {
+  lookup(takeDir: string, settings: GifSettings | "any"): GifEntry | undefined {
     const e = this.entries.get(takeDir);
-    return e && e.settings.fps === settings.fps && e.settings.maxWidth === settings.maxWidth ? e : undefined;
+    if (!e) return undefined;
+    if (settings === "any") return e;
+    return e.settings.fps === settings.fps && e.settings.maxWidth === settings.maxWidth ? e : undefined;
+  }
+  /** Whether `gen` is still this take's newest job — a queued start asks before it renders. */
+  isCurrent(takeDir: string, gen: number): boolean {
+    return this.gens.get(takeDir) === gen;
   }
   begin(takeDir: string): number {
     this.entries.delete(takeDir);
