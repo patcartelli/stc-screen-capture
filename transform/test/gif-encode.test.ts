@@ -97,3 +97,72 @@ describe("buildPalette", () => {
     expect(() => buildPalette([])).toThrow(/no frames/);
   });
 });
+
+describe("gradient-only dither", () => {
+  const GW = 256, GH = 4;
+  /** A palette with a 16-level grey step: what a real 255-colour palette spent mostly elsewhere looks like to one gradient. */
+  const greys: number[][] = [];
+  for (let v = 0; v <= 240; v += 16) greys.push([v, v, v]);
+  greys.push([255, 255, 255]);
+  function frameOf(w: number, h: number, px: (x: number, y: number) => number): Uint8ClampedArray {
+    const a = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const v = px(x, y);
+      a.set([v, v, v, 255], (y * w + x) * 4);
+    }
+    return a;
+  }
+  function encodeWith(w: number, h: number, palette: number[][], fs: Uint8ClampedArray[], dither: boolean) {
+    const g = new GifWriter(w, h, palette, fs.map(() => 10), { dither });
+    for (const f of fs) g.addFrame(f);
+    return g.finish();
+  }
+  /** Frame `i`'s grey level per pixel (each palette entry is a distinct grey, so this IS its index). */
+  function greysOf(bytes: Uint8Array, i: number): number[] {
+    const r = new GifReader(bytes);
+    const rgba = new Uint8ClampedArray(r.width * r.height * 4);
+    r.decodeAndBlitFrameRGBA(i, rgba);
+    return Array.from({ length: r.width * r.height }, (_, p) => rgba[p * 4]!);
+  }
+  function longestRun(row: number[]): number {
+    let best = 1, run = 1;
+    for (let i = 1; i < row.length; i++) { run = row[i] === row[i - 1] ? run + 1 : 1; best = Math.max(best, run); }
+    return best;
+  }
+  function transitions(row: number[]): number {
+    let n = 0;
+    for (let i = 1; i < row.length; i++) if (row[i] !== row[i - 1]) n++;
+    return n;
+  }
+  const gradient = frameOf(GW, GH, (x) => x);                    // 0..255, one level per pixel
+
+  test("a flat fill and hard-edged text encode byte-identically with dither on and off", () => {
+    const flat = frameOf(GW, GH, () => 200);
+    const text = frameOf(GW, GH, (x, y) => ((x >> 2) % 3 === 0 && y > 0 ? 0 : 255));   // black glyph blocks on white
+    for (const f of [flat, text]) {
+      const p = buildPalette([f]);
+      expect(Buffer.from(encodeWith(GW, GH, p, [f, f], true))
+        .equals(Buffer.from(encodeWith(GW, GH, p, [f, f], false)))).toBe(true);
+    }
+  });
+
+  test("a smooth gradient bands less with dither on than off", () => {
+    const on = greysOf(encodeWith(GW, GH, greys, [gradient], true), 0);
+    const off = greysOf(encodeWith(GW, GH, greys, [gradient], false), 0);
+    const row = (a: number[], y: number) => a.slice(y * GW, (y + 1) * GW);
+    for (let y = 0; y < GH; y++) {
+      expect(longestRun(row(off, y))).toBeGreaterThanOrEqual(15);    // posterized: 16-px bands
+      expect(longestRun(row(on, y))).toBeLessThan(longestRun(row(off, y)));
+      // Band edges become patterns: far more index changes along the row.
+      expect(transitions(row(on, y))).toBeGreaterThan(3 * transitions(row(off, y)));
+    }
+  });
+
+  test("dither is deterministic: a repeated gradient frame is entirely transparent", () => {
+    const r = new GifReader(encodeWith(GW, GH, greys, [gradient, gradient], true));
+    expect(r.frameInfo(1).transparent_index).not.toBe(null);
+    const canvas = new Uint8ClampedArray(GW * GH * 4).fill(7);
+    r.decodeAndBlitFrameRGBA(1, canvas);            // transparent pixels leave the canvas untouched
+    expect(canvas.every((v) => v === 7)).toBe(true);
+  });
+});
