@@ -100,7 +100,7 @@ describe("buildPalette", () => {
 
 describe("gradient-only dither", () => {
   const GW = 128, GH = 4;
-  /** A palette with a 16-level grey step: what a real 255-colour palette spent mostly elsewhere looks like to one gradient. */
+  /** A palette with a 16-level grey step, twice DITHER_SPREAD: what a real 255-colour palette spent mostly elsewhere looks like to one gradient. */
   const greys: number[][] = [];
   for (let v = 0; v <= 240; v += 16) greys.push([v, v, v]);
   greys.push([255, 255, 255]);
@@ -156,12 +156,14 @@ describe("gradient-only dither", () => {
     const on = greysOf(encodeWith(GW, GH, greys, [gradient], true), 0);
     const off = greysOf(encodeWith(GW, GH, greys, [gradient], false), 0);
     const row = (a: number[], y: number) => a.slice(y * GW, (y + 1) * GW);
-    for (let y = 0; y < GH; y++) {
-      expect(longestRun(row(off, y))).toBeGreaterThanOrEqual(8);     // posterized: 8-px bands
-      expect(longestRun(row(on, y))).toBeLessThan(longestRun(row(off, y)));
-      // Band edges become patterns: far more index changes along the row.
-      expect(transitions(row(on, y))).toBeGreaterThan(2 * transitions(row(off, y)));
-    }
+    for (let y = 0; y < GH; y++) expect(longestRun(row(off, y))).toBeGreaterThanOrEqual(8);     // posterized: 8-px bands
+    // Band edges become a pattern: with dither off every row steps at the same x; with it on the Bayer rows stagger them.
+    const edges = (a: number[]) => new Set(Array.from({ length: GH }, (_, y) => {
+      const r = row(a, y);
+      return r.findIndex((v, i) => i > 0 && v !== r[i - 1]);
+    }));
+    expect(edges(off).size).toBe(1);
+    expect(edges(on).size).toBeGreaterThan(1);
   });
 
   test("dither is deterministic: a repeated gradient frame is entirely transparent", () => {

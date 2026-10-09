@@ -56,18 +56,19 @@ export const SMOOTH_MIN = 2;
 export const SMOOTH_MAX = 12;
 /**
  * Peak-to-peak size of the ordered-dither offset, in 8-bit levels, added equally
- * to R, G and B. A 255-colour palette over a screen take spends most of its
- * entries on UI greys and accents, so a gradient typically sees palette
- * neighbours ~16-32 levels apart; an offset spanning about ±8 (half that step)
- * moves a pixel across at most one band boundary, which breaks the band edge
- * into a pattern without adding visible grain.
+ * to R, G and B. Chosen by eye on a real take (2026-10-09, frame 240 of the
+ * Discord-over-dark-wallpaper take) after Patrick judged 16 as not subtle
+ * enough: 16, 12, 10 and 8 were compared against no dither. The band edges
+ * stay softened at every value, but the stipple on the near-flat dark areas
+ * between them gets steadily fainter down to 8, at a little banding's cost.
+ * 8 is about +-4 levels, under half a palette step on a gradient.
  */
-export const DITHER_SPREAD = 16;
+export const DITHER_SPREAD = 8;
 /** 4x4 Bayer matrix, row-major by (y & 3, x & 3). */
 const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 /**
  * Whole-level offsets, centred on zero: (b - 7.5) * SPREAD / 16 truncated toward
- * zero gives -7..7 at SPREAD 16, symmetric. Half-levels would be resolved by the
+ * zero gives -3..3 at SPREAD 8 (-7..7 at 16), symmetric. Half-levels would be resolved by the
  * clamped array's round-half-to-even, which favours even levels.
  */
 const DITHER_OFFSET = Int16Array.from(BAYER4, (b) => Math.trunc(((b - 7.5) * DITHER_SPREAD) / 16));
