@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  actionsFor, closesPanel, promotes, trashStyle, UNDO_WINDOW_MS, lockedWhileCopying,
+  actionsFor, closesPanel, promotes, trashStyle, UNDO_WINDOW_MS, lockedWhileCopying, offersFormat,
   type PanelAction, type PanelTake,
 } from "../src/panel-actions.js";
 
@@ -106,5 +106,14 @@ describe("what a recording's copy locks while it renders (STC-488)", () => {
     // Trash and dismiss are the panel's way out, and they cancel the render.
     const all: PanelAction[] = ["copy", "save", "edit", "trash", "dismiss"];
     expect(all.filter(lockedWhileCopying)).toEqual(["copy", "save", "edit"]);
+  });
+});
+
+describe("STC-395: offersFormat", () => {
+  test("only a fresh recording gets the GIF / Video switch", () => {
+    expect(offersFormat({ kind: "recording", origin: "fresh" })).toBe(true);
+    expect(offersFormat({ kind: "recording", origin: "library" })).toBe(false);
+    expect(offersFormat({ kind: "shot", origin: "fresh" })).toBe(false);
+    expect(offersFormat({ kind: "shot", origin: "library" })).toBe(false);
   });
 });

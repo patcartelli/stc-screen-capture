@@ -65,6 +65,15 @@ export interface PanelTake {
 }
 
 /**
+ * Whether the panel shows the GIF / Video switch (STC-395). Only a fresh
+ * recording: that is the only take with a recording Copy (`panel:copyRecording`
+ * refuses anything outside the temp root), and a library re-open has no Save.
+ */
+export function offersFormat(take: PanelTake): boolean {
+  return take.kind === "recording" && take.origin === "fresh";
+}
+
+/**
  * The actions this take has, in the order the panel lays them out.
  *
  * Trash is always last and always present — it is the ✕, and a panel that
