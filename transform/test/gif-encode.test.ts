@@ -1,7 +1,7 @@
 // transform/test/gif-encode.test.ts
 import { describe, test, expect } from "vitest";
 import { GifReader } from "omggif";
-import { buildPalette, GifWriter } from "../src/gif-encode.js";
+import { buildPalette, DITHER_SPREAD, GifWriter } from "../src/gif-encode.js";
 
 const W = 16, H = 8;
 function solid(r: number, g: number, b: number): Uint8ClampedArray {
@@ -100,9 +100,10 @@ describe("buildPalette", () => {
 
 describe("gradient-only dither", () => {
   const GW = 128, GH = 4;
-  /** A palette with a 16-level grey step, twice DITHER_SPREAD: what a real 255-colour palette spent mostly elsewhere looks like to one gradient. */
+  /** A palette with a grey step of twice DITHER_SPREAD: what a real 255-colour palette spent mostly elsewhere looks like to one gradient. */
+  const STEP = 2 * DITHER_SPREAD;
   const greys: number[][] = [];
-  for (let v = 0; v <= 240; v += 16) greys.push([v, v, v]);
+  for (let v = 0; v <= 255 - STEP; v += STEP) greys.push([v, v, v]);
   greys.push([255, 255, 255]);
   function frameOf(w: number, h: number, px: (x: number, y: number) => number): Uint8ClampedArray {
     const a = new Uint8ClampedArray(w * h * 4);
@@ -156,7 +157,7 @@ describe("gradient-only dither", () => {
     const on = greysOf(encodeWith(GW, GH, greys, [gradient], true), 0);
     const off = greysOf(encodeWith(GW, GH, greys, [gradient], false), 0);
     const row = (a: number[], y: number) => a.slice(y * GW, (y + 1) * GW);
-    for (let y = 0; y < GH; y++) expect(longestRun(row(off, y))).toBeGreaterThanOrEqual(8);     // posterized: 8-px bands
+    for (let y = 0; y < GH; y++) expect(longestRun(row(off, y))).toBeGreaterThanOrEqual(STEP / 2);     // posterized: STEP/2-px bands at 2 levels a pixel
     // Band edges become a pattern: with dither off every row steps at the same x; with it on the Bayer rows stagger them.
     const edges = (a: number[]) => new Set(Array.from({ length: GH }, (_, y) => {
       const r = row(a, y);

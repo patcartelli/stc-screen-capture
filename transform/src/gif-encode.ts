@@ -58,17 +58,17 @@ export const SMOOTH_MAX = 12;
  * Peak-to-peak size of the ordered-dither offset, in 8-bit levels, added equally
  * to R, G and B. Chosen by eye on a real take (2026-10-09, frame 240 of the
  * Discord-over-dark-wallpaper take) after Patrick judged 16 as not subtle
- * enough: 16, 12, 10 and 8 were compared against no dither. The band edges
- * stay softened at every value, but the stipple on the near-flat dark areas
- * between them gets steadily fainter down to 8, at a little banding's cost.
- * 8 is about +-4 levels, under half a palette step on a gradient.
+ * enough, then 8 as still too strong ("a little lower, maybe 4"): 16, 12, 10,
+ * 8 and 4 were compared against no dither. The stipple on the near-flat dark
+ * areas gets steadily fainter as the spread falls, at a little banding's cost.
+ * 4 is offsets of -1, 0 or +1 level.
  */
-export const DITHER_SPREAD = 8;
+export const DITHER_SPREAD = 4;
 /** 4x4 Bayer matrix, row-major by (y & 3, x & 3). */
 const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 /**
  * Whole-level offsets, centred on zero: (b - 7.5) * SPREAD / 16 truncated toward
- * zero gives -3..3 at SPREAD 8 (-7..7 at 16), symmetric. Half-levels would be resolved by the
+ * zero gives -1..1 at SPREAD 4 (-3..3 at 8, -7..7 at 16), symmetric; at 4, eight of the sixteen Bayer cells are 0. Half-levels would be resolved by the
  * clamped array's round-half-to-even, which favours even levels.
  */
 const DITHER_OFFSET = Int16Array.from(BAYER4, (b) => Math.trunc(((b - 7.5) * DITHER_SPREAD) / 16));
