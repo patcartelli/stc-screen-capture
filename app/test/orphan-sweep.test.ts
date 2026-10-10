@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { findOrphanedBundles } from "../src/temp-takes.js";
+import { listLibrary } from "../src/library.js";
 import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
 
@@ -208,5 +209,18 @@ describe("an untagged file blocks only bundles of its own kind", () => {
     expect(blocked.map((b) => b.dir)).toEqual([still.dir]);
     // And the file it was read from is still there, untouched.
     expect(await readFile(join(root, "holiday.jpg"))).toEqual(Buffer.from(JPEG));
+  });
+});
+
+describe("a saved GIF is invisible to Reclaim and the library (STC-395)", () => {
+  test("an untagged top-level .gif neither blocks an orphan nor becomes a library item", async () => {
+    await rm(join(root, "login-bug.mp4"));
+    await writeFile(join(root, "2026-09-01_10-05-00.gif"), new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]));
+    const { orphans, blocked } = await findOrphanedBundles(env, root);
+    expect(blocked).toEqual([]);
+    expect(orphans.map((o) => o.dir)).toEqual([bundle]);
+    const lib = await listLibrary(env, root);
+    expect(JSON.stringify(lib.items)).not.toContain(".gif");
+    expect(JSON.stringify(lib.items)).not.toContain("10-05-00");
   });
 });

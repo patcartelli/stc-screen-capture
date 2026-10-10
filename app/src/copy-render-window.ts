@@ -18,6 +18,7 @@ import { BrowserWindow, ipcMain } from "electron";
 import { join, dirname } from "node:path";
 import { rename, rm, writeFile, mkdir } from "node:fs/promises";
 import { PARTIAL_SUFFIX } from "./recording-copy.js";
+import type { GifSettings } from "@transform/gif-options.js";
 
 export type CopyOutcome =
   | { ok: true; path: string }
@@ -26,8 +27,12 @@ export type CopyOutcome =
 
 export interface CopyJobOptions {
   takeDir: string;
-  /** The final .mp4; main writes outPath + PARTIAL_SUFFIX first. */
+  /** The final file (.mp4 or .gif); main writes outPath + PARTIAL_SUFFIX first. */
   outPath: string;
+  /** STC-395: what the hidden page renders. Absent = "mp4", STC-488's Copy. */
+  format?: "mp4" | "gif";
+  /** STC-395: required with `format: "gif"` — read by main once, at the job's start. */
+  gif?: GifSettings;
   dist: string;
   rendererDir: string;
   /** Test seam (STC_COPY_RENDER_DELAY_MS): the render waits this long before loading. */
@@ -37,6 +42,13 @@ export interface CopyJobOptions {
   /** main's openTakes.delete */
   revoke(webContentsId: number): void;
   onProgress(done: number, total: number): void;
+  /**
+   * STC-395: asked just before a window is made — including when a start was
+   * QUEUED behind an older job's cleanup. False settles this call as cancelled
+   * without rendering: a GIF cancelled (or superseded) while it waited in the
+   * queue must not run the whole conversion for a panel showing Video.
+   */
+  stillWanted?(): boolean;
 }
 
 interface Job {
@@ -48,8 +60,10 @@ interface Job {
   state: "live" | "settling";
   /** The in-flight `copy:write`, so cleanup can wait for it. */
   writing?: Promise<void>;
-  /** Render timeout watchdog handle (STC-488 headless CI fix). */
+  /** Render INACTIVITY watchdog handle (STC-488 headless CI fix; re-armed per progress, STC-395). */
   renderTimeoutHandle?: NodeJS.Timeout;
+  /** Re-arm the watchdog: called at start and on every `copy:progress` while live. */
+  armWatchdog(): void;
   /** The rename ran: outPath belongs to this job and is removed if it settles unsuccessfully. */
   renamed: boolean;
   settle(o: CopyOutcome): void;
@@ -64,7 +78,9 @@ const logRm = (what: string) => (e: unknown) => console.error(`[copy] could not 
 
 ipcMain.on("copy:progress", (e, done: number, total: number) => {
   const job = bySender.get(e.sender.id);
-  if (job?.state === "live") job.opts.onProgress(Number(done) || 0, Number(total) || 0);
+  if (job?.state !== "live") return;
+  job.armWatchdog();
+  job.opts.onProgress(Number(done) || 0, Number(total) || 0);
 });
 ipcMain.on("copy:failed", (e, detail: string) => {
   bySender.get(e.sender.id)?.settle({ ok: false, detail: String(detail) });
@@ -88,16 +104,33 @@ ipcMain.handle("copy:write", (e, bytes: Uint8Array) => {
   return job.writing;
 });
 
+const formatOf = (o: CopyJobOptions): "mp4" | "gif" => o.format ?? "mp4";
+
 export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   const existing = jobs.get(opts.takeDir);
+  // STC-395: a duplicate must be asking for the SAME file. A GIF caller handed
+  // a live mp4 job's outcome would paste a video (and vice versa). The panel
+  // never asks for both at once; main refuses here too.
+  if (existing?.state === "live" && formatOf(existing.opts) !== formatOf(opts)) {
+    return Promise.resolve({ ok: false, detail: "another render of this take is running" });
+  }
   // One caller per take is the contract: a duplicate gets the running job's
   // outcome and its own `onProgress` is ignored.
   if (existing?.state === "live") return existing.settled;
   // A job still cleaning up owns this take's files; start only once it is done.
   if (existing) return existing.settled.then(() => startCopyRender(opts));
+  // Asked here, after the queue: a queued start re-enters this function once
+  // the old job is gone, so this one check covers both paths.
+  if (opts.stillWanted && !opts.stillWanted()) return Promise.resolve({ ok: false, cancelled: true });
 
   // Headless/Xvfb on CI: hidden windows may not render frames. Watchdog ensures
   // the job settles even if copy:write never arrives, preventing test hangs.
+  // It is an INACTIVITY timeout (STC-395): re-armed on every `copy:progress`,
+  // so a job that keeps reporting never times out, and one silent this long
+  // settles as the timeout failure. A total bound was wrong once GIFs
+  // arrived: a GIF of a multi-minute or 4K take can legitimately run past
+  // 120 s, and the watchdog exists for a hidden window that never renders,
+  // not for a slow one that does.
   // Default 120s matches the e2e test's inner bounds; override with STC_COPY_RENDER_TIMEOUT_MS.
   const RENDER_TIMEOUT_MS = Number(process.env.STC_COPY_RENDER_TIMEOUT_MS) || 120_000;
 
@@ -121,6 +154,18 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   const settled = new Promise<CopyOutcome>((res) => { resolve = res; });
   const job: Job = {
     opts, win, senderId, cancelled: false, state: "live", renderTimeoutHandle: undefined, renamed: false, settled,
+    armWatchdog: () => {
+      if (job.state !== "live") return;
+      if (job.renderTimeoutHandle) clearTimeout(job.renderTimeoutHandle);
+      job.renderTimeoutHandle = setTimeout(() => {
+        if (job.state === "live") {
+          job.settle({
+            ok: false,
+            detail: `render timeout: no progress for ${RENDER_TIMEOUT_MS}ms (likely headless/hidden window rendering issue)`,
+          });
+        }
+      }, RENDER_TIMEOUT_MS);
+    },
     settle: (o) => {
       if (job.state !== "live") return;               // one outcome per job
       job.state = "settling";
@@ -152,18 +197,11 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   bySender.set(senderId, job);
   opts.grant(senderId, opts.takeDir);
 
-  // Start render timeout watchdog. If copy:write doesn't arrive within
-  // RENDER_TIMEOUT_MS, settle as a timeout error. This prevents hangs on CI
-  // where hidden windows don't render (Xvfb, headless Docker, etc).
-  // The timeout is cancelled when the job settles (above in settle()).
-  job.renderTimeoutHandle = setTimeout(() => {
-    if (job.state === "live") {
-      job.settle({
-        ok: false,
-        detail: `render timeout after ${RENDER_TIMEOUT_MS}ms (likely headless/hidden window rendering issue)`,
-      });
-    }
-  }, RENDER_TIMEOUT_MS);
+  // Start the render inactivity watchdog. If neither progress nor copy:write
+  // arrives within RENDER_TIMEOUT_MS, settle as a timeout error. This prevents
+  // hangs on CI where hidden windows don't render (Xvfb, headless Docker, etc).
+  // Every `copy:progress` re-arms it; settle() cancels it.
+  job.armWatchdog();
 
   // Destroyed by anything but settle (settle's own destroy lands here too, and
   // is a no-op: a job settles once).
@@ -177,8 +215,17 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   win.webContents.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
     if (isMainFrame) job.settle({ ok: false, detail: `the render page failed to load (${code} ${desc})` });
   });
+  // Both seams travel in the query: the test delay, and (STC-395) the format
+  // with the GIF settings main read once, at this job's start.
+  const query: Record<string, string> = {};
+  if (opts.delayMs) query.delayMs = String(opts.delayMs);
+  if (opts.format === "gif" && opts.gif) {
+    query.format = "gif";
+    query.fps = String(opts.gif.fps);
+    query.maxWidth = String(opts.gif.maxWidth);
+  }
   win.loadFile(join(opts.rendererDir, "copy-render.html"),
-    opts.delayMs ? { query: { delayMs: String(opts.delayMs) } } : undefined)
+    Object.keys(query).length ? { query } : undefined)
     .catch((e) => job.settle({ ok: false, detail: `the render page failed to load: ${String(e?.message ?? e)}` }));
   return settled;
 }
@@ -192,6 +239,11 @@ export async function cancelCopyRender(takeDir: string): Promise<void> {
 }
 
 export function copyRenderInFlight(takeDir: string): boolean { return jobs.get(takeDir)?.state === "live"; }
+/** STC-395: what the LIVE job for this take is rendering, or undefined when none is. */
+export function copyRenderFormat(takeDir: string): "mp4" | "gif" | undefined {
+  const j = jobs.get(takeDir);
+  return j?.state === "live" ? formatOf(j.opts) : undefined;
+}
 export async function cancelAllCopyRenders(): Promise<void> {
   await Promise.all([...jobs.keys()].map(cancelCopyRender));
 }

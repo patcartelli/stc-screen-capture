@@ -30,11 +30,15 @@ import {
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
-import { startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight } from "./copy-render-window.js";
 import {
-  copyPathFor, copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
+  startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight, copyRenderFormat,
+} from "./copy-render-window.js";
+import { GifCache } from "./gif-cache.js";
+import {
+  copyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
+  copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
 } from "./recording-copy.js";
-import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir } from "node:fs/promises";
+import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir, rename } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, renameCapture } from "./takes.js";
@@ -133,9 +137,17 @@ ipcMain.on("toast:message", (_e, message: unknown) => {
 });
 // The message toast's button. The page names an action by id; what it opens
 // is `toast-message.ts`'s table, so a renderer cannot ask for an address.
+// "reveal-saved-gif" (STC-395) is main's own: it shows the file main itself
+// last saved, never a path the page supplies.
 ipcMain.on("toast:action", (_e, id: unknown) => {
   if (!isToastActionId(id)) return;
-  void shell.openExternal(TOAST_ACTION_URLS[id]);
+  if (id === "reveal-saved-gif") {
+    if (lastSavedGif) shell.showItemInFolder(lastSavedGif);
+    hideToast();
+    return;
+  }
+  const url = TOAST_ACTION_URLS[id];
+  if (url) void shell.openExternal(url);
   hideToast();
 });
 
@@ -218,6 +230,8 @@ let recordFlowActive = false;
  * produced itself needs no guard at all.
  */
 let lastStillFile: string | undefined;
+/** STC-395: the GIF `panel:save` last wrote — what the "Show in Finder" toast reveals. Same reasoning as above. */
+let lastSavedGif: string | undefined;
 
 /**
  * Inside the library root OR the temp root (STC-393).
@@ -2968,6 +2982,7 @@ ipcMain.handle("thumbnail:menu", async (e, ctx: ThumbMenuContext) => {
       take: ctx?.take ?? { kind: "shot", origin: "fresh" },
       busy: ctx?.busy === true,
       copying: ctx?.copying === true,
+      converting: ctx?.converting === true,
     }).map((item) => item.type === "separator"
       ? { type: "separator" as const }
       : { label: item.label, enabled: item.enabled !== false, click: () => answer(item.id) }));
@@ -3081,13 +3096,86 @@ ipcMain.handle("still:revealShot", async (_e, dir: string) => {
  * second Copy is instant. Only a recording comes here; a shot's Copy is still
  * `still:export`.
  */
-ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
+/** STC-395: the GIF cached per fresh take, and what it was made with. */
+const gifCache = new GifCache();
+
+type GifOutcome = { ok: true; path: string; bytes: number; rendered: boolean }
+                | { ok: false; cancelled?: true; detail?: string };
+
+/**
+ * Start (or reuse) this take's GIF and resolve when it is ready (STC-395).
+ * Settings are read once, at the start of a conversion (spec §3), and only a
+ * PICK compares them with the cache: `"pick"` is the GIF button, which makes
+ * a GIF with today's settings (reusing one only if it was made with them).
+ * `"use"` is Copy and Save, which take the GIF the panel is showing — any
+ * cached one, whatever it was made with — so changing a setting while a GIF
+ * is ready never turns a Copy into a hidden re-render the panel cannot show.
+ * Progress goes out on `thumb:copyProgress`, the channel the panel already
+ * listens on.
+ *
+ * Only the caller that STARTED the job (`gifCache.begin`) records it in the
+ * cache. A caller that arrives while a GIF job is live — Copy or Save pressed
+ * mid-conversion — joins it through `startCopyRender`'s duplicate path, gets
+ * that job's outcome, and settles nothing. `panel:cancelGif` forgets the take
+ * (bumping its generation), so a cancelled job finishing late cannot claim
+ * the cache, and a start still QUEUED behind an older job's cleanup asks
+ * `stillWanted` before it renders anything. `rendered` is true whenever this
+ * caller WAITED on a render (started or joined), which is what Copy's
+ * clipboard courtesy asks.
+ */
+async function ensureGif(dir: string, panel: Electron.WebContents, mode: "pick" | "use"): Promise<GifOutcome> {
+  const settings = readSettings(app.getPath("userData")).gif;
+  const hit = gifCache.lookup(dir, mode === "pick" ? settings : "any");
+  if (hit && existsSync(hit.path)) return { ok: true, path: hit.path, bytes: hit.bytes, rendered: false };
+  const running = copyRenderFormat(dir);
+  if (running === "mp4") return { ok: false, detail: "a video copy is still rendering" };
+  const out = gifCopyPathFor(process.env, dir);
+  const gen = running === "gif" ? undefined : gifCache.begin(dir);
+  const r = await startCopyRender({
+    takeDir: dir, outPath: out, dist: here, rendererDir: join(here, "..", "renderer"),
+    format: "gif", gif: settings,
+    delayMs: Number(process.env.STC_COPY_RENDER_DELAY_MS) || undefined,
+    grant: (id, d) => openTakes.set(id, d),
+    revoke: (id) => openTakes.delete(id),
+    onProgress: (done, total) => { if (!panel.isDestroyed()) panel.send("thumb:copyProgress", done, total); },
+    // A joiner (gen undefined) is answered by the live job and never reaches this.
+    stillWanted: () => gen === undefined || gifCache.isCurrent(dir, gen),
+  });
+  if (!r.ok) return r.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: r.detail };
+  let bytes: number;
+  try { bytes = (await stat(out)).size; }
+  catch (err: any) { return { ok: false, detail: `the GIF went missing: ${String(err?.message ?? err)}` }; }
+  if (gen !== undefined) gifCache.settle(dir, gen, { path: out, settings, bytes });
+  return { ok: true, path: out, bytes, rendered: true };
+}
+
+ipcMain.handle("panel:gif", async (e, dir: string) => {
+  if (typeof dir !== "string" || !insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
+    return { ok: false, detail: "not a recording on a panel" };
+  }
+  const r = await ensureGif(dir, e.sender, "pick");
+  return r.ok ? { ok: true, bytes: r.bytes } : r;
+});
+
+/**
+ * STC-395: flipping back to Video mid-conversion. ALWAYS forgets the take's
+ * GIF, even when no GIF job is live: a GIF pick whose start is still queued
+ * behind a cancelled job's cleanup has no live job yet, and the forget is
+ * what makes that queued start give up (`stillWanted`). Cancels only a live
+ * GIF job — never an mp4 Copy's render.
+ */
+ipcMain.handle("panel:cancelGif", async (_e, dir: string) => {
+  if (typeof dir !== "string") return;
+  gifCache.forget(dir);
+  if (copyRenderFormat(dir) === "gif") await cancelCopyRender(dir);
+});
+
+ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) => {
   if (typeof dir !== "string" || !insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
     return { ok: false, detail: "not a recording on a panel" };
   }
   const helper = sup;   // captured: the render below is long and `sup` can go away under it
   if (!helper) return { ok: false, detail: "the helper is not running" };
-  const out = copyPathFor(process.env, dir);
   // A render takes long enough for the person to copy something else. The
   // clipboard's changeCount is read before it and after it; a courtesy, not a
   // gate: if it cannot be read (the client rejects on an error reply), write.
@@ -3097,9 +3185,22 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
       return Number.isFinite(n) ? n : undefined;
     } catch { return undefined; }
   };
+  let out: string;
   let changeBefore: number | undefined;
   let rendered = false;
-  if (!existsSync(out)) {
+  if (format === "gif") {
+    // STC-395: the GIF the panel is showing (or the one still converting —
+    // this waits for it). Read before, so a render this caller waited on
+    // keeps the same courtesy the mp4 path has.
+    changeBefore = await readChangeCount();
+    const g = await ensureGif(dir, e.sender, "use");
+    if (!g.ok) return g.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: g.detail };
+    out = g.path;
+    rendered = g.rendered;
+  } else {
+    out = copyPathFor(process.env, dir);
+  }
+  if (format !== "gif" && !existsSync(out)) {
     rendered = true;
     changeBefore = await readChangeCount();
     const panel = e.sender;
@@ -3131,13 +3232,39 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string) => {
   return { ok: true };
 });
 
-ipcMain.handle("panel:save", async (_e, dir: string) => {
+/**
+ * Save (STC-392), and in GIF mode (STC-395) Save keeps the take AND writes
+ * its GIF beside it in the save folder. The GIF must be READY before the
+ * promote — `ensureGif` is the wait, and a cancel or failure saves nothing.
+ * Once the take is promoted it stays kept: a GIF write that fails after that
+ * point is reported (`gifError` and a toast), never undone by un-saving.
+ */
+ipcMain.handle("panel:save", async (e, dir: string, format: unknown) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
+  const wantGif = format === "gif";
   // main enforces the lock too (panel-actions.ts's rule), not only the panel.
-  if (lockedWhileCopying("save") && copyRenderInFlight(dir)) return { ok: false, detail: "a copy is still rendering" };
+  // In GIF mode the wait is `ensureGif` itself, which refuses a live mp4 render.
+  if (!wantGif && lockedWhileCopying("save") && copyRenderInFlight(dir)) {
+    return { ok: false, detail: "a copy is still rendering" };
+  }
+  let gif: { path: string } | undefined;
+  if (wantGif) {
+    if (!insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
+      return { ok: false, detail: "a GIF is saved only from a fresh recording" };
+    }
+    const g = await ensureGif(dir, e.sender, "use");
+    if (!g.ok) {
+      return { ok: false, detail: g.cancelled ? "the GIF was cancelled" : `the GIF could not be made: ${g.detail}` };
+    }
+    // A cache hit never looked at the render table, and the promote below
+    // must not move a take out from under ANY live render (an mp4 Copy, or a
+    // job started while we waited): the same lock, asked after the wait.
+    if (copyRenderInFlight(dir)) return { ok: false, detail: "a copy is still rendering" };
+    gif = { path: g.path };
+  }
   try {
     // Asked, not assumed: `promotes("save")` is `panel-actions.ts`'s own
     // answer, not a second place this handler decides "save promotes" for
@@ -3146,10 +3273,33 @@ ipcMain.handle("panel:save", async (_e, dir: string) => {
     // (CLAUDE.md) would be back, just split across a renderer file and this
     // one instead of two renderer files.
     const promoted = promotes("save") ? await promoteIntoLibrary(saveFolder, dir) : dir;
+    let gifError: string | undefined;
+    if (gif) {
+      // Through `.partial` + rename, like every other file this app writes
+      // where a reader might look; `savedGifName` counts a `.partial` as taken.
+      let partial: string | undefined;
+      try {
+        const root = takesRoot(process.env, saveFolder);
+        const name = savedGifName(basename(promoted), await readdir(root).catch(() => []));
+        const dest = join(root, name);
+        partial = dest + PARTIAL_SUFFIX;
+        await copyFile(gif.path, partial);
+        await rename(partial, dest);
+        partial = undefined;
+        lastSavedGif = dest;
+        showNotice({ title: "Saved GIF", body: name, action: { id: "reveal-saved-gif", label: "Show in Finder" } });
+      } catch (err: any) {
+        gifError = String(err?.message ?? err);
+        if (partial) await rm(partial, { force: true }).catch(() => {});
+        showNotice({ title: "Saved the take", body: `The GIF couldn't be written: ${gifError}` });
+      }
+      // The take has moved; its old key names nothing now.
+      gifCache.forget(dir);
+    }
     dismissThumbnail(dir);
-    return { ok: true, dir: promoted };
-  } catch (e: any) {
-    return { ok: false, detail: String(e?.message ?? e) };
+    return { ok: true, dir: promoted, ...(gifError ? { gifError } : {}) };
+  } catch (err: any) {
+    return { ok: false, detail: String(err?.message ?? err) };
   }
 });
 
@@ -3236,6 +3386,7 @@ ipcMain.handle("panel:dismiss", async (_e, dir: string) => {
   // waiting for it any more.
   // The panel goes first: it need not wait out a large write's cleanup.
   dismissThumbnail(dir);
+  gifCache.forget(dir);   // STC-395: a late GIF finish cannot claim the cache
   await cancelCopyRender(dir);
   return { ok: true };
 });
@@ -3275,11 +3426,13 @@ ipcMain.handle("panel:trash", async (_e, dir: string) => {
     // origin "fresh" and `panel:copyRecording` requires the temp root, so no
     // render exists on a "confirm"-style take. If that ever changes, the
     // cancel belongs BEFORE `trashOne`, not after it.
-    if (r.ok) await cancelCopyRender(dir);
+    if (r.ok) { gifCache.forget(dir); await cancelCopyRender(dir); }
     return r;
   }
 
   // STC-488: a Trash cancels a running Copy render, once the Trash is decided.
+  // STC-395: and forgets the take's GIF, so a late finish cannot claim the cache.
+  gifCache.forget(dir);
   await cancelCopyRender(dir);
   if (!existsSync(dir)) { dismissThumbnail(dir); return { ok: true }; }
   pendingTrash.promise(dir);

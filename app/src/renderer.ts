@@ -46,6 +46,8 @@ interface AppSettings {
   /** STC-444 slice 3: the site folder, moved here from the editor window's
    *  own sharebar — one setting for the whole app, not a per-take one. */
   share: { destination: string | null };
+  /** STC-395: what a recording's GIF is converted with. */
+  gif: GifSettings;
 }
 interface Take {
   dir: string; name: string; durationMs: number;
@@ -125,6 +127,7 @@ import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
+import { type GifSettings, GIF_FPS_OPTIONS, GIF_WIDTH_OPTIONS } from "@transform/gif-options";
 import { MODEL_CODE } from "./product.js";
 import { PERMISSION_ACTION_LABELS, type Grant, type PermissionsState, type RowAction } from "./permissions.js";
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
@@ -1038,6 +1041,12 @@ for (const { ms, label } of COUNTDOWN_OPTIONS) {
   countdownSel.append(opt);
 }
 
+// STC-395: the GIF row, built from the lists the validator uses.
+const gifFpsSel = $("giffps") as HTMLSelectElement;
+const gifWidthSel = $("gifwidth") as HTMLSelectElement;
+for (const fps of GIF_FPS_OPTIONS) gifFpsSel.add(new Option(`${fps} fps`, String(fps)));
+for (const w of GIF_WIDTH_OPTIONS) gifWidthSel.add(new Option(w === "original" ? "Original" : `${w} px`, String(w)));
+
 const iconPlacementSel = $("iconplacement") as HTMLSelectElement;
 for (const value of ICON_PLACEMENTS) {
   const opt = document.createElement("option");
@@ -1058,7 +1067,7 @@ iconPlacementSel.addEventListener("change", async () => {
 });
 
 async function loadStillPreferences(): Promise<void> {
-  const { thumbnail, countdownMs, showDiagnostics, iconPlacement } = await recorder.getSettings();
+  const { thumbnail, countdownMs, showDiagnostics, iconPlacement, gif } = await recorder.getSettings();
   iconPlacementSel.value = iconPlacement;
   thumbCornerSel.value = thumbnail.corner;
   thumbSkipBox.checked = thumbnail.skip;
@@ -1069,6 +1078,8 @@ async function loadStillPreferences(): Promise<void> {
   // than silently misreporting itself as 3 seconds.
   countdownSel.value = COUNTDOWN_OPTIONS.some((o) => o.ms === countdownMs)
     ? String(countdownMs) : "";
+  gifFpsSel.value = String(gif.fps);
+  gifWidthSel.value = String(gif.maxWidth);
   // LAST, and deliberately: this one is a second IPC round trip rather than a
   // field of the settings already in hand, and the whole function is called
   // as `void … .catch(() => {})`. Put first, a failure here would leave every
@@ -1082,6 +1093,16 @@ async function patchThumbnail(patch: Partial<AppSettings["thumbnail"]>): Promise
   const current = (await recorder.getSettings()).thumbnail;
   await recorder.setSettings({ thumbnail: { ...current, ...patch } });
 }
+
+async function patchGif(patch: Partial<AppSettings["gif"]>): Promise<void> {
+  const current = (await recorder.getSettings()).gif;
+  await recorder.setSettings({ gif: { ...current, ...patch } });
+}
+gifFpsSel.addEventListener("change", () => void patchGif({ fps: Number(gifFpsSel.value) as AppSettings["gif"]["fps"] }));
+gifWidthSel.addEventListener("change", () => {
+  const v = gifWidthSel.value;
+  void patchGif({ maxWidth: (v === "original" ? "original" : Number(v)) as AppSettings["gif"]["maxWidth"] });
+});
 
 $("stillchoosedest").addEventListener("click", async () => {
   // The picker's own reply is deliberately not what is displayed: a cancel

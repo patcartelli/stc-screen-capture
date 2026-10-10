@@ -18,7 +18,12 @@ contextBridge.exposeInMainWorld("thumb", {
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   reveal: () => ipcRenderer.invoke("still:reveal"),
   // STC-488: a recording's Copy renders, then goes on the pasteboard.
-  copyRecording: (dir: string) => ipcRenderer.invoke("panel:copyRecording", dir),
+  // STC-395: `format` "gif" copies the take's GIF (waiting for it if it is
+  // still converting); absent or "video" is STC-488's mp4.
+  copyRecording: (dir: string, format?: "video" | "gif") => ipcRenderer.invoke("panel:copyRecording", dir, format),
+  // STC-395: start-or-reuse the take's GIF; resolves when ready. Progress on onCopyProgress.
+  gif: (dir: string) => ipcRenderer.invoke("panel:gif", dir),
+  cancelGif: (dir: string) => ipcRenderer.invoke("panel:cancelGif", dir),
   onCopyProgress: (cb: (done: number, total: number) => void) => {
     const listener = (_e: unknown, done: number, total: number) => cb(done, total);
     ipcRenderer.on("thumb:copyProgress", listener);
@@ -27,7 +32,7 @@ contextBridge.exposeInMainWorld("thumb", {
   // The right-click menu (STC-296 follow-up). Main builds and pops it up and
   // answers with the chosen id, so this window never holds a `Menu` and the
   // template stays checkable in one place.
-  menu: (ctx: { take: PanelTake; busy: boolean; copying?: boolean }) =>
+  menu: (ctx: { take: PanelTake; busy: boolean; copying?: boolean; converting?: boolean }) =>
     ipcRenderer.invoke("thumbnail:menu", ctx),
   // A DIRECTORY, which main validates against the recordings root before it
   // touches anything — the renderer names a take, never a path to act on.
@@ -35,7 +40,8 @@ contextBridge.exposeInMainWorld("thumb", {
   // The three actions that CHANGE where a take lives. Each names a directory
   // and main validates it, the same rule `still:revealShot` follows: this
   // window names a take, never a path to act on.
-  save: (dir: string) => ipcRenderer.invoke("panel:save", dir),
+  // STC-395: in GIF mode Save also writes the GIF beside the kept take.
+  save: (dir: string, format?: "video" | "gif") => ipcRenderer.invoke("panel:save", dir, format),
   edit: (dir: string) => ipcRenderer.invoke("panel:edit", dir),
   trash: (dir: string) => ipcRenderer.invoke("panel:trash", dir),
   // Close without deciding (STC-412) — the X and Escape both funnel here

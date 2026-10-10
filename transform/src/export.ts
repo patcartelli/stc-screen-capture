@@ -101,10 +101,44 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export async function exportSession(
-  session: LoadedSession, project: Project, opts: ExportOptions = {},
-): Promise<ExportResult> {
-  const t0 = performance.now();
+export interface FrameLoopStats { peakBuffered: number; decodedFrames: number; cameraDecodedFrames: number }
+
+export interface FrameLoopOptions {
+  /** First export frame (grid index) and how many export frames the window spans. */
+  from: number; total: number;
+  /** Export frames per yielded frame; 1 for an MP4, gifFrameStep(fps) for a GIF. */
+  step?: number;
+  /** willReadFrequently on the canvas — true when the consumer reads pixels back. */
+  readback?: boolean;
+  signal?: AbortSignal;
+  stats?: FrameLoopStats;
+}
+
+export interface CompositedFrame {
+  /** 0-based index of this yielded frame. */ i: number;
+  /** Export-grid frame relative to `from` (i * step). */ k: number;
+  tNs: number;
+  ctx: OffscreenCanvasRenderingContext2D;
+}
+
+/**
+ * The ONE frame loop (STC-395): `render()` → frame selection → `composite()`
+ * onto an OffscreenCanvas. `exportSession` (MP4) and `exportGif` iterate it;
+ * a sink that copied this loop would carry its own frame-selection rule and
+ * the two would drift silently — the non-negotiable is "sinks may not fork
+ * the transform".
+ *
+ * Owns its decoders: they are closed in `finally`, which runs when the
+ * consumer finishes, breaks out of its `for await`, or throws.
+ *
+ * The yielded `ctx` is the SAME canvas every time, overwritten by the next
+ * frame — a consumer reads or encodes it before asking for the next one.
+ */
+export async function* compositeFrames(
+  session: LoadedSession, project: Project, opts: FrameLoopOptions,
+): AsyncGenerator<CompositedFrame> {
+  const step = opts.step ?? 1;
+  if (!Number.isInteger(step) || step < 1) throw new Error(`compositeFrames: step must be a positive integer, got ${step}`);
   const source = new ForwardFrameSource(session.video);
   // A SECOND decoder, never a shared one. PHASE-0 §4b's one-in-flight rule is
   // per decoder, and ForwardFrameSource serialises internally, so two instances
@@ -114,21 +148,54 @@ export async function exportSession(
   // exactly as the display index is, because pipStateAt() returns null outside
   // the track's bounds rather than clamping backwards into it.
   const cameraSource = session.cameraVideo ? new ForwardFrameSource(session.cameraVideo) : null;
-  // STC-233. Unlike the camera, the mic track has no per-frame relationship
-  // to render() at all — it is clipped to the export window and muxed in,
-  // never read by the compositor — so it needs no frame source, only the
-  // decoded track itself.
-  const micAudio = session.micAudio;
-  const { width, height, fps } = project.output;
-  const wantHash = opts.hash ?? false;
-
+  const { width, height } = project.output;
   const ctx = new OffscreenCanvas(width, height).getContext("2d", {
     alpha: false,
-    willReadFrequently: opts.softwareRaster ?? wantHash,
+    willReadFrequently: opts.readback ?? false,
     // STC-510: the take's own space (capture-colour.ts, shared with the preview), so a
     // Display P3 take is not clipped to sRGB on the way out.
     colorSpace: canvasColorSpace(session.anchors),
   }) as OffscreenCanvasRenderingContext2D;
+  try {
+    for (let i = 0, k = 0; k < opts.total; i++, k += step) {
+      if (opts.signal?.aborted) return;
+      const tNs = exportFrameTimeNs(opts.from + k);
+      const fs = render(project, session, tNs);
+      // Frame selection is render()'s answer, not the sink's to re-derive: a
+      // sink that recomputed it would keep the old rule if render()'s ever
+      // changed, and the two would disagree silently.
+      const idx = fs.frameIndex;
+      const frame = idx === null ? null : await source.frameAt(idx);
+      const cameraFrame = fs.pip && cameraSource ? await cameraSource.frameAt(fs.pip.frameIndex) : null;
+      if (opts.stats) {
+        opts.stats.peakBuffered = Math.max(opts.stats.peakBuffered,
+          source.bufferedCount + (cameraSource?.bufferedCount ?? 0));
+      }
+      composite(ctx, frame, cameraFrame, fs, width, height);
+      yield { i, k, tNs, ctx };
+    }
+  } finally {
+    if (opts.stats) {
+      opts.stats.decodedFrames = source.decodedCount;
+      opts.stats.cameraDecodedFrames = cameraSource?.decodedCount ?? 0;
+    }
+    source.close();
+    cameraSource?.close();
+  }
+}
+
+export async function exportSession(
+  session: LoadedSession, project: Project, opts: ExportOptions = {},
+): Promise<ExportResult> {
+  const t0 = performance.now();
+  // STC-233. Unlike the camera, the mic track has no per-frame relationship
+  // to render() at all — it is clipped to the export window and muxed in,
+  // never read by the compositor — so it needs no frame source, only the
+  // decoded track itself. (The display and camera frame sources live in
+  // `compositeFrames`, STC-395.)
+  const micAudio = session.micAudio;
+  const { width, height, fps } = project.output;
+  const wantHash = opts.hash ?? false;
 
   const lastFrameNs = session.frames[session.frames.length - 1]!;
   // The same formula exportWindow uses, from the same module. A second copy
@@ -311,24 +378,16 @@ export async function exportSession(
 
   const rolling = new Uint8Array(32);
   const audioRolling = new Uint8Array(32);
-  let peakBuffered = 0;
+  const stats: FrameLoopStats = { peakBuffered: 0, decodedFrames: 0, cameraDecodedFrames: 0 };
   let cancelled = false;
 
   try {
-    for (let k = 0; k < total; k++) {
-      if (opts.signal?.aborted) { cancelled = true; break; }
+    let produced = 0;
+    for await (const { k, tNs, ctx } of compositeFrames(session, project, {
+      from, total, readback: opts.softwareRaster ?? wantHash, signal: opts.signal, stats,
+    })) {
       if (encoderError) throw encoderError;
-
-      const tNs = exportFrameTimeNs(from + k);
-      const fs = render(project, session, tNs);
-      // Frame selection is render()'s answer, not the sink's to re-derive: a
-      // sink that recomputed it would keep the old rule if render()'s ever
-      // changed, and the two would disagree silently.
-      const idx = fs.frameIndex;
-      const frame = idx === null ? null : await source.frameAt(idx);
-      const cameraFrame = fs.pip && cameraSource ? await cameraSource.frameAt(fs.pip.frameIndex) : null;
-      peakBuffered = Math.max(peakBuffered, source.bufferedCount + (cameraSource?.bufferedCount ?? 0));
-      composite(ctx, frame, cameraFrame, fs, width, height);
+      produced++;
 
       if (wantHash) {
         const rgba = ctx.getImageData(0, 0, width, height).data;
@@ -363,6 +422,9 @@ export async function exportSession(
         await new Promise((r) => setTimeout(r, 0));
       }
     }
+    // The loop stops early only on an abort (a throw leaves this function).
+    // An abort that lands after the last frame was produced is not a cancel.
+    cancelled = produced < total && opts.signal?.aborted === true;
 
     let micEncodedChunks = 0;
     if (audioEncoder && decodedAudio && audioParams && !cancelled) {
@@ -497,9 +559,9 @@ export async function exportSession(
       frames: cancelled ? 0 : total,
       hash: wantHash && !cancelled ? await sha256Hex(rolling) : "",
       encodedBytes, encoded,
-      peakBufferedFrames: peakBuffered,
-      decodedFrames: source.decodedCount,
-      cameraDecodedFrames: cameraSource?.decodedCount ?? 0,
+      peakBufferedFrames: stats.peakBuffered,
+      decodedFrames: stats.decodedFrames,
+      cameraDecodedFrames: stats.cameraDecodedFrames,
       micEncodedChunks: cancelled ? 0 : micEncodedChunks,
       audioOutputChunks: cancelled ? 0 : audioOutputChunks,
       mixEncodedChunks: cancelled ? 0 : mixEncodedChunks,
@@ -509,8 +571,7 @@ export async function exportSession(
       cancelled,
     };
   } finally {
-    source.close();
-    cameraSource?.close();
+    // The frame sources are closed by `compositeFrames`' own finally.
     if (decodedAudio) for (const d of decodedAudio) d.close();
     if (encoder && encoder.state !== "closed") encoder.close();
     if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();

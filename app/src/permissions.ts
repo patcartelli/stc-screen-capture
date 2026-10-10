@@ -63,8 +63,8 @@ export interface PermissionsState {
 }
 
 export const SETTINGS_URLS: Record<Grant, string> = {
-  "screen-recording": TOAST_ACTION_URLS["open-screen-recording-settings"],
-  "input-monitoring": TOAST_ACTION_URLS["open-input-monitoring-settings"],
+  "screen-recording": TOAST_ACTION_URLS["open-screen-recording-settings"]!,
+  "input-monitoring": TOAST_ACTION_URLS["open-input-monitoring-settings"]!,
 };
 
 export const PERMISSION_ACTION_LABELS: Record<RowAction, string> = {

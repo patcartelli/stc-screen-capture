@@ -32,8 +32,10 @@
     "electron": "43.4.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
+    "gifenc": "^1.0.3",
     "mp4-muxer": "^5.2.2",
     "mp4box": "^2.4.1",
+    "omggif": "^1.0.10",
     "playwright": "^1.62.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
