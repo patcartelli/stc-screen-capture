@@ -115,6 +115,15 @@ export interface Settings {
    */
   previewMuted: boolean;
   /**
+   * Whether this Mac has had its one throwaway ScreenCaptureKit stream
+   * (STC-522, `permissions.ts` rule 8): macOS's "bypass the private window
+   * picker" consent is raised by the first STREAM, so Capture starts one at
+   * launch, before any take can. Set only once the helper answered `primed`.
+   * Not a preference anyone sees; it lives here because this is the file that
+   * survives a relaunch.
+   */
+  capturePrimed: boolean;
+  /**
    * The global capture shortcuts (STC-292), as Electron accelerators. `null`
    * for an action the user deliberately unbound — which is a preference like
    * any other, and must survive a restart rather than springing back to the
@@ -247,6 +256,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showClicks: true,
   pipStyle: { ...DEFAULT_PIP_STYLE, center: { ...DEFAULT_PIP_STYLE.center } },
   previewMuted: false,
+  capturePrimed: false,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   still: { ...DEFAULT_STILL_SETTINGS },
@@ -408,6 +418,7 @@ export function readSettings(dir: string): Settings {
     showClicks: doc.showClicks !== false,
     pipStyle: cleanStoredPipStyle(doc.pipStyle),
     previewMuted: doc.previewMuted === true,
+    capturePrimed: doc.capturePrimed === true,
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
@@ -454,6 +465,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     showClicks: merged.showClicks !== false,
     pipStyle: cleanStoredPipStyle(merged.pipStyle),
     previewMuted: merged.previewMuted === true,
+    capturePrimed: merged.capturePrimed === true,
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),

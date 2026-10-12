@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  blocksCapture, parsePermissions, permissionsState, remember,
+  blocksCapture, parsePermissions, permissionsState, remember, shouldPrimeCapture,
   type PermissionsMemory, type PermissionsReport,
 } from "../src/permissions.js";
 
@@ -84,5 +84,33 @@ describe("remember", () => {
     const m2 = remember(m1, report({ screenRecording: false }));
     expect(m2.screenAtLaunch).toBe(false);
     expect(remember(m2, report({ screenRecording: true })).screenAtLaunch).toBe(false);
+  });
+});
+
+describe("shouldPrimeCapture (rule 8, STC-522)", () => {
+  const granted = report({ screenRecording: true });
+  const launchedGranted = remember(fresh, granted);
+
+  test("granted at launch and never primed: prime", () => {
+    expect(shouldPrimeCapture(granted, launchedGranted, false)).toBe(true);
+  });
+
+  test("already primed on this Mac: never again", () => {
+    expect(shouldPrimeCapture(granted, launchedGranted, true)).toBe(false);
+  });
+
+  test("a grant that arrived during this run waits for the relaunch", () => {
+    const launchedDenied = remember(fresh, report({ screenRecording: false }));
+    expect(shouldPrimeCapture(granted, launchedDenied, false)).toBe(false);
+  });
+
+  test("no Screen Recording, or no readable report: nothing to prime", () => {
+    expect(shouldPrimeCapture(report(), remember(fresh, report()), false)).toBe(false);
+    expect(shouldPrimeCapture(null, fresh, false)).toBe(false);
+  });
+
+  test("Input Monitoring does not matter: the consent is Screen Recording's", () => {
+    const r = report({ screenRecording: true, inputMonitoring: "denied" });
+    expect(shouldPrimeCapture(r, remember(fresh, r), false)).toBe(true);
   });
 });

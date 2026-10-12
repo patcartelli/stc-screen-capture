@@ -79,6 +79,7 @@ import {
 import { resolveHelperPath } from "./helper-path.js";
 import {
   blocksCapture, isGrant, isRowAction, parsePermissions, permissionsState, remember, SETTINGS_URLS,
+  shouldPrimeCapture,
   type PermissionsMemory, type PermissionsReport, type PermissionsState,
 } from "./permissions.js";
 
@@ -440,6 +441,12 @@ function openLibrary(): void {
 
 let permMemory: PermissionsMemory = { screenAtLaunch: null, requested: new Set() };
 let permState: PermissionsState = { needed: false, rows: [] };
+/**
+ * This launch's throwaway stream (STC-522, permissions.ts rule 8), at most
+ * once per run. Set once and never cleared: a failure is retried at the next
+ * launch, not on the next permissions read, so a refusing Mac cannot loop.
+ */
+let primeInFlight: Promise<void> | undefined;
 
 /**
  * Read both grants from the helper and tell the window. Never throws: an
@@ -462,7 +469,24 @@ async function checkPermissions(): Promise<PermissionsState> {
   permMemory = remember(permMemory, report);
   permState = permissionsState(report, permMemory);
   send("permissions:changed", permState);
+  if (!primeInFlight && shouldPrimeCapture(report, permMemory, readSettings(app.getPath("userData")).capturePrimed)) {
+    primeInFlight = primeCapture();
+  }
   return permState;
+}
+
+async function primeCapture(): Promise<void> {
+  try {
+    const r = await sup?.primeCapture();
+    if (r?.ev !== "primed") {
+      console.error("[permissions] prime-capture did not prime:", r);
+      return;
+    }
+    writeSettings(app.getPath("userData"), { capturePrimed: true });
+    console.log(`[permissions] primed capture (${String(r.frames)} frames in ${String(r.heldMs)} ms)`);
+  } catch (e) {
+    console.error("[permissions] prime-capture failed:", e);
+  }
 }
 
 /**
@@ -473,6 +497,9 @@ async function checkPermissions(): Promise<PermissionsState> {
  * blocked; a grant revoked after launch is STC-520's.
  */
 async function permissionsBlock(kind: "record" | "still"): Promise<boolean> {
+  // A capture asked for while the throwaway stream is still running waits for
+  // it, so the overlay never opens over the consent it is there to raise.
+  await primeInFlight;
   if (!blocksCapture(permState, kind)) return false;
   if (!blocksCapture(await checkPermissions(), kind)) return false;
   openLibrary();
@@ -1309,12 +1336,16 @@ ipcMain.handle("recorder:reclaimSpace", async (): Promise<{ moved: number; faile
  * one the design intends. The dedicated channel stays: `still:chooseDestination`
  * sets it from a native folder picker, which is a person choosing, not the
  * renderer.
+ *
+ * `capturePrimed` (STC-522) is main's alone too, for a duller reason: a
+ * renderer echoing back the settings it was handed would write a stale
+ * `false` and the throwaway stream would run again at the next launch.
  */
 ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Promise<Settings> => {
   // Destructured rather than deleted, so `saveFolder` is named here and a
-  // reader can see exactly which key does not survive.
-  const { saveFolder: _mainsAlone, ...withoutSaveFolder } = { ...(patch ?? {}) };
-  const clean: Partial<Settings> = withoutSaveFolder as Partial<Settings>;
+  // reader can see exactly which keys do not survive.
+  const { saveFolder: _mainsAlone, capturePrimed: _alsoMains, ...withoutMainsKeys } = { ...(patch ?? {}) };
+  const clean: Partial<Settings> = withoutMainsKeys as Partial<Settings>;
   if (clean.share) {
     // Same rule, same reason (STC-242): `share.destination` is a folder in the
     // user's own site repo, and a renderer that could name it could make this
