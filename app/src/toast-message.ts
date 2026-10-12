@@ -13,16 +13,25 @@
  * ## An action is an id, never a URL or a handler
  *
  * The renderer, and the toast page itself, may only NAME an action. What
- * that does is decided here (`TOAST_ACTION_URLS`) and carried out by main, so
- * a message that crossed the `toast:message` boundary cannot ask main to open
- * an arbitrary address. `parseToastMessage` refuses an id this table does not
- * have.
+ * that does is decided here (`TOAST_ACTION_URLS`, or for `reveal-saved-gif`
+ * main's own handler) and carried out by main, so a message that crossed the
+ * `toast:message` boundary cannot ask main to open an arbitrary address.
+ * `parseToastMessage` refuses an id `TOAST_ACTION_IDS` does not have.
  */
 
-export type ToastActionId = "open-screen-recording-settings" | "open-input-monitoring-settings";
+/** Every action a toast may name — the one list `isToastActionId` checks. */
+export const TOAST_ACTION_IDS = [
+  "open-screen-recording-settings",
+  "open-input-monitoring-settings",
+  // STC-395: show the GIF Save just wrote. Main's own action, not a URL —
+  // main remembers the file; the page can name the action, never the path.
+  "reveal-saved-gif",
+] as const;
 
-/** The System Settings pane each action opens. */
-export const TOAST_ACTION_URLS: Record<ToastActionId, string> = {
+export type ToastActionId = (typeof TOAST_ACTION_IDS)[number];
+
+/** Actions that open a System Settings pane. "reveal-saved-gif" is main's, not a URL. */
+export const TOAST_ACTION_URLS: Partial<Record<ToastActionId, string>> = {
   "open-screen-recording-settings":
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
   "open-input-monitoring-settings":
@@ -33,6 +42,11 @@ export interface ToastMessage {
   /** One short line. Absent for a free-form string: body only, no header. */
   title?: string;
   body: string;
+  /**
+   * `"success"` swaps the header's warning "!" for a check mark. Absent is the
+   * warning look every existing toast has; no other value is valid.
+   */
+  tone?: "success";
   action?: { id: ToastActionId; label: string };
 }
 
@@ -49,7 +63,7 @@ export function toastMessageText(m: ToastInput): string {
 }
 
 export function isToastActionId(id: unknown): id is ToastActionId {
-  return typeof id === "string" && Object.hasOwn(TOAST_ACTION_URLS, id);
+  return typeof id === "string" && (TOAST_ACTION_IDS as readonly string[]).includes(id);
 }
 
 /**
@@ -60,10 +74,12 @@ export function isToastActionId(id: unknown): id is ToastActionId {
 export function parseToastMessage(x: unknown): ToastMessage | undefined {
   if (typeof x === "string") return x ? { body: x } : undefined;
   if (typeof x !== "object" || x === null) return undefined;
-  const { title, body, action } = x as Record<string, unknown>;
+  const { title, body, action, tone } = x as Record<string, unknown>;
   if (typeof body !== "string" || !body) return undefined;
   if (title !== undefined && (typeof title !== "string" || !title)) return undefined;
+  if (tone !== undefined && tone !== "success") return undefined;
   const out: ToastMessage = { body };
+  if (tone === "success") out.tone = "success";
   if (title !== undefined) out.title = title as string;
   if (action !== undefined) {
     if (typeof action !== "object" || action === null) return undefined;
