@@ -204,6 +204,13 @@ let busy = false;
  * says which buttons wait.
  */
 let copying = false;
+/**
+ * A render has actually STARTED (STC-533): main's first progress event arrived.
+ * `copying` is set at the click, to hold the buttons; the bar and "Rendering…"
+ * wait for this, because main may answer a Copy by reusing a finished file and
+ * rendering nothing, and a bar for that reads as "rendering again".
+ */
+let copyRendering = false;
 const copyProgress = $("copyprogress") as HTMLProgressElement;
 /** STC-395: a fresh recording's output format. Late events after a flip back to Video are ignored by the reducer. */
 let gif: GifState = INITIAL_GIF_STATE;
@@ -227,6 +234,8 @@ window.thumb.onCopyProgress((done, total) => {
     return;
   }
   if (!copying || total <= 0) return;
+  copyRendering = true;
+  copyProgress.hidden = false;
   copyProgress.value = Math.round((done / total) * 1000);
   setStatus(`Rendering… ${Math.round((done / total) * 100)}%`);
 });
@@ -400,7 +409,7 @@ function drawGif(): void {
   gifLabelEl.hidden = !l;
   gifLabelEl.textContent = l?.text ?? "";
   gifLabelEl.classList.toggle("warn", l?.warn === true);
-  copyProgress.hidden = gif.kind !== "converting" && !copying;
+  copyProgress.hidden = gif.kind !== "converting" && !copyRendering;
   if (gif.kind === "converting") copyProgress.value = gif.permille;
   setActionsEnabled(!busy);
 }
@@ -481,9 +490,8 @@ async function copyRecording(): Promise<boolean> {
   } else {
     copying = true;
     copyProgress.value = 0;
-    copyProgress.hidden = false;
     drawGif();                       // applies the copying locks, disables the switch
-    setStatus("Rendering… 0%");
+    setStatus("Copying…");           // not "Rendering…": main may reuse a finished file (STC-533)
   }
   try {
     const r = await window.thumb.copyRecording(dir, formatOf(gif));
@@ -494,6 +502,7 @@ async function copyRecording(): Promise<boolean> {
     return r.ok;
   } finally {
     copying = false;
+    copyRendering = false;
     copyingGif = false;
     copyWaitingGif = false;
     copyProgress.hidden = true;

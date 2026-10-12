@@ -31,6 +31,7 @@ import { windowCount, pageWithUrl, clickThatCloses } from "./_windows.js";
 //   test 7 (trash mid-render): 15 + 30 + 15 + 15 + 15 = 90 s (+ 1 s wait)
 //   test 8 (dismiss mid-render): 15 + 30 + 15 + 15 + 15 = 90 s
 //   test 9 (reuse): 15 + 30 + 120 + 15 (enabled) + 15 (copy-file 2) = 195 s
+//     (+ 1.5 s wait and a 3 s held reply, STC-533)
 //   test 10 (clipboard moved mid-render, F1): 15 + 30 + 15 (Ready status) + 15 (enabled)
 //     + 15 (copy-file 2) = 90 s
 //   test 11 (quit mid-render, F8): 15 + 30 + 15 (render window) = 60 s; the close
@@ -236,9 +237,28 @@ describe("copying a recording (STC-488)", () => {
     await expect.poll(() => copyRequests(l.copyLog).length, { timeout: 120_000 }).toBe(1);
     await expect.poll(() => panel.isEnabled("#copy"), { timeout: POLL_MS }).toBe(true);
     const first = statSync(copyRequests(l.copyLog)[0]!.path);
+    // STC-533: hold main's reply for the second Copy for 3 s, so the panel sits in
+    // the one-round-trip gap on purpose. Without this the check below passes or
+    // fails on whether the reply beat Playwright's read — the old code showed
+    // "Rendering… 0%" for that whole gap. (`_invokeHandlers` is Electron's own
+    // handler table; there is no public way to wrap a registered handler.)
+    await app!.evaluate(({ ipcMain }) => {
+      const table = (ipcMain as unknown as { _invokeHandlers: Map<string, (...a: unknown[]) => Promise<unknown>> })._invokeHandlers;
+      const original = table.get("panel:copyRecording")!;
+      ipcMain.removeHandler("panel:copyRecording");
+      ipcMain.handle("panel:copyRecording", async (...a) => {
+        const r = await original(...a);
+        await new Promise((res) => setTimeout(res, 3000));
+        return r;
+      });
+    });
     await panel.click("#copy");
     // A re-render would show progress and a render window right after the click.
     expect(await panel.isVisible("#copyprogress"), "no progress right after the click").toBe(false);
+    expect(await panel.textContent("#status"), "no Rendering… text while the reply is out").not.toContain("Rendering");
+    await panel.waitForTimeout(1500);   // mid-gap: the reply is still being held
+    expect(await panel.isVisible("#copyprogress"), "no progress while the reply is held").toBe(false);
+    expect(await panel.isDisabled("#save"), "the buttons are still held while copying").toBe(true);
     await expect.poll(() => copyRequests(l.copyLog).length, { timeout: POLL_MS }).toBe(2);
     expect(await panel.isVisible("#copyprogress"), "no progress before the second write").toBe(false);
     expect(await windowCount(app!, "copy-render.html"), "no second render").toBe(0);
