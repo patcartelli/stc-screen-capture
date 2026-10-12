@@ -34,5 +34,9 @@ Nothing asked. The capture classes read `authorizationStatus` and failed unless 
 | 8 | With everything granted, revoke Input Monitoring in System Settings (leave Capture running), press Record | The panel appears before any overlay. Before this, the stale grant was caught only after a refusal |
 | 9 | Restricted (MDM) | Not testable in the VM. The row offers only **Don't use**; reading the copy is the check |
 
+**VM pass 2026-10-12** (clean clone `stc-run-1012-144423`, packaged build from this branch):
+rows 1–8 all **pass** (Patrick, by eye). Row 9 is not testable in a VM. Not read back from
+TCC.db by the agent.
+
 Row 3 is the one most likely to send this back: it is the only place macOS's prompt
 meets a flow that has just closed an overlay.
