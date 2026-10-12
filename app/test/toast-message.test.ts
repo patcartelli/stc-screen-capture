@@ -32,6 +32,14 @@ describe("a toast message", () => {
     }
   });
 
+  test("tone: success is kept, absent stays absent, anything else refuses", () => {
+    expect(parseToastMessage({ title: "T", body: "B", tone: "success" })).toEqual({ title: "T", body: "B", tone: "success" });
+    expect("tone" in parseToastMessage({ title: "T", body: "B" })!).toBe(false);
+    for (const bad of ["warn", "", null, 1, "SUCCESS"]) {
+      expect(parseToastMessage({ body: "b", tone: bad }), JSON.stringify(bad)).toBeUndefined();
+    }
+  });
+
   test("parse refuses an action id it does not know, or a missing label", () => {
     expect(parseToastMessage({ body: "b", action: { id: "open-anything", label: "x" } })).toBeUndefined();
     expect(parseToastMessage({ body: "b", action: { id: "open-screen-recording-settings", label: "" } })).toBeUndefined();

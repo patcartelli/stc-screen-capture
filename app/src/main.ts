@@ -3287,7 +3287,7 @@ ipcMain.handle("panel:save", async (e, dir: string, format: unknown) => {
         await rename(partial, dest);
         partial = undefined;
         lastSavedGif = dest;
-        showNotice({ title: "Saved GIF", body: name, action: { id: "reveal-saved-gif", label: "Show in Finder" } });
+        showNotice({ title: "Saved GIF", tone: "success", body: name, action: { id: "reveal-saved-gif", label: "Show in Finder" } });
       } catch (err: any) {
         gifError = String(err?.message ?? err);
         if (partial) await rm(partial, { force: true }).catch(() => {});
