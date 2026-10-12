@@ -76,6 +76,7 @@ import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast, closeToastsForQuit } from "./toast-window.js";
 import { noteAppQuitting } from "./window-geometry.js";
+import { startQuitWindowLog } from "./quit-window-log.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
   ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
@@ -1119,6 +1120,9 @@ let quitting = false;
  * step has already run and outliving it.
  */
 function runQuitTeardown(): void {
+  // FIRST, before anything below closes or destroys a window (STC-534): the
+  // state of every window as the quit commits, then each one's changes.
+  startQuitWindowLog(app, BrowserWindow.getAllWindows());
   globalShortcut.unregisterAll();
   tray?.destroy();
   tray = undefined;

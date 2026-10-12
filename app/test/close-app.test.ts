@@ -85,6 +85,53 @@ describe("closeApp (STC-449)", () => {
     expect(stderr.listenerCount("data")).toBe(0);
   });
 
+  describe("a crash while closing prints the app's [window] log (STC-534)", () => {
+    function crashedApp(signal: NodeJS.Signals | null, lines: string[], lateLines: string[] = []) {
+      const s = stubApp(10, lines);
+      const proc = s.app.process() as unknown as { signalCode: NodeJS.Signals | null };
+      proc.signalCode = signal;
+      // A crashed process's last chunks can arrive after `close` resolves.
+      const realClose = s.app.close.bind(s.app);
+      (s.app as { close: () => Promise<void> }).close = () => realClose().then(() => {
+        setTimeout(() => {
+          for (const l of lateLines) s.stderr.emit("data", Buffer.from(`${l}\n`));
+          s.stderr.emit("end");
+        }, 20);
+      });
+      return s;
+    }
+    const WINDOW_LOG = [
+      "[window] quit +0ms: 2 windows: #1 index.html visible focused | #3 overlay.html visible",
+      "[quit] teardown trash=0ms",
+      "[window] +40ms #3 destroyed: closed",
+    ];
+
+    test("SIGSEGV: every [window] line, in order, and nothing else", async () => {
+      const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const { app } = crashedApp("SIGSEGV", WINDOW_LOG, ["[window] +41ms app: did-resign-active"]);
+      await closeApp(app);
+      const out = write.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toContain("[closeApp] pid 4242 died from SIGSEGV while closing (STC-534)");
+      // The late line is there too: the drain waited for it.
+      expect(out).toMatch(/quit \+0ms.*\n.*#3 destroyed: closed\n.*did-resign-active\n/);
+      expect(out).not.toContain("[quit] teardown");
+    });
+
+    test("a clean exit prints none of it", async () => {
+      const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const { app } = crashedApp(null, WINDOW_LOG);
+      await closeApp(app);
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    test("a crash with no [window] line says so", async () => {
+      const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const { app } = crashedApp("SIGBUS", []);
+      await closeApp(app);
+      expect(write.mock.calls.map((c) => String(c[0])).join("")).toContain("(no [window] line was printed)");
+    });
+  });
+
   test("no app is a no-op", async () => {
     await expect(closeApp(undefined)).resolves.toBeUndefined();
   });
