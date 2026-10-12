@@ -206,6 +206,22 @@ describe("the mic says what it is doing", () => {
       .toContain("Fixture USB Mic");
   }, 180_000);
 
+  // STC-526: the camera's test of the same name, one device over — see
+  // camera-toggle.e2e.test.ts for why every value is recorded.
+  test("a failure that arrives before the start's reply is not overwritten by \"opening…\"", async () => {
+    const win = await launch({ ...dirs(), mic: "fail-now" });
+    await pickMic(win, "Fixture USB Mic");
+    await observeTextSequence(win, "mic-state");
+    await startRecordFlow(app!, win);
+    await expect.poll(() => toastText(app!), { timeout: 20_000 }).toContain("no longer available");
+    await new Promise((r) => setTimeout(r, 1_000));
+    const seen = await textSequence(win, "mic-state");
+    const failedAt = seen.findIndex((t) => t.includes("failed"));
+    expect(failedAt, `the failure was shown: ${JSON.stringify(seen)}`).toBeGreaterThanOrEqual(0);
+    expect(seen.slice(failedAt), "nothing overwrote it").not.toContain("opening…");
+    expect(seen.at(-1)).toContain("failed");
+  }, 180_000);
+
   test("a mic that cannot be found says so instead of failing silently", async () => {
     const win = await launch({ ...dirs(), mic: "fail" });
     await pickMic(win, "Fixture USB Mic");
