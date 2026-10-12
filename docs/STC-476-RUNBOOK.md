@@ -70,7 +70,8 @@ before clicking Grant… again.
 - **The picker-bypass consent** ("Capture is requesting to bypass the system private
   window picker…") appears when the first stream starts, so it lands in the first
   take. It's raised at stream start, not by the window list, so the panel can't
-  trigger it in advance without a throwaway stream. Filed as STC-522.
+  trigger it in advance without a throwaway stream. Filed as STC-522, which adds
+  that stream at launch (`docs/STC-522-RUNBOOK.md`).
 - Does `CGRequestListenEventAccess` block the helper until the user answers? It
   didn't visibly stall in VM 4. The app gives up after 5 s anyway.
 

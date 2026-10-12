@@ -24,6 +24,16 @@
  * 6. A report that could not be read is NOT a panel. An old or missing
  *    helper fails open. The helper's own refusals still cover the take.
  * 7. A shot needs Screen Recording only. A Record needs both.
+ * 8. Prime once (STC-522). macOS's "bypass the system private window picker"
+ *    consent is raised by the first ScreenCaptureKit STREAM, not by the
+ *    window list, so left alone it lands inside the first take. On a launch
+ *    where Screen Recording was already granted, and only until it has worked
+ *    once, the helper runs a throwaway stream (`prime-capture`) so the dialog
+ *    comes up then. Granted AT LAUNCH, not merely now: a mid-run grant needs
+ *    the relaunch first (rule 3), and a stream before it would be refused.
+ *    Once, not every launch, because every stream lights the menu bar's
+ *    recording indicator; Patrick's call, 2026-10-12. A periodic re-consent
+ *    from macOS is not covered by this.
  */
 
 import { TOAST_ACTION_URLS } from "./toast-message.js";
@@ -141,6 +151,12 @@ export function blocksCapture(s: PermissionsState, kind: "record" | "still"): bo
 export function remember(m: PermissionsMemory, r: PermissionsReport | null): PermissionsMemory {
   if (!r || m.screenAtLaunch !== null) return m;
   return { ...m, screenAtLaunch: r.screenRecording };
+}
+
+/** Should this launch run the throwaway stream? (rule 8) */
+export function shouldPrimeCapture(r: PermissionsReport | null, m: PermissionsMemory,
+                                   alreadyPrimed: boolean): boolean {
+  return !alreadyPrimed && r?.screenRecording === true && m.screenAtLaunch === true;
 }
 
 export function isGrant(v: unknown): v is Grant {

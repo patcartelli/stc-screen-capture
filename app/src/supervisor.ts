@@ -126,6 +126,16 @@ export class HelperSupervisor {
     return this.client.request("request-permission", { grant }, { timeoutMs: 5000 });
   }
 
+  /**
+   * One throwaway ScreenCaptureKit stream, so macOS's picker-bypass consent
+   * comes up now rather than inside the first take (STC-522). Answers
+   * `primed` once the stream has stopped. The helper's own backstop is 10 s.
+   */
+  async primeCapture(): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("prime-capture", {}, { timeoutMs: 15_000 });
+  }
+
   /** The file paths on the pasteboard right now: the copy purge's one check. */
   async pasteboardFiles(): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");
