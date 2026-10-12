@@ -4,9 +4,14 @@
  * `exportSession` with the take's project: the default one, since a panel
  * only ever shows an unedited take. Never shown; cancelled by main
  * destroying this window, so nothing here listens for a cancel.
+ *
+ * STC-395: with `?format=gif` it runs `exportGif` instead, over the same
+ * loaded take, and writes the GIF through the same `copy:write`.
  */
 import { loadTake, type TakeIO } from "./session-io.js";
 import { exportSession } from "@transform/export";
+import { exportGif } from "@transform/gif-export";
+import { cleanGifSettings } from "@transform/gif-options";
 
 declare global {
   interface Window {
@@ -30,7 +35,8 @@ const PROGRESS_EVERY_MS = 100;
  * test can afford, the same reason STC_COUNTDOWN_FAULT exists. Zero/absent in
  * the product.
  */
-const delayMs = Number(new URLSearchParams(location.search).get("delayMs")) || 0;
+const params = new URLSearchParams(location.search);
+const delayMs = Number(params.get("delayMs")) || 0;
 
 void (async () => {
   const io = window.copyRender;
@@ -41,6 +47,26 @@ void (async () => {
       await new Promise((r) => setTimeout(r, delayMs));
     }
     const { session, project } = await loadTake(io);
+    // STC-395: the GIF path. Settings arrive in the query, read by main once
+    // at the job's start. GIFs carry no capture id (spec §3), so none is read.
+    if (params.get("format") === "gif") {
+      const settings = cleanGifSettings({
+        fps: Number(params.get("fps")),
+        maxWidth: params.get("maxWidth") === "original" ? "original" : Number(params.get("maxWidth")),
+      });
+      let last = 0;
+      const r = await exportGif(session, project, {
+        settings,
+        onProgress: (done, total) => {
+          const now = performance.now();
+          if (now - last < PROGRESS_EVERY_MS && done < total) return;
+          last = now;
+          io.progress(done, total);
+        },
+      });
+      await io.write(r.bytes);
+      return;
+    }
     let captureId: string | undefined;
     try { captureId = await io.captureId(); }
     catch (e) { console.error("[copy] could not resolve a capture id:", e); }

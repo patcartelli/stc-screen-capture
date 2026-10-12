@@ -10,12 +10,18 @@
  *
  * Main does every filesystem and pasteboard call; this module only decides,
  * the same split `temp-takes.ts`'s `sweepOrphanedBundles` follows.
+ *
+ * STC-395: a copy is an `.mp4` (the rendered recording) or a `.gif` (the same
+ * render, as an animated GIF). Both share the one name rule and the one purge.
  */
 import { basename, join } from "node:path";
 import { appSupportDir } from "./temp-takes.js";
 import { PRODUCT_NAME } from "./product.js";
+import { uniqueTakeName } from "./takes.js";
 
 export const PARTIAL_SUFFIX = ".partial";
+/** The kinds of file a copy can be (STC-395 added GIF). Both purge alike. */
+const COPY_EXTENSIONS = [".mp4", ".gif"] as const;
 /** STC-392's own number. */
 export const COPY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** A partial this old is a crash's leftover; a render writing one finishes in seconds. */
@@ -40,6 +46,23 @@ export function copyPathFor(env: NodeJS.ProcessEnv, takeDir: string): string {
   return join(copiesRoot(env), `${basename(takeDir)}.mp4`);
 }
 
+/** STC-395: the GIF beside the mp4 copy; same name rule, same purge. */
+export function gifCopyPathFor(env: NodeJS.ProcessEnv, takeDir: string): string {
+  return join(copiesRoot(env), `${basename(takeDir)}.gif`);
+}
+
+/**
+ * The saved GIF's leaf in the save folder: the take's name, or `-2`, `-3` …
+ * — the collision rule take directories already use (`uniqueTakeName`). A
+ * `.partial` in flight counts as taken.
+ */
+export function savedGifName(takeName: string, existingNames: readonly string[]): string {
+  const stems = existingNames
+    .filter((n) => n.endsWith(".gif") || n.endsWith(`.gif${PARTIAL_SUFFIX}`))
+    .map((n) => n.slice(0, n.indexOf(".gif")));
+  return `${uniqueTakeName(takeName, stems)}.gif`;
+}
+
 export interface CopyEntry { name: string; mtimeMs: number }
 
 /**
@@ -55,11 +78,12 @@ export function purgeDecision(entries: readonly CopyEntry[], now: number,
   const out: string[] = [];
   for (const e of entries) {
     const age = now - e.mtimeMs;
-    if (e.name.endsWith(`.mp4${PARTIAL_SUFFIX}`)) {
+    const ext = COPY_EXTENSIONS.find((x) => e.name.endsWith(x) || e.name.endsWith(`${x}${PARTIAL_SUFFIX}`));
+    if (!ext) continue;
+    if (e.name.endsWith(PARTIAL_SUFFIX)) {
       if (age > PARTIAL_MAX_AGE_MS) out.push(e.name);
       continue;
     }
-    if (!e.name.endsWith(".mp4")) continue;
     if (onClipboard.has(join(root, e.name))) continue;
     if (age > COPY_MAX_AGE_MS) out.push(e.name);
   }

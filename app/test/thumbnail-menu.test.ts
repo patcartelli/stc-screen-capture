@@ -53,6 +53,12 @@ describe("the template", () => {
     expect(enabled).toEqual({ copy: false, save: false, edit: false, reveal: true, trash: true });
   });
 
+  test("while a GIF converts (STC-395), edit is unavailable; copy and save stay (they join it)", () => {
+    const items = buildThumbMenu({ take: RECORDING_FRESH, converting: true });
+    const enabled = Object.fromEntries(items.filter((i) => i.id !== "separator").map((i) => [i.id, i.enabled]));
+    expect(enabled).toEqual({ copy: true, save: true, edit: false, reveal: true, trash: true });
+  });
+
   test("delete is last, and behind a separator", () => {
     const items = buildThumbMenu({ take: SHOT_FRESH });
     expect(items[items.length - 1]?.id).toBe("trash");

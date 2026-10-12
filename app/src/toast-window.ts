@@ -186,6 +186,7 @@ export function showMessageToast(message: ToastInput, opts: ToastWindowOptions):
   const ms = messageToastMs(m);
   const query: Record<string, string> = { mode: "message", text: m.body, ms: String(ms) };
   if (m.title) query.title = m.title;
+  if (m.tone) query.tone = m.tone;
   if (m.action) { query.action = m.action.id; query.actionLabel = m.action.label; }
   const win = buildToastWindow(opts, query, MESSAGE_TOAST_SIZE, false);
 

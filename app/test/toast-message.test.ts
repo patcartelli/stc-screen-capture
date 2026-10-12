@@ -32,6 +32,14 @@ describe("a toast message", () => {
     }
   });
 
+  test("tone: success is kept, absent stays absent, anything else refuses", () => {
+    expect(parseToastMessage({ title: "T", body: "B", tone: "success" })).toEqual({ title: "T", body: "B", tone: "success" });
+    expect("tone" in parseToastMessage({ title: "T", body: "B" })!).toBe(false);
+    for (const bad of ["warn", "", null, 1, "SUCCESS"]) {
+      expect(parseToastMessage({ body: "b", tone: bad }), JSON.stringify(bad)).toBeUndefined();
+    }
+  });
+
   test("parse refuses an action id it does not know, or a missing label", () => {
     expect(parseToastMessage({ body: "b", action: { id: "open-anything", label: "x" } })).toBeUndefined();
     expect(parseToastMessage({ body: "b", action: { id: "open-screen-recording-settings", label: "" } })).toBeUndefined();
@@ -40,10 +48,17 @@ describe("a toast message", () => {
     expect(isToastActionId("__proto__")).toBe(false);
   });
 
-  test("every action opens a System Settings pane", () => {
+  test("every action with a URL opens a System Settings pane", () => {
     for (const url of Object.values(TOAST_ACTION_URLS)) {
       expect(url).toMatch(/^x-apple\.systempreferences:/);
     }
+  });
+
+  test("reveal-saved-gif is an action main carries out itself, with no URL (STC-395)", () => {
+    expect(isToastActionId("reveal-saved-gif")).toBe(true);
+    expect(TOAST_ACTION_URLS["reveal-saved-gif"]).toBeUndefined();
+    const m = { title: "Saved GIF", body: "a.gif", action: { id: "reveal-saved-gif", label: "Show in Finder" } };
+    expect(parseToastMessage(m)).toEqual(m);
   });
 
   test("parse drops extra fields rather than passing them on", () => {

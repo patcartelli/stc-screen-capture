@@ -31,6 +31,7 @@ const dir = params.get("dir") ?? "";
 const ms = Number(params.get("ms") ?? "0");
 const text = params.get("text") ?? "";
 const title = params.get("title") ?? "";
+const tone = params.get("tone") ?? "";
 const actionId = params.get("action") ?? "";
 const actionLabel = params.get("actionLabel") ?? "";
 
@@ -46,6 +47,11 @@ const closeBtn = document.getElementById("close") as HTMLButtonElement;
 // (`toast-window.ts` holds it back until `ready-to-show`), so there is no
 // instant where a message is laid out with the undo toast's rules.
 document.documentElement.dataset.mode = mode;
+// Same moment, same reason: the header icon's look ("success" = check, else the warning "!").
+if (tone === "success") {
+  document.documentElement.dataset.tone = tone;
+  document.getElementById("icon")!.textContent = "\u2713";
+}
 
 if (mode === "message") {
   label.textContent = text;

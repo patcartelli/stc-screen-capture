@@ -57,6 +57,68 @@ describe("a recording never reaches a shot-only path", () => {
   });
 });
 
+describe("STC-395: a failed GIF refuses Copy and Save by key as well as by button", () => {
+  test("perform() returns false for copy/save in GIF mode when copySaveEnabled is false", () => {
+    expect(bodyOf("async function perform(")).toMatch(
+      /\(action === "copy" \|\| action === "save"\) && formatOf\(gif\) === "gif" && !copySaveEnabled\(gif\)\) return false;/);
+  });
+  test("the switch is disabled while an action is in flight", () => {
+    expect(src).toMatch(/b\.disabled = copying \|\| busy;/);
+  });
+});
+
+describe("STC-395: Edit waits on a GIF conversion (spec §2), by button, key and menu", () => {
+  test("the buttons, perform() and the menu all ask lockedWhileConverting about a live GIF job", () => {
+    expect(src).toMatch(/function gifJobLive\(\): boolean \{ return gif\.kind === "converting" \|\| copyingGif; \}/);
+    expect(bodyOf("function setActionsEnabled(")).toMatch(/\|\| \(gifJobLive\(\) && lockedWhileConverting\(action\)\)/);
+    expect(bodyOf("async function perform(")).toMatch(/if \(gifJobLive\(\) && lockedWhileConverting\(action\)\) return false;/);
+    expect(src).toMatch(/window\.thumb\.menu\(\{ take, busy, copying, converting: gifJobLive\(\) \}\)/);
+  });
+  test("control: a perform() that checks only the mp4 copy lock does not pass", () => {
+    const old = "async function perform(action: PanelAction): Promise<boolean> {\n"
+      + "  if (copying && lockedWhileCopying(action)) return false;\n";
+    expect(old).not.toMatch(/if \(gifJobLive\(\) && lockedWhileConverting\(action\)\) return false;/);
+  });
+  test("Copy's waiting status follows the percentage, as Save's does (M7)", () => {
+    expect(src).toMatch(/if \(copyWaitingGif && gif\.kind === "converting"\) setStatus\(`Waiting for the GIF… \$\{Math\.floor\(gif\.permille \/ 10\)\}%`\);/);
+  });
+});
+
+describe("STC-395: only the newest pick's reply reaches the reducer (Review Focus 4)", () => {
+  const STALE = /if \(mine !== pickSeq\) return;/;
+  // Only a pick that starts or cancels a job takes a token. A "none" pick (GIF
+  // re-clicked mid-conversion) that bumped it would orphan the running job's
+  // reply and leave the panel converting forever.
+  const TOKEN_AFTER_NONE = /if \(effect === "none"\) return;\s*(?:\/\/[^\n]*\n\s*)*const mine = \+\+pickSeq;/;
+  test("a pick takes a token only once it is known to start or cancel a job", () => {
+    const b = bodyOf("async function pickFormat(");
+    expect(b).toMatch(/const effect = effectOfPick\(gif, format\);[\s\S]*?if \(effect === "none"\) return;[\s\S]*?const mine = \+\+pickSeq;\s*if \(effect === "cancel"\)/);
+    expect(b).toMatch(TOKEN_AFTER_NONE);
+    expect((b.match(/\+\+pickSeq/g) ?? [])).toHaveLength(1);
+  });
+  test("control: the token taken before the effect is known does not pass", () => {
+    const early = "(format: OutputFormat): Promise<void> {\n  const mine = ++pickSeq;\n  const effect = effectOfPick(gif, format);\n"
+      + "  gifEvent({ kind: \"pick\", format });\n  if (effect === \"none\") return;\n  if (effect === \"cancel\") {";
+    expect(early).not.toMatch(/const effect = effectOfPick\(gif, format\);[\s\S]*?if \(effect === "none"\) return;[\s\S]*?const mine = \+\+pickSeq;\s*if \(effect === "cancel"\)/);
+    expect(early).not.toMatch(TOKEN_AFTER_NONE);
+  });
+  test("every outcome after the reply is behind the staleness check", () => {
+    const b = bodyOf("async function pickFormat(");
+    const reply = b.indexOf("await window.thumb.gif(dir)");
+    expect(reply).toBeGreaterThan(-1);
+    const after = b.slice(reply);
+    const events = [...after.matchAll(/gifEvent\(\{ kind: "(done|failed|cancelled)"/g)];
+    expect(events.map((m) => m[1]).sort()).toEqual(["cancelled", "done", "failed", "failed"]);
+    expect(after).toMatch(/catch \(err\) \{\s*if \(mine !== pickSeq\) return;\s*gifEvent\(\{ kind: "failed"/);
+    expect(after).toMatch(/\}\s*if \(mine !== pickSeq\) return;\s*if \(r\.ok\) gifEvent\(\{ kind: "done"/);
+  });
+  test("control: the pattern does not fire on an unguarded reply", () => {
+    const unguarded = "try { r = await window.thumb.gif(dir); }\n  if (r.ok) gifEvent({ kind: \"done\", bytes: r.bytes });";
+    expect(unguarded).not.toMatch(STALE);
+    expect(unguarded).not.toMatch(/\}\s*if \(mine !== pickSeq\) return;\s*if \(r\.ok\) gifEvent\(\{ kind: "done"/);
+  });
+});
+
 describe("the recording card's duration", () => {
   test("is the library's own formatter", () => {
     expect(fmtDuration(42_000)).toBe("0:42");
