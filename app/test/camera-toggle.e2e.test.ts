@@ -267,6 +267,29 @@ describe("the camera says what it is doing (STC-287)", () => {
 
   // THE case. Before this, a camera that failed produced nothing whatsoever in
   // the UI — the user's only clue was a take with no picture-in-picture.
+  // STC-526. "fail-now" sends the failure in the same tick as `started`, so
+  // it reaches this window BEFORE the start's own reply — the order a loaded
+  // machine produces at random. The per-take reset used to run after that
+  // reply and write "opening…" over the failure, for the rest of the take.
+  // Every value the row takes is recorded, because "failed" IS on screen
+  // for a moment before being overwritten: polling for it would pass.
+  test("a failure that arrives before the start's reply is not overwritten by \"opening…\"", async () => {
+    const win = await launch({ ...dirs(), camera: "fail-now" });
+    await win.waitForSelector("#camera-picker");
+    await turnCameraOn(win);
+    await observeTextSequence(win, "camera-state");
+    await startRecordFlow(app!, win);
+    await expect.poll(() => toastText(app!), { timeout: 20_000 }).toContain("picture-in-picture");
+    // The reset is one IPC round trip after the start's reply; give it far
+    // more than that to land if it is going to.
+    await new Promise((r) => setTimeout(r, 1_000));
+    const seen = await textSequence(win, "camera-state");
+    const failedAt = seen.findIndex((t) => t.includes("failed"));
+    expect(failedAt, `the failure was shown: ${JSON.stringify(seen)}`).toBeGreaterThanOrEqual(0);
+    expect(seen.slice(failedAt), "nothing overwrote it").not.toContain("opening…");
+    expect(seen.at(-1)).toContain("failed");
+  }, 60_000);
+
   test("a camera that fails to open says so instead of failing silently", async () => {
     const win = await launch({ ...dirs(), camera: "fail" });
     await win.waitForSelector("#camera-picker");

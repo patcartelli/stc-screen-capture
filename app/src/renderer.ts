@@ -145,6 +145,7 @@ import {
   editPipStyle, pipRect, pipSize, snapCenter, PIP_SNAP_THRESHOLD_SCREEN_PX, PIP_SHADOW, type PipStyle,
 } from "@transform/pip-style.js";
 import { buildPipInspector } from "./pip-inspector.js";
+import { TakeDeviceReports, type TakeDevice } from "./take-device-status.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
@@ -284,6 +285,13 @@ function currentSelection(): DeviceSelection {
 }
 
 /**
+ * What the devices have said during the current take, so neither the
+ * per-take "opening…" reset nor the idle label writes over a report that beat
+ * it here (STC-526, take-device-status.ts).
+ */
+const takeReports = new TakeDeviceReports();
+
+/**
  * The trigger's own label at rest — what is CONFIGURED, not what a take is
  * currently doing. `setCamera`/`setMic` (below) overwrite this with live
  * status the moment a take actually opens the device; this only runs again
@@ -297,8 +305,11 @@ function deviceStatusLabel(choice: DeviceChoice, devices: DeviceLike[]): string 
 }
 function renderIdleStatus(): void {
   if (recording) return;
-  setCamera(deviceStatusLabel(cameraChoice(), knownCameras));
-  setMic(deviceStatusLabel(micChoice(), knownMics));
+  // `recording` is set only when the start's reply arrives, and Record's own
+  // settings:changed lands here before that: a device that already reported
+  // for the starting take keeps its row (STC-526, take-device-status.ts rule 4).
+  if (takeReports.mayShowIdle("camera")) setCamera(deviceStatusLabel(cameraChoice(), knownCameras));
+  if (takeReports.mayShowIdle("mic")) setMic(deviceStatusLabel(micChoice(), knownMics));
 }
 
 async function refreshDevices(): Promise<void> {
@@ -421,6 +432,7 @@ function lockSettings(locked: boolean): void {
  */
 function applyRecordingState(recording_: boolean): void {
   recording = recording_;
+  if (!recording) takeReports.newTake();
   recordBtn.textContent = recording ? "Stop" : "Record";
   setState(recording ? "recording" : "idle");
   // The device is opened at start and closed at stop, so the setting must
@@ -451,9 +463,13 @@ async function refreshCaptureSettingsForRecording(): Promise<void> {
   }
   // Reset per take, and say "opening…" rather than "—": the camera opens
   // off the critical path, so there IS a window where it is neither absent
-  // nor live, and that window is the whole complaint (STC-287).
-  setCamera(storedCamera ? "opening…" : "off");
-  setMic(storedMicUid != null ? "opening…" : "off");
+  // nor live, and that window is the whole complaint (STC-287). But never
+  // over a device that already reported for this take: a fast failure can
+  // arrive before this runs (STC-526, take-device-status.ts).
+  const camera = takeReports.placeholder("camera", storedCamera);
+  if (camera !== undefined) setCamera(camera);
+  const mic = takeReports.placeholder("mic", storedMicUid != null);
+  if (mic !== undefined) setMic(mic);
 }
 // ---- profile sheet (STC-374) ------------------------------------------------
 //
@@ -608,6 +624,9 @@ recordBtn.addEventListener("click", async () => {
   recordBtn.disabled = true;
   try {
     if (!recording) {
+      // Before asking, so nothing reported before this take can protect a
+      // row from the take's own "opening…" (STC-526, rule 2).
+      takeReports.newTake();
       const r = await recorder.start();
       // STC-391: Escape (or Cancel) during the countdown. Not a failure and
       // not an alert — the user asked for nothing to happen, and telling them
@@ -755,15 +774,21 @@ recorder.on("recorder:recording-state", (s: { recording: boolean; dir?: string }
  */
 function setCamera(text: string): void { $("camera-state").textContent = text; }
 
+/** A device's own report for this take: its row, and the record that it spoke. */
+function reportDevice(device: TakeDevice, text: string): void {
+  takeReports.report(device);
+  if (device === "camera") setCamera(text); else setMic(text);
+}
+
 recorder.on("helper:camera-started", (l) => {
-  setCamera(String(l.device ?? "live"));
+  reportDevice("camera", String(l.device ?? "live"));
 });
 
 /** STC-233: the mic's own lifecycle readout, same reasoning as the camera's. */
 function setMic(text: string): void { $("mic-state").textContent = text; }
 
 recorder.on("helper:mic-started", (l) => {
-  setMic(String(l.device ?? "live"));
+  reportDevice("mic", String(l.device ?? "live"));
 });
 
 recorder.on("helper:respawned", () => setState("recovered — helper restarted"));
@@ -962,13 +987,13 @@ recorder.on("helper:warning", (l) => {
     // row has to be always-visible (STC-412 final review, I2): the alert is a
     // toast that dismisses itself, so the row is the ONLY thing that still
     // says "this take had no camera" a minute later.
-    setCamera(code === "camera-no-frames" ? "no frames" : code === "camera-disconnected" ? "disconnected" : `failed — ${code}`);
+    reportDevice("camera", code === "camera-no-frames" ? "no frames" : code === "camera-disconnected" ? "disconnected" : `failed — ${code}`);
     alertUser(l.detail ? `${camera}\n\n${l.detail}` : camera);
     return;
   }
   const mic = MIC_FAULTS[code];
   if (mic) {
-    setMic(code === "mic-no-frames" ? "no frames" : code === "mic-disconnected" ? "disconnected" : `failed — ${code}`);
+    reportDevice("mic", code === "mic-no-frames" ? "no frames" : code === "mic-disconnected" ? "disconnected" : `failed — ${code}`);
     alertUser(l.detail ? `${mic}\n\n${l.detail}` : mic);
     return;
   }
