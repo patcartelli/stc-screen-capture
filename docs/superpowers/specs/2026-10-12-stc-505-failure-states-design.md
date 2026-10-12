@@ -169,12 +169,12 @@ plays to the failure point.
 
 ## Follow-ups
 
-To be filed in Linear after this spec is approved, checking `list_issues` for
-duplicates first:
+Filed 2026-10-12, after checking Linear for duplicates. STC-237 (device-loss recovery)
+is the nearest existing ticket and is left alone.
 
-1. Disk-write failure detection and a `disk-full` stop reason (helper, schema bump).
-2. Live mic level from the helper and a live pill meter, with the silence marker.
-3. Library `notes` from `stop.reason` and silent spans.
-4. Crash-recovery panel from a fragmented `display.mp4` with no sidecars.
-5. `ENDED_BY_HELPER` entries and the pill's stopped-state labels.
-6. Runbook execution on the Mac, with the fault injectors in the table above.
+1. STC-527: disk-write failure detection and a `disk-full` stop reason (helper, schema bump).
+2. STC-528: live mic level from the helper and a live pill meter, with the silence marker and recorded spans.
+3. STC-529: library `notes` from `stop.reason` and silent spans.
+4. STC-530: crash-recovery panel from a fragmented `display.mp4` with no sidecars.
+5. STC-531: `ENDED_BY_HELPER` entries and the pill's stopped-state labels.
+6. STC-532: runbook execution on the Mac, with the fault injectors in the table above. Blocked by 1-5.
