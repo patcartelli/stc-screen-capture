@@ -16,6 +16,7 @@ import {
 import {
   DEFAULT_EMBED_TEMPLATE,
 } from "./share.js";
+import { type GifSettings, DEFAULT_GIF_SETTINGS, cleanGifSettings } from "@transform/gif-options.js";
 import { cleanPipStyle, DEFAULT_PIP_STYLE, type PipStyle } from "@transform/pip-style.js";
 
 /**
@@ -142,6 +143,8 @@ export interface Settings {
    * bound and the constant it clamps to cannot drift apart.
    */
   countdownMs: number;
+  /** STC-395: what a GIF is converted with. Read when a conversion starts. */
+  gif: GifSettings;
   /**
    * How a still leaves the app (STC-293), and the one place those answers
    * live. The ticket's Note: "One encoder, one filename template, one
@@ -249,6 +252,7 @@ export const DEFAULT_SETTINGS: Settings = {
   previewMuted: false,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
+  gif: { ...DEFAULT_GIF_SETTINGS },
   still: { ...DEFAULT_STILL_SETTINGS },
   thumbnail: { ...DEFAULT_THUMBNAIL_SETTINGS },
   share: { ...DEFAULT_SHARE_SETTINGS },
@@ -412,6 +416,7 @@ export function readSettings(dir: string): Settings {
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
     countdownMs: clampCountdownMs(doc.countdownMs),
+    gif: cleanGifSettings(doc.gif),
     still: cleanStill(doc.still),
     thumbnail: cleanThumbnail(doc.thumbnail),
     share: cleanShare(doc.share),
@@ -442,6 +447,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     still: { ...current.still, ...(patch.still ?? {}) },
     thumbnail: { ...current.thumbnail, ...(patch.thumbnail ?? {}) },
     share: { ...current.share, ...(patch.share ?? {}) },
+    gif: { ...current.gif, ...(patch.gif ?? {}) },
   };
   const clean: Settings = {
     camera: merged.camera === true,
@@ -464,6 +470,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     // on a physical LED.
     shutterSound: merged.shutterSound !== false,
     countdownMs: clampCountdownMs(merged.countdownMs),
+    gif: cleanGifSettings(merged.gif),
     saveFolder: cleanSaveFolder(merged.saveFolder),
     showDiagnostics: typeof merged.showDiagnostics === "boolean"
       ? merged.showDiagnostics : DEFAULT_SETTINGS.showDiagnostics,

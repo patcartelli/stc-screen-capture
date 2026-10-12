@@ -8,6 +8,7 @@ import {
 } from "../src/settings.js";
 import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
+import { DEFAULT_GIF_SETTINGS } from "@transform/gif-options.js";
 import { DEFAULT_PIP_STYLE } from "@transform/pip-style.js";
 
 /**
@@ -28,7 +29,8 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both",
+                 gif: DEFAULT_GIF_SETTINGS });
     expect(DEFAULT_SETTINGS.camera).toBe(false);
   });
 
@@ -69,7 +71,7 @@ describe("the camera preference", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both", gif: DEFAULT_GIF_SETTINGS });
   });
 
   test("an unwritable directory does not throw — the preference is not worth a crash", () => {
@@ -125,7 +127,7 @@ describe("the display preference (STC-247)", () => {
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
                  thumbnail: DEFAULT_THUMBNAIL_SETTINGS, share: DEFAULT_SHARE_SETTINGS,
-                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both" });
+                 saveFolder: null, showDiagnostics: false, libraryView: "grid", iconPlacement: "both", gif: DEFAULT_GIF_SETTINGS });
   });
 });
 
@@ -689,5 +691,27 @@ describe("iconPlacement (STC-502)", () => {
     const d = mkdtempSync(join(tmpdir(), "stc-settings-"));
     writeSettings(d, { iconPlacement: "none" as never });
     expect(readSettings(d).iconPlacement).toBe("both");
+  });
+});
+
+describe("STC-395: GIF settings", () => {
+  test("default 15 fps / 960 px on an untouched install", () => {
+    expect(readSettings(dir()).gif).toEqual({ fps: 15, maxWidth: 960 });
+  });
+  test("round-trips a chosen value", () => {
+    const d = dir();
+    writeSettings(d, { gif: { fps: 30, maxWidth: "original" } });
+    expect(readSettings(d).gif).toEqual({ fps: 30, maxWidth: "original" });
+  });
+  test("an invalid stored value falls back per field", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ gif: { fps: 24, maxWidth: 640 } }));
+    expect(readSettings(d).gif).toEqual({ fps: 15, maxWidth: 640 });
+  });
+  test("changing one field keeps the other", () => {
+    const d = dir();
+    writeSettings(d, { gif: { fps: 10, maxWidth: 480 } });
+    writeSettings(d, { gif: { ...readSettings(d).gif, fps: 20 } });
+    expect(readSettings(d).gif).toEqual({ fps: 20, maxWidth: 480 });
   });
 });

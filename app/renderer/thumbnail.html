@@ -66,6 +66,13 @@
     #takemeta { opacity: 0.7; margin-top: 2px; }
     #copyprogress { width: 100%; height: var(--space-1); margin-top: var(--space-2); accent-color: var(--accent); }
     #copyprogress[hidden] { display: none; }
+    #format { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-top: var(--space-2); }
+    #format[hidden], #giflabel[hidden] { display: none; }
+    #format button { border: 0; background: transparent; padding: 2px var(--space-2); font: inherit; color: var(--text-dim); }
+    #format button[aria-checked="true"] { background: var(--accent); color: var(--on-image); }
+    #format button:disabled { opacity: .5; }
+    #giflabel { margin-top: var(--space-1); font-size: var(--type-meta); color: var(--text-dim); }
+    #giflabel.warn { color: var(--warn); }
     #controls { padding: var(--space-3) var(--space-4) var(--space-4); }
     .row { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
     select, button {
@@ -135,6 +142,12 @@
     <div id="takecard" hidden>
       <div id="takemeta"></div>
       <!-- STC-488: a recording's Copy renders first. Hidden unless one is running. -->
+      <!-- STC-395: a fresh recording's output format. Never closes the panel. -->
+      <div id="format" role="radiogroup" aria-label="Output format" hidden>
+        <button type="button" role="radio" data-format="video" aria-checked="true">Video</button>
+        <button type="button" role="radio" data-format="gif" aria-checked="false">GIF</button>
+      </div>
+      <div id="giflabel" hidden></div>
       <progress id="copyprogress" max="1000" value="0" hidden></progress>
     </div>
     <div id="controls">
