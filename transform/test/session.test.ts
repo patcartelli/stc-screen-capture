@@ -211,17 +211,26 @@ describe("loader accepts v1 through v7 anchors", () => {
     expect(s.systemAudio).toBeUndefined();
   });
 
-  test("a version 10 anchors document is rejected by name", async () => {
-    // Widening must not become "accept anything". Version 10, not 9: STC-510
-    // made 9 a real, supported version (`capture.colorSpace`), so it is no
-    // longer a stand-in for "unknown future version" — the same thing
+  test("a version 11 anchors document is rejected by name", async () => {
+    // Widening must not become "accept anything". Version 11, not 10: STC-527
+    // made 10 a real, supported version (the `disk-full` stop reason), so it is
+    // no longer a stand-in for "unknown future version" — the same thing
     // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240), 6 (STC-418),
-    // 7 (STC-235) and 8 (STC-482).
+    // 7 (STC-235), 8 (STC-482) and 9 (STC-510).
     await expect(loadSession({
-      anchors: offsetAnchors({ version: 10 as any }),
+      anchors: offsetAnchors({ version: 11 as any }),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 10 is not supported/);
+    })).rejects.toThrow(/version 11 is not supported/);
+  });
+
+  test("a disk-full take (v10) loads like any other (STC-527)", async () => {
+    const s = await loadSession({
+      anchors: offsetAnchors({ version: 10 as any, stop: { t: 1_000_000_000, reason: "disk-full" } }),
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    });
+    expect(s.anchors.stop?.reason).toBe("disk-full");
   });
 
   // STC-482: a v8 window track is validated at load and its displacement taken
