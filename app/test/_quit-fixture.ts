@@ -90,6 +90,19 @@ export const SLOW_CLOSE_MS = 3_000;
  */
 export const CLOSE_GIVE_UP_MARGIN_MS = 10_000;
 
+/** How long a crashed app's stderr gets to drain before its window log is printed. */
+export const CRASH_STDERR_DRAIN_MS = 2_000;
+
+/**
+ * Whether the app died from a fault rather than being closed or killed
+ * (STC-534). SIGKILL is `closeApp`'s own give-up and SIGTERM an ordinary
+ * kill; neither is the crash the window log is for.
+ */
+export function diedFromCrash(signal: NodeJS.Signals | null): boolean {
+  return signal === "SIGSEGV" || signal === "SIGBUS" || signal === "SIGABRT"
+    || signal === "SIGILL" || signal === "SIGTRAP";
+}
+
 /**
  * Close an app the way every e2e `afterEach` should (STC-449).
  *
@@ -120,8 +133,13 @@ export async function closeApp(app: ElectronApplication | undefined, hookBoundMs
   if (!app) return;
   const proc = app.process();
   const quitLines: string[] = [];
+  // STC-534: main.ts's window log from the moment the quit commits. Printed
+  // only if the app died from a crash signal, since then the last of these
+  // name the window AppKit was moving key status onto or off.
+  const windowLines: string[] = [];
   const onData = (chunk: Buffer | string) => {
     for (const line of String(chunk).split("\n")) {
+      if (line.includes("[window]")) windowLines.push(line.trim());
       if (line.includes("[quit]")) quitLines.push(line.trim());
       // STC-496: a resize refused because the app is quitting. It is rare by
       // design and names the caller that crashed CI, so it is printed however
@@ -139,7 +157,21 @@ export async function closeApp(app: ElectronApplication | undefined, hookBoundMs
     new Promise<false>((r) => { timer = setTimeout(() => r(false), giveUpMs); }),
   ]);
   clearTimeout(timer);
+  // `close` resolves on the process's exit, which can come before its last
+  // stderr chunks are read. Only a crash waits for them — a clean close has
+  // nothing here worth the wait.
+  const signal = (proc as { signalCode?: NodeJS.Signals | null }).signalCode ?? null;
+  if (closed && diedFromCrash(signal) && proc.stderr && !proc.stderr.readableEnded) {
+    await new Promise<void>((r) => {
+      const t = setTimeout(r, CRASH_STDERR_DRAIN_MS);
+      proc.stderr!.once("end", () => { clearTimeout(t); r(); });
+    });
+  }
   proc.stderr?.off("data", onData);
+  if (closed && diedFromCrash(signal)) {
+    process.stderr.write(`[closeApp] pid ${proc.pid} died from ${signal} while closing (STC-534); `
+      + `its window log, last line last:\n${windowLines.map((l) => `  ${l}\n`).join("") || "  (no [window] line was printed)\n"}`);
+  }
   const ms = Date.now() - t0;
   if (!closed) {
     // STC-496: what the stuck main process was doing, taken BEFORE the kill
