@@ -32,7 +32,7 @@ describe("take library in the app", () => {
     // Kind-neutral since STC-294: the library holds stills too, so "no
     // recordings" would be wrong in a folder that has screenshots and no video.
     await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 })
-      .toContain("Nothing here yet");
+      .toContain("No captures yet");
   }, 60_000);
 
   test("a real recording is listed with metadata read from its sidecars", async () => {
