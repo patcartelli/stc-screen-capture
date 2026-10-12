@@ -6,7 +6,7 @@
  * 1. Two rows, and only two: Screen Recording and Input Monitoring. Both are
  *    required. Without Screen Recording nothing is captured, and without Input
  *    Monitoring a take has no cursor anywhere, which the helper already
- *    refuses (STC-315/480). Mic and camera rows are STC-520.
+ *    refuses (STC-315/480). Mic and camera rows are STC-520 (rule 9).
  * 2. The helper reads and requests both (`Permissions.swift`). Electron has no
  *    Input Monitoring API, and the ticket asks for one place, not two.
  * 3. Screen Recording takes effect only after a relaunch. A grant that arrived
@@ -34,18 +34,39 @@
  *    Once, not every launch, because every stream lights the menu bar's
  *    recording indicator; Patrick's call, 2026-10-12. A periodic re-consent
  *    from macOS is not covered by this.
+ * 9. Microphone and Camera rows exist ONLY while a mic or camera is chosen
+ *    (Patrick, 2026-10-12: "when first chosen", not at first launch), and
+ *    only while that device is not authorized. A Record blocks on them like
+ *    on a required row: a take whose chosen mic was silently refused is
+ *    STC-475's symptom (nothing in the helper ever ASKED; it only read the
+ *    status). A shot never needs them. Their grants take effect at once, no
+ *    relaunch. The one extra action, "turn-off", clears the choice, so a
+ *    person who declines is never stuck behind a device they don't need.
+ *    A report with no mic/camera field (an old helper) shows neither row
+ *    (rule 6's fail-open).
  */
 
 import { TOAST_ACTION_URLS } from "./toast-message.js";
 
-export type Grant = "screen-recording" | "input-monitoring";
+export type Grant = "screen-recording" | "input-monitoring" | "microphone" | "camera";
 export type ListenEvent = "granted" | "denied" | "unknown";
+/** `AVCaptureDevice.authorizationStatus`, as the helper spells it. */
+export type AvAccess = "authorized" | "denied" | "restricted" | "notDetermined";
 
 /** The helper's `permissions` reply. */
 export interface PermissionsReport {
   screenRecording: boolean;
   inputMonitoring: ListenEvent;
+  microphone?: AvAccess;
+  camera?: AvAccess;
 }
+
+/** Which optional devices the settings currently choose (rule 9). */
+export interface WantedDevices {
+  microphone: boolean;
+  camera: boolean;
+}
+export const NO_DEVICES: WantedDevices = { microphone: false, camera: false };
 
 /** What this run of the app remembers between checks. */
 export interface PermissionsMemory {
@@ -56,7 +77,7 @@ export interface PermissionsMemory {
 }
 
 export type RowStatus = "granted" | "not-yet" | "denied" | "relaunch";
-export type RowAction = "request" | "open-settings" | "relaunch";
+export type RowAction = "request" | "open-settings" | "relaunch" | "turn-off";
 
 export interface PermissionRow {
   grant: Grant;
@@ -69,18 +90,23 @@ export interface PermissionRow {
 
 export interface PermissionsState {
   needed: boolean;
+  /** The sentence under the heading; it counts the rows, so it is decided here. */
+  intro: string;
   rows: PermissionRow[];
 }
 
 export const SETTINGS_URLS: Record<Grant, string> = {
   "screen-recording": TOAST_ACTION_URLS["open-screen-recording-settings"]!,
   "input-monitoring": TOAST_ACTION_URLS["open-input-monitoring-settings"]!,
+  microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+  camera: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
 };
 
 export const PERMISSION_ACTION_LABELS: Record<RowAction, string> = {
   request: "Grant…",
   "open-settings": "Open System Settings",
   relaunch: "Relaunch Capture",
+  "turn-off": "Don't use",
 };
 
 /** Refuses anything that is not exactly the helper's reply (rule 6). */
@@ -90,7 +116,45 @@ export function parsePermissions(line: unknown): PermissionsReport | null {
   if (l.ev !== "permissions") return null;
   if (typeof l.screenRecording !== "boolean") return null;
   if (l.inputMonitoring !== "granted" && l.inputMonitoring !== "denied" && l.inputMonitoring !== "unknown") return null;
-  return { screenRecording: l.screenRecording, inputMonitoring: l.inputMonitoring };
+  const out: PermissionsReport = { screenRecording: l.screenRecording, inputMonitoring: l.inputMonitoring };
+  for (const key of ["microphone", "camera"] as const) {
+    const v = l[key];
+    if (v === undefined) continue;
+    if (!isAvAccess(v)) return null;
+    out[key] = v;
+  }
+  return out;
+}
+
+function isAvAccess(v: unknown): v is AvAccess {
+  return v === "authorized" || v === "denied" || v === "restricted" || v === "notDetermined";
+}
+
+const AV_COPY = {
+  microphone: {
+    title: "Microphone",
+    why: "You chose a microphone, so Capture records your voice with it. Without access the take would have no narration.",
+  },
+  camera: {
+    title: "Camera",
+    why: "You chose to record a camera, so Capture adds it as a picture-in-picture. Without access the take would have no camera.",
+  },
+} as const;
+
+function avRow(grant: "microphone" | "camera", access: AvAccess, m: PermissionsMemory): PermissionRow {
+  const base = { grant, ...AV_COPY[grant] };
+  if (access === "authorized") return { ...base, status: "granted", statusText: "Granted", actions: [] };
+  if (access === "restricted") {
+    return { ...base, status: "denied", statusText: "Blocked by a restriction on this Mac.", actions: ["turn-off"] };
+  }
+  // Unlike Input Monitoring, "not determined" is believed: AVFoundation says
+  // it only for a Mac that has not been asked, and its prompt cannot be
+  // dismissed, so one request always ends in authorized or denied.
+  if (access === "notDetermined" && !m.requested.has(grant)) {
+    return { ...base, status: "not-yet", statusText: "Not granted yet", actions: ["request", "turn-off"] };
+  }
+  return { ...base, status: "denied", statusText: "Turn on Capture in System Settings.",
+           actions: ["open-settings", "turn-off"] };
 }
 
 function screenRow(r: PermissionsReport, m: PermissionsMemory): PermissionRow {
@@ -135,10 +199,24 @@ function inputRow(r: PermissionsReport, m: PermissionsMemory): PermissionRow {
 }
 
 /** The panel for one report. `null` (unreadable) is never a panel (rule 6). */
-export function permissionsState(r: PermissionsReport | null, m: PermissionsMemory): PermissionsState {
-  if (!r) return { needed: false, rows: [] };
+export function permissionsState(
+  r: PermissionsReport | null, m: PermissionsMemory, wanted: WantedDevices = NO_DEVICES,
+): PermissionsState {
+  if (!r) return { needed: false, intro: "", rows: [] };
   const rows = [screenRow(r, m), inputRow(r, m)];
-  return { needed: rows.some((row) => row.status !== "granted"), rows };
+  for (const grant of ["microphone", "camera"] as const) {
+    const access = r[grant];
+    if (wanted[grant] && access !== undefined) rows.push(avRow(grant, access, m));
+  }
+  const missing = rows.filter((row) => row.status !== "granted");
+  const devicesOnly = missing.every((row) => row.grant === "microphone" || row.grant === "camera");
+  const onlyRequired = rows.length === 2;
+  const intro = onlyRequired
+    ? "Capture needs two macOS permissions. macOS asks once for each. After that, they live in System Settings › Privacy & Security."
+    : devicesOnly
+      ? "The microphone or camera you chose needs your permission. macOS asks once. After that, it lives in System Settings › Privacy & Security."
+      : "Capture needs these macOS permissions. macOS asks once for each. After that, they live in System Settings › Privacy & Security.";
+  return { needed: missing.length > 0, intro, rows };
 }
 
 /** Does this state stop a capture before its overlay opens? (rule 7) */
@@ -160,9 +238,18 @@ export function shouldPrimeCapture(r: PermissionsReport | null, m: PermissionsMe
 }
 
 export function isGrant(v: unknown): v is Grant {
-  return v === "screen-recording" || v === "input-monitoring";
+  return v === "screen-recording" || v === "input-monitoring" || v === "microphone" || v === "camera";
 }
 
 export function isRowAction(v: unknown): v is RowAction {
-  return v === "request" || v === "open-settings" || v === "relaunch";
+  return v === "request" || v === "open-settings" || v === "relaunch" || v === "turn-off";
+}
+
+/** The optional rows a Record is waiting on (rule 9): mic/camera not yet authorized. */
+export function deviceGrantsPending(s: PermissionsState): Array<"microphone" | "camera"> {
+  const out: Array<"microphone" | "camera"> = [];
+  for (const row of s.rows) {
+    if ((row.grant === "microphone" || row.grant === "camera") && row.status !== "granted") out.push(row.grant);
+  }
+  return out;
 }

@@ -180,6 +180,10 @@ describe("reliable channel — fd3, request/response with sequence numbers", () 
     // No Accessibility: reading it on a never-asked Mac blocks the Input
     // Monitoring prompt (STC-518), so the report must not touch it.
     expect(r.accessibility).toBeUndefined();
+    // STC-520: the optional pair, as AVFoundation spells them. A READ.
+    for (const key of ["microphone", "camera"]) {
+      expect(["authorized", "denied", "restricted", "notDetermined"]).toContain(r[key]);
+    }
   });
 
   test("request-permission refuses a grant it does not know, without prompting (STC-476)", async () => {
@@ -187,7 +191,8 @@ describe("reliable channel — fd3, request/response with sequence numbers", () 
     // raise a real system prompt. The VM runbook is where they are watched.
     const h = spawnHelper();
     await waitFor(() => find(h.fd3, "ready"));
-    h.send({ cmd: "request-permission", grant: "camera", seq: 22 });
+    // "camera" was the unknown grant here until STC-520 made it a known one.
+    h.send({ cmd: "request-permission", grant: "location", seq: 22 });
     const r = await waitFor(() => h.fd3.find((l) => l.seq === 22), 5000, "request-permission reply");
     expect(r.ev).toBe("error");
     expect(r.code).toBe("bad-request");
