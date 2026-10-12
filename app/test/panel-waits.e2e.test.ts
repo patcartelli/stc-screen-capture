@@ -564,13 +564,16 @@ describe("Trash is a promise you can take back (STC-392 Task 6)", () => {
     // calls out: waiting OUT the real undo window, not racing it.
     await expect.poll(() => readdirSync(temp).length,
                        { timeout: UNDO_WINDOW_MS + 4_000 }).toBe(0);
-    // The toast took itself down on the same schedule.
-    expect(await hasWindow(electronApp, "toast.html")).toBe(false);
+    // The toast took itself down on the same schedule. STC-535: polled, not
+    // read once — "the same schedule" is not "before the sweep", and a
+    // destroyed window stays listed ~25 ms (`_windows.ts`'s header).
+    await expect.poll(() => hasWindow(electronApp, "toast.html"),
+                       { timeout: POLL_MS }).toBe(false);
     // Declared timeout: PLAYWRIGHT_LAUNCH_OVERHEAD_MS (60s) + `launch`'s own
     // capture-count poll (15s) + the toast-appear poll (15s) + the undo-
-    // window poll (UNDO_WINDOW_MS + 4s) = 94s + UNDO_WINDOW_MS summed;
-    // declared above that.
-  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 2 * POLL_MS + UNDO_WINDOW_MS + 4_000 + 30_000);
+    // window poll (UNDO_WINDOW_MS + 4s) + the toast-gone poll (15s) =
+    // 109s + UNDO_WINDOW_MS summed; declared above that.
+  }, PLAYWRIGHT_LAUNCH_OVERHEAD_MS + 3 * POLL_MS + UNDO_WINDOW_MS + 4_000 + 30_000);
 });
 
 /**
