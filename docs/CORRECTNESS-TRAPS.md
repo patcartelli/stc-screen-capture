@@ -1709,3 +1709,17 @@ configuration. Don't re-discover these.
   sampler passes while the real sample is empty. CI now runs it via `sudo -n` (`_e2e-diagnostics.ts`'s
   `sampleProcess`), which GitHub's runners allow; **no run has hung since that went in, so it has not
   yet produced a real Electron sample**. On a developer's Mac, use `sudo sample` by hand.
+- **An `app.evaluate` can RUN and still fail with "Resulting promise was garbage collected"
+  (STC-513).** Playwright sends it with `awaitPromise: true`. When it arrives while main is busy in
+  JS (the first evaluate after launch lands inside `app.whenReady()`'s callback, blocked about
+  150 ms in `createWindow()` when `STC_OPEN_LIBRARY_ON_LAUNCH=1`), V8 runs it as an interrupt. The
+  function body runs at once, and V8 wraps the result in a promise that it holds only by a weak
+  handle. Node drains microtasks only at its own checkpoints, so the reply waits until that callback
+  returns, and a minor GC in that gap collects the wrapper. Proven by forcing it: one `gc()` right
+  after `createWindow()` (`--js-flags=--expose-gc`) failed 4/4 with master's glyph, and the control
+  without the call passed 4/4. **The menu-bar glyph was a red herring.** The camera mask's code
+  allocates enough to move a scavenge into that gap (6/6 failures standalone with the library window
+  on, 0/6 with it off); its pixels play no part. Before believing a pixel, a timing or a "which
+  module" story about this error, look for a GC between dispatch and the next microtask checkpoint.
+  `stubQuitDialog` handles it by reading the stub back, a few times at most, on exactly this error,
+  and throwing if the stub is missing. Any other evaluate issued during startup can hit the same race.
