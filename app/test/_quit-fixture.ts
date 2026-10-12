@@ -2,6 +2,7 @@ import type { ElectronApplication } from "playwright";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { DEFAULT_REQUEST_TIMEOUT_MS, QUIT_GRACE_MS } from "../src/helper-client.js";
 import { E2E_DIAG_DIR_ENV, snapshotHungApp } from "./_e2e-diagnostics.js";
+import { installAtLaunch } from "./_launch-evaluate.js";
 
 /**
  * Snapshot a process `closeApp` is about to kill, into the e2e diagnostics
@@ -46,53 +47,15 @@ async function snapshotBeforeKill(pid: number | undefined): Promise<string | und
  * temp-vs-library split). Quit Anyway deletes nothing and leaves takes in
  * temp, which is what these tests already expect.
  *
- * STC-513: this evaluate can come back as "Resulting promise was garbage
- * collected" even though the stub WAS installed. Being the first evaluate
- * after launch, it usually arrives while main is still inside
- * `app.whenReady()`'s callback (blocked in `createWindow()` for ~150 ms
- * when `STC_OPEN_LIBRARY_ON_LAUNCH` is set). The inspector then runs it as
- * a V8 interrupt: the function body runs at once, and V8 wraps the result
- * in a promise for `awaitPromise`, holding it only by a WEAK handle. Node
- * drains microtasks only at its own checkpoints, so the reply waits until
- * that callback returns. If a minor GC lands in the gap, the wrapper is
- * collected and the reply is lost. Forcing one `gc()` right after
- * `createWindow()` makes it fail every time, with any glyph. The camera
- * glyph only exposed it because its mask code allocates enough to move a
- * scavenge into the gap; its pixels have nothing to do with it.
- *
- * So on exactly that error, ask main whether the stub is in place. That
- * read is idempotent and normally runs once main is idle. Its own reply can
- * be lost the same way while startup is still busy, so it is asked a few
- * times. A stub that is NOT in place after a lost reply throws: it would
- * mean the cause above is wrong.
+ * STC-513: installed through `installAtLaunch`, because the first evaluate
+ * after launch can lose its reply even though it ran (`_launch-evaluate.ts`).
  */
 export async function stubQuitDialog(app: ElectronApplication): Promise<void> {
-  try {
-    await app.evaluate(({ dialog }) => {
-      const stub = (async (..._args: unknown[]) => ({ response: 1, checkboxChecked: false })) as any;
-      stub.__stcQuitStub = true;
-      dialog.showMessageBox = stub;
-    });
-    return;
-  } catch (e) {
-    if (!isLostReply(e)) throw e;
-  }
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const installed = await app.evaluate(({ dialog }) => (dialog.showMessageBox as any).__stcQuitStub === true);
-      if (installed) return;
-      throw new Error("STC-513: the quit-dialog stub's reply was lost, and it is not installed");
-    } catch (e) {
-      if (!isLostReply(e) || attempt >= LOST_REPLY_READS) throw e;
-    }
-  }
-}
-
-/** How many times a lost read-back is asked again before giving up (STC-513). */
-const LOST_REPLY_READS = 5;
-
-function isLostReply(e: unknown): boolean {
-  return e instanceof Error && e.message.includes("Resulting promise was garbage collected");
+  await installAtLaunch(app, ({ dialog }) => {
+    dialog.showMessageBox = (async (..._args: unknown[]) =>
+      ({ response: 1, checkboxChecked: false })) as any;
+    (globalThis as Record<string, unknown>).__stcQuitStub = true;
+  }, undefined, "__stcQuitStub");
 }
 
 /**

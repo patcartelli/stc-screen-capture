@@ -8,6 +8,7 @@ import { windowCount } from "./_windows.js";
 import { stamp, RAW_SUBDIR } from "../src/takes.js";
 import { RECOVERY_OFFERED_FILE } from "../src/temp-takes.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { installAtLaunch } from "./_launch-evaluate.js";
 
 /**
  * A temp-take folder name that is recent, not a hardcoded calendar date.
@@ -97,7 +98,9 @@ async function launch(s: Seeded, response: 0 | 1): Promise<Launched> {
   // `shell.showItemInFolder` is stubbed in the same breath: Review reveals an
   // unfinished take in Finder, and a test must neither pop a real Finder
   // window on a Mac nor be unable to see that it asked for one.
-  await app.evaluate(({ dialog, shell }, resp) => {
+  // STC-513: through `installAtLaunch`, because this evaluate lands inside
+  // the startup gap where a reply can be lost although the install ran.
+  await installAtLaunch(app, ({ dialog, shell }, resp) => {
     const g = globalThis as any;
     g.__recoveryCalls = 0;
     g.__recoveryDialogs = [];
@@ -109,7 +112,8 @@ async function launch(s: Seeded, response: 0 | 1): Promise<Launched> {
       return { response: resp, checkboxChecked: false };
     }) as any;
     shell.showItemInFolder = ((p: string) => { g.__revealed.push(p); }) as any;
-  }, response);
+    g.__recoveryStub = true;
+  }, response, "__recoveryStub");
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   return {

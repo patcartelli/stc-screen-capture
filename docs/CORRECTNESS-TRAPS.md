@@ -1721,5 +1721,7 @@ configuration. Don't re-discover these.
   allocates enough to move a scavenge into that gap (6/6 failures standalone with the library window
   on, 0/6 with it off); its pixels play no part. Before believing a pixel, a timing or a "which
   module" story about this error, look for a GC between dispatch and the next microtask checkpoint.
-  `stubQuitDialog` handles it by reading the stub back, a few times at most, on exactly this error,
-  and throwing if the stub is missing. Any other evaluate issued during startup can hit the same race.
+  **Anything installed in main right after `electron.launch()` goes through `_launch-evaluate.ts`'s
+  `installAtLaunch`**, which sets a marker, reads it back, and asks again (bounded) only on exactly
+  this error. `stubQuitDialog` and `crash-recovery.e2e`'s dialog stub both use it. The first CI run
+  after `stubQuitDialog` alone was fixed failed all 9 `crash-recovery` tests on the same error.
