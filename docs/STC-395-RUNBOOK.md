@@ -33,7 +33,7 @@ node scripts/gif-one.mjs <sessionDir> --check --no-dither --out /tmp/stc-395-dit
 
 ## §3 Time
 
-A one-minute take at 4K capture. Time from flipping to GIF until `GIF · …` appears. Record the number here: ______
+A one-minute take at 4K capture. Time from flipping to GIF until `GIF · …` appears. Record the number here: **~43 s on the panel** (2026-10-12, a 61.2 s take on a 3840×2160 HP Z27, defaults 15 fps / 960; `gif-one` on the same take: 918 frames 960×540, 4.91 MB in 44.3 s, 5.6% dithered). PASS.
 Compare against the script on the same take:
 
 ```
@@ -42,7 +42,7 @@ node scripts/gif-one.mjs <sessionDir> [fps=15] [maxWidth=960|original] [--check]
 
 Reference: a real 2162x1300, 8 s take gave 120 frames at 960x578, 2.21 MB, in 4.6 s. P3 readback is forced to sRGB and may cost extra per frame at 4K.
 
-Known limit (not fixed): pass 1 (the palette) reports progress only once per palette sample, and between samples it still decodes every frame. On an hour-plus 4K take one gap can run past the render's 120 s inactivity watchdog, and the GIF fails with `render timeout: no progress for 120000ms`. If you see that, write down the take's length and capture size here: ______
+Known limit (not fixed): pass 1 (the palette) reports progress only once per palette sample, and between samples it still decodes every frame. On an hour-plus 4K take one gap can run past the render's 120 s inactivity watchdog, and the GIF fails with `render timeout: no progress for 120000ms`. If you see that, write down the take's length and capture size here: ______ (not seen on the 61 s 4K take)
 
 ## §4 Large warning
 
