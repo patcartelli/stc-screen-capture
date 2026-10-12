@@ -28,15 +28,33 @@ until it merges, then from `master`. `npm run app:package` first.
 - The panel's footnote now says "After you relaunch…" instead of "On your first
   recording…".
 
-## Checks
+## Checks — VM pass 2026-10-12, build `46687a9`, `fresh.sh` (clean TCC)
 
 | # | check | how | result |
 |---|---|---|---|
-| 1 | `fresh.sh` (clean). Grant both rows, then Relaunch Capture. **Within a second or two of the relaunch**, with no Record pressed, macOS shows the picker-bypass dialog. The menu bar's recording indicator flashes briefly | Patrick, by eye | |
-| 2 | **The done-when.** Choose Allow, then Record a short take. The take contains no system dialog, and none appears during it | Patrick, by eye; agent watches the take over SSH | |
-| 3 | After 1, `settings.json` (`~/Library/Application Support/Capture/settings.json` in the guest) has `"capturePrimed": true`, and Capture's log shows `[permissions] primed capture (N frames in 1000 ms)` | agent, SSH | |
-| 4 | Quit and relaunch Capture. No recording-indicator flash, and no new `primed capture` log line | Patrick (flash); agent (log) | |
-| 5 | `fresh.sh --granted`. On the first launch, the prime runs once (log line, flag set). Note whether the dialog appears there too | agent, SSH; Patrick for the dialog | |
+| 1 | Grant both rows, then relaunch. **Within a second or two of the relaunch**, with no Record pressed, macOS shows the picker-bypass dialog. The menu bar's recording indicator flashes briefly | Patrick, by eye; agent from `replayd`'s log | **pass.** `replayd` started the prime's stream at 17:17:34.608 and showed the alert at 17:17:34.949 (`SCAlert showAlertWithTitle…`). Patrick saw it and accepted it without reading it. See the note below |
+| 2 | **The done-when.** Record a short take. The take contains no system dialog, and none appears during it | agent from `replayd`'s log; Patrick by eye | **pass (log).** The take's stream ran 17:25:33.764–17:25:40.199. `replayd` ran `requireAlert…` and showed **no** alert. Patrick did not separately report what he saw during the take |
+| 3 | `settings.json` (`~/Library/Application Support/Capture/settings.json` in the guest) has `"capturePrimed": true`. Before the grants, the file did not exist | agent, SSH | **pass** |
+| 4 | Quit and relaunch Capture. No recording-indicator flash, and no new stream | Patrick (flash); agent (`replayd` log stream) | **pass.** Patrick saw no flash. The relaunched Capture (new PIDs) started no stream |
+| 5 | `fresh.sh --granted`. On the first launch, the prime runs once (log line, flag set). Note whether the dialog appears there too | agent, SSH; Patrick for the dialog | **not run** |
+
+The app's log is no help after the panel's Relaunch: `app.relaunch()` drops
+`launch-guest.sh`'s `--stdout`, so `[permissions] primed capture` never reaches
+`/tmp/stc-capture-launch.log`. The evidence is the flag plus `replayd`'s own log,
+read with `log show --predicate 'process == "replayd"'`, or `log stream` during a
+check. Pipe the script into the guest (`ssh.sh <vm> bash -s < script`); `ssh.sh`
+loses nested quotes.
+
+**The alert's answer was logged as "user acknowledgement refused"** (17:17:36.459,
+0.7 s after the prime's stream stopped), even though Patrick accepted it. The take
+still got no alert, so either path counts for `replayd`'s `SCAlertStatsManager`
+(it records `lastAlertedDate`). Whether that log line means "Allow" or "dismissed
+because its stream ended" is not settled. Either way the done-when holds.
+
+There were two relaunches after the grants (helper PIDs 1237, then 1258 at
+17:17:54). The prime ran in the first, so the second correctly did not prime.
+Patrick watched the second and saw no dialog in it, which looks like a failure
+but is not.
 
 ### If check 1 fails
 
