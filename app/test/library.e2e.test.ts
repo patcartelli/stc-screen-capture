@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, existsSync, readdirSync, writeFileSync, statSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, chmodSync, existsSync, readdirSync, writeFileSync, statSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
@@ -34,7 +34,8 @@ afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, AP
 interface Launched { win: Page; recordings: string; stillLog: string; errors: string[] }
 
 /** `seed` populates the recordings root before Electron ever sees it. */
-async function launch(seed: (recordings: string) => void): Promise<Launched> {
+async function launch(seed: (recordings: string) => void,
+                      extraEnv: Record<string, string> = {}): Promise<Launched> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-libe2e-"));
   seed(recordings);
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
@@ -62,7 +63,7 @@ async function launch(seed: (recordings: string) => void): Promise<Launched> {
     cwd: root,
     env: {
       ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
-      STC_FAKE_STILL_LOG: stillLog, STC_NO_SHUTTER: "1",
+      STC_FAKE_STILL_LOG: stillLog, STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
   const win = await app.firstWindow();
@@ -152,6 +153,59 @@ describe("the library grid", () => {
     expect(await win.locator("#libgrid").count()).toBe(0);
     // The filter chips are still there — the library is empty, not absent.
     expect(await win.locator(".libfilters .chip").count()).toBe(3);
+  }, 60_000);
+
+  // STC-521: the three states a library with nothing to show can be in.
+  test("the empty state names the folder and the hotkeys, in light and dark", async () => {
+    const { win, recordings } = await launch(() => {});
+    const card = win.locator("#empty.libplaceholder");
+    await expect.poll(() => card.count(), { timeout: 15_000 }).toBe(1);
+    const text = await card.innerText();
+    expect(text).toContain("No captures yet");
+    expect(text).toContain(recordings);
+    expect(text).toMatch(/takes a screenshot/);
+    expect(text).toMatch(/starts a recording/);
+    const look = () => card.evaluate((n) => {
+      const s = getComputedStyle(n);
+      return { bg: s.backgroundColor, title: getComputedStyle(n.querySelector(".libplacetitle")!).color };
+    });
+    await win.emulateMedia({ colorScheme: "light" });
+    const light = await look();
+    await win.emulateMedia({ colorScheme: "dark" });
+    const dark = await look();
+    // Both themes draw a real surface with legible text, and they differ.
+    for (const l of [light, dark]) expect(l.bg).not.toBe("rgba(0, 0, 0, 0)");
+    expect(dark.bg).not.toBe(light.bg);
+    expect(dark.title).not.toBe(light.title);
+  }, 60_000);
+
+  test("while the first scan is still running the library says it is loading", async () => {
+    const { win } = await launch(() => {}, { STC_LIBRARY_SLOW_MS: "4000" });
+    const state = win.locator("#libstate[data-state='loading']");
+    await expect.poll(() => state.count(), { timeout: 3_000 }).toBe(1);
+    expect(await state.innerText()).toContain("Loading your captures");
+    // ...and then gives way to the real answer.
+    await expect.poll(() => win.locator("#empty").count(), { timeout: 15_000 }).toBe(1);
+    expect(await win.locator("#libstate").count()).toBe(0);
+  }, 60_000);
+
+  test("a folder that has gone missing says so, and Try again recovers once it is back", async () => {
+    const { win, recordings } = await launch((dir) => rmSync(dir, { recursive: true, force: true }));
+    const state = win.locator("#libstate[data-state='missing']");
+    await expect.poll(() => state.count(), { timeout: 15_000 }).toBe(1);
+    expect(await state.innerText()).toContain(recordings);
+    expect(await state.getAttribute("role")).toBe("alert");
+    // Nothing to filter or lay out over a folder that is not there.
+    expect(await win.locator(".libfilters .chip").count()).toBe(0);
+    mkdirSync(recordings, { recursive: true });
+    await state.locator("button[data-placeholder='retry']").click();
+    await expect.poll(() => win.locator("#empty").count(), { timeout: 15_000 }).toBe(1);
+  }, 60_000);
+
+  test("a folder the app may not read is its own state", async () => {
+    const { win } = await launch((dir) => chmodSync(dir, 0o000));
+    await expect.poll(() => win.locator("#libstate[data-state='unreadable']").count(), { timeout: 15_000 }).toBe(1);
+    expect(await win.locator("#libstate button[data-placeholder='choose-folder']").count()).toBe(1);
   }, 60_000);
 
   test("a stills-only library lists them as stills, not as broken recordings", async () => {

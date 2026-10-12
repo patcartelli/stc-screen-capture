@@ -120,8 +120,11 @@ import {
   formatAccelerator, parseAccelerator,
   type BindableAction, type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
-import { renderLibrary, type LibraryCallbacks } from "./library-view.js";
-import type { LibraryItem, LibraryList } from "./library-items.js";
+import { renderLibrary, renderPlaceholderOnly, showUpdating, type LibraryCallbacks } from "./library-view.js";
+import {
+  placeholderFor, LOADING_PLACEHOLDER, UPDATING_NOTE, UPDATING_SHOW_AFTER_MS,
+  type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
+} from "./library-items.js";
 import { formatElapsedTimer } from "./pill.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
@@ -1360,10 +1363,43 @@ async function openItem(item: LibraryItem): Promise<void> {
   await recorder.reopenStill(dir);
 }
 
+/** What the empty library says — read only when it is about to be shown. */
+async function placeholderContext(): Promise<PlaceholderContext> {
+  let shortcuts: Awaited<ReturnType<typeof recorder.getShortcuts>>["shortcuts"] | undefined;
+  try { shortcuts = (await recorder.getShortcuts()).shortcuts; } catch { /* unbound reads as no hint */ }
+  const key = (a: "display" | "record") => (shortcuts?.[a] ? formatAccelerator(shortcuts[a]) : null);
+  return { folder: await recorder.resolvedSaveFolder(), shotKey: key("display"), recordKey: key("record") };
+}
+
+async function onPlaceholderAction(a: PlaceholderAction): Promise<void> {
+  if (a === "choose-folder") await recorder.chooseStillDestination();
+  await refreshTakes();
+}
+
+// STC-521: the first paint shows "loading" instead of an empty page, and a
+// later refresh that outlasts UPDATING_SHOW_AFTER_MS says the grid is catching
+// up. A fast refresh shows neither.
+let libraryDrawn = false;
+
 async function refreshTakes(): Promise<void> {
-  const list = await recorder.library(libraryFilter);
+  const host = $("takes");
+  let slow: ReturnType<typeof setTimeout> | undefined;
+  if (!libraryDrawn) renderPlaceholderOnly(host, LOADING_PLACEHOLDER);
+  else slow = setTimeout(() => showUpdating(host, UPDATING_NOTE), UPDATING_SHOW_AFTER_MS);
+  let list: LibraryList;
+  try {
+    list = await recorder.library(libraryFilter);
+  } finally {
+    clearTimeout(slow);
+  }
   libraryFilter = list.filter;
-  renderLibrary($("takes"), list, libraryCallbacks, libraryViewMode);
+  const empty = !list.items.length && !list.invalid.length && !(list.folder && list.folder.state !== "ok");
+  const placeholder = placeholderFor(list, empty && list.filter === "all"
+    ? await placeholderContext()
+    : { folder: "", shotKey: null, recordKey: null });
+  libraryDrawn = true;
+  renderLibrary(host, list, libraryCallbacks, libraryViewMode, placeholder,
+                (a) => void onPlaceholderAction(a));
 }
 
 

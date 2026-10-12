@@ -2152,9 +2152,14 @@ ipcMain.handle("recorder:stop", async () => {
 
 // ---- the library: one index over two kinds (STC-294) ----------------------
 
-ipcMain.handle("library:list", async (_e, filter?: string) =>
-  listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
-             typeof filter === "string" ? filter : undefined));
+ipcMain.handle("library:list", async (_e, filter?: string) => {
+  // STC-521: the loading state only exists while the scan is slow, and a scan
+  // of a test fixture never is. This makes it reachable on purpose.
+  const slow = Number(process.env.STC_LIBRARY_SLOW_MS);
+  if (slow > 0) await new Promise((r) => setTimeout(r, slow));
+  return listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
+                     typeof filter === "string" ? filter : undefined);
+});
 
 /**
  * Cache a decorated thumbnail beside the document it was rendered from.

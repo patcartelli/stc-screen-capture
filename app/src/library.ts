@@ -9,7 +9,7 @@ import { readBundleId } from "./capture-identity.js";
 import {
   recordingItem, stillItem, looseFileItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
   THUMBNAIL_FILE, SUPPORTED_ANCHORS_VERSIONS, recordingDurationMs,
-  type FinishedFileInfo, type InvalidItem, type LibraryList, type StillInfo, type TakeInfo, type TakeList,
+  type FinishedFileInfo, type FolderStatus, type InvalidItem, type LibraryList, type StillInfo, type TakeInfo, type TakeList,
 } from "./library-items.js";
 
 // Re-exported so callers have one import for the library, not two.
@@ -376,6 +376,8 @@ interface Scan {
    */
   loose: FinishedFileInfo[];
   invalid: InvalidItem[];
+  /** Whether the folder itself could be read (STC-521). */
+  folder: FolderStatus;
 }
 
 /** A candidate bundle directory. */
@@ -534,6 +536,23 @@ async function readBundleInfo(dir: string, name: string, names: string[]): Promi
 }
 
 /**
+ * Why a folder could not be listed (STC-521), as the library shows it.
+ *
+ * ENOENT on the DEFAULT folder is not a problem: nothing creates
+ * `~/Desktop/stc` until the first capture, so a fresh install is empty, not
+ * broken. The same ENOENT on a folder the user (or the environment) NAMED is
+ * different — it was there, or they would not have named it, and it moved.
+ * Everything else (EACCES, ENOTDIR, EIO) is unreadable whoever chose the path.
+ */
+export function folderStatusOf(env: NodeJS.ProcessEnv, saveFolder: string | null,
+                               path: string, code: string | undefined): FolderStatus {
+  if (code === "ENOENT") {
+    return saveFolder || env.STC_RECORDINGS_DIR ? { state: "missing", path } : { state: "ok" };
+  }
+  return { state: "unreadable", path };
+}
+
+/**
  * One pass over the storage root, per the ticket's four scan rules
  * (`.superpowers/sdd/.../task-8-brief.md`):
  *
@@ -564,8 +583,8 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
   let entries: string[];
   try {
     entries = await readdir(root);
-  } catch {
-    return { takes: [], stills: [], loose: [], invalid: [] };   // no folder yet is not an error
+  } catch (e: any) {
+    return { takes: [], stills: [], loose: [], invalid: [], folder: folderStatusOf(env, saveFolder, root, e?.code) };
   }
 
   const finished = await scanFinishedFiles(root, entries);
@@ -730,7 +749,7 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
   // what a renamed FILE needs; a bundle is never renamed by the user.
   takes.sort((a, b) => b.name.localeCompare(a.name));
   stills.sort((a, b) => b.name.localeCompare(a.name));
-  return { takes, stills, loose, invalid };
+  return { takes, stills, loose, invalid, folder: { state: "ok" } };
 }
 
 async function readRecording(dir: string, name: string, names: string[],
@@ -832,11 +851,11 @@ async function readStill(dir: string, name: string, names: string[],
  */
 export async function listLibrary(env: NodeJS.ProcessEnv, saveFolder: string | null,
                                   filter: string = DEFAULT_LIBRARY_FILTER): Promise<LibraryList> {
-  const { takes, stills, loose, invalid } = await scanRoot(env, saveFolder);
+  const { takes, stills, loose, invalid, folder } = await scanRoot(env, saveFolder);
   const all = [...takes.map(recordingItem), ...stills.map(stillItem), ...loose.map(looseFileItem)];
   all.sort((a, b) => b.createdAt - a.createdAt);
   const chosen = LIBRARY_FILTERS.some((f) => f.id === filter) ? filter : DEFAULT_LIBRARY_FILTER;
-  return { items: applyFilter(all, chosen), invalid, filters: LIBRARY_FILTERS, filter: chosen };
+  return { items: applyFilter(all, chosen), invalid, filters: LIBRARY_FILTERS, filter: chosen, folder };
 }
 
 /**
