@@ -2,6 +2,7 @@ import type { ElectronApplication } from "playwright";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { DEFAULT_REQUEST_TIMEOUT_MS, QUIT_GRACE_MS } from "../src/helper-client.js";
 import { E2E_DIAG_DIR_ENV, snapshotHungApp } from "./_e2e-diagnostics.js";
+import { installAtLaunch } from "./_launch-evaluate.js";
 
 /**
  * Snapshot a process `closeApp` is about to kill, into the e2e diagnostics
@@ -45,12 +46,16 @@ async function snapshotBeforeKill(pid: number | undefined): Promise<string | und
  * change what these tests observe on disk (several assert exactly the
  * temp-vs-library split). Quit Anyway deletes nothing and leaves takes in
  * temp, which is what these tests already expect.
+ *
+ * STC-513: installed through `installAtLaunch`, because the first evaluate
+ * after launch can lose its reply even though it ran (`_launch-evaluate.ts`).
  */
 export async function stubQuitDialog(app: ElectronApplication): Promise<void> {
-  await app.evaluate(({ dialog }) => {
+  await installAtLaunch(app, ({ dialog }) => {
     dialog.showMessageBox = (async (..._args: unknown[]) =>
       ({ response: 1, checkboxChecked: false })) as any;
-  });
+    (globalThis as Record<string, unknown>).__stcQuitStub = true;
+  }, undefined, "__stcQuitStub");
 }
 
 /**
