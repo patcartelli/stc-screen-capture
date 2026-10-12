@@ -145,6 +145,11 @@ process.stdin.on("data", (chunk) => {
           setTimeout(() => send("warning", {
             code: "camera-failed", detail: "fake: the device could not be opened",
           }), 40);
+        } else if (process.env.STC_FAKE_CAMERA === "fail-now") {
+          // STC-526: the same failure in the SAME tick as `started`, so it
+          // reaches the window before the start's own reply does. That is
+          // the ordering a loaded machine produces at random with "fail".
+          send("warning", { code: "camera-failed", detail: "fake: the device could not be opened" });
         } else if (process.env.STC_FAKE_CAMERA) {
           setTimeout(() => send("camera-started", { device: process.env.STC_FAKE_CAMERA }), 40);
         }
@@ -162,6 +167,9 @@ process.stdin.on("data", (chunk) => {
           setTimeout(() => send("warning", {
             code: "mic-not-found", detail: "fake: the device could not be found",
           }), 40);
+        } else if (process.env.STC_FAKE_MIC === "fail-now") {
+          // STC-526: same as the camera's "fail-now", one device over.
+          send("warning", { code: "mic-not-found", detail: "fake: the device could not be found" });
         } else if (process.env.STC_FAKE_MIC) {
           setTimeout(() => send("mic-started", { device: process.env.STC_FAKE_MIC }), 40);
         }
