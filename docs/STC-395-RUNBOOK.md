@@ -49,6 +49,8 @@ Known limit (not fixed): pass 1 (the palette) reports progress only once per pal
 A long take (2+ minutes, lots of motion) at 1280 / 30 fps.
 Must: `… — large for a GIF; Video is smaller` in the warning colour; Copy and Save still work.
 
+Result 2026-10-12: PASS. A 3:27 take at 1280 / 30 fps came out at 92 MB; the label read `GIF · 92 MB — large for a GIF; Video is smaller` in the warning orange; Copy and Save both worked. Found here: the "Saved GIF" toast showed the warning "!" icon; it is now a success ✓ (`tone: "success"`, fe02db3).
+
 ## §5 Save
 
 Save in GIF mode. The take appears in the library as before, `<take>.gif` sits in the save folder, and "Show in Finder" selects it. Then open the take in the editor and Export an MP4: the GIF must be untouched.
