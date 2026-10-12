@@ -11,15 +11,15 @@ import { SCREENCAPTUREKIT_FILES } from "../../vitest.screencapturekit-files.js";
  * that takes a day to trace, which is why this is a test and not a comment.
  *
  * Detection, as a grep: the file names the real binary's path AND sends one
- * of the three helper commands that reach ScreenCaptureKit (`start`,
- * `capture-still`, `windows`), in either the raw-protocol or the client form.
+ * of the four helper commands that reach ScreenCaptureKit (`start`,
+ * `capture-still`, `windows`, `prime-capture`), in either the raw-protocol or the client form.
  */
 const root = join(__dirname, "..", "..");
 const REAL_BINARY = /"helper",\s*"build",\s*"stc-helper"/;
 const SCK_COMMAND = new RegExp([
-  String.raw`cmd:\s*"(start|windows|capture-still)"`,
-  String.raw`request\(\s*"(start|windows|capture-still)"`,
-  String.raw`\.(startRecording|listWindows|captureStill)\(`,
+  String.raw`cmd:\s*"(start|windows|capture-still|prime-capture)"`,
+  String.raw`request\(\s*"(start|windows|capture-still|prime-capture)"`,
+  String.raw`\.(startRecording|listWindows|captureStill|primeCapture)\(`,
 ].join("|"));
 
 const reachesScreenCaptureKit = (src: string) => REAL_BINARY.test(src) && SCK_COMMAND.test(src);
@@ -39,7 +39,7 @@ describe("the real helper's ScreenCaptureKit calls never run in parallel (STC-47
   test("every unit file that reaches ScreenCaptureKit through the real helper is listed", () => {
     const found = unitTestFiles().filter((f) => reachesScreenCaptureKit(readFileSync(join(root, f), "utf8")));
     expect(found.filter((f) => !SCREENCAPTUREKIT_FILES.includes(f)),
-      "these call start/windows/capture-still on the real helper but run in the parallel unit group; "
+      "these call start/windows/capture-still/prime-capture on the real helper but run in the parallel unit group; "
       + "add them to vitest.screencapturekit-files.ts").toEqual([]);
   });
 

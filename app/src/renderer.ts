@@ -120,8 +120,11 @@ import {
   formatAccelerator, parseAccelerator,
   type BindableAction, type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
-import { renderLibrary, type LibraryCallbacks } from "./library-view.js";
-import type { LibraryItem, LibraryList } from "./library-items.js";
+import { renderLibrary, renderPlaceholderOnly, showUpdating, type LibraryCallbacks } from "./library-view.js";
+import {
+  placeholderFor, LOADING_PLACEHOLDER, UPDATING_NOTE, UPDATING_SHOW_AFTER_MS,
+  type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
+} from "./library-items.js";
 import { formatElapsedTimer } from "./pill.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
@@ -142,6 +145,7 @@ import {
   editPipStyle, pipRect, pipSize, snapCenter, PIP_SNAP_THRESHOLD_SCREEN_PX, PIP_SHADOW, type PipStyle,
 } from "@transform/pip-style.js";
 import { buildPipInspector } from "./pip-inspector.js";
+import { TakeDeviceReports, type TakeDevice } from "./take-device-status.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 const recordBtn = $("record") as HTMLButtonElement;
@@ -281,6 +285,13 @@ function currentSelection(): DeviceSelection {
 }
 
 /**
+ * What the devices have said during the current take, so neither the
+ * per-take "opening…" reset nor the idle label writes over a report that beat
+ * it here (STC-526, take-device-status.ts).
+ */
+const takeReports = new TakeDeviceReports();
+
+/**
  * The trigger's own label at rest — what is CONFIGURED, not what a take is
  * currently doing. `setCamera`/`setMic` (below) overwrite this with live
  * status the moment a take actually opens the device; this only runs again
@@ -294,8 +305,11 @@ function deviceStatusLabel(choice: DeviceChoice, devices: DeviceLike[]): string 
 }
 function renderIdleStatus(): void {
   if (recording) return;
-  setCamera(deviceStatusLabel(cameraChoice(), knownCameras));
-  setMic(deviceStatusLabel(micChoice(), knownMics));
+  // `recording` is set only when the start's reply arrives, and Record's own
+  // settings:changed lands here before that: a device that already reported
+  // for the starting take keeps its row (STC-526, take-device-status.ts rule 4).
+  if (takeReports.mayShowIdle("camera")) setCamera(deviceStatusLabel(cameraChoice(), knownCameras));
+  if (takeReports.mayShowIdle("mic")) setMic(deviceStatusLabel(micChoice(), knownMics));
 }
 
 async function refreshDevices(): Promise<void> {
@@ -418,6 +432,7 @@ function lockSettings(locked: boolean): void {
  */
 function applyRecordingState(recording_: boolean): void {
   recording = recording_;
+  if (!recording) takeReports.newTake();
   recordBtn.textContent = recording ? "Stop" : "Record";
   setState(recording ? "recording" : "idle");
   // The device is opened at start and closed at stop, so the setting must
@@ -448,9 +463,13 @@ async function refreshCaptureSettingsForRecording(): Promise<void> {
   }
   // Reset per take, and say "opening…" rather than "—": the camera opens
   // off the critical path, so there IS a window where it is neither absent
-  // nor live, and that window is the whole complaint (STC-287).
-  setCamera(storedCamera ? "opening…" : "off");
-  setMic(storedMicUid != null ? "opening…" : "off");
+  // nor live, and that window is the whole complaint (STC-287). But never
+  // over a device that already reported for this take: a fast failure can
+  // arrive before this runs (STC-526, take-device-status.ts).
+  const camera = takeReports.placeholder("camera", storedCamera);
+  if (camera !== undefined) setCamera(camera);
+  const mic = takeReports.placeholder("mic", storedMicUid != null);
+  if (mic !== undefined) setMic(mic);
 }
 // ---- profile sheet (STC-374) ------------------------------------------------
 //
@@ -607,6 +626,9 @@ recordBtn.addEventListener("click", async () => {
   recordBtn.disabled = true;
   try {
     if (!recording) {
+      // Before asking, so nothing reported before this take can protect a
+      // row from the take's own "opening…" (STC-526, rule 2).
+      takeReports.newTake();
       const r = await recorder.start();
       // STC-391: Escape (or Cancel) during the countdown. Not a failure and
       // not an alert — the user asked for nothing to happen, and telling them
@@ -754,15 +776,21 @@ recorder.on("recorder:recording-state", (s: { recording: boolean; dir?: string }
  */
 function setCamera(text: string): void { $("camera-state").textContent = text; }
 
+/** A device's own report for this take: its row, and the record that it spoke. */
+function reportDevice(device: TakeDevice, text: string): void {
+  takeReports.report(device);
+  if (device === "camera") setCamera(text); else setMic(text);
+}
+
 recorder.on("helper:camera-started", (l) => {
-  setCamera(String(l.device ?? "live"));
+  reportDevice("camera", String(l.device ?? "live"));
 });
 
 /** STC-233: the mic's own lifecycle readout, same reasoning as the camera's. */
 function setMic(text: string): void { $("mic-state").textContent = text; }
 
 recorder.on("helper:mic-started", (l) => {
-  setMic(String(l.device ?? "live"));
+  reportDevice("mic", String(l.device ?? "live"));
 });
 
 recorder.on("helper:respawned", () => setState("recovered — helper restarted"));
@@ -961,13 +989,13 @@ recorder.on("helper:warning", (l) => {
     // row has to be always-visible (STC-412 final review, I2): the alert is a
     // toast that dismisses itself, so the row is the ONLY thing that still
     // says "this take had no camera" a minute later.
-    setCamera(code === "camera-no-frames" ? "no frames" : code === "camera-disconnected" ? "disconnected" : `failed — ${code}`);
+    reportDevice("camera", code === "camera-no-frames" ? "no frames" : code === "camera-disconnected" ? "disconnected" : `failed — ${code}`);
     alertUser(l.detail ? `${camera}\n\n${l.detail}` : camera);
     return;
   }
   const mic = MIC_FAULTS[code];
   if (mic) {
-    setMic(code === "mic-no-frames" ? "no frames" : code === "mic-disconnected" ? "disconnected" : `failed — ${code}`);
+    reportDevice("mic", code === "mic-no-frames" ? "no frames" : code === "mic-disconnected" ? "disconnected" : `failed — ${code}`);
     alertUser(l.detail ? `${mic}\n\n${l.detail}` : mic);
     return;
   }
@@ -1362,10 +1390,43 @@ async function openItem(item: LibraryItem): Promise<void> {
   await recorder.reopenStill(dir);
 }
 
+/** What the empty library says — read only when it is about to be shown. */
+async function placeholderContext(): Promise<PlaceholderContext> {
+  let shortcuts: Awaited<ReturnType<typeof recorder.getShortcuts>>["shortcuts"] | undefined;
+  try { shortcuts = (await recorder.getShortcuts()).shortcuts; } catch { /* unbound reads as no hint */ }
+  const key = (a: "display" | "record") => (shortcuts?.[a] ? formatAccelerator(shortcuts[a]) : null);
+  return { folder: await recorder.resolvedSaveFolder(), shotKey: key("display"), recordKey: key("record") };
+}
+
+async function onPlaceholderAction(a: PlaceholderAction): Promise<void> {
+  if (a === "choose-folder") await recorder.chooseStillDestination();
+  await refreshTakes();
+}
+
+// STC-521: the first paint shows "loading" instead of an empty page, and a
+// later refresh that outlasts UPDATING_SHOW_AFTER_MS says the grid is catching
+// up. A fast refresh shows neither.
+let libraryDrawn = false;
+
 async function refreshTakes(): Promise<void> {
-  const list = await recorder.library(libraryFilter);
+  const host = $("takes");
+  let slow: ReturnType<typeof setTimeout> | undefined;
+  if (!libraryDrawn) renderPlaceholderOnly(host, LOADING_PLACEHOLDER);
+  else slow = setTimeout(() => showUpdating(host, UPDATING_NOTE), UPDATING_SHOW_AFTER_MS);
+  let list: LibraryList;
+  try {
+    list = await recorder.library(libraryFilter);
+  } finally {
+    clearTimeout(slow);
+  }
   libraryFilter = list.filter;
-  renderLibrary($("takes"), list, libraryCallbacks, libraryViewMode);
+  const empty = !list.items.length && !list.invalid.length && !(list.folder && list.folder.state !== "ok");
+  const placeholder = placeholderFor(list, empty && list.filter === "all"
+    ? await placeholderContext()
+    : { folder: "", shotKey: null, recordKey: null });
+  libraryDrawn = true;
+  renderLibrary(host, list, libraryCallbacks, libraryViewMode, placeholder,
+                (a) => void onPlaceholderAction(a));
 }
 
 

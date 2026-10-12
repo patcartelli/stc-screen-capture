@@ -1,4 +1,6 @@
-import type { LibraryActionId, LibraryItem, LibraryList } from "./library-items.js";
+import type {
+  LibraryActionId, LibraryItem, LibraryList, LibraryPlaceholder, PlaceholderAction,
+} from "./library-items.js";
 
 /**
  * The library grid. Draws what the adapter hands it and decides nothing
@@ -104,6 +106,57 @@ function filterBar(list: LibraryList, cb: LibraryCallbacks): HTMLElement {
     bar.append(chip);
   }
   return bar;
+}
+
+/**
+ * A library with nothing to draw (STC-521): the sentence, the folder it is
+ * about, and whatever the user can do. Wording is `placeholderFor`'s; this
+ * only lays it out. `#empty` stays the id the existing tests look for.
+ */
+function placeholderCard(p: LibraryPlaceholder, act: (a: PlaceholderAction) => void): HTMLElement {
+  const card = el("div", "libplaceholder");
+  card.id = p.state === "empty" || p.state === "filtered" ? "empty" : "libstate";
+  card.dataset.state = p.state;
+  // Only a problem interrupts a screen reader; loading and empty are polite.
+  card.setAttribute("role", p.state === "missing" || p.state === "unreadable" ? "alert" : "status");
+  if (p.state === "loading") card.append(el("div", "libspinner"));
+  card.append(el("div", "libplacetitle", p.title), el("div", "libplacebody", p.body));
+  if (p.path) card.append(el("code", "libplacepath", p.path));
+  if (p.actions.length) {
+    const row = el("div", "libplaceactions");
+    for (const a of p.actions) {
+      const b = el("button", a === "choose-folder" ? "primary" : "", PLACEHOLDER_LABELS[a]);
+      b.dataset.placeholder = a;
+      b.addEventListener("click", () => act(a));
+      row.append(b);
+    }
+    card.append(row);
+  }
+  return card;
+}
+
+const PLACEHOLDER_LABELS: Record<PlaceholderAction, string> = {
+  "retry": "Try again",
+  "choose-folder": "Choose folder…",
+};
+
+/** Just a placeholder, before there is any list to draw around it. */
+export function renderPlaceholderOnly(host: HTMLElement, p: LibraryPlaceholder): void {
+  host.textContent = "";
+  host.setAttribute("aria-busy", String(p.state === "loading"));
+  host.append(placeholderCard(p, () => {}));
+}
+
+/**
+ * The library is catching up (STC-521): the grid on screen is stale, so say
+ * so without taking it away. Shown only by the caller's delay, never here.
+ */
+export function showUpdating(host: HTMLElement, text: string): void {
+  host.setAttribute("aria-busy", "true");
+  if (host.querySelector(".libupdating")) return;
+  const note = el("div", "libupdating", text);
+  note.setAttribute("role", "status");
+  host.prepend(note);
 }
 
 /** The grid/list layout switch (STC-429), drawn beside the filter chips. */
@@ -324,7 +377,9 @@ function tile(item: LibraryItem, cb: LibraryCallbacks, view: "grid" | "list"): H
  * no answer, and the view handles it by not asking.
  */
 export function renderLibrary(host: HTMLElement, list: LibraryList,
-                              cb: LibraryCallbacks, view: "grid" | "list" = "grid"): void {
+                              cb: LibraryCallbacks, view: "grid" | "list" = "grid",
+                              placeholder: LibraryPlaceholder | null = null,
+                              onPlaceholderAction: (a: PlaceholderAction) => void = () => {}): void {
   painting?.disconnect();
   // `rootMargin` paints a screenful ahead, so a tile is ready by the time it
   // arrives rather than popping in after it. IntersectionObserver is absent
@@ -342,16 +397,18 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
     : undefined;
 
   host.textContent = "";
-  const header = el("div", "libheader");
-  header.append(filterBar(list, cb), viewSwitch(view, cb));
-  host.append(header);
+  host.removeAttribute("aria-busy");
+  // A folder that cannot be read has no kinds to filter and no layout to
+  // choose, so its controls would be decoration over a lost library.
+  const folderLost = placeholder?.state === "missing" || placeholder?.state === "unreadable";
+  if (!folderLost) {
+    const header = el("div", "libheader");
+    header.append(filterBar(list, cb), viewSwitch(view, cb));
+    host.append(header);
+  }
 
-  if (!list.items.length && !list.invalid.length) {
-    const empty = el("div", "libempty", list.filter === "all"
-      ? "Nothing here yet."
-      : "Nothing of this kind yet.");
-    empty.id = "empty";
-    host.append(empty);
+  if (placeholder) {
+    host.append(placeholderCard(placeholder, onPlaceholderAction));
     return;
   }
 

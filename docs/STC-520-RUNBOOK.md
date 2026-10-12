@@ -10,7 +10,7 @@ last row.
 - **Helper:** `permissions` also reports `microphone` and `camera`
   (`authorized | denied | restricted | notDetermined`). `request-permission` accepts
   `microphone` and `camera` and replies after the person has answered.
-- **App:** `app/src/permissions.ts` rule 8. A Microphone or Camera row exists only while
+- **App:** `app/src/permissions.ts` rule 9. A Microphone or Camera row exists only while
   that device is chosen and not authorized. Record waits on it; a shot never does. "Don't
   use" clears the choice. `main.ts` re-reads the grants before every overlay, and asks for
   a chosen, never-asked device after the overlay closes and before the countdown.

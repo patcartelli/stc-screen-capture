@@ -24,7 +24,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -66,7 +66,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -122,7 +122,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -203,6 +203,21 @@ describe("the system-audio preference (STC-418)", () => {
     writeSettings(d, { systemAudio: true });
     writeSettings(d, { camera: true });
     expect(readSettings(d).systemAudio).toBe(true);
+  });
+});
+
+describe("the capture-primed flag (STC-522)", () => {
+  test("defaults to not primed; persists once set; a non-boolean is not primed", () => {
+    expect(readSettings(dir()).capturePrimed).toBe(false);
+    const d = dir();
+    expect(writeSettings(d, { capturePrimed: true }).capturePrimed).toBe(true);
+    expect(readSettings(d).capturePrimed).toBe(true);
+    // An unrelated write must not reset it, or the stream runs again.
+    writeSettings(d, { previewMuted: true });
+    expect(readSettings(d).capturePrimed).toBe(true);
+    const e = dir();
+    writeFileSync(join(e, "settings.json"), JSON.stringify({ capturePrimed: "yes" }));
+    expect(readSettings(e).capturePrimed).toBe(false);
   });
 });
 

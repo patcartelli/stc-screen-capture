@@ -128,6 +128,21 @@ final class App {
             if !known {
                 IO.send("error", seq: seq, ["code": "bad-request", "detail": "unknown grant \(grant)"])
             }
+        case "prime-capture":
+            // STC-522: a throwaway stream so macOS's picker-bypass consent
+            // comes up now, not inside the first take. Idle only: during a take
+            // the consent has already been asked, and a second stream would be
+            // a second recording indicator for nothing.
+            guard state == .idle, !CapturePrime.running else {
+                IO.send("error", seq: seq, ["code": "bad-state",
+                                            "detail": "prime-capture needs an idle helper with no prime running"]); return
+            }
+            CapturePrime.run(holdMs: cmd["holdMs"] as? Int ?? CapturePrime.defaultHoldMs) { result in
+                switch result {
+                case .success(let o): IO.send("primed", seq: seq, o)
+                case .failure(let e): IO.send("error", seq: seq, ["code": e.code, "detail": e.detail])
+                }
+            }
         case "capture-still":
             captureStill(cmd, seq: seq)
         case "copy-file":

@@ -199,9 +199,20 @@ export interface InvalidItem {
   reason: string;
 }
 
+/**
+ * Whether the library's folder could be listed at all (STC-521). `ok` covers
+ * both a folder with things in it and an empty one: whether anything is IN it
+ * is `items`' business, whether it can be READ is this.
+ */
+export type FolderStatus =
+  | { state: "ok" }
+  | { state: "missing" | "unreadable"; path: string };
+
 export interface LibraryList {
   items: LibraryItem[];
   invalid: InvalidItem[];
+  /** Absent only on a list built before the folder was asked about. */
+  folder?: FolderStatus;
   /** The chips to draw, and which one is on. Data, so the view chooses nothing. */
   filters: readonly LibraryFilter[];
   filter: string;
@@ -540,6 +551,70 @@ export function looseFileItem(f: FinishedFileInfo): LibraryItem {
       { id: "reveal", label: "Show" },
       { id: "delete", label: "Delete" },
     ],
+  };
+}
+
+// ── what the library shows when it has nothing to show (STC-521) ────────────
+
+/** An update that finishes inside this is never announced — a flash is worse than silence. */
+export const UPDATING_SHOW_AFTER_MS = 300;
+
+export const UPDATING_NOTE = "Checking for new captures…";
+
+export type PlaceholderAction = "retry" | "choose-folder";
+
+export interface LibraryPlaceholder {
+  state: "loading" | "empty" | "filtered" | "missing" | "unreadable";
+  title: string;
+  body: string;
+  /** The folder's path when the sentence is about it, shown on its own line. */
+  path?: string;
+  actions: PlaceholderAction[];
+}
+
+export interface PlaceholderContext {
+  /** Resolved save folder, for the sentence that says what the folder is. */
+  folder: string;
+  /** Already formatted for display ("⌃⌥⇧⌘3"); null when the action is unbound. */
+  shotKey: string | null;
+  recordKey: string | null;
+}
+
+/** The first paint, before any list has come back. */
+export const LOADING_PLACEHOLDER: LibraryPlaceholder = {
+  state: "loading", title: "Loading your captures…",
+  body: "Reading the folder.", actions: [],
+};
+
+/**
+ * The sentence for a library with nothing to draw, or null when there is a
+ * grid to draw instead. A folder that cannot be read wins over "empty": an
+ * empty-looking library over a lost folder says the captures are gone.
+ */
+export function placeholderFor(list: LibraryList, ctx: PlaceholderContext): LibraryPlaceholder | null {
+  const f = list.folder;
+  if (f && f.state !== "ok") {
+    return f.state === "missing"
+      ? { state: "missing", title: "This folder can’t be found",
+          body: "It was moved, renamed or deleted, or the drive it’s on isn’t connected. Your captures haven’t been removed.",
+          path: f.path, actions: ["retry", "choose-folder"] }
+      : { state: "unreadable", title: "This folder can’t be opened",
+          body: "Capture doesn’t have permission to read it. Allow access in System Settings → Privacy & Security → Files and Folders, or choose another folder.",
+          path: f.path, actions: ["retry", "choose-folder"] };
+  }
+  if (list.items.length || list.invalid.length) return null;
+  if (list.filter !== "all") {
+    return { state: "filtered", title: "Nothing of this kind yet", body: "Choose All to see everything.", actions: [] };
+  }
+  const keys = [
+    ctx.shotKey ? `${ctx.shotKey} takes a screenshot` : null,
+    ctx.recordKey ? `${ctx.recordKey} starts a recording` : null,
+  ].filter((k): k is string => k !== null);
+  return {
+    state: "empty", title: "No captures yet",
+    body: `Screenshots and recordings you make are saved to this folder, a plain folder you can also open in Finder.${
+      keys.length ? ` ${keys.join(", ")}.` : " Use Record or Shot to make the first one."}`,
+    path: ctx.folder, actions: [],
   };
 }
 

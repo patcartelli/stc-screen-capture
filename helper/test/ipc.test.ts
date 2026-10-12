@@ -388,4 +388,25 @@ describe("capture-still — validation answers on fd3 before anything touches Sc
     if (r.ev === "windows") expect(Array.isArray(r.windows)).toBe(true);
     else expect(r.code).toBe("no-displays");
   }, 20_000);
+
+  // STC-522. Ungranted (CI) the shareable-content call is refused and the
+  // answer is `no-displays`; granted, a real throwaway stream runs and stops.
+  // Either way it ANSWERS: the app awaits it before a Record's overlay opens.
+  // A second prime while one runs is refused rather than queued.
+  test("prime-capture answers reliably, granted or not, and refuses a second at once", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "prime-capture", seq: 35, holdMs: 200 });
+    h.send({ cmd: "prime-capture", seq: 36, holdMs: 200 });
+    const second = await waitFor(() => h.fd3.find((l) => l.seq === 36), 5000, "second prime");
+    expect(second.ev).toBe("error");
+    expect(second.code).toBe("bad-state");
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 35), 12_000, "prime outcome");
+    expect(["primed", "error"]).toContain(r.ev);
+    if (r.ev === "primed") expect(r.heldMs).toBe(200);
+    else expect(r.code).toBe("no-displays");
+    h.send({ cmd: "status", seq: 37 });
+    const s = await waitFor(() => h.fd3.find((l) => l.seq === 37), 5000, "status after prime");
+    expect(s.state).toBe("idle");
+  }, 20_000);
 });

@@ -218,8 +218,29 @@
     .libactions button.primary:hover:not([disabled]) { background: var(--accent-soft); }
     .libactions button.delete { border-color: var(--rec); color: var(--rec); }
     .libactions button.tertiary { border-color: var(--border); color: var(--text-dim); }
-    .libempty { color: var(--text-faint); padding: 6px 0; }
-    #empty { color: var(--text-faint); padding: 6px 0; }
+    /* What the library says with nothing to draw (STC-521): empty, loading, and
+       a folder that is missing or unreadable. Tokens only, so light and dark
+       follow the OS like the rest of this window. A lost folder takes the
+       record colour for its title; the others stay quiet. */
+    .libplaceholder { display: flex; flex-direction: column; align-items: center; text-align: center;
+                      gap: 8px; padding: 40px 24px; margin-top: 8px;
+                      border: 1px dashed var(--border-strong); border-radius: 12px; background: var(--surface); }
+    .libplacetitle { font-size: var(--type-body-strong); font-weight: var(--type-body-strong-weight); color: var(--text); }
+    .libplacebody { max-width: 46ch; color: var(--text-dim); }
+    .libplacepath { max-width: 100%; overflow-wrap: anywhere; font-family: var(--font-mono);
+                    font-size: var(--type-value-sm); color: var(--text-dim);
+                    background: var(--surface-hover); padding: 3px 8px; border-radius: 6px; }
+    .libplaceholder[data-state="missing"] .libplacetitle,
+    .libplaceholder[data-state="unreadable"] .libplacetitle { color: var(--rec); }
+    .libplaceholder[data-state="missing"], .libplaceholder[data-state="unreadable"] { border-style: solid; border-color: var(--rec); }
+    .libplaceactions { display: flex; gap: 8px; margin-top: 6px; }
+    .libplaceactions button.primary { font-weight: 600; border-color: var(--accent); color: var(--accent); }
+    .libspinner { width: 18px; height: 18px; border-radius: 999px; border: 2px solid var(--border-strong);
+                  border-top-color: var(--accent); animation: libspin .8s linear infinite; }
+    @keyframes libspin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .libspinner { animation: none; } }
+    .libupdating { color: var(--text-dim); font-size: var(--type-value-sm); padding: 0 0 6px; }
+    #takes[aria-busy="true"] .libgrid, #takes[aria-busy="true"] .liblist { opacity: .6; }
     .stamp { color: var(--text-faint); font-size: var(--type-value-sm); margin-left: 6px; }
     .labelinput { font: inherit; padding: 2px 6px; border-radius: 5px;
                   border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); width: 200px; }
@@ -623,7 +644,7 @@
     <h1 id="permissionhead">Before your first capture</h1>
     <p class="permintro" id="permissionintro">Capture needs two macOS permissions. macOS asks once for each. After that, they live in System Settings › Privacy &amp; Security.</p>
     <div id="permissionrows"></div>
-    <p class="permnote">On your first recording, macOS may also ask whether Capture can record without its window picker. Choose Allow.</p>
+    <p class="permnote">After you relaunch, macOS may ask whether Capture can record without its window picker. Choose Allow.</p>
   </section>
   <script src="../dist/renderer.js"></script>
 </body>
