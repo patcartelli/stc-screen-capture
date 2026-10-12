@@ -38,6 +38,11 @@ describe("geometryAt — the entry for the frame being SHOWN", () => {
 describe("checkGeometry refuses rather than defaults", () => {
   const bad = (mut: (a: any) => void) => { const a: any = v7(); mut(a); return a; };
   test("a valid v7 passes", () => expect(() => checkGeometry(v7())).not.toThrow());
+  // Every later version is a superset of v7, so a refitted take that ALSO
+  // earned a later version carries its geometry there: a refitted P3 take is
+  // v9 (STC-510), a refitted take that filled the disk is v10 (STC-527).
+  test.each([8, 9, 10])("geometry on a v%i passes", (v) =>
+    expect(() => checkGeometry({ ...v7(), version: v } as Anchors)).not.toThrow());
   test("no geometry passes (every take before STC-235)", () =>
     expect(() => checkGeometry({ ...v7(), version: 6, geometry: undefined } as Anchors)).not.toThrow());
   test.each([

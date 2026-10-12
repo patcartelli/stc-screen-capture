@@ -45,7 +45,9 @@ export function checkGeometry(anchors: Anchors): void {
   const g = anchors.geometry;
   if (anchors.version === 7 && !g) throw new SessionLoadError("anchors v7 has no geometry — a take with no refit is written as v6 or lower");
   if (!g) return;
-  if (anchors.version !== 7) throw new SessionLoadError(`geometry is new at anchors v7, found on v${anchors.version}`);
+  // v7 or later: each later version is v7 plus something else, so a refitted take
+  // that also earned v8 (a moved window), v9 (P3) or v10 (disk full) keeps it.
+  if (anchors.version < 7) throw new SessionLoadError(`geometry is new at anchors v7, found on v${anchors.version}`);
   if (g.length < 2) throw new SessionLoadError("geometry has fewer than 2 entries");
   const { width: W, height: H } = anchors.capture;
   const e0 = g[0]!;

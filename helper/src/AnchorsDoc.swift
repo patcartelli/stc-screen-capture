@@ -245,6 +245,9 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     // STC-510: a take whose pixels are not sRGB. Written ONLY then, so a take on an
     // sRGB display keeps whatever version its other blocks earned, byte for byte.
     if colorSpace != nil { version = max(version, 9) }
+    // STC-527: the one stop reason older versions refuse. Every other take
+    // keeps the version its blocks earned.
+    if stopReason == "disk-full" || stopReason == "disk-full-timeout" { version = max(version, 10) }
     var capturedBlock: [String: Any] = ["width": capture.width, "height": capture.height, "codec": "h264",
                                          "firstFrameNs": max(0, capture.firstFrameNs)]
     if let colorSpace { capturedBlock["colorSpace"] = colorSpace }

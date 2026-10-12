@@ -35,9 +35,11 @@ const root = join(__dirname, "..", "..");
  * STC-235: the classifier DECIDES `display-reconfigured`/`region-out-of-bounds`
  * as `.stop("…")`, and Capture.swift relays them (and its own refit
  * failures) through `failRefit("…")` -> `onRefitFailed` -> App.stop(reason:).
+ * DiskDecisions.swift since STC-527, the same `.stop("…")` shape: `disk-full`
+ * and `error`, relayed through `onWriterStopped`.
  */
 const SOURCES = ["helper/src/main.swift", "helper/src/Protocol.swift", "helper/src/Capture.swift",
-                 "helper/src/DisplayChangeDecisions.swift"];
+                 "helper/src/DisplayChangeDecisions.swift", "helper/src/DiskDecisions.swift"];
 
 /**
  * Signals the helper installs a graceful handler for (main.swift's
@@ -145,7 +147,7 @@ function reasonsInSwift(): string[] {
 //   `geometry` key, and so stays at v3-v6. anchors-3..6 were widened to carry
 //   it for exactly that take; the per-version test below holds them to it.
 const validateReason = (() => {
-  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-8.schema.json"), "utf8"));
+  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-10.schema.json"), "utf8"));
   const ajv = new Ajv({ allErrors: true, strict: true });
   return ajv.compile(schema.properties.stop.properties.reason);
 })();
@@ -161,8 +163,9 @@ describe("stop.reason — the helper and anchors-7 agree (STC-311, extended by S
       "user", "quit", "stdin-closed", "stopped-during-start", "signal-15",
       "window-resized", "window-closed",
       "display-reconfigured", "region-out-of-bounds",
+      "disk-full", "error",
     ]));
-    expect(reasons.length).toBeGreaterThanOrEqual(9);
+    expect(reasons.length).toBeGreaterThanOrEqual(11);
     // And a guard on each STC-235 pattern ALONE (see CLASSIFIER_STOP /
     // FAIL_REFIT): the aggregate above still passes if either one stops
     // matching, since the other supplies `display-reconfigured` too.
@@ -172,6 +175,9 @@ describe("stop.reason — the helper and anchors-7 agree (STC-311, extended by S
       "the failRefit(\"…\") pattern matches nothing in Capture.swift").toBeGreaterThanOrEqual(1);
     expect([...decisions.matchAll(CLASSIFIER_STOP)].length,
       "the .stop(\"…\") pattern matches nothing in DisplayChangeDecisions.swift").toBeGreaterThanOrEqual(1);
+    const disk = readFileSync(join(root, "helper/src/DiskDecisions.swift"), "utf8");
+    expect([...disk.matchAll(CLASSIFIER_STOP)].map((m) => m[1]),
+      "DiskDecisions.swift's .stop(\"…\") reasons").toEqual(expect.arrayContaining(["disk-full", "error"]));
 
     for (const r of reasons) {
       expect(validateReason(r), `the helper can write stop.reason "${r}", which anchors-7 refuses`).toBe(true);
@@ -199,6 +205,19 @@ describe("stop.reason — the helper and anchors-7 agree (STC-311, extended by S
         expect(validate(r), `anchors-${v} refuses "${r}", which a v${v} region take can carry`).toBe(true);
       }
     }
+  });
+
+  test("disk-full is new at anchors-10: every older version refuses it (STC-527)", () => {
+    // The minimum-version rule from the other side: AnchorsDoc.swift writes v10
+    // for exactly this reason, so an older schema accepting it would mean the
+    // bump was not needed, and one refusing it is why it was.
+    for (const v of [2, 3, 4, 5, 6, 7, 8, 9]) {
+      const schema = JSON.parse(readFileSync(join(root, `schema/anchors-${v}.schema.json`), "utf8"));
+      const validate = new Ajv({ allErrors: true, strict: true }).compile(schema.properties.stop.properties.reason);
+      expect(validate("disk-full"), `anchors-${v} accepts "disk-full"`).toBe(false);
+    }
+    expect(validateReason("disk-full")).toBe(true);
+    expect(validateReason("disk-full-timeout")).toBe(true);
   });
 
   test("the rule still discriminates — it did not become 'any string'", () => {

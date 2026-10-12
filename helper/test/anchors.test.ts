@@ -317,5 +317,13 @@ describe("anchors document", () => {
     );
     expect(validate3(winStill), JSON.stringify(validate3.errors, null, 2)).toBe(true);
     expect((winStill as { version: number }).version).toBe(3);
+    // STC-527: a disk-full take validates against anchors-10 and anchors-9
+    // refuses it — the stop reason is the only thing that moved it.
+    const diskFull = extractJSON(out, "JSON-DISK-FULL:");
+    const validate10 = new Ajv({ allErrors: true, strict: true }).compile(
+      JSON.parse(readFileSync(join(root, "schema/anchors-10.schema.json"), "utf8")),
+    );
+    expect(validate10(diskFull), JSON.stringify(validate10.errors, null, 2)).toBe(true);
+    expect(validate9(diskFull), "anchors-9 must refuse a disk-full stop").toBe(false);
   });
 }, 60_000);
