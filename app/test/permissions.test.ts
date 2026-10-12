@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  blocksCapture, parsePermissions, permissionsState, remember,
+  blocksCapture, deviceGrantsPending, isGrant, isRowAction, parsePermissions, permissionsState, remember,
   type PermissionsMemory, type PermissionsReport,
 } from "../src/permissions.js";
 
@@ -72,7 +72,7 @@ describe("permissionsState", () => {
 
   test("an unreadable report is not a panel (an old helper fails open)", () => {
     const s = permissionsState(null, fresh);
-    expect(s).toEqual({ needed: false, rows: [] });
+    expect(s).toEqual({ needed: false, intro: "", rows: [] });
     expect(blocksCapture(s, "record")).toBe(false);
   });
 });
@@ -84,5 +84,77 @@ describe("remember", () => {
     const m2 = remember(m1, report({ screenRecording: false }));
     expect(m2.screenAtLaunch).toBe(false);
     expect(remember(m2, report({ screenRecording: true })).screenAtLaunch).toBe(false);
+  });
+});
+
+describe("microphone and camera rows (STC-520 rule 8)", () => {
+  const granted = report({ screenRecording: true, inputMonitoring: "granted" });
+  const withAv = (o: Partial<PermissionsReport>, wanted: { microphone: boolean; camera: boolean }, requested: string[] = []) => {
+    const r = { ...granted, ...o };
+    return permissionsState(r, { ...remember(fresh, r), requested: new Set(requested as any) }, wanted);
+  };
+  const none = { microphone: false, camera: false };
+
+  test("no device chosen: no row, however the status reads", () => {
+    const s = withAv({ microphone: "denied", camera: "notDetermined" }, none);
+    expect(s.rows.map((r) => r.grant)).toEqual(["screen-recording", "input-monitoring"]);
+    expect(s.needed).toBe(false);
+  });
+
+  test("a chosen mic never asked about: Grant, and Don't use; Record waits, a shot does not", () => {
+    const s = withAv({ microphone: "notDetermined" }, { microphone: true, camera: false });
+    expect(row(s, "microphone")).toMatchObject({ status: "not-yet", actions: ["request", "turn-off"] });
+    expect(s.needed).toBe(true);
+    expect(blocksCapture(s, "record")).toBe(true);
+    expect(blocksCapture(s, "still")).toBe(false);
+    expect(deviceGrantsPending(s)).toEqual(["microphone"]);
+  });
+
+  test("a chosen camera that is denied: Settings and Don't use, never a second Grant", () => {
+    const s = withAv({ camera: "denied" }, { microphone: false, camera: true });
+    expect(row(s, "camera")).toMatchObject({ status: "denied", actions: ["open-settings", "turn-off"] });
+  });
+
+  test("asked this run and refused: the same as denied", () => {
+    const s = withAv({ microphone: "notDetermined" }, { microphone: true, camera: false }, ["microphone"]);
+    expect(row(s, "microphone").actions).toEqual(["open-settings", "turn-off"]);
+  });
+
+  test("restricted can only be turned off", () => {
+    const s = withAv({ camera: "restricted" }, { microphone: false, camera: true });
+    expect(row(s, "camera").actions).toEqual(["turn-off"]);
+  });
+
+  test("authorized devices add granted rows and no panel", () => {
+    const s = withAv({ microphone: "authorized", camera: "authorized" }, { microphone: true, camera: true });
+    expect(s.needed).toBe(false);
+    expect(blocksCapture(s, "record")).toBe(false);
+    expect(deviceGrantsPending(s)).toEqual([]);
+  });
+
+  test("an old helper that reports neither: a chosen device shows no row (fails open)", () => {
+    const s = withAv({}, { microphone: true, camera: true });
+    expect(s.rows).toHaveLength(2);
+    expect(s.needed).toBe(false);
+  });
+
+  test("the intro counts what is asked", () => {
+    expect(withAv({}, none).intro).toMatch(/two macOS permissions/);
+    expect(withAv({ microphone: "notDetermined" }, { microphone: true, camera: false }).intro).toMatch(/microphone or camera/);
+    const both = permissionsState(report({ microphone: "notDetermined" }), fresh, { microphone: true, camera: false });
+    expect(both.intro).toMatch(/these macOS permissions/);
+  });
+
+  test("the report parser takes the new fields and refuses a bad one", () => {
+    expect(parsePermissions({ ev: "permissions", screenRecording: true, inputMonitoring: "granted",
+      microphone: "authorized", camera: "notDetermined" }))
+      .toEqual({ screenRecording: true, inputMonitoring: "granted", microphone: "authorized", camera: "notDetermined" });
+    expect(parsePermissions({ ev: "permissions", screenRecording: true, inputMonitoring: "granted", camera: "maybe" })).toBeNull();
+  });
+
+  test("the new grant and action names pass the IPC guards; junk does not", () => {
+    expect(isGrant("microphone") && isGrant("camera")).toBe(true);
+    expect(isRowAction("turn-off")).toBe(true);
+    expect(isGrant("location")).toBe(false);
   });
 });

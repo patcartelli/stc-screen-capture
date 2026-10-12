@@ -82,8 +82,9 @@ import {
 } from "./capture-identity.js";
 import { resolveHelperPath } from "./helper-path.js";
 import {
-  blocksCapture, isGrant, isRowAction, parsePermissions, permissionsState, remember, SETTINGS_URLS,
-  type PermissionsMemory, type PermissionsReport, type PermissionsState,
+  blocksCapture, deviceGrantsPending, isGrant, isRowAction, parsePermissions, permissionsState, remember,
+  SETTINGS_URLS,
+  type PermissionsMemory, type PermissionsReport, type PermissionsState, type WantedDevices,
 } from "./permissions.js";
 
 /**
@@ -453,7 +454,7 @@ function openLibrary(): void {
 // `#permissionsheet`, which pulls on load and is pushed on every change.
 
 let permMemory: PermissionsMemory = { screenAtLaunch: null, requested: new Set() };
-let permState: PermissionsState = { needed: false, rows: [] };
+let permState: PermissionsState = { needed: false, intro: "", rows: [] };
 
 /**
  * Read both grants from the helper and tell the window. Never throws: an
@@ -474,20 +475,51 @@ async function checkPermissions(): Promise<PermissionsState> {
     console.error("[permissions] could not read the grants:", e);
   }
   permMemory = remember(permMemory, report);
-  permState = permissionsState(report, permMemory);
+  permState = permissionsState(report, permMemory, wantedDevices());
   send("permissions:changed", permState);
   return permState;
+}
+
+/** The mic and camera the settings choose right now (permissions.ts rule 8). */
+function wantedDevices(): WantedDevices {
+  const s = readSettings(app.getPath("userData"));
+  return { microphone: s.micDeviceUid != null, camera: s.camera };
+}
+
+/**
+ * After the overlay has closed and the bar's choices are written, before the
+ * countdown: the mic and camera this take will use must be allowed. macOS's
+ * own prompt is safe to raise here (the overlay's scrim is gone), so a device
+ * that was never asked about is asked for now; anything still refused brings
+ * the panel forward, with its "Don't use" button, instead of a take that
+ * silently lacks the device (STC-475). True means do not start.
+ */
+async function deviceGrantsBlock(): Promise<boolean> {
+  if (process.env.STC_ASSUME_PERMISSIONS === "granted") return false;
+  let state = await checkPermissions();
+  for (const grant of deviceGrantsPending(state)) {
+    const row = state.rows.find((r) => r.grant === grant);
+    if (!row?.actions.includes("request")) continue;
+    permMemory = { ...permMemory, requested: new Set([...permMemory.requested, grant]) };
+    try { await sup?.requestPermission(grant); }
+    catch (e) { console.error("[permissions] request failed:", grant, e); }
+  }
+  state = await checkPermissions();
+  if (deviceGrantsPending(state).length === 0) return false;
+  openLibrary();
+  return true;
 }
 
 /**
  * Before any overlay opens: true when this capture must not start, with the
  * panel brought forward instead. macOS's own Screen Recording prompt lands
  * UNDER the overlay's scrim (STC-476, 2026-10-02), so the overlay is the one
- * thing that must not come first. Re-reads only when the last read said
- * blocked; a grant revoked after launch is STC-520's.
+ * thing that must not come first. Always re-reads (STC-520): a grant revoked
+ * in System Settings after launch is caught here, not by a refused take. It
+ * is one cheap helper round trip, and `checkPermissions` skips it entirely
+ * under the e2e suite's seam.
  */
 async function permissionsBlock(kind: "record" | "still"): Promise<boolean> {
-  if (!blocksCapture(permState, kind)) return false;
   if (!blocksCapture(await checkPermissions(), kind)) return false;
   openLibrary();
   return true;
@@ -505,6 +537,14 @@ ipcMain.handle("permissions:act", async (_e, grant: unknown, action: unknown): P
     app.relaunch();
     app.quit();
     return permState;
+  }
+  if (action === "turn-off") {
+    // Only the optional rows have this action (permissions.ts rule 8).
+    if (grant === "microphone") writeSettings(app.getPath("userData"), { micDeviceUid: null });
+    else if (grant === "camera") writeSettings(app.getPath("userData"), { camera: false });
+    else return permState;
+    send("settings:changed", undefined);
+    return checkPermissions();
   }
   permMemory = { ...permMemory, requested: new Set([...permMemory.requested, grant]) };
   try { await sup?.requestPermission(grant); }
@@ -1569,6 +1609,9 @@ async function recordFlowBody(
   // countdown still keeps a mic (and now a camera device / system-audio
   // choice) the user just made.
   writeBarOptions(options);
+
+  // STC-520: the mic/camera just chosen must be allowed before anything counts down.
+  if (await deviceGrantsBlock()) return { ok: false, code: "permissions-needed" };
 
   // THE start-param builder — the only place a Record's `start` request is
   // assembled (spec §3). A new setting that reaches the helper (STC-420's

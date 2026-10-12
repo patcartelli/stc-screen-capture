@@ -119,10 +119,15 @@ final class App {
             // STC-476/518: raises macOS's own prompt when it has never asked.
             // State-free, like `permissions`: it touches no take.
             let grant = cmd["grant"] as? String ?? ""
-            guard Permissions.request(grant) else {
-                IO.send("error", seq: seq, ["code": "bad-request", "detail": "unknown grant \(grant)"]); return
+            // The reply waits for the answer: the microphone and camera
+            // prompts are asynchronous, and a reply sent before the person
+            // has chosen would report "notDetermined" for a grant they just gave.
+            let known = Permissions.request(grant) {
+                IO.send("permissions", seq: seq, Permissions.report())
             }
-            IO.send("permissions", seq: seq, Permissions.report())
+            if !known {
+                IO.send("error", seq: seq, ["code": "bad-request", "detail": "unknown grant \(grant)"])
+            }
         case "capture-still":
             captureStill(cmd, seq: seq)
         case "copy-file":

@@ -491,9 +491,11 @@ document.addEventListener("keydown", (e) => {
 // restart.
 const permSheet = $("permissionsheet");
 const permRows = $("permissionrows");
+const permIntro = $("permissionintro");
 
 function renderPermissions(s: PermissionsState): void {
   permSheet.classList.toggle("open", s.needed);
+  if (s.intro) permIntro.textContent = s.intro;
   permRows.replaceChildren(...s.rows.map((row) => {
     const el = document.createElement("div");
     el.className = "permrow";

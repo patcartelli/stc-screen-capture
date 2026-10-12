@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import CoreGraphics
 import IOKit.hid
 
@@ -40,16 +41,36 @@ enum Permissions {
         case .unknown: listen = "unknown"
         }
         return ["screenRecording": CGPreflightScreenCaptureAccess(),
-                "inputMonitoring": listen]
+                "inputMonitoring": listen,
+                "microphone": avAccess(.audio),
+                "camera": avAccess(.video)]
     }
 
-    /// Ask macOS for one grant. Each call raises the system prompt only when
-    /// the grant has never been asked for; after that it returns at once and
-    /// System Settings is the only way back, which the panel links to.
-    static func request(_ grant: String) -> Bool {
+    /// Microphone / camera as AVFoundation reports them (STC-520). A READ:
+    /// `authorizationStatus` never prompts and never creates a grantable row
+    /// in System Settings — only `requestAccess` does, and until STC-520
+    /// nothing in this helper called it (STC-475's root cause).
+    static func avAccess(_ media: AVMediaType) -> String {
+        switch AVCaptureDevice.authorizationStatus(for: media) {
+        case .authorized:    return "authorized"
+        case .denied:        return "denied"
+        case .restricted:    return "restricted"
+        case .notDetermined: return "notDetermined"
+        @unknown default:    return "notDetermined"
+        }
+    }
+
+    /// Ask macOS for one grant, then call `done` (possibly on another
+    /// thread). Each call raises the system prompt only when the grant has
+    /// never been asked for; after that it returns at once and System
+    /// Settings is the only way back, which the panel links to. Returns
+    /// false, never calling `done`, for a grant it does not know.
+    static func request(_ grant: String, done: @escaping () -> Void) -> Bool {
         switch grant {
-        case "screen-recording": _ = CGRequestScreenCaptureAccess(); return true
-        case "input-monitoring": requestListenEvent(); return true
+        case "screen-recording": _ = CGRequestScreenCaptureAccess(); done(); return true
+        case "input-monitoring": requestListenEvent(); done(); return true
+        case "microphone": AVCaptureDevice.requestAccess(for: .audio) { _ in done() }; return true
+        case "camera":     AVCaptureDevice.requestAccess(for: .video) { _ in done() }; return true
         default: return false
         }
     }
