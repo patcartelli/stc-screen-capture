@@ -25,6 +25,7 @@ import { framingProblem } from "@transform/framing.js";
 import { withTimeout } from "@transform/timeout.js";
 import { RECOVERY_STOP_REASON } from "@transform/recover-anchors.js";
 import { recoverTake, hasPartialAnchors } from "./recover-take.js";
+import { takeEndedStopReason } from "./take-stop-reason.js";
 import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
   publicSrc, type PublishPlan,
@@ -750,6 +751,11 @@ const deferredRecoveredPanels: string[] = [];
 /** Panels hidden for a capture come back, then any recovered take that had to wait gets its panel. */
 function showThumbnailsAfterCapture(): void {
   showHiddenThumbnails();
+  presentDeferredRecoveredPanels();
+}
+
+/** The deferred queue's ONE drain: only once no take is live (`sup.state`, the named authority). */
+function presentDeferredRecoveredPanels(): void {
   if (quitting || sup?.state === "recording") return;
   for (const dir of deferredRecoveredPanels.splice(0)) void presentRecordingPanel(dir, "fresh");
 }
@@ -771,11 +777,11 @@ async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
   // focus on `panels[0]`. That ordering is deliberate.
   showThumbnailsAfterCapture();
   // STC-527's worst case (STC-530): the helper stopped cleanly but anchors.json could not be
-  // written. Its partial still describes the take; finish it with the reason the helper gave
-  // (`stopped` is the app's own word for a stop it asked for, which the take records as `user`).
+  // written. Its partial still describes the take; finish it with the reason the helper gave,
+  // in the take's vocabulary (`takeEndedStopReason`: `stopped` -> `user`, the supervisor's own
+  // `helper-idle`/`helper-stopped` -> `error`, anything anchors-11 accepts unchanged).
   if (await hasPartialAnchors(dir)) {
-    const why = typeof reason === "string" && reason !== "stopped" ? reason : "user";
-    const r = await recoverTake(dir, why);
+    const r = await recoverTake(dir, takeEndedStopReason(reason));
     if (!r.ok) console.error("[take-ended] anchors.json is missing and the take could not be finished:", dir, r.why);
     // Recovery took time: a quit or a new take may have begun meanwhile.
     if (quitting) return;
@@ -803,6 +809,14 @@ async function onRecordingLost(i: { dir?: unknown } & Record<string, unknown>): 
     else await presentRecordingPanel(i.dir, "fresh");
   }
   send("helper:recording-lost", { ...i, recovered });
+  // The opening `showThumbnailsAfterCapture()` cannot drain the deferred queue: the supervisor
+  // emits `recording-lost` synchronously from its exit handler while `state` still reads
+  // "recording", and only sets "starting" (or "failed") after the emit returns. So a take A
+  // deferred behind a take B that then ALSO crashed would wait for some later capture. Drain
+  // once more here, after a tick, so the exit handler has finished even on the path above that
+  // never awaited; `sup.state` then reads "recording" only if a NEW take really is live.
+  await Promise.resolve();
+  presentDeferredRecoveredPanels();
 }
 
 /**

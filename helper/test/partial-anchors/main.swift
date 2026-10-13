@@ -59,5 +59,22 @@ do {
     check(c.request() == false, "and only one")
 }
 
+// 5. The rate limit (final review): the first write is never delayed; a write inside the
+//    interval waits exactly out the rest of it; one at or past the interval goes now.
+do {
+    let s: UInt64 = 1_000_000_000
+    let minNs = UInt64(PARTIAL_MIN_INTERVAL_SECONDS * Double(s))
+    check(PARTIAL_MIN_INTERVAL_SECONDS == 0.5, "the interval is half a second")
+    check(partialWriteDelay(lastWriteNs: nil, nowNs: 5 * s) == 0, "the first write is never delayed")
+    check(partialWriteDelay(lastWriteNs: 5 * s, nowNs: 5 * s) == PARTIAL_MIN_INTERVAL_SECONDS,
+          "a write right after the last waits the whole interval")
+    check(abs(partialWriteDelay(lastWriteNs: 5 * s, nowNs: 5 * s + 200_000_000) - 0.3) < 1e-9,
+          "a write 200 ms after the last waits the remaining 300 ms")
+    check(partialWriteDelay(lastWriteNs: 5 * s, nowNs: 5 * s + minNs) == 0, "a write exactly one interval later goes now")
+    check(partialWriteDelay(lastWriteNs: 5 * s, nowNs: 9 * s) == 0, "a write long after goes now")
+    check(partialWriteDelay(lastWriteNs: 5 * s, nowNs: 4 * s) == PARTIAL_MIN_INTERVAL_SECONDS,
+          "a clock that went backwards waits the whole interval, never longer")
+}
+
 try? FileManager.default.removeItem(at: tmp)
 if failures.isEmpty { print("ALL PASS") } else { failures.forEach { print("FAIL: \($0)") }; exit(1) }

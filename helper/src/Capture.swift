@@ -90,6 +90,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private let partialQueue = DispatchQueue(label: "stc.partial-anchors")
     private var partialCoalescer = PartialWriteCoalescer()   // guarded by `lock`
     private var partialRetired = false                       // touched only on partialQueue
+    private var lastPartialWriteNs: UInt64?                  // touched only on partialQueue
     /// A mic or camera torn down MID-TAKE by a disconnect (`handleMicDisconnected`,
     /// `handleCameraDisconnected`) is no longer in `mic`/`camera` by the time
     /// the take's own `stop()` runs, so that stop would not wait for it: its
@@ -2645,17 +2646,35 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let schedule = !stoppingBegan && firstFramePtsNs >= 0 && partialCoalescer.request()
         lock.unlock()
         guard schedule else { return }
+        // The caller's side stays one `async`; the rate limit is decided ON partialQueue, which
+        // owns `lastPartialWriteNs`. A write too soon after the last one is re-queued for the
+        // next allowed instant (`partialWriteDelay`, PARTIAL_MIN_INTERVAL_SECONDS). The coalescer
+        // stays pending until the write actually begins, so changes meanwhile fold into it and
+        // it still sees the latest state. A delayed write that fires after retire-at-stop finds
+        // `partialRetired` set and does nothing.
         partialQueue.async { [weak self] in
             guard let self, !self.partialRetired else { return }
-            self.lock.lock()
-            self.partialCoalescer.began()
-            let stopping = self.stoppingBegan
-            self.lock.unlock()
-            if stopping { return }
-            let doc = partialAnchors(self.currentAnchorsDocument(stopReason: "user", stopTNs: 0))
-            do { try writePartialAnchors(doc, in: self.dir) }
-            catch { IO.log("anchors.partial.json could not be written (\(error)); a crash now loses this take's description") }
+            let delay = partialWriteDelay(lastWriteNs: self.lastPartialWriteNs, nowNs: Clock.nowNs())
+            if delay > 0 {
+                self.partialQueue.asyncAfter(deadline: .now() + delay) { [weak self] in self?.writePartialNow() }
+            } else {
+                self.writePartialNow()
+            }
         }
+    }
+
+    /// One partial write. On partialQueue only.
+    private func writePartialNow() {
+        guard !partialRetired else { return }
+        lock.lock()
+        partialCoalescer.began()
+        let stopping = stoppingBegan
+        lock.unlock()
+        if stopping { return }
+        lastPartialWriteNs = Clock.nowNs()
+        let doc = partialAnchors(currentAnchorsDocument(stopReason: "user", stopTNs: 0))
+        do { try writePartialAnchors(doc, in: dir) }
+        catch { IO.log("anchors.partial.json could not be written (\(error)); a crash now loses this take's description") }
     }
 
     private func writeSidecars(reason: String) {
