@@ -835,16 +835,14 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: STC-527 disk full
 
-    /// Free bytes on the volume holding this take, or nil if it cannot be
-    /// read. The raw free count, not "available for important usage": that one
-    /// includes purgeable space macOS may not reclaim fast enough for a writer
-    /// at 50 Mbps, and stopping a little early beats an ENOSPC mid-fragment.
+    /// Free bytes on the volume holding this take (`volumeFreeBytes`, which
+    /// says why it must clear the URL's cache on every read).
     /// `STC_CAPTURE_FAULT=disk-full` reads 0, so the real watch, decision and
-    /// stop run without filling a disk.
+    /// stop run without filling a disk — which is also why that fault never
+    /// caught the stale read.
     private func freeBytes() -> Int64? {
         if ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "disk-full" { return 0 }
-        let v = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityKey])
-        return v?.volumeAvailableCapacity.map(Int64.init)
+        return volumeFreeBytes(at: dir)
     }
 
     private func startDiskWatcher() {

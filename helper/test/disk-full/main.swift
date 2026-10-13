@@ -51,6 +51,56 @@ check(decideWriterFailure(nil, freeBytes: nil) == .stop("error"), "no error and 
 if let outPath = ProcessInfo.processInfo.environment["STC_DISK_FULL_OUT"] {
     let url = URL(fileURLWithPath: outPath)
     try? FileManager.default.removeItem(at: url)
+
+    // MARK: 2a. the watch's read SEES the disk fill (runbook §2, 2026-10-13)
+    //
+    // Shaped like the watch: one stored URL, read twice from a global queue
+    // (no run loop), with 4 MiB written between. `volumeFreeBytes` must see
+    // the drop. The CONTROL is the read the watch used to do — the same stored
+    // URL, no cache clear — and it must NOT see it: that is what proves this
+    // check can fail, i.e. that the fix and not luck is what moved the number.
+    // The control runs first, because clearing the cache clears it for every
+    // copy of the URL.
+    let dir = url.deletingLastPathComponent()
+    let filler = dir.appendingPathComponent("filler")
+    func onWatchQueue<T>(_ f: @escaping () -> T) -> T {
+        var r: T?
+        let s = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async { r = f(); s.signal() }
+        s.wait()
+        return r!
+    }
+    func fill() {
+        try? FileManager.default.removeItem(at: filler)
+        FileManager.default.createFile(atPath: filler.path, contents: nil)
+        let h = try! FileHandle(forWritingTo: filler)
+        try! h.write(contentsOf: Data(count: 4 << 20))
+        try! h.synchronize()
+        try! h.close()
+    }
+    let stale = { () -> Int64? in
+        (try? dir.resourceValues(forKeys: [.volumeAvailableCapacityKey]))?.volumeAvailableCapacity.map(Int64.init)
+    }
+    let staleBefore = onWatchQueue(stale)
+    fill()
+    let staleAfter = onWatchQueue(stale)
+    print("STALE: \(staleBefore.map(String.init) ?? "nil") -> \(staleAfter.map(String.init) ?? "nil")")
+    check(staleBefore != nil && staleBefore == staleAfter,
+          "CONTROL: an uncleared read of a stored URL must return the cached value (if macOS stopped caching, this check can no longer fail and needs rethinking)")
+    try? FileManager.default.removeItem(at: filler)
+
+    let freshBefore = onWatchQueue { volumeFreeBytes(at: dir) }
+    fill()
+    let freshAfter = onWatchQueue { volumeFreeBytes(at: dir) }
+    print("FRESH: \(freshBefore.map(String.init) ?? "nil") -> \(freshAfter.map(String.init) ?? "nil")")
+    if let b = freshBefore, let a = freshAfter {
+        check(b - a >= 3 << 20, "volumeFreeBytes must see 4 MiB written between two reads (saw \(b - a) bytes)")
+    } else {
+        check(false, "volumeFreeBytes must read the volume")
+    }
+    try? FileManager.default.removeItem(at: filler)
+
+    // MARK: 2b. the writer fills it
     let W = 1280, H = 720
     let writer = try! AVAssetWriter(outputURL: url, fileType: .mp4)
     writer.movieTimeScale = 90_000
