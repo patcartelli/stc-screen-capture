@@ -99,13 +99,13 @@ describe("the reconcile (D1)", () => {
   });
 });
 
-describe("what a recording's copy locks while it renders (STC-488)", () => {
-  test("copy, save and edit lock; trash and dismiss never do", () => {
-    // Save would move the take out from under the render reading it, and Edit
-    // promotes first, the same move. A second Copy would start a second job.
-    // Trash and dismiss are the panel's way out, and they cancel the render.
+describe("what a recording's copy locks while it renders (STC-488, STC-495)", () => {
+  test("only a second copy locks; save, edit, trash and dismiss never do", () => {
+    // STC-495: the render runs in the background from the moment the panel
+    // appears, so Save and Edit cancel it (main.ts) rather than waiting on it.
+    // A second Copy would start a second wait. Trash and dismiss cancel too.
     const all: PanelAction[] = ["copy", "save", "edit", "trash", "dismiss"];
-    expect(all.filter(lockedWhileCopying)).toEqual(["copy", "save", "edit"]);
+    expect(all.filter(lockedWhileCopying)).toEqual(["copy"]);
   });
 });
 

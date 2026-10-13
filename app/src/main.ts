@@ -64,7 +64,7 @@ import {
   afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
   unsavedTakeDirs, takeFor,
 } from "./thumbnail-window.js";
-import { promotes, trashStyle, lockedWhileCopying } from "./panel-actions.js";
+import { promotes, trashStyle } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
 import { editorIsOpen, openEditor } from "./editor-window.js";
 import { openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
@@ -705,6 +705,7 @@ async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): 
       take: { kind: "recording", origin },
       dist: here, rendererDir: join(here, "..", "renderer"),
     });
+    if (origin === "fresh") startBackgroundCopy(dir);
     return true;
   } catch (e) {
     console.error("[recording-panel] could not present the panel:", dir, e);
@@ -3210,7 +3211,10 @@ async function ensureGif(dir: string, panel: Electron.WebContents, mode: "pick" 
   const hit = gifCache.lookup(dir, mode === "pick" ? settings : "any");
   if (hit && existsSync(hit.path)) return { ok: true, path: hit.path, bytes: hit.bytes, rendered: false };
   const running = copyRenderFormat(dir);
-  if (running === "mp4") return { ok: false, detail: "a video copy is still rendering" };
+  // STC-495: a live mp4 render is the background copy (or a Copy waiting on
+  // it); a GIF pick supersedes it and Copy re-renders on demand if the person
+  // flips back to Video.
+  if (running === "mp4") await cancelCopyRender(dir);
   const out = gifCopyPathFor(process.env, dir);
   const gen = running === "gif" ? undefined : gifCache.begin(dir);
   const r = await startCopyRender({
@@ -3252,6 +3256,33 @@ ipcMain.handle("panel:cancelGif", async (_e, dir: string) => {
   if (copyRenderFormat(dir) === "gif") await cancelCopyRender(dir);
 });
 
+/**
+ * STC-495: a fresh recording's copy renders in the background from the moment
+ * its panel appears, so Copy is usually a cache hit. The job is the ordinary
+ * `startCopyRender` one (same file, same `.partial` + rename, same cancel by
+ * Trash/dismiss/quit); only its progress differs: nobody is listening until
+ * Copy is pressed, so progress goes to `copySinks[dir]`, which
+ * `panel:copyRecording` sets to the panel that is waiting. Failure is logged
+ * and not shown: Copy then renders again on demand, as STC-488 always did.
+ */
+const copySinks = new Map<string, Electron.WebContents>();
+function startBackgroundCopy(dir: string): void {
+  const out = copyPathFor(process.env, dir);
+  if (existsSync(out) || copyRenderInFlight(dir)) return;
+  void startCopyRender({
+    takeDir: dir, outPath: out, dist: here, rendererDir: join(here, "..", "renderer"),
+    delayMs: Number(process.env.STC_COPY_RENDER_DELAY_MS) || undefined,
+    grant: (id, d) => openTakes.set(id, d),
+    revoke: (id) => openTakes.delete(id),
+    onProgress: (done, total) => {
+      const sink = copySinks.get(dir);
+      if (sink && !sink.isDestroyed()) sink.send("thumb:copyProgress", done, total);
+    },
+  }).then((r) => {
+    if (!r.ok && !r.cancelled) console.error("[copy] background render failed:", dir, r.detail);
+  });
+}
+
 ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) => {
   if (typeof dir !== "string" || !insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
     return { ok: false, detail: "not a recording on a panel" };
@@ -3286,6 +3317,9 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) =>
     rendered = true;
     changeBefore = await readChangeCount();
     const panel = e.sender;
+    copySinks.set(dir, panel);
+    // Joins the background render when one is live (`startCopyRender`'s
+    // duplicate path); otherwise starts one. Either way this caller waits.
     const r = await startCopyRender({
       takeDir: dir, outPath: out, dist: here, rendererDir: join(here, "..", "renderer"),
       delayMs: Number(process.env.STC_COPY_RENDER_DELAY_MS) || undefined,
@@ -3294,7 +3328,7 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) =>
       onProgress: (done, total) => {
         if (!panel.isDestroyed()) panel.send("thumb:copyProgress", done, total);
       },
-    });
+    }).finally(() => { if (copySinks.get(dir) === panel) copySinks.delete(dir); });
     if (!r.ok) return r.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: r.detail };
   }
   // A queued start can outlive a cancel; a gone panel gets no pasteboard write.
@@ -3327,11 +3361,10 @@ ipcMain.handle("panel:save", async (e, dir: string, format: unknown) => {
     return { ok: false, detail: "not a take this app wrote" };
   }
   const wantGif = format === "gif";
-  // main enforces the lock too (panel-actions.ts's rule), not only the panel.
-  // In GIF mode the wait is `ensureGif` itself, which refuses a live mp4 render.
-  if (!wantGif && lockedWhileCopying("save") && copyRenderInFlight(dir)) {
-    return { ok: false, detail: "a copy is still rendering" };
-  }
+  // STC-495: Save is never locked by a copy render. The render reads the
+  // take's folder, which the promote below moves, so it is cancelled first;
+  // the panel closes on Save, so nothing is left waiting for that copy.
+  if (!wantGif) await cancelCopyRender(dir);
   let gif: { path: string } | undefined;
   if (wantGif) {
     if (!insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
@@ -3342,9 +3375,9 @@ ipcMain.handle("panel:save", async (e, dir: string, format: unknown) => {
       return { ok: false, detail: g.cancelled ? "the GIF was cancelled" : `the GIF could not be made: ${g.detail}` };
     }
     // A cache hit never looked at the render table, and the promote below
-    // must not move a take out from under ANY live render (an mp4 Copy, or a
-    // job started while we waited): the same lock, asked after the wait.
-    if (copyRenderInFlight(dir)) return { ok: false, detail: "a copy is still rendering" };
+    // must not move a take out from under ANY live render (a job started
+    // while we waited): cancelled, as in video mode.
+    await cancelCopyRender(dir);
     gif = { path: g.path };
   }
   try {
@@ -3402,7 +3435,11 @@ ipcMain.handle("panel:edit", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     return { ok: false, detail: "not a take this app wrote" };
   }
-  if (lockedWhileCopying("edit") && copyRenderInFlight(dir)) return { ok: false, detail: "a copy is still rendering" };
+  // STC-495: Edit is never locked by the background copy; it ends it, because
+  // the promote below moves the folder the render is reading. A GIF job still
+  // blocks Edit (`lockedWhileConverting`).
+  if (copyRenderFormat(dir) === "gif") return { ok: false, detail: "a copy is still rendering" };
+  await cancelCopyRender(dir);
   try {
     // Same reasoning as `panel:save` above: `promotes("edit")` is asked, not
     // hardcoded — this handler has no opinion of its own about whether Edit

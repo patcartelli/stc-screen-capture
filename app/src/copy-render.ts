@@ -12,6 +12,7 @@ import { loadTake, type TakeIO } from "./session-io.js";
 import { exportSession } from "@transform/export";
 import { exportGif } from "@transform/gif-export";
 import { cleanGifSettings } from "@transform/gif-options";
+import { EMBED_CSS_WIDTH, outputSizeFor, isCaptureSize } from "@transform/output-size";
 
 declare global {
   interface Window {
@@ -71,7 +72,13 @@ void (async () => {
     try { captureId = await io.captureId(); }
     catch (e) { console.error("[copy] could not resolve a capture id:", e); }
     let last = 0;
-    const result = await exportSession(session, project, {
+    // STC-495: a copy is for chat, so it renders at the embed width (1x) —
+    // never larger than the capture (no upscaling), and with the aspect and
+    // even-dimension rules `outputSizeFor` owns. Export and Save are untouched.
+    const size = outputSizeFor(project.output, EMBED_CSS_WIDTH);
+    const smaller = size.width < project.output.width && !isCaptureSize(project.output, size);
+    const chat = smaller ? { ...project, output: { ...project.output, ...size } } : project;
+    const result = await exportSession(session, chat, {
       captureId,
       onProgress: (done, total) => {
         const now = performance.now();
