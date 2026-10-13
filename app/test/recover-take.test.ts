@@ -84,4 +84,18 @@ describe("recoverTake (STC-530)", () => {
     expect(out.files.camera).toBeUndefined();
     rmSync(dir, { recursive: true });
   });
+
+  test("a partial whose files block is malformed resolves { ok: false } and deletes nothing", async () => {
+    const a = JSON.parse(readFileSync(join(fixture, "anchors.json"), "utf8"));
+    delete a.stop;
+    for (const display of [42, "../display.mp4", "a/b.mp4"]) {
+      const dir = crashedTake({ partial: { ...a, version: 2, files: { display } } });
+      const r = await recoverTake(dir, "recorder-quit");
+      expect(r.ok).toBe(false);
+      expect(existsSync(join(dir, "anchors.partial.json"))).toBe(true);
+      expect(existsSync(join(dir, "display.mp4"))).toBe(true);
+      expect(existsSync(join(dir, "anchors.json"))).toBe(false);
+      rmSync(dir, { recursive: true });
+    }
+  });
 });

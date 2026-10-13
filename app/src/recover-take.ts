@@ -81,7 +81,24 @@ async function audioLastNs(path: string, what: string, firstNs: number): Promise
   }
 }
 
+/** A name the partial gave a media file: a plain string, no separator, no `..`. */
+function plainName(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0 && !/[\\/]/.test(v) && v !== ".." && v !== ".";
+}
+
+/**
+ * Never rejects: every failure is `{ ok: false, why }`, and a failure leaves the
+ * directory as it was (callers `void` this from event handlers).
+ */
 export async function recoverTake(dir: string, reason: string): Promise<TakeRecovery> {
+  try {
+    return await recoverTakeInner(dir, reason);
+  } catch (e) {
+    return { ok: false, why: `recovery failed unexpectedly: ${(e as Error).message}` };
+  }
+}
+
+async function recoverTakeInner(dir: string, reason: string): Promise<TakeRecovery> {
   if (await exists(join(dir, "anchors.json"))) {
     return { ok: false, why: "anchors.json already exists — this take is not one to recover" };
   }
@@ -92,6 +109,12 @@ export async function recoverTake(dir: string, reason: string): Promise<TakeReco
     return { ok: false, why: `no readable ${PARTIAL_ANCHORS_FILE}: ${(e as Error).message}` };
   }
   const files = (partial && typeof partial === "object" && partial.files) || {};
+  if (typeof files !== "object") return { ok: false, why: "anchors.partial.json has a malformed files block" };
+  for (const k of ["display", "camera", "mic", "system"]) {
+    if (files[k] !== undefined && !plainName(files[k])) {
+      return { ok: false, why: `anchors.partial.json names files.${k} as something that is not a plain file name` };
+    }
+  }
 
   const display = await videoFrames(join(dir, files.display ?? "display.mp4"), "display.mp4");
   const media: RecoveredMedia = { displayFramesNs: display ?? [] };

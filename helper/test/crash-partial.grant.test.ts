@@ -86,6 +86,7 @@ describe("a take the helper dies in keeps its description (STC-530)", () => {
     // The helper's own clock at the last heartbeat before the kill.
     const lastStats = [...h.out].reverse().find((l) => l.ev === "stats" && l.state === "recording");
     expect(lastStats, "no recording heartbeat").toBeDefined();
+    // From the last heartbeat (<=200 ms stale): underestimates the kill time, so the assertion is lenient by that much.
     const killedAtNs = Number(lastStats!.elapsedMs) * 1e6;
     h.proc.kill("SIGKILL");
     await h.exited;
