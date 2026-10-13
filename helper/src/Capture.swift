@@ -1066,6 +1066,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             let decision = decideCameraOpen(opened: opened, stoppingBegan: self.stoppingBegan)
             if decision == .store { self.camera = cam }
             self.lock.unlock()
+            // STC-530: a first frame that landed before the store above found no
+            // camera to read; describe it now that it is stored.
+            if decision == .store { self.notePartialChange() }
 
             switch decision {
             case .store:
@@ -1120,6 +1123,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             let decision = decideCameraOpen(opened: opened, stoppingBegan: self.stoppingBegan)
             if decision == .store { self.mic = m }
             self.lock.unlock()
+            // STC-530: same as the camera — a first sample before the store was unseen.
+            if decision == .store { self.notePartialChange() }
 
             switch decision {
             case .store:
@@ -1195,6 +1200,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self?.lock.lock()
             self?.micTrack = track
             self?.lock.unlock()
+            // STC-530: between `mic = nil` and here the partial could see no mic at all.
+            self?.notePartialChange()
             teardowns.leave()
         }
     }
@@ -1242,6 +1249,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self?.lock.lock()
             self?.cameraTrack = track
             self?.lock.unlock()
+            // STC-530: between `camera = nil` and here the partial could see no camera at all.
+            self?.notePartialChange()
             teardowns.leave()
         }
     }
@@ -2578,16 +2587,16 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// A subsystem still running has no track yet (that is set at its stop); its LIVE
     /// track is read instead.
     ///
-    /// Takes `lock`, then each live subsystem's own lock inside it (`track()`). That
-    /// order is safe: no subsystem calls back into this session while holding its own
-    /// lock — `onFirstAppend`, `onStreamDied` and every start/stop completion are
-    /// invoked after the subsystem's `unlock()` — and `handleCameraDisconnected`
-    /// already nests `currentDeviceUid()` the same way.
+    /// The live subsystems are only SNAPSHOTTED under `lock`; their `track()` runs after
+    /// it is released. `CameraCapture.track()` sorts every frame delta (`medianDelta`),
+    /// and the display frame callback takes `lock` on every frame — holding it across
+    /// that sort would back-pressure the capture graph. It also keeps the two locks
+    /// from ever nesting here.
     private func currentAnchorsDocument(stopReason: String, stopTNs: Int) -> [String: Any] {
         lock.lock()
-        let camTrack = cameraTrack ?? camera?.track()
-        let micT = micTrack ?? mic?.track()
-        let sysT = systemAudioTrack ?? systemAudio?.track()
+        let storedCam = cameraTrack, liveCam = camera
+        let storedMic = micTrack, liveMic = mic
+        let storedSys = systemAudioTrack, liveSys = systemAudio
         // STC-235: the top-level `display` is the take's START geometry —
         // entry 0's own value, the same one the first frame recorded — never
         // the scalar fields, which a refit has moved to the CURRENT one. A
@@ -2600,6 +2609,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let startDisplay = geo.first?.display ?? currentDisplayGeometry()
         let firstFrameNs = firstFramePtsNs
         lock.unlock()
+        let camTrack = storedCam ?? liveCam?.track()
+        let micT = storedMic ?? liveMic?.track()
+        let sysT = storedSys ?? liveSys?.track()
         let pauses = pauseGate.intervals
         return anchorsDocument(
             timebase: (Int(Clock.timebase.numer), Int(Clock.timebase.denom)),
