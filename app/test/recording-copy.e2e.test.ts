@@ -161,7 +161,9 @@ describe("copying a recording (STC-488)", () => {
     await expect.poll(() => panel.textContent("#status"), { timeout: POLL_MS }).toContain("Saving");
     await metaKey(panel, "c");
     await panel.waitForTimeout(1500);
-    expect(await windowCount(app!, "copy-render.html"), "no render for a take mid-Save").toBe(0);
+    // STC-495: one render window is the BACKGROUND copy, started with the panel.
+    // The stand-in Save above does not cancel it; ⌘C must not add a second.
+    expect(await windowCount(app!, "copy-render.html"), "no second render for a take mid-Save").toBeLessThanOrEqual(1);
     expect(await panel.isVisible("#copyprogress")).toBe(false);
     expect(await panel.textContent("#status")).toContain("Saving");
     await expect.poll(() => panel.textContent("#status"), { timeout: POLL_MS }).toContain("Could not save");
