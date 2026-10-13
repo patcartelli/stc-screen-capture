@@ -36,6 +36,7 @@ func retirePartialAnchors(in dir: URL) {
 /// appends to the window track at 30 Hz (STC-482); without this every append would
 /// queue its own write. A value, so "a burst is one write" is a test, not a hope about
 /// queue scheduling — the `SettleDebounce` precedent (DisplayChangeDecisions.swift).
+/// Not thread-safe: the caller serialises it (CaptureSession holds its `lock` around both calls).
 struct PartialWriteCoalescer {
     private var pending = false
     /// A change happened. True = schedule a write; false = one is already pending and will see it.
