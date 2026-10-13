@@ -124,28 +124,18 @@ describe("copying a recording (STC-488)", () => {
     expect(existsSync(dir), "Copy does not promote").toBe(true);
   }, 300_000);
 
-  test("Save and Edit are locked while a copy renders, by key as well as by click (Review Focus 1)", async () => {
+  test("Save and Edit are never locked by the copy render (STC-495); only a second Copy waits", async () => {
     const l = await launch();
-    const dir = await recordAndStop(l);
+    await recordAndStop(l);
     const panel = await readyPanel();
+    // The background render is already running; nothing was pressed.
     await panel.click("#copy");
     await expect.poll(() => panel.isVisible("#copyprogress"), { timeout: POLL_MS }).toBe(true);
-    expect(await panel.isDisabled("#save")).toBe(true);
-    expect(await panel.isDisabled("#edit")).toBe(true);
+    expect(await panel.isEnabled("#save")).toBe(true);
+    expect(await panel.isEnabled("#edit")).toBe(true);
     expect(await panel.isDisabled("#copy")).toBe(true);
     expect(await panel.isEnabled("#trash")).toBe(true);
-    await metaKey(panel, "s");
-    // Sampled right after the key: a Save that started would have said so.
-    expect(await panel.textContent("#status")).not.toContain("Saving");
-    await metaKey(panel, "e");
-    await panel.waitForTimeout(500);
-    expect(await windowCount(app!, "editor.html"), "a ⌘E during the render must not open the editor").toBe(0);
-
     await expect.poll(() => copyRequests(l.copyLog).length, { timeout: 120_000 }).toBe(1);
-    // AFTER the render: if either key had slipped through, the take has moved by now.
-    expect(existsSync(dir), "neither ⌘S nor ⌘E may have moved the take").toBe(true);
-    expect(await windowCount(app!, "editor.html")).toBe(0);
-    await expect.poll(() => panel.isEnabled("#save"), { timeout: POLL_MS }).toBe(true);
   }, 300_000);
 
   test("a camera take copies (Review Focus 3)", async () => {
@@ -258,7 +248,7 @@ describe("copying a recording (STC-488)", () => {
     expect(await panel.textContent("#status"), "no Rendering… text while the reply is out").not.toContain("Rendering");
     await panel.waitForTimeout(1500);   // mid-gap: the reply is still being held
     expect(await panel.isVisible("#copyprogress"), "no progress while the reply is held").toBe(false);
-    expect(await panel.isDisabled("#save"), "the buttons are still held while copying").toBe(true);
+    expect(await panel.isDisabled("#copy"), "Copy is held while it waits").toBe(true);
     await expect.poll(() => copyRequests(l.copyLog).length, { timeout: POLL_MS }).toBe(2);
     expect(await panel.isVisible("#copyprogress"), "no progress before the second write").toBe(false);
     expect(await windowCount(app!, "copy-render.html"), "no second render").toBe(0);

@@ -127,30 +127,30 @@ export function promotes(action: PanelAction): boolean {
 }
 
 /**
- * Whether this action must wait while a recording's Copy is rendering
- * (STC-488).
+ * Whether this action must wait while a recording's Copy is waiting on a
+ * render (STC-488). Only Copy: a second Copy would be a second wait on the
+ * same render.
  *
- * Save moves the take into the library, and the render is reading it. Edit
- * promotes first, the same move. A second Copy would start a second render of
- * the same take. Trash and dismiss do NOT wait: a panel that never closes on
- * its own must always have a way out, so they cancel the render instead
- * (`main.ts`'s `panel:trash`/`panel:dismiss`).
+ * STC-495 removed Save and Edit from this. The render now starts when the
+ * panel appears, so it is nearly always running, and holding Save back for it
+ * would lock the panel for the length of every take's render. Save and Edit
+ * cancel the render instead (`main.ts`), since the panel closes with them.
+ * Trash and dismiss never waited: they cancel too.
  */
 export function lockedWhileCopying(action: PanelAction): boolean {
-  return action === "copy" || action === "save" || action === "edit";
+  return action === "copy";
 }
 
 /**
  * Whether this action must wait while a fresh recording's GIF is converting
- * (STC-395, spec §2). The conversion is a copy job like an mp4 Copy's render,
- * so what `lockedWhileCopying` holds back waits on it too — EXCEPT Copy and
- * Save, which deliberately wait on the conversion and join it rather than
- * being refused. That leaves Edit: it promotes the take out from under the
- * render reading it, and `main.ts`'s `panel:edit` refuses it while a render
- * is live, so the panel must not offer it.
+ * (STC-395, spec §2). Copy and Save deliberately wait on the conversion and
+ * join it rather than being refused. That leaves Edit: it promotes the take
+ * out from under the render reading it, and `main.ts`'s `panel:edit` refuses
+ * it while a GIF job is live, so the panel must not offer it. (Its own rule
+ * since STC-495; it used to be derived from `lockedWhileCopying`.)
  */
 export function lockedWhileConverting(action: PanelAction): boolean {
-  return lockedWhileCopying(action) && action !== "copy" && action !== "save";
+  return action === "edit";
 }
 
 /**
