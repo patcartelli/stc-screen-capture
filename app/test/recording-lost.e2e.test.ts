@@ -58,7 +58,12 @@ describe("the helper dies mid-take (STC-530)", () => {
     await panel.waitForLoadState("domcontentloaded");
     await expect.poll(() => panel.textContent("#takereason"), { timeout: 15_000 })
       .toBe("Capture's recorder quit unexpectedly. This is what was saved before it stopped. Cursor and event data are missing.");
-    expect(await toastText(app!)).not.toMatch(/not saved|couldn't be recovered/);
+    // Sampled over time, not read once: main presents the panel FIRST and sends
+    // helper:recording-lost after, so a toast raised by that send arrives late.
+    for (let i = 0; i < 12; i++) {
+      expect(await toastText(app!)).not.toMatch(/not saved|couldn't be recovered/);
+      await new Promise((r) => setTimeout(r, 250));
+    }
   }, 240_000);
 
   test("the helper dies before writing anything: the toast says so and no panel appears", async () => {
