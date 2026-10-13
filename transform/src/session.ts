@@ -195,8 +195,10 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   //
   // v10 (STC-527) adds only the `disk-full` stop reason. Nothing here reads
   // `stop`; the take loads like any other, up to where it stopped.
-  // v11 (STC-530) adds only the `recorder-quit` stop reason, written by the app's
-  // recovery. A recovered take has no events.json; it loads with none.
+  // v11 (STC-530) adds only the recorder-quit stop reason, written by the app's recovery
+  // (app/src/recover-take.ts), never the helper. Nothing here reads `stop`. Such a take
+  // usually has no events.json; its callers pass an empty events document for it, as
+  // session-io.ts already does for any take without one.
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
