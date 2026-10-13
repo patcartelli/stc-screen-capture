@@ -47,10 +47,10 @@ describe("the template", () => {
     expect(actions).toEqual(["copy", "save", "edit", "reveal", "trash"]);
   });
 
-  test("while a recording's copy renders, copy, save and edit are unavailable and delete is not", () => {
+  test("while a recording's copy renders, only copy is unavailable (STC-495)", () => {
     const items = buildThumbMenu({ take: RECORDING_FRESH, copying: true });
     const enabled = Object.fromEntries(items.filter((i) => i.id !== "separator").map((i) => [i.id, i.enabled]));
-    expect(enabled).toEqual({ copy: false, save: false, edit: false, reveal: true, trash: true });
+    expect(enabled).toEqual({ copy: false, save: true, edit: true, reveal: true, trash: true });
   });
 
   test("while a GIF converts (STC-395), edit is unavailable; copy and save stay (they join it)", () => {

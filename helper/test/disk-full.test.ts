@@ -16,6 +16,7 @@ import { runSwiftHarness } from "./_swift-harness.js";
  */
 const SOURCES = [
   "helper/src/DiskDecisions.swift",
+  "helper/src/DiskVolume.swift",
   "helper/src/WriterGate.swift",
   "helper/test/disk-full/main.swift",
 ];
