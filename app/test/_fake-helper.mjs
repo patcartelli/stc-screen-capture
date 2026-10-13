@@ -13,8 +13,9 @@
  * for. It is a stand-in for the helper's CONTROL PLANE only; it captures
  * nothing, and no test may use it to make claims about capture.
  */
-import { writeSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { writeSync, writeFileSync, mkdirSync, copyFileSync, readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultFakeDisplays } from "./_fake-displays.mjs";
 
 const argv = process.argv.slice(2);
@@ -120,6 +121,19 @@ process.stdin.on("data", (chunk) => {
         session = cmd.dir ?? null;
         recordingStartedAt = Date.now();
         send("started", { seq, session });
+        // STC-530. The helper dying mid-take, as `kill -9` leaves it: a playable display.mp4
+        // and the anchors.partial.json the real helper keeps current — never anchors.json.
+        // fixtures/basic supplies both, so the app's recovery runs against a real mp4.
+        if (process.env.STC_FAKE_DIE_MS && typeof cmd.dir === "string") {
+          const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures", "basic");
+          if (!process.env.STC_FAKE_DIE_NO_PARTIAL) {
+            copyFileSync(join(fixture, "display.mp4"), join(cmd.dir, "display.mp4"));
+            const a = JSON.parse(readFileSync(join(fixture, "anchors.json"), "utf8"));
+            delete a.stop;
+            writeFileSync(join(cmd.dir, "anchors.partial.json"), JSON.stringify({ ...a, version: 2 }));
+          }
+          setTimeout(() => process.kill(process.pid, "SIGKILL"), Number(process.env.STC_FAKE_DIE_MS));
+        }
         // STC-501. The heartbeat rides stdout and `started` rides fd3: two pipes
         // with no ordering between them. A stats line the helper wrote while
         // still idle, BEFORE it processed `start`, can be read after `started`

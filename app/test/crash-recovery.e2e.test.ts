@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
@@ -212,6 +212,26 @@ describe("crash recovery (STC-393)", () => {
     expect(existsSync(join(s.tempTakes, unfinished))).toBe(false);
     // The still is offered the ordinary way, alongside it.
     await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: 15_000 }).toBe(1);
+  }, 60_000);
+
+  test("Review puts a crashed take with anchors.partial.json up as a panel (STC-530)", async () => {
+    const s = seed();
+    const name = recentStamp(60 * 60 * 1000);
+    const dir = join(s.tempTakes, name);
+    mkdirSync(dir, { recursive: true });
+    cpSync(join(root, "fixtures/basic/display.mp4"), join(dir, "display.mp4"));
+    const a = JSON.parse(readFileSync(join(root, "fixtures/basic/anchors.json"), "utf8"));
+    delete a.stop;
+    writeFileSync(join(dir, "anchors.partial.json"), JSON.stringify({ ...a, version: 2 }));
+
+    const { calls, dialogs, revealed } = await launch(s, 0);   // 0 = "Review"
+    await expect.poll(() => calls(), { timeout: 15_000 }).toBe(1);
+    const [d] = await dialogs();
+    expect(d!.message).toBe("1 unsaved take recovered");
+    expect(d!.detail).not.toMatch(/Finder/);          // it is a recording now, not an unfinished take
+    await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: 15_000 }).toBe(1);
+    expect(await revealed()).toEqual([]);
+    expect(JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8")).stop.reason).toBe("recorder-quit");
   }, 60_000);
 
   test("a temp directory with nothing in it is removed and never counted", async () => {
