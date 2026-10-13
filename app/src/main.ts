@@ -23,6 +23,8 @@ import { isProjectVersion } from "@transform/project-version.js";
 import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
 import { framingProblem } from "@transform/framing.js";
 import { withTimeout } from "@transform/timeout.js";
+import { RECOVERY_STOP_REASON } from "@transform/recover-anchors.js";
+import { recoverTake, hasPartialAnchors } from "./recover-take.js";
 import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
   publicSrc, type PublishPlan,
@@ -588,12 +590,12 @@ function startSupervisor(): void {
   sup.on("stats", (l) => send("helper:stats", l));
   sup.on("respawned", (i) => send("helper:respawned", i));
   sup.on("gave-up", (i) => send("helper:gave-up", i));
-  // The helper holds the capture devices: if it dies mid-recording the take is
-  // gone, and that must be stated rather than left to look like an idle reset.
-  sup.on("recording-lost", (i) => send("helper:recording-lost", i));
-  // The helper died: no take to decide on, but the panels hidden for it must
-  // not stay hidden (STC-487).
-  sup.on("recording-lost", () => showThumbnailsAfterCapture());
+  // The helper died mid-take (STC-530). Since the helper keeps anchors.partial.json current,
+  // what it wrote up to ~2 s before can be finished into an ordinary take and put up as its
+  // panel — the same panel a clean stop gets. The renderer is told which happened: a
+  // recovered take needs no toast (the panel carries the reason), one that could not be
+  // recovered is left in temp storage, untouched, for launch recovery to offer.
+  sup.on("recording-lost", (i) => { void onRecordingLost(i); });
   // Stopped cleanly without being asked — the take is intact, unlike a loss.
   // Still in TEMP storage (STC-487): a stop never promotes, so `dir` is a temp
   // path and nothing is in the library yet. The panel `take-ended` puts up is
@@ -601,7 +603,7 @@ function startSupervisor(): void {
   sup.on("recording-ended", (i) => send("helper:recording-ended", i));
   // A take ended cleanly — asked for or not — and is waiting for a decision
   // (STC-487). The ONE place a recording's panel is presented from a stop.
-  sup.on("take-ended", (i) => { void onTakeEnded(i?.dir); });
+  sup.on("take-ended", (i) => { void onTakeEnded(i?.dir, i?.reason); });
   sup.on("helper:warning", (l) => send("helper:warning", l));
   // STC-287. The camera opens off the critical path (deliberately — see
   // Capture.swift), so it goes live a second or so AFTER recording starts. The
@@ -746,7 +748,7 @@ async function writeRecordTimeProject(dir: string, choices: RecordTimeChoices): 
  * The take stays in temp storage and the recovery prompt offers it next launch
  * — the same backstop Quit Anyway already relies on.
  */
-async function onTakeEnded(dir: unknown): Promise<void> {
+async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
   if (typeof dir !== "string") return;
   if (quitting) return;
   // The panels hidden for this recording come back FIRST, so the new one is
@@ -754,7 +756,31 @@ async function onTakeEnded(dir: unknown): Promise<void> {
   // behind it, and its own focus-on-paint takes over from `afterCapture`'s
   // focus on `panels[0]`. That ordering is deliberate.
   showThumbnailsAfterCapture();
+  // STC-527's worst case (STC-530): the helper stopped cleanly but anchors.json could not be
+  // written. Its partial still describes the take; finish it with the reason the helper gave
+  // (`stopped` is the app's own word for a stop it asked for, which the take records as `user`).
+  if (await hasPartialAnchors(dir)) {
+    const why = typeof reason === "string" && reason !== "stopped" ? reason : "user";
+    const r = await recoverTake(dir, why);
+    if (!r.ok) console.error("[take-ended] anchors.json is missing and the take could not be finished:", dir, r.why);
+  }
   await presentRecordingPanel(dir, "fresh");
+}
+
+/**
+ * The helper died mid-take (`HelperSupervisor`'s `recording-lost`, which carries the take's
+ * temp `dir`). Panels hidden for the take come back first either way (STC-487). Quitting does
+ * not present, the same rule as `onTakeEnded`: the take stays for next launch's recovery.
+ */
+async function onRecordingLost(i: { dir?: unknown } & Record<string, unknown>): Promise<void> {
+  showThumbnailsAfterCapture();
+  let recovered = false;
+  if (typeof i.dir === "string" && !quitting) {
+    const r = await recoverTake(i.dir, RECOVERY_STOP_REASON);
+    if (r.ok) recovered = await presentRecordingPanel(i.dir, "fresh");
+    else console.error("[recording-lost] could not recover the take:", i.dir, r.why);
+  }
+  send("helper:recording-lost", { ...i, recovered });
 }
 
 /**
@@ -805,6 +831,15 @@ async function recoverUnsavedTakes(): Promise<void> {
     // is nothing in it to offer, so it is neither counted nor kept.
     for (const t of found) {
       if (t.kind === "empty") await rm(t.dir, { recursive: true, force: true }).catch(() => {});
+    }
+    // STC-530: a take the helper died in, from a helper that kept anchors.partial.json.
+    // Finished BEFORE counting, so the prompt and Review treat it as the recording it now is;
+    // one that cannot be finished is exactly the `unknown` take this code already reveals.
+    for (const t of found) {
+      if (t.kind !== "partial") continue;
+      const r = await recoverTake(t.dir, RECOVERY_STOP_REASON);
+      if (r.ok) t.kind = "recording";
+      else { console.error("[recovery] could not finish a crashed take:", t.dir, r.why); t.kind = "unknown"; }
     }
     const orphaned = found.filter((t) => t.kind !== "empty");
     if (orphaned.length === 0) return;

@@ -726,7 +726,10 @@ recorder.on("helper:recording-ended", (i) => {
 
 recorder.on("helper:recording-lost", (i) => {
   applyRecordingState(false);
-  alertUser(`The recorder quit while recording — that take was not saved.\n${i.dir ?? ""}`);
+  // STC-530: a recovered take is up as its own panel, with the reason on it — no toast
+  // (STC-505: toasts are for events with no take to attach to). One that could not be
+  // recovered is still on disk, untouched, and the next launch offers it.
+  if (!i.recovered) alertUser("The recorder quit while recording, and the take couldn't be recovered.");
 });
 
 /**
