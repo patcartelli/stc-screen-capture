@@ -94,6 +94,27 @@ Clean up:
 hdiutil detach /tmp/stc-small
 ```
 
+## §2 result, 2026-10-13: the watch never fired (fixed)
+
+Run on the host Mac from `master` @ `6114340`: a 256 MB volume, the whole 4K screen with
+a video playing, system audio and a camera. Two takes, the same both times: `anchors.json`
+v10 with `stop.reason = "disk-full"` and no `.sidecar-reserve` left, but the take ran until
+the disk was **full**. About 5 MiB was free at the stop (13 MiB once the reserve was
+released), `display.mp4` was ~240 MiB, and system audio's last sample came 2.4-2.9 s
+before `stop.t`. The **writer path** ended both takes, and the reserve did its job for real.
+
+The watch never fired because `freeBytes()` read `.volumeAvailableCapacityKey` from the
+same stored URL every tick. Foundation caches resource values on a URL until a run loop
+turns, and the watch's `DispatchSourceTimer` on a global queue never turns one, so every
+tick returned the first tick's number. Fixed by `volumeFreeBytes(at:)`
+(`helper/src/DiskVolume.swift`), which clears the cache on every read.
+`helper/test/disk-full/` now reads, writes 4 MiB and reads again from a background queue,
+using the uncleared read as its control. It was confirmed to fail with the clear removed.
+`STC_CAPTURE_FAULT=disk-full` could never have caught this: it returns 0 before the read.
+
+**Re-run §2 on the fixed build** (rebuild the helper first). The take should now stop with
+about 60 MiB free, and `df` should show it.
+
 ## What only a Mac can settle
 
 - Whether 64 MiB is the right floor. Too low and a VBR spike reaches `ENOSPC` before the
