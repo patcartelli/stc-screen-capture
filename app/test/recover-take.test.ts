@@ -52,6 +52,14 @@ describe("recoverTake (STC-530)", () => {
     rmSync(dir, { recursive: true });
   });
 
+  test("recovery leaves no temp file behind, and a successful publish is a complete anchors.json", async () => {
+    const dir = crashedTake();
+    expect(await recoverTake(dir, "recorder-quit")).toEqual({ ok: true });
+    expect(existsSync(join(dir, "anchors.json.recovering"))).toBe(false);
+    expect(() => JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"))).not.toThrow();
+    rmSync(dir, { recursive: true });
+  });
+
   test("no partial, no video, or a video with no frames: not recoverable, and nothing is deleted (Review Focus 1)", async () => {
     const noPartial = mkdtempSync(join(tmpdir(), "stc-recover-"));
     cpSync(join(fixture, "display.mp4"), join(noPartial, "display.mp4"));

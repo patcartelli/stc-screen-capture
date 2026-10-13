@@ -16,7 +16,7 @@
  * Video is read by RANGE (box headers and the sample index), never whole — a take can be
  * gigabytes. Audio is read whole, as `session-io.ts` already does.
  */
-import { open, readFile, rm, writeFile } from "node:fs/promises";
+import { link, open, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { demuxTrack } from "@transform/demux.js";
 import { demuxAudioTrack } from "@transform/demux-audio.js";
@@ -150,12 +150,18 @@ async function recoverTakeInner(dir: string, reason: string): Promise<TakeRecove
     for (const s of sources) await s.close().catch(() => {});
   }
 
+  // Written whole under a temp name, then PUBLISHED with `link`, which fails if anchors.json
+  // exists (it wins) and never exposes a half-written file: a process exit mid-write leaves
+  // only the temp, not a truncated anchors.json that launch recovery would trust.
+  const tmp = join(dir, "anchors.json.recovering");
   try {
-    // `wx`: if anything wrote anchors.json since the check above, it wins.
-    await writeFile(join(dir, "anchors.json"), JSON.stringify(anchors), { flag: "wx" });
+    await writeFile(tmp, JSON.stringify(anchors));
+    await link(tmp, join(dir, "anchors.json"));
   } catch (e) {
+    await rm(tmp, { force: true }).catch(() => {});
     return { ok: false, why: `could not write anchors.json: ${(e as Error).message}` };
   }
+  await rm(tmp, { force: true }).catch(() => {});
   await rm(join(dir, PARTIAL_ANCHORS_FILE), { force: true }).catch(() => {});
   return { ok: true };
 }

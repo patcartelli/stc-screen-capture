@@ -64,7 +64,7 @@ import { recordTimeProject, defaultStyleForTake, type RecordTimeChoices } from "
 import { cleanPipStyle } from "@transform/pip-style.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
-  afterCapture as showThumbnailsAfterCapture, closeThumbnail, dismissThumbnail,
+  afterCapture as showHiddenThumbnails, closeThumbnail, dismissThumbnail,
   unsavedTakeDirs, takeFor,
 } from "./thumbnail-window.js";
 import { promotes, trashStyle } from "./panel-actions.js";
@@ -741,6 +741,20 @@ async function writeRecordTimeProject(dir: string, choices: RecordTimeChoices): 
 }
 
 /**
+ * Recovered takes whose panel could not go up because a NEW take was recording (STC-530): a
+ * panel presented mid-take is visible and would be filmed. Drained by `showThumbnailsAfterCapture`,
+ * the one place panels come back once no take is live.
+ */
+const deferredRecoveredPanels: string[] = [];
+
+/** Panels hidden for a capture come back, then any recovered take that had to wait gets its panel. */
+function showThumbnailsAfterCapture(): void {
+  showHiddenThumbnails();
+  if (quitting || sup?.state === "recording") return;
+  for (const dir of deferredRecoveredPanels.splice(0)) void presentRecordingPanel(dir, "fresh");
+}
+
+/**
  * A take ended cleanly (`HelperSupervisor`'s `take-ended`).
  *
  * Quitting does not present: `shutdown()` stops a live take, which fires this
@@ -763,6 +777,9 @@ async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
     const why = typeof reason === "string" && reason !== "stopped" ? reason : "user";
     const r = await recoverTake(dir, why);
     if (!r.ok) console.error("[take-ended] anchors.json is missing and the take could not be finished:", dir, r.why);
+    // Recovery took time: a quit or a new take may have begun meanwhile.
+    if (quitting) return;
+    if (sup?.state === "recording") { if (r.ok) deferredRecoveredPanels.push(dir); return; }
   }
   await presentRecordingPanel(dir, "fresh");
 }
@@ -777,8 +794,13 @@ async function onRecordingLost(i: { dir?: unknown } & Record<string, unknown>): 
   let recovered = false;
   if (typeof i.dir === "string" && !quitting) {
     const r = await recoverTake(i.dir, RECOVERY_STOP_REASON);
-    if (r.ok) recovered = await presentRecordingPanel(i.dir, "fresh");
-    else console.error("[recording-lost] could not recover the take:", i.dir, r.why);
+    recovered = r.ok;
+    if (!r.ok) console.error("[recording-lost] could not recover the take:", i.dir, r.why);
+    // Recovery took time: quitting leaves the take for launch recovery; a take already
+    // recording again must not be filmed with a panel, so the panel waits (see above).
+    else if (quitting) { /* on disk, offered next launch */ }
+    else if (sup?.state === "recording") deferredRecoveredPanels.push(i.dir);
+    else await presentRecordingPanel(i.dir, "fresh");
   }
   send("helper:recording-lost", { ...i, recovered });
 }
