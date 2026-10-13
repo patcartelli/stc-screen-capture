@@ -108,6 +108,7 @@
  */
 
 import type { DecorationMode } from "@transform/shot.js";
+import { libraryNote } from "./stop-copy.js";
 
 export type LibraryKind = "recording" | "still";
 
@@ -285,6 +286,8 @@ export interface TakeInfo {
    * 1.26-1.39 s across five real takes.
    */
   camera?: { present: boolean; device?: string; pipStartsAfterMs: number };
+  /** How the take stopped, when anchors.json says (STC-530). Read for the library note; STC-529 extends it. */
+  stop?: { t: number; reason: string };
   /**
    * The matching finished export at top level, when this bundle and a
    * top-level file are linked by an embedded capture id (STC-413). Absent
@@ -382,6 +385,8 @@ export function recordingItem(t: TakeInfo): LibraryItem {
         : `Camera: ${who}`);
     }
   }
+  const stopNote = libraryNote(t.stop);
+  if (stopNote) notes.push(stopNote);
   return {
     id: t.name,
     kind: "recording",

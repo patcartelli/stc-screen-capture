@@ -64,6 +64,8 @@
     #takecard { flex: 1; display: flex; flex-direction: column;
                 align-items: center; justify-content: center; text-align: center; }
     #takemeta { opacity: 0.7; margin-top: 2px; }
+    #takereason { margin-top: 4px; }
+    #takereason:empty { display: none; }
     #copyprogress { width: 100%; height: var(--space-1); margin-top: var(--space-2); accent-color: var(--accent); }
     #copyprogress[hidden] { display: none; }
     #format { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-top: var(--space-2); }
@@ -141,6 +143,7 @@
          thumbnail (`library-items.ts`'s `source: "none"`). -->
     <div id="takecard" hidden>
       <div id="takemeta"></div>
+      <div id="takereason"></div>
       <!-- STC-488: a recording's Copy renders first. Hidden unless one is running. -->
       <!-- STC-395: a fresh recording's output format. Never closes the panel. -->
       <div id="format" role="radiogroup" aria-label="Output format" hidden>

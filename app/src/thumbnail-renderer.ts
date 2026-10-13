@@ -147,9 +147,11 @@ if (take.kind === "recording") {
   ($("takecard") as HTMLElement).hidden = false;
   ($("thumbwrap") as HTMLElement).hidden = true;
   const rec = JSON.parse(params.get("recording") ?? "null") as
-    { durationMs: number; scope: string } | null;
+    { durationMs: number; scope: string; reason?: string } | null;
   ($("takemeta") as HTMLElement).textContent =
     rec ? `${fmtDuration(rec.durationMs)} · ${rec.scope}` : "";
+  // STC-530: why this take stopped, when it was not a plain stop. Empty otherwise (hidden by CSS).
+  ($("takereason") as HTMLElement).textContent = rec?.reason ?? "";
 }
 /**
  * The shot, or `null` for a recording (STC-487). Parsed only for a shot:

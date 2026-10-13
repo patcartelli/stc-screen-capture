@@ -34,6 +34,7 @@ import {
   startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight, copyRenderFormat,
 } from "./copy-render-window.js";
 import { GifCache } from "./gif-cache.js";
+import { panelReason } from "./stop-copy.js";
 import {
   copyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
   copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
@@ -692,10 +693,11 @@ function reconcileWindowRecording(): void {
  * to show it (decided with Patrick, 2026-09-30).
  */
 async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): Promise<boolean> {
-  let recording = { durationMs: 0, scope: "Screen" };
+  let recording: { durationMs: number; scope: string; reason?: string } = { durationMs: 0, scope: "Screen" };
   try {
     const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"));
-    recording = { durationMs: recordingDurationMs(anchors), scope: recordingScopeLabel(anchors) };
+    recording = { durationMs: recordingDurationMs(anchors), scope: recordingScopeLabel(anchors),
+                  reason: panelReason(anchors.stop) };
   } catch (e) {
     console.error("[recording-panel] could not read anchors.json for the card:", dir, e);
   }
