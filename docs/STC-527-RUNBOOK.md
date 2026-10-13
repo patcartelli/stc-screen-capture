@@ -1,10 +1,10 @@
 # STC-527 runbook — disk full mid-take
 
-**Branch:** `accounts/stc-527-disk-full-mid-take` until it merges, then `master`.
+**Branch:** `master` (merged in #319 and #321).
 
 ```
 git fetch origin
-git checkout accounts/stc-527-disk-full-mid-take
+git checkout master && git pull
 npm ci
 helper/build.sh
 ```
@@ -60,15 +60,41 @@ hdiutil create -size 256m -fs APFS -volname StcSmall /tmp/stc-small.dmg
 hdiutil attach /tmp/stc-small.dmg -mountpoint /tmp/stc-small
 ```
 
+Check the volume before anything else. The device must NOT be your main disk, and the size
+must be about 244Mi:
+
+```
+df -h /tmp/stc-small
+```
+
+Three traps, each hit on 2026-10-13:
+- **Make the image with `hdiutil create`, as above.** `diskutil image create blank` makes an
+  ASIF image, which `hdiutil attach` refuses ("image format not supported"; it needs
+  `diskutil image attach --mountPoint /tmp/stc-small /tmp/stc-small.dmg`).
+- **If the attach fails, `/tmp/stc-small` is just a folder on your real disk**, and the app
+  will happily write a take there. A take that shows no `Used` growth in
+  `df -h /tmp/stc-small` in the first seconds is on the wrong disk.
+- **`STC_TEMP_TAKES_DIR` only counts at launch.** An app already running keeps writing to
+  `~/Library/Application Support/Capture/temp-takes/`. Quit it and start it with the
+  variable on the same line, below.
+
 ```
 STC_TEMP_TAKES_DIR=/tmp/stc-small npm run app:start
+```
+
+In a second terminal tab, watch the free space (start it BEFORE recording, or the stop's
+reading is lost):
+
+```
+while true; do df -h /tmp/stc-small | tail -1; sleep 1; done
 ```
 
 Record the whole screen with a video playing. Watch for:
 
 1. **The take stops by itself** before the volume is completely full (`df -h /tmp/stc-small`
    should still show roughly 60 MB free).
-2. **Two alerts with raw codes** (see "Not in this ticket" above).
+2. **An alert** reading "Recording stopped by the recorder (disk-full)…" (STC-531's copy
+   has landed; this ticket only supplies the reason).
 3. **The corner panel appears** for the take. Open it in the editor: it plays from the
    start to the moment it stopped, with the cursor.
 4. In the take folder under `/tmp/stc-small`, `anchors.json` has `"version": 10` and
@@ -88,10 +114,13 @@ take should still stop with `disk-full`, and `anchors.json` should still be ther
 what the 8 MiB reserve is for. If `anchors.json` is missing, the reserve was not enough
 and the take went down the crash path. Note what was in the folder and its sizes.
 
+Re-recording on a volume already under the 64 MiB floor stops after about a second with
+`disk-full`: that is the floor working, not a fault. Clear the volume between runs.
+
 Clean up:
 
 ```
-hdiutil detach /tmp/stc-small
+hdiutil detach /tmp/stc-small && rm /tmp/stc-small.dmg
 ```
 
 ## §2 result, 2026-10-13: the watch never fired (fixed)
@@ -112,16 +141,29 @@ tick returned the first tick's number. Fixed by `volumeFreeBytes(at:)`
 using the uncleared read as its control. It was confirmed to fail with the clear removed.
 `STC_CAPTURE_FAULT=disk-full` could never have caught this: it returns 0 before the read.
 
-**Re-run §2 on the fixed build** (rebuild the helper first). The take should now stop with
-about 60 MiB free, and `df` should show it.
+## §1 and §2 on the fixed build, 2026-10-13: pass
+
+Host Mac, `master` @ `312851a` (#319 + #321), helper rebuilt.
+
+- **§1:** `disk-full.grant.test.ts` 3/3, the control included.
+- **§2, the watch:** a 244Mi volume, the whole 4K screen with a video playing. `Used` climbed
+  10 → 169 MiB over about 35 s, then 177 MiB at the stop, with **66 MiB free** once the
+  reserve was released (the last growth sample, 74 MiB free, was still above the floor), where
+  the pre-fix take ended at about 5 MiB. Samples move in 16 MiB steps, so that is the
+  resolution. `anchors.json` v10, `stop.reason = "disk-full"`, no `.sidecar-reserve`. The
+  alert showed, the take reached the corner panel, was saved, and plays.
+- **§2, the `dd` case:** the take stopped with `disk-full`, `anchors.json` v10 present, no
+  reserve, 13 MiB free afterwards. It stopped 1.2 s in, so this run cannot say whether the
+  watch or the writer path caught it; the writer path is covered by CI's
+  `STC_CAPTURE_FAULT=disk-write-failed` and by the pre-fix run above.
 
 ## What only a Mac can settle
 
-- Whether 64 MiB is the right floor. Too low and a VBR spike reaches `ENOSPC` before the
-  next poll; too high and it stops a take someone had room for. §2's `df` reading says
-  which.
+- Whether 64 MiB is the right floor beyond one 4K display with video: §2's reading (stop at
+  ~66 MiB free) says it was enough here. Too low and a VBR spike reaches `ENOSPC` before the
+  next poll; too high and it stops a take someone had room for.
 - Whether the raw free count stops too early on a disk whose space is mostly purgeable.
   The watch deliberately ignores purgeable space; on a nearly full real system disk,
-  compare `df -h /` with Finder's "Available".
+  compare `df -h /` with Finder's "Available". Filed as STC-537.
 - Whether a crash leaves `.sidecar-reserve` behind in a recovered take (8 MiB of zeros).
   STC-530's crash-recovery panel is where that would be cleaned up.
