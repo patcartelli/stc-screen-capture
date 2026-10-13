@@ -23,8 +23,13 @@ import { SessionLoadError } from "./session-error.js";
 /** Every colour space `anchors.capture.colorSpace` may name. */
 export const CAPTURE_COLOR_SPACES = ["displayP3"] as const;
 
-/** The canvas colour space for this take: what to pass to `getContext("2d", { colorSpace })`. */
-export function canvasColorSpace(anchors: Pick<Anchors, "capture">): PredefinedColorSpace {
+/**
+ * The canvas colour space for this take: what to pass to `getContext("2d", { colorSpace })`.
+ * Spelled out rather than `PredefinedColorSpace` so the Electron main process can import
+ * `loadSession` (STC-530's recovery checks a rebuilt take with it): that is a DOM type, and
+ * `tsconfig.node.json` has no DOM. The two values ARE that type's members.
+ */
+export function canvasColorSpace(anchors: Pick<Anchors, "capture">): "srgb" | "display-p3" {
   return anchors.capture.colorSpace === "displayP3" ? "display-p3" : "srgb";
 }
 
