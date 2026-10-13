@@ -129,7 +129,7 @@ export type CaptureScope =
 
 /** Mirrors schema/anchors-1.schema.json through anchors-7.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {

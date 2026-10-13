@@ -158,16 +158,16 @@ describe("listTakes — anchors version support (STC-262)", () => {
   });
 
   test("a version this build does not know is still rejected, by name", async () => {
-    // Widening must not become "accept anything". Version 10, not 9: STC-510
-    // made 9 a real, supported version (`capture.colorSpace`), so it is no
-    // longer a stand-in for "unknown future version" — the same thing
+    // Widening must not become "accept anything". Version 11, not 10: STC-527
+    // made 10 a real, supported version (the `disk-full` stop reason), so it is
+    // no longer a stand-in for "unknown future version" — the same thing
     // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240), 6 (STC-418),
-    // 7 (STC-235) and 8 (STC-482).
-    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 10 }) });
+    // 7 (STC-235), 8 (STC-482) and 9 (STC-510).
+    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 11 }) });
     const { takes, invalid } = await listTakes(env(), null);
     expect(takes).toEqual([]);
     expect(invalid.length).toBe(1);
-    expect(invalid[0]!.reason).toMatch(/version 10 is not supported/);
+    expect(invalid[0]!.reason).toMatch(/version 11 is not supported/);
   });
 });
 

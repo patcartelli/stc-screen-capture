@@ -446,6 +446,20 @@ do {
                                  pauses: [],
                                  stopReason: "user", stopTNs: 20_000_000_000)
     check(region["version"] as? Int == 3, "a region take ignores a window track and stays v3")
+
+    // STC-527: a take that stopped on a full disk is v10, whatever else it is;
+    // the reserved `error` reason is not new and earns nothing.
+    for r in ["disk-full", "disk-full-timeout"] {
+        let full = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                   capture: capture, camera: nil, requested: false,
+                                   pauses: [], stopReason: r, stopTNs: 20_000_000_000)
+        check(full["version"] as? Int == 10, "a \(r) take must write version 10")
+        if r == "disk-full" { printJSON(full, marker: "JSON-DISK-FULL:") }
+    }
+    let failed = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                 capture: capture, camera: nil, requested: false,
+                                 pauses: [], stopReason: "error", stopTNs: 20_000_000_000)
+    check(failed["version"] as? Int == 2, "an `error` stop stays at the version its blocks earned")
 }
 
 if failures.isEmpty { print("ALL PASS") }

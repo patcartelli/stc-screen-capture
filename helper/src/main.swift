@@ -275,6 +275,16 @@ final class App {
                 self.stop(reason: reason)
             }
         }
+        // STC-527: the disk filled or the display writer failed. Same route
+        // and same identity check as the three above; the reason
+        // (`disk-full` / `error`) is decided in DiskDecisions.swift.
+        session.onWriterStopped = { [weak self, weak session] reason in
+            DispatchQueue.main.async {
+                guard let self, let session,
+                      self.state == .recording, self.capture === session else { return }
+                self.stop(reason: reason)
+            }
+        }
         // STC-419: the keyboard layout is read HERE because this is main (every
         // command arrives via IO.readCommands' `DispatchQueue.main.async`) and
         // the Text Input Source APIs require it; `begin()` runs on

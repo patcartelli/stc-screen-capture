@@ -194,6 +194,21 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// reason when a display change cannot be refitted. Called on
     /// `refitQueue`; the handler dispatches to main itself.
     var onRefitFailed: ((String) -> Void)?
+    /// STC-527: App sets it, like `onWindowChanged`, to end the take when the
+    /// disk fills or the display writer fails (`DiskDecisions.swift` decides
+    /// the reason). Fired at most once per take (`writerStopReported`), off
+    /// main; the handler dispatches to main itself.
+    var onWriterStopped: ((String) -> Void)?
+    /// Guarded by `lock`. The watch and the frame path can both see the same
+    /// full disk within one frame of each other; the take ends once.
+    private var writerStopReported = false
+    /// Polls free space on the take's volume (STC-527). Guarded by `lock`,
+    /// same race as `windowWatcher`.
+    private var diskWatcher: DispatchSourceTimer?
+    /// Creates and deletes `SIDECAR_RESERVE_FILE`. Serial, so `writeSidecars`
+    /// can wait out a reserve still being written before it deletes it — a
+    /// reserve created AFTER the delete would be left in the take.
+    private let reserveQueue = DispatchQueue(label: "stc.capture.reserve")
     private let refitQueue = DispatchQueue(label: "stc.capture.refit")
     /// The display stream's sample queue — ONE queue for the life of the
     /// take, so a restarted stream delivers on the same serial queue as the
@@ -625,9 +640,14 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                                                 displayOrigin: (target.geometry.originX, target.geometry.originY),
                                                 start: (w.bounds.x, w.bounds.y))
                     }
+                    // STC-527: every scope. Started after `started` like the
+                    // window watch; the reserve is written off the critical path.
+                    self.startDiskWatcher()
+                    self.reserveSidecarSpace()
                     self.finishStart(.success(self.describe()))
                     self.armStreamDeathFault()
                     self.armDisplayFault()
+                    self.armWriterFault()
                 }
             }
         } catch {
@@ -810,6 +830,112 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             } else {
                 self.displayChanged()
             }
+        }
+    }
+
+    // MARK: STC-527 disk full
+
+    /// Free bytes on the volume holding this take, or nil if it cannot be
+    /// read. The raw free count, not "available for important usage": that one
+    /// includes purgeable space macOS may not reclaim fast enough for a writer
+    /// at 50 Mbps, and stopping a little early beats an ENOSPC mid-fragment.
+    /// `STC_CAPTURE_FAULT=disk-full` reads 0, so the real watch, decision and
+    /// stop run without filling a disk.
+    private func freeBytes() -> Int64? {
+        if ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "disk-full" { return 0 }
+        let v = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        return v?.volumeAvailableCapacity.map(Int64.init)
+    }
+
+    private func startDiskWatcher() {
+        if ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "disk-full" {
+            IO.log("STC_CAPTURE_FAULT=disk-full: the disk watch reads 0 bytes free")
+        }
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        t.schedule(deadline: .now() + DISK_WATCH_INTERVAL_SECONDS, repeating: DISK_WATCH_INTERVAL_SECONDS)
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            let free = self.freeBytes()
+            if case .stop(let reason) = decideDiskWatch(freeBytes: free) {
+                self.reportWriterStop(reason, detail: "\(free ?? -1) bytes free, under the \(DISK_FREE_FLOOR_BYTES)-byte floor")
+            }
+        }
+        // The window watcher's race, the same way (startWindowWatcher).
+        lock.lock()
+        if stoppingBegan {
+            lock.unlock()
+            t.cancel()
+            return
+        }
+        diskWatcher = t
+        lock.unlock()
+        t.resume()
+    }
+
+    /// Called from the frame path once the display writer is `.failed`.
+    private func writerFailed(_ error: Error?) {
+        // Every frame after the failure lands here until the stop begins;
+        // only the first needs the volume read.
+        lock.lock(); let done = writerStopReported || stoppingBegan; lock.unlock()
+        if done { return }
+        guard case .stop(let reason) = decideWriterFailure(error, freeBytes: freeBytes()) else { return }
+        reportWriterStop(reason, detail: "display writer failed: \(error.map { "\($0)" } ?? "no error")")
+    }
+
+    private func reportWriterStop(_ reason: String, detail: String) {
+        lock.lock()
+        if writerStopReported || stoppingBegan { lock.unlock(); return }
+        writerStopReported = true
+        lock.unlock()
+        IO.send("warning", ["code": reason == "disk-full" ? "disk-full" : "writer-failed", "detail": detail])
+        onWriterStopped?(reason)
+    }
+
+    /// `STC_CAPTURE_FAULT=disk-write-failed`: 0.5 s in, the frame path's
+    /// reaction to a failed writer runs with the error a real full disk
+    /// produced (AVFoundationErrorDomain -11807 over POSIX 28, measured). The
+    /// watch path has `=disk-full`; this is the other way in.
+    private func armWriterFault() {
+        guard ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "disk-write-failed" else { return }
+        IO.log("STC_CAPTURE_FAULT=disk-write-failed: the writer will report a full disk in \(Self.windowFaultDelaySeconds) s")
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.windowFaultDelaySeconds) { [weak self] in
+            let posix = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC))
+            self?.writerFailed(NSError(domain: "AVFoundationErrorDomain", code: -11807,
+                                       userInfo: [NSUnderlyingErrorKey: posix,
+                                                  NSLocalizedDescriptionKey: "injected by STC_CAPTURE_FAULT=disk-write-failed"]))
+        }
+    }
+
+    /// Holds `SIDECAR_RESERVE_BYTES` for the sidecars until `writeSidecars`
+    /// lets it go. Real bytes, not a truncate: APFS would make that sparse
+    /// and reserve nothing. A disk too full to take it is logged and left to
+    /// the watch, which will stop the take within a second anyway.
+    private func reserveSidecarSpace() {
+        reserveQueue.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock(); let stopping = self.stoppingBegan; self.lock.unlock()
+            if stopping { return }
+            let url = self.dir.appendingPathComponent(SIDECAR_RESERVE_FILE)
+            guard FileManager.default.createFile(atPath: url.path, contents: nil),
+                  let h = try? FileHandle(forWritingTo: url) else {
+                IO.log("sidecar reserve: could not create \(url.path)")
+                return
+            }
+            let chunk = Data(count: 1 << 20)
+            do {
+                for _ in 0..<(SIDECAR_RESERVE_BYTES >> 20) { try h.write(contentsOf: chunk) }
+                try h.close()
+            } catch {
+                try? h.close()
+                try? FileManager.default.removeItem(at: url)
+                IO.log("sidecar reserve: \(error); the take has none")
+            }
+        }
+    }
+
+    private func releaseSidecarReserve() {
+        reserveQueue.sync {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(SIDECAR_RESERVE_FILE))
         }
     }
 
@@ -1749,6 +1875,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             lock.lock()
             if outcome == .appended { framesAppended += 1 } else { framesDropped += 1 }
             lock.unlock()
+            // STC-527: a failed writer reports as "not ready" forever, never
+            // as a failed append (DiskDecisions.swift), so a dropped frame is
+            // the only place the frame path can notice it. Cheap: only read on
+            // a frame that did not go in.
+            if outcome != .appended, let w = writer, w.status == .failed {
+                writerFailed(w.error)
+            }
         }
     }
 
@@ -2263,6 +2396,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         windowWatcher = nil
         let winTracker = windowTracker
         windowTracker = nil
+        let diskWatch = diskWatcher
+        diskWatcher = nil
         // STC-235: read under the lock a refit's restart swaps it under. Nil
         // with `restarting` set means a restart is between streams: the old
         // one is already being stopped by the restart, and the new one either
@@ -2282,6 +2417,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // already fired) and closes the watcher for every other stop reason.
         winWatcher?.cancel()
         winTracker?.cancel()
+        diskWatch?.cancel()
 
         let answerLock = NSLock()
         var answered = false
@@ -2415,6 +2551,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func writeSidecars(reason: String) {
+        // STC-527: give the sidecars the space held for them since start.
+        releaseSidecarReserve()
         lock.lock()
         let evs = events
         let camTrack = cameraTrack
@@ -2478,7 +2616,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         guard let d = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]) else {
             IO.send("error", ["code": "sidecar-encode-failed", "file": name]); return
         }
-        try? d.write(to: dir.appendingPathComponent(name))
+        do {
+            try d.write(to: dir.appendingPathComponent(name))
+        } catch {
+            // STC-527: said out loud. A missing anchors.json sends the take
+            // down the crash path, and the client should know why.
+            IO.send("warning", ["code": "sidecar-write-failed", "file": name, "detail": "\(error)"])
+        }
     }
 }
 
