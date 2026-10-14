@@ -48,7 +48,7 @@ Three of these depart from the spec:
 npm run test:capture -- helper/test/stream-died.grant.test.ts
 ```
 
-All three tests pass. The new test drives `STC_CAPTURE_FAULT=screen-recording-revoked`: the same injected death, with the grant probe reading false. The existing `stream-died` test is its control: the same death with the real probe must stay `stream-stopped`.
+All three passed on hardware 2026-10-14. The new test drives `STC_CAPTURE_FAULT=screen-recording-revoked`: the same injected death, with the grant probe reading false. The existing `stream-died` test is its control: the same death with the real probe must stay `stream-stopped`.
 
 ## §1 Screen Recording turned off mid-take (the acceptance for state 1)
 
