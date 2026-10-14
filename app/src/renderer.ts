@@ -126,6 +126,7 @@ import {
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
 import { formatElapsedTimer } from "./pill.js";
+import { STOP_ANNOUNCING_WARNINGS } from "./stop-copy.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
@@ -924,9 +925,8 @@ const MIC_FAULTS: Record<string, string> = {
  * by a `recording-ended` with the same reason.
  */
 const RECORDING_FAULTS: Record<string, string> = {
-  "stream-stopped":
-    "The display capture stopped unexpectedly, so the recording is being stopped. " +
-    "What was captured up to this point is kept.",
+  // `stream-stopped` used to have a sentence here. Since STC-531 it is one of
+  // `STOP_ANNOUNCING_WARNINGS`: the pill and the panel say it.
   "av-runtime-error": "A capture device reported an error during the recording.",
 };
 
@@ -960,6 +960,12 @@ recorder.on("helper:warning", (l) => {
   // helper-side, knows) — so an automatic camera's disconnect still shows
   // both toasts. Both are accurate; this only removes the redundant one.
   if (code === "device-disconnected" && l.uid != null && l.uid === storedCameraUid) {
+    return;
+  }
+  // STC-531: the helper is about to stop the take itself, and the pill and the
+  // panel will say why. A toast here would be the same news a third time.
+  if (STOP_ANNOUNCING_WARNINGS.has(code)) {
+    console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }
   if (INFORMATIONAL_WARNINGS.has(code)) {

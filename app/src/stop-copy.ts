@@ -72,6 +72,24 @@ const ROWS: Record<string, StopRow> = {
 /** Every reason with a row — what the test walks against the helper's own list. */
 export const HELPER_STOP_REASONS: readonly string[] = Object.keys(ROWS);
 
+/**
+ * The helper's `warning` codes that only ANNOUNCE one of the stops above: it sends one
+ * of these and then stops the take itself, with the reason in the comment. The renderer
+ * shows every other warning as a toast; these it must not, or the stop is said three
+ * times (warning toast, pill, panel). Seen on hardware 2026-10-14: a resized window got
+ * "The recorder reported a problem: window-resized-during-recording" on top of the panel.
+ *
+ * `stream-stopped` is also sent when the stream dies while a take is STARTING; that take
+ * is refused through the start reply (`refusals.ts`), so silencing the warning loses nothing.
+ */
+export const STOP_ANNOUNCING_WARNINGS: ReadonlySet<string> = new Set([
+  "window-resized-during-recording", // -> window-resized
+  "window-closed-during-recording", // -> window-closed
+  "stream-stopped", // -> stream-stopped
+  "disk-full", // -> disk-full
+  "writer-failed", // -> error
+]);
+
 const TIMEOUT = "-timeout";
 function baseReason(reason: string | undefined): string | undefined {
   return reason?.endsWith(TIMEOUT) ? reason.slice(0, -TIMEOUT.length) : reason;

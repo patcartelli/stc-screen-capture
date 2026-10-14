@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   panelReason, panelAction, pillLabel, libraryNote, formatTakeTime, isStopActionId, HELPER_STOP_REASONS,
+  STOP_ANNOUNCING_WARNINGS,
 } from "../src/stop-copy.js";
 import { recordingItem, type TakeInfo } from "../src/library-items.js";
 
@@ -54,6 +55,26 @@ describe("stop copy (STC-530, STC-531)", () => {
         expect(pillLabel(reason), reason).toBeTruthy();
         expect(panelReason({ t: 90_000_000_000, reason }), reason).toMatch(/^Stopped at 1:30\. .+ Everything up to then is saved\.$/);
       }
+    }
+  });
+
+  test("every warning the helper sends right before stopping a take is silenced (seen on hardware)", () => {
+    // Read from the Swift: a warning sent and then, two lines on, a stop. The pairs the
+    // window watcher and the writer use are named here; a new one must join the set.
+    const capture = readFileSync(join(root, "helper/src/Capture.swift"), "utf8");
+    for (const code of STOP_ANNOUNCING_WARNINGS) {
+      expect(capture.includes(`"${code}"`), `${code} is not sent by Capture.swift any more`).toBe(true);
+    }
+    // The window watcher's warning-then-stop pairs, found rather than listed.
+    const pairs = [...capture.matchAll(/IO\.send\("warning", \["code": "([a-z-]+)"[\s\S]{0,200}?onWindowChanged\?\("([a-z-]+)"\)/g)];
+    expect(pairs.length, "the warning-then-stop pattern matches nothing").toBeGreaterThanOrEqual(2);
+    for (const [, code, reason] of pairs) {
+      expect(STOP_ANNOUNCING_WARNINGS.has(code!), code).toBe(true);
+      expect(HELPER_STOP_REASONS, reason).toContain(reason);
+    }
+    // And it is not "silence everything": a warning about a take that keeps going still toasts.
+    for (const code of ["av-runtime-error", "mic-disconnected", "camera-no-frames", "sidecar-write-failed"]) {
+      expect(STOP_ANNOUNCING_WARNINGS.has(code), code).toBe(false);
     }
   });
 

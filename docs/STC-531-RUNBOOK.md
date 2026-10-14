@@ -16,6 +16,7 @@ npm run app:start
   - the pill shows the cause for 2 s (`PILL_STOPPED_DWELL_MS`) in place of the timer, and is disabled meanwhile;
   - then the window restores and the take's panel goes up with `Stopped at m:ss. <cause>. Everything up to then is saved.`
 - Every word comes from `app/src/stop-copy.ts`. `ENDED_BY_HELPER` is gone.
+- The warning the helper sends just before such a stop (`window-resized-during-recording`, `window-closed-during-recording`, `stream-stopped`, `disk-full`, `writer-failed`) is no longer a toast either: `STOP_ANNOUNCING_WARNINGS`, found on hardware 2026-10-14 when a resized window still got "The recorder reported a problem: window-resized-during-recording".
 - One panel action: **Reclaim space** for a full disk. It runs the same sweep as the profile sheet's button.
 - Labels:
 
@@ -48,7 +49,7 @@ So the spec's state 1 has no pill label or panel line. A `screen-recording-revok
 
 Work through §2 to §4 and look at the pill during the 2 s.
 
-- **Does the label fit?** The window keeps the width it collapsed to, sized for the timer, so the label is in the system font. The longest label is "Window resized". An ellipsis means it does not fit: report it.
+- **Does the label fit?** CONFIRMED for "Window resized" on hardware 2026-10-14. The window keeps the width it collapsed to, sized for the timer, so the label is in the system font. The longest label is "Window resized". An ellipsis means it does not fit: report it.
 - **Is 2 s long enough to read?**
 - **Does the window jump when it restores?**
 
