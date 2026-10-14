@@ -65,6 +65,8 @@ Record a second display, then unplug it. Expect **Display lost**, then `...The d
 
 ## §4 Disk full
 
+**CONFIRMED on hardware 2026-10-14** (packaged build, 256 MB volume): stopped at 0:42 with ~53 MiB free (61 once the reserve went), anchors v10 `disk-full`, "Disk full" on the pill, then the panel line with Reclaim space.
+
 Use STC-527's runbook §2 setup (a small `hdiutil` volume as `STC_TEMP_TAKES_DIR`; check `df` first). Expect:
 - **Disk full** on the pill;
 - the panel line, and a **Reclaim space** button;
