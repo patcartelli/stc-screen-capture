@@ -492,6 +492,20 @@ export interface Bounds { x: number; y: number; width: number; height: number }
  */
 export const PANEL_SIZE: Size = { width: 260, height: 210 };
 
+/**
+ * A recording whose stop has a reason line (STC-530's crash line, STC-531's
+ * `Stopped at m:ss. …`) is taller by exactly that line's room. At `PANEL_SIZE`
+ * the line pushed Copy/Save/Edit off the card (seen on hardware 2026-10-14).
+ * Only the height moves; `stackLayout` already lays out each panel by its OWN
+ * size, so a taller card in the stack needs nothing else.
+ */
+export const REASON_PANEL_SIZE: Size = { width: PANEL_SIZE.width, height: 250 };
+
+/** The size a panel is created at: taller only when its card carries a stop reason. */
+export function panelSizeFor(hasReason: boolean): Size {
+  return hasReason ? REASON_PANEL_SIZE : PANEL_SIZE;
+}
+
 // Redact used to grow this same panel in place at a bigger WINDOW size
 // (`REDACT_SIZE`, STC-297) — "it is still the same panel in the same corner,
 // the still EDITOR is STC-300 and this stops well short of one." STC-300

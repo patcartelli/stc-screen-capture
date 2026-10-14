@@ -1,7 +1,7 @@
 import { app, BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import {
-  positionFor, stackLayout, visibleCount, PANEL_SIZE,
+  positionFor, stackLayout, visibleCount, panelSizeFor,
   type Corner, type Size, type Bounds,
 } from "./thumbnail.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
@@ -56,7 +56,7 @@ import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
  * sliver. It now hands `thumbnail.ts`'s `stackLayout` every visible panel's
  * REAL current size and lays the whole column out fresh, wrapping into a
  * second column on a display too short for `MAX_STACKED` full-size cards.
- * Every panel is `PANEL_SIZE` today — Redact used to grow one in place
+ * Every panel is `PANEL_SIZE`, or `REASON_PANEL_SIZE` for a recording with a stop reason (STC-531). Redact used to grow one in place
  * (`REDACT_SIZE`) and no longer does, moved to its own window by STC-300 —
  * but `stackLayout` stays a function of each panel's OWN size rather than one
  * shared constant, since nothing here needs to know that is currently true.
@@ -525,9 +525,11 @@ class ThumbnailSession {
     this.currentWorkArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     // At the corner: a new panel is always the newest, so index 0. `restack`
     // moves the ones behind it immediately afterwards.
-    const { x, y } = positionFor(this.corner, this.workArea, PANEL_SIZE, CORNER_MARGIN);
+    // STC-531: a recording with a stop reason gets the line's room (`panelSizeFor`).
+    const size = panelSizeFor(Boolean(opts.recording?.reason));
+    const { x, y } = positionFor(this.corner, this.workArea, size, CORNER_MARGIN);
     this.win = new BrowserWindow({
-      x, y, width: PANEL_SIZE.width, height: PANEL_SIZE.height,
+      x, y, width: size.width, height: size.height,
       transparent: true, frame: false, hasShadow: false,
       resizable: false, movable: false, minimizable: false, maximizable: false,
       fullscreenable: false, skipTaskbar: true,
