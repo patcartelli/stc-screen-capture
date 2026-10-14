@@ -211,17 +211,26 @@ describe("loader accepts v1 through v7 anchors", () => {
     expect(s.systemAudio).toBeUndefined();
   });
 
-  test("a version 12 anchors document is rejected by name", async () => {
-    // Widening must not become "accept anything". Version 12, not 11: STC-530
-    // made 11 a real, supported version (the `recorder-quit` stop reason), so it
-    // is no longer a stand-in for "unknown future version" — the same thing
-    // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240), 6 (STC-418),
-    // 7 (STC-235), 8 (STC-482), 9 (STC-510) and 10 (STC-527).
+  test("a version 13 anchors document is rejected by name", async () => {
+    // Widening must not become "accept anything". Version 13, not 12: STC-531
+    // made 12 a real, supported version (the `screen-recording-revoked` stop
+    // reason), so it is no longer a stand-in for "unknown future version" — the
+    // same thing already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240),
+    // 6 (STC-418), 7 (STC-235), 8 (STC-482), 9 (STC-510), 10 (STC-527) and
+    // 11 (STC-530).
     await expect(loadSession({
-      anchors: offsetAnchors({ version: 12 as any }),
+      anchors: offsetAnchors({ version: 13 as any }),
       events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
       displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 12 is not supported/);
+    })).rejects.toThrow(/version 13 is not supported/);
+  });
+
+  test("a version 12 anchors document loads (STC-531)", async () => {
+    await expect(loadSession({
+      anchors: offsetAnchors({ version: 12, stop: { t: 1, reason: "screen-recording-revoked" } } as any),
+      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
+      displayMp4: mp4("fixtures/offset/display.mp4"),
+    })).resolves.toBeDefined();
   });
 
   test("v11 (STC-530, recorder-quit) loads like any other take", async () => {

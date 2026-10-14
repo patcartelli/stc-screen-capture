@@ -5,8 +5,8 @@ import { panelReason, libraryNote } from "../src/stop-copy.js";
 import { recordingItem, type TakeInfo } from "../src/library-items.js";
 
 const root = join(__dirname, "..", "..");
-/** Every reason anchors-11 can carry, read from the schema so a new one is covered without an edit. */
-const reasons: string[] = JSON.parse(readFileSync(join(root, "schema/anchors-11.schema.json"), "utf8"))
+/** Every reason anchors-12 can carry, read from the schema so a new one is covered without an edit. */
+const reasons: string[] = JSON.parse(readFileSync(join(root, "schema/anchors-12.schema.json"), "utf8"))
   .properties.stop.properties.reason.anyOf.flatMap((b: { enum?: string[] }) => b.enum ?? []);
 
 describe("stop copy (STC-530)", () => {

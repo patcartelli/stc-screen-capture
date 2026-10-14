@@ -33,6 +33,24 @@ describe("anchors-11 (STC-530): the recorder-quit stop reason", () => {
   });
 });
 
+describe("anchors-12 (STC-531): the screen-recording-revoked stop reason", () => {
+  const base = (reason: string) => ({
+    ...load("fixtures/basic/anchors.json"),
+    version: 12,
+    stop: { t: 4_000_000_000, reason },
+  });
+  test("anchors-12 accepts it, with and without -timeout, and still accepts recorder-quit", () => {
+    const validate = compile("schema/anchors-12.schema.json");
+    for (const r of ["screen-recording-revoked", "screen-recording-revoked-timeout", "recorder-quit"]) {
+      expect(validate(base(r)), `${r}: ${JSON.stringify(validate.errors)}`).toBe(true);
+    }
+  });
+  test("anchors-11 refuses it (it is new at 12)", () => {
+    const validate = compile("schema/anchors-11.schema.json");
+    expect(validate({ ...base("screen-recording-revoked"), version: 11 })).toBe(false);
+  });
+});
+
 describe("session schemas validate the fixture", () => {
   test("anchors.json conforms to anchors-1 schema", () => {
     const validate = compile("schema/anchors-1.schema.json");

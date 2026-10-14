@@ -779,7 +779,7 @@ async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
   // STC-527's worst case (STC-530): the helper stopped cleanly but anchors.json could not be
   // written. Its partial still describes the take; finish it with the reason the helper gave,
   // in the take's vocabulary (`takeEndedStopReason`: `stopped` -> `user`, the supervisor's own
-  // `helper-idle`/`helper-stopped` -> `error`, anything anchors-11 accepts unchanged).
+  // `helper-idle`/`helper-stopped` -> `error`, anything anchors-12 accepts unchanged).
   if (await hasPartialAnchors(dir)) {
     const r = await recoverTake(dir, takeEndedStopReason(reason));
     if (!r.ok) console.error("[take-ended] anchors.json is missing and the take could not be finished:", dir, r.why);

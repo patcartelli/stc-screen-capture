@@ -49,6 +49,15 @@ describe("recoverAnchors (STC-530)", () => {
     expect(r.anchors.stop?.reason).toBe("disk-full");
   });
 
+  test("screen-recording-revoked is written at 12 (STC-531)", () => {
+    for (const reason of ["screen-recording-revoked", "screen-recording-revoked-timeout"]) {
+      const r = recoverAnchors(partial(), media, reason);
+      if (!r.ok) throw new Error(r.why);
+      expect(r.anchors.version).toBe(12);
+      expect(r.anchors.stop?.reason).toBe(reason);
+    }
+  });
+
   test("a display with no frames is not recoverable (Review Focus 1)", () => {
     const r = recoverAnchors(partial(), { ...media, displayFramesNs: [] }, RECOVERY_STOP_REASON);
     expect(r).toEqual({ ok: false, why: expect.stringMatching(/no frames/) });
