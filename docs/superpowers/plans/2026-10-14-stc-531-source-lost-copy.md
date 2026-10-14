@@ -48,7 +48,10 @@ table (`docs/superpowers/specs/2026-10-12-stc-505-failure-states-design.md`).
   so it isn't that test.
 - **3: yes.** The panel waits out the 2 s pill label, but only when the helper stopped
   the take itself.
-- **1: open.** It has been explained; no answer yet.
+- **1: drop the toast.** When the helper stops a take with a panel, there is no toast: the
+  pill and the panel carry the cause. `ENDED_BY_HELPER` is deleted and `stop-copy.ts` is
+  the only copy table. A toast appears only if `presentRecordingPanel` fails, so a lost
+  panel is never silent. Build step 4 is this.
 
 ## Decisions needed from Patrick before building
 
