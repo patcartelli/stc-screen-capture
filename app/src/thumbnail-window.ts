@@ -7,6 +7,7 @@ import {
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import { type PanelTake } from "./panel-actions.js";
+import type { StopAction } from "./stop-copy.js";
 import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
 
 /**
@@ -108,7 +109,7 @@ export interface PresentOptions {
    * what it was pointed at. A recording has no picture in v1 (STC-392 D2), so
    * this is the whole of its card. Present for `take.kind === "recording"`.
    */
-  recording?: { durationMs: number; scope: string; reason?: string };
+  recording?: { durationMs: number; scope: string; reason?: string; action?: StopAction };
   corner: Corner;
   /** Where `thumbnail.html` and its preload live. */
   dist: string;

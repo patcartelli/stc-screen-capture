@@ -37,7 +37,7 @@ import {
   startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight, copyRenderFormat,
 } from "./copy-render-window.js";
 import { GifCache } from "./gif-cache.js";
-import { panelReason } from "./stop-copy.js";
+import { panelReason, panelAction, pillLabel, isStopActionId, type StopAction } from "./stop-copy.js";
 import {
   copyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
   copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
@@ -74,7 +74,7 @@ import { editorIsOpen, openEditor } from "./editor-window.js";
 import { openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
 import { attachPillToSupervisor } from "./pill-window.js";
-import { MIN_PILL_WIDTH_PX } from "./pill.js";
+import { MIN_PILL_WIDTH_PX, PILL_STOPPED_DWELL_MS } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
@@ -602,6 +602,14 @@ function startSupervisor(): void {
   // path and nothing is in the library yet. The panel `take-ended` puts up is
   // where it gets decided on.
   sup.on("recording-ended", (i) => send("helper:recording-ended", i));
+  // STC-531: the renderer no longer toasts a helper-decided stop; the take's
+  // panel says why. A stop with no take directory has no panel to say it, so
+  // that one alone is still a toast — the pill's label, or the bare reason.
+  sup.on("recording-ended", (i) => {
+    if (quitting || typeof i?.dir === "string") return;
+    const reason = typeof i?.reason === "string" ? i.reason : "unknown";
+    showNotice(`The recording stopped (${pillLabel(reason) ?? reason}).`);
+  });
   // A take ended cleanly — asked for or not — and is waiting for a decision
   // (STC-487). The ONE place a recording's panel is presented from a stop.
   sup.on("take-ended", (i) => { void onTakeEnded(i?.dir, i?.reason); });
@@ -696,11 +704,12 @@ function reconcileWindowRecording(): void {
  * to show it (decided with Patrick, 2026-09-30).
  */
 async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): Promise<boolean> {
-  let recording: { durationMs: number; scope: string; reason?: string } = { durationMs: 0, scope: "Screen" };
+  let recording: { durationMs: number; scope: string; reason?: string; action?: StopAction } =
+    { durationMs: 0, scope: "Screen" };
   try {
     const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"));
     recording = { durationMs: recordingDurationMs(anchors), scope: recordingScopeLabel(anchors),
-                  reason: panelReason(anchors.stop) };
+                  reason: panelReason(anchors.stop), action: panelAction(anchors.stop) };
   } catch (e) {
     console.error("[recording-panel] could not read anchors.json for the card:", dir, e);
   }
@@ -787,7 +796,24 @@ async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
     if (quitting) return;
     if (sup?.state === "recording") { if (r.ok) deferredRecoveredPanels.push(dir); return; }
   }
-  await presentRecordingPanel(dir, "fresh");
+  // STC-531: the helper stopped this take by itself, and the pill is saying why
+  // (`pill-window.ts`). The panel waits the same `PILL_STOPPED_DWELL_MS`, so
+  // the label and the panel are never up together (Patrick, 2026-10-14). A
+  // stop the user asked for has no label and presents at once, as it always did.
+  const helperDecided = typeof reason === "string" && pillLabel(reason) !== undefined;
+  if (helperDecided) {
+    await new Promise((r) => setTimeout(r, PILL_STOPPED_DWELL_MS));
+    // The wait is time a quit or a new take can begin in, the same re-check
+    // recovery makes above; a panel presented mid-take would be filmed.
+    if (quitting) return;
+    if (sup?.state === "recording") { deferredRecoveredPanels.push(dir); return; }
+  }
+  // The panel is the only place a helper-decided stop says why (STC-531: no
+  // toast). If it cannot go up, the take is still in temp storage for launch
+  // recovery, and the why is said here instead of nowhere.
+  if (!(await presentRecordingPanel(dir, "fresh")) && helperDecided) {
+    showNotice(`${panelReason({ reason: reason as string })} It will be offered the next time Capture opens.`);
+  }
 }
 
 /**
@@ -1420,7 +1446,23 @@ ipcMain.handle("recorder:resolvedSaveFolder", async (): Promise<string> =>
  * asking: the sheet is modal once it is up, but the find before it is not.
  */
 let reclaiming = false;
-ipcMain.handle("recorder:reclaimSpace", async (): Promise<{ moved: number; failed: number }> => {
+ipcMain.handle("recorder:reclaimSpace", () => reclaimSpace());
+
+/**
+ * STC-531: a stopped take's one action, from its panel. The page names an id
+ * (`stop-copy.ts`'s `panelAction`) and this decides what it does, the rule
+ * `toast:action` follows: Reclaim space is the SAME sweep the profile sheet's
+ * button runs, and Open System Settings is the toast table's own URL.
+ */
+ipcMain.handle("panel:stopAction", async (_e, id: unknown): Promise<boolean> => {
+  if (!isStopActionId(id)) return false;
+  if (id === "reclaim-space") { await reclaimSpace(); return true; }
+  const url = TOAST_ACTION_URLS[id];
+  if (url) await shell.openExternal(url);
+  return url !== undefined;
+});
+
+async function reclaimSpace(): Promise<{ moved: number; failed: number }> {
   if (reclaiming) return { moved: 0, failed: 0 };
   reclaiming = true;
   try {
@@ -1455,7 +1497,7 @@ ipcMain.handle("recorder:reclaimSpace", async (): Promise<{ moved: number; faile
   } finally {
     reclaiming = false;
   }
-});
+}
 
 /**
  * The renderer's own preferences, minus the ones it may not name.

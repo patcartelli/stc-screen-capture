@@ -8,6 +8,7 @@ import { toastPage, toastText, waitForToastText } from "./_toast.js";
 import { MESSAGE_TOAST_MIN_MS } from "../src/toast.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
+import { windowCount, pageWithUrl } from "./_windows.js";
 
 /**
  * A warning the helper sends on its reliable channel reaches the user, and a
@@ -250,20 +251,13 @@ describe("helper warnings during a take", () => {
     // button must not go on saying "Stop" for a take that has already ended.
     await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
-    // The LAST word is the end of the take, not the tap warning that preceded
-    // it, and it says what happened rather than quoting a reason code.
-    await expect.poll(() => toastText(app!), { timeout: 10_000 })
-      .toMatch(/display capture stopped unexpectedly, so the recording was stopped/);
-    // Captured once rather than re-read: the toast auto-dismisses on its own
-    // clock now (`toast.ts`'s `messageToastMs`), so chaining further live reads against it
-    // would race that timer instead of asserting against the text the poll
-    // above already confirmed is showing.
-    const finalAlert = await toastText(app!);
-    // Not "saved": a stop no longer promotes (STC-487), so it points at the panel.
-    expect(finalAlert).toMatch(/waiting in the panel at the corner of the screen/);
-    expect(finalAlert).not.toMatch(/was saved/);
-    expect(finalAlert).not.toMatch(/press Stop/);
+    // STC-531: the words are the pill's and the panel's now, never a toast
+    // (stop-copy.e2e.test.ts reads them). The av-runtime-error warning that
+    // preceded the stop still toasts; the stop itself must not add one.
+    for (let i = 0; i < 12; i++) {
+      expect(await toastText(app!)).not.toMatch(/stopped unexpectedly|stopped by the recorder|waiting in the panel/);
+      await new Promise((r) => setTimeout(r, 250));
+    }
   }, 120_000);
 
   test("an idle display reconfiguration is not an alert", async () => {
@@ -287,7 +281,7 @@ describe("helper warnings during a take", () => {
       { timeout: 10_000 }).toBe(true);
   }, 120_000);
 
-  test("a region that no longer fits its refit display ends the take, in words (STC-235)", async () => {
+  test("a region that no longer fits its refit display ends the take, without a toast (STC-235, STC-531)", async () => {
     // Modelled on "a display stream that dies ends the take" above, same
     // unsolicited-stop env vars — just a different reason, and no warning
     // precedes it (a region going out of bounds is not a dead stream).
@@ -298,9 +292,13 @@ describe("helper warnings during a take", () => {
     await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
     await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
     await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
-    await expect.poll(() => toastPage(app!).then((p) => !!p), { timeout: 10_000 }).toBe(true);
-    await expect.poll(() => toastText(app!), { timeout: 10_000 })
-      .toMatch(/recorded area no longer fits on it, so the recording was stopped/);
+    // STC-531: the pill says "Area lost" and the panel says why; no toast.
+    await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: 15_000 }).toBe(1);
+    const panel = await pageWithUrl(app!, "thumbnail.html");
+    await panel.waitForLoadState("domcontentloaded");
+    await expect.poll(() => panel.textContent("#takereason"), { timeout: 10_000 })
+      .toMatch(/the area you were recording no longer fits/);
+    expect(await toastPage(app!)).toBeUndefined();
   }, 120_000);
 
   // STC-412 Task 7: none of the tests above prove a toast actually goes away

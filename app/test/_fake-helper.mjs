@@ -219,6 +219,21 @@ process.stdin.on("data", (chunk) => {
             state = "idle";
             session = null;
             recordingStartedAt = null;
+            // STC-531. The real helper's clean stop writes the take's sidecars, and
+            // the panel reads its reason line and action from anchors.json's `stop`.
+            // fixtures/basic supplies a real mp4 and anchors; the stop is this one,
+            // at the version that reason needs (the helper's minimum-version rule).
+            if (typeof dir === "string") {
+              try {
+                const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures", "basic");
+                copyFileSync(join(fixture, "display.mp4"), join(dir, "display.mp4"));
+                const a = JSON.parse(readFileSync(join(fixture, "anchors.json"), "utf8"));
+                const version = stopReason === "screen-recording-revoked" ? 12
+                  : stopReason === "disk-full" ? 10 : a.version;
+                writeFileSync(join(dir, "anchors.json"),
+                  JSON.stringify({ ...a, version, stop: { t: deathMs * 1_000_000, reason: stopReason } }));
+              } catch { /* a test seam is not worth killing the stand-in */ }
+            }
             send("stopped", { dir, elapsedMs: deathMs, reason: stopReason });
           }, deathMs);
         }

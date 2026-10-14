@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld("thumb", {
   // A DIRECTORY, which main validates against the recordings root before it
   // touches anything — the renderer names a take, never a path to act on.
   revealShot: (dir: string) => ipcRenderer.invoke("still:revealShot", dir),
+  // STC-531: a stopped take's one action (Reclaim space / Open System Settings).
+  // An ID only — main's `panel:stopAction` validates it and decides what it does.
+  stopAction: (id: string) => ipcRenderer.invoke("panel:stopAction", id),
   // The three actions that CHANGE where a take lives. Each names a directory
   // and main validates it, the same rule `still:revealShot` follows: this
   // window names a take, never a path to act on.

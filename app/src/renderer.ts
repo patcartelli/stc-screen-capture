@@ -697,31 +697,18 @@ recorder.on("helper:stats", (s) => {
   if (s.elapsedMs != null) pillTimer.textContent = formatElapsedTimer(s.elapsedMs);
 });
 
-/**
- * Why the helper ended a take on its own, in the user's terms. Anything not
- * named here is shown by its reason code rather than dropped.
- */
-const ENDED_BY_HELPER: Record<string, string> = {
-  "display-reconfigured": "Display configuration changed, so the recording was stopped.",
-  // STC-306: SCStream reported itself dead under a live take. The helper
-  // stops cleanly rather than sitting in "recording" with no frames arriving.
-  "stream-stopped": "The display capture stopped unexpectedly, so the recording was stopped.",
-  // STC-235: a region take whose region no longer fits the changed display.
-  // Clamping would silently record a different area, so the helper stops.
-  "region-out-of-bounds": "The display changed and the recorded area no longer fits on it, so the recording was stopped.",
-};
-
-recorder.on("helper:recording-ended", (i) => {
-  // The helper stopped by itself — a display change, or a display stream that
-  // died. The file is valid; what would be wrong is leaving the button saying
-  // "Stop" (or, before Finding 2's fix, the pickers still locked).
+recorder.on("helper:recording-ended", () => {
+  // The helper stopped by itself — the source went away, the disk filled,
+  // Screen Recording was turned off. The file is valid; what would be wrong is
+  // leaving the button saying "Stop" (or, before Finding 2's fix, the pickers
+  // still locked).
+  //
+  // No toast (STC-531, Patrick 2026-10-14). The WHY is said twice already: the
+  // pill shows it for PILL_STOPPED_DWELL_MS, then the take's panel carries it as
+  // its reason line (`stop-copy.ts`, the one copy table). STC-505's rule:
+  // toasts are for events with no take to attach to. Main raises one only if the
+  // panel cannot go up (`onTakeEnded`).
   applyRecordingState(false);
-  const why = ENDED_BY_HELPER[String(i.reason)] ?? `Recording stopped by the recorder (${i.reason}).`;
-  // Not "saved", and no grid refresh or Finder reveal (STC-487): a stop no
-  // longer promotes, so `i.dir` is a temp path and the library has nothing new.
-  // Main puts up the take's panel from its own `take-ended`; this is only the
-  // WHY, and where to find it.
-  alertUser(`${why}\nWhat was captured up to that point is waiting in the panel at the corner of the screen. Save it to keep it.`);
 });
 
 recorder.on("helper:recording-lost", (i) => {
@@ -947,7 +934,7 @@ const RECORDING_FAULTS: Record<string, string> = {
 /**
  * Emitted by the helper's watchers whenever ANY display changes, recording or
  * not — alone it is not worth an alert. A take the display change ENDS says so
- * through `helper:recording-ended` (`ENDED_BY_HELPER`'s `display-reconfigured`
+ * through `helper:recording-ended` and the take's panel (`stop-copy.ts`'s `display-reconfigured`
  * / `region-out-of-bounds`); one it survives (STC-235) sends `display-refit`,
  * which is news, not a problem: the recording continues. The helper used to
  * send a separate `display-change-during-recording` warning before every such
