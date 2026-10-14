@@ -6,6 +6,7 @@ import { rawRoot, stamp, uniqueTakeName } from "./takes.js";
 import { scanFinishedFilesAt } from "./library.js";
 import { readBundleId } from "./capture-identity.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME } from "./product.js";
+import { PARTIAL_ANCHORS_FILE } from "@transform/recover-anchors.js";
 
 /**
  * Where a capture lives before it is saved (STC-393).
@@ -401,13 +402,18 @@ export interface TempTakeInfo {
    * most-wanted take in the list, and crash recovery must surface it rather
    * than skip it (STC-465 review).
    *
+   * `partial` (STC-530) is the same crash, from a helper new enough to have kept
+   * `anchors.partial.json` current while recording: `recoverTake` (recover-take.ts) can turn it
+   * into a recording. `anchors.json` wins over it — a partial left beside a finished take is a
+   * write that raced the stop, not a take to recover.
+   *
    * `empty` — a directory holding no file with a single byte in it (dotfiles
    * aside, which are only ever this module's own bookkeeping) — is the one
    * case with nothing to offer anyone: the helper made the directory and died
    * before writing anything. Classified here, in the ONE place that reads a
    * temp take's contents, so crash recovery never counts it as a take.
    */
-  kind: "still" | "recording" | "unknown" | "empty";
+  kind: "still" | "recording" | "partial" | "unknown" | "empty";
 }
 
 /** Anything in `dir` with bytes in it, dotfiles aside — see {@link TempTakeInfo}'s `empty`. */
@@ -452,6 +458,7 @@ export async function listTempTakes(env: NodeJS.ProcessEnv): Promise<TempTakeInf
     } catch { continue; }
     const kind = names.includes("shot.json") ? "still"
                : names.includes("anchors.json") ? "recording"
+               : names.includes(PARTIAL_ANCHORS_FILE) ? "partial"
                : await hasContent(dir, names) ? "unknown" : "empty";
     out.push({ dir, name, kind });
   }

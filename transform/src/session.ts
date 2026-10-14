@@ -195,13 +195,17 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   //
   // v10 (STC-527) adds only the `disk-full` stop reason. Nothing here reads
   // `stop`; the take loads like any other, up to where it stopped.
+  // v11 (STC-530) adds only the recorder-quit stop reason, written by the app's recovery
+  // (app/src/recover-take.ts), never the helper. Nothing here reads `stop`. Such a take
+  // usually has no events.json; its callers pass an empty events document for it, as
+  // session-io.ts already does for any take without one.
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
     anchors?.version !== 7 && anchors?.version !== 8 && anchors?.version !== 9 &&
-    anchors?.version !== 10
+    anchors?.version !== 10 && anchors?.version !== 11
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9 or 10)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 or 11)`);
   }
   // v9's `capture.colorSpace` (STC-510): which space the pixels are in, so a sink does
   // not draw a Display P3 take into an sRGB canvas. Refused if unknown, never defaulted.

@@ -304,6 +304,22 @@ describe("listTempTakes — crash recovery's input", () => {
     for (const f of files) writeFileSync(join(dir, f), "");
   }
 
+  test("a take with anchors.partial.json and no anchors.json is `partial` (STC-530)", async () => {
+    const dir = join(tempRoot, "2026-10-13_10-00-00");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "display.mp4"), Buffer.alloc(4096, 7));
+    writeFileSync(join(dir, "anchors.partial.json"), "{}");
+    expect((await listTempTakes(env)).find((t) => t.dir === dir)?.kind).toBe("partial");
+  });
+
+  test("a partial left beside a finished anchors.json is a plain recording (Review Focus 3)", async () => {
+    const dir = join(tempRoot, "2026-10-13_10-00-01");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "anchors.json"), "{}");
+    writeFileSync(join(dir, "anchors.partial.json"), "{}");
+    expect((await listTempTakes(env)).find((t) => t.dir === dir)?.kind).toBe("recording");
+  });
+
   test("classifies by which document is inside — shot.json is a still, anchors.json a recording", async () => {
     put("2026-09-16_09-00-00", ["shot.json", "frame.png"]);
     put("2026-09-16_10-00-00", ["anchors.json", "events.json", "display.mp4"]);

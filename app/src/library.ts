@@ -795,6 +795,8 @@ async function readRecording(dir: string, name: string, names: string[],
     events,
     label: await readLabel(dir),
     camera: cameraSummary(anchors),
+    stop: typeof anchors.stop?.reason === "string" && Number.isInteger(anchors.stop?.t)
+      ? { t: anchors.stop.t, reason: anchors.stop.reason } : undefined,
     bytes: await dirSize(dir, names),
   });
 }

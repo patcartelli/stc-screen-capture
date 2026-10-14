@@ -87,6 +87,10 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     private var firstPtsNs: Int64 = -1
     private var lastPtsNs: Int64 = -1
     private var appended = 0
+    /// STC-530: called once, off the lock, when the first sample lands in the file —
+    /// the moment this track's start time exists for `anchors.partial.json`. Set before
+    /// `start()`; never changed after.
+    var onFirstAppend: (() -> Void)?
 
     /// Set by `stop()` so the liveness watchdog below cannot warn about a take
     /// that has already ended.
@@ -341,10 +345,12 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
             guard outcome == .appended else { return }
 
             lock.lock()
-            if firstPtsNs < 0 { firstPtsNs = rel }
+            let first = firstPtsNs < 0
+            if first { firstPtsNs = rel }
             lastPtsNs = rel
             appended += 1
             lock.unlock()
+            if first { onFirstAppend?() }
         }
     }
 
@@ -384,7 +390,8 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         w.finishWriting { finish(self.track()) }
     }
 
-    private func track() -> MicTrack? {
+    /// Also read live by CaptureSession for anchors.partial.json (STC-530); takes the lock.
+    func track() -> MicTrack? {
         lock.lock(); defer { lock.unlock() }
         guard appended > 0, firstPtsNs >= 0, lastPtsNs >= firstPtsNs else { return nil }
         return MicTrack(present: true, device: deviceName,

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -11,6 +12,13 @@ import { defineConfig } from "vitest/config";
  * the file says so at the top.
  */
 export default defineConfig({
+  // The "@transform" alias vitest.config.ts gives each of its projects (its
+  // comment says why there are several copies). STC-530's crash-partial grant
+  // test is the first one here to import app code, which reaches the transform
+  // through it; without this the file fails at import, before any test runs.
+  resolve: {
+    alias: { "@transform": fileURLToPath(new URL("./transform/src", import.meta.url)) },
+  },
   test: {
     // Scoped to the real test directories, exactly as vitest.config.ts scopes
     // its own include. A bare "**/*.grant.test.ts" also globs the agent

@@ -108,7 +108,7 @@ export interface PresentOptions {
    * what it was pointed at. A recording has no picture in v1 (STC-392 D2), so
    * this is the whole of its card. Present for `take.kind === "recording"`.
    */
-  recording?: { durationMs: number; scope: string };
+  recording?: { durationMs: number; scope: string; reason?: string };
   corner: Corner;
   /** Where `thumbnail.html` and its preload live. */
   dist: string;

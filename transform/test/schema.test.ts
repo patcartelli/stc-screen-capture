@@ -16,6 +16,23 @@ function compile(schemaPath: string) {
 
 const clone = <T,>(o: T): T => JSON.parse(JSON.stringify(o));
 
+describe("anchors-11 (STC-530): the recorder-quit stop reason", () => {
+  const base = () => ({
+    ...load("fixtures/basic/anchors.json"),
+    version: 11,
+    stop: { t: 4_000_000_000, reason: "recorder-quit" },
+  });
+  test("anchors-11 accepts recorder-quit", () => {
+    const validate = compile("schema/anchors-11.schema.json");
+    const doc = base();
+    expect(validate(doc), JSON.stringify(validate.errors)).toBe(true);
+  });
+  test("anchors-10 refuses recorder-quit (it is new at 11)", () => {
+    const validate = compile("schema/anchors-10.schema.json");
+    expect(validate({ ...base(), version: 10 })).toBe(false);
+  });
+});
+
 describe("session schemas validate the fixture", () => {
   test("anchors.json conforms to anchors-1 schema", () => {
     const validate = compile("schema/anchors-1.schema.json");

@@ -84,6 +84,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private var keysRecorded = 0
     private var keysDropped = 0
     private var stoppingBegan = false
+    /// STC-530: anchors.partial.json. Its own serial queue — the capture callbacks only
+    /// REQUEST a write (`notePartialChange`), never perform one, the rule `IO.stat`
+    /// follows: nothing here may back-pressure the capture graph.
+    private let partialQueue = DispatchQueue(label: "stc.partial-anchors")
+    private var partialCoalescer = PartialWriteCoalescer()   // guarded by `lock`
+    private var partialRetired = false                       // touched only on partialQueue
+    private var lastPartialWriteNs: UInt64?                  // touched only on partialQueue
     /// A mic or camera torn down MID-TAKE by a disconnect (`handleMicDisconnected`,
     /// `handleCameraDisconnected`) is no longer in `mic`/`camera` by the time
     /// the take's own `stop()` runs, so that stop would not wait for it: its
@@ -732,6 +739,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.windowTrack.append(WindowTrackEntryDoc(tNs: Int(Clock.nowNs() - self.t0Ns),
                                                             x: start.x + 120, y: start.y + 60))
                 self.lock.unlock()
+                self.notePartialChange()
             }
             return
         }
@@ -746,11 +754,15 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 (x: $0.x - displayOrigin.x, y: $0.y - displayOrigin.y)
             }
             self.lock.lock()
-            defer { self.lock.unlock() }
-            guard let last = self.windowTrack.last else { return }
-            if shouldRecordWindowOrigin(last: (last.x, last.y), current: current), let c = current {
+            var appended = false
+            if let last = self.windowTrack.last,
+               shouldRecordWindowOrigin(last: (last.x, last.y), current: current), let c = current {
                 self.windowTrack.append(WindowTrackEntryDoc(tNs: Int(now - self.t0Ns), x: c.x, y: c.y))
+                appended = true
             }
+            self.lock.unlock()
+            // STC-530: after the unlock — notePartialChange takes `lock` itself.
+            if appended { self.notePartialChange() }
         }
         // Same stop() race as the watcher above: a stop that beat this store
         // must not be outlived by the timer.
@@ -1043,6 +1055,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             if stoppingAlready { return }
 
             let cam = CameraCapture(dir: dir, t0Ns: t0Ns, pauseGate: self.pauseGate, deviceUid: deviceUid)
+            cam.onFirstAppend = { [weak self] in self?.notePartialChange() }   // STC-530
             let result = cam.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
@@ -1054,6 +1067,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             let decision = decideCameraOpen(opened: opened, stoppingBegan: self.stoppingBegan)
             if decision == .store { self.camera = cam }
             self.lock.unlock()
+            // STC-530: a first frame that landed before the store above found no
+            // camera to read; describe it now that it is stored.
+            if decision == .store { self.notePartialChange() }
 
             switch decision {
             case .store:
@@ -1099,6 +1115,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             if stoppingAlready { return }
 
             let m = MicCapture(dir: dir, t0Ns: t0Ns, deviceUid: deviceUid, pauseGate: self.pauseGate)
+            m.onFirstAppend = { [weak self] in self?.notePartialChange() }   // STC-530
             let result = m.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
@@ -1107,6 +1124,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             let decision = decideCameraOpen(opened: opened, stoppingBegan: self.stoppingBegan)
             if decision == .store { self.mic = m }
             self.lock.unlock()
+            // STC-530: same as the camera — a first sample before the store was unseen.
+            if decision == .store { self.notePartialChange() }
 
             switch decision {
             case .store:
@@ -1182,6 +1201,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self?.lock.lock()
             self?.micTrack = track
             self?.lock.unlock()
+            // STC-530: between `mic = nil` and here the partial could see no mic at all.
+            self?.notePartialChange()
             teardowns.leave()
         }
     }
@@ -1229,6 +1250,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             self?.lock.lock()
             self?.cameraTrack = track
             self?.lock.unlock()
+            // STC-530: between `camera = nil` and here the partial could see no camera at all.
+            self?.notePartialChange()
             teardowns.leave()
         }
     }
@@ -1247,6 +1270,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         if stoppingBegan { lock.unlock(); return }
         let a = SystemAudioCapture(dir: dir, t0Ns: t0Ns, pauseGate: pauseGate)
+        a.onFirstAppend = { [weak self] in self?.notePartialChange() }   // STC-530
         systemAudio = a
         lock.unlock()
 
@@ -1776,6 +1800,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             // below may block the capture callback or send on the pipe.
             var landed: PendingGeometry?
             var unrepresentable = false
+            // STC-530: the first written frame, or a refit landing, is a change
+            // anchors.partial.json describes — requested after the unlock below.
+            var wasFirst = false
             switch decision {
             case .skip:
                 lock.unlock(); return       // idle/blank/suppressed: VFR emits nothing
@@ -1823,7 +1850,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
                 ptsNs = pts
                 lastPtsNs = pts
-                if firstFramePtsNs < 0 { firstFramePtsNs = pts }
+                wasFirst = firstFramePtsNs < 0
+                if wasFirst { firstFramePtsNs = pts }
                 // Entry 0 from the same frame and the same values as
                 // `firstFramePtsNs` and the top-level `display`, so the
                 // loader's deep comparison holds by construction.
@@ -1839,6 +1867,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
             lock.unlock()
+
+            if wasFirst || landed != nil { notePartialChange() }
 
             if let p = landed {
                 let reported = (att[.contentRect] as? NSDictionary)
@@ -2225,6 +2255,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let tNs = Int64(Clock.nowNs() - t0Ns)
         guard pauseGate.pause(atNs: tNs) else { return false }
         recordHeldButtonReleases(atNs: tNs)
+        notePartialChange()   // STC-530: every change, though a pause alone adds no interval yet
         return true
     }
 
@@ -2272,7 +2303,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     func resume() -> Bool {
         let tNs = Int64(Clock.nowNs() - t0Ns)
         let changed = pauseGate.resume(atNs: tNs)
-        if changed { recordResumeAnchor(atNs: tNs) }
+        if changed {
+            recordResumeAnchor(atNs: tNs)
+            notePartialChange()   // STC-530: the closed interval belongs in the partial
+        }
         return changed
     }
 
@@ -2548,14 +2582,22 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    private func writeSidecars(reason: String) {
-        // STC-527: give the sidecars the space held for them since start.
-        releaseSidecarReserve()
+    /// The anchors document as of now. `writeSidecars` calls it with the real stop; the
+    /// partial calls it with a placeholder stop that `partialAnchors` removes. One builder,
+    /// so the partial and anchors.json cannot disagree about anything but `stop`.
+    /// A subsystem still running has no track yet (that is set at its stop); its LIVE
+    /// track is read instead.
+    ///
+    /// The live subsystems are only SNAPSHOTTED under `lock`; their `track()` runs after
+    /// it is released. `CameraCapture.track()` sorts every frame delta (`medianDelta`),
+    /// and the display frame callback takes `lock` on every frame — holding it across
+    /// that sort would back-pressure the capture graph. It also keeps the two locks
+    /// from ever nesting here.
+    private func currentAnchorsDocument(stopReason: String, stopTNs: Int) -> [String: Any] {
         lock.lock()
-        let evs = events
-        let camTrack = cameraTrack
-        let micT = micTrack
-        let sysT = systemAudioTrack
+        let storedCam = cameraTrack, liveCam = camera
+        let storedMic = micTrack, liveMic = mic
+        let storedSys = systemAudioTrack, liveSys = systemAudio
         // STC-235: the top-level `display` is the take's START geometry —
         // entry 0's own value, the same one the first frame recorded — never
         // the scalar fields, which a refit has moved to the CURRENT one. A
@@ -2567,6 +2609,79 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let track = windowTrack
         let startDisplay = geo.first?.display ?? currentDisplayGeometry()
         let firstFrameNs = firstFramePtsNs
+        lock.unlock()
+        let camTrack = storedCam ?? liveCam?.track()
+        let micT = storedMic ?? liveMic?.track()
+        let sysT = storedSys ?? liveSys?.track()
+        let pauses = pauseGate.intervals
+        return anchorsDocument(
+            timebase: (Int(Clock.timebase.numer), Int(Clock.timebase.denom)),
+            t0Ns: t0Ns,
+            display: startDisplay,
+            capture: CaptureGeometryDoc(width: captureW, height: captureH,
+                                        firstFrameNs: Int(firstFrameNs)),
+            camera: camTrack,
+            requested: wantCamera,
+            mic: micT,
+            micRequested: wantMicUid != nil,
+            systemAudio: sysT,
+            systemAudioRequested: wantSystemAudio,
+            scope: captureScope,
+            geometry: geo,
+            windowTrack: track,
+            pauses: pauses,
+            colorSpace: anchorsColorSpace(captureColour),
+            stopReason: stopReason,
+            stopTNs: stopTNs)
+    }
+
+    /// Something `anchors.partial.json` describes changed (STC-530). Cheap and lock-safe
+    /// from any thread EXCEPT while holding `lock` — callers release it first.
+    ///
+    /// A failed write is only logged: the next change writes the whole document again,
+    /// so it is retried then, and a take whose partial never lands is no worse off than
+    /// every take was before STC-530.
+    private func notePartialChange() {
+        lock.lock()
+        let schedule = !stoppingBegan && firstFramePtsNs >= 0 && partialCoalescer.request()
+        lock.unlock()
+        guard schedule else { return }
+        // The caller's side stays one `async`; the rate limit is decided ON partialQueue, which
+        // owns `lastPartialWriteNs`. A write too soon after the last one is re-queued for the
+        // next allowed instant (`partialWriteDelay`, PARTIAL_MIN_INTERVAL_SECONDS). The coalescer
+        // stays pending until the write actually begins, so changes meanwhile fold into it and
+        // it still sees the latest state. A delayed write that fires after retire-at-stop finds
+        // `partialRetired` set and does nothing.
+        partialQueue.async { [weak self] in
+            guard let self, !self.partialRetired else { return }
+            let delay = partialWriteDelay(lastWriteNs: self.lastPartialWriteNs, nowNs: Clock.nowNs())
+            if delay > 0 {
+                self.partialQueue.asyncAfter(deadline: .now() + delay) { [weak self] in self?.writePartialNow() }
+            } else {
+                self.writePartialNow()
+            }
+        }
+    }
+
+    /// One partial write. On partialQueue only.
+    private func writePartialNow() {
+        guard !partialRetired else { return }
+        lock.lock()
+        partialCoalescer.began()
+        let stopping = stoppingBegan
+        lock.unlock()
+        if stopping { return }
+        lastPartialWriteNs = Clock.nowNs()
+        let doc = partialAnchors(currentAnchorsDocument(stopReason: "user", stopTNs: 0))
+        do { try writePartialAnchors(doc, in: dir) }
+        catch { IO.log("anchors.partial.json could not be written (\(error)); a crash now loses this take's description") }
+    }
+
+    private func writeSidecars(reason: String) {
+        // STC-527: give the sidecars the space held for them since start.
+        releaseSidecarReserve()
+        lock.lock()
+        let evs = events
         lock.unlock()
 
         // events-2 since STC-309: v1 plus `{t, kind: "cursor", shape}`. The
@@ -2584,35 +2699,29 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // sidecar describes the whole take rather than trailing off.
         let stopTNs = Int64(Clock.nowNs() - t0Ns)
         pauseGate.close(atNs: stopTNs)
-        let pauses = pauseGate.intervals
         // Exact, from the helper's own clock. The same offset survives in the
         // file only as a timescale-quantised empty edit, so this is what a
         // reader checks its recovered value against.
-        let doc = anchorsDocument(
-            timebase: (Int(Clock.timebase.numer), Int(Clock.timebase.denom)),
-            t0Ns: t0Ns,
-            display: startDisplay,
-            capture: CaptureGeometryDoc(width: captureW, height: captureH,
-                                        firstFrameNs: Int(firstFrameNs)),
-            camera: camTrack,
-            requested: wantCamera,
-            mic: micT,
-            micRequested: wantMicUid != nil,
-            systemAudio: sysT,
-            systemAudioRequested: wantSystemAudio,
-            scope: captureScope,
-            geometry: geo,
-            windowTrack: track,
-            pauses: pauses,
-            colorSpace: anchorsColorSpace(captureColour),
-            stopReason: reason,
-            stopTNs: Int(stopTNs))
+        let doc = currentAnchorsDocument(stopReason: reason, stopTNs: Int(stopTNs))
         write(doc, to: "anchors.json")
+        // STC-530: on the partial's own queue, so a write already queued cannot land
+        // after this and leave a stale partial beside a finished take.
+        partialQueue.sync {
+            partialRetired = true
+            retirePartialAnchors(in: dir)
+        }
     }
 
     private func write(_ o: Any, to name: String) {
         guard let d = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]) else {
             IO.send("error", ["code": "sidecar-encode-failed", "file": name]); return
+        }
+        // STC-530: STC-527's worst case on demand — every sidecar written except anchors.json,
+        // so the take must be recovered from anchors.partial.json. The real trigger is a disk
+        // that fills in the 8 MiB gap the reserve leaves, which no test can schedule.
+        if name == "anchors.json", ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "anchors-write-failed" {
+            IO.send("warning", ["code": "sidecar-write-failed", "file": name, "detail": "injected by STC_CAPTURE_FAULT=anchors-write-failed"])
+            return
         }
         do {
             try d.write(to: dir.appendingPathComponent(name))

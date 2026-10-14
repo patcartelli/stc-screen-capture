@@ -84,6 +84,10 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var firstPtsNs: Int64 = -1
     private var lastPtsNs: Int64 = -1
     private var appended = 0
+    /// STC-530: called once, off the lock, when the first sample lands in the file —
+    /// the moment this track's start time exists for `anchors.partial.json`. Set before
+    /// `start()`; never changed after.
+    var onFirstAppend: (() -> Void)?
 
     /// Called if the stream dies mid-take (`didStopWithError`). The take goes
     /// on without system audio from that point — this is an optional
@@ -205,10 +209,12 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             guard gate.append(retimed) == .appended else { return }
 
             lock.lock()
-            if firstPtsNs < 0 { firstPtsNs = rel }
+            let first = firstPtsNs < 0
+            if first { firstPtsNs = rel }
             lastPtsNs = rel
             appended += 1
             lock.unlock()
+            if first { onFirstAppend?() }
         }
     }
 
@@ -267,7 +273,8 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    private func track() -> SystemAudioTrack? {
+    /// Also read live by CaptureSession for anchors.partial.json (STC-530); takes the lock.
+    func track() -> SystemAudioTrack? {
         lock.lock(); defer { lock.unlock() }
         guard appended > 0, firstPtsNs >= 0, lastPtsNs >= firstPtsNs else { return nil }
         return SystemAudioTrack(present: true,
