@@ -234,6 +234,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `camera`/`cursorRunLoop`: a stop() that arrives before this is stored
     /// must not be outlived by it.
     private var windowWatcher: DispatchSourceTimer?
+    /// The window a window-scope take is recording, so a dead stream can be
+    /// checked against it (`decideStreamDeath`, STC-531). nil for any other scope.
+    private var watchedWindowId: UInt32?
     /// Samples a window-scope take's window origin at 30 Hz (STC-482). Guarded
     /// by `lock` for the same reason as `windowWatcher`.
     private var windowTracker: DispatchSourceTimer?
@@ -672,6 +675,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// file ends up an unusable mix of sizes.
     static let windowWatchIntervalSeconds: Double = 1.0
 
+    /// How long a window take's dead stream waits before asking the window
+    /// server a second time whether the window is gone (STC-531). Short: the
+    /// take is already over, this only decides what it is called.
+    static let streamDeathWindowRecheckSeconds: Double = 0.3
+
     private func startWindowWatcher(windowId: UInt32, initialSize: (width: Double, height: Double)) {
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         t.schedule(deadline: .now() + Self.windowWatchIntervalSeconds,
@@ -705,6 +713,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             return
         }
         windowWatcher = t
+        watchedWindowId = windowId
         lock.unlock()
         t.resume()
     }
@@ -1934,7 +1943,30 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // the same clean stop a display change gets — instead of sitting in
         // `recording` with frames that will never arrive. The take is intact
         // up to the failure, which is what a clean stop preserves.
-        if !answeredStart { onStreamDied?(error) }
+        if answeredStart { return }
+        // STC-531: on a window take, closing the window is what kills the
+        // stream, and it does so before the 1 Hz watcher looks. Ask the window
+        // server now, and once more shortly after in case it lags the stream;
+        // a window gone either time is `window-closed`, through the same
+        // `onWindowChanged` the watcher uses. App.stop's state guard makes a
+        // second report (the watcher's own, a moment later) a no-op.
+        lock.lock(); let windowId = watchedWindowId; lock.unlock()
+        guard let windowId else { onStreamDied?(error); return }
+        let gone = { Self.currentWindowSize(windowId: windowId) == nil }
+        if decideStreamDeath(windowGone: gone()) == "window-closed" {
+            IO.log("stream: died with its window gone; stopping as window-closed")
+            onWindowChanged?("window-closed")
+            return
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.streamDeathWindowRecheckSeconds) { [weak self] in
+            guard let self else { return }
+            if decideStreamDeath(windowGone: gone()) == "window-closed" {
+                IO.log("stream: died with its window gone (on the re-check); stopping as window-closed")
+                self.onWindowChanged?("window-closed")
+            } else {
+                self.onStreamDied?(error)
+            }
+        }
     }
 
     // MARK: - event tap

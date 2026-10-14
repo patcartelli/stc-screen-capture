@@ -55,7 +55,7 @@ Work through §2 to §4 and look at the pill during the 2 s.
 
 ## §2 Window closed / resized
 
-**Resize: CONFIRMED on hardware 2026-10-14** (packaged build): "Window resized" on the pill, no toast, then the panel with the reason on a 250 px card and Copy/Save/Edit visible. Close not yet watched.
+**Resize: CONFIRMED on hardware 2026-10-14** (packaged build): "Window resized" on the pill, no toast, then the panel with the reason on a 250 px card and Copy/Save/Edit visible. Close, first try: the take stopped as `stream-stopped` ("The screen capture stopped unexpectedly"), because closing the window kills the SCStream before the 1 Hz watcher polls. Fixed: a window take's dead stream is checked against the window (`decideStreamDeath`, re-checked once after 0.3 s); gone means `window-closed`. Re-watch it.
 
 Record a window (overlay → Window), then close it. Do it again and resize the window instead. Expect **Window closed** / **Window resized** on the pill, then the panel line, with no action button.
 
