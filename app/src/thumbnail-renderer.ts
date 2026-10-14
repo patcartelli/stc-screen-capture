@@ -77,6 +77,8 @@ declare global {
       /** STC-395: flipping back to Video mid-conversion. */
       cancelGif(dir: string): Promise<void>;
       onCopyProgress(cb: (done: number, total: number) => void): () => void;
+      /** STC-531: a stopped take's one action, by id (`stop-copy.ts`'s `StopActionId`). */
+      stopAction(id: string): Promise<boolean>;
       revealShot(dir: string): Promise<boolean>;
       /** The three actions that CHANGE where a take lives (STC-392) — see `panel-actions.ts`. */
       save(dir: string, format?: OutputFormat): Promise<{
@@ -147,11 +149,19 @@ if (take.kind === "recording") {
   ($("takecard") as HTMLElement).hidden = false;
   ($("thumbwrap") as HTMLElement).hidden = true;
   const rec = JSON.parse(params.get("recording") ?? "null") as
-    { durationMs: number; scope: string; reason?: string } | null;
+    { durationMs: number; scope: string; reason?: string; action?: { id: string; label: string } } | null;
   ($("takemeta") as HTMLElement).textContent =
     rec ? `${fmtDuration(rec.durationMs)} · ${rec.scope}` : "";
   // STC-530: why this take stopped, when it was not a plain stop. Empty otherwise (hidden by CSS).
   ($("takereason") as HTMLElement).textContent = rec?.reason ?? "";
+  // STC-531: the stop's one action. The page only NAMES it; main validates the id and does it.
+  const action = rec?.action;
+  if (action && typeof action.id === "string" && typeof action.label === "string") {
+    const b = $("takeaction") as HTMLButtonElement;
+    b.textContent = action.label;
+    b.hidden = false;
+    b.addEventListener("click", () => { void window.thumb.stopAction(action.id); });
+  }
 }
 /**
  * The shot, or `null` for a recording (STC-487). Parsed only for a shot:

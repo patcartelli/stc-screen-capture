@@ -4,7 +4,7 @@ import {
   parseCorner,
   discardDirection, isHorizontal, swipeOffset, isDiscardSwipe, SWIPE_DISCARD_PX,
   classifyDrag, DRAG_START_PX,
-  stackLayout, STACK_GAP_PX, MAX_STACKED, PANEL_SIZE,
+  stackLayout, STACK_GAP_PX, MAX_STACKED, PANEL_SIZE, REASON_PANEL_SIZE, panelSizeFor,
   hiddenCount, visibleCount,
   CORNERS,
 } from "../src/thumbnail.js";
@@ -353,5 +353,14 @@ describe("recordings (STC-392 Phase B Task 8)", () => {
     // with the same behavior" — while the picture is the one thing that differs.
     expect(actionsFor({ kind: "recording", origin: "fresh" })).toContain("trash");
     expect(closesPanel("trash")).toBe(closesPanel("trash"));
+  });
+});
+
+describe("panelSizeFor (STC-531)", () => {
+  test("a stop reason gets a taller card, the same width; no reason keeps PANEL_SIZE", () => {
+    expect(panelSizeFor(false)).toEqual(PANEL_SIZE);
+    expect(panelSizeFor(true)).toEqual(REASON_PANEL_SIZE);
+    expect(REASON_PANEL_SIZE.width).toBe(PANEL_SIZE.width);
+    expect(REASON_PANEL_SIZE.height).toBeGreaterThan(PANEL_SIZE.height);
   });
 });
