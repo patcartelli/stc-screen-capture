@@ -24,6 +24,14 @@ export interface DemuxedVideo {
 }
 
 /**
+ * The file parsed (or was empty) and holds no video track at all — as opposed
+ * to a file that is malformed. STC-541: a camera that recorded no frames
+ * leaves exactly this, and `loadSession` loads such a take without a camera
+ * rather than refusing it. A parse error stays a plain Error and still refuses.
+ */
+export class NoVideoTrackError extends Error {}
+
+/**
  * Reads the sample INDEX, never the samples (STC-236). Every top-level box is
  * handed to mp4box whole except an mdat, which gets only its header: mp4box
  * then skips to the next box, and builds trak.samples (offset, size, sync,
@@ -57,10 +65,10 @@ export async function demuxTrack(src: ByteSource, what: string): Promise<Demuxed
   }
   file.flush();
   if (parseError) throw new Error(`mp4box reading ${what}: ${parseError}`);
-  if (!info) throw new Error(`${what} is not a readable MP4 — no track information found`);
+  if (!info) throw new NoVideoTrackError(`${what} is not a readable MP4 — no track information found`);
 
   const track = info.videoTracks[0];
-  if (!track) throw new Error(`no video track in ${what}`);
+  if (!track) throw new NoVideoTrackError(`no video track in ${what}`);
 
   // avcC description: serialize the box, strip the 8-byte box header.
   // NB PHASE-0 §4b.5: DataStream must come off the module export in use.

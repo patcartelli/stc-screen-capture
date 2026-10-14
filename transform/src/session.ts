@@ -1,4 +1,4 @@
-import { demuxTrack, type DemuxedVideo } from "./demux.js";
+import { demuxTrack, NoVideoTrackError, type DemuxedVideo } from "./demux.js";
 import { demuxAudioTrack, type DemuxedAudio } from "./demux-audio.js";
 import type { Anchors, KeyEvent, RecordedEvent, Session, SessionEvent } from "./types.js";
 import { checkKeyEvent } from "./keycast.js";
@@ -284,13 +284,27 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   }
   checkFrameOffset("display.mp4", anchors.capture.firstFrameNs, video.framesNs[0]!);
 
+  // STC-541: a camera that recorded NO frames leaves a camera.mp4 with no video
+  // track (seen on hardware: 20 KB, no moov) or an empty one, while the anchors
+  // still claim it. That is not the two sources disagreeing — the file is there,
+  // it just holds nothing — so the take loads exactly as a take without a camera
+  // does (`camera.present` false, which every reader checks first; the same drop
+  // STC-530's recovery makes in recover-anchors.ts) instead of refusing the whole
+  // recording over its PiP. A MALFORMED file and an offset disagreement still refuse.
   let cameraVideo: DemuxedVideo | undefined;
+  let cameraDropped = false;
   if (claimsCamera && input.cameraMp4) {
-    cameraVideo = await demuxTrack(input.cameraMp4, "camera.mp4");
-    if (cameraVideo.framesNs.length === 0) {
-      throw new SessionLoadError("camera.mp4 contains no frames");
+    try {
+      cameraVideo = await demuxTrack(input.cameraMp4, "camera.mp4");
+    } catch (e) {
+      if (!(e instanceof NoVideoTrackError)) throw e;
     }
-    checkFrameOffset("camera.mp4", anchors.camera!.firstFramePtsNs, cameraVideo.framesNs[0]!);
+    if (!cameraVideo || cameraVideo.framesNs.length === 0) {
+      cameraVideo = undefined;
+      cameraDropped = true;
+    } else {
+      checkFrameOffset("camera.mp4", anchors.camera!.firstFramePtsNs, cameraVideo.framesNs[0]!);
+    }
   }
 
   let micAudio: DemuxedAudio | undefined;
@@ -317,7 +331,7 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   return {
     // checkGeometry above ran on the helper's ORIGINAL document; this is the
     // same timeline read on the file's clock — see snapGeometryToFrames.
-    anchors: snapGeometryToFrames(anchors, video.framesNs),
+    anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: { ...anchors.camera!, present: false } } : anchors, video.framesNs),
     events: [...stabiliseEvents(anchors, pointerEvents)].sort((a, b) => a.t - b.t),
     ...(keyEvents.length > 0 ? { keys: keyEvents.sort((a, b) => a.t - b.t) } : {}),
     frames: video.framesNs,

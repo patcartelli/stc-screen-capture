@@ -88,7 +88,9 @@ export async function loadTake(io: TakeIO): Promise<LoadedTake> {
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project = parseProject(
     projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
-    anchors.camera?.present === true,
+    // The LOADED anchors, not the raw ones: loadSession drops a camera that
+    // recorded no frames (STC-541), and its default project must carry no PiP.
+    session.anchors.camera?.present === true,
   );
   return { session, project, anchors, sources: { display: displaySrc, camera: cameraSrc } };
 }
