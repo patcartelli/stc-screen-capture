@@ -4,8 +4,13 @@
  * describe the same stop two ways.
  *
  * STC-530 filled in `recorder-quit`. STC-531 adds every stop the HELPER decides on by
- * itself — the source went away, the disk filled, Screen Recording was turned off — as a
- * pill label, a panel line and, for two of them, one action. Those stops no longer get a
+ * itself — the source went away, the disk filled — as a pill label, a panel line and, for
+ * a full disk, one action.
+ *
+ * Screen Recording turned off mid-take is NOT a stop and has no row: measured on the
+ * packaged app (Patrick, 2026-10-14), macOS keeps delivering frames to a running stream
+ * after the grant is revoked (57 fps, no gap, to the user's own Stop) and only offers
+ * "Quit & Reopen / Later". Quit ends the take through the ordinary quit path. Those stops no longer get a
  * toast (Patrick, 2026-10-14): the pill and the panel say it, and a third copy of the same
  * sentence was noise. So a helper stop with no row here would say NOTHING, which is why
  * `app/test/stop-copy.test.ts` walks every reason the helper can write and fails on a
@@ -23,7 +28,7 @@
 export type StopBlock = { t?: number; reason?: string } | undefined;
 
 /** The one action a stopped take's panel may offer. Main decides what each does. */
-export type StopActionId = "reclaim-space" | "open-screen-recording-settings";
+export type StopActionId = "reclaim-space";
 
 export interface StopAction { id: StopActionId; label: string }
 
@@ -36,7 +41,7 @@ interface StopRow {
 }
 
 /**
- * Every stop the helper decides on by itself (`StreamStopDecisions.swift`,
+ * Every stop the helper decides on by itself (a dead stream in `main.swift`,
  * `DisplayChangeDecisions.swift`, `DiskDecisions.swift`, the window watcher). A stop the
  * user asked for (`user`, `quit`, `stdin-closed`, `signal-N`) has no row: nothing went
  * wrong, so there is nothing to say.
@@ -59,10 +64,6 @@ const ROWS: Record<string, StopRow> = {
   // (STC-235), so the label names that instead.
   "region-out-of-bounds": {
     pill: "Area lost", cause: "The display settings changed and the area you were recording no longer fits.",
-  },
-  "screen-recording-revoked": {
-    pill: "Access revoked", cause: "Screen Recording was turned off for Capture.",
-    action: { id: "open-screen-recording-settings", label: "Open System Settings" },
   },
   "stream-stopped": { pill: "Source lost", cause: "The screen capture stopped unexpectedly." },
   "error": { pill: "Write failed", cause: "The recording could not be written to disk." },
@@ -116,7 +117,7 @@ export function panelAction(stop: StopBlock): StopAction | undefined {
 }
 
 export function isStopActionId(x: unknown): x is StopActionId {
-  return x === "reclaim-space" || x === "open-screen-recording-settings";
+  return x === "reclaim-space";
 }
 
 export function libraryNote(stop: StopBlock): string | undefined {

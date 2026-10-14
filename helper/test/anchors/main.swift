@@ -460,15 +460,6 @@ do {
                                  capture: capture, camera: nil, requested: false,
                                  pauses: [], stopReason: "error", stopTNs: 20_000_000_000)
     check(failed["version"] as? Int == 2, "an `error` stop stays at the version its blocks earned")
-
-    // STC-531: Screen Recording turned off mid-take is v12 (v11 is the app's).
-    for r in ["screen-recording-revoked", "screen-recording-revoked-timeout"] {
-        let revoked = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
-                                      capture: capture, camera: nil, requested: false,
-                                      pauses: [], stopReason: r, stopTNs: 20_000_000_000)
-        check(revoked["version"] as? Int == 12, "a \(r) take must write version 12")
-        if r == "screen-recording-revoked" { printJSON(revoked, marker: "JSON-REVOKED:") }
-    }
 }
 
 if failures.isEmpty { print("ALL PASS") }

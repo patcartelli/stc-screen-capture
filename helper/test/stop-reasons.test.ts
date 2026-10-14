@@ -39,8 +39,7 @@ const root = join(__dirname, "..", "..");
  * and `error`, relayed through `onWriterStopped`.
  */
 const SOURCES = ["helper/src/main.swift", "helper/src/Protocol.swift", "helper/src/Capture.swift",
-                 "helper/src/DisplayChangeDecisions.swift", "helper/src/DiskDecisions.swift",
-                 "helper/src/StreamStopDecisions.swift"];
+                 "helper/src/DisplayChangeDecisions.swift", "helper/src/DiskDecisions.swift"];
 
 /**
  * Signals the helper installs a graceful handler for (main.swift's
@@ -148,7 +147,7 @@ function reasonsInSwift(): string[] {
 //   `geometry` key, and so stays at v3-v6. anchors-3..6 were widened to carry
 //   it for exactly that take; the per-version test below holds them to it.
 const validateReason = (() => {
-  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-12.schema.json"), "utf8"));
+  const schema = JSON.parse(readFileSync(join(root, "schema/anchors-10.schema.json"), "utf8"));
   const ajv = new Ajv({ allErrors: true, strict: true });
   return ajv.compile(schema.properties.stop.properties.reason);
 })();
@@ -165,9 +164,8 @@ describe("stop.reason — the helper and anchors-7 agree (STC-311, extended by S
       "window-resized", "window-closed",
       "display-reconfigured", "region-out-of-bounds",
       "disk-full", "error",
-      "stream-stopped", "screen-recording-revoked",
     ]));
-    expect(reasons.length).toBeGreaterThanOrEqual(13);
+    expect(reasons.length).toBeGreaterThanOrEqual(11);
     // And a guard on each STC-235 pattern ALONE (see CLASSIFIER_STOP /
     // FAIL_REFIT): the aggregate above still passes if either one stops
     // matching, since the other supplies `display-reconfigured` too.
@@ -180,10 +178,6 @@ describe("stop.reason — the helper and anchors-7 agree (STC-311, extended by S
     const disk = readFileSync(join(root, "helper/src/DiskDecisions.swift"), "utf8");
     expect([...disk.matchAll(CLASSIFIER_STOP)].map((m) => m[1]),
       "DiskDecisions.swift's .stop(\"…\") reasons").toEqual(expect.arrayContaining(["disk-full", "error"]));
-    const stream = readFileSync(join(root, "helper/src/StreamStopDecisions.swift"), "utf8");
-    expect([...stream.matchAll(CLASSIFIER_STOP)].map((m) => m[1]),
-      "StreamStopDecisions.swift's .stop(\"…\") reasons").toEqual(
-      expect.arrayContaining(["stream-stopped", "screen-recording-revoked"]));
 
     for (const r of reasons) {
       expect(validateReason(r), `the helper can write stop.reason "${r}", which anchors-7 refuses`).toBe(true);
@@ -224,17 +218,6 @@ describe("stop.reason — the helper and anchors-7 agree (STC-311, extended by S
     }
     expect(validateReason("disk-full")).toBe(true);
     expect(validateReason("disk-full-timeout")).toBe(true);
-  });
-
-  test("screen-recording-revoked is new at anchors-12: every older version refuses it (STC-531)", () => {
-    // v11 is the app's (recorder-quit); the helper writes 12 for this reason.
-    for (const v of [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) {
-      const schema = JSON.parse(readFileSync(join(root, `schema/anchors-${v}.schema.json`), "utf8"));
-      const validate = new Ajv({ allErrors: true, strict: true }).compile(schema.properties.stop.properties.reason);
-      expect(validate("screen-recording-revoked"), `anchors-${v} accepts "screen-recording-revoked"`).toBe(false);
-    }
-    expect(validateReason("screen-recording-revoked")).toBe(true);
-    expect(validateReason("screen-recording-revoked-timeout")).toBe(true);
   });
 
   test("the rule still discriminates — it did not become 'any string'", () => {

@@ -242,14 +242,11 @@ final class App {
         // identity check keeps a stale session's late callback from stopping
         // a later take. `didStopWithError` has already sent the
         // `stream-stopped` warning by the time this runs.
-        // STC-531: the session decides the reason (`decideStreamStop`):
-        // `screen-recording-revoked` when the grant went with it, else
-        // `stream-stopped`.
-        session.onStreamDied = { [weak self, weak session] reason in
+        session.onStreamDied = { [weak self, weak session] _ in
             DispatchQueue.main.async {
                 guard let self, let session,
                       self.state == .recording, self.capture === session else { return }
-                self.stop(reason: reason)
+                self.stop(reason: "stream-stopped")
             }
         }
         // STC-370: a window-scope take's own window resizing or closing ends

@@ -698,10 +698,9 @@ recorder.on("helper:stats", (s) => {
 });
 
 recorder.on("helper:recording-ended", () => {
-  // The helper stopped by itself — the source went away, the disk filled,
-  // Screen Recording was turned off. The file is valid; what would be wrong is
-  // leaving the button saying "Stop" (or, before Finding 2's fix, the pickers
-  // still locked).
+  // The helper stopped by itself — the source went away, or the disk filled.
+  // The file is valid; what would be wrong is leaving the button saying "Stop"
+  // (or, before Finding 2's fix, the pickers still locked).
   //
   // No toast (STC-531, Patrick 2026-10-14). The WHY is said twice already: the
   // pill shows it for PILL_STOPPED_DWELL_MS, then the take's panel carries it as

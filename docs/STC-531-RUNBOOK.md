@@ -16,14 +16,7 @@ npm run app:start
   - the pill shows the cause for 2 s (`PILL_STOPPED_DWELL_MS`) in place of the timer, and is disabled meanwhile;
   - then the window restores and the take's panel goes up with `Stopped at m:ss. <cause>. Everything up to then is saved.`
 - Every word comes from `app/src/stop-copy.ts`. `ENDED_BY_HELPER` is gone.
-- Two panel actions:
-  - **Reclaim space** for a full disk. It runs the same sweep as the profile sheet's button.
-  - **Open System Settings** when Screen Recording was turned off. It opens the Screen Recording pane.
-- **A new stop reason, `screen-recording-revoked` (anchors-12).** `decideStreamStop` (`helper/src/StreamStopDecisions.swift`) decides it when the display stream dies. Either signal is enough:
-  - `CGPreflightScreenCaptureAccess()` reads false at that moment;
-  - the error is ScreenCaptureKit's `userDeclined` (-3801).
-
-  Any other death is still `stream-stopped`.
+- One panel action: **Reclaim space** for a full disk. It runs the same sweep as the profile sheet's button.
 - Labels:
 
 | Reason | Pill | Panel cause |
@@ -33,7 +26,6 @@ npm run app:start
 | `display-reconfigured` | Display lost | The display you were recording was disconnected. |
 | `region-out-of-bounds` | Area lost | The display settings changed and the area you were recording no longer fits. |
 | `disk-full` | Disk full | Your disk is full. + **Reclaim space** |
-| `screen-recording-revoked` | Access revoked | Screen Recording was turned off for Capture. + **Open System Settings** |
 | `stream-stopped` | Source lost | The screen capture stopped unexpectedly. |
 | `error` | Write failed | The recording could not be written to disk. |
 
@@ -42,46 +34,33 @@ Three of these depart from the spec:
 - **The last two rows:** the spec does not name these stops. Without the toast they would say nothing.
 - **"Everything up to then is saved."** appears on every row. That follows the spec's wording rule, not its table, which has it only on disk full.
 
-## §0 Grant test (Patrick's terminal)
+## Settled: Screen Recording turned off mid-take is not a stop
 
-```
-npm run test:capture -- helper/test/stream-died.grant.test.ts
-```
+Measured on 2026-10-14 with the **packaged** app, switching off Capture's own entry in System Settings mid-take:
+- macOS kept delivering frames: 57 fps, no gap, until the user pressed Stop.
+- It only offered **Quit & Reopen / Later**. Quit ends the take through the ordinary quit path, and the take waits in unsaved takes for the next launch.
 
-All three passed on hardware 2026-10-14. The new test drives `STC_CAPTURE_FAULT=screen-recording-revoked`: the same injected death, with the grant probe reading false. The existing `stream-died` test is its control: the same death with the real probe must stay `stream-stopped`.
+So the spec's state 1 has no pill label or panel line. A `screen-recording-revoked` stop reason was built and then removed.
 
-## §1 Screen Recording turned off mid-take (the acceptance for state 1)
+**Trap:** `npm run app:start` runs as Electron or the terminal app, not as Capture. Switching off Capture's entry does nothing to it, so test anything involving permissions on the packaged app (`npm run app:package`).
 
-1. Use the packaged app, or `app:start` from a terminal so the helper's stderr is visible.
-2. Start a Screen take.
-3. A few seconds in, turn Screen Recording off for Capture in System Settings.
+## §1 The pill label, by eye
 
-**Expect:**
-- the pill reads **Access revoked** for about 2 s, with no toast;
-- then the panel reads `Stopped at m:ss. Screen Recording was turned off for Capture. Everything up to then is saved.`;
-- **Open System Settings** opens the Screen Recording pane.
+Work through §2 to §4 and look at the pill during the 2 s.
 
-**Report the helper's log line** `stream: died (<domain> <code>), Screen Recording granted: <bool> -> ...`. It says which signal classified the stop. If the panel says "The screen capture stopped unexpectedly" instead, neither signal fired; that log line is what to send back.
-
-Turn Screen Recording back on and relaunch afterwards. A grant made while the app is running only takes effect after a relaunch.
-
-## §2 The pill label, by eye
-
-Work through §3 to §5 and look at the pill during the 2 s.
-
-- **Does the label fit?** The window keeps the width it collapsed to, sized for the timer, so the label is in the system font. The longest labels are "Window resized" and "Access revoked". An ellipsis means it does not fit: report it.
+- **Does the label fit?** The window keeps the width it collapsed to, sized for the timer, so the label is in the system font. The longest label is "Window resized". An ellipsis means it does not fit: report it.
 - **Is 2 s long enough to read?**
 - **Does the window jump when it restores?**
 
-## §3 Window closed / resized
+## §2 Window closed / resized
 
 Record a window (overlay → Window), then close it. Do it again and resize the window instead. Expect **Window closed** / **Window resized** on the pill, then the panel line, with no action button.
 
-## §4 Display lost
+## §3 Display lost
 
 Record a second display, then unplug it. Expect **Display lost**, then `...The display you were recording was disconnected...`.
 
-## §5 Disk full
+## §4 Disk full
 
 Use STC-527's runbook §2 setup (a small `hdiutil` volume as `STC_TEMP_TAKES_DIR`; check `df` first). Expect:
 - **Disk full** on the pill;

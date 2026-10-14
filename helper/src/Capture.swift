@@ -322,11 +322,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// heartbeat saying `recording` while no frame will ever arrive again, and
     /// nothing ends the take until the user presses Stop. Called on SCK's
     /// delegate queue; the handler dispatches to main itself.
-    ///
-    /// Carries the stop reason, decided at the moment of the death
-    /// (`decideStreamStop`, STC-531): the grant is read THEN, not when main
-    /// gets round to it.
-    var onStreamDied: ((String) -> Void)?
+    var onStreamDied: ((Error) -> Void)?
     /// Fired when a window-scope take's own window resizes or closes
     /// mid-take (STC-370) — the window-watch twin of `onStreamDied`, same
     /// reason: a `CaptureSession` must never call its OWN `stop()` directly,
@@ -1018,20 +1014,15 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// genuine death `stopCapture` answers with an error that is ignored, on
     /// the fault it answers cleanly; both reach `finishWriting`.
     /// Driven by helper/test/stream-died.grant.test.ts.
-    ///
-    /// `=screen-recording-revoked` (STC-531) is the same death with the grant
-    /// probe reading false (`screenRecordingGrantedNow`), so the stop is
-    /// classified by the real `decideStreamStop` the way a revoke would be.
     static let streamDeathFaultDelaySeconds: Double = 0.5
     private func armStreamDeathFault() {
-        guard let fault = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"],
-              fault == "stream-died" || fault == "screen-recording-revoked",
+        guard ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "stream-died",
               let s = stream else { return }
-        IO.log("STC_CAPTURE_FAULT=\(fault): the stream will report itself dead in \(Self.streamDeathFaultDelaySeconds) s")
+        IO.log("STC_CAPTURE_FAULT=stream-died: the stream will report itself dead in \(Self.streamDeathFaultDelaySeconds) s")
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.streamDeathFaultDelaySeconds) { [weak self] in
             self?.stream(s, didStopWithError: NSError(
                 domain: "stc.fault", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "injected by STC_CAPTURE_FAULT=\(fault)"]))
+                userInfo: [NSLocalizedDescriptionKey: "injected by STC_CAPTURE_FAULT=stream-died"]))
         }
     }
 
@@ -1943,26 +1934,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // the same clean stop a display change gets — instead of sitting in
         // `recording` with frames that will never arrive. The take is intact
         // up to the failure, which is what a clean stop preserves.
-        if !answeredStart { onStreamDied?(streamStopReason(for: error)) }
-    }
-
-    /// STC-531: a stream that died because Screen Recording was turned off is
-    /// `screen-recording-revoked`, any other death `stream-stopped`.
-    private func streamStopReason(for error: Error) -> String {
-        let e = error as NSError
-        let declined = e.domain == SCStreamErrorDomain && e.code == SCStreamError.Code.userDeclined.rawValue
-        let granted = Self.screenRecordingGrantedNow()
-        let decision = decideStreamStop(screenRecordingGranted: granted, userDeclined: declined)
-        IO.log("stream: died (\(e.domain) \(e.code)), Screen Recording granted: \(granted) -> \(decision)")
-        switch decision { case .stop(let reason): return reason }
-    }
-
-    /// `CGPreflightScreenCaptureAccess()`, except under
-    /// `STC_CAPTURE_FAULT=screen-recording-revoked`, where it reads false so the
-    /// real classification runs without anyone opening System Settings.
-    static func screenRecordingGrantedNow() -> Bool {
-        if ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "screen-recording-revoked" { return false }
-        return CGPreflightScreenCaptureAccess()
+        if !answeredStart { onStreamDied?(error) }
     }
 
     // MARK: - event tap

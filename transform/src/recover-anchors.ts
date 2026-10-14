@@ -94,9 +94,6 @@ export function recoverAnchors(partial: unknown, media: RecoveredMedia, reason: 
   let version: number = doc.version;
   if (reason === "disk-full" || reason === "disk-full-timeout") version = Math.max(version, 10);
   if (reason === RECOVERY_STOP_REASON) version = Math.max(version, 11);
-  if (reason === "screen-recording-revoked" || reason === "screen-recording-revoked-timeout") {
-    version = Math.max(version, 12);
-  }
   doc.version = version;
   return { ok: true, anchors: doc as unknown as Anchors };
 }

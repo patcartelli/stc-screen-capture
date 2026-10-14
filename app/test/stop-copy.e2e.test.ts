@@ -13,7 +13,7 @@ import { toastText } from "./_toast.js";
 /**
  * The helper stops a take by itself (STC-531): the pill says why for
  * PILL_STOPPED_DWELL_MS, then the panel goes up with the reason line and, for
- * two reasons, one action. No toast (Patrick, 2026-10-14).
+ * a full disk, one action. No toast (Patrick, 2026-10-14).
  *
  * `_fake-helper.mjs`'s `STC_FAKE_STREAM_DEATH_MS` + `STC_FAKE_STOP_REASON` send
  * the unsolicited `stopped` the real helper sends, after writing the take's
@@ -92,13 +92,6 @@ describe("a take the helper stopped by itself (STC-531)", () => {
       .toBe("Stopped at 0:02. Your disk is full. Everything up to then is saved.");
     expect(await panel.isVisible("#takeaction")).toBe(true);
     expect(await panel.textContent("#takeaction")).toBe("Reclaim space");
-  }, 240_000);
-
-  test("Screen Recording turned off: the panel offers Open System Settings", async () => {
-    const { panel } = await stoppedPanel("screen-recording-revoked");
-    await expect.poll(() => panel.textContent("#takereason"), { timeout: 15_000 })
-      .toBe("Stopped at 0:02. Screen Recording was turned off for Capture. Everything up to then is saved.");
-    expect(await panel.textContent("#takeaction")).toBe("Open System Settings");
   }, 240_000);
 
   test("the action's id is validated by main, not trusted from the page", async () => {

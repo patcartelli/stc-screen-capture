@@ -139,3 +139,7 @@ A VM can run this too (`tools/vm/fresh.sh --granted`, the toggle is a TCC click)
 
 ## Out of scope
 - Library notes (STC-529), live mic meter (STC-528), the runbook pass (STC-532).
+
+## Reversed (2026-10-14)
+
+Answer 2 was wrong. Measured on the packaged app with Capture's own entry: turning Screen Recording off mid-take does NOT end the stream (57 fps to the user's Stop; macOS only offers Quit & Reopen / Later). The `screen-recording-revoked` reason, anchors-12, the Open System Settings action and the fault were removed (Patrick). The earlier "it stops" was most likely the dev build, which runs as Electron/the terminal, not as Capture.

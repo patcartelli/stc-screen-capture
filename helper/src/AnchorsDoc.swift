@@ -248,11 +248,6 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     // STC-527: the one stop reason older versions refuse. Every other take
     // keeps the version its blocks earned.
     if stopReason == "disk-full" || stopReason == "disk-full-timeout" { version = max(version, 10) }
-    // STC-531: Screen Recording turned off mid-take. v11 is the app's own
-    // (recorder-quit), so the helper skips straight to 12.
-    if stopReason == "screen-recording-revoked" || stopReason == "screen-recording-revoked-timeout" {
-        version = max(version, 12)
-    }
     var capturedBlock: [String: Any] = ["width": capture.width, "height": capture.height, "codec": "h264",
                                          "firstFrameNs": max(0, capture.firstFrameNs)]
     if let colorSpace { capturedBlock["colorSpace"] = colorSpace }

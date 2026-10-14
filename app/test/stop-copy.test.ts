@@ -7,8 +7,8 @@ import {
 import { recordingItem, type TakeInfo } from "../src/library-items.js";
 
 const root = join(__dirname, "..", "..");
-/** Every reason anchors-12 can carry, read from the schema so a new one is covered without an edit. */
-const reasons: string[] = JSON.parse(readFileSync(join(root, "schema/anchors-12.schema.json"), "utf8"))
+/** Every reason anchors-11 can carry, read from the schema so a new one is covered without an edit. */
+const reasons: string[] = JSON.parse(readFileSync(join(root, "schema/anchors-11.schema.json"), "utf8"))
   .properties.stop.properties.reason.anyOf.flatMap((b: { enum?: string[] }) => b.enum ?? []);
 
 /**
@@ -20,9 +20,10 @@ const reasons: string[] = JSON.parse(readFileSync(join(root, "schema/anchors-12.
 function helperDecidedReasons(): string[] {
   const read = (f: string) => readFileSync(join(root, "helper/src", f), "utf8");
   const found = new Set<string>();
-  for (const f of ["StreamStopDecisions.swift", "DisplayChangeDecisions.swift", "DiskDecisions.swift"]) {
+  for (const f of ["DisplayChangeDecisions.swift", "DiskDecisions.swift"]) {
     for (const m of read(f).matchAll(/\.stop\("([a-z-]+)"\)/g)) found.add(m[1]!);
   }
+  for (const m of read("main.swift").matchAll(/self\.stop\(reason: "([a-z-]+)"\)/g)) found.add(m[1]!);
   const capture = read("Capture.swift");
   for (const m of capture.matchAll(/onWindowChanged\?\("([a-z-]+)"\)/g)) found.add(m[1]!);
   for (const m of capture.matchAll(/failRefit\("([a-z-]+)"\)/g)) found.add(m[1]!);
@@ -41,7 +42,7 @@ describe("stop copy (STC-530, STC-531)", () => {
   test("the Swift search finds what it is looking for (a guard on the guard)", () => {
     expect(helperDecidedReasons()).toEqual(expect.arrayContaining([
       "disk-full", "error", "display-reconfigured", "region-out-of-bounds",
-      "stream-stopped", "screen-recording-revoked", "window-closed", "window-resized",
+      "stream-stopped", "window-closed", "window-resized",
     ]));
   });
 
@@ -67,7 +68,6 @@ describe("stop copy (STC-530, STC-531)", () => {
     ["display-reconfigured", "Display lost", "Stopped at 4:12. The display you were recording was disconnected. Everything up to then is saved."],
     // The spec's "Display changed" is over its own 14-character ceiling; see stop-copy.ts.
     ["region-out-of-bounds", "Area lost", "Stopped at 4:12. The display settings changed and the area you were recording no longer fits. Everything up to then is saved."],
-    ["screen-recording-revoked", "Access revoked", "Stopped at 4:12. Screen Recording was turned off for Capture. Everything up to then is saved."],
   ])("%s: the spec's pill label and panel line", (reason, pill, line) => {
     expect(pillLabel(reason)).toBe(pill);
     expect(panelReason({ t: 252_400_000_000, reason })).toBe(line);
@@ -76,13 +76,11 @@ describe("stop copy (STC-530, STC-531)", () => {
   test("the two actions, and no others", () => {
     expect(panelAction({ t: 1, reason: "disk-full" })).toEqual({ id: "reclaim-space", label: "Reclaim space" });
     expect(panelAction({ t: 1, reason: "disk-full-timeout" })?.id).toBe("reclaim-space");
-    expect(panelAction({ t: 1, reason: "screen-recording-revoked" }))
-      .toEqual({ id: "open-screen-recording-settings", label: "Open System Settings" });
     const withAction = reasons.filter((r) => panelAction({ t: 1, reason: r }));
     expect(withAction.sort()).toEqual(
-      ["disk-full", "disk-full-timeout", "screen-recording-revoked", "screen-recording-revoked-timeout"]);
+      ["disk-full", "disk-full-timeout"]);
     expect(isStopActionId("reclaim-space")).toBe(true);
-    expect(isStopActionId("open-screen-recording-settings")).toBe(true);
+    expect(isStopActionId("open-screen-recording-settings")).toBe(false);
     expect(isStopActionId("open-input-monitoring-settings")).toBe(false);
   });
 

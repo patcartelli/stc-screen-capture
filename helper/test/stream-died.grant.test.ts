@@ -158,33 +158,6 @@ describe("a display stream that dies mid-take (STC-306)", () => {
     expect(JSON.parse(readFileSync(join(dir2, "anchors.json"), "utf8")).stop?.reason).toBe("stream-stopped");
   }, 120_000);
 
-  // STC-531. The same death with the grant probe reading false — what turning
-  // Screen Recording off mid-take looks like to the helper. The test above is
-  // its CONTROL: same death, real (granted) probe, so it must stay
-  // stream-stopped; only the probe makes the difference here.
-  test("a death with Screen Recording gone stops with screen-recording-revoked, at anchors-12", async () => {
-    const dir = session();
-    const h = spawnHelper({ STC_CAPTURE_FAULT: "screen-recording-revoked" });
-    await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
-    h.send({ cmd: "start", dir, seq: 1 });
-    const started = await waitFor(() => h.fd3.find((l) => l.seq === 1), 20_000, "start outcome");
-    if (started.ev !== "started") throw skipGrant(started);
-
-    const stopped = await waitFor(
-      () => h.fd3.find((l) => l.ev === "stopped" && typeof l.seq !== "number"),
-      30_000, "an unsolicited `stopped`");
-    expect(stopped.reason).toBe("screen-recording-revoked");
-    expect(stopped.stopWarning, "the writer did not finalise in time").toBeUndefined();
-    expect(hasMoov(join(dir, "display.mp4")), "display.mp4 has no moov").toBe(true);
-
-    const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
-    expect(anchors.stop?.reason).toBe("screen-recording-revoked");
-    expect(anchors.version).toBe(12);
-    const validate = new Ajv({ allErrors: true, strict: true })
-      .compile(JSON.parse(readFileSync(join(root, "schema/anchors-12.schema.json"), "utf8")));
-    expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
-  }, 120_000);
-
   test("without the fault, the same helper records and stops on request — the injector is opt-in", async () => {
     const dir = session();
     const h = spawnHelper({});

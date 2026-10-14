@@ -325,15 +325,5 @@ describe("anchors document", () => {
     );
     expect(validate10(diskFull), JSON.stringify(validate10.errors, null, 2)).toBe(true);
     expect(validate9(diskFull), "anchors-9 must refuse a disk-full stop").toBe(false);
-    // STC-531: Screen Recording turned off mid-take is v12; anchors-11 refuses it.
-    const revoked = extractJSON(out, "JSON-REVOKED:");
-    const validate12 = new Ajv({ allErrors: true, strict: true }).compile(
-      JSON.parse(readFileSync(join(root, "schema/anchors-12.schema.json"), "utf8")),
-    );
-    const validate11 = new Ajv({ allErrors: true, strict: true }).compile(
-      JSON.parse(readFileSync(join(root, "schema/anchors-11.schema.json"), "utf8")),
-    );
-    expect(validate12(revoked), JSON.stringify(validate12.errors, null, 2)).toBe(true);
-    expect(validate11(revoked), "anchors-11 must refuse a screen-recording-revoked stop").toBe(false);
   });
 }, 60_000);

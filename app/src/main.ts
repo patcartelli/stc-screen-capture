@@ -788,7 +788,7 @@ async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
   // STC-527's worst case (STC-530): the helper stopped cleanly but anchors.json could not be
   // written. Its partial still describes the take; finish it with the reason the helper gave,
   // in the take's vocabulary (`takeEndedStopReason`: `stopped` -> `user`, the supervisor's own
-  // `helper-idle`/`helper-stopped` -> `error`, anything anchors-12 accepts unchanged).
+  // `helper-idle`/`helper-stopped` -> `error`, anything anchors-11 accepts unchanged).
   if (await hasPartialAnchors(dir)) {
     const r = await recoverTake(dir, takeEndedStopReason(reason));
     if (!r.ok) console.error("[take-ended] anchors.json is missing and the take could not be finished:", dir, r.why);
@@ -1451,15 +1451,13 @@ ipcMain.handle("recorder:reclaimSpace", () => reclaimSpace());
 /**
  * STC-531: a stopped take's one action, from its panel. The page names an id
  * (`stop-copy.ts`'s `panelAction`) and this decides what it does, the rule
- * `toast:action` follows: Reclaim space is the SAME sweep the profile sheet's
- * button runs, and Open System Settings is the toast table's own URL.
+ * `toast:action` follows. Reclaim space (a full disk) is the SAME sweep the
+ * profile sheet's button runs.
  */
 ipcMain.handle("panel:stopAction", async (_e, id: unknown): Promise<boolean> => {
   if (!isStopActionId(id)) return false;
-  if (id === "reclaim-space") { await reclaimSpace(); return true; }
-  const url = TOAST_ACTION_URLS[id];
-  if (url) await shell.openExternal(url);
-  return url !== undefined;
+  await reclaimSpace();
+  return true;
 });
 
 async function reclaimSpace(): Promise<{ moved: number; failed: number }> {
