@@ -55,7 +55,7 @@ Work through §2 to §4 and look at the pill during the 2 s.
 
 ## §2 Window closed / resized
 
-**Resize: CONFIRMED on hardware 2026-10-14** (packaged build): "Window resized" on the pill, no toast, then the panel with the reason on a 250 px card and Copy/Save/Edit visible. Close, first try: the take stopped as `stream-stopped` ("The screen capture stopped unexpectedly"), because closing the window kills the SCStream before the 1 Hz watcher polls. Fixed: a window take's dead stream is checked against the window (`decideStreamDeath`, re-checked once after 0.3 s); gone means `window-closed`. Re-watch it.
+**Resize: CONFIRMED on hardware 2026-10-14** (packaged build): "Window resized" on the pill, no toast, then the panel with the reason on a 250 px card and Copy/Save/Edit visible. Close, first try: the take stopped as `stream-stopped` ("The screen capture stopped unexpectedly"), because closing the window kills the SCStream before the 1 Hz watcher polls. Fixed: a window take's dead stream is checked against the window (`decideStreamDeath`, re-checked once after 0.3 s); gone means `window-closed`. Re-watched on the fixed build 2026-10-14: CONFIRMED, "Window closed" on the pill and panel.
 
 Record a window (overlay → Window), then close it. Do it again and resize the window instead. Expect **Window closed** / **Window resized** on the pill, then the panel line, with no action button.
 
@@ -65,7 +65,7 @@ Record a second display, then unplug it. Expect **Display lost**, then `...The d
 
 ## §4 Disk full
 
-**CONFIRMED on hardware 2026-10-14** (packaged build, 256 MB volume): stopped at 0:42 with ~53 MiB free (61 once the reserve went), anchors v10 `disk-full`, "Disk full" on the pill, then the panel line with Reclaim space.
+**CONFIRMED on hardware 2026-10-14** (packaged build, 256 MB volume): stopped at 0:42 with ~53 MiB free (61 once the reserve went), anchors v10 `disk-full`, "Disk full" on the pill, then the panel line with Reclaim space; clicking it ran the profile sheet's sweep.
 
 Use STC-527's runbook §2 setup (a small `hdiutil` volume as `STC_TEMP_TAKES_DIR`; check `df` first). Expect:
 - **Disk full** on the pill;
