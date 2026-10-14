@@ -103,11 +103,32 @@ export function clampPillWidth(measuredContentWidthPx: number, paddingPx = 16): 
 export function decidePillAction(
   current: PillWindowState,
   recordingState: SupervisorState,
+  dwelling = false,
 ): "collapse" | "restore" | "none" {
   const recording = recordingState === "recording";
   if (recording && current === "expanded") return "collapse";
-  if (!recording && current === "collapsed") return "restore";
+  // STC-531: a pill showing why its take stopped holds until the dwell ends.
+  // Only a restore waits; a new take (`recording`) never does.
+  if (!recording && current === "collapsed" && !dwelling) return "restore";
   return "none";
+}
+
+/**
+ * How long the pill shows why the helper stopped a take (STC-531, the spec's
+ * "about 2 s") before the window restores and the take's panel goes up. The
+ * panel waits the SAME time (main.ts's `onTakeEnded`), so the label and the
+ * panel are never on screen together.
+ */
+export const PILL_STOPPED_DWELL_MS = 2000;
+
+/**
+ * Whether a stop shows its label on the pill: only when there IS a label
+ * (`stop-copy.ts`'s `pillLabel`, i.e. the helper stopped the take by itself)
+ * and the window is the pill right now. A stop the user asked for, or one
+ * that lands on an expanded window, restores exactly as it always did.
+ */
+export function shouldDwell(current: PillWindowState, label: string | undefined): boolean {
+  return current === "collapsed" && label !== undefined && label !== "";
 }
 
 /**

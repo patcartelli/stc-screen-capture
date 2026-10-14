@@ -1,6 +1,9 @@
 import { BrowserWindow, screen, type Rectangle } from "electron";
 import type { HelperSupervisor } from "./supervisor.js";
-import { PILL_HEIGHT_PX, clampPillWidth, decidePillAction, type PillWindowState } from "./pill.js";
+import {
+  PILL_HEIGHT_PX, PILL_STOPPED_DWELL_MS, clampPillWidth, decidePillAction, shouldDwell, type PillWindowState,
+} from "./pill.js";
+import { pillLabel } from "./stop-copy.js";
 import { setBoundsUnlessClosing } from "./window-geometry.js";
 
 /**
@@ -144,10 +147,23 @@ export function attachPillToSupervisor(
 ): PillAttachment {
   let current: PillWindowState = "expanded";
   let expandedBounds: Rectangle | undefined;
+  // STC-531: the pill showing why the helper stopped its take. While this is
+  // set, `decidePillAction` holds the restore; it ends on its own timer, or
+  // the moment a new take is recording.
+  let dwell: ReturnType<typeof setTimeout> | undefined;
+
+  const endDwell = (): void => {
+    if (dwell === undefined) return;
+    clearTimeout(dwell);
+    dwell = undefined;
+    sendPillStopped(win, undefined);
+  };
 
   const reconcile = (): void => {
-    if (win.isDestroyed()) return;
-    const action = decidePillAction(current, sup.state);
+    if (win.isDestroyed()) { endDwell(); return; }
+    // A new take while the label is up: the pill is that take's now.
+    if (sup.state === "recording") endDwell();
+    const action = decidePillAction(current, sup.state, dwell !== undefined);
     if (action === "collapse") {
       expandedBounds = collapsePill(win, opts.getContentWidthPx());
       current = "collapsed";
@@ -159,10 +175,34 @@ export function attachPillToSupervisor(
     }
   };
 
+  // `recording-ended` is only ever a stop the HELPER decided on (the
+  // supervisor's own contract), so its reason is what the pill says.
+  const onEnded = (i: { reason?: unknown } | undefined): void => {
+    const label = pillLabel(typeof i?.reason === "string" ? i.reason : undefined);
+    if (dwell === undefined && !win.isDestroyed() && shouldDwell(current, label)) {
+      sendPillStopped(win, label);
+      dwell = setTimeout(() => {
+        dwell = undefined;
+        sendPillStopped(win, undefined);
+        reconcile();
+      }, PILL_STOPPED_DWELL_MS);
+    }
+    reconcile();
+  };
+
   const offStats = sup.on("stats", reconcile);
-  const offEnded = sup.on("recording-ended", reconcile);
+  const offEnded = sup.on("recording-ended", onEnded);
   const offLost = sup.on("recording-lost", reconcile);
-  return { detach: () => { offStats(); offEnded(); offLost(); }, reconcileNow: reconcile };
+  return {
+    detach: () => { endDwell(); offStats(); offEnded(); offLost(); },
+    reconcileNow: reconcile,
+  };
+}
+
+/** STC-531: the pill's stopped label, or `undefined` to clear it. */
+function sendPillStopped(win: BrowserWindow, label: string | undefined): void {
+  if (win.isDestroyed()) return;
+  win.webContents.send("pill:stopped", { label: label ?? null });
 }
 
 export interface PillAttachment {

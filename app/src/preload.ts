@@ -102,6 +102,9 @@ contextBridge.exposeInMainWorld("recorder", {
                       // its own window shrank — `pill-window.ts` drives the
                       // resize from main, not from anything in this page.
                       "pill:state",
+                      // STC-531: the helper stopped the take by itself; the
+                      // pill says why for a moment (`label`), then null.
+                      "pill:stopped",
                       // STC-433: `recorder:start` resolved a stale mic on
                       // this window's behalf (turned it off) — the mic
                       // popover's own stored state is now stale too, and

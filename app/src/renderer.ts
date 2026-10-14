@@ -808,6 +808,18 @@ recorder.on("pill:state", (s: { collapsed: boolean }) => {
   document.body.classList.toggle("pill-collapsed", s.collapsed);
 });
 
+// STC-531: the helper stopped the take by itself. For PILL_STOPPED_DWELL_MS
+// main sends the cause (`stop-copy.ts`'s `pillLabel`), then null. Disabled
+// meanwhile: the pill's click is Record's, and would start a new take.
+const pillLabelEl = $("pill-label");
+recorder.on("pill:stopped", (s: { label: string | null }) => {
+  const label = typeof s?.label === "string" && s.label ? s.label : null;
+  pillBtn.classList.toggle("stopped", label !== null);
+  pillBtn.disabled = label !== null;
+  pillLabelEl.textContent = label ?? "";
+  pillBtn.setAttribute("aria-label", label ? `Recording stopped: ${label}` : "Stop recording");
+});
+
 /**
  * STC-433: Record's own flow (`runRecordFlow` in main.ts) turned the mic off
  * on this window's behalf, when its overlay pick vanished before the take
