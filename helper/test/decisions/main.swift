@@ -384,6 +384,14 @@ check("a height change past tolerance is a resize",
 check("the window no longer being found is gone, not resized",
       decideWindowWatch(initial: (800, 600), current: nil), WindowWatchDecision.gone)
 
+// ── a dead stream on a window take whose window is gone (STC-531) ───────────
+check("a window take whose window is gone stops as window-closed",
+      decideStreamDeath(windowGone: true), "window-closed")
+check("a window take whose window is still there stays stream-stopped",
+      decideStreamDeath(windowGone: false), "stream-stopped")
+check("a take with no window (display or region) stays stream-stopped",
+      decideStreamDeath(windowGone: nil), "stream-stopped")
+
 // ── the window track records only real movement (STC-482) ───────────────────
 check("an unmoved window records nothing",
       shouldRecordWindowOrigin(last: (100, 50), current: (100, 50)), false)

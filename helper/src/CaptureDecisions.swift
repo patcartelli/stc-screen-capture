@@ -595,6 +595,21 @@ func decideWindowWatch(initial: (width: Double, height: Double),
     return changed ? .resized : .unchanged
 }
 
+/// Why a live display stream died, as a `stop.reason` (STC-531).
+///
+/// Closing the window a window-scope take is recording ends the SCStream
+/// BEFORE the 1 Hz window watcher's next poll can see the window gone, so the
+/// take stopped as `stream-stopped` and the panel said "The screen capture
+/// stopped unexpectedly" (seen on hardware 2026-10-14). On a window take the
+/// stream's death is therefore checked against the window first: gone means
+/// `window-closed`, the same reason the watcher would have given a second later.
+///
+/// `windowGone` is nil for a take with no window (display or region scope).
+/// A window that is still there leaves the death unexplained: `stream-stopped`.
+func decideStreamDeath(windowGone: Bool?) -> String {
+    windowGone == true ? "window-closed" : "stream-stopped"
+}
+
 // ── where a window-scope take's window is, over time (STC-482) ──────────────
 
 /// Half a point, the same tolerance `decideWindowWatch` uses for the same

@@ -127,9 +127,13 @@ describe("a display stream that dies mid-take (STC-306)", () => {
     expect(anchors.stop?.reason).toBe("stream-stopped");
     // The reason is in the schema's enum, not merely written: anchors-2 gained
     // it with this fix, and a take that fails validation is a take the library
-    // cannot open.
+    // cannot open. Validated at the document's OWN version, not a fixed 2: on a
+    // Display P3 Mac the helper writes v9 with `capture.colorSpace` (STC-510),
+    // which anchors-2 rightly refuses (seen on hardware 2026-10-14).
+    expect(anchors.version).toBeGreaterThanOrEqual(2);
     const ajv = new Ajv({ allErrors: true, strict: true });
-    const validate = ajv.compile(JSON.parse(readFileSync(join(root, "schema/anchors-2.schema.json"), "utf8")));
+    const validate = ajv.compile(JSON.parse(readFileSync(
+      join(root, `schema/anchors-${anchors.version}.schema.json`), "utf8")));
     expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
 
     // The helper is idle and usable, not wedged: the heartbeat agrees (it is

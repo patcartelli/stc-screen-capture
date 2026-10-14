@@ -64,8 +64,16 @@
     #takecard { flex: 1; display: flex; flex-direction: column;
                 align-items: center; justify-content: center; text-align: center; }
     #takemeta { opacity: 0.7; margin-top: 2px; }
-    #takereason { margin-top: 4px; }
+    /* STC-531: meta-sized, like the duration line above it. At the body size a
+       three-line reason pushed Copy/Save/Edit off the card (hardware, 2026-10-14);
+       the panel is also taller when a reason exists (`REASON_PANEL_SIZE`). */
+    #takereason {
+      margin-top: 4px; padding: 0 var(--space-3);
+      font-size: var(--type-meta); line-height: 1.4; letter-spacing: var(--type-meta-tracking);
+    }
     #takereason:empty { display: none; }
+    #takeaction { margin-top: var(--space-2); }
+    #takeaction[hidden] { display: none; }
     #copyprogress { width: 100%; height: var(--space-1); margin-top: var(--space-2); accent-color: var(--accent); }
     #copyprogress[hidden] { display: none; }
     #format { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-top: var(--space-2); }
@@ -144,6 +152,10 @@
     <div id="takecard" hidden>
       <div id="takemeta"></div>
       <div id="takereason"></div>
+      <!-- STC-531: the stop's one action (Reclaim space / Open System Settings),
+           from `stop-copy.ts`'s `panelAction`. Not a [data-action]: it does
+           nothing to the take, so a busy take (a Copy rendering) does not lock it. -->
+      <button id="takeaction" type="button" hidden></button>
       <!-- STC-488: a recording's Copy renders first. Hidden unless one is running. -->
       <!-- STC-395: a fresh recording's output format. Never closes the panel. -->
       <div id="format" role="radiogroup" aria-label="Output format" hidden>

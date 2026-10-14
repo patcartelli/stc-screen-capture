@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   clampPillWidth, decidePillAction, formatElapsedTimer,
   MIN_PILL_WIDTH_PX, METER_MODE, RESIZE_STYLE, PILL_HEIGHT_PX,
+  PILL_STOPPED_DWELL_MS, shouldDwell,
 } from "../src/pill.js";
+import { HELPER_STOP_REASONS, pillLabel } from "../src/stop-copy.js";
 
 describe("clampPillWidth", () => {
   it("adds padding to a real measurement", () => {
@@ -35,6 +37,38 @@ describe("decidePillAction", () => {
   it("is idempotent once already in the state the signal implies", () => {
     expect(decidePillAction("collapsed", "recording")).toBe("none");
     expect(decidePillAction("expanded", "idle")).toBe("none");
+  });
+
+  // STC-531: the stopped label holds the restore, and ONLY the restore.
+  it("holds a restore while the stopped label is up", () => {
+    for (const s of ["idle", "stopped", "failed", "starting"] as const) {
+      expect(decidePillAction("collapsed", s, true)).toBe("none");
+    }
+  });
+
+  it("never holds a collapse: a new take during the label is that take's pill", () => {
+    expect(decidePillAction("expanded", "recording", true)).toBe("collapse");
+    expect(decidePillAction("collapsed", "recording", true)).toBe("none");
+  });
+});
+
+describe("shouldDwell (STC-531)", () => {
+  it("dwells only for a labelled stop on the collapsed pill", () => {
+    expect(shouldDwell("collapsed", "Window closed")).toBe(true);
+    expect(shouldDwell("expanded", "Window closed")).toBe(false);
+    expect(shouldDwell("collapsed", undefined)).toBe(false);
+    expect(shouldDwell("collapsed", "")).toBe(false);
+  });
+
+  it("each labelled stop the helper decides on dwells; a user stop does not", () => {
+    for (const r of HELPER_STOP_REASONS) expect(shouldDwell("collapsed", pillLabel(r)), r).toBe(true);
+    for (const r of ["user", "quit", "stopped", "helper-idle", "recorder-quit"]) {
+      expect(shouldDwell("collapsed", pillLabel(r)), r).toBe(false);
+    }
+  });
+
+  it("is the spec's ~2 s", () => {
+    expect(PILL_STOPPED_DWELL_MS).toBe(2000);
   });
 });
 
