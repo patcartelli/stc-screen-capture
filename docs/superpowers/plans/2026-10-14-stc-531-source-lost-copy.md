@@ -37,6 +37,19 @@ table (`docs/superpowers/specs/2026-10-12-stc-505-failure-states-design.md`).
   exist for a reason. The thumbnail bridge (`thumbnail-preload.ts`) has no reclaim or
   settings channel.
 
+## Answers (Patrick, 2026-10-14)
+
+- **2: stop path.** Turning Screen Recording off mid-take ends the take, and it reaches
+  the panel. So access revoked gets its own helper reason (plus the schema bump) and the
+  Open System Settings action. Still needed: the SCK error code `didStopWithError`
+  reports, so the helper can tell a revoked grant from any other dead stream. Read it
+  from the `stream-stopped` warning's `detail` on a take recorded with this branch's
+  build. The only take in temp storage from 2026-10-14 stopped with `user` (anchors-6),
+  so it isn't that test.
+- **3: yes.** The panel waits out the 2 s pill label, but only when the helper stopped
+  the take itself.
+- **1: open.** It has been explained; no answer yet.
+
 ## Decisions needed from Patrick before building
 
 1. **The recording-ended toast.** Spec decision 3 says toasts are only for events with no
