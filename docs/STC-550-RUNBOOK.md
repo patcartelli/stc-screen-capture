@@ -51,6 +51,10 @@ drag region takes no clicks, so clicking the timer no longer stops the take.
   - §7: the drag moved the pill once and never again (the native
     `-webkit-app-region: drag`). Replaced with the page's own pointer events,
     which also ease the motion as asked (direct under Reduce Motion).
+- **After CI (also re-check):** the pill is now `focusable: false`. On CI a
+  take started from the menu bar with no window open gave the pill key
+  status, so it held the keyboard. Check on hardware that Stop still works on
+  the first click and that the drag still moves it, in §5 and §7.
 - Not yet run: §5.
 
 ## §1 The one open question: is the pill out of the video? (requirement 9)
