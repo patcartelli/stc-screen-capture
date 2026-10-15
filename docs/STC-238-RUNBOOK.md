@@ -9,6 +9,13 @@ npm ci
 helper/build.sh
 ```
 
+## Result on hardware
+
+**2026-10-15, Patrick's Mac: 9/9 passed** (140 s). The first run that day failed 4 of 9, from three causes, all fixed on this branch:
+- The camera-disconnect fault was armed when the camera opened, before it had delivered any frame. It is now armed from the camera's first written frame.
+- The export harness refused a recovered take that has no `events.json`. It now reads a missing file as no cursor, the same as the app's loader.
+- The supervisor pipe-close case expected `recording-lost` where `recording-ended` is correct.
+
 ## What it is
 
 `npm run test:soak` runs `helper/test/fault-soak.soak.test.ts`. Every fault the ticket names goes into a real take, and every result is held to the same bar (`helper/test/_soak.ts`):
