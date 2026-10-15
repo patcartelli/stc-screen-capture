@@ -26,8 +26,8 @@ import { PARTIAL_ANCHORS_FILE, recoverAnchors, type RecoveredMedia } from "@tran
 
 export type TakeRecovery = { ok: true } | { ok: false; why: string };
 
-/** A ranged reader over one file on disk. */
-async function fileSource(path: string): Promise<ByteSource & { close(): Promise<void> }> {
+/** A ranged reader over one file on disk. Exported for STC-238's soak, which loads takes the same way. */
+export async function fileSource(path: string): Promise<ByteSource & { close(): Promise<void> }> {
   const fh = await open(path, "r");
   const { size } = await fh.stat();
   return {

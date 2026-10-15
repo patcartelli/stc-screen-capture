@@ -936,7 +936,7 @@ const RECORDING_FAULTS: Record<string, string> = {
  * stop; since STC-235 it does not, and the stop's own reason is the one
  * message.
  */
-const INFORMATIONAL_WARNINGS = new Set(["display-reconfigured", "display-refit", "display-refit-rect-mismatch"]);
+const INFORMATIONAL_WARNINGS = new Set(["display-reconfigured", "display-refit", "display-refit-rect-mismatch", "frames-dropped"]);
 
 recorder.on("helper:warning", (l) => {
   const code = String(l.code);
@@ -983,7 +983,10 @@ recorder.on("helper:warning", (l) => {
     // survived a display change, which runbook §1/§2 ask about. So it goes to
     // the DevTools console. An idle `display-reconfigured` stays silent: it
     // fires on every monitor change and says nothing about a take.
-    if (code === "display-refit" || code === "display-refit-rect-mismatch") {
+    // `frames-dropped` (STC-238) is the same kind of record: a hole the writer
+    // could not fill (`startNs`..`endNs`, `count` frames) in a take that kept
+    // going. A loaded machine can produce several, so never a toast.
+    if (code === "display-refit" || code === "display-refit-rect-mismatch" || code === "frames-dropped") {
       console.info(`[helper] ${code}`, JSON.stringify(l));
     }
     return;
