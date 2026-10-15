@@ -37,6 +37,8 @@ interface StopRow {
   pill: string;
   /** The panel line's middle sentence, between "Stopped at m:ss." and the saved-claim. */
   cause: string;
+  /** The library note's `<cause>`: "Stopped early: <lib> at m:ss" (STC-529). Lower-case, no full stop. */
+  lib: string;
   action?: StopAction;
 }
 
@@ -51,22 +53,23 @@ interface StopRow {
  */
 const ROWS: Record<string, StopRow> = {
   "disk-full": {
-    pill: "Disk full", cause: "Your disk is full.",
+    pill: "Disk full", cause: "Your disk is full.", lib: "disk full",
     action: { id: "reclaim-space", label: "Reclaim space" },
   },
-  "window-closed": { pill: "Window closed", cause: "The window you were recording was closed." },
-  "window-resized": { pill: "Window resized", cause: "The window you were recording was resized." },
+  "window-closed": { pill: "Window closed", cause: "The window you were recording was closed.", lib: "window closed" },
+  "window-resized": { pill: "Window resized", cause: "The window you were recording was resized.", lib: "window resized" },
   // Since STC-235 a display mode change refits; this is reached only when the captured
   // display is gone (`decideDisplayChange`), so it reads as the spec's "Display lost".
-  "display-reconfigured": { pill: "Display lost", cause: "The display you were recording was disconnected." },
+  "display-reconfigured": { pill: "Display lost", cause: "The display you were recording was disconnected.", lib: "display disconnected" },
   // The spec's "Display changed" is 15 characters, over its own 14-character ceiling. This
   // reason only ever ends an AREA take whose area no longer fits the changed display
   // (STC-235), so the label names that instead.
   "region-out-of-bounds": {
     pill: "Area lost", cause: "The display settings changed and the area you were recording no longer fits.",
+    lib: "display changed",
   },
-  "stream-stopped": { pill: "Source lost", cause: "The screen capture stopped unexpectedly." },
-  "error": { pill: "Write failed", cause: "The recording could not be written to disk." },
+  "stream-stopped": { pill: "Source lost", cause: "The screen capture stopped unexpectedly.", lib: "capture source lost" },
+  "error": { pill: "Write failed", cause: "The recording could not be written to disk.", lib: "write failed" },
 };
 
 /** Every reason with a row — what the test walks against the helper's own list. */
@@ -186,11 +189,34 @@ export function trackLossLine(anchors: TrackBlocks | undefined): string | undefi
   return lines.length > 0 ? lines.join(" ") : undefined;
 }
 
+/** The part of an anchors document `libraryNotes` reads for silence (anchors-13). */
+export type SilentSpans = readonly { startNs: number; endNs: number }[] | undefined;
+
+/** The two spans a note lists before "and N more" (spec: "first two, then and N more"). */
+const SILENT_SPANS_LISTED = 2;
+
+/**
+ * The library's note for how a take stopped, or undefined when nothing needs saying: a
+ * user-initiated stop has no row. `Stopped early: <cause> at m:ss` so a scan down the grid
+ * reads the same way every time; without a time, `Stopped early: <cause>`.
+ */
 export function libraryNote(stop: StopBlock): string | undefined {
-  switch (stop?.reason) {
-    case "recorder-quit":
-      return "Recovered after the recorder quit. No cursor data.";
-    default:
-      return undefined;
-  }
+  if (stop?.reason === "recorder-quit") return "Recovered after the recorder quit. No cursor data.";
+  const row = rowFor(stop);
+  if (!row) return undefined;
+  const at = typeof stop?.t === "number" ? ` at ${formatTakeTime(stop.t)}` : "";
+  return `Stopped early: ${row.lib}${at}`;
+}
+
+/**
+ * "No mic signal from 1:10 to 4:30", several spans listing the first two, then "and N more".
+ * Spans arrive in order (anchors-13), so "first" is the earliest.
+ */
+export function silenceNote(spans: SilentSpans): string | undefined {
+  if (!spans || spans.length === 0) return undefined;
+  const listed = spans.slice(0, SILENT_SPANS_LISTED)
+    .map((s) => `${formatTakeTime(s.startNs)} to ${formatTakeTime(s.endNs)}`);
+  const more = spans.length - listed.length;
+  const tail = more > 0 ? `, and ${more} more` : "";
+  return `No mic signal from ${listed.join(more > 0 ? ", " : " and ")}${tail}`;
 }
