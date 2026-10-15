@@ -129,6 +129,9 @@ describe("the mic format guard (STC-485)", () => {
 
     const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
     expect(anchors.mic?.present ?? false, "a track with nothing appended must not claim to be present").toBe(false);
+    // STC-237: a trip on the FIRST buffer leaves no track, so there is nothing for
+    // `endedBy: format-mismatch` to describe (a mid-take trip writes it; anchors.test.ts).
+    expect(anchors.mic?.endedBy).toBeUndefined();
   }, 90_000);
 
   test("CONTROL: a real take raises no warning and decodes to the span it recorded", async () => {
@@ -138,6 +141,7 @@ describe("the mic format guard (STC-485)", () => {
       .toBeUndefined();
     const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
     expect(anchors.mic?.present).toBe(true);
+    expect(anchors.mic.endedBy, "a mic that ran to the end must not say it ended early").toBeUndefined();
     const span = (anchors.mic.lastFramePtsNs - anchors.mic.firstFramePtsNs) / 1e9;
     expect(existsSync(join(dir, "mic.m4a"))).toBe(true);
     const decoded = decodedSeconds(join(dir, "mic.m4a"));

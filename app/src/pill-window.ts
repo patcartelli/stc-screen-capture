@@ -1,9 +1,10 @@
 import { BrowserWindow, screen, type Rectangle } from "electron";
 import type { HelperSupervisor } from "./supervisor.js";
 import {
-  PILL_HEIGHT_PX, PILL_STOPPED_DWELL_MS, clampPillWidth, decidePillAction, shouldDwell, type PillWindowState,
+  PILL_HEIGHT_PX, PILL_STOPPED_DWELL_MS, clampPillWidth, decidePillAction, shouldDwell, shouldShowTrackNotice,
+  type PillWindowState,
 } from "./pill.js";
-import { pillLabel } from "./stop-copy.js";
+import { pillLabel, trackLossPillLabel } from "./stop-copy.js";
 import { setBoundsUnlessClosing } from "./window-geometry.js";
 
 /**
@@ -159,6 +160,28 @@ export function attachPillToSupervisor(
     sendPillStopped(win, undefined);
   };
 
+  // STC-237: a mic or camera lost while the take KEEPS recording. The pill shows it in
+  // place of the timer for the same time a stop's label shows, then goes back. It moves
+  // no window, so it never touches `reconcile`. A second loss restarts the clock with its
+  // own label; a stop takes over from it (`onEnded`).
+  let notice: ReturnType<typeof setTimeout> | undefined;
+  const endNotice = (): void => {
+    if (notice === undefined) return;
+    clearTimeout(notice);
+    notice = undefined;
+    sendPillNotice(win, undefined);
+  };
+  const onWarning = (l: { code?: unknown } | undefined): void => {
+    const label = trackLossPillLabel(String(l?.code));
+    if (win.isDestroyed() || !shouldShowTrackNotice(current, sup.state, label)) return;
+    if (notice !== undefined) clearTimeout(notice);
+    sendPillNotice(win, label);
+    notice = setTimeout(() => {
+      notice = undefined;
+      sendPillNotice(win, undefined);
+    }, PILL_STOPPED_DWELL_MS);
+  };
+
   const reconcile = (): void => {
     if (win.isDestroyed()) { endDwell(); return; }
     // A new take while the label is up: the pill is that take's now.
@@ -178,6 +201,7 @@ export function attachPillToSupervisor(
   // `recording-ended` is only ever a stop the HELPER decided on (the
   // supervisor's own contract), so its reason is what the pill says.
   const onEnded = (i: { reason?: unknown } | undefined): void => {
+    endNotice();
     const label = pillLabel(typeof i?.reason === "string" ? i.reason : undefined);
     if (dwell === undefined && !win.isDestroyed() && shouldDwell(current, label)) {
       sendPillStopped(win, label);
@@ -192,11 +216,18 @@ export function attachPillToSupervisor(
 
   const offStats = sup.on("stats", reconcile);
   const offEnded = sup.on("recording-ended", onEnded);
-  const offLost = sup.on("recording-lost", reconcile);
+  const offLost = sup.on("recording-lost", () => { endNotice(); reconcile(); });
+  const offWarning = sup.on("helper:warning", onWarning);
   return {
-    detach: () => { endDwell(); offStats(); offEnded(); offLost(); },
+    detach: () => { endDwell(); endNotice(); offStats(); offEnded(); offLost(); offWarning(); },
     reconcileNow: reconcile,
   };
+}
+
+/** STC-237: a lost track's label on a pill still recording, or `undefined` to clear it. */
+function sendPillNotice(win: BrowserWindow, label: string | undefined): void {
+  if (win.isDestroyed()) return;
+  win.webContents.send("pill:notice", { label: label ?? null });
 }
 
 /** STC-531: the pill's stopped label, or `undefined` to clear it. */

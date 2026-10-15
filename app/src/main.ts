@@ -37,7 +37,7 @@ import {
   startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight, copyRenderFormat,
 } from "./copy-render-window.js";
 import { GifCache } from "./gif-cache.js";
-import { panelReason, panelAction, pillLabel, isStopActionId, type StopAction } from "./stop-copy.js";
+import { panelReason, panelAction, pillLabel, isStopActionId, trackLossLine, type StopAction } from "./stop-copy.js";
 import {
   copyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
   copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
@@ -708,8 +708,10 @@ async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): 
     { durationMs: 0, scope: "Screen" };
   try {
     const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"));
+    // STC-237: a mic or camera that ended early is a second sentence after the stop's own.
+    const reason = [panelReason(anchors.stop), trackLossLine(anchors)].filter(Boolean).join(" ") || undefined;
     recording = { durationMs: recordingDurationMs(anchors), scope: recordingScopeLabel(anchors),
-                  reason: panelReason(anchors.stop), action: panelAction(anchors.stop) };
+                  reason, action: panelAction(anchors.stop) };
   } catch (e) {
     console.error("[recording-panel] could not read anchors.json for the card:", dir, e);
   }

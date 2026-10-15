@@ -462,5 +462,51 @@ do {
     check(failed["version"] as? Int == 2, "an `error` stop stays at the version its blocks earned")
 }
 
+// STC-237: a mic or camera that ended before the take did records why, and only then
+// is the take v12. A track that is not written cannot carry it.
+do {
+    var cam = CameraTrack(present: true, device: "Fixture Camera", width: 1280, height: 720,
+                          firstFramePtsNs: 1_000_000_000, lastFramePtsNs: 9_000_000_000,
+                          frameIntervalNs: 17_000_000)
+    cam.endedBy = "disconnected"
+    var mic = MicTrack(present: true, device: "Fixture Mic", sampleRate: 48000, channels: 1,
+                       firstFramePtsNs: 12_000_000, lastFramePtsNs: 7_000_000_000)
+    mic.endedBy = "format-mismatch"
+    let ended = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                capture: capture, camera: cam, requested: true,
+                                mic: mic, micRequested: true,
+                                pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(ended["version"] as? Int == 12, "a take with a track that ended early must write version 12")
+    check((ended["camera"] as? [String: Any])?["endedBy"] as? String == "disconnected", "camera endedBy is written")
+    check((ended["mic"] as? [String: Any])?["endedBy"] as? String == "format-mismatch", "mic endedBy is written")
+    printJSON(ended, marker: "JSON-ENDED-BY:")
+
+    // Not requested: no block, so nothing to say and no bump.
+    let unrequested = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                      capture: capture, camera: cam, requested: false,
+                                      mic: mic, micRequested: false,
+                                      pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(unrequested["version"] as? Int == 2, "an unrequested track's endedBy earns nothing")
+    check(unrequested["camera"] == nil && unrequested["mic"] == nil, "and writes no block")
+
+    // A present:false track (the subsystem produced nothing) never carries endedBy.
+    let absent = CameraTrack(present: false, device: "", width: 0, height: 0, firstFramePtsNs: 0,
+                         lastFramePtsNs: 0, frameIntervalNs: 0, endedBy: "disconnected")
+    let none = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                               capture: capture, camera: absent, requested: true,
+                               pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check((none["camera"] as? [String: Any])?["endedBy"] == nil, "present:false writes no endedBy")
+    check(none["version"] as? Int == 2, "and stays at the version its blocks earned")
+
+    // The control: the same tracks without endedBy stay at the version they always were.
+    cam.endedBy = nil; mic.endedBy = nil
+    let whole = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                capture: capture, camera: cam, requested: true,
+                                mic: mic, micRequested: true,
+                                pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(whole["version"] as? Int == 4, "tracks that ran to the end stay v4")
+    check((whole["mic"] as? [String: Any])?["endedBy"] == nil, "and carry no endedBy")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

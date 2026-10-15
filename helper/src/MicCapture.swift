@@ -394,8 +394,11 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     func track() -> MicTrack? {
         lock.lock(); defer { lock.unlock() }
         guard appended > 0, firstPtsNs >= 0, lastPtsNs >= firstPtsNs else { return nil }
+        // STC-237: a tripped STC-485 guard ended this track early. Its last sample is the
+        // last one before the trip, because nothing after it was appended.
         return MicTrack(present: true, device: deviceName,
                         sampleRate: Int(sampleRate.rounded()), channels: channels,
-                        firstFramePtsNs: Int(firstPtsNs), lastFramePtsNs: Int(lastPtsNs))
+                        firstFramePtsNs: Int(firstPtsNs), lastFramePtsNs: Int(lastPtsNs),
+                        endedBy: formatTripped ? "format-mismatch" : nil)
     }
 }

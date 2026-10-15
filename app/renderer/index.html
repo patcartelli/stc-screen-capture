@@ -425,7 +425,12 @@
        is Record's click, and here it would start a new take. */
     #pill-label { display: none; }
     #pill.stopped > :not(#pill-label) { display: none; }
-    #pill.stopped #pill-label {
+    /* STC-237: a mic or camera lost while the take KEEPS recording. The label
+       stands in for the timer and meter only: the dot still says recording,
+       the stop square still says what a click does, and the button stays
+       enabled, because this take is still running and its pill is still Stop. */
+    #pill.notice #pill-timer, #pill.notice #pill-meter { display: none; }
+    #pill.stopped #pill-label, #pill.notice #pill-label {
       display: block; flex: 1 1 auto; min-width: 0; text-align: center;
       font: 500 11px/1 -apple-system, system-ui, sans-serif;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

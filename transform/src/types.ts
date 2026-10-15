@@ -65,6 +65,8 @@ export interface CameraTrack {
   lastFramePtsNs: number;
   /** median inter-frame delta; bounds the track end (see render()) */
   frameIntervalNs: number;
+  /** anchors-12 (STC-237): why the track ended before the take did. Absent: it ran to the end. */
+  endedBy?: "disconnected";
 }
 
 /**
@@ -80,6 +82,8 @@ export interface MicTrack {
   channels: number;
   firstFramePtsNs: number;
   lastFramePtsNs: number;
+  /** anchors-12 (STC-237): why the track ended before the take did. Absent: it ran to the end. */
+  endedBy?: "disconnected" | "format-mismatch";
 }
 
 /**
@@ -129,7 +133,7 @@ export type CaptureScope =
 
 /** Mirrors schema/anchors-1.schema.json through anchors-7.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {

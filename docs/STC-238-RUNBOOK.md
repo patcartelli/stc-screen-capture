@@ -23,7 +23,7 @@ helper/build.sh
 | disk full | `=disk-full` | stop `disk-full` |
 | write error | `=disk-write-failed` | stop `disk-full` |
 | encoder stall | `=encoder-stall` (**new**) | warning `frames-dropped` {startNs, endNs, count}; the take goes on; no frame in the file inside that span |
-| camera disconnect | `=camera-disconnected`, `camera: true` | warning `camera-disconnected` with `tNs` (**new field**); the camera track ends there |
+| camera disconnect | `=camera-disconnected`, `camera: true` | warning `camera-disconnected` with `tNs` (**new field**); the camera track ends there; `anchors.camera.endedBy` is `disconnected` (STC-237) |
 | IPC pipe close | stdin closed mid-take | stop `stdin-closed`, helper exits 0 |
 | helper crash | SIGKILL mid-take | recovered, `recorder-quit` |
 | pipe close via the supervisor | the real `HelperSupervisor`'s child's stdin closed | `recording-lost` names the take; respawn; back to idle; a second take records |

@@ -83,6 +83,19 @@ describe("a take whose camera.mp4 has no video track (STC-541)", () => {
     expect(render(project, session, 2_000_000_000).pip).toBeNull();
   });
 
+  test("a camera unplugged before its first frame (v12 endedBy) loads the same way, without endedBy", async () => {
+    // STC-237: the helper only writes endedBy on a present track, but a camera unplugged
+    // before it delivered a frame can still leave a trackless camera.mp4. The demotion
+    // to present:false drops endedBy rather than leaving a combination anchors-12 refuses.
+    const a = JSON.parse(new TextDecoder().decode(fixture("anchors.json")));
+    const v12 = { ...a, version: 12, camera: { ...a.camera, endedBy: "disconnected" } };
+    const { session } = await loadTake(take(tracklessMp4(), {
+      "anchors.json": new TextEncoder().encode(JSON.stringify(v12)),
+    }));
+    expect(session.anchors.camera?.present).toBe(false);
+    expect(session.anchors.camera).not.toHaveProperty("endedBy");
+  });
+
   test("a MALFORMED camera.mp4 still refuses the take", async () => {
     // A box declaring fewer bytes than its own header is a broken file, not an
     // empty camera; guessing past it would hide a real fault.

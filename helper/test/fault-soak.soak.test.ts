@@ -8,7 +8,7 @@
  *   disk full             STC_CAPTURE_FAULT=disk-full          stop: disk-full
  *   write error           STC_CAPTURE_FAULT=disk-write-failed  stop: disk-full
  *   encoder stall         STC_CAPTURE_FAULT=encoder-stall      warning: frames-dropped (the take goes on)
- *   camera disconnect     STC_CAPTURE_FAULT=camera-disconnected warning: camera-disconnected + tNs
+ *   camera disconnect     STC_CAPTURE_FAULT=camera-disconnected warning + tNs; anchors camera.endedBy
  *   IPC pipe close        stdin closed mid-take                stop: stdin-closed
  *   helper crash          SIGKILL mid-take                     recovered: recorder-quit
  *   ...and the last two again through the REAL HelperSupervisor, which must
@@ -117,6 +117,8 @@ for (let round = 1; round <= ROUNDS; round++) {
       await userStop(h);
       expectStopRecord(dir, "user");
       expect(existsSync(join(dir, "camera.mp4")), "camera.mp4 missing").toBe(true);
+    // STC-237: the take itself carries why the track ended early.
+    expect(readAnchors(dir).camera?.endedBy).toBe("disconnected");
 
       const session = await accept(dir);
       const cam = session.cameraVideo?.framesNs ?? [];

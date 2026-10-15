@@ -41,8 +41,13 @@ export interface RecoveredMedia {
 
 export type Recovery = { ok: true; anchors: Anchors } | { ok: false; why: string };
 
-/** The newest version the HELPER writes. A partial claiming more is not one it wrote. */
-const MAX_PARTIAL_VERSION = 10;
+/**
+ * The versions the HELPER writes. A partial claiming another is not one it wrote: 11 is
+ * the app's own (recorder-quit, written only here), and nothing above 12 exists yet.
+ * 12 (STC-237) is a take whose mic or camera ended early; the partial carries its
+ * `endedBy` too, since both come from one builder.
+ */
+const helperWrites = (v: unknown) => Number.isInteger(v) && (v as number) >= 1 && ((v as number) <= 10 || v === 12);
 const REQUIRED = ["timebase", "t0Ns", "display", "capture", "files"] as const;
 
 function medianDelta(xs: readonly number[]): number | undefined {
@@ -57,7 +62,7 @@ export function recoverAnchors(partial: unknown, media: RecoveredMedia, reason: 
   }
   const p = partial as Record<string, any>;
   if ("stop" in p) return { ok: false, why: "anchors.partial.json already has a stop block — it is not a partial" };
-  if (!Number.isInteger(p.version) || p.version < 1 || p.version > MAX_PARTIAL_VERSION) {
+  if (!helperWrites(p.version)) {
     return { ok: false, why: `anchors.partial.json version ${String(p.version)} is not one the helper writes` };
   }
   for (const k of REQUIRED) {
