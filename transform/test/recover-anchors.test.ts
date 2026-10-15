@@ -89,8 +89,9 @@ describe("recoverAnchors (STC-530)", () => {
     expect(schema(12)(r.anchors), JSON.stringify(schema(12).errors)).toBe(true);
   });
 
-  test("a partial above 12 is not one the helper wrote", () => {
-    expect(recoverAnchors({ ...partial(), version: 13 }, media, RECOVERY_STOP_REASON).ok).toBe(false);
+  test("a partial above 13 is not one the helper wrote", () => {
+    // 13 is real now (STC-528), so 14 stands in for "unknown future version".
+    expect(recoverAnchors({ ...partial(), version: 14 }, media, RECOVERY_STOP_REASON).ok).toBe(false);
   });
 
   test("does not mutate its input", () => {

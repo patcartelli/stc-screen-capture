@@ -84,6 +84,11 @@ export interface MicTrack {
   lastFramePtsNs: number;
   /** anchors-12 (STC-237): why the track ended before the take did. Absent: it ran to the end. */
   endedBy?: "disconnected" | "format-mismatch";
+  /**
+   * anchors-13 (STC-528): stretches of no mic signal (peak under -60 dBFS) at least 10 s
+   * long, session-relative ns, in order. Absent: none. Only on a present:true track.
+   */
+  silentSpans?: { startNs: number; endNs: number }[];
 }
 
 /**

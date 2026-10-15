@@ -193,6 +193,33 @@ function checkEndedBy(anchors: Anchors): void {
   }
 }
 
+/**
+ * STC-528: `silentSpans` on the `mic` block — the stretches where the mic delivered no
+ * signal. Refused when it cannot be right: before v13, on a present:false block, empty
+ * (the helper writes no key rather than an empty list), or out of order. Nothing in
+ * render() reads it; it is for the library's notes (STC-529).
+ */
+function checkSilentSpans(anchors: Anchors): void {
+  const spans = anchors.mic?.silentSpans;
+  if (spans === undefined) return;
+  if (anchors.version < 13) {
+    throw new SessionLoadError(`anchors.mic.silentSpans needs anchors version 13; this document is version ${anchors.version}`);
+  }
+  if (anchors.mic!.present !== true) {
+    throw new SessionLoadError("anchors.mic.silentSpans is set on a mic block with present:false — there is no track to have been silent");
+  }
+  if (!Array.isArray(spans) || spans.length === 0) {
+    throw new SessionLoadError("anchors.mic.silentSpans must be a non-empty list when present");
+  }
+  let prevEnd = 0;
+  for (const [i, s] of spans.entries()) {
+    if (!Number.isInteger(s?.startNs) || !Number.isInteger(s?.endNs) || s.startNs < prevEnd || s.endNs <= s.startNs) {
+      throw new SessionLoadError(`anchors.mic.silentSpans[${i}] must be whole ns, start < end, and after the span before it`);
+    }
+    prevEnd = s.endNs;
+  }
+}
+
 function withoutEndedBy<T extends { endedBy?: unknown }>(block: T): T {
   const { endedBy: _dropped, ...rest } = block;
   return rest as T;
@@ -235,15 +262,19 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // v12 (STC-237) adds `endedBy` on `mic`/`camera`: why that track ended before the take
   // did. Checked in checkEndedBy; render() needs nothing new, since a track's own
   // `lastFramePtsNs` already ends the PiP and the audio mix reads silence past a track.
+  // v13 (STC-528) adds `silentSpans` on `mic`: where the mic delivered no signal for 10 s
+  // or more. Checked in checkSilentSpans; nothing here plays it differently.
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
     anchors?.version !== 7 && anchors?.version !== 8 && anchors?.version !== 9 &&
-    anchors?.version !== 10 && anchors?.version !== 11 && anchors?.version !== 12
+    anchors?.version !== 10 && anchors?.version !== 11 && anchors?.version !== 12 &&
+    anchors?.version !== 13
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 or 12)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 or 13)`);
   }
   checkEndedBy(anchors);
+  checkSilentSpans(anchors);
   // v9's `capture.colorSpace` (STC-510): which space the pixels are in, so a sink does
   // not draw a Display P3 take into an sRGB canvas. Refused if unknown, never defaulted.
   checkCaptureColour(anchors);
