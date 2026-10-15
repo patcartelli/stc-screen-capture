@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   clampPillWidth, decidePillAction, formatElapsedTimer,
   MIN_PILL_WIDTH_PX, METER_MODE, RESIZE_STYLE, PILL_HEIGHT_PX,
-  PILL_STOPPED_DWELL_MS, shouldDwell,
+  PILL_STOPPED_DWELL_MS, shouldDwell, shouldShowTrackNotice,
 } from "../src/pill.js";
-import { HELPER_STOP_REASONS, pillLabel } from "../src/stop-copy.js";
+import { HELPER_STOP_REASONS, pillLabel, trackLossPillLabel } from "../src/stop-copy.js";
 
 describe("clampPillWidth", () => {
   it("adds padding to a real measurement", () => {
@@ -69,6 +69,25 @@ describe("shouldDwell (STC-531)", () => {
 
   it("is the spec's ~2 s", () => {
     expect(PILL_STOPPED_DWELL_MS).toBe(2000);
+  });
+});
+
+describe("shouldShowTrackNotice (STC-237)", () => {
+  it("shows a lost track's label on the pill of a take still recording", () => {
+    expect(shouldShowTrackNotice("collapsed", "recording", trackLossPillLabel("mic-disconnected"))).toBe(true);
+    expect(shouldShowTrackNotice("collapsed", "recording", trackLossPillLabel("camera-disconnected"))).toBe(true);
+  });
+
+  it("not on an expanded window, a take that is not recording, or with no label", () => {
+    expect(shouldShowTrackNotice("expanded", "recording", "Mic lost")).toBe(false);
+    expect(shouldShowTrackNotice("collapsed", "idle", "Mic lost")).toBe(false);
+    expect(shouldShowTrackNotice("collapsed", "recording", trackLossPillLabel("camera-no-frames"))).toBe(false);
+    expect(shouldShowTrackNotice("collapsed", "recording", "")).toBe(false);
+  });
+
+  it("never moves the window: a notice is a label swap, not a dwell", () => {
+    // The take keeps recording, so the pill stays collapsed whatever the notice does.
+    expect(decidePillAction("collapsed", "recording", false)).toBe("none");
   });
 });
 

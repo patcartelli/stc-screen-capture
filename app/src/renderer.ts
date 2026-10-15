@@ -806,9 +806,20 @@ const pillLabelEl = $("pill-label");
 recorder.on("pill:stopped", (s: { label: string | null }) => {
   const label = typeof s?.label === "string" && s.label ? s.label : null;
   pillBtn.classList.toggle("stopped", label !== null);
+  if (label !== null) pillBtn.classList.remove("notice"); // STC-237: a stop ends any notice
   pillBtn.disabled = label !== null;
   pillLabelEl.textContent = label ?? "";
   pillBtn.setAttribute("aria-label", label ? `Recording stopped: ${label}` : "Stop recording");
+});
+
+// STC-237: a mic or camera was lost and the take keeps recording. The label
+// stands in for the timer for PILL_STOPPED_DWELL_MS; the button stays Stop.
+recorder.on("pill:notice", (s: { label: string | null }) => {
+  const label = typeof s?.label === "string" && s.label ? s.label : null;
+  if (pillBtn.classList.contains("stopped")) return; // a stop's label outranks it
+  pillBtn.classList.toggle("notice", label !== null);
+  pillLabelEl.textContent = label ?? "";
+  pillBtn.setAttribute("aria-label", label ? `Stop recording (${label})` : "Stop recording");
 });
 
 /**

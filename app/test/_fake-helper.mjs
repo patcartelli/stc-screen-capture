@@ -190,10 +190,12 @@ process.stdin.on("data", (chunk) => {
         // Any warning code, after `started` — the real helper reports a tap it
         // could not install, or a stream that died, as a warning on the
         // reliable channel once the take is already running.
+        // STC_FAKE_WARNING_MS (STC-237) delays it, e.g. past the first heartbeat so
+        // the pill has collapsed and a lost track's notice has a pill to go on.
         if (process.env.STC_FAKE_WARNING) {
           setTimeout(() => send("warning", {
             code: process.env.STC_FAKE_WARNING, detail: "fake: a warning the UI must show",
-          }), 60);
+          }), Number(process.env.STC_FAKE_WARNING_MS) || 60);
         }
         // STC-306. The real helper's display stream can die under a live
         // take (`didStopWithError` after `started`). It warns, then ends the
@@ -228,9 +230,12 @@ process.stdin.on("data", (chunk) => {
                 const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures", "basic");
                 copyFileSync(join(fixture, "display.mp4"), join(dir, "display.mp4"));
                 const a = JSON.parse(readFileSync(join(fixture, "anchors.json"), "utf8"));
+                // STC_FAKE_ANCHORS_EXTRA (STC-237): JSON merged over the document, version
+                // included, e.g. a camera block that ended early (anchors-12's `endedBy`).
+                const extra = process.env.STC_FAKE_ANCHORS_EXTRA ? JSON.parse(process.env.STC_FAKE_ANCHORS_EXTRA) : {};
                 const version = stopReason === "disk-full" ? 10 : a.version;
                 writeFileSync(join(dir, "anchors.json"),
-                  JSON.stringify({ ...a, version, stop: { t: deathMs * 1_000_000, reason: stopReason } }));
+                  JSON.stringify({ ...a, version, ...extra, stop: { t: deathMs * 1_000_000, reason: stopReason } }));
               } catch { /* a test seam is not worth killing the stand-in */ }
             }
             send("stopped", { dir, elapsedMs: deathMs, reason: stopReason });
