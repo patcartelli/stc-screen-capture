@@ -30,6 +30,16 @@ ever made for a take.
 **Stop is now the square button only.** The whole pill is a drag handle, and a
 drag region takes no clicks, so clicking the timer no longer stops the take.
 
+## Results
+
+- **2026-10-15, Patrick's Mac, this branch:** a full-screen take did NOT have
+  the pill in the recording, and the pill opened top-centre. So ScreenCaptureKit
+  does list a window shown at opacity 0 as on screen, and the exclusion holds.
+  The first attempt that day ran `master` by mistake (pill in the take, not
+  centred). Check the prompt says this branch before judging a result.
+- Still to do: the `screencapture` half of §1 (the pill must still be visible
+  to other capturers), the Area take, and §2–§9.
+
 ## §1 The one open question: is the pill out of the video? (requirement 9)
 
 The helper can only exclude a window that ScreenCaptureKit lists as on screen.
