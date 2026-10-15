@@ -105,6 +105,9 @@ contextBridge.exposeInMainWorld("recorder", {
                       // STC-531: the helper stopped the take by itself; the
                       // pill says why for a moment (`label`), then null.
                       "pill:stopped",
+                      // STC-237: a mic or camera was lost and the take goes
+                      // on; the pill says which for a moment, then null.
+                      "pill:notice",
                       // STC-433: `recorder:start` resolved a stale mic on
                       // this window's behalf (turned it off) — the mic
                       // popover's own stored state is now stale too, and

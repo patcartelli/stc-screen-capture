@@ -132,6 +132,18 @@ export function shouldDwell(current: PillWindowState, label: string | undefined)
 }
 
 /**
+ * STC-237: whether a mic or camera lost mid-take shows its label (`stop-copy.ts`'s
+ * `trackLossPillLabel`) on the pill. Only while the take is still recording and the window
+ * is the pill. Unlike `shouldDwell` this moves nothing: the label stands in for the timer
+ * for `PILL_STOPPED_DWELL_MS`, the button stays Stop, and `decidePillAction` never sees it.
+ */
+export function shouldShowTrackNotice(
+  current: PillWindowState, recordingState: SupervisorState, label: string | undefined,
+): boolean {
+  return current === "collapsed" && recordingState === "recording" && label !== undefined && label !== "";
+}
+
+/**
  * "The timer crossing an hour gains two digits" — mm:ss below an hour,
  * h:mm:ss at or above it. Takes milliseconds, matching this app's other
  * elapsed-time reads: a real duration rather than a counted tick.

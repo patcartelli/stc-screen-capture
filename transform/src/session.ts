@@ -165,6 +165,39 @@ function snapGeometryToFrames(anchors: Anchors, framesNs: readonly number[]): An
   return { ...anchors, geometry: out };
 }
 
+const ENDED_BY: { mic: readonly string[]; camera: readonly string[] } = {
+  mic: ["disconnected", "format-mismatch"],
+  camera: ["disconnected"],
+};
+
+/**
+ * STC-237: `endedBy` on a `mic`/`camera` block says why that track ended before the take
+ * did. Refused rather than ignored when it cannot be right: before v12 (an older reader
+ * would never have been handed one), on a present:false block (there is no track to have
+ * ended), or with a value the helper never writes.
+ */
+function checkEndedBy(anchors: Anchors): void {
+  for (const name of ["mic", "camera"] as const) {
+    const block = anchors[name];
+    const endedBy = block?.endedBy;
+    if (endedBy === undefined) continue;
+    if (anchors.version < 12) {
+      throw new SessionLoadError(`anchors.${name}.endedBy needs anchors version 12; this document is version ${anchors.version}`);
+    }
+    if (block!.present !== true) {
+      throw new SessionLoadError(`anchors.${name}.endedBy is set on a ${name} block with present:false — there is no track to have ended`);
+    }
+    if (!ENDED_BY[name].includes(endedBy)) {
+      throw new SessionLoadError(`anchors.${name}.endedBy "${endedBy}" is not one of ${ENDED_BY[name].join(", ")}`);
+    }
+  }
+}
+
+function withoutEndedBy<T extends { endedBy?: unknown }>(block: T): T {
+  const { endedBy: _dropped, ...rest } = block;
+  return rest as T;
+}
+
 export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   const { anchors, events } = input;
 
@@ -199,14 +232,18 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // (app/src/recover-take.ts), never the helper. Nothing here reads `stop`. Such a take
   // usually has no events.json; its callers pass an empty events document for it, as
   // session-io.ts already does for any take without one.
+  // v12 (STC-237) adds `endedBy` on `mic`/`camera`: why that track ended before the take
+  // did. Checked in checkEndedBy; render() needs nothing new, since a track's own
+  // `lastFramePtsNs` already ends the PiP and the audio mix reads silence past a track.
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
     anchors?.version !== 7 && anchors?.version !== 8 && anchors?.version !== 9 &&
-    anchors?.version !== 10 && anchors?.version !== 11
+    anchors?.version !== 10 && anchors?.version !== 11 && anchors?.version !== 12
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 or 11)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 or 12)`);
   }
+  checkEndedBy(anchors);
   // v9's `capture.colorSpace` (STC-510): which space the pixels are in, so a sink does
   // not draw a Display P3 take into an sRGB canvas. Refused if unknown, never defaulted.
   checkCaptureColour(anchors);
@@ -331,7 +368,9 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   return {
     // checkGeometry above ran on the helper's ORIGINAL document; this is the
     // same timeline read on the file's clock — see snapGeometryToFrames.
-    anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: { ...anchors.camera!, present: false } } : anchors, video.framesNs),
+    // A dropped camera also drops its `endedBy` (STC-237): there is no track left for it
+    // to describe, and anchors-12 refuses one on a present:false block.
+    anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: withoutEndedBy({ ...anchors.camera!, present: false }) } : anchors, video.framesNs),
     events: [...stabiliseEvents(anchors, pointerEvents)].sort((a, b) => a.t - b.t),
     ...(keyEvents.length > 0 ? { keys: keyEvents.sort((a, b) => a.t - b.t) } : {}),
     frames: video.framesNs,

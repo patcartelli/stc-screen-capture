@@ -430,3 +430,21 @@ describe("reusableTracks: may export use what the preview already decoded", () =
     expect(reusableTracks({ mic: true, system: true, cleanMic: false }, undefined, undefined)).toEqual({ mic: null, system: null });
   });
 });
+
+describe("a mic lost mid-take (STC-237)", () => {
+  test("mixes to silence past the cut while system audio carries on, for the full window", () => {
+    // A mic that ended (anchors-12 `endedBy`) after 4 samples of an 8-sample window.
+    const mic = track(0, f32(0.5, 0.5, 0.5, 0.5));
+    const system = track(0, f32(0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1));
+    const [left] = mixBlock({ mic, system, systemLevel: 1, originNs: 0, from: 0, frames: 8 });
+    expect(left!.length, "the block is the window's length, not the mic's").toBe(8);
+    expect(Array.from(left!.slice(0, 4))).toEqual([0.6, 0.6, 0.6, 0.6].map(Math.fround));
+    expect(Array.from(left!.slice(4)), "past the cut is system audio alone").toEqual([0.1, 0.1, 0.1, 0.1].map(Math.fround));
+  });
+
+  test("a mic-only mix is silence past the cut, not a short block", () => {
+    const mic = track(0, f32(0.5, 0.5));
+    const [left] = mixBlock({ mic, system: null, systemLevel: 1, micLevel: 0.5, originNs: 0, from: 0, frames: 6 });
+    expect(Array.from(left!)).toEqual([0.25, 0.25, 0, 0, 0, 0]);
+  });
+});

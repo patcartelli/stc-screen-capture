@@ -43,7 +43,10 @@ jobs:
     # that gate-bounds.test.ts requires. 5 more minutes restores it (530 s).
     # The gate itself costs seconds; the bound is dominated by launch,
     # readiness and teardown, which every gate shares.
-    timeout-minutes: 95
+    # 95 -> 100 (STC-237): the Test step's bound went 27 -> 35 min after the
+    # suite outgrew it (scripts/gate-bounds.mjs's TEST_STEP_MS), which took the
+    # margin from 530 s to 50 s. 5 more minutes restores 350 s.
+    timeout-minutes: 100
 
     # A post-merge master run re-verifies a tree CI already approved as a PR
     # head, which is the largest remaining duplication. It is NOT skipped by
@@ -111,12 +114,12 @@ jobs:
       # ends red with its failure summary instead of at the step bound below
       # with none.
       #
-      # Bounded as one process (STC-498), like test:slow and every gate: 27 min
+      # Bounded as one process (STC-498), like test:slow and every gate: 35 min
       # is TEST_STEP_MS in scripts/gate-bounds.mjs, ~1.3x the slowest healthy
       # run measured. gate-bounds.test.ts asserts the two agree. If it fires on
       # a healthy run, the suite has outgrown it: re-measure and raise both.
       - name: Test
-        timeout-minutes: 27
+        timeout-minutes: 35
         run: npm test
         env:
           STC_E2E_DIAG_OUT: ${{ github.workspace }}/e2e-diag

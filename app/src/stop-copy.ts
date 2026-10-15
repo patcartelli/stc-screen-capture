@@ -138,6 +138,54 @@ export function isStopActionId(x: unknown): x is StopActionId {
   return x === "reclaim-space";
 }
 
+/**
+ * STC-237: a mic or camera that went away while the take KEPT recording. Not a stop, so
+ * not in `ROWS`. The helper's warning for it is no longer a toast (Patrick, 2026-10-14,
+ * the same ruling as `STOP_ANNOUNCING_WARNINGS`): the pill shows `pill` for
+ * `PILL_STOPPED_DWELL_MS` while the take goes on, and the panel says it afterwards from the
+ * take's own `endedBy` (`trackLossLine`). Labels obey the same 14-character ceiling.
+ */
+const TRACK_LOSS: Record<string, { pill: string }> = {
+  "mic-disconnected": { pill: "Mic lost" },
+  "mic-format-mismatch": { pill: "Mic lost" },
+  "camera-disconnected": { pill: "Camera lost" },
+};
+
+/** The helper warnings that announce a lost track. The renderer must not toast these. */
+export const TRACK_LOSS_WARNINGS: ReadonlySet<string> = new Set(Object.keys(TRACK_LOSS));
+
+/** The pill's label for a track lost mid-take, or undefined for any other warning. */
+export function trackLossPillLabel(code: string): string | undefined {
+  return Object.hasOwn(TRACK_LOSS, code) ? TRACK_LOSS[code]!.pill : undefined;
+}
+
+/** The part of an anchors document `trackLossLine` reads. */
+export interface TrackBlocks {
+  mic?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number };
+  camera?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number };
+}
+
+/**
+ * The panel's sentence for every track that ended before the take did (anchors-12's
+ * `endedBy`, at the track's own `lastFramePtsNs`), or undefined when none did. Says what
+ * the rest of the take lacks, because that is what the person will notice on playback.
+ */
+export function trackLossLine(anchors: TrackBlocks | undefined): string | undefined {
+  const lines: string[] = [];
+  const at = (b: { lastFramePtsNs?: number }) =>
+    typeof b.lastFramePtsNs === "number" ? ` at ${formatTakeTime(b.lastFramePtsNs)}` : "";
+  const mic = anchors?.mic;
+  if (mic?.present === true && mic.endedBy !== undefined) {
+    const what = mic.endedBy === "format-mismatch" ? "The mic stopped sending usable audio" : "The mic disconnected";
+    lines.push(`${what}${at(mic)}, so the rest of the take has no mic audio.`);
+  }
+  const cam = anchors?.camera;
+  if (cam?.present === true && cam.endedBy !== undefined) {
+    lines.push(`The camera disconnected${at(cam)}, so the rest of the take has no camera.`);
+  }
+  return lines.length > 0 ? lines.join(" ") : undefined;
+}
+
 export function libraryNote(stop: StopBlock): string | undefined {
   switch (stop?.reason) {
     case "recorder-quit":

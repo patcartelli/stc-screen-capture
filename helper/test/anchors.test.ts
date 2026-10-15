@@ -325,5 +325,15 @@ describe("anchors document", () => {
     );
     expect(validate10(diskFull), JSON.stringify(validate10.errors, null, 2)).toBe(true);
     expect(validate9(diskFull), "anchors-9 must refuse a disk-full stop").toBe(false);
+
+    // STC-237: a take whose camera and mic ended early validates against anchors-12, and
+    // anchors-11 refuses it — `endedBy` is the only thing that moved it.
+    const endedBy = extractJSON(out, "JSON-ENDED-BY:");
+    const compileV = (v: number) => new Ajv({ allErrors: true, strict: true }).compile(
+      JSON.parse(readFileSync(join(root, `schema/anchors-${v}.schema.json`), "utf8")),
+    );
+    const validate12 = compileV(12);
+    expect(validate12(endedBy), JSON.stringify(validate12.errors, null, 2)).toBe(true);
+    expect(compileV(11)(endedBy), "anchors-11 must refuse endedBy").toBe(false);
   });
 }, 60_000);
