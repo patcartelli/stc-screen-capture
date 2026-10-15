@@ -797,8 +797,20 @@ async function readRecording(dir: string, name: string, names: string[],
     camera: cameraSummary(anchors),
     stop: typeof anchors.stop?.reason === "string" && Number.isInteger(anchors.stop?.t)
       ? { t: anchors.stop.t, reason: anchors.stop.reason } : undefined,
+    silentSpans: silentSpansOf(anchors),
     bytes: await dirSize(dir, names),
   });
+}
+
+/**
+ * The mic's silent spans (anchors-13), kept only when every one is a well-formed pair so a
+ * malformed sidecar degrades to "no note" instead of a note naming NaN.
+ */
+function silentSpansOf(anchors: any): TakeInfo["silentSpans"] {
+  const spans = anchors?.mic?.present === true ? anchors.mic.silentSpans : undefined;
+  if (!Array.isArray(spans) || spans.length === 0) return undefined;
+  const ok = spans.every((s: any) => Number.isInteger(s?.startNs) && Number.isInteger(s?.endNs));
+  return ok ? spans.map((s: any) => ({ startNs: s.startNs, endNs: s.endNs })) : undefined;
 }
 
 /**

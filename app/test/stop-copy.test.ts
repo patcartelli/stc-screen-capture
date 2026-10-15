@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  panelReason, panelAction, pillLabel, libraryNote, formatTakeTime, isStopActionId, HELPER_STOP_REASONS,
+  panelReason, panelAction, pillLabel, libraryNote, silenceNote, formatTakeTime, isStopActionId, HELPER_STOP_REASONS,
   STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, trackLossPillLabel, trackLossLine,
 } from "../src/stop-copy.js";
 import { recordingItem, type TakeInfo } from "../src/library-items.js";
@@ -130,11 +130,40 @@ describe("stop copy (STC-530, STC-531)", () => {
     expect(formatTakeTime(ns)).toBe(want);
   });
 
-  test("library notes are still only recorder-quit's (STC-529 adds the rest)", () => {
-    for (const reason of reasons.filter((r) => r !== "recorder-quit")) {
+  test.each([
+    ["disk-full", "Stopped early: disk full at 4:12", 252],
+    ["window-closed", "Stopped early: window closed at 1:30", 90],
+    ["window-resized", "Stopped early: window resized at 1:30", 90],
+    ["display-reconfigured", "Stopped early: display disconnected at 1:30", 90],
+    ["region-out-of-bounds", "Stopped early: display changed at 1:30", 90],
+    ["stream-stopped", "Stopped early: capture source lost at 1:30", 90],
+    ["error", "Stopped early: write failed at 1:30", 90],
+    ["window-closed-timeout", "Stopped early: window closed at 1:30", 90],
+  ])("library note for %s", (reason, want, sec) => {
+    expect(libraryNote({ t: sec * 1e9, reason })).toBe(want);
+  });
+
+  test("a stop with no time still gets a note, and a stop the user asked for gets none", () => {
+    expect(libraryNote({ reason: "disk-full" })).toBe("Stopped early: disk full");
+    for (const reason of ["user", "quit", "stdin-closed", "signal-15", "unheard-of"]) {
       expect(libraryNote({ t: 1, reason }), reason).toBeUndefined();
     }
     expect(libraryNote({})).toBeUndefined();
+    expect(libraryNote(undefined)).toBeUndefined();
+  });
+
+  test("every helper stop reason has a library note", () => {
+    for (const reason of HELPER_STOP_REASONS) expect(libraryNote({ t: 1e9, reason }), reason).toMatch(/^Stopped early: /);
+  });
+
+  const span = (a: number, b: number) => ({ startNs: a * 1e9, endNs: b * 1e9 });
+  test("silence notes: one span, two, and 'and N more'", () => {
+    expect(silenceNote(undefined)).toBeUndefined();
+    expect(silenceNote([])).toBeUndefined();
+    expect(silenceNote([span(70, 270)])).toBe("No mic signal from 1:10 to 4:30");
+    expect(silenceNote([span(70, 270), span(300, 330)])).toBe("No mic signal from 1:10 to 4:30 and 5:00 to 5:30");
+    expect(silenceNote([span(70, 270), span(300, 330), span(400, 420), span(500, 520)]))
+      .toBe("No mic signal from 1:10 to 4:30, 5:00 to 5:30, and 2 more");
   });
 
   const aTake = (): TakeInfo => ({
@@ -146,6 +175,14 @@ describe("stop copy (STC-530, STC-531)", () => {
     const item = recordingItem({ ...aTake(), stop: { t: 4_000_000_000, reason: "recorder-quit" } });
     expect(item.notes).toContain("Recovered after the recorder quit. No cursor data.");
     expect(recordingItem(aTake()).notes ?? []).not.toContain("Recovered after the recorder quit. No cursor data.");
+  });
+
+  test("an early stop and a silent mic become notes on the item; a normal take adds none", () => {
+    const item = recordingItem({
+      ...aTake(), stop: { t: 252e9, reason: "disk-full" }, silentSpans: [{ startNs: 70e9, endNs: 270e9 }],
+    });
+    expect(item.notes).toEqual(["Stopped early: disk full at 4:12", "No mic signal from 1:10 to 4:30"]);
+    expect(recordingItem({ ...aTake(), stop: { t: 5e9, reason: "user" } }).notes).toEqual([]);
   });
 });
 

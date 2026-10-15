@@ -108,7 +108,7 @@
  */
 
 import type { DecorationMode } from "@transform/shot.js";
-import { libraryNote } from "./stop-copy.js";
+import { libraryNote, silenceNote } from "./stop-copy.js";
 
 export type LibraryKind = "recording" | "still";
 
@@ -288,6 +288,8 @@ export interface TakeInfo {
   camera?: { present: boolean; device?: string; pipStartsAfterMs: number };
   /** How the take stopped, when anchors.json says (STC-530). Read for the library note; STC-529 extends it. */
   stop?: { t: number; reason: string };
+  /** Stretches the mic delivered no signal (anchors-13, STC-528), for the library note (STC-529). */
+  silentSpans?: { startNs: number; endNs: number }[];
   /**
    * The matching finished export at top level, when this bundle and a
    * top-level file are linked by an embedded capture id (STC-413). Absent
@@ -387,6 +389,8 @@ export function recordingItem(t: TakeInfo): LibraryItem {
   }
   const stopNote = libraryNote(t.stop);
   if (stopNote) notes.push(stopNote);
+  const silence = silenceNote(t.silentSpans);
+  if (silence) notes.push(silence);
   return {
     id: t.name,
     kind: "recording",
