@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   panelReason, panelAction, pillLabel, libraryNote, formatTakeTime, isStopActionId, HELPER_STOP_REASONS,
-  STOP_ANNOUNCING_WARNINGS,
+  STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, trackLossPillLabel, trackLossLine,
 } from "../src/stop-copy.js";
 import { recordingItem, type TakeInfo } from "../src/library-items.js";
 
 const root = join(__dirname, "..", "..");
-/** Every reason anchors-11 can carry, read from the schema so a new one is covered without an edit. */
-const reasons: string[] = JSON.parse(readFileSync(join(root, "schema/anchors-11.schema.json"), "utf8"))
+/** Every reason anchors-12 can carry, read from the schema so a new one is covered without an edit. */
+const reasons: string[] = JSON.parse(readFileSync(join(root, "schema/anchors-12.schema.json"), "utf8"))
   .properties.stop.properties.reason.anyOf.flatMap((b: { enum?: string[] }) => b.enum ?? []);
 
 /**
@@ -72,8 +72,9 @@ describe("stop copy (STC-530, STC-531)", () => {
       expect(STOP_ANNOUNCING_WARNINGS.has(code!), code).toBe(true);
       expect(HELPER_STOP_REASONS, reason).toContain(reason);
     }
-    // And it is not "silence everything": a warning about a take that keeps going still toasts.
-    for (const code of ["av-runtime-error", "mic-disconnected", "camera-no-frames", "sidecar-write-failed"]) {
+    // And it is not "silence everything": a warning about a take that keeps going still toasts
+    // (a LOST track is the exception, and goes on the pill instead: TRACK_LOSS_WARNINGS, STC-237).
+    for (const code of ["av-runtime-error", "camera-no-frames", "sidecar-write-failed"]) {
       expect(STOP_ANNOUNCING_WARNINGS.has(code), code).toBe(false);
     }
   });
@@ -145,5 +146,39 @@ describe("stop copy (STC-530, STC-531)", () => {
     const item = recordingItem({ ...aTake(), stop: { t: 4_000_000_000, reason: "recorder-quit" } });
     expect(item.notes).toContain("Recovered after the recorder quit. No cursor data.");
     expect(recordingItem(aTake()).notes ?? []).not.toContain("Recovered after the recorder quit. No cursor data.");
+  });
+});
+
+describe("a track lost while the take keeps recording (STC-237)", () => {
+  test("every track-loss warning the helper sends has a pill label, and none is also a stop", () => {
+    const swift = ["Capture.swift", "MicCapture.swift"]
+      .map((f) => readFileSync(join(root, "helper/src", f), "utf8")).join("\n");
+    for (const code of TRACK_LOSS_WARNINGS) {
+      expect(swift, `the helper no longer sends ${code}; drop it here`).toContain(`"code": "${code}"`);
+      expect(trackLossPillLabel(code)).toBeTruthy();
+      expect(trackLossPillLabel(code)!.length).toBeLessThanOrEqual(14);
+      expect(STOP_ANNOUNCING_WARNINGS.has(code), `${code} does not stop the take`).toBe(false);
+    }
+    expect(trackLossPillLabel("mic-disconnected")).toBe("Mic lost");
+    expect(trackLossPillLabel("camera-disconnected")).toBe("Camera lost");
+    expect(trackLossPillLabel("camera-no-frames"), "a camera that never started is not a lost one").toBeUndefined();
+  });
+
+  test("the panel line names each lost track and when", () => {
+    expect(trackLossLine({ mic: { present: true, endedBy: "disconnected", lastFramePtsNs: 70_400_000_000 } }))
+      .toBe("The mic disconnected at 1:10, so the rest of the take has no mic audio.");
+    expect(trackLossLine({ mic: { present: true, endedBy: "format-mismatch", lastFramePtsNs: 5_000_000_000 } }))
+      .toBe("The mic stopped sending usable audio at 0:05, so the rest of the take has no mic audio.");
+    expect(trackLossLine({
+      mic: { present: true, endedBy: "disconnected", lastFramePtsNs: 70_000_000_000 },
+      camera: { present: true, endedBy: "disconnected", lastFramePtsNs: 90_000_000_000 },
+    })).toBe("The mic disconnected at 1:10, so the rest of the take has no mic audio. " +
+             "The camera disconnected at 1:30, so the rest of the take has no camera.");
+  });
+
+  test("no line for a track that ran to the end, or that is not there", () => {
+    expect(trackLossLine(undefined)).toBeUndefined();
+    expect(trackLossLine({ mic: { present: true, lastFramePtsNs: 1 } })).toBeUndefined();
+    expect(trackLossLine({ camera: { present: false, endedBy: "disconnected" } })).toBeUndefined();
   });
 });

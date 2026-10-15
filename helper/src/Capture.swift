@@ -1088,8 +1088,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // the camera is live. IO.stat is the drop-oldest ring and
                     // discards precisely under the load this most needs to
                     // survive; IO.send never drops.
-                    IO.send("camera-started", ["device": name])
-                    self.armCameraDisconnectFault(deviceUid: cam.currentDeviceUid())
+                    // `uid` (STC-237): the device actually resolved to, which for an
+                    // automatic pick the app cannot otherwise know. It needs it to tell
+                    // the generic `device-disconnected` for THIS camera from one for
+                    // some other device, and say nothing for the former.
+                    let uid = cam.currentDeviceUid()
+                    IO.send("camera-started", ["device": name, "uid": uid])
+                    self.armCameraDisconnectFault(deviceUid: uid)
                 }
             case .closeImmediately:
                 // stop() already ran and found no camera to close, because

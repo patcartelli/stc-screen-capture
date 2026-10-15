@@ -126,7 +126,7 @@ import {
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
 import { formatElapsedTimer } from "./pill.js";
-import { STOP_ANNOUNCING_WARNINGS } from "./stop-copy.js";
+import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
@@ -772,7 +772,11 @@ function reportDevice(device: TakeDevice, text: string): void {
   if (device === "camera") setCamera(text); else setMic(text);
 }
 
+/** The camera the helper actually opened (STC-237), for an automatic pick's unplug. */
+let liveCameraUid: string | null = null;
+
 recorder.on("helper:camera-started", (l) => {
+  liveCameraUid = typeof l.uid === "string" ? l.uid : null;
   reportDevice("camera", String(l.device ?? "live"));
 });
 
@@ -862,15 +866,9 @@ const CAMERA_FAULTS: Record<string, string> = {
   // time the take actually opens it — the same shape as mic-not-found, and the
   // same rule (refuse that device, never silently substitute another).
   "camera-not-found": "The chosen camera is no longer available, so this take has no picture-in-picture.",
-  // Found 2026-09-25 alongside mic-disconnected's own entry below: a mid-take
-  // camera unplug had the identical gap (no dedicated reaction, only the
-  // generic `device-disconnected` above). Video (and mic) keep recording —
-  // an audio/PiP-only track has no `AVAssetWriter` dimension constraint, so
-  // ending the whole take over it would be strictly worse than a take with a
-  // shorter camera track.
-  "camera-disconnected":
-    "The camera disconnected, so the rest of this take has no picture-in-picture. " +
-    "The recording itself continues.",
+  // `camera-disconnected` (a mid-take unplug; video keeps recording, STC-433) is not a
+  // toast since STC-237: it is one of `stop-copy.ts`'s TRACK_LOSS_WARNINGS, said on the
+  // pill while the take runs and on the panel after.
 };
 
 /**
@@ -888,22 +886,9 @@ const MIC_FAULTS: Record<string, string> = {
   "mic-no-frames":
     "The microphone opened but is not sending any audio, so this take will have no " +
     "microphone audio. Another app holding the device is the usual cause.",
-  // Found 2026-09-25: a mid-take mic unplug had no dedicated reaction at all
-  // (the helper's own CaptureSession.handleMicDisconnected fixes that) — the
-  // recording continues on video, with the mic track finalised at the point
-  // of disconnect rather than ending the whole take, unlike a display change
-  // (which must stop cleanly — AVAssetWriter cannot resize mid-file; losing
-  // an audio-only track has no such constraint).
-  "mic-disconnected":
-    "The microphone disconnected, so the rest of this take has no microphone audio. " +
-    "The recording itself continues.",
-  // STC-485: the helper's format guard ended the mic track because the
-  // device's audio stopped matching the format it is labelled as. Before the
-  // guard this was a take whose whole mic track was full-scale noise, with
-  // nothing said.
-  "mic-format-mismatch":
-    "The microphone started sending audio in a format the recording could not read, so the rest " +
-    "of this take has no microphone audio rather than a track of noise. The recording itself continues.",
+  // `mic-disconnected` (STC-433) and `mic-format-mismatch` (STC-485's guard) end the
+  // mic track while the take keeps recording. Not toasts since STC-237: they are
+  // `stop-copy.ts`'s TRACK_LOSS_WARNINGS, said on the pill and then the panel.
 };
 
 /**
@@ -953,13 +938,21 @@ recorder.on("helper:warning", (l) => {
   if (code === "device-disconnected" && l.uid != null && l.uid === storedMicUid) {
     return;
   }
-  // Same dedup for a camera unplug's own specific code — but only catches it
-  // when a device was explicitly picked. `storedCameraUid` is the REQUEST
-  // (null for the common "automatic" pick, STC-414), not the device the
-  // helper actually resolved to (which only `CameraCapture.currentDeviceUid`,
-  // helper-side, knows) — so an automatic camera's disconnect still shows
-  // both toasts. Both are accurate; this only removes the redundant one.
-  if (code === "device-disconnected" && l.uid != null && l.uid === storedCameraUid) {
+  // Same dedup for a camera unplug's own specific code. `storedCameraUid` is the
+  // REQUEST (null for the common "automatic" pick, STC-414); `liveCameraUid` is
+  // the device the helper actually resolved to, from `camera-started` (STC-237),
+  // without which an automatic camera's unplug still got this generic toast.
+  if (code === "device-disconnected" && l.uid != null &&
+      (l.uid === storedCameraUid || l.uid === liveCameraUid)) {
+    return;
+  }
+  // STC-237: a mic or camera lost while the take keeps recording. The row says it
+  // at a glance; the pill says it for a moment (pill-window.ts, from main) and the
+  // panel says it after. No toast: that was the third copy of the same news.
+  if (TRACK_LOSS_WARNINGS.has(code)) {
+    const device = code.startsWith("camera") ? "camera" : "mic";
+    reportDevice(device, code.endsWith("-disconnected") ? "disconnected" : `failed — ${code}`);
+    console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }
   // STC-531: the helper is about to stop the take itself, and the pill and the
@@ -996,13 +989,13 @@ recorder.on("helper:warning", (l) => {
     // row has to be always-visible (STC-412 final review, I2): the alert is a
     // toast that dismisses itself, so the row is the ONLY thing that still
     // says "this take had no camera" a minute later.
-    reportDevice("camera", code === "camera-no-frames" ? "no frames" : code === "camera-disconnected" ? "disconnected" : `failed — ${code}`);
+    reportDevice("camera", code === "camera-no-frames" ? "no frames" : `failed — ${code}`);
     alertUser(l.detail ? `${camera}\n\n${l.detail}` : camera);
     return;
   }
   const mic = MIC_FAULTS[code];
   if (mic) {
-    reportDevice("mic", code === "mic-no-frames" ? "no frames" : code === "mic-disconnected" ? "disconnected" : `failed — ${code}`);
+    reportDevice("mic", code === "mic-no-frames" ? "no frames" : `failed — ${code}`);
     alertUser(l.detail ? `${mic}\n\n${l.detail}` : mic);
     return;
   }
