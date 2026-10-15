@@ -1,133 +1,240 @@
-import { BrowserWindow, screen, type Rectangle } from "electron";
+import { BrowserWindow, ipcMain, screen, type Rectangle } from "electron";
+import { join } from "node:path";
 import type { HelperSupervisor } from "./supervisor.js";
 import {
-  PILL_HEIGHT_PX, PILL_STOPPED_DWELL_MS, clampPillWidth, decidePillAction, shouldDwell, shouldShowTrackNotice,
-  type PillWindowState,
+  MIN_PILL_WIDTH_PX, PILL_STOPPED_DWELL_MS, decidePillAction, pillBounds, resizePillBounds,
+  shouldDwell, shouldShowTrackNotice, type PillWindowState,
 } from "./pill.js";
-import { pillLabel, trackLossPillLabel } from "./stop-copy.js";
-import { setBoundsUnlessClosing } from "./window-geometry.js";
+import { pillLabel, trackLossPillLabel, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
+import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
+import { PANEL_WINDOW_TYPE } from "./panel-focus.js";
+import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
 
 /**
- * The pill's real window mechanics (STC-375). `pill.ts` decides WHAT the
- * window should be; this does the actual `BrowserWindow` calls, the same
- * split `overlay-session.ts` and `thumbnail-window.ts` make for their own
- * windowed interactions.
+ * The pill's own window (STC-550). `pill.ts` decides; this owns the real
+ * `BrowserWindow`, one per take.
  *
- * Wired into `main.ts`'s real window (2026-09-14): the chrome question in
- * `pill.ts`'s header is resolved as `titleBarStyle: "hidden"` — the main
- * window keeps its native traffic lights as an inset overlay rather than
- * going fully frameless, so `collapsePill`/`restorePill` also toggle their
- * visibility (`setButtonsVisible`): a 26px pill has no real room for a
- * title-bar button cluster, and macOS's own `hiddenInset` windows already
- * establish that hiding them while a window is this small is normal rather
- * than surprising.
+ * Until STC-550 the pill was the library window collapsed to 26px (STC-375),
+ * which tied it to whatever state the library was in: closed (STC-524),
+ * minimized (STC-538), hidden with ⌘H. Now the library only steps aside
+ * (`main.ts`, `pill.ts`'s `libraryAroundTake`) and the pill is this.
  *
- * ## "Restore" means the window's OWN remembered bounds, not a fixed size
+ * ## One take's life
  *
- * The ticket's pseudocode restores to a fixed `360 x instrumentHeight`,
- * centred on the display. That doesn't fit the window STC-374 actually
- * shipped: `main.ts`'s `createWindow()` makes a normal, resizable,
- * user-positioned window (520x680 by default, no `resizable: false`), not a
- * fixed-size instrument panel. Restoring a resizable window to a hardcoded
- * size the user never chose would silently discard any resize or move they
- * had done before recording — arguably a worse bug than the one this ticket
- * is fixing. So `collapsePill` remembers the window's bounds immediately
- * before shrinking it, and `restorePill` is handed those bounds back rather
- * than a literal — "restore" means "exactly as it was," which also already
- * IS "on the display it was on" and needs no separate centring step.
+ * 1. `preparePill`, before `start`: the window is made, loaded and shown
+ *    WITHOUT focus at opacity 0 and click-through, top-centre of the display
+ *    about to be recorded. It has to be on screen already, because the
+ *    helper can only leave out of the take a window `SCShareableContent`
+ *    lists as on screen, and its CGWindowID goes in `start`'s
+ *    `excludeWindowIds` (requirement 9). Invisible, it is in no frame and
+ *    takes no click.
+ * 2. `pillStarted`, once `start` has ANSWERED: attached to the supervisor.
+ *    It becomes visible only off `sup.state`, the helper-confirmed value
+ *    (traps 1 and 3 in `pill.ts`'s header), never off the Record click.
+ * 3. When the take ends (and any STC-531 dwell is over), or `start` never
+ *    happened (`discardPill`), the window is hidden, then destroyed, and the
+ *    caller's `onOver` runs once. `main.ts` brings the library back there.
+ *
+ * Nothing about where the pill was dragged survives step 3: the next take's
+ * pill opens top-centre again (decided 2026-10-15).
+ *
+ * ## Not a document window, and not focusable by accident
+ *
+ * It is an NSPanel (`PANEL_WINDOW_TYPE`), so a click on Stop does not
+ * activate the app and pull the library or the editor forward over the
+ * screen being recorded, and `acceptFirstMouse` makes that first click count.
+ * `main.ts`'s `documentWindowCount` never sees it (requirement 8), so "Menu
+ * bar only" gets no Dock icon for a take.
  */
 
-/**
- * The ticket's own pseudocode, in order: measure the content, lock resizing,
- * shrink to the pill, float above everything, and survive a Space switch.
- * Returns the window's bounds from just before the shrink, so the caller can
- * hand them back to `restorePill` later.
- *
- * `"screen-saver"` is the level `overlay-session.ts` already uses.
- * `setVisibleOnAllWorkspaces` is what stops the pill vanishing on a Space
- * switch mid-take — the ticket's own reasoning, and screen recordings
- * involve Space switches constantly.
- *
- * The width is clamped twice: `clampPillWidth` refuses a non-finite or
- * negative measurement (the pure half), and here it is also capped to the
- * display's own work area — a pure function cannot know how wide a real
- * screen is, and a pill wider than the display it floats over is not
- * "content-width," it is broken.
- *
- * Also tells the renderer (`pill:state`, STC-375's actual first Mac finding)
- * — without it the page has no way to learn its own window shrank, and goes
- * on laying out the full instrument UI into a 26px viewport: not "a pill
- * with no content yet" but visibly clipped controls, which reads as broken
- * rather than as unfinished. `index.html`'s `body.pill-collapsed` rule hides
- * everything except the Record/Stop button — deliberately kept reachable,
- * since nothing else in the app can stop a recording (no hotkey covers it).
- */
-export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number): Rectangle {
-  if (win.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 };
-  const previousBounds = win.getBounds();
-  const workArea = screen.getDisplayMatching(previousBounds).workArea;
-  const width = Math.min(clampPillWidth(measuredContentWidthPx), workArea.width);
-  win.setResizable(false);
-  // `setSize`'s meaning (top-left stays put; Electron fills x/y from the
-  // current bounds), through the same guard every geometry change takes
-  // (STC-496).
-  setBoundsUnlessClosing(win, { width, height: PILL_HEIGHT_PX }, "collapsePill");
-  win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  setButtonsVisible(win, false);
-  sendPillState(win, "collapsed");
-  return previousBounds;
+export interface PrepareOptions {
+  /** The work area of the display the take is about to record. */
+  workArea: Rectangle;
+  /** Where `pill-preload.cjs` lives (`here` in main.ts). */
+  dist: string;
+  /** Where `pill.html` lives. */
+  rendererDir: string;
+  /** Runs once when this take's pill is gone, whichever way it went. */
+  onOver: () => void;
 }
 
 /**
- * The way back: come off always-on-top before growing (so the OS is not
- * asked to reflow an always-on-top window mid-resize), unlock resizing, and
- * put the window back exactly where `collapsePill` found it.
+ * The last width the pill's content reported, so the next take's pill opens
+ * at the right size rather than at the floor and then resizing.
  */
-export function restorePill(win: BrowserWindow, bounds: Rectangle): void {
-  if (win.isDestroyed()) return;
-  win.setAlwaysOnTop(false);
-  win.setResizable(true);
-  // A take the helper ends during quit's shutdown restores the pill too
-  // (STC-496: a resize at quit is what crashes on CI).
-  setBoundsUnlessClosing(win, bounds, "restorePill");
-  setButtonsVisible(win, true);
-  sendPillState(win, "expanded");
-}
+let lastContentWidthPx = MIN_PILL_WIDTH_PX;
 
-function sendPillState(win: BrowserWindow, state: PillWindowState): void {
-  if (win.isDestroyed()) return;
-  win.webContents.send("pill:state", { collapsed: state === "collapsed" });
-}
+let active: PillSession | undefined;
+
+/** Whether a pill (visible or still invisible) exists right now. For tests and guards. */
+export function pillIsUp(): boolean { return active !== undefined; }
 
 /**
- * `setWindowButtonVisibility` is macOS-only and only meaningful on a
- * `titleBarStyle: "hidden"`/`"hiddenInset"` window (the traffic lights are
- * drawn as an inset overlay rather than inside a title-bar strip, so they
- * are the one thing left to hide separately when the content shrinks under
- * them). Guarded the same way `setDockVisible` guards an activation-policy
- * change in `main.ts`: a chrome cosmetic is never worth a crash, and this
- * runs on every CI platform this repo tests on, most of which do not have
- * the method at all.
+ * Step 1. Never rejects: a pill that could not be made costs the take its
+ * pill, never the take. Answers the window ids to exclude, which is empty if
+ * the id could not be read.
  */
-function setButtonsVisible(win: BrowserWindow, visible: boolean): void {
-  try { win.setWindowButtonVisibility?.(visible); } catch { /* cosmetic only */ }
+export async function preparePill(opts: PrepareOptions): Promise<number[]> {
+  // A pill left over from a take that never told us it ended. Gone first, so
+  // two can never be on screen.
+  active?.end();
+  try {
+    const session = new PillSession(opts);
+    active = session;
+    return await session.prepare();
+  } catch (e) {
+    console.error("[pill] could not prepare the pill:", e);
+    return [];
+  }
 }
+
+/** Step 2: `start` answered and the take is live. */
+export function pillStarted(sup: HelperSupervisor): void {
+  active?.attach(sup);
+}
+
+/** `start` was never sent, or was refused: put the prepared pill away. */
+export function discardPill(): void {
+  active?.end();
+}
+
+class PillSession {
+  private win: BrowserWindow;
+  private detach: (() => void) | undefined;
+  private sup: HelperSupervisor | undefined;
+  private over = false;
+
+  constructor(private opts: PrepareOptions) {
+    const b = pillBounds(opts.workArea, lastContentWidthPx);
+    this.win = new BrowserWindow({
+      ...b,
+      show: false, frame: false, resizable: false, minimizable: false, maximizable: false,
+      fullscreenable: false, skipTaskbar: true, hiddenInMissionControl: true,
+      // The same opaque dark the page paints, so nothing light shows while
+      // the page is loading or the window is being resized.
+      backgroundColor: "#0b0b0c",
+      type: PANEL_WINDOW_TYPE,
+      acceptFirstMouse: true,
+      title: "Recording",
+      webPreferences: {
+        preload: join(opts.dist, "pill-preload.cjs"),
+        contextIsolation: true, nodeIntegration: false,
+        // It is never the frontmost window, and a throttled page would let
+        // the timer stall while the take runs on.
+        backgroundThrottling: false,
+      },
+    });
+    trackClosing(this.win);
+    this.win.setAlwaysOnTop(true, "screen-saver");
+    // A Space switch mid-take must not lose the pill, fullscreen apps included.
+    // To float over a fullscreen app Electron hides the Dock icon here
+    // (`DockHide`), the same as the overlay and the countdown already did on
+    // every Record. So "Menu bar only" never gets one for a take
+    // (requirement 8); the caller's `onOver` puts the preference back after.
+    this.win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    this.win.once("closed", () => this.end());
+  }
+
+  async prepare(): Promise<number[]> {
+    const shown = new Promise<void>((resolve) => this.win.once("ready-to-show", () => resolve()));
+    await this.win.loadFile(join(this.opts.rendererDir, "pill.html"));
+    await shown;
+    if (this.over || this.win.isDestroyed()) return [];
+    this.win.setOpacity(0);
+    this.win.setIgnoreMouseEvents(true);
+    this.win.showInactive();
+    // The window server has to have it on screen before the helper asks
+    // ScreenCaptureKit what is — the same wait every hide in this app takes.
+    await sleep(HIDE_SETTLE_MS);
+    if (this.over || this.win.isDestroyed()) return [];
+    const id = windowIdOf(this.win.getMediaSourceId());
+    return id === undefined ? [] : [id];
+  }
+
+  attach(sup: HelperSupervisor): void {
+    if (this.over || this.detach) return;
+    this.sup = sup;
+    const pill = attachPillToSupervisor(this.win, sup, {
+      show: () => this.show(),
+      hide: () => this.end(),
+    });
+    this.detach = pill.detach;
+    pill.reconcileNow();
+    // A take that was already over by the time `start`'s answer got here
+    // never shows its pill at all.
+    if (sup.state !== "recording") this.end();
+  }
+
+  private show(): void {
+    if (this.over || this.win.isDestroyed()) return;
+    this.win.setIgnoreMouseEvents(false);
+    this.win.setOpacity(1);
+    // Already shown (at opacity 0) by `prepare`; this covers a pill whose
+    // prepare lost the race with the take starting.
+    if (!this.win.isVisible()) this.win.showInactive();
+  }
+
+  /** `pill:contentWidth`, from this session's own page only. */
+  resizeTo(sender: Electron.WebContents, px: unknown): void {
+    if (this.over || this.win.isDestroyed() || sender !== this.win.webContents) return;
+    if (typeof px !== "number" || !Number.isFinite(px) || px <= 0) return;
+    lastContentWidthPx = px;
+    const current = this.win.getBounds();
+    const workArea = screen.getDisplayMatching(current).workArea;
+    setBoundsUnlessClosing(this.win, resizePillBounds(current, workArea, px), "pill resize");
+  }
+
+  /** `pill:stop`, from this session's own page only. */
+  async stop(sender: Electron.WebContents): Promise<{ ok: boolean }> {
+    if (this.over || sender !== this.win.webContents || this.sup?.state !== "recording") return { ok: false };
+    try {
+      // `stopRecording` leaves the take in temp storage; `take-ended` puts up
+      // its panel (STC-487), the same as every other way a take is stopped.
+      await this.sup.stopRecording();
+      return { ok: true };
+    } catch (e) {
+      console.error("[pill] stop failed:", e);
+      return { ok: false };
+    }
+  }
+
+  /** Step 3. Idempotent, and `onOver` runs exactly once. */
+  end(): void {
+    if (this.over) return;
+    this.over = true;
+    this.detach?.();
+    if (active === this) active = undefined;
+    const win = this.win;
+    if (!win.isDestroyed()) {
+      win.hide();
+      // Destroyed a settle later, the way the countdown is, so the window
+      // server is not asked to drop a window it is still drawing.
+      setTimeout(() => { if (!win.isDestroyed()) win.destroy(); }, HIDE_SETTLE_MS);
+    }
+    try { this.opts.onOver(); } catch (e) { console.error("[pill] onOver failed:", e); }
+  }
+}
+
+ipcMain.on("pill:contentWidth", (e, px: unknown) => active?.resizeTo(e.sender, px));
+ipcMain.handle("pill:stop", (e) => active?.stop(e.sender) ?? { ok: false });
 
 export interface AttachOptions {
-  /** How wide the pill's real content measures right now (renderer-supplied). */
-  getContentWidthPx: () => number;
+  /** The confirmed state says the take is live: make the pill visible. */
+  show: () => void;
+  /** The take is over and any dwell has run: put the pill away. */
+  hide: () => void;
 }
 
 /**
- * Drives collapse/restore off the supervisor's own heartbeat-confirmed
- * state — traps 1 and 3 from the ticket, encoded rather than trusted.
+ * Drives the pill off the supervisor's own heartbeat-confirmed state —
+ * traps 1 and 3 from STC-375, encoded rather than trusted.
  *
- * Trap 1: collapse happens after `start` is answered, never inside it. This
+ * Trap 1: the pill shows after `start` is answered, never inside it. This
  * is never called from a click handler or from inside `startRecording()`'s
- * own promise — only from the supervisor's `stats` heartbeat and its
- * explicit `recording-ended` / `recording-lost` events, all of which fire
- * strictly *after* a `start`/`stop` round trip has already completed.
+ * own promise — only after it resolves, and from the supervisor's `stats`
+ * heartbeat and its explicit `recording-ended` / `recording-lost` /
+ * `take-ended` events, all of which fire strictly *after* a `start`/`stop`
+ * round trip has already completed.
  *
  * Trap 3: the click that started the take is not the signal `sup.state` is.
  * A take the helper stopped on its own (`recording-ended`, or the heartbeat
@@ -136,10 +243,6 @@ export interface AttachOptions {
  * cannot outlive a recording that has already ended.
  *
  * Returns `detach` and `reconcileNow`; the caller owns the window's lifetime.
- * A caller must re-attach after replacing `win` — STC-292 made the main
- * window closable and re-creatable (menu-bar-first), and this does not
- * survive that on its own; `main.ts` would call this again inside its own
- * `createWindow()`.
  */
 export function attachPillToSupervisor(
   win: BrowserWindow,
@@ -147,17 +250,15 @@ export function attachPillToSupervisor(
   opts: AttachOptions,
 ): PillAttachment {
   let current: PillWindowState = "expanded";
-  let expandedBounds: Rectangle | undefined;
   // STC-531: the pill showing why the helper stopped its take. While this is
-  // set, `decidePillAction` holds the restore; it ends on its own timer, or
-  // the moment a new take is recording.
+  // set, `decidePillAction` holds the hide; it ends on its own timer.
   let dwell: ReturnType<typeof setTimeout> | undefined;
 
   const endDwell = (): void => {
     if (dwell === undefined) return;
     clearTimeout(dwell);
     dwell = undefined;
-    sendPillStopped(win, undefined);
+    sendPill(win, "pill:stopped", { label: null });
   };
 
   // STC-237: a mic or camera lost while the take KEEPS recording. The pill shows it in
@@ -169,32 +270,31 @@ export function attachPillToSupervisor(
     if (notice === undefined) return;
     clearTimeout(notice);
     notice = undefined;
-    sendPillNotice(win, undefined);
+    sendPill(win, "pill:notice", { label: null });
   };
   const onWarning = (l: { code?: unknown } | undefined): void => {
-    const label = trackLossPillLabel(String(l?.code));
+    const code = String(l?.code);
+    // STC-528: no mic track from here on, so the meter goes back to hatched.
+    if (TRACK_LOSS_WARNINGS.has(code) && !code.startsWith("camera")) sendPill(win, "pill:micLost", {});
+    const label = trackLossPillLabel(code);
     if (win.isDestroyed() || !shouldShowTrackNotice(current, sup.state, label)) return;
     if (notice !== undefined) clearTimeout(notice);
-    sendPillNotice(win, label);
+    sendPill(win, "pill:notice", { label });
     notice = setTimeout(() => {
       notice = undefined;
-      sendPillNotice(win, undefined);
+      sendPill(win, "pill:notice", { label: null });
     }, PILL_STOPPED_DWELL_MS);
   };
 
   const reconcile = (): void => {
     if (win.isDestroyed()) { endDwell(); return; }
-    // A new take while the label is up: the pill is that take's now.
-    if (sup.state === "recording") endDwell();
     const action = decidePillAction(current, sup.state, dwell !== undefined);
     if (action === "collapse") {
-      expandedBounds = collapsePill(win, opts.getContentWidthPx());
       current = "collapsed";
+      opts.show();
     } else if (action === "restore") {
-      // expandedBounds is always set here: the only path to "collapsed" is
-      // through the branch above, which always sets it first.
-      if (expandedBounds) restorePill(win, expandedBounds);
       current = "expanded";
+      opts.hide();
     }
   };
 
@@ -204,46 +304,45 @@ export function attachPillToSupervisor(
     endNotice();
     const label = pillLabel(typeof i?.reason === "string" ? i.reason : undefined);
     if (dwell === undefined && !win.isDestroyed() && shouldDwell(current, label)) {
-      sendPillStopped(win, label);
+      sendPill(win, "pill:stopped", { label });
       dwell = setTimeout(() => {
         dwell = undefined;
-        sendPillStopped(win, undefined);
         reconcile();
       }, PILL_STOPPED_DWELL_MS);
     }
     reconcile();
   };
 
-  const offStats = sup.on("stats", reconcile);
+  const offStats = sup.on("stats", (l: { elapsedMs?: unknown } | undefined) => {
+    if (typeof l?.elapsedMs === "number") sendPill(win, "pill:elapsed", { elapsedMs: l.elapsedMs });
+    reconcile();
+  });
+  const offLevel = sup.on("helper:level", (l) => sendPill(win, "pill:level", l));
   const offEnded = sup.on("recording-ended", onEnded);
   const offLost = sup.on("recording-lost", () => { endNotice(); reconcile(); });
+  // A stop the user asked for: put the pill away now rather than at the next
+  // heartbeat.
+  const offTakeEnded = sup.on("take-ended", reconcile);
   const offWarning = sup.on("helper:warning", onWarning);
   return {
-    detach: () => { endDwell(); endNotice(); offStats(); offEnded(); offLost(); offWarning(); },
+    detach: () => {
+      endDwell(); endNotice();
+      offStats(); offLevel(); offEnded(); offLost(); offTakeEnded(); offWarning();
+    },
     reconcileNow: reconcile,
   };
 }
 
-/** STC-237: a lost track's label on a pill still recording, or `undefined` to clear it. */
-function sendPillNotice(win: BrowserWindow, label: string | undefined): void {
+function sendPill(win: BrowserWindow, channel: string, payload: unknown): void {
   if (win.isDestroyed()) return;
-  win.webContents.send("pill:notice", { label: label ?? null });
-}
-
-/** STC-531: the pill's stopped label, or `undefined` to clear it. */
-function sendPillStopped(win: BrowserWindow, label: string | undefined): void {
-  if (win.isDestroyed()) return;
-  win.webContents.send("pill:stopped", { label: label ?? null });
+  win.webContents.send(channel, payload);
 }
 
 export interface PillAttachment {
   /** Stop listening. The caller owns the window's lifetime. */
   detach: () => void;
-  /**
-   * Reconcile against the supervisor's state right now, instead of waiting for
-   * the next heartbeat. A window created while a take is already running
-   * (STC-502: the hotkey started it with no window open) uses this to become
-   * the pill BEFORE it is ever shown, so it never appears as the full library.
-   */
+  /** Reconcile against the supervisor's state right now, instead of waiting for the next heartbeat. */
   reconcileNow: () => void;
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

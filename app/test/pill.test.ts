@@ -6,6 +6,7 @@ import {
   MIN_PILL_WIDTH_PX, RESIZE_STYLE, PILL_HEIGHT_PX,
   PILL_STOPPED_DWELL_MS, shouldDwell, shouldShowTrackNotice,
   METER_FLOOR_DB, NO_SIGNAL_TOOLTIP, meterFill, meterView, parseLevel,
+  PILL_CHROME_PX, PILL_TOP_INSET_PX, pillBounds, resizePillBounds, libraryAroundTake,
 } from "../src/pill.js";
 import { HELPER_STOP_REASONS, pillLabel, trackLossPillLabel } from "../src/stop-copy.js";
 
@@ -165,5 +166,78 @@ describe("the level meter (STC-528)", () => {
     for (const bad of [null, undefined, {}, { peak: "0.3", silent: false }, { peak: 0.3 }, { peak: Number.NaN, silent: false }]) {
       expect(parseLevel(bad)).toBeUndefined();
     }
+  });
+});
+
+describe("pillBounds (STC-550)", () => {
+  const workArea = { x: 0, y: 25, width: 1512, height: 920 };
+
+  it("opens centred on the recorded display's work area, just under the menu bar", () => {
+    const b = pillBounds(workArea, 100);
+    expect(b).toEqual({ x: Math.round((1512 - b.width) / 2), y: 25 + PILL_TOP_INSET_PX,
+                        width: 100 + PILL_CHROME_PX, height: PILL_HEIGHT_PX });
+  });
+
+  it("is on the SECOND display when that is the one recorded", () => {
+    const secondary = { x: 1512, y: -200, width: 2560, height: 1415 };
+    const b = pillBounds(secondary, 100);
+    expect(b.x).toBeGreaterThanOrEqual(secondary.x);
+    expect(b.x + b.width).toBeLessThanOrEqual(secondary.x + secondary.width);
+    expect(b.x + b.width / 2).toBeCloseTo(secondary.x + secondary.width / 2, 0);
+    expect(b.y).toBe(-200 + PILL_TOP_INSET_PX);
+  });
+
+  it("never trusts a bad measurement, and never exceeds the work area", () => {
+    expect(pillBounds(workArea, Number.NaN).width).toBe(MIN_PILL_WIDTH_PX);
+    expect(pillBounds({ x: 0, y: 0, width: 50, height: 50 }, 400).width).toBe(50);
+  });
+
+  it("the inset is tokens.css's --space-3", () => {
+    const tokens = readFileSync(join(__dirname, "../renderer/tokens.css"), "utf8");
+    expect(tokens).toMatch(new RegExp(`--space-3: ${PILL_TOP_INSET_PX}px;`));
+  });
+});
+
+describe("resizePillBounds (STC-550)", () => {
+  const workArea = { x: 0, y: 25, width: 1000, height: 700 };
+
+  it("grows about the pill's current centre, so a dragged pill stays where it was put", () => {
+    const dragged = { x: 300, y: 400, width: 120, height: PILL_HEIGHT_PX };
+    const b = resizePillBounds(dragged, workArea, 140);
+    expect(b.width).toBe(140 + PILL_CHROME_PX);
+    expect(b.x + b.width / 2).toBeCloseTo(360, 0);
+    expect(b.y).toBe(400);
+  });
+
+  it("stays inside the work area when grown against an edge", () => {
+    const atEdge = { x: 1000 - 120, y: 30, width: 120, height: PILL_HEIGHT_PX };
+    const b = resizePillBounds(atEdge, workArea, 300);
+    expect(b.x + b.width).toBe(1000);
+  });
+});
+
+describe("libraryAroundTake (STC-550)", () => {
+  const base = { exists: true, visible: true, minimized: false, appHidden: false };
+
+  it("an open library is hidden for the take and comes back after it", () => {
+    expect(libraryAroundTake(base)).toEqual({ hide: true, showAfter: true });
+  });
+
+  it("a minimized library is left in the Dock, before and after (STC-538)", () => {
+    expect(libraryAroundTake({ ...base, minimized: true })).toEqual({ hide: false, showAfter: false });
+    expect(libraryAroundTake({ ...base, minimized: true, visible: false })).toEqual({ hide: false, showAfter: false });
+  });
+
+  it("a library hidden with the app (⌘H) is kept hidden through the unhide, and not shown after", () => {
+    expect(libraryAroundTake({ ...base, appHidden: true })).toEqual({ hide: true, showAfter: false });
+  });
+
+  it("no library: none is made and none appears after (STC-524)", () => {
+    expect(libraryAroundTake({ exists: false, visible: false, minimized: false, appHidden: false }))
+      .toEqual({ hide: false, showAfter: false });
+  });
+
+  it("a library that exists but is not on screen stays that way", () => {
+    expect(libraryAroundTake({ ...base, visible: false })).toEqual({ hide: false, showAfter: false });
   });
 });

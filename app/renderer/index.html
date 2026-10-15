@@ -46,8 +46,7 @@
     :root { --traffic-light-offset: 68px; }
     #title-row { padding-top: 20px; padding-left: var(--traffic-light-offset); -webkit-app-region: drag; }
     h1 { font-size: var(--type-title); font-weight: var(--type-title-weight); margin: 0; }
-    /* STC-399: a model plate beside the title, not a control — quiet, and
-       excluded from the collapsed pill for free (it is not #record-row). */
+    /* STC-399: a model plate beside the title, not a control — quiet. */
     #modelcode { font-family: var(--font-mono); font-size: var(--type-label);
                 letter-spacing: var(--type-label-tracking); text-transform: uppercase;
                 color: var(--text-dim); opacity: .55; }
@@ -332,128 +331,6 @@
     .permwhy { margin: 6px 0 10px; color: var(--text-dim); }
     .permactions { display: flex; gap: 8px; }
     .permactions:empty { display: none; }
-
-    /* ── the pill (STC-375) ──────────────────────────────────────────────
-       Record collapses this real window to a 26px-tall pill (pill-window.ts);
-       the renderer only learns about it via the `pill:state` IPC event
-       (renderer.ts), which toggles this class on <body>. Without it the page
-       goes on laying out the whole instrument at its normal size into a 26px
-       viewport — clipped controls, not a pill.
-
-       #pill is the whole pill: dot, live timer, hatched meter, and (this is
-       the load-bearing part) the only thing that can stop a recording once
-       collapsed — there is no hotkey for it (CAPTURE_ACTIONS in hotkeys.ts
-       is stills only) — so it is a <button>, not a <div>, and shares
-       #record's click handler (renderer.ts). Dark always (#0b0b0c/#f5f5f5,
-       matching pill.ts's PILL_THEME — the one color pairing in this app that
-       cannot be a shared token, since CSS cannot import a TS module): the
-       ticket's own reasoning is that this surface floats over someone else's
-       window for the length of a session, where light chrome has nothing
-       reliable to sit against, so it does not follow STC-372's light/dark
-       tokens the rest of the window does.
-
-       #pill stays in the layout (`position: fixed`, off-screen) even while
-       NOT collapsed, rather than `display: none` — a hidden element cannot
-       be measured, and `renderer.ts`'s ResizeObserver needs its real content
-       width to report to main (`pill:contentWidth`) so the window collapses
-       to the pill's actual content-width rather than a guess. It becomes
-       part of the visible page only under `.pill-collapsed`.
-
-       Everything else in #record-row is hidden when collapsed — the still-
-       capture button, the Profile button, the state readout — and every
-       OTHER row in the body (#devicestate and its pickers, and the profile
-       sheet, if it happened to be open: a sliver of a slide-over panel in a
-       26px window is its own kind of broken). */
-    body.pill-collapsed { background: #0b0b0c; overflow: hidden; padding: 0; margin: 0; }
-    body.pill-collapsed > *:not(#record-row) { display: none; }
-    body.pill-collapsed #record-row > *:not(#pill) { display: none; }
-    body.pill-collapsed #record-row { margin: 0; }
-
-    #pill {
-      position: fixed; top: -9999px; left: -9999px; visibility: hidden;
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 0 10px; height: 32px; box-sizing: border-box;
-      background: #0b0b0c; color: #f5f5f5; font: var(--type-timer-pill)/1 var(--font-pixel);
-      border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 16px; cursor: pointer;
-      transition: background-color 120ms ease;
-    }
-    /* STC-447: the ring above and this hover mirror pill.ts's PILL_THEME.ring
-       and .hover. There is no box-shadow on purpose: collapsed, the pill fills
-       an opaque window edge to edge, so a CSS shadow would be clipped away.
-       The native window shadow already does that job. */
-    #pill:hover { background: #17171a; }
-    body.pill-collapsed #pill {
-      position: static; top: auto; left: auto; visibility: visible;
-      /* The VIEWPORT, not 100%. The parents (#record-row, body) have auto
-         height, so `height: 100%` fell back to the content height, one line
-         of the timer font inside a 26px window. That went unseen while pill
-         and body were the same colour; STC-447's ring drew a stadium hugging
-         the digits (seen on hardware 2026-09-29). */
-      width: 100vw; height: 100vh;
-    }
-    #pill-dot {
-      width: 8px; height: 8px; border-radius: 50%; flex: none;
-      background: #ff3b30; animation: pill-live-pulse 1.4s ease-in-out infinite;
-    }
-    @keyframes pill-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-    #pill-timer { flex: none; font-variant-numeric: tabular-nums; }
-    /* The level meter (STC-528; pill.ts's meterView decides, this draws).
-       Hatched until the helper has sent a reading: no mic, or one lost. A
-       static diagonal stripe is the one pattern that cannot be mistaken for a
-       moving bar, so a level is never implied where none was measured.
-       .live: the bar's width is --level (0..1, dB-scaled), the colors are
-       PILL_THEME's meterLevel/meterTrack. .no-signal: the helper says 10 s of
-       silence, so the bar flattens to a baseline with an amber dot at its end
-       (Patrick, 2026-10-15). Warn only; it clears when signal returns. The
-       width never changes between modes, so a mode change cannot resize the
-       collapsed window (STC-375). */
-    #pill-meter {
-      position: relative; width: 18px; height: 8px; border-radius: 2px; flex: none;
-      background: repeating-linear-gradient(45deg, #3a3a3c 0 2px, transparent 2px 4px);
-    }
-    #pill-meter-bar, #pill-meter-dot { display: none; position: absolute; }
-    #pill-meter.live { background: #2c2c2e; }
-    #pill-meter.live #pill-meter-bar {
-      display: block; left: 0; top: 0; bottom: 0; border-radius: 2px;
-      width: calc(var(--level, 0) * 100%); background: #f5f5f5;
-      transition: width 60ms linear;
-    }
-    #pill-meter.no-signal { background: linear-gradient(#636366, #636366) left 50% / 13px 1px no-repeat; }
-    #pill-meter.no-signal #pill-meter-dot {
-      display: block; right: 0; top: 2px; width: 4px; height: 4px; border-radius: 50%;
-      background: #ff9f0a;
-    }
-    /* Reported after the first hardware look: dot/timer/meter read fine, but
-       nothing said what clicking the pill DOES — the aria-label is there for
-       a screen reader, not for an eye. A small filled square (the universal
-       stop glyph, same shape QuickTime/Zoom/OBS use) closes that gap without
-       adding a text label the pill has no room for. */
-    #pill-stop {
-      width: 8px; height: 8px; border-radius: 2px; flex: none;
-      background: #f5f5f5;
-    }
-    /* STC-531: the helper stopped the take by itself, and for PILL_STOPPED_DWELL_MS
-       the pill says why ("Window closed") instead of the timer. The window keeps
-       the width it collapsed to: resizing it here would be a second resize
-       racing collapse/restore (STC-375). So the label replaces everything else,
-       in the system font, which is narrower than the pixel font at this size,
-       and a label that still does not fit is cut with an ellipsis rather than
-       clipped mid-letter. The button is disabled meanwhile: a click on the pill
-       is Record's click, and here it would start a new take. */
-    #pill-label { display: none; }
-    #pill.stopped > :not(#pill-label) { display: none; }
-    /* STC-237: a mic or camera lost while the take KEEPS recording. The label
-       stands in for the timer and meter only: the dot still says recording,
-       the stop square still says what a click does, and the button stays
-       enabled, because this take is still running and its pill is still Stop. */
-    #pill.notice #pill-timer, #pill.notice #pill-meter { display: none; }
-    #pill.stopped #pill-label, #pill.notice #pill-label {
-      display: block; flex: 1 1 auto; min-width: 0; text-align: center;
-      font: 500 11px/1 -apple-system, system-ui, sans-serif;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    #pill.stopped { cursor: default; }
-    #pill.stopped:hover { background: #0b0b0c; }
   </style>
 </head>
 <body>
@@ -463,13 +340,6 @@
   </div>
   <div class="row" id="record-row">
     <button id="record">Record</button>
-    <button id="pill" aria-label="Stop recording">
-      <span id="pill-dot" aria-hidden="true"></span>
-      <span id="pill-timer">00:00</span>
-      <span id="pill-meter" aria-hidden="true"><span id="pill-meter-bar"></span><span id="pill-meter-dot"></span></span>
-      <span id="pill-stop" aria-hidden="true"></span>
-      <span id="pill-label"></span>
-    </button>
     <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
     <span id="state">starting…</span>
     <button id="settings" title="Profile, preferences and shortcuts">Settings</button>

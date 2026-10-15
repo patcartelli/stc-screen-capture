@@ -1,11 +1,12 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
-import { windowCount, pageWithUrl } from "./_windows.js";
+import { windowCount } from "./_windows.js";
 import { startRecordFlow } from "./_record-flow.js";
+import { pillPage, pillShowing, pillWindowState } from "./_pill.js";
 
 /**
  * Launch to the menu bar (STC-502), through the real app.
@@ -29,9 +30,13 @@ const DOCK_POLL = { timeout: 5_000 };
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
-async function launch(): Promise<ElectronApplication> {
+async function launch(settings?: Record<string, unknown>): Promise<ElectronApplication> {
+  const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+  // A preference in place before launch, for a test that must not open the
+  // library to set one (it would no longer be a take with no window).
+  if (settings) writeFileSync(join(userData, "settings.json"), JSON.stringify(settings));
   app = await electron.launch({
-    args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
+    args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
       ...process.env,
@@ -131,7 +136,7 @@ describe("launch to the menu bar", () => {
     await expect.poll(() => trayUp(a)).toBe(true);
   });
 
-  test("a take started with no window open still gets its pill, born collapsed and unfocused", async () => {
+  test("a take started with no window open gets its pill, and no library appears, during or after", async () => {
     const a = await launch();
     // A stopped take leaves a panel, and quitting over one raises a modal.
     await stubQuitDialog(a);
@@ -142,24 +147,40 @@ describe("launch to the menu bar", () => {
     // no library window anywhere. `win` is only used by the window door.
     await startRecordFlow(a, undefined as unknown as Page, { door: "menu-bar" });
 
-    // Before STC-502's follow-up nothing made a window here, so the only way
-    // to see the timer or stop the take was to open the library by hand.
-    await expect.poll(() => windowCount(a, "index.html"), { timeout: 45_000 }).toBe(1);
-    const page = await pageWithUrl(a, "index.html");
-    const handle = await a.browserWindow(page);
-    await expect.poll(
-      () => handle.evaluate((w) => ({
-        resizable: w.isResizable(), alwaysOnTop: w.isAlwaysOnTop(), focused: w.isFocused(),
-      })),
-      { timeout: 20_000 },
-    ).toEqual({ resizable: false, alwaysOnTop: true, focused: false });
-    await expect.poll(() => page.evaluate(() => document.body.classList.contains("pill-collapsed")),
-      { timeout: 20_000 }).toBe(true);
-    await expect.poll(() => page.textContent("#pill-timer"), { timeout: 20_000 }).toMatch(/^\d{2}:\d{2}$/);
+    // STC-524 made a library here and collapsed it into the pill. Since
+    // STC-550 the pill is its own window and no library is made at all.
+    await expect.poll(() => pillShowing(a), { timeout: 45_000 }).toBe(true);
+    expect(await pillWindowState(a)).toMatchObject({ resizable: false, alwaysOnTop: true, focused: false });
+    expect(await windowCount(a, "index.html")).toBe(0);
+    const pill = await pillPage(a);
+    await expect.poll(() => pill.textContent("#pill-timer"), { timeout: 20_000 }).toMatch(/^\d{2}:\d{2}$/);
 
     // And it stops the take it belongs to.
-    await page.click("#pill");
-    await expect.poll(() => page.evaluate(() => document.body.classList.contains("pill-collapsed")),
-      { timeout: 20_000 }).toBe(false);
+    await pill.click("#pill-stop");
+    await expect.poll(() => pillWindowState(a).then((s) => s.exists), { timeout: 20_000 }).toBe(false);
+    // The library was not on screen when the take began, so it stays away (decision 4).
+    expect(await windowCount(a, "index.html")).toBe(0);
+  }, 180_000);
+
+  test("Menu bar only: a take started with no window puts no Dock icon up (STC-550 requirement 8)", async () => {
+    if (!darwin) {
+      process.stderr.write("SKIP: the Dock icon exists only on macOS\n");
+      return;
+    }
+    const a = await launch({ iconPlacement: "menubar" });
+    await stubQuitDialog(a);
+    await expect.poll(() => trayUp(a)).toBe(true);
+    await expect.poll(() => dockUp(a), DOCK_POLL).toBe(false);
+
+    await startRecordFlow(a, undefined as unknown as Page, { door: "menu-bar" });
+    await expect.poll(() => pillShowing(a), { timeout: 45_000 }).toBe(true);
+    // Sampled across the take, not once. STC-524 made a library window here,
+    // a document window, which is what put the icon up under this setting.
+    for (let i = 0; i < 8; i++) {
+      expect(await dockUp(a), `sample ${i}`).toBe(false);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    await (await pillPage(a)).click("#pill-stop");
+    await expect.poll(() => pillWindowState(a).then((s) => s.exists), { timeout: 20_000 }).toBe(false);
   }, 180_000);
 });
