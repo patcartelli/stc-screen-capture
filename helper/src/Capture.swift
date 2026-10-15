@@ -1207,8 +1207,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                                     + "with no mic track from this point on"])
         let teardowns = midTakeTeardowns   // strong: leave() must happen even if self is gone
         m.stop { [weak self] track in
+            // STC-237: say why it ended. This outranks an earlier format trip: both
+            // ended the track, and the device going away is what the person did.
+            var ended = track
+            ended?.endedBy = "disconnected"
             self?.lock.lock()
-            self?.micTrack = track
+            self?.micTrack = ended
             self?.lock.unlock()
             // STC-530: between `mic = nil` and here the partial could see no mic at all.
             self?.notePartialChange()
@@ -1256,8 +1260,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                                     + "with no picture-in-picture from this point on"])
         let teardowns = midTakeTeardowns   // strong: leave() must happen even if self is gone
         cam.stop { [weak self] track in
+            var ended = track   // STC-237: the camera went away mid-take
+            ended?.endedBy = "disconnected"
             self?.lock.lock()
-            self?.cameraTrack = track
+            self?.cameraTrack = ended
             self?.lock.unlock()
             // STC-530: between `camera = nil` and here the partial could see no camera at all.
             self?.notePartialChange()

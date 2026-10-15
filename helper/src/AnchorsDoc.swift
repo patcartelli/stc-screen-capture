@@ -89,6 +89,9 @@ struct CameraTrack {
     /// this; the measured camera rate varies run to run, so it must be recorded
     /// rather than assumed.
     let frameIntervalNs: Int
+    /// STC-237: why the track ended before the take did (`disconnected`), or nil when it
+    /// ran to the end. A `var` with a default so every existing construction is unchanged.
+    var endedBy: String? = nil
 }
 
 /// What the mic track turned out to be (STC-233). `nil` means no mic on this
@@ -102,6 +105,9 @@ struct MicTrack {
     let sampleRate: Int, channels: Int
     let firstFramePtsNs: Int
     let lastFramePtsNs: Int
+    /// STC-237: why the track ended before the take did (`disconnected`, or
+    /// `format-mismatch` from STC-485's guard), or nil when it ran to the end.
+    var endedBy: String? = nil
 }
 
 /// What the system-audio track turned out to be (STC-418). `nil` means no
@@ -201,6 +207,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                 "lastFramePtsNs": c.lastFramePtsNs,
                 "frameIntervalNs": c.frameIntervalNs,
             ]
+            if let e = c.endedBy { cameraBlock?["endedBy"] = e }
         }
     }
     var micBlock: [String: Any]?
@@ -216,6 +223,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                 "firstFramePtsNs": m.firstFramePtsNs,
                 "lastFramePtsNs": m.lastFramePtsNs,
             ]
+            if let e = m.endedBy { micBlock?["endedBy"] = e }
         }
     }
     var systemBlock: [String: Any]?
@@ -248,6 +256,10 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     // STC-527: the one stop reason older versions refuse. Every other take
     // keeps the version its blocks earned.
     if stopReason == "disk-full" || stopReason == "disk-full-timeout" { version = max(version, 10) }
+    // STC-237: a mic or camera that ended before the take did. Read off the BLOCKS, so an
+    // `endedBy` on a track that was never written (not requested, or present:false) can
+    // neither appear nor bump the version. 11 is the app's own (recorder-quit) and is skipped.
+    if cameraBlock?["endedBy"] != nil || micBlock?["endedBy"] != nil { version = max(version, 12) }
     var capturedBlock: [String: Any] = ["width": capture.width, "height": capture.height, "codec": "h264",
                                          "firstFrameNs": max(0, capture.firstFrameNs)]
     if let colorSpace { capturedBlock["colorSpace"] = colorSpace }

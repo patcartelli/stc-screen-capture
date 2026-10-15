@@ -151,6 +151,9 @@ describe("a device that disconnects mid-take ends only its own track (STC-433)",
     expect(statSync(join(dir, "mic.m4a")).size).toBeGreaterThan(0);
     // The mic stopped at the unplug, not at the end of the take.
     expect(anchors.mic.lastFramePtsNs).toBeLessThan(anchors.stop.t - 1_000_000_000);
+    // STC-237: and it says why, which is what makes the take v12.
+    expect(anchors.mic.endedBy).toBe("disconnected");
+    expect(anchors.version).toBe(12);
   }, 90_000);
 
   test("mic: a take stopped straight after the unplug still records the mic track (the stop waits for it)", async () => {
@@ -169,6 +172,7 @@ describe("a device that disconnects mid-take ends only its own track (STC-433)",
     validateAnchors(anchors);
     expect(anchors.mic?.present, "anchors.json was written before the mic's own teardown finished").toBe(true);
     expect(statSync(join(dir, "mic.m4a")).size).toBeGreaterThan(0);
+    expect(anchors.mic.endedBy, "the stop raced the teardown and lost endedBy (STC-237)").toBe("disconnected");
   }, 90_000);
 
   test("camera: warning, the take keeps recording, a clean stop keeps the camera track", async () => {
@@ -188,5 +192,13 @@ describe("a device that disconnects mid-take ends only its own track (STC-433)",
     const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
     validateAnchors(anchors);
     expect(existsSync(join(dir, "camera.mp4")), "camera.mp4 missing").toBe(true);
+    // STC-237: a camera that got frames before the unplug says why it ended. One that got
+    // none in the fault's 0.5 s is present:false and, by anchors-12's rule, has no endedBy.
+    if (anchors.camera?.present) {
+      expect(anchors.camera.endedBy).toBe("disconnected");
+      expect(anchors.version).toBe(12);
+    } else {
+      expect(anchors.camera?.endedBy).toBeUndefined();
+    }
   }, 90_000);
 });
