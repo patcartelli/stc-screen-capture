@@ -152,13 +152,19 @@ for (let round = 1; round <= ROUNDS; round++) {
       let sup: HelperSupervisor | undefined;
       afterEach(async () => { await sup?.shutdown?.(); sup = undefined; });
 
-      /** Record, break the helper with `fault`, and prove the supervisor reconciles. */
-      async function superviseFault(fault: (child: ChildProcess) => void) {
+      /**
+       * Record, break the helper with `fault`, and prove the supervisor reconciles.
+       * `reported` is how the take in flight must be announced: `lost` for a helper
+       * that died with it, `ended` for one that finished it on its way out (a pipe
+       * close: the helper writes the take and says `stopped` before it exits).
+       */
+      async function superviseFault(fault: (child: ChildProcess) => void, reported: "lost" | "ended") {
         sup = HelperSupervisor.start(BIN, { statsIntervalMs: 200 });
         await sup.ready();
         const dir = sessionDir();
-        const lost: any[] = [], respawned: any[] = [];
+        const lost: any[] = [], ended: any[] = [], respawned: any[] = [];
         sup.on("recording-lost", (p) => lost.push(p));
+        sup.on("recording-ended", (p) => ended.push(p));
         sup.on("respawned", (p) => respawned.push(p));
         await sup.startRecording(dir);
         await sleep(2_500);
@@ -168,7 +174,10 @@ for (let round = 1; round <= ROUNDS; round++) {
         await waitFor(() => respawned[0], 10_000, "the supervisor to respawn the helper");
         await sup.ready();
         expect(sup.pid, "a new helper process").not.toBe(first);
-        expect(lost.map((l) => l.dir), "the take in flight is reported, by its directory").toEqual([dir]);
+        const [said, silent] = reported === "lost" ? [lost, ended] : [ended, lost];
+        expect(said.map((l) => l.dir), `the take in flight is reported as recording-${reported}, by its directory`)
+          .toEqual([dir]);
+        expect(silent, "and only once, one way").toEqual([]);
         await waitFor(() => sup!.state === "idle" || undefined, 10_000, "the supervisor to settle idle");
         expect(sup.recordingDir, "no take left believed live").toBeUndefined();
 
@@ -181,15 +190,15 @@ for (let round = 1; round <= ROUNDS; round++) {
         return dir;
       }
 
-      test("pipe close: the supervisor respawns, reports the take, comes back idle, and records again", async () => {
-        const dir = await superviseFault((c) => c.stdin!.end());
+      test("pipe close: the supervisor respawns, reports the take as ended, comes back idle, and records again", async () => {
+        const dir = await superviseFault((c) => c.stdin!.end(), "ended");
         // A clean shutdown wrote its own record; nothing to recover.
         expectStopRecord(dir, "stdin-closed");
         await accept(dir);
       }, 240_000);
 
-      test("SIGKILL: the supervisor respawns, reports the take, comes back idle, and records again", async () => {
-        const dir = await superviseFault((c) => c.kill("SIGKILL"));
+      test("SIGKILL: the supervisor respawns, reports the take as lost, comes back idle, and records again", async () => {
+        const dir = await superviseFault((c) => c.kill("SIGKILL"), "lost");
         expect(await recoverTake(dir, "recorder-quit")).toEqual({ ok: true });
         expectStopRecord(dir, "recorder-quit");
         await accept(dir);

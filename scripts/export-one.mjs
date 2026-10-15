@@ -33,6 +33,9 @@ const server = await createServer({
       s.middlewares.use("/session", (req, res, next) => {
         const name = (req.url || "").split("?")[0].replace(/^\//, "");
         if (!["anchors.json", "events.json", "project.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a"].includes(name)) return next();
+        // A file the take does not have is a 404, not a thrown read: a recovered
+        // take has no events.json (STC-530), and the page reads a 404 as "none".
+        if (!existsSync(join(sessionDir, name))) { res.statusCode = 404; res.end(); return; }
         res.setHeader("content-type", name.endsWith(".json") ? "application/json" : "video/mp4");
         res.end(readFileSync(join(sessionDir, name)));
       });

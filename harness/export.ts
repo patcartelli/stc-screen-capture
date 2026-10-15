@@ -28,7 +28,10 @@ applyDecoderPreference();
 (window as any).exportSession = async (dir: string, projectRaw: unknown, opts: ExportOptions & { returnFile?: boolean } = {}) => {
   const [anchors, events, displayMp4] = await Promise.all([
     fetch(`${dir}/anchors.json`).then((r) => r.json()),
-    fetch(`${dir}/events.json`).then((r) => r.json()),
+    // No events.json is no cursor, exactly as the app's loader (session-io.ts's
+    // loadTake) reads it: a take recovered after the helper died (STC-530) has none,
+    // and this export refused every such take until STC-238's soak exported one.
+    fetch(`${dir}/events.json`).then((r) => (r.ok ? r.json() : { version: 1, events: [] })),
     fetch(`${dir}/display.mp4`).then((r) => r.arrayBuffer()),
   ]);
   // Fetched only when the take's own anchors say it has one — loadSession

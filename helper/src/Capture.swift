@@ -1072,7 +1072,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             if stoppingAlready { return }
 
             let cam = CameraCapture(dir: dir, t0Ns: t0Ns, pauseGate: self.pauseGate, deviceUid: deviceUid)
-            cam.onFirstAppend = { [weak self] in self?.notePartialChange() }   // STC-530
+            cam.onFirstAppend = { [weak self, weak cam] in
+                self?.notePartialChange()   // STC-530
+                // STC-238: from the first FRAME, not the open, so the injected
+                // unplug always lands mid-track (armCameraDisconnectFault).
+                if let cam { self?.armCameraDisconnectFault(deviceUid: cam.currentDeviceUid()) }
+            }
             let result = cam.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
@@ -1102,7 +1107,6 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // some other device, and say nothing for the former.
                     let uid = cam.currentDeviceUid()
                     IO.send("camera-started", ["device": name, "uid": uid])
-                    self.armCameraDisconnectFault(deviceUid: uid)
                 }
             case .closeImmediately:
                 // stop() already ran and found no camera to close, because
@@ -1235,7 +1239,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     /// `STC_CAPTURE_FAULT=camera-disconnected`: the camera counterpart of
-    /// `armMicDisconnectFault` above, same idiom and same reason.
+    /// `armMicDisconnectFault` above, same idiom and same reason. Armed from the
+    /// camera's first WRITTEN frame (STC-238). It used to be armed when the camera
+    /// opened, and a camera slow to deliver (measured 2026-10-15) was "unplugged"
+    /// with no frames yet: an empty camera.mp4, `present: false`, and no track for
+    /// STC-237's `endedBy` to describe, so the fault never exercised mid-track loss.
     static let cameraDisconnectFaultDelaySeconds: Double = 0.5
     private func armCameraDisconnectFault(deviceUid: String) {
         guard ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "camera-disconnected" else { return }
