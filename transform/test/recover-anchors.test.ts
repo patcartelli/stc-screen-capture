@@ -72,6 +72,27 @@ describe("recoverAnchors (STC-530)", () => {
     expect(recoverAnchors(noCapture, media, RECOVERY_STOP_REASON).ok).toBe(false);
   });
 
+  test("a v12 partial (STC-237: a track that ended early) recovers, keeping endedBy", () => {
+    const ended = partial({ version: 12, mic: { ...partial().mic, endedBy: "disconnected" } });
+    const r = recoverAnchors(ended, media, RECOVERY_STOP_REASON);
+    if (!r.ok) throw new Error(r.why);
+    expect(r.anchors.version).toBe(12);
+    expect((r.anchors as any).mic).toMatchObject({ present: true, endedBy: "disconnected" });
+    expect(schema(12)(r.anchors), JSON.stringify(schema(12).errors)).toBe(true);
+  });
+
+  test("a v12 track whose file yielded nothing is dropped along with its endedBy", () => {
+    const ended = partial({ version: 12, camera: { ...partial().camera, endedBy: "disconnected" } });
+    const r = recoverAnchors(ended, { ...media, cameraFramesNs: null }, RECOVERY_STOP_REASON);
+    if (!r.ok) throw new Error(r.why);
+    expect(r.anchors.camera).toEqual({ present: false });
+    expect(schema(12)(r.anchors), JSON.stringify(schema(12).errors)).toBe(true);
+  });
+
+  test("a partial above 12 is not one the helper wrote", () => {
+    expect(recoverAnchors({ ...partial(), version: 13 }, media, RECOVERY_STOP_REASON).ok).toBe(false);
+  });
+
   test("does not mutate its input", () => {
     const p = partial();
     const before = JSON.stringify(p);

@@ -211,18 +211,8 @@ describe("loader accepts v1 through v7 anchors", () => {
     expect(s.systemAudio).toBeUndefined();
   });
 
-  test("a version 12 anchors document is rejected by name", async () => {
-    // Widening must not become "accept anything". Version 12, not 11: STC-530
-    // made 11 a real, supported version (the `recorder-quit` stop reason), so it
-    // is no longer a stand-in for "unknown future version" — the same thing
-    // already happened to 3 (STC-370), 4 (STC-233), 5 (STC-240), 6 (STC-418),
-    // 7 (STC-235), 8 (STC-482), 9 (STC-510) and 10 (STC-527).
-    await expect(loadSession({
-      anchors: offsetAnchors({ version: 12 as any }),
-      events: { version: 1, events: [{ t: 0, kind: "move", x: 1, y: 2 }] },
-      displayMp4: mp4("fixtures/offset/display.mp4"),
-    })).rejects.toThrow(/version 12 is not supported/);
-  });
+  // "Unknown future version" now lives in ended-by.test.ts, which made 12 real (STC-237),
+  // the same thing that already happened to 3 through 11.
 
   test("v11 (STC-530, recorder-quit) loads like any other take", async () => {
     const s = await loadSession({
