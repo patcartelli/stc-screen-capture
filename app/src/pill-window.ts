@@ -38,11 +38,13 @@ import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
  * Nothing about where the pill was dragged survives step 3: the next take's
  * pill opens top-centre again (decided 2026-10-15).
  *
- * ## Not a document window, and not focusable by accident
+ * ## Not a document window, and never focused
  *
  * It is an NSPanel (`PANEL_WINDOW_TYPE`), so a click on Stop does not
  * activate the app and pull the library or the editor forward over the
  * screen being recorded, and `acceptFirstMouse` makes that first click count.
+ * It is `focusable: false`, so it can never hold the keyboard: shown inactive
+ * was not enough when it was the app's only window (CI, 2026-10-15).
  * `main.ts`'s `documentWindowCount` never sees it (requirement 8), so "Menu
  * bar only" gets no Dock icon for a take.
  */
@@ -115,6 +117,14 @@ class PillSession {
       backgroundColor: "#0b0b0c",
       type: PANEL_WINDOW_TYPE,
       acceptFirstMouse: true,
+      // Never key, not just shown inactive (requirement 3). With no other
+      // window up, AppKit hands key status to whatever is left when the
+      // overlay and countdown close, and `showInactive` does not stop that:
+      // on CI the pill of a take started from the menu bar came up focused,
+      // holding the keyboard (where Space could press its Stop). A window
+      // that cannot become key still takes clicks (`acceptFirstMouse`) and
+      // pointer drags.
+      focusable: false,
       title: "Recording",
       webPreferences: {
         preload: join(opts.dist, "pill-preload.cjs"),
