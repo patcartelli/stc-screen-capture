@@ -397,14 +397,31 @@
     }
     @keyframes pill-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
     #pill-timer { flex: none; font-variant-numeric: tabular-nums; }
-    /* The level meter: hatched, NEVER a live reading — no audio capture
-       exists anywhere in the helper (mic deferred since phase 1), and the
-       ticket is explicit that drawing one "at a plausible level where it
-       would read as live" would be a lie. A static diagonal-stripe fill is
-       the one pattern that cannot be mistaken for a moving bar. */
+    /* The level meter (STC-528; pill.ts's meterView decides, this draws).
+       Hatched until the helper has sent a reading: no mic, or one lost. A
+       static diagonal stripe is the one pattern that cannot be mistaken for a
+       moving bar, so a level is never implied where none was measured.
+       .live: the bar's width is --level (0..1, dB-scaled), the colors are
+       PILL_THEME's meterLevel/meterTrack. .no-signal: the helper says 10 s of
+       silence, so the bar flattens to a baseline with an amber dot at its end
+       (Patrick, 2026-10-15). Warn only; it clears when signal returns. The
+       width never changes between modes, so a mode change cannot resize the
+       collapsed window (STC-375). */
     #pill-meter {
-      width: 18px; height: 8px; border-radius: 2px; flex: none;
+      position: relative; width: 18px; height: 8px; border-radius: 2px; flex: none;
       background: repeating-linear-gradient(45deg, #3a3a3c 0 2px, transparent 2px 4px);
+    }
+    #pill-meter-bar, #pill-meter-dot { display: none; position: absolute; }
+    #pill-meter.live { background: #2c2c2e; }
+    #pill-meter.live #pill-meter-bar {
+      display: block; left: 0; top: 0; bottom: 0; border-radius: 2px;
+      width: calc(var(--level, 0) * 100%); background: #f5f5f5;
+      transition: width 60ms linear;
+    }
+    #pill-meter.no-signal { background: linear-gradient(#636366, #636366) left 50% / 13px 1px no-repeat; }
+    #pill-meter.no-signal #pill-meter-dot {
+      display: block; right: 0; top: 2px; width: 4px; height: 4px; border-radius: 50%;
+      background: #ff9f0a;
     }
     /* Reported after the first hardware look: dot/timer/meter read fine, but
        nothing said what clicking the pill DOES — the aria-label is there for
@@ -449,7 +466,7 @@
     <button id="pill" aria-label="Stop recording">
       <span id="pill-dot" aria-hidden="true"></span>
       <span id="pill-timer">00:00</span>
-      <span id="pill-meter" aria-hidden="true"></span>
+      <span id="pill-meter" aria-hidden="true"><span id="pill-meter-bar"></span><span id="pill-meter-dot"></span></span>
       <span id="pill-stop" aria-hidden="true"></span>
       <span id="pill-label"></span>
     </button>

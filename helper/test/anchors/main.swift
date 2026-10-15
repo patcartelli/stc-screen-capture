@@ -508,5 +508,38 @@ do {
     check((whole["mic"] as? [String: Any])?["endedBy"] == nil, "and carry no endedBy")
 }
 
+// STC-528: a mic with silent spans writes them, and only then is the take v13.
+do {
+    var mic = MicTrack(present: true, device: "Fixture Mic", sampleRate: 48000, channels: 1,
+                       firstFramePtsNs: 12_000_000, lastFramePtsNs: 30_000_000_000)
+    mic.silentSpans = [SilentSpan(startNs: 2_000_000_000, endNs: 14_000_000_000),
+                       SilentSpan(startNs: 18_000_000_000, endNs: 30_010_000_000)]
+    let silent = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                 capture: capture, camera: nil, requested: false,
+                                 mic: mic, micRequested: true,
+                                 pauses: [], stopReason: "user", stopTNs: 31_000_000_000)
+    check(silent["version"] as? Int == 13, "a take with a silent span must write version 13")
+    let spans = (silent["mic"] as? [String: Any])?["silentSpans"] as? [[String: Int]]
+    check(spans?.count == 2 && spans?[0]["startNs"] == 2_000_000_000 && spans?[1]["endNs"] == 30_010_000_000,
+          "silentSpans are written in order, as given")
+    printJSON(silent, marker: "JSON-SILENT-SPANS:")
+
+    // Not requested: no block, so nothing to say and no bump.
+    let unrequested = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                      capture: capture, camera: nil, requested: false,
+                                      mic: mic, micRequested: false,
+                                      pauses: [], stopReason: "user", stopTNs: 31_000_000_000)
+    check(unrequested["version"] as? Int == 2 && unrequested["mic"] == nil, "an unrequested mic's spans earn nothing")
+
+    // The control: no spans, no key, and the version its other blocks earned.
+    mic.silentSpans = []
+    let live = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                               capture: capture, camera: nil, requested: false,
+                               mic: mic, micRequested: true,
+                               pauses: [], stopReason: "user", stopTNs: 31_000_000_000)
+    check(live["version"] as? Int == 4, "a mic with no silent span stays v4")
+    check((live["mic"] as? [String: Any])?["silentSpans"] == nil, "and writes no silentSpans key")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

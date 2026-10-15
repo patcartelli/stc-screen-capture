@@ -27,6 +27,7 @@ describe("anchors document", () => {
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
+        "helper/src/MicSignalDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -81,6 +82,7 @@ describe("anchors document", () => {
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
+        "helper/src/MicSignalDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -122,6 +124,7 @@ describe("anchors document", () => {
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
+        "helper/src/MicSignalDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -166,6 +169,7 @@ describe("anchors document", () => {
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
+        "helper/src/MicSignalDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -208,6 +212,7 @@ describe("anchors document", () => {
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
+        "helper/src/MicSignalDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -245,6 +250,7 @@ describe("anchors document", () => {
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
+        "helper/src/MicSignalDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -335,5 +341,12 @@ describe("anchors document", () => {
     const validate12 = compileV(12);
     expect(validate12(endedBy), JSON.stringify(validate12.errors, null, 2)).toBe(true);
     expect(compileV(11)(endedBy), "anchors-11 must refuse endedBy").toBe(false);
+
+    // STC-528: a take with silent mic spans validates against anchors-13, and anchors-12
+    // refuses it — `silentSpans` is the only thing that moved it.
+    const silent = extractJSON(out, "JSON-SILENT-SPANS:");
+    const validate13 = compileV(13);
+    expect(validate13(silent), JSON.stringify(validate13.errors, null, 2)).toBe(true);
+    expect(validate12(silent), "anchors-12 must refuse silentSpans").toBe(false);
   });
 }, 60_000);

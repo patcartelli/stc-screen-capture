@@ -1142,6 +1142,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
 
             let m = MicCapture(dir: dir, t0Ns: t0Ns, deviceUid: deviceUid, pauseGate: self.pauseGate)
             m.onFirstAppend = { [weak self] in self?.notePartialChange() }   // STC-530
+            m.onSilenceChange = { [weak self] in self?.notePartialChange() } // STC-528
             let result = m.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }

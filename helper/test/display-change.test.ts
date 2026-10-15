@@ -15,6 +15,7 @@ describe("display change decisions", () => {
         // still-decisions.test.ts carries them.
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
+        "helper/src/MicSignalDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/src/DisplayChangeDecisions.swift",
         "helper/test/display-change/main.swift",

@@ -89,6 +89,8 @@ contextBridge.exposeInMainWorld("recorder", {
     const channels = ["helper:ready", "helper:stats", "helper:respawned",
                       "helper:gave-up", "helper:recording-lost", "helper:recording-ended",
                       "helper:warning", "helper:camera-started", "helper:mic-started",
+                      // STC-528: the mic's live level, for the pill's meter.
+                      "helper:level",
                       // A capture the window did not ask for — a hotkey or the
                       // menu bar (STC-292). The shot is on disk either way;
                       // this is only so an open window stays truthful.

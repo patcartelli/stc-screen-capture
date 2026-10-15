@@ -91,6 +91,10 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     /// the moment this track's start time exists for `anchors.partial.json`. Set before
     /// `start()`; never changed after.
     var onFirstAppend: (() -> Void)?
+    /// STC-528: called, off the lock, when a silent stretch reaches 10 s (a span now
+    /// exists) and when it ends, so `anchors.partial.json` carries it if the helper dies.
+    /// Set before `start()`; never changed after.
+    var onSilenceChange: (() -> Void)?
 
     /// Set by `stop()` so the liveness watchdog below cannot warn about a take
     /// that has already ended.
@@ -99,6 +103,13 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     /// does not follow its `mic-format-mismatch` with a second, wrong reason
     /// (a guard that trips on the first buffer leaves `appended` at zero).
     private var formatTripped = false
+    /// STC-528: the live level and the take's silent spans. Fed on `queue`, read by
+    /// `track()` from any thread, so it lives under `lock` like the counters above.
+    private var signal = MicSignalTracker()
+    /// `STC_CAPTURE_FAULT=mic-silent`: the MEASURED level reads zero, so the pill's
+    /// marker and the sidecar's span can be watched without muting a real mic. The
+    /// audio written to mic.m4a is untouched — the fault is in the meter, not the take.
+    private static let faultSilent = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "mic-silent"
 
     /// How long a mic may be RUNNING with zero samples before the user is told
     /// — the audio analogue of `CameraCapture.noFramesWarningSeconds` and the
@@ -276,6 +287,7 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         case .trip(let fault):
             lock.lock()
             formatTripped = true
+            signal.end()
             let device = deviceName
             let native = nativeFormat.map { $0.description } ?? "unknown"
             lock.unlock()
@@ -288,6 +300,48 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
                                         + "The mic track ends here rather than recording noise"])
             return false
         }
+    }
+
+    /// STC-528: folds one buffer into the live level and the silent spans, and sends a
+    /// reading when one is due. LOSSY only (`IO.stat`): this runs on the capture
+    /// callback, and a meter must never be able to back-pressure the take.
+    private func noteSignal(_ sb: CMSampleBuffer, ptsNs rel: Int64, paused: Bool) {
+        let peak = Self.faultSilent ? 0 : Self.peak(sb)
+        let dur = CMSampleBufferGetDuration(sb)
+        let durNs = dur.isValid ? Self.ptsNs(dur) : 0
+        lock.lock()
+        let wasSilent = signal.silent
+        let reading = signal.feed(ptsNs: rel, endNs: rel + max(0, durNs), peak: peak, paused: paused)
+        let changed = signal.silent != wasSilent
+        lock.unlock()
+        if changed { onSilenceChange?() }
+        guard let reading else { return }
+        // Four decimals is 0.0001 linear, -80 dBFS: finer than the pill can draw.
+        IO.stat("level", ["peak": (Double(reading.peak) * 10_000).rounded() / 10_000,
+                          "silent": reading.silent])
+    }
+
+    /// The buffer's peak, read as the pinned float32 interleaved format (STC-485's guard
+    /// has already refused anything else). Walks the block buffer's segments, since a
+    /// `CMBlockBuffer` is not promised to be contiguous.
+    static func peak(_ sb: CMSampleBuffer) -> Float {
+        guard let bb = CMSampleBufferGetDataBuffer(sb) else { return 0 }
+        let total = CMBlockBufferGetDataLength(bb)
+        var offset = 0
+        var m: Float = 0
+        while offset < total {
+            var len = 0
+            var ptr: UnsafeMutablePointer<CChar>?
+            guard CMBlockBufferGetDataPointer(bb, atOffset: offset, lengthAtOffsetOut: &len,
+                                              totalLengthOut: nil, dataPointerOut: &ptr) == kCMBlockBufferNoErr,
+                  let ptr, len > 0 else { break }
+            let n = len / MemoryLayout<Float>.size
+            ptr.withMemoryRebound(to: Float.self, capacity: n) {
+                m = max(m, MicSignal.peak(UnsafeBufferPointer(start: $0, count: n)))
+            }
+            offset += len
+        }
+        return m
     }
 
     /// Exact PTS in nanoseconds — identical rule to `CameraCapture.ptsNs`.
@@ -338,7 +392,11 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
             // buffer, and a paused stretch is still delivered.
             guard passesFormatGuard(sb, ptsNs: rel) else { return }
 
-            if pauseGate.isPaused(atNs: rel) { return }
+            // STC-528: before the pause gate too, because the tracker needs to see a
+            // pause to close a span at it. Paused audio reads as zero on the meter.
+            let paused = pauseGate.isPaused(atNs: rel)
+            noteSignal(sb, ptsNs: rel, paused: paused)
+            if paused { return }
 
             guard let retimed = Self.retimed(sb, toNs: rel) else { return }
             let outcome = gate.append(retimed)
@@ -399,6 +457,7 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         return MicTrack(present: true, device: deviceName,
                         sampleRate: Int(sampleRate.rounded()), channels: channels,
                         firstFramePtsNs: Int(firstPtsNs), lastFramePtsNs: Int(lastPtsNs),
-                        endedBy: formatTripped ? "format-mismatch" : nil)
+                        endedBy: formatTripped ? "format-mismatch" : nil,
+                        silentSpans: signal.spansSoFar())
     }
 }
