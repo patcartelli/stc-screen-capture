@@ -74,7 +74,7 @@ import { editorIsOpen, openEditor } from "./editor-window.js";
 import { openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
 import { discardPill, pillStarted, preparePill } from "./pill-window.js";
-import { PILL_STOPPED_DWELL_MS, libraryAroundTake } from "./pill.js";
+import { PILL_STOPPED_DWELL_MS, libraryAroundTake, type LibraryAtTakeStart } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
@@ -329,18 +329,42 @@ let libraryReturnsAfterTake = false;
  * bring the library back mid-take; it is hidden first so it stays out.
  * Answers whether anything went off screen, so the caller can wait for the
  * window server before the take's first frame.
+ *
+ * `atFlowStart` is the library as Record found it, before the overlay: the
+ * overlay activates the app, and activating an app hidden with ⌘H unhides the
+ * library with it (found on hardware, 2026-10-15). Read only at take start, a
+ * library ⌘H'd away looked open, and came back after the take.
  */
-function hideLibraryForTake(): boolean {
-  const exists = win !== undefined && !win.isDestroyed();
-  const appHidden = process.platform === "darwin" && app.isHidden();
-  const plan = libraryAroundTake({
-    exists, appHidden,
-    visible: exists && win!.isVisible(), minimized: exists && win!.isMinimized(),
-  });
+function hideLibraryForTake(atFlowStart: LibraryAtTakeStart): boolean {
+  const now = libraryNow();
+  const plan = libraryAroundTake(atFlowStart);
+  // Whatever is on screen NOW goes, whatever the flow-start state said: the
+  // overlay may have brought it back.
+  const hide = now.exists && !now.minimized && (now.visible || now.appHidden);
   libraryReturnsAfterTake = plan.showAfter;
-  if (plan.hide) win!.hide();
-  if (appHidden) app.show();
-  return plan.hide;
+  if (hide) win!.hide();
+  if (now.appHidden) app.show();
+  return hide;
+}
+
+/** The library window's state right now, for `libraryAroundTake`. */
+function libraryNow(): LibraryAtTakeStart {
+  const exists = win !== undefined && !win.isDestroyed();
+  return {
+    exists,
+    appHidden: process.platform === "darwin" && app.isHidden(),
+    visible: exists && win!.isVisible(),
+    minimized: exists && win!.isMinimized(),
+  };
+}
+
+/**
+ * A library hidden with the app (⌘H) is taken off screen for real before the
+ * overlay opens, so the overlay activating the app cannot bring it back. It
+ * stays that way after the take, which is what ⌘H already meant.
+ */
+function keepHiddenLibraryHidden(atFlowStart: LibraryAtTakeStart): void {
+  if (atFlowStart.appHidden && atFlowStart.exists && !atFlowStart.minimized) win!.hide();
 }
 
 /**
@@ -1737,6 +1761,9 @@ function writeBarOptions(options: OptionsState): void {
 async function recordFlowBody(
   source: RecordSource, stored: Settings, mics: MicInfo[], cameras: DeviceLike[], windows: WindowInfo[],
 ): Promise<RecordResult> {
+  // STC-550: the library as Record found it, before the overlay can unhide it.
+  const libraryAtFlowStart = libraryNow();
+  keepHiddenLibraryHidden(libraryAtFlowStart);
   const { outcome, options, afterClose } = await openOverlay({
     windows, mode: "region", purpose: "record",
     initialOptions: {
@@ -1884,7 +1911,7 @@ async function recordFlowBody(
   // is lost: each panel's take stays in temp storage with its panel intact.
   // After the countdown, so a cancelled one costs a pending panel nothing.
   // The library goes the same way (STC-550), and comes back with the pill.
-  const libraryHidden = hideLibraryForTake();
+  const libraryHidden = hideLibraryForTake(libraryAtFlowStart);
   await hideThumbnailForCapture();
   if (libraryHidden) await new Promise((r) => setTimeout(r, HIDE_SETTLE_MS));
   const exclude = await pillExclusions;

@@ -37,8 +37,21 @@ drag region takes no clicks, so clicking the timer no longer stops the take.
   does list a window shown at opacity 0 as on screen, and the exclusion holds.
   The first attempt that day ran `master` by mistake (pill in the take, not
   centred). Check the prompt says this branch before judging a result.
-- Still to do: the `screencapture` half of §1 (the pill must still be visible
-  to other capturers), the Area take, and §2–§9.
+- **Same day, full pass:** §1 (`screencapture` shows the pill; an Area take
+  over the top-centre exports without it), §2, §3, §6 and §8 PASSED. §7: Stop
+  works and a new take opens top-centre.
+- **Three found and fixed the same day (re-check these):**
+  - §9: closing a recorded window went straight to the panel, with no
+    "Window closed" on the pill. The supervisor emits `take-ended` before
+    `recording-ended`, and the pill was put away on the first. Pinned by
+    `app/test/pill-dwell.test.ts`.
+  - §4: after ⌘H, the library came back when Record was chosen from the menu
+    bar (the overlay activates the app, which unhides it) and again after the
+    take. The library's state is now read when the Record flow starts.
+  - §7: the drag moved the pill once and never again (the native
+    `-webkit-app-region: drag`). Replaced with the page's own pointer events,
+    which also ease the motion as asked (direct under Reduce Motion).
+- Not yet run: §5.
 
 ## §1 The one open question: is the pill out of the video? (requirement 9)
 
@@ -109,8 +122,11 @@ if you see it.
 
 ## §7 Drag (acceptances 6, 7)
 
-1. During a take, drag the pill by its timer or dot to another spot.
-2. It follows the pointer. Clicking Stop still ends the take, on the first click,
+1. During a take, drag the pill by its timer or dot to another spot. Then drag
+   it again, and a third time: the first version only moved once.
+2. It follows the pointer with a short settle, not a jump. With System
+   Settings → Accessibility → Display → Reduce motion on, it tracks the
+   pointer directly. Clicking Stop still ends the take, on the first click,
    **without bringing Capture to the front** (the app you were recording keeps
    focus).
 3. Start another take. The pill is back at top-centre.

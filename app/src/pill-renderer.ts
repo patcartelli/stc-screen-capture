@@ -15,6 +15,7 @@ declare global {
     pill: {
       stop(): Promise<{ ok: boolean }>;
       reportWidth(px: number): void;
+      drag(msg: { phase: "start" | "move" | "end"; x?: number; y?: number; reduced?: boolean }): void;
       on(channel: string, cb: (payload: unknown) => void): () => void;
     };
   }
@@ -28,8 +29,36 @@ const meter = $("pill-meter");
 const labelEl = $("pill-label");
 const stopBtn = $("pill-stop") as HTMLButtonElement;
 
-// The drag region is the whole pill (pill.html); Stop is the one control in it.
-// Disabled while the request is out, so a second click cannot stop the NEXT take.
+// The drag: anywhere on the pill but Stop. This page reports the pointer and
+// main moves the window, easing toward it (`pill.ts`'s `dragTarget`/`easeStep`).
+// Not a `-webkit-app-region: drag` region: on hardware that moved this panel
+// once and never again, and it cannot ease. Pointer capture keeps the moves
+// coming when the pointer outruns the window.
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+let dragPointer: number | undefined;
+pill.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || (e.target as Element).closest("#pill-stop")) return;
+  dragPointer = e.pointerId;
+  pill.setPointerCapture(e.pointerId);
+  pill.classList.add("dragging");
+  window.pill.drag({ phase: "start", x: e.screenX, y: e.screenY, reduced: reducedMotion.matches });
+});
+pill.addEventListener("pointermove", (e) => {
+  if (e.pointerId !== dragPointer) return;
+  window.pill.drag({ phase: "move", x: e.screenX, y: e.screenY });
+});
+const endDrag = (e: PointerEvent): void => {
+  if (e.pointerId !== dragPointer) return;
+  dragPointer = undefined;
+  pill.classList.remove("dragging");
+  window.pill.drag({ phase: "end" });
+};
+pill.addEventListener("pointerup", endDrag);
+pill.addEventListener("pointercancel", endDrag);
+pill.addEventListener("lostpointercapture", endDrag);
+
+// Stop is the one control on the pill. Disabled while the request is out, so
+// a second click cannot stop the NEXT take.
 stopBtn.addEventListener("click", async () => {
   stopBtn.disabled = true;
   const r = await window.pill.stop().catch(() => ({ ok: false }));

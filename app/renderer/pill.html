@@ -8,18 +8,20 @@
   <style>
     /* ── the pill (STC-375; its own window since STC-550) ─────────────────
        Moved from the library's index.html as it was, with one change the
-       window's move forced: the whole pill is a DRAG region now (requirement
-       5), and a drag region takes no clicks, so Stop is its own button
-       (`#pill-stop`, the square glyph that already said what a click does)
-       instead of the whole pill being one.
+       window's move forced: the whole pill drags now (requirement 5), so Stop
+       is its own button (`#pill-stop`, the square glyph that already said
+       what a click does) instead of the whole pill being one. The drag is
+       pill-renderer.ts's pointer events, not `-webkit-app-region: drag`: on
+       hardware the native region moved this panel once and then never again.
 
        Dark always (#0b0b0c/#f5f5f5, pill.ts's PILL_THEME): it floats over
        someone else's window for the length of a take, where light chrome has
        nothing reliable to sit against.
 
-       No transition anywhere, on the pill appearing or going: requirement 10
-       (reduced motion) is met by there being no motion to reduce. The live
-       dot's pulse is the one animation, and it stops under reduced motion. */
+       Requirement 10 (reduced motion): the pill appears and goes with no
+       transition at all. The two things that do move both stop under reduced
+       motion: the live dot's pulse (below), and the drag's easing, which
+       places the pill directly instead (pill-window.ts's `onDrag`). */
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
       background: #0b0b0c; overflow: hidden;
@@ -34,8 +36,9 @@
          the pill fills an opaque window edge to edge, so the native window
          shadow is the shadow. */
       border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 16px;
-      -webkit-app-region: drag; cursor: default;
+      cursor: grab; touch-action: none;
     }
+    #pill.dragging { cursor: grabbing; }
     /* Measured by pill-renderer.ts; main sizes the window to it plus
        PILL_CHROME_PX (the padding and ring above). */
     #pill-row { display: inline-flex; align-items: center; gap: 6px; width: max-content; }
@@ -73,10 +76,9 @@
       background: #ff9f0a;
     }
     /* Stop: the universal stop glyph (QuickTime/Zoom/OBS). Its own button
-       now, carved out of the drag region, with the hover fill (PILL_THEME's
-       .hover) that used to sit on the whole pill. */
+       now, the one place a press does not start a drag, with the hover fill
+       (PILL_THEME's .hover) that used to sit on the whole pill. */
     #pill-stop {
-      -webkit-app-region: no-drag;
       display: grid; place-items: center; flex: none;
       width: 20px; height: 20px; margin: 0 -4px 0 0; padding: 0;
       border: 0; border-radius: 4px; background: transparent; cursor: pointer;

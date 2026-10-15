@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld("pill", {
   stop: () => ipcRenderer.invoke("pill:stop"),
   // Fire-and-forget: main only resizes the window to it.
   reportWidth: (px: number) => ipcRenderer.send("pill:contentWidth", px),
+  // The drag's pointer, in screen coordinates. Fire-and-forget, many a second;
+  // main moves the window (`pill-window.ts`'s `onDrag`).
+  drag: (msg: unknown) => ipcRenderer.send("pill:drag", msg),
   on: (channel: string, cb: (payload: unknown) => void) => {
     if (!CHANNELS.has(channel)) throw new Error(`pill: no such channel ${channel}`);
     const listener = (_e: unknown, payload: unknown) => cb(payload);

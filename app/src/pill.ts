@@ -115,6 +115,41 @@ export function resizePillBounds(current: PillRect, workArea: PillRect, measured
   return { x, y: current.y, width, height: current.height };
 }
 
+export interface PillPoint { x: number; y: number }
+
+/**
+ * Where a drag puts the pill's top-left: where it was when the drag began,
+ * moved by exactly as far as the pointer has. Screen coordinates throughout.
+ *
+ * The drag is the page's own pointer events, not a `-webkit-app-region: drag`
+ * region. On hardware (2026-10-15) the native region moved this panel once and
+ * then never again, and it cannot ease. So `pill-renderer.ts` reports the
+ * pointer and `pill-window.ts` moves the window toward this target.
+ */
+export function dragTarget(windowAtStart: PillPoint, pointerAtStart: PillPoint, pointerNow: PillPoint): PillPoint {
+  return {
+    x: Math.round(windowAtStart.x + pointerNow.x - pointerAtStart.x),
+    y: Math.round(windowAtStart.y + pointerNow.y - pointerAtStart.y),
+  };
+}
+
+/**
+ * The drag's easing (asked for on hardware, 2026-10-15): each frame the pill
+ * covers this fraction of the distance left to the pointer, so it follows
+ * closely and settles rather than jumping. At 60 frames a second it is within
+ * a pixel of a 200px jump in about 130 ms. Under reduced motion the pill is
+ * placed directly instead.
+ */
+export const PILL_DRAG_EASE = 0.35;
+export const PILL_DRAG_FRAME_MS = 16;
+
+/** One easing frame. Lands exactly on the target once within half a pixel, so it always settles. */
+export function easeStep(current: PillPoint, target: PillPoint, ease = PILL_DRAG_EASE): PillPoint {
+  const dx = target.x - current.x, dy = target.y - current.y;
+  if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5) return { x: target.x, y: target.y };
+  return { x: current.x + dx * ease, y: current.y + dy * ease };
+}
+
 /** What the library window is doing at the moment a take is about to start. */
 export interface LibraryAtTakeStart {
   /** A library window exists at all. Since STC-502 there often is none. */
@@ -283,9 +318,9 @@ export function parseLevel(l: unknown): LevelReading | undefined {
  * deliberately: resolving an open question while scaffolding ahead of
  * STC-374 would be a decision nobody asked for yet.
  *
- * Since STC-550 the pill also appears and goes with no transition at all,
- * which is how its requirement 10 (respect `prefers-reduced-motion`) is met:
- * there is no motion to reduce.
+ * Since STC-550 the pill also appears and goes with no transition at all.
+ * The one motion it has is a drag's easing (`easeStep`), and under
+ * `prefers-reduced-motion` a drag places it directly (requirement 10).
  */
 export type ResizeStyle = "snap";
 export const RESIZE_STYLE: ResizeStyle = "snap";

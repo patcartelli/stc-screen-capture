@@ -7,6 +7,7 @@ import {
   PILL_STOPPED_DWELL_MS, shouldDwell, shouldShowTrackNotice,
   METER_FLOOR_DB, NO_SIGNAL_TOOLTIP, meterFill, meterView, parseLevel,
   PILL_CHROME_PX, PILL_TOP_INSET_PX, pillBounds, resizePillBounds, libraryAroundTake,
+  dragTarget, easeStep, PILL_DRAG_FRAME_MS,
 } from "../src/pill.js";
 import { HELPER_STOP_REASONS, pillLabel, trackLossPillLabel } from "../src/stop-copy.js";
 
@@ -213,6 +214,35 @@ describe("resizePillBounds (STC-550)", () => {
     const atEdge = { x: 1000 - 120, y: 30, width: 120, height: PILL_HEIGHT_PX };
     const b = resizePillBounds(atEdge, workArea, 300);
     expect(b.x + b.width).toBe(1000);
+  });
+});
+
+describe("the pill's drag (STC-550)", () => {
+  it("moves the window exactly as far as the pointer moved", () => {
+    expect(dragTarget({ x: 700, y: 33 }, { x: 750, y: 45 }, { x: 610, y: 400 })).toEqual({ x: 560, y: 388 });
+  });
+
+  it("works across displays, in negative screen coordinates", () => {
+    expect(dragTarget({ x: 100, y: 10 }, { x: 120, y: 20 }, { x: -380, y: -180 })).toEqual({ x: -400, y: -190 });
+  });
+
+  it("eases toward the target and always settles exactly on it", () => {
+    const target = { x: 200, y: 0 };
+    let p = { x: 0, y: 0 };
+    let frames = 0;
+    while ((p.x !== target.x || p.y !== target.y) && frames < 100) { p = easeStep(p, target); frames++; }
+    expect(p).toEqual(target);
+    // Close behind the pointer, never a slow drift: well under 200 ms at 60 fps.
+    expect(frames * PILL_DRAG_FRAME_MS).toBeLessThan(250);
+  });
+
+  it("never overshoots", () => {
+    let p = { x: 0, y: 0 };
+    for (let i = 0; i < 20; i++) {
+      p = easeStep(p, { x: 100, y: -50 });
+      expect(p.x).toBeLessThanOrEqual(100);
+      expect(p.y).toBeGreaterThanOrEqual(-50);
+    }
   });
 });
 

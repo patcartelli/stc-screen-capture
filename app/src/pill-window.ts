@@ -2,8 +2,8 @@ import { BrowserWindow, ipcMain, screen, type Rectangle } from "electron";
 import { join } from "node:path";
 import type { HelperSupervisor } from "./supervisor.js";
 import {
-  MIN_PILL_WIDTH_PX, PILL_STOPPED_DWELL_MS, decidePillAction, pillBounds, resizePillBounds,
-  shouldDwell, shouldShowTrackNotice, type PillWindowState,
+  MIN_PILL_WIDTH_PX, PILL_DRAG_FRAME_MS, PILL_STOPPED_DWELL_MS, decidePillAction, dragTarget, easeStep,
+  pillBounds, resizePillBounds, shouldDwell, shouldShowTrackNotice, type PillPoint, type PillWindowState,
 } from "./pill.js";
 import { pillLabel, trackLossPillLabel, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
 import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
@@ -184,6 +184,52 @@ class PillSession {
     setBoundsUnlessClosing(this.win, resizePillBounds(current, workArea, px), "pill resize");
   }
 
+  private drag: { windowAt: PillPoint; pointerAt: PillPoint; reduced: boolean } | undefined;
+  private dragTo: PillPoint | undefined;
+  private dragNow: PillPoint | undefined;
+  private dragTimer: ReturnType<typeof setInterval> | undefined;
+
+  /**
+   * `pill:drag`, from this session's own page only: the page's pointer, in
+   * screen coordinates. The window eases toward where the pointer says
+   * (`easeStep`), or goes straight there under reduced motion.
+   */
+  onDrag(sender: Electron.WebContents, msg: unknown): void {
+    if (this.over || this.win.isDestroyed() || sender !== this.win.webContents) return;
+    const m = msg as { phase?: unknown; x?: unknown; y?: unknown; reduced?: unknown } | null;
+    if (m?.phase === "end") { this.drag = undefined; return; }
+    if (typeof m?.x !== "number" || typeof m?.y !== "number" || !Number.isFinite(m.x) || !Number.isFinite(m.y)) return;
+    const pointer = { x: m.x, y: m.y };
+    if (m.phase === "start") {
+      const b = this.win.getBounds();
+      this.drag = { windowAt: { x: b.x, y: b.y }, pointerAt: pointer, reduced: m.reduced === true };
+      this.dragNow = { x: b.x, y: b.y };
+      this.dragTo = this.dragNow;
+      return;
+    }
+    if (m.phase !== "move" || !this.drag) return;
+    this.dragTo = dragTarget(this.drag.windowAt, this.drag.pointerAt, pointer);
+    if (this.drag.reduced) { this.dragNow = this.dragTo; this.place(this.dragTo); return; }
+    this.dragTimer ??= setInterval(this.dragFrame, PILL_DRAG_FRAME_MS);
+  }
+
+  private dragFrame = (): void => {
+    if (this.over || this.win.isDestroyed() || !this.dragNow || !this.dragTo) { this.stopDragTimer(); return; }
+    this.dragNow = easeStep(this.dragNow, this.dragTo);
+    this.place(this.dragNow);
+    // Settled, and the pointer is up: nothing left to move.
+    if (!this.drag && this.dragNow.x === this.dragTo.x && this.dragNow.y === this.dragTo.y) this.stopDragTimer();
+  };
+
+  private stopDragTimer(): void {
+    if (this.dragTimer !== undefined) clearInterval(this.dragTimer);
+    this.dragTimer = undefined;
+  }
+
+  private place(p: PillPoint): void {
+    setBoundsUnlessClosing(this.win, { x: Math.round(p.x), y: Math.round(p.y) }, "pill drag");
+  }
+
   /** `pill:stop`, from this session's own page only. */
   async stop(sender: Electron.WebContents): Promise<{ ok: boolean }> {
     if (this.over || sender !== this.win.webContents || this.sup?.state !== "recording") return { ok: false };
@@ -202,6 +248,7 @@ class PillSession {
   end(): void {
     if (this.over) return;
     this.over = true;
+    this.stopDragTimer();
     this.detach?.();
     if (active === this) active = undefined;
     const win = this.win;
@@ -216,6 +263,7 @@ class PillSession {
 }
 
 ipcMain.on("pill:contentWidth", (e, px: unknown) => active?.resizeTo(e.sender, px));
+ipcMain.on("pill:drag", (e, msg: unknown) => active?.onDrag(e.sender, msg));
 ipcMain.handle("pill:stop", (e) => active?.stop(e.sender) ?? { ok: false });
 
 export interface AttachOptions {
@@ -300,6 +348,12 @@ export function attachPillToSupervisor(
 
   // `recording-ended` is only ever a stop the HELPER decided on (the
   // supervisor's own contract), so its reason is what the pill says.
+  //
+  // `take-ended` comes through here too, and FIRST: the supervisor emits it
+  // just before `recording-ended`, for every clean stop. Reconciling on it
+  // alone put the pill away before the helper's reason could hold it up, so
+  // "Window closed" never showed (found on hardware, 2026-10-15). A stop the
+  // user asked for has reason "stopped", which has no label, so it goes at once.
   const onEnded = (i: { reason?: unknown } | undefined): void => {
     endNotice();
     const label = pillLabel(typeof i?.reason === "string" ? i.reason : undefined);
@@ -320,9 +374,7 @@ export function attachPillToSupervisor(
   const offLevel = sup.on("helper:level", (l) => sendPill(win, "pill:level", l));
   const offEnded = sup.on("recording-ended", onEnded);
   const offLost = sup.on("recording-lost", () => { endNotice(); reconcile(); });
-  // A stop the user asked for: put the pill away now rather than at the next
-  // heartbeat.
-  const offTakeEnded = sup.on("take-ended", reconcile);
+  const offTakeEnded = sup.on("take-ended", onEnded);
   const offWarning = sup.on("helper:warning", onWarning);
   return {
     detach: () => {
