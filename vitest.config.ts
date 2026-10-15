@@ -24,7 +24,7 @@ import { SCREENCAPTUREKIT_FILES } from "./vitest.screencapturekit-files.js";
  * unit and helper suites are fast and independent, and serialising them would
  * cost minutes for nothing.
  */
-const EXCLUDE = ["**/node_modules/**", "**/*.grant.test.ts", "**/*.slow.test.ts"];
+const EXCLUDE = ["**/node_modules/**", "**/*.grant.test.ts", "**/*.slow.test.ts", "**/*.soak.test.ts"];
 
 /**
  * Where an e2e hang's diagnostics go (STC-496, app/test/_e2e-diagnostics.ts).

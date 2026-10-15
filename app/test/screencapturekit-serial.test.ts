@@ -28,7 +28,7 @@ function unitTestFiles(): string[] {
   const out: string[] = [];
   for (const dir of ["app/test", "helper/test", "transform/test"]) {
     for (const f of readdirSync(join(root, dir))) {
-      if (!f.endsWith(".test.ts") || /\.(e2e|grant|slow)\.test\.ts$/.test(f)) continue;
+      if (!f.endsWith(".test.ts") || /\.(e2e|grant|slow|soak)\.test\.ts$/.test(f)) continue;
       out.push(`${dir}/${f}`);
     }
   }

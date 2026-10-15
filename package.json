@@ -21,6 +21,7 @@
     "gate:framing": "node scripts/gate-retry.mjs scripts/framing-gate.mjs",
     "gate:still": "node scripts/gate-retry.mjs scripts/still-gate.mjs",
     "test:slow": "vitest run --config vitest.slow.config.ts",
+    "test:soak": "vitest run --config vitest.soak.config.ts",
     "merge": "node scripts/merge-when-green.mjs",
     "ticket": "NODE_USE_ENV_PROXY=1 node scripts/ticket-check.mjs",
     "build:icon-png": "node scripts/svg-to-png.mjs",

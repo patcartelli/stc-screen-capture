@@ -248,6 +248,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private var events: [[String: Any]] = []
     private var framesAppended = 0
     private var framesDropped = 0
+    /// STC-238: the writer's refusals as timestamped runs (DropRunDecisions.swift),
+    /// sent as `frames-dropped` warnings. Under `lock`, beside the count it explains.
+    private var dropRuns = DropRunTracker()
+    /// `STC_CAPTURE_FAULT=encoder-stall`, read once.
+    private let encoderStallFault = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "encoder-stall"
     /// Frames the stream delivered while paused. Counted APART from
     /// `framesDropped`, which means "the writer would not take it" — folding
     /// paused frames in would make every paused take look as though it had
@@ -657,6 +662,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     self.finishStart(.success(self.describe()))
                     self.armStreamDeathFault()
                     self.armDisplayFault()
+                    if self.encoderStallFault {
+                        IO.log("STC_CAPTURE_FAULT=encoder-stall: display frames \(ENCODER_STALL_FAULT_AFTER_NS / 1_000_000)-\((ENCODER_STALL_FAULT_AFTER_NS + ENCODER_STALL_FAULT_DURATION_NS) / 1_000_000) ms into the take are refused")
+                    }
                     self.armWriterFault()
                 }
             }
@@ -1202,7 +1210,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         mic = nil
         midTakeTeardowns.enter()
         lock.unlock()
-        IO.send("warning", ["code": "mic-disconnected", "uid": uid,
+        // STC-238: `tNs` on the session clock (the cursor's own), so the record says WHEN.
+        IO.send("warning", ["code": "mic-disconnected", "uid": uid, "tNs": Int(Clock.nowNs() - t0Ns),
                             "detail": "the microphone disconnected mid-recording; the take continues "
                                     + "with no mic track from this point on"])
         let teardowns = midTakeTeardowns   // strong: leave() must happen even if self is gone
@@ -1251,7 +1260,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         camera = nil
         midTakeTeardowns.enter()
         lock.unlock()
-        IO.send("warning", ["code": "camera-disconnected", "uid": uid,
+        // STC-238: `tNs` on the session clock (the cursor's own), so the record says WHEN.
+        IO.send("warning", ["code": "camera-disconnected", "uid": uid, "tNs": Int(Clock.nowNs() - t0Ns),
                             "detail": "the camera disconnected mid-recording; the take continues "
                                     + "with no picture-in-picture from this point on"])
         let teardowns = midTakeTeardowns   // strong: leave() must happen even if self is gone
@@ -1908,10 +1918,19 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             // holds its own lock across the append so a concurrent stop cannot
             // tear the track down mid-append. A frame that arrives during
             // teardown is dropped, not written into a closing writer.
-            let outcome = gate.append(pb, at: CMTime(value: ptsNs, timescale: 1_000_000_000))
+            //
+            // STC-238: `encoder-stall` refuses a window of frames here, before the
+            // gate, as a writer that is not ready refuses them inside it.
+            lock.lock(); let firstPts = firstFramePtsNs; lock.unlock()
+            let stalled = encoderStallFault && encoderStallFaultCovers(ptsNs: ptsNs, firstFramePtsNs: firstPts)
+            let outcome: WriterGate.Outcome = stalled
+                ? .dropped
+                : gate.append(pb, at: CMTime(value: ptsNs, timescale: 1_000_000_000))
             lock.lock()
             if outcome == .appended { framesAppended += 1 } else { framesDropped += 1 }
+            let endedRun = dropRuns.record(appended: outcome == .appended, ptsNs: ptsNs)
             lock.unlock()
+            if let run = endedRun { IO.send("warning", run.warning) }
             // STC-527: a failed writer reports as "not ready" forever, never
             // as a failed append (DiskDecisions.swift), so a dropped frame is
             // the only place the frame path can notice it. Cheap: only read on
@@ -2452,6 +2471,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // the tap is disabled below, so the disable CoreGraphics reports back
         // (handleTapEvent) is seen as ours and not re-enabled or counted.
         stoppingBegan = true
+        // STC-238: before the gate closes, so teardown's own refusals are not a hole.
+        let openRun = dropRuns.close()
         let cam = camera
         let m = mic
         let sysAudio = systemAudio
@@ -2472,6 +2493,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let displayStream = stream
         let midRestart = restarting
         lock.unlock()
+        if let run = openRun { IO.send("warning", run.warning) }
 
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let tapRunLoop { CFRunLoopStop(tapRunLoop) }
