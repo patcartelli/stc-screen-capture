@@ -623,6 +623,9 @@ function startSupervisor(): void {
   // STC-233: same reasoning, one device over — the mic also opens off the
   // critical path (MicCapture.swift) and reports separately once it resolves.
   sup.on("helper:mic-started", (l) => send("helper:mic-started", l));
+  // STC-528: the mic's live level for the pill's meter. Lossy at the helper and lossy
+  // here: `send`, never an invoke, ~13 a second, and the renderer keeps only the latest.
+  sup.on("helper:level", (l) => send("helper:level", l));
   // STC-388: the tray's Record item reads as Stop while a take is live, and
   // its own state can change with no window open to notice — reuse the same
   // heartbeat-confirmed events the pill already listens to (STC-375) rather

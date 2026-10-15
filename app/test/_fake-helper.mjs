@@ -37,6 +37,8 @@ const permissions = { screenRecording: fakeScreen === "1", inputMonitoring: fake
 const send = (ev, o = {}) => writeSync(3, JSON.stringify({ ev, ...o }) + "\n");
 /** stdout = lossy: stats only. */
 const stat = (o) => process.stdout.write(JSON.stringify({ ev: "stats", ...o }) + "\n");
+/** STC-528: the fake's `level` readings, see STC_FAKE_LEVEL below. */
+let levelTimer;
 
 setInterval(() => stat({
   state,
@@ -187,6 +189,17 @@ process.stdin.on("data", (chunk) => {
         } else if (process.env.STC_FAKE_MIC) {
           setTimeout(() => send("mic-started", { device: process.env.STC_FAKE_MIC }), 40);
         }
+        // STC-528. The real helper sends the mic's level on the LOSSY channel about 13
+        // times a second while a mic delivers. "live" is a steady mid-level reading,
+        // "silent" is what follows 10 s of nothing (the helper's own decision). Cleared
+        // by `stop` below, as the real one stops with the mic.
+        if (process.env.STC_FAKE_LEVEL) {
+          const silent = process.env.STC_FAKE_LEVEL === "silent";
+          clearInterval(levelTimer);
+          levelTimer = setInterval(() => process.stdout.write(JSON.stringify(
+            { ev: "level", peak: silent ? 0 : 0.3, silent }) + "\n"), 75);
+          levelTimer.unref?.();
+        }
         // Any warning code, after `started` — the real helper reports a tap it
         // could not install, or a stream that died, as a warning on the
         // reliable channel once the take is already running.
@@ -248,6 +261,7 @@ process.stdin.on("data", (chunk) => {
         // stand-in cannot tell "waited for the stop" from "did not" — the quit
         // test passed against the broken before-quit until this existed.
         const delay = Number(process.env.STC_FAKE_STOP_DELAY_MS) || 0;
+        clearInterval(levelTimer);
         setTimeout(() => {
           state = "idle";
           session = null;

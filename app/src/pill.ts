@@ -158,16 +158,72 @@ export function formatElapsedTimer(ms: number): string {
 }
 
 /**
- * No audio capture exists anywhere in the helper — mic is deferred since
- * phase 1 — and the ticket is explicit that the level meter must draw
- * hatched, "not at a plausible level where it would read as live."
- * `"hatched"` is the only value this type admits, so a future caller cannot
- * wire in a fabricated number and have it typecheck; drawing a real meter
- * needs a real audio signal, which is a type change here, not a rendering
- * choice at the call site.
+ * The level meter (STC-528). It used to be hatched only, because there was no
+ * audio signal to back a live one, and STC-375 was explicit that it must never
+ * be drawn "at a plausible level where it would read as live." That rule still
+ * holds: the only number a live meter draws is one the HELPER measured
+ * (`MicSignal` in `helper/src/MicSignalDecisions.swift`, sent as a lossy
+ * `level` event). So the meter is:
+ *
+ * - `hatched` — no reading has arrived this take: no mic, a mic that never
+ *   delivered a sample, or one that was lost (STC-237). Never a guessed level.
+ * - `live` — the bar's width is the last reading's peak.
+ * - `no-signal` — the helper says the mic has been silent for 10 s. The bar
+ *   flattens to a baseline and an amber dot sits at its end, tooltip
+ *   `NO_SIGNAL_TOOLTIP` (Patrick, 2026-10-15). Warn only: no toast, no sound,
+ *   no offer to stop (STC-505). It clears the moment signal returns.
  */
-export type LevelMeterMode = "hatched";
-export const METER_MODE: LevelMeterMode = "hatched";
+export type LevelMeterMode = "hatched" | "live" | "no-signal";
+
+/** One `level` reading, as the helper sends it: peak 0..1 (linear) and the 10 s silence flag. */
+export interface LevelReading { peak: number; silent: boolean }
+
+export interface MeterView {
+  mode: LevelMeterMode;
+  /** The bar's width as a fraction of the meter, 0..1. Zero unless `live`. */
+  fill: number;
+}
+
+/**
+ * The meter's floor, the helper's silence floor (`MicSignal.silenceFloorDbfs`):
+ * a reading at or under it draws an empty bar, so the bar is empty exactly when
+ * the helper calls the buffer silent.
+ */
+export const METER_FLOOR_DB = -60;
+
+/**
+ * The tooltip on the no-signal dot. "10 s" is `MicSignal.silentSpanMinNs`;
+ * `pill.test.ts` reads the Swift so the two cannot drift.
+ */
+export const NO_SIGNAL_TOOLTIP = "No mic signal for 10 s";
+
+/**
+ * A peak on a dB scale from `METER_FLOOR_DB` (empty) to 0 dBFS (full). Linear
+ * would leave ordinary speech (-30 to -12 dBFS) as a sliver.
+ */
+export function meterFill(peak: number): number {
+  if (!Number.isFinite(peak) || peak <= 0) return 0;
+  const db = 20 * Math.log10(Math.min(peak, 1));
+  return Math.max(0, Math.min(1, (db - METER_FLOOR_DB) / -METER_FLOOR_DB));
+}
+
+/**
+ * What the meter draws. `reading` is the latest one this take, or undefined if
+ * none has come; `micLost` is a lost mic (STC-237), after which a reading still
+ * in flight on the lossy channel must not bring the meter back.
+ */
+export function meterView(reading: LevelReading | undefined, micLost = false): MeterView {
+  if (!reading || micLost) return { mode: "hatched", fill: 0 };
+  if (reading.silent) return { mode: "no-signal", fill: 0 };
+  return { mode: "live", fill: meterFill(reading.peak) };
+}
+
+/** A `level` event's payload, or undefined when it is not one — the renderer trusts nothing. */
+export function parseLevel(l: unknown): LevelReading | undefined {
+  const o = l as { peak?: unknown; silent?: unknown } | null;
+  if (typeof o?.peak !== "number" || !Number.isFinite(o.peak) || typeof o.silent !== "boolean") return undefined;
+  return { peak: Math.max(0, Math.min(1, o.peak)), silent: o.silent };
+}
 
 /**
  * Snap vs. animate the resize is the ticket's own open question — snapping
@@ -193,6 +249,11 @@ export const PILL_THEME = {
   dotLive: "#ff3b30",
   dotPaused: "#f5f5f5",
   meterHatch: "#3a3a3c",
+  /** STC-528: the live bar, its empty track, the no-signal baseline, and its dot. */
+  meterLevel: "#f5f5f5",
+  meterTrack: "#2c2c2e",
+  meterBaseline: "#636366",
+  meterNoSignal: "#ff9f0a",
   /**
    * STC-447, answering the STC-375 runbook's open question: "is the whole
    * pill legible against whatever is likely to be behind it". A dark pill had

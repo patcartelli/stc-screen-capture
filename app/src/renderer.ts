@@ -125,7 +125,7 @@ import {
   placeholderFor, LOADING_PLACEHOLDER, UPDATING_NOTE, UPDATING_SHOW_AFTER_MS,
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
-import { formatElapsedTimer } from "./pill.js";
+import { formatElapsedTimer, meterView, NO_SIGNAL_TOOLTIP, parseLevel, type LevelReading } from "./pill.js";
 import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
@@ -175,6 +175,22 @@ pillBtn.addEventListener("click", () => recordBtn.click());
 new ResizeObserver(() => {
   recorder.reportPillWidth(Math.ceil(pillBtn.getBoundingClientRect().width));
 }).observe(pillBtn);
+
+// STC-528: the pill's level meter. `meterView` (pill.ts) decides; this only draws.
+// The reading is this take's latest; both reset when a take starts or ends, so a
+// take with no mic stays hatched rather than showing the last take's level.
+const pillMeter = $("pill-meter");
+let lastLevel: LevelReading | undefined;
+let micLost = false;
+function drawMeter(): void {
+  const v = meterView(lastLevel, micLost);
+  pillMeter.classList.toggle("live", v.mode === "live");
+  pillMeter.classList.toggle("no-signal", v.mode === "no-signal");
+  pillMeter.style.setProperty("--level", v.fill.toFixed(3));
+  if (v.mode === "no-signal") pillMeter.title = NO_SIGNAL_TOOLTIP;
+  else pillMeter.removeAttribute("title");
+}
+function resetMeter(): void { lastLevel = undefined; micLost = false; drawMeter(); }
 
 /**
  * Which display to record (STC-247). "Automatic" is the phase-1 behaviour —
@@ -432,6 +448,7 @@ function lockSettings(locked: boolean): void {
  * only function that writes any of these four things.
  */
 function applyRecordingState(recording_: boolean): void {
+  if (recording_ !== recording) resetMeter();
   recording = recording_;
   if (!recording) takeReports.newTake();
   recordBtn.textContent = recording ? "Stop" : "Record";
@@ -787,6 +804,15 @@ recorder.on("helper:mic-started", (l) => {
   reportDevice("mic", String(l.device ?? "live"));
 });
 
+// STC-528: the helper's lossy `level` reading, ~13 a second while a mic delivers.
+// Ignored outside a take: one still in flight after the stop must not light the meter.
+recorder.on("helper:level", (l) => {
+  const r = parseLevel(l);
+  if (!r || !recording) return;
+  lastLevel = r;
+  drawMeter();
+});
+
 recorder.on("helper:respawned", () => setState("recovered — helper restarted"));
 recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The recorder keeps failing to start. Restart the app."); });
 
@@ -963,6 +989,8 @@ recorder.on("helper:warning", (l) => {
   if (TRACK_LOSS_WARNINGS.has(code)) {
     const device = code.startsWith("camera") ? "camera" : "mic";
     reportDevice(device, code.endsWith("-disconnected") ? "disconnected" : `failed — ${code}`);
+    // STC-528: no mic track from here on, so the meter goes back to hatched.
+    if (device === "mic") { micLost = true; drawMeter(); }
     console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }

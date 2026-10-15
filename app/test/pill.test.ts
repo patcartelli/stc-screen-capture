@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   clampPillWidth, decidePillAction, formatElapsedTimer,
-  MIN_PILL_WIDTH_PX, METER_MODE, RESIZE_STYLE, PILL_HEIGHT_PX,
+  MIN_PILL_WIDTH_PX, RESIZE_STYLE, PILL_HEIGHT_PX,
   PILL_STOPPED_DWELL_MS, shouldDwell, shouldShowTrackNotice,
+  METER_FLOOR_DB, NO_SIGNAL_TOOLTIP, meterFill, meterView, parseLevel,
 } from "../src/pill.js";
 import { HELPER_STOP_REASONS, pillLabel, trackLossPillLabel } from "../src/stop-copy.js";
 
@@ -113,11 +116,54 @@ describe("constants the design fixes", () => {
     expect(PILL_HEIGHT_PX).toBe(26);
   });
 
-  it("only ever draws the meter hatched — no audio capture exists to back a live one", () => {
-    expect(METER_MODE).toBe("hatched");
-  });
-
   it("only implements snap — animate is the ticket's own open question", () => {
     expect(RESIZE_STYLE).toBe("snap");
+  });
+});
+
+describe("the level meter (STC-528)", () => {
+  const swift = readFileSync(join(__dirname, "..", "..", "helper/src/MicSignalDecisions.swift"), "utf8");
+
+  it("is hatched until the helper has sent a reading — never a guessed level", () => {
+    expect(meterView(undefined, false)).toEqual({ mode: "hatched", fill: 0 });
+  });
+
+  it("is hatched once the mic is lost, even if a reading is still in flight", () => {
+    expect(meterView({ peak: 0.5, silent: false }, true).mode).toBe("hatched");
+  });
+
+  it("goes live on a reading and moves with it", () => {
+    const quiet = meterView({ peak: 0.01, silent: false });
+    const loud = meterView({ peak: 0.5, silent: false });
+    expect(quiet.mode).toBe("live");
+    expect(loud.fill).toBeGreaterThan(quiet.fill);
+  });
+
+  it("shows no-signal, with an empty bar, when the helper says silent; clears when it does not", () => {
+    expect(meterView({ peak: 0, silent: true }, false)).toEqual({ mode: "no-signal", fill: 0 });
+    expect(meterView({ peak: 0.2, silent: false }, false).mode).toBe("live");
+  });
+
+  it("is a dB scale from the helper's silence floor to full scale", () => {
+    expect(meterFill(0)).toBe(0);
+    expect(meterFill(10 ** (METER_FLOOR_DB / 20))).toBeCloseTo(0, 9);
+    expect(meterFill(1)).toBe(1);
+    expect(meterFill(2)).toBe(1);
+    expect(meterFill(10 ** (-30 / 20))).toBeCloseTo(0.5, 9);   // ordinary speech is mid-bar, not a sliver
+    expect(meterFill(Number.NaN)).toBe(0);
+  });
+
+  it("uses the helper's own floor and duration, read from the Swift", () => {
+    expect(swift).toMatch(new RegExp(`silenceFloorDbfs: Double = ${METER_FLOOR_DB}\\b`));
+    const ns = Number(/silentSpanMinNs: Int64 = ([\d_]+)/.exec(swift)?.[1]?.replace(/_/g, ""));
+    expect(NO_SIGNAL_TOOLTIP).toBe(`No mic signal for ${ns / 1e9} s`);
+  });
+
+  it("trusts nothing it is sent", () => {
+    expect(parseLevel({ peak: 0.3, silent: false })).toEqual({ peak: 0.3, silent: false });
+    expect(parseLevel({ peak: 7, silent: true })).toEqual({ peak: 1, silent: true });
+    for (const bad of [null, undefined, {}, { peak: "0.3", silent: false }, { peak: 0.3 }, { peak: Number.NaN, silent: false }]) {
+      expect(parseLevel(bad)).toBeUndefined();
+    }
   });
 });
