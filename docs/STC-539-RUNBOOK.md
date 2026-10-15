@@ -30,6 +30,16 @@ That leaves two explanations for the 2026-10-14 take, and the take itself cannot
 
 The trashed take (`~/Library/Mobile Documents/.Trash/2026-10-14_12-40-15`) fits both. Its `camera.mp4` was last modified at 12:40 (creation) while `display.mp4` was last written at 12:41.
 
+## §1 result (2026-10-15, real app, this branch)
+
+**Not reproduced through the app either.** Whole screen at 4K, FaceTime HD Camera, Elgato Wave:3 mic, system audio, started from the hotkey, `pkill -9 stc-helper` at ~60 s (take `2026-10-15_16-42-30`):
+
+- the `[camera]` count climbed steadily the whole take, 1749 frames at 60.0 s
+- `camera.mp4` was 59.5 MB, its last frame at 59.64 s against a recovered stop of 60.25 s
+- recovery (`recorder-quit`) kept the camera, `present: true`, so the PiP survived
+
+Two clean-stop takes the same afternoon (34 s, 69 s) were fine too. Whatever emptied the 2026-10-14 camera.mp4 is intermittent, or depended on something not repeated here. The most likely candidate is explanation 1: a camera that stalled after its first frame, which nothing warns about. The `[camera]` log line in `npm run app:start`'s terminal now makes a recurrence diagnosable on the spot.
+
 ## What this branch adds to tell them apart
 
 - **The stats heartbeat carries `cameraFrames`** (`CaptureSession.stats()`): frames that actually landed in camera.mp4. It appears once the camera is stored.
