@@ -147,10 +147,16 @@ export const GATE_DECODER_PREFERENCE = "prefer-software";
  * healthy run once the e2e suite grows past it. When it does, re-measure and
  * raise it; do not read that red as a hang without checking the step's log.
  *
+ * RE-MEASURED 2026-10-15 (STC-237), because it did: master's STC-531 and
+ * STC-541 pushes and STC-237's PR run all ended at the 27 min bound, the last
+ * with every one of 3750 tests passed at 1620 s. Over the 24 runs that finished
+ * from 2026-10-12 to 2026-10-14 the step took 1045-1599 s, and the suite itself
+ * reached 1620 s. 35 min is ~1.3x that, the same rule as before.
+ *
  * The Test step's `timeout-minutes` in ci.yml must equal this, and
  * gate-bounds.test.ts asserts it.
  */
-export const TEST_STEP_MS = 27 * 60_000;
+export const TEST_STEP_MS = 35 * 60_000;
 
 /**
  * Everything from the job's start to the start of `Test`: checkout,
