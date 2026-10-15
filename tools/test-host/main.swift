@@ -26,7 +26,7 @@ func arg(_ name: String) -> String? {
 }
 
 guard let outPath = arg("--out") else {
-    FileHandle.standardError.write("usage: --out <result.json> [--probe | --camera-request | --mic-request | --camera-probe --helper <bin> | --cursor-probe --helper <bin> [--ms <n>] [--on-main] | --helper <bin> --dir <sessionDir> --ms <n> [--camera] [--mic <uid>]]\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: --out <result.json> [--probe | --camera-request | --mic-request | --camera-probe --helper <bin> | --cursor-probe --helper <bin> [--ms <n>] [--on-main] | --helper <bin> --dir <sessionDir> --ms <n> [--camera] [--mic <uid>] [--system-audio] [--kill-after-ms <n>]]\n".data(using: .utf8)!)
     exit(2)
 }
 let outURL = URL(fileURLWithPath: outPath)
@@ -123,7 +123,7 @@ func runMicRequest() {
 /// said. Assertions live in the test suite, not here: this writes a transcript,
 /// it does not decide whether the transcript is good.
 func runSession(helper: String, dir: String, recordMs: Int, camera: Bool, mic: String?,
-                systemAudio: Bool = false) {
+                systemAudio: Bool = false, killAfterMs: Int? = nil) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: helper)
     // No fd3: Process cannot hand a child an arbitrary descriptor without
@@ -189,6 +189,31 @@ func runSession(helper: String, dir: String, recordMs: Int, camera: Bool, mic: S
     if systemAudio { startCmd["systemAudio"] = true }
     send(startCmd)
     let startOutcome = waitFor("start", { ($0["seq"] as? Int) == 1 }, timeout: 30)
+
+    // STC-539: SIGKILL the helper mid-take instead of stopping it — the crash
+    // STC-394's fragments exist for — so a CAMERA take can be killed under this
+    // bundle's Camera grant. No stop, no quit: what the writers already put on
+    // disk is all the take will have. `lastStats` is the final heartbeat before
+    // the kill, whose `cameraFrames` says whether the camera was still delivering.
+    if let killAfterMs, startOutcome?["ev"] as? String == "started" {
+        usleep(useconds_t(killAfterMs * 1000))
+        lock.lock()
+        let lastStats = lines.last(where: { $0["ev"] as? String == "stats" && $0["state"] as? String == "recording" })
+        lock.unlock()
+        kill(p.processIdentifier, SIGKILL)
+        p.waitUntilExit()
+        lock.lock()
+        let transcript = lines
+        lock.unlock()
+        writeResult([
+            "verdict": "killed",
+            "startOutcome": startOutcome ?? [:],
+            "lastStats": lastStats ?? [:],
+            "transcript": transcript,
+            "dir": dir,
+        ])
+        exit(0)
+    }
 
     if startOutcome?["ev"] as? String == "started" {
         usleep(useconds_t(recordMs * 1000))
@@ -414,7 +439,8 @@ DispatchQueue.main.async {
     DispatchQueue.global().async {
         runSession(helper: helper, dir: dir, recordMs: Int(arg("--ms") ?? "3000") ?? 3000,
                    camera: args.contains("--camera"), mic: arg("--mic"),
-                   systemAudio: args.contains("--system-audio"))
+                   systemAudio: args.contains("--system-audio"),
+                   killAfterMs: arg("--kill-after-ms").flatMap(Int.init))
     }
 }
 app.run()

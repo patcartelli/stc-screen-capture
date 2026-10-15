@@ -2430,12 +2430,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stats() -> [String: Any] {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        let liveCam = camera
         // `events` counts everything in the file, cursor events included;
         // `cursorEvents` is the shape changes alone, so the app can show the
         // two side by side and a take with no pointer motion still reads as
         // such.
-        return ["frames": framesAppended, "dropped": framesDropped,
+        var s: [String: Any] = ["frames": framesAppended, "dropped": framesDropped,
                 "framesPaused": framesPaused,
                 "eventsPaused": eventsPaused,
                 "paused": pauseGate.isPaused,
@@ -2446,6 +2447,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 "tapDisabled": ["timeout": tapDisables["timeout"] ?? 0,
                                 "userInput": tapDisables["userInput"] ?? 0,
                                 "afterStop": tapDisablesAfterStop]]
+        lock.unlock()
+        // STC-539: present once the camera is stored, so a take killed mid-way
+        // can say whether its camera was still delivering at the kill. Read
+        // after `lock` is released, as `currentAnchorsDocument` reads the
+        // camera's track, so the two locks never nest.
+        if let liveCam { s["cameraFrames"] = liveCam.appendedFrames() }
+        return s
     }
 
     /// No camera field here on purpose: the camera opens asynchronously (see
