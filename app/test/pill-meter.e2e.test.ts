@@ -70,7 +70,8 @@ describe("the pill's mic level (STC-528)", () => {
       await new Promise((r) => setTimeout(r, 250));
     }
     expect(await win.isDisabled("#pill")).toBe(false);
-    expect(await win.getAttribute("#pill", "class")).not.toMatch(/stopped|notice/);
+    // No class attribute at all is null, not "": the pill has neither state.
+    expect((await win.getAttribute("#pill", "class")) ?? "").not.toMatch(/stopped|notice/);
   }, 240_000);
 
   test("a take with no mic stays hatched", async () => {
