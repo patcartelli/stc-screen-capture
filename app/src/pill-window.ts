@@ -64,6 +64,14 @@ import { setBoundsUnlessClosing } from "./window-geometry.js";
  */
 export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number): Rectangle {
   if (win.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 };
+  // STC-538: the pill IS this window, so it has to be on screen. A minimized
+  // window (Dock) or an app hidden with ⌘H would otherwise collapse out of
+  // sight and leave a take running with no timer and no stop control. Done
+  // BEFORE `getBounds`, so the bounds are the restored ones, not the Dock's.
+  // `showInactive`, never `show`: it must not take the keyboard from the app
+  // being recorded.
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.showInactive();
   const previousBounds = win.getBounds();
   const workArea = screen.getDisplayMatching(previousBounds).workArea;
   const width = Math.min(clampPillWidth(measuredContentWidthPx), workArea.width);
