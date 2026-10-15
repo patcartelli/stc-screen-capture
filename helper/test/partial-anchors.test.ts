@@ -9,6 +9,7 @@ describe("anchors.partial.json (STC-530)", () => {
         "helper/src/StillDecisions.swift",
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
+        "helper/src/MicSignalDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/src/PartialAnchors.swift",
         "helper/test/partial-anchors/main.swift",

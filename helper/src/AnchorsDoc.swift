@@ -108,6 +108,9 @@ struct MicTrack {
     /// STC-237: why the track ended before the take did (`disconnected`, or
     /// `format-mismatch` from STC-485's guard), or nil when it ran to the end.
     var endedBy: String? = nil
+    /// STC-528: the stretches of no mic signal at least `MicSignal.silentSpanMinNs`
+    /// long, in order. Empty means none, and writes no key.
+    var silentSpans: [SilentSpan] = []
 }
 
 /// What the system-audio track turned out to be (STC-418). `nil` means no
@@ -224,6 +227,11 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                 "lastFramePtsNs": m.lastFramePtsNs,
             ]
             if let e = m.endedBy { micBlock?["endedBy"] = e }
+            // STC-528: written only when there is one, so a take with a live mic all the
+            // way through keeps the version its other blocks earned.
+            if !m.silentSpans.isEmpty {
+                micBlock?["silentSpans"] = m.silentSpans.map { ["startNs": Int($0.startNs), "endNs": Int($0.endNs)] }
+            }
         }
     }
     var systemBlock: [String: Any]?
@@ -260,6 +268,8 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     // `endedBy` on a track that was never written (not requested, or present:false) can
     // neither appear nor bump the version. 11 is the app's own (recorder-quit) and is skipped.
     if cameraBlock?["endedBy"] != nil || micBlock?["endedBy"] != nil { version = max(version, 12) }
+    // STC-528: a mic with at least one stretch of no signal. Read off the block, same reason.
+    if micBlock?["silentSpans"] != nil { version = max(version, 13) }
     var capturedBlock: [String: Any] = ["width": capture.width, "height": capture.height, "codec": "h264",
                                          "firstFrameNs": max(0, capture.firstFrameNs)]
     if let colorSpace { capturedBlock["colorSpace"] = colorSpace }
