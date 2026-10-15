@@ -588,7 +588,18 @@ function startSupervisor(): void {
     statsIntervalMs: 500,
   });
   sup.on("ready", (l) => send("helper:ready", l));
-  sup.on("stats", (l) => send("helper:stats", l));
+  // STC-539: the diagnostics table is hidden behind the pill for the whole take,
+  // which is exactly when the camera's count matters, so it goes to stdout too.
+  let cameraLogBucket = -1;
+  sup.on("stats", (l) => {
+    send("helper:stats", l);
+    const s = l as { cameraFrames?: number; elapsedMs?: number };
+    if (s.cameraFrames == null || s.elapsedMs == null) { cameraLogBucket = -1; return; }
+    const bucket = Math.floor(s.elapsedMs / 5000);
+    if (bucket === cameraLogBucket) return;
+    cameraLogBucket = bucket;
+    console.log(`[camera] ${s.cameraFrames} frames at ${(s.elapsedMs / 1000).toFixed(1)}s`);
+  });
   sup.on("respawned", (i) => send("helper:respawned", i));
   sup.on("gave-up", (i) => send("helper:gave-up", i));
   // The helper died mid-take (STC-530). Since the helper keeps anchors.partial.json current,
