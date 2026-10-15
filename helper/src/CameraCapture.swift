@@ -377,6 +377,14 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         w.finishWriting { finish(self.track()) }
     }
 
+    /// Frames that landed in camera.mp4 so far, for the stats heartbeat (STC-539).
+    /// `anchors.partial.json` is rewritten at the camera's FIRST frame and not
+    /// after, so it cannot say whether frames kept arriving; this can.
+    func appendedFrames() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return appended
+    }
+
     /// Also read live by CaptureSession for anchors.partial.json (STC-530); takes the lock.
     func track() -> CameraTrack? {
         lock.lock(); defer { lock.unlock() }

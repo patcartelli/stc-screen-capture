@@ -8,7 +8,7 @@ vi.mock("electron", () => ({
 import { collapsePill } from "../src/pill-window.js";
 
 /** The calls collapsePill makes, in order, on a window in the given state. */
-function fakeWindow(state: { minimized: boolean; visible: boolean }) {
+function fakeWindow(state: { minimized: boolean; visible: boolean; loading?: boolean }) {
   const calls: string[] = [];
   const win = {
     isDestroyed: () => false,
@@ -23,7 +23,7 @@ function fakeWindow(state: { minimized: boolean; visible: boolean }) {
     setAlwaysOnTop: () => {},
     setVisibleOnAllWorkspaces: () => {},
     setWindowButtonVisibility: () => {},
-    webContents: { send: () => {} },
+    webContents: { send: () => {}, isLoading: () => state.loading ?? false },
   };
   return { win, calls };
 }
@@ -41,6 +41,14 @@ describe("collapsePill makes the window visible first (STC-538)", () => {
     collapsePill(win as never, 200);
     expect(calls).toContain("showInactive");
     expect(calls.indexOf("showInactive")).toBeLessThan(calls.indexOf("getBounds"));
+  });
+
+  // createWindow({ asPill }) shows it at did-finish-load; shown earlier it came
+  // up focused on CI (launch-no-window.e2e).
+  it("does not show a window whose page is still loading", () => {
+    const { win, calls } = fakeWindow({ minimized: false, visible: false, loading: true });
+    collapsePill(win as never, 200);
+    expect(calls).not.toContain("showInactive");
   });
 
   it("leaves an already-visible window alone", () => {

@@ -706,6 +706,8 @@ recorder.on("helper:stats", (s) => {
   // STC-309: shape changes are counted inside `events` too; shown apart so a
   // take with no pointer motion still reads as one.
   $("cursorEvents").textContent = s.cursorEvents ?? "—";
+  // STC-539: absent until the camera has opened, and on a take without one.
+  $("cameraFrames").textContent = s.cameraFrames ?? "—";
   $("elapsed").textContent = s.elapsedMs != null ? `${(s.elapsedMs / 1000).toFixed(1)}s` : "—";
   // The pill's own timer (STC-375) — same heartbeat, same elapsedMs, just
   // formatted the way a small always-on-top strip needs rather than the

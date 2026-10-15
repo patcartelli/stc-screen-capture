@@ -70,8 +70,13 @@ export function collapsePill(win: BrowserWindow, measuredContentWidthPx: number)
   // BEFORE `getBounds`, so the bounds are the restored ones, not the Dock's.
   // `showInactive`, never `show`: it must not take the keyboard from the app
   // being recorded.
+  // Not while the page is still LOADING: that is the window `createWindow`
+  // builds hidden for a take started with no window open, and it shows that
+  // window itself once the page loads. Shown here, before the load, it came up
+  // FOCUSED on CI (launch-no-window.e2e), taking the keyboard from the app
+  // being recorded. A minimized or ⌘H-hidden library has long since loaded.
   if (win.isMinimized()) win.restore();
-  if (!win.isVisible()) win.showInactive();
+  if (!win.isVisible() && !win.webContents.isLoading()) win.showInactive();
   const previousBounds = win.getBounds();
   const workArea = screen.getDisplayMatching(previousBounds).workArea;
   const width = Math.min(clampPillWidth(measuredContentWidthPx), workArea.width);
