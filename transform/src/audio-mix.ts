@@ -70,26 +70,116 @@ export interface PcmTrack {
 export function trackFromChunks(chunks: PcmChunk[], label: string): PcmTrack | null {
   if (chunks.length === 0) return null;
   const sorted = [...chunks].sort((a, b) => a.timestampUs - b.timestampUs);
-  const first = sorted[0]!;
-  const rate = first.sampleRate;
-  const nch = first.channels.length;
+  const builder = new PcmTrackBuilder(label, {
+    firstUs: sorted[0]!.timestampUs,
+    lastUs: sorted[sorted.length - 1]!.timestampUs,
+  });
   for (const c of sorted) {
-    if (c.sampleRate !== rate || c.channels.length !== nch) {
+    builder.add(c.timestampUs, c.sampleRate, c.channels.length, c.channels[0]?.length ?? 0,
+      (ch, dst) => dst.set(c.channels[ch]!));
+  }
+  return builder.finish();
+}
+
+/**
+ * Builds a `PcmTrack` one decoded chunk at a time, writing each straight into
+ * its place in the contiguous track (STC-491). This is what lets
+ * decode-audio.ts copy an `AudioData` out and close it inside the decoder's
+ * own output callback: the track is the ONLY full copy of the audio that
+ * ever exists. Before, three did at the load's peak — every `AudioData` held
+ * until the flush, a `Float32Array` per chunk, then the contiguous track —
+ * and renderer RSS, which keeps its high-water mark, paid for all three.
+ *
+ * The placement rule is `trackFromChunks`'s, unchanged: a chunk sits at the
+ * index its own timestamp says, rounded on the FIRST chunk's rate, measured
+ * from the first chunk; a gap is zeros; an overlap is overwritten by the
+ * later chunk. Two things differ in how it gets there, neither in a sample:
+ *
+ * - **Chunks must arrive in timestamp order.** `trackFromChunks` sorts first;
+ *   a decoder's output cannot be sorted without holding it, which is the copy
+ *   this exists to remove. WebCodecs emits outputs in the order chunks were
+ *   decoded, and demux-audio.ts's timestamps only ever increase, so an
+ *   out-of-order chunk is refused by name rather than placed under a
+ *   different overwrite order than the sorted path would have used.
+ * - **The size is a guess from the sample table, made at the first chunk.**
+ *   `hint.lastUs` (the demuxed LAST chunk's timestamp) plus one first-chunk's
+ *   worth of frames, at the DECODED rate — the container's own rate is a
+ *   separate claim from the bitstream's (export.ts, STC-233), so it is never
+ *   used here. A chunk past the guess grows the track (a copy, rare); a track
+ *   shorter than the guess is returned as a view of exactly its own length,
+ *   so `channels[c].length` is what `trackFromChunks` always returned.
+ *
+ * A chunk whose rate or channel count differs from the first is refused with
+ * `trackFromChunks`'s own message, at the chunk where it happens: STC-233
+ * saw a mic change format mid-take on real hardware, and a mix built on a
+ * guess about which half is right would be the quiet kind of wrong.
+ */
+export class PcmTrackBuilder {
+  private rate = 0;
+  private nch = 0;
+  private startUs = 0;
+  private lastUs = -Infinity;
+  private out: Float32Array[] | null = null;
+  private extent = 0;
+
+  constructor(
+    private readonly label: string,
+    /** The demuxed sample table's first and last chunk timestamps — sizes the track up front. */
+    private readonly hint?: { firstUs: number; lastUs: number },
+  ) {}
+
+  /**
+   * Places one chunk of `frames` frames at `timestampUs`. `copyPlane(ch, dst)`
+   * must fill `dst` (exactly `frames` long) with channel `ch`'s samples.
+   */
+  add(
+    timestampUs: number, sampleRate: number, numberOfChannels: number, frames: number,
+    copyPlane: (ch: number, dst: Float32Array) => void,
+  ): void {
+    if (this.out === null) {
+      this.rate = sampleRate;
+      this.nch = numberOfChannels;
+      this.startUs = timestampUs;
+      const lastUs = Math.max(timestampUs, this.hint?.lastUs ?? timestampUs);
+      const capacity = this.offsetOf(lastUs) + frames;
+      this.out = Array.from({ length: numberOfChannels }, () => new Float32Array(capacity));
+    } else if (sampleRate !== this.rate || numberOfChannels !== this.nch) {
       throw new Error(
-        `${label}: decoded chunks are not uniform — ${nch}ch/${rate}Hz and ` +
-        `${c.channels.length}ch/${c.sampleRate}Hz in one track`);
+        `${this.label}: decoded chunks are not uniform — ${this.nch}ch/${this.rate}Hz and ` +
+        `${numberOfChannels}ch/${sampleRate}Hz in one track`);
     }
+    if (timestampUs < this.lastUs) {
+      throw new Error(
+        `${this.label}: decoded chunks arrived out of timestamp order — ` +
+        `${timestampUs}us after ${this.lastUs}us`);
+    }
+    this.lastUs = timestampUs;
+    const at = this.offsetOf(timestampUs);
+    const need = at + frames;
+    const capacity = this.out[0]?.length ?? 0;
+    if (need > capacity) this.grow(Math.max(need, Math.ceil(capacity * 1.25)));
+    for (let ch = 0; ch < this.nch; ch++) copyPlane(ch, this.out[ch]!.subarray(at, need));
+    if (need > this.extent) this.extent = need;
   }
-  const startUs = first.timestampUs;
-  const offsetOf = (c: PcmChunk) => Math.round((c.timestampUs - startUs) * rate / 1e6);
-  let length = 0;
-  for (const c of sorted) length = Math.max(length, offsetOf(c) + (c.channels[0]?.length ?? 0));
-  const out = Array.from({ length: nch }, () => new Float32Array(length));
-  for (const c of sorted) {
-    const at = offsetOf(c);
-    for (let ch = 0; ch < nch; ch++) out[ch]!.set(c.channels[ch]!, at);
+
+  /** The track, or null if no chunk was ever added. */
+  finish(): PcmTrack | null {
+    if (this.out === null) return null;
+    const channels = this.out.map((c) => c.length === this.extent ? c : c.subarray(0, this.extent));
+    return { startNs: this.startUs * 1000, sampleRate: this.rate, channels };
   }
-  return { startNs: startUs * 1000, sampleRate: rate, channels: out };
+
+  private offsetOf(timestampUs: number): number {
+    return Math.round((timestampUs - this.startUs) * this.rate / 1e6);
+  }
+
+  private grow(capacity: number): void {
+    this.out = this.out!.map((c) => {
+      const next = new Float32Array(capacity);
+      next.set(c.subarray(0, this.extent));
+      return next;
+    });
+  }
 }
 
 /** How many output frames a window `[fromNs, toNs)` holds at MIX_SAMPLE_RATE. */
