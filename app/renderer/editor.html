@@ -123,7 +123,8 @@
        margin. Camera comes first when the take has one; Clicks is always
        present, so it takes the margin otherwise. Audio and Keys follow, 8px
        apart. */
-    #pipbtn, #clicksbtn { anchor-name: none; }
+    #pipbtn { anchor-name: --pipbtn; }
+    #clicksbtn { anchor-name: none; }
     #pipbtn:not([hidden]) ~ #clicksbtn { margin-left: 8px; }
     #audiobtn { margin-left: 8px; }
     /* On is drawn with a thicker line (2px accent: the 1px border plus a 1px
@@ -132,11 +133,13 @@
     #clicksbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
                                       box-shadow: inset 0 0 0 1px var(--accent); }
     #clicksbtn[aria-pressed="false"] { opacity: .6; }
-    /* Not anchored to the button: it opens OVER the stage on the side away
-       from the PiP (editor.ts's placePipPanel, pip-style.ts's inspectorSide),
-       so the PiP stays pressable while it is open. left/top/max-height are set
-       on beforetoggle; width is PIP_PANEL_WIDTH_PX there. */
-    #pippanel { position: fixed; inset: auto; margin: 0; overflow: auto; box-sizing: border-box;
+    /* The Camera popover is anchored to its button above the timecode row, the
+       same as #audiopanel (STC-483, Patrick 2026-10-16: the earlier over-the-
+       stage placement collided with the timeline lanes). It can cover the PiP
+       while open; a press on the PiP's overlay closes it and a drag re-opens it. */
+    #pippanel { position-anchor: --pipbtn; position-area: top span-left; margin: 0 0 6px;
+                position-try-fallbacks: flip-block; inset: auto; overflow: auto; box-sizing: border-box;
+                width: 300px; max-height: calc(100vh - 80px);
                 padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                 background: var(--surface, var(--bg)); color: var(--text);
                 box-shadow: var(--shadow-card); }
