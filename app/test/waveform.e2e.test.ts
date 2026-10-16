@@ -60,6 +60,8 @@ describe("the audio lane", () => {
     const win = await openEditor(makeMicTakeFolder().dir);
     await expect.poll(() => win.isVisible("#audio-lane"), { timeout: 20_000 }).toBe(true);
     const before = await laneHeight(win);
+    // The grip can sit below the fold of a small window; the mouse needs it on screen.
+    await win.locator("#audio-resize").scrollIntoViewIfNeeded();
     const grip = (await win.locator("#audio-resize").boundingBox())!;
     const x = grip.x + grip.width / 2;
     const y = grip.y + grip.height / 2;
