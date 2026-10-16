@@ -7,6 +7,7 @@ import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
+import { isCloseKey, CLOSE_SHEET_SCRIPT } from "./close-shortcut.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
   buildThumbMenu, type ThumbMenuContext, type ThumbMenuId,
@@ -309,6 +310,16 @@ function createWindow(): void {
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(join(here, "..", "renderer", "index.html"));
+  // STC-552: ⌘W closes the Settings sheet first, the window only when no sheet
+  // is open. Runs ahead of the menu's Close Window accelerator.
+  const w = win;
+  w.webContents.on("before-input-event", (event, input) => {
+    if (!isCloseKey(input)) return;
+    event.preventDefault();
+    void w.webContents.executeJavaScript(CLOSE_SHEET_SCRIPT)
+      .then((closedSheet) => { if (!closedSheet && !w.isDestroyed()) w.close(); })
+      .catch(() => { if (!w.isDestroyed()) w.close(); });
+  });
   reconcileIcons();
 }
 
