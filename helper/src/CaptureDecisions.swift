@@ -456,6 +456,13 @@ struct StartRequest: Equatable {
     /// literal `true` — the same latitude `systemAudio` gets. When off, keyDown
     /// is not even in the tap's mask.
     var keys: Bool = false
+    /// STC-550: this app's own windows to leave out of a display or region
+    /// take: the pill, which floats over the screen being recorded. Resolved
+    /// against `SCShareableContent` in `resolveCaptureTarget`; an id that is
+    /// not on screen is simply not excluded, the same latitude
+    /// `parseStillRequest` gives its own `excludeWindowIds`. A window take
+    /// ignores it: its filter already holds only the one window.
+    var excludeWindowIds: [UInt32] = []
 }
 
 extension StartRequest {
@@ -470,6 +477,9 @@ extension StartRequest {
                   camera: r.camera, micDeviceUid: r.micDeviceUid,
                   cameraDeviceUid: r.cameraDeviceUid, systemAudio: r.systemAudio)
         self.keys = r.keys
+        // A refit rebuilds the filter; without this the pill would appear in
+        // the take from the first refit on (STC-550).
+        self.excludeWindowIds = r.excludeWindowIds
     }
 }
 
@@ -554,6 +564,9 @@ func parseStartRequest(_ cmd: [String: Any]) -> Result<StartRequest, StartReques
                                windowId: windowId, camera: camera, micDeviceUid: micDeviceUid,
                                cameraDeviceUid: cameraDeviceUid, systemAudio: systemAudio)
     request.keys = cmd["keys"] as? Bool ?? false
+    // STC-550: a malformed entry is dropped rather than refused: a bad id
+    // costs only its own exclusion, never the take.
+    request.excludeWindowIds = (cmd["excludeWindowIds"] as? [Any] ?? []).compactMap(id32)
     return .success(request)
 }
 

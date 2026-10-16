@@ -9,6 +9,7 @@ import { startRecordFlow } from "./_record-flow.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { windowCount, pageWithUrl } from "./_windows.js";
 import { toastText } from "./_toast.js";
+import { pillPage, pillShowing, pillWindowState } from "./_pill.js";
 
 /**
  * The helper stops a take by itself (STC-531): the pill says why for
@@ -49,7 +50,7 @@ async function launch(extraEnv: Record<string, string>): Promise<Page> {
   return win;
 }
 
-/** Stop at 2.5 s: past at least one heartbeat, so the pill has collapsed (pill.e2e.test.ts). */
+/** Stop at 2.5 s: well past the pill showing (pill.e2e.test.ts). */
 const DEATH_MS = "2500";
 
 async function stoppedPanel(reason: string): Promise<{ win: Page; panel: Page }> {
@@ -65,15 +66,17 @@ describe("a take the helper stopped by itself (STC-531)", () => {
   test("window closed: the pill says so, THEN the panel, and no toast", async () => {
     const win = await launch({ STC_FAKE_STREAM_DEATH_MS: DEATH_MS, STC_FAKE_STOP_REASON: "window-closed" });
     await startRecordFlow(app!, win);
+    await expect.poll(() => pillShowing(app!), { timeout: 30_000 }).toBe(true);
+    const pill = await pillPage(app!);
     // The label is up while the panel is not: the two are never on screen together.
-    await expect.poll(() => win.textContent("#pill-label"), { timeout: 30_000 }).toBe("Window closed");
-    expect(await win.getAttribute("#pill", "class")).toContain("stopped");
-    expect(await win.isDisabled("#pill"), "a click here would start a new take").toBe(true);
+    await expect.poll(() => pill.textContent("#pill-label"), { timeout: 30_000 }).toBe("Window closed");
+    expect(await pill.getAttribute("#pill", "class")).toContain("stopped");
+    expect(await pill.isDisabled("#pill-stop"), "there is no take left to stop").toBe(true);
     expect(await windowCount(app!, "thumbnail.html")).toBe(0);
-    // Then the label clears and the panel goes up with the line.
+    // Then the pill goes (STC-550: its window is the take's) and the panel
+    // goes up with the line.
     await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: 15_000 }).toBe(1);
-    expect(await win.textContent("#pill-label")).toBe("");
-    expect(await win.isDisabled("#pill")).toBe(false);
+    await expect.poll(() => pillWindowState(app!).then((s) => s.exists), { timeout: 15_000 }).toBe(false);
     const panel = await pageWithUrl(app!, "thumbnail.html");
     await panel.waitForLoadState("domcontentloaded");
     await expect.poll(() => panel.textContent("#takereason"), { timeout: 15_000 })

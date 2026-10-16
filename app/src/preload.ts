@@ -76,10 +76,6 @@ contextBridge.exposeInMainWorld("recorder", {
   start: () => ipcRenderer.invoke("recorder:start"),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),
-  // STC-375: fire-and-forget, not invoke — nothing awaits an answer, and the
-  // pill's width can change several times a minute (a digit added to the
-  // timer). `send` rather than `invoke` is what keeps that cheap.
-  reportPillWidth: (px: number) => ipcRenderer.send("pill:contentWidth", px),
   // STC-412: main-window warnings route through the toast.
   showToast: (message: string | { title?: string; body: string; action?: { id: string; label: string } }) =>
     ipcRenderer.send("toast:message", message),
@@ -89,8 +85,6 @@ contextBridge.exposeInMainWorld("recorder", {
     const channels = ["helper:ready", "helper:stats", "helper:respawned",
                       "helper:gave-up", "helper:recording-lost", "helper:recording-ended",
                       "helper:warning", "helper:camera-started", "helper:mic-started",
-                      // STC-528: the mic's live level, for the pill's meter.
-                      "helper:level",
                       // A capture the window did not ask for — a hotkey or the
                       // menu bar (STC-292). The shot is on disk either way;
                       // this is only so an open window stays truthful.
@@ -99,17 +93,8 @@ contextBridge.exposeInMainWorld("recorder", {
                       // main (a panel's Save or Edit) — rescan, whatever chip
                       // is selected.
                       "library:changed",
-                      // STC-375: the window just collapsed to (or restored
-                      // from) the pill. The renderer has no other way to know
-                      // its own window shrank — `pill-window.ts` drives the
-                      // resize from main, not from anything in this page.
-                      "pill:state",
-                      // STC-531: the helper stopped the take by itself; the
-                      // pill says why for a moment (`label`), then null.
-                      "pill:stopped",
-                      // STC-237: a mic or camera was lost and the take goes
-                      // on; the pill says which for a moment, then null.
-                      "pill:notice",
+                      // The pill's channels left with the pill (STC-550):
+                      // `pill-preload.ts` is its own bridge now.
                       // STC-433: `recorder:start` resolved a stale mic on
                       // this window's behalf (turned it off) — the mic
                       // popover's own stored state is now stale too, and

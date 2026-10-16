@@ -20,7 +20,7 @@ let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 describe("the model code (STC-399)", () => {
-  test("shows on the instrument strip, and disappears with everything else when the pill collapses", async () => {
+  test("shows on the instrument strip", async () => {
     const { dir } = makeTakeFolder();
     const r = await launchApp(dir);
     app = r.app;
@@ -28,12 +28,10 @@ describe("the model code (STC-399)", () => {
 
     expect(await win.textContent("#modelcode")).toBe("SK-016");
     expect(await win.isVisible("#modelcode")).toBe(true);
-
-    // The same CSS rule that hides the title hides this — no separate
-    // conditional was written for it, so exercising the class directly
-    // proves the placement rather than a real recording proving nothing new.
-    await win.evaluate(() => document.body.classList.add("pill-collapsed"));
-    expect(await win.isVisible("#modelcode")).toBe(false);
+    // It used to also prove the plate went with the rest of the window when
+    // the library collapsed into the pill. The pill is its own window since
+    // STC-550 and the library is hidden whole for a take, so there is no
+    // collapsed state left for it to hide in.
   }, 60_000);
 
   test("the editor's export dialog carries the full stamp, built from app.getVersion()", async () => {

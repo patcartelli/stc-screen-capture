@@ -107,8 +107,6 @@ declare const recorder: {
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
   on(event: string, cb: (p: any) => void): () => void;
-  /** STC-375: the pill's measured content width, fire-and-forget. */
-  reportPillWidth(px: number): void;
   /** STC-412: show a warning via the toast. */
   showToast(message: ToastInput): void;
 };
@@ -125,7 +123,6 @@ import {
   placeholderFor, LOADING_PLACEHOLDER, UPDATING_NOTE, UPDATING_SHOW_AFTER_MS,
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
-import { formatElapsedTimer, meterView, NO_SIGNAL_TOOLTIP, parseLevel, type LevelReading } from "./pill.js";
 import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
@@ -157,40 +154,8 @@ let recording = false;
 // the About panel and the export stamp's job). Static, so no boot IIFE needed.
 $("modelcode").textContent = MODEL_CODE;
 
-// STC-375: the pill. It is only ever shown (body.pill-collapsed) while
-// recording, and its one job is to be the only thing that can stop that
-// recording — see index.html's #pill comment for why it must be a button.
-// Sharing #record's own click handler, rather than reimplementing start/stop
-// here, is what keeps there being exactly one place that decides what a
-// click on "the recording is running, end it" does.
-const pillBtn = $("pill") as HTMLButtonElement;
-const pillTimer = $("pill-timer");
-pillBtn.addEventListener("click", () => recordBtn.click());
-// #pill stays laid out off-screen even while not collapsed (index.html) so
-// its real content width is always measurable — this is what lets the
-// window collapse to the pill's actual content-width (pill-window.ts's
-// getContentWidthPx) instead of a fixed guess. Only its own content
-// (the timer digit count) can change that width; a ResizeObserver reports
-// it exactly when it does, rather than main polling for it.
-new ResizeObserver(() => {
-  recorder.reportPillWidth(Math.ceil(pillBtn.getBoundingClientRect().width));
-}).observe(pillBtn);
-
-// STC-528: the pill's level meter. `meterView` (pill.ts) decides; this only draws.
-// The reading is this take's latest; both reset when a take starts or ends, so a
-// take with no mic stays hatched rather than showing the last take's level.
-const pillMeter = $("pill-meter");
-let lastLevel: LevelReading | undefined;
-let micLost = false;
-function drawMeter(): void {
-  const v = meterView(lastLevel, micLost);
-  pillMeter.classList.toggle("live", v.mode === "live");
-  pillMeter.classList.toggle("no-signal", v.mode === "no-signal");
-  pillMeter.style.setProperty("--level", v.fill.toFixed(3));
-  if (v.mode === "no-signal") pillMeter.title = NO_SIGNAL_TOOLTIP;
-  else pillMeter.removeAttribute("title");
-}
-function resetMeter(): void { lastLevel = undefined; micLost = false; drawMeter(); }
+// The pill (STC-375) lived in this page while it was this window collapsed.
+// It is its own window since STC-550: `pill-window.ts`, `pill-renderer.ts`.
 
 /**
  * Which display to record (STC-247). "Automatic" is the phase-1 behaviour —
@@ -448,7 +413,6 @@ function lockSettings(locked: boolean): void {
  * only function that writes any of these four things.
  */
 function applyRecordingState(recording_: boolean): void {
-  if (recording_ !== recording) resetMeter();
   recording = recording_;
   if (!recording) takeReports.newTake();
   recordBtn.textContent = recording ? "Stop" : "Record";
@@ -709,12 +673,6 @@ recorder.on("helper:stats", (s) => {
   // STC-539: absent until the camera has opened, and on a take without one.
   $("cameraFrames").textContent = s.cameraFrames ?? "—";
   $("elapsed").textContent = s.elapsedMs != null ? `${(s.elapsedMs / 1000).toFixed(1)}s` : "—";
-  // The pill's own timer (STC-375) — same heartbeat, same elapsedMs, just
-  // formatted the way a small always-on-top strip needs rather than the
-  // debug table's one-decimal seconds. Harmless to update while #pill is
-  // off-screen: it is what makes "digit count changed" something the
-  // ResizeObserver above can ever see.
-  if (s.elapsedMs != null) pillTimer.textContent = formatElapsedTimer(s.elapsedMs);
 });
 
 recorder.on("helper:recording-ended", () => {
@@ -806,49 +764,9 @@ recorder.on("helper:mic-started", (l) => {
   reportDevice("mic", String(l.device ?? "live"));
 });
 
-// STC-528: the helper's lossy `level` reading, ~13 a second while a mic delivers.
-// Ignored outside a take: one still in flight after the stop must not light the meter.
-recorder.on("helper:level", (l) => {
-  const r = parseLevel(l);
-  if (!r || !recording) return;
-  lastLevel = r;
-  drawMeter();
-});
 
 recorder.on("helper:respawned", () => setState("recovered — helper restarted"));
 recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The recorder keeps failing to start. Restart the app."); });
-
-// STC-375: the window just collapsed to the pill, or restored from it. With
-// no listener the page never learns its own window shrank, and lays out the
-// full instrument UI into a 26px viewport — visibly clipped controls, not a
-// pill. `body.pill-collapsed` (index.html) hides everything in favour of a
-// plain dark strip.
-recorder.on("pill:state", (s: { collapsed: boolean }) => {
-  document.body.classList.toggle("pill-collapsed", s.collapsed);
-});
-
-// STC-531: the helper stopped the take by itself. For PILL_STOPPED_DWELL_MS
-// main sends the cause (`stop-copy.ts`'s `pillLabel`), then null. Disabled
-// meanwhile: the pill's click is Record's, and would start a new take.
-const pillLabelEl = $("pill-label");
-recorder.on("pill:stopped", (s: { label: string | null }) => {
-  const label = typeof s?.label === "string" && s.label ? s.label : null;
-  pillBtn.classList.toggle("stopped", label !== null);
-  if (label !== null) pillBtn.classList.remove("notice"); // STC-237: a stop ends any notice
-  pillBtn.disabled = label !== null;
-  pillLabelEl.textContent = label ?? "";
-  pillBtn.setAttribute("aria-label", label ? `Recording stopped: ${label}` : "Stop recording");
-});
-
-// STC-237: a mic or camera was lost and the take keeps recording. The label
-// stands in for the timer for PILL_STOPPED_DWELL_MS; the button stays Stop.
-recorder.on("pill:notice", (s: { label: string | null }) => {
-  const label = typeof s?.label === "string" && s.label ? s.label : null;
-  if (pillBtn.classList.contains("stopped")) return; // a stop's label outranks it
-  pillBtn.classList.toggle("notice", label !== null);
-  pillLabelEl.textContent = label ?? "";
-  pillBtn.setAttribute("aria-label", label ? `Stop recording (${label})` : "Stop recording");
-});
 
 /**
  * STC-433: Record's own flow (`runRecordFlow` in main.ts) turned the mic off
@@ -991,8 +909,6 @@ recorder.on("helper:warning", (l) => {
   if (TRACK_LOSS_WARNINGS.has(code)) {
     const device = code.startsWith("camera") ? "camera" : "mic";
     reportDevice(device, code.endsWith("-disconnected") ? "disconnected" : `failed — ${code}`);
-    // STC-528: no mic track from here on, so the meter goes back to hatched.
-    if (device === "mic") { micLost = true; drawMeter(); }
     console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }

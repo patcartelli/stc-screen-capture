@@ -35,6 +35,10 @@ await build({ ...common, entryPoints: ["app/src/toast-renderer.ts"], outfile: "a
 // same reason every other floating surface above is separate.
 await build({ ...common, entryPoints: ["app/src/still-editor-preload.ts"], outfile: "app/dist/still-editor-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/still-editor-renderer.ts"], outfile: "app/dist/still-editor-renderer.js", format: "iife", platform: "browser" });
+// The recording pill (STC-550) — its own window since it stopped being the
+// library window collapsed, with its own narrowest bridge.
+await build({ ...common, entryPoints: ["app/src/pill-preload.ts"], outfile: "app/dist/pill-preload.cjs", format: "cjs" });
+await build({ ...common, entryPoints: ["app/src/pill-renderer.ts"], outfile: "app/dist/pill-renderer.js", format: "iife", platform: "browser" });
 // STC-488: the hidden window that renders a recording's Copy.
 await build({ ...common, entryPoints: ["app/src/copy-render-preload.ts"], outfile: "app/dist/copy-render-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/copy-render.ts"], outfile: "app/dist/copy-render.js", format: "iife", platform: "browser" });

@@ -437,6 +437,24 @@ if case .success(let r) = parseStartRequest(["cmd": "start", "dir": "/tmp/x", "k
     check("a refit copy keeps keys (parse)", false, true)
 }
 
+// ── STC-550: the pill's window id rides on start, and survives a refit ─────
+func parsedExclude(_ cmd: [String: Any]) -> String {
+    switch parseStartRequest(cmd) {
+    case .success(let r): return "ok:" + r.excludeWindowIds.map(String.init).joined(separator: ",")
+    case .failure(let e): return "err:\(e.code)"
+    }
+}
+check("excludeWindowIds defaults to none", parsedExclude(["cmd": "start", "dir": "/tmp/x"]), "ok:")
+check("excludeWindowIds carries ids", parsedExclude(["cmd": "start", "dir": "/tmp/x", "excludeWindowIds": [12, 340]]), "ok:12,340")
+check("a malformed id is dropped, not refused",
+      parsedExclude(["cmd": "start", "dir": "/tmp/x", "excludeWindowIds": [12, -1, "x", 7]]), "ok:12,7")
+check("a non-array is none, not a refusal", parsedExclude(["cmd": "start", "dir": "/tmp/x", "excludeWindowIds": 12]), "ok:")
+if case .success(let r) = parseStartRequest(["cmd": "start", "dir": "/tmp/x", "excludeWindowIds": [12]]) {
+    check("a refit copy keeps excludeWindowIds", StartRequest(copying: r, displayId: 7).excludeWindowIds, [UInt32(12)])
+} else {
+    check("a refit copy keeps excludeWindowIds (parse)", false, true)
+}
+
 // ── capture colour (STC-510) ────────────────────────────────────────────────
 check("a Display P3 display captures in P3", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceDisplayP3", isWideGamut: true), CaptureColour.displayP3)
 check("a named P3 wins even if the wide flag is absent", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceDisplayP3", isWideGamut: false), CaptureColour.displayP3)

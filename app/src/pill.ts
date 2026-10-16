@@ -9,48 +9,24 @@ import type { SupervisorState } from "./supervisor-state.js";
  * `pill-window.ts` owns the real `BrowserWindow` and the real resize calls
  * this module only describes.
  *
- * Also imported by `renderer.ts` now (`formatElapsedTimer`, for the pill's
- * own timer readout), which is WHY the `SupervisorState` type comes from
+ * Also imported by `pill-renderer.ts` (`formatElapsedTimer`, `meterView`),
+ * which is WHY the `SupervisorState` type comes from
  * `supervisor-state.ts` rather than `supervisor.ts` — the same node-drag
  * trap `library-items.ts` was split out of `library.ts` to avoid.
  *
- * ## The pill is not a new window
+ * ## Its own window (STC-550)
  *
- * The ticket's own design: "one frameless `BrowserWindow`, created once and
- * alive for the whole session. Recording doesn't open anything; it changes
- * the window it already has." So there is no `open`/`close` here — only two
- * sizes one window moves between, `expanded` (the instrument) and
- * `collapsed` (the pill). `pill-window.ts` is written to operate on whatever
- * `BrowserWindow` it is handed, so it can be pointed at the app's real main
- * window once STC-374 has stripped that window down to capture + grid;
- * nothing here decides which window that is.
+ * STC-375 built the pill as the library window collapsed to 26px, which made
+ * sense while the library was the window Record lived in. STC-502 made the
+ * app launch to the menu bar, and every state the library could be in
+ * (closed, minimized, hidden with ⌘H) then turned up as a pill bug. So the
+ * pill is a window of its own now (`pill-window.ts`, `pill.html`), one per
+ * take, top-centre of the display being recorded (`pillBounds`), and the
+ * library only steps out of the way (`libraryAroundTake`).
  *
- * ## Wired into `main.ts`'s real window (2026-09-14)
- *
- * STC-374 (instrument strip) merged first, removing the original "little
- * point" blocker — the main window at rest now shows only capture + grid, so
- * `restore()` no longer brings back still-capture prefs or the shortcuts
- * editor. That still left a real fork: `main.ts`'s `createWindow()`
- * (unchanged by STC-374) made a normal window with native chrome — a title
- * bar reading "stc recorder", traffic lights — while this ticket's design
- * opens with "one frameless `BrowserWindow`." A titled window cannot be
- * shrunk to 26px; the title-bar strip does not go away just because the
- * content area does.
- *
- * Decided (not decided here — flagged on the PR and the ticket, answered by
- * the ticket owner): `titleBarStyle: "hidden"`, not a fully frameless
- * window. The native traffic lights stay, drawn as an inset overlay instead
- * of inside a title-bar strip, so the content view can fill the window down
- * to 26px; `pill-window.ts` additionally hides the buttons themselves while
- * collapsed (`setWindowButtonVisibility`), since there is no room for them
- * in a pill. This is the smaller of the two options that were on the table —
- * it does not touch the app's chrome everywhere the way a fully frameless
- * window would, only removes the drawn title strip.
- *
- * The pill's own CONTENT (the dot, the live timer, the hatched meter) still
- * has no view — that is unfinished visual work, not part of this wiring.
- * `main.ts` collapses to `MIN_PILL_WIDTH_PX` rather than a real measured
- * content width until that view exists; see the comment at its call site.
+ * The state names below kept their STC-375 meaning so every rule written
+ * against them still reads the same: `collapsed` is "the pill is showing",
+ * `expanded` is "no pill". Nothing resizes between them any more.
  *
  * ## Trap 1 and 3 from the ticket, encoded rather than trusted
  *
@@ -93,12 +69,122 @@ export function clampPillWidth(measuredContentWidthPx: number, paddingPx = 16): 
 }
 
 /**
- * What the confirmed recording state means for the window's size.
+ * What the pill's border and side padding add to its measured row
+ * (`pill.html`: 10px each side plus a 1px ring each side).
+ */
+export const PILL_CHROME_PX = 22;
+
+/**
+ * The gap between the top of the work area (just under the menu bar) and the
+ * pill. `--space-3` in `tokens.css`, which CSS cannot hand to the main process;
+ * `pill.test.ts` reads the token so the two cannot drift.
+ */
+export const PILL_TOP_INSET_PX = 8;
+
+export interface PillRect { x: number; y: number; width: number; height: number }
+
+/**
+ * Where a take's pill opens (STC-550): centred on the recorded display's work
+ * area, `PILL_TOP_INSET_PX` below its top. Every take starts here; a drag
+ * moves the window for that take only and is never stored.
+ *
+ * Whole pixels, and never wider than the work area: a pure function cannot
+ * know how wide a real screen is, so the caller hands it in.
+ */
+export function pillBounds(workArea: PillRect, measuredContentWidthPx: number): PillRect {
+  const width = Math.min(clampPillWidth(measuredContentWidthPx, PILL_CHROME_PX), Math.max(1, workArea.width));
+  return {
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + PILL_TOP_INSET_PX),
+    width,
+    height: PILL_HEIGHT_PX,
+  };
+}
+
+/**
+ * The pill's content changed width (the timer gained an hour digit, or a stop
+ * label stands in for it). It grows or shrinks about its CURRENT centre, so a
+ * pill the user dragged stays where they put it, and is kept inside the work
+ * area of the display it is on.
+ */
+export function resizePillBounds(current: PillRect, workArea: PillRect, measuredContentWidthPx: number): PillRect {
+  const width = Math.min(clampPillWidth(measuredContentWidthPx, PILL_CHROME_PX), Math.max(1, workArea.width));
+  const centre = current.x + current.width / 2;
+  const left = Math.round(centre - width / 2);
+  const x = Math.min(Math.max(left, workArea.x), workArea.x + workArea.width - width);
+  return { x, y: current.y, width, height: current.height };
+}
+
+export interface PillPoint { x: number; y: number }
+
+/**
+ * Where a drag puts the pill's top-left: where it was when the drag began,
+ * moved by exactly as far as the pointer has. Screen coordinates throughout.
+ *
+ * The drag is the page's own pointer events, not a `-webkit-app-region: drag`
+ * region. On hardware (2026-10-15) the native region moved this panel once and
+ * then never again, and it cannot ease. So `pill-renderer.ts` reports the
+ * pointer and `pill-window.ts` moves the window toward this target.
+ */
+export function dragTarget(windowAtStart: PillPoint, pointerAtStart: PillPoint, pointerNow: PillPoint): PillPoint {
+  return {
+    x: Math.round(windowAtStart.x + pointerNow.x - pointerAtStart.x),
+    y: Math.round(windowAtStart.y + pointerNow.y - pointerAtStart.y),
+  };
+}
+
+/**
+ * The drag's easing (asked for on hardware, 2026-10-15): each frame the pill
+ * covers this fraction of the distance left to the pointer, so it follows
+ * closely and settles rather than jumping. At 60 frames a second it is within
+ * a pixel of a 200px jump in about 130 ms. Under reduced motion the pill is
+ * placed directly instead.
+ */
+export const PILL_DRAG_EASE = 0.35;
+export const PILL_DRAG_FRAME_MS = 16;
+
+/** One easing frame. Lands exactly on the target once within half a pixel, so it always settles. */
+export function easeStep(current: PillPoint, target: PillPoint, ease = PILL_DRAG_EASE): PillPoint {
+  const dx = target.x - current.x, dy = target.y - current.y;
+  if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5) return { x: target.x, y: target.y };
+  return { x: current.x + dx * ease, y: current.y + dy * ease };
+}
+
+/** What the library window is doing at the moment a take is about to start. */
+export interface LibraryAtTakeStart {
+  /** A library window exists at all. Since STC-502 there often is none. */
+  exists: boolean;
+  /** `BrowserWindow.isVisible()`. */
+  visible: boolean;
+  minimized: boolean;
+  /** The whole app is hidden (⌘H). */
+  appHidden: boolean;
+}
+
+/**
+ * What a take does to the library (STC-550, decided 2026-10-15).
+ *
+ * - Open and on screen: `hide()` it (never `minimize()`, which animates), and
+ *   show it again, unfocused, when the take is over.
+ * - Minimized: leave it in the Dock, untouched, before and after (STC-538).
+ * - Hidden with the app (⌘H): main has to unhide the app for the pill to show
+ *   at all, which would bring the library back mid-take, so it is `hide()`n
+ *   too. It was not on screen when the take started, so it stays hidden after.
+ * - None: nothing to do, and none is made (STC-524 made one to collapse).
+ */
+export function libraryAroundTake(s: LibraryAtTakeStart): { hide: boolean; showAfter: boolean } {
+  if (!s.exists || s.minimized) return { hide: false, showAfter: false };
+  if (s.appHidden) return { hide: true, showAfter: false };
+  return { hide: s.visible, showAfter: s.visible };
+}
+
+/**
+ * What the confirmed recording state means for the pill: `collapse` shows it,
+ * `restore` puts it away (the names are STC-375's; see the header).
  *
  * Idempotent by construction: asking again once already in the state the
  * signal implies answers `"none"`, so a caller that re-derives this on every
- * heartbeat (rather than only on a transition) cannot double-resize a window
- * that is already the right size.
+ * heartbeat (rather than only on a transition) cannot show or hide twice.
  */
 export function decidePillAction(
   current: PillWindowState,
@@ -231,6 +317,10 @@ export function parseLevel(l: unknown): LevelReading | undefined {
  * since CSS cannot move a window. Only `"snap"` is implemented here,
  * deliberately: resolving an open question while scaffolding ahead of
  * STC-374 would be a decision nobody asked for yet.
+ *
+ * Since STC-550 the pill also appears and goes with no transition at all.
+ * The one motion it has is a drag's easing (`easeStep`), and under
+ * `prefers-reduced-motion` a drag places it directly (requirement 10).
  */
 export type ResizeStyle = "snap";
 export const RESIZE_STYLE: ResizeStyle = "snap";
@@ -261,8 +351,8 @@ export const PILL_THEME = {
    * background. Fixed, not a token, for the same reason as everything above.
    *
    * There is deliberately NO shadow value here. PR #220 had one, but the
-   * collapsed pill fills an opaque window edge to edge (index.html's
-   * `body.pill-collapsed #pill`), so a CSS shadow is clipped to nothing. The
+   * pill fills an opaque window edge to edge (`pill.html`'s `#pill`), so a
+   * CSS shadow is clipped to nothing. The
    * window's own native macOS shadow is the shadow.
    */
   ring: "rgba(255, 255, 255, 0.14)",

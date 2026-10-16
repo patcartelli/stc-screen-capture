@@ -489,7 +489,16 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 return .failure(.noDisplays(underlying: nil))
             }
             let geometry = displayGeometry(id: display.displayID, pointWidth: display.width, pointHeight: display.height)
-            let filter = SCContentFilter(display: display, excludingWindows: [])
+            // STC-550: the pill floats over this display, so it is named here
+            // or it is in every frame. Only windows SCK lists as on screen can
+            // be named; the app shows the pill (at zero opacity) before
+            // `start` for exactly that reason.
+            let excluded = request.excludeWindowIds.isEmpty ? [] :
+                content.windows.filter { request.excludeWindowIds.contains($0.windowID) }
+            if excluded.count != request.excludeWindowIds.count {
+                IO.log("start: excluding \(excluded.count) of \(request.excludeWindowIds.count) requested windows; the rest are not on screen")
+            }
+            let filter = SCContentFilter(display: display, excludingWindows: excluded)
             guard let region = request.region else {
                 return .success(CaptureTarget(filter: filter, audioDisplay: display, geometry: geometry,
                                               sourceRect: nil,

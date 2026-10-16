@@ -56,7 +56,7 @@ import { reclaimPrompt, reclaimResult } from "./reclaim.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
          recordingDurationMs, recordingScopeLabel } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
-import { openOverlay, closeOverlay, overlayIsOpen } from "./overlay-session.js";
+import { openOverlay, closeOverlay, overlayIsOpen, HIDE_SETTLE_MS } from "./overlay-session.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
@@ -73,8 +73,8 @@ import { quitDecision } from "./quit-guard.js";
 import { editorIsOpen, openEditor } from "./editor-window.js";
 import { openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
-import { attachPillToSupervisor } from "./pill-window.js";
-import { MIN_PILL_WIDTH_PX, PILL_STOPPED_DWELL_MS } from "./pill.js";
+import { discardPill, pillStarted, preparePill } from "./pill-window.js";
+import { PILL_STOPPED_DWELL_MS, libraryAroundTake, type LibraryAtTakeStart } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
@@ -117,20 +117,6 @@ const HELPER = resolveHelperPath({
 
 let win: BrowserWindow | undefined;
 let sup: HelperSupervisor | undefined;
-/**
- * STC-375: the pill's real, renderer-measured content width — reported by
- * `#pill`'s ResizeObserver (renderer.ts) over `pill:contentWidth`, fire-
- * and-forget. `getContentWidthPx` below reads this SYNCHRONOUSLY when a
- * heartbeat triggers a collapse; IPC has no synchronous request the other
- * direction, so a cache kept current by the renderer's own pushes is the
- * only way main can have a real number ready at the moment it needs one.
- * Starts at the floor, matching what the window collapses to before the
- * page has ever measured anything.
- */
-let pillContentWidthPx = MIN_PILL_WIDTH_PX;
-ipcMain.on("pill:contentWidth", (_e, px: unknown) => {
-  if (typeof px === "number" && Number.isFinite(px) && px > 0) pillContentWidthPx = px;
-});
 // The message toast's ✕ (STC-412 final review, C1). `hideToast` is
 // idempotent and always acts on the one toast that is up, so this needs no
 // argument and cannot close the wrong window.
@@ -310,51 +296,107 @@ function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<str
 const TRAFFIC_LIGHT_X_PX = 20;
 const TRAFFIC_LIGHT_Y_PX = 24;
 
-function createWindow(opts: { asPill?: boolean } = {}): void {
+function createWindow(): void {
   win = new BrowserWindow({
     width: 520, height: 680, title: PRODUCT_NAME,
-    // STC-502: a window made because a take is already running (the hotkey
-    // started it with no window open) is born hidden, becomes the pill, and is
-    // shown without taking focus. Shown as the full library first, it would
-    // sit over the screen being recorded for a heartbeat and pull focus off it.
-    show: !opts.asPill,
-    // STC-375 (Pill): a fully frameless window was the other option on the
-    // table and was passed over — see pill.ts's header. "hidden" keeps the
-    // native traffic lights as an inset overlay (no drawn title strip), which
-    // is what lets Record collapse the window to a 26px pill at all.
+    // STC-375 chose "hidden" over fully frameless so the library could
+    // collapse to a 26px pill. The pill has its own window since STC-550; the
+    // chrome stays as STC-432 tuned it.
     titleBarStyle: "hidden",
     // STC-432: aligned to `#title-row` rather than left at the OS default —
-    // see the constants above. Only `collapsePill`/`restorePill`
-    // (pill-window.ts) ever change VISIBILITY of the lights afterward; the
-    // position set here is untouched by collapse/restore, which is exactly
-    // what "come back in the same position" requires.
+    // see the constants above.
     trafficLightPosition: { x: TRAFFIC_LIGHT_X_PX, y: TRAFFIC_LIGHT_Y_PX },
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(join(here, "..", "renderer", "index.html"));
-  // STC-375: collapse/restore is driven by the supervisor's own confirmed
-  // state (traps 1 and 3 in pill.ts's header), never by the Record click.
-  // Re-attached on every createWindow() call, since STC-292 made the main
-  // window closable and re-creatable (menu-bar-first) and a stale listener on
-  // a destroyed window is not a live one.
-  if (sup) {
-    const pill = attachPillToSupervisor(win, sup, {
-      getContentWidthPx: () => pillContentWidthPx,
-    });
-    win.once("closed", pill.detach);
-    if (opts.asPill) {
-      const w = win;
-      pill.reconcileNow();
-      // `collapsePill` told the renderer while it was still loading, which
-      // drops the message; say it again once the page can hear it.
-      w.webContents.once("did-finish-load", () => {
-        if (w.isDestroyed()) return;
-        w.webContents.send("pill:state", { collapsed: true });
-        w.showInactive();
-      });
-    }
-  }
   reconcileIcons();
+}
+
+/**
+ * Whether the library goes back on screen when this take is over (STC-550).
+ * Set by `hideLibraryForTake`, read once by `showLibraryAfterTake`.
+ */
+let libraryReturnsAfterTake = false;
+
+/**
+ * The library steps out of the way of a take (STC-550, `pill.ts`'s
+ * `libraryAroundTake`): hidden with `hide()` if it is on screen, never
+ * minimized, resized or restyled, so its bounds are exactly what they were.
+ * A minimized library is not touched at all (STC-538), and none is made if
+ * there is none (STC-524 used to make one, to collapse into the pill).
+ *
+ * The app hidden with ⌘H has to be unhidden for the pill to show, which would
+ * bring the library back mid-take; it is hidden first so it stays out.
+ * Answers whether anything went off screen, so the caller can wait for the
+ * window server before the take's first frame.
+ *
+ * `atFlowStart` is the library as Record found it, before the overlay: the
+ * overlay activates the app, and activating an app hidden with ⌘H unhides the
+ * library with it (found on hardware, 2026-10-15). Read only at take start, a
+ * library ⌘H'd away looked open, and came back after the take.
+ */
+function hideLibraryForTake(atFlowStart: LibraryAtTakeStart): boolean {
+  const now = libraryNow();
+  const plan = libraryAroundTake(atFlowStart);
+  // Whatever is on screen NOW goes, whatever the flow-start state said: the
+  // overlay may have brought it back.
+  const hide = now.exists && !now.minimized && (now.visible || now.appHidden);
+  libraryReturnsAfterTake = plan.showAfter;
+  if (hide) win!.hide();
+  if (now.appHidden) app.show();
+  return hide;
+}
+
+/** The library window's state right now, for `libraryAroundTake`. */
+function libraryNow(): LibraryAtTakeStart {
+  const exists = win !== undefined && !win.isDestroyed();
+  return {
+    exists,
+    appHidden: process.platform === "darwin" && app.isHidden(),
+    visible: exists && win!.isVisible(),
+    minimized: exists && win!.isMinimized(),
+  };
+}
+
+/**
+ * A library hidden with the app (⌘H) is taken off screen for real before the
+ * overlay opens, so the overlay activating the app cannot bring it back. It
+ * stays that way after the take, which is what ⌘H already meant.
+ */
+function keepHiddenLibraryHidden(atFlowStart: LibraryAtTakeStart): void {
+  if (atFlowStart.appHidden && atFlowStart.exists && !atFlowStart.minimized) win!.hide();
+}
+
+/**
+ * The take is over (or never began): the library comes back if it was up,
+ * unfocused, and the Dock icon goes back to what the preference says — the
+ * pill's window hid it to float over fullscreen apps (`pill-window.ts`).
+ */
+function showLibraryAfterTake(): void {
+  const returns = libraryReturnsAfterTake;
+  libraryReturnsAfterTake = false;
+  if (quitting) return;
+  // `showInactive`, so the take's panel stays in front and keeps the keyboard.
+  if (returns && win && !win.isDestroyed()) win.showInactive();
+  reconcileIconsSoon();
+}
+
+/**
+ * The work area of the display a take is about to record, for its pill
+ * (STC-550): the display picked on the overlay, or the one holding the picked
+ * window. "Automatic" (a display that vanished, STC-433) falls back to the
+ * one under the pointer, the countdown's rule.
+ */
+function pillWorkArea(startParams: Record<string, unknown>, windows: WindowInfo[]): Electron.Rectangle {
+  if (typeof startParams.windowId === "number") {
+    const w = windows.find((x) => x.id === startParams.windowId);
+    if (w) return screen.getDisplayMatching(w.bounds).workArea;
+  }
+  if (typeof startParams.displayId === "number") {
+    const d = screen.getAllDisplays().find((x) => x.id === startParams.displayId);
+    if (d) return d.workArea;
+  }
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
 }
 
 /**
@@ -588,8 +630,9 @@ function startSupervisor(): void {
     statsIntervalMs: 500,
   });
   sup.on("ready", (l) => send("helper:ready", l));
-  // STC-539: the diagnostics table is hidden behind the pill for the whole take,
-  // which is exactly when the camera's count matters, so it goes to stdout too.
+  // STC-539: the diagnostics table is off screen for the whole take (the
+  // library is hidden for it, STC-550), which is exactly when the camera's
+  // count matters, so it goes to stdout too.
   let cameraLogBucket = -1;
   sup.on("stats", (l) => {
     send("helper:stats", l);
@@ -634,9 +677,7 @@ function startSupervisor(): void {
   // STC-233: same reasoning, one device over — the mic also opens off the
   // critical path (MicCapture.swift) and reports separately once it resolves.
   sup.on("helper:mic-started", (l) => send("helper:mic-started", l));
-  // STC-528: the mic's live level for the pill's meter. Lossy at the helper and lossy
-  // here: `send`, never an invoke, ~13 a second, and the renderer keeps only the latest.
-  sup.on("helper:level", (l) => send("helper:level", l));
+  // STC-528's `helper:level` goes to the pill's own window (`pill-window.ts`), not here.
   // STC-388: the tray's Record item reads as Stop while a take is live, and
   // its own state can change with no window open to notice — reuse the same
   // heartbeat-confirmed events the pill already listens to (STC-375) rather
@@ -694,10 +735,6 @@ function reconcileTrayRecording(): void {
  */
 function reconcileWindowRecording(): void {
   const recording = sup?.state === "recording";
-  // STC-502: nothing opens a window at launch any more, so a take started from
-  // the hotkey or the menu bar has no pill to stop it with. The pill IS the
-  // main window collapsed (pill-window.ts), so make one.
-  if (recording && (!win || win.isDestroyed())) createWindow({ asPill: true });
   send("recorder:recording-state", { recording, dir: recording ? sup?.recordingDir : undefined });
 }
 
@@ -1736,6 +1773,9 @@ function writeBarOptions(options: OptionsState): void {
 async function recordFlowBody(
   source: RecordSource, stored: Settings, mics: MicInfo[], cameras: DeviceLike[], windows: WindowInfo[],
 ): Promise<RecordResult> {
+  // STC-550: the library as Record found it, before the overlay can unhide it.
+  const libraryAtFlowStart = libraryNow();
+  keepHiddenLibraryHidden(libraryAtFlowStart);
   const { outcome, options, afterClose } = await openOverlay({
     windows, mode: "region", purpose: "record",
     initialOptions: {
@@ -1855,6 +1895,18 @@ async function recordFlowBody(
     }
   }
 
+  // STC-550: the take's pill, made now (invisible, click-through) so it is on
+  // screen with a window id by the time `start` is sent, and the helper can
+  // leave it out of every frame. Begun before the countdown so the load
+  // overlaps it rather than adding to Record's wait. A pill still up from the
+  // last take is put away first, which brings ITS library back before this
+  // take decides about the library below.
+  const pillExclusions = preparePill({
+    workArea: pillWorkArea(startParams, windows),
+    dist: here, rendererDir: join(here, "..", "renderer"),
+    onOver: showLibraryAfterTake,
+  });
+
   // Record ALWAYS counts down (STC-391) — it is what makes Record feel weightier
   // than a shot. After the overlay has gone, never during it.
   const ms = clampCountdownMs(stored.countdownMs);
@@ -1863,15 +1915,19 @@ async function recordFlowBody(
       ms, purpose: "record", displayId: countdownDisplay,
       dist: here, rendererDir: join(here, "..", "renderer"),
     });
-    if (!countdownFired(counted.outcome)) return { ok: false, cancelled: true };
+    if (!countdownFired(counted.outcome)) { discardPill(); return { ok: false, cancelled: true }; }
   }
-  // Any floating panel still on screen would be IN the take, and unlike a shot
-  // there is no exclusion list for `start` to be added to — so they are HIDDEN
+  // Any floating panel still on screen would be IN the take, so they are HIDDEN
   // for its length (STC-392 focus rule 2), and `take-ended` (or any exit below
   // that produces no take) shows them again. Nothing is closed and nothing
   // is lost: each panel's take stays in temp storage with its panel intact.
   // After the countdown, so a cancelled one costs a pending panel nothing.
+  // The library goes the same way (STC-550), and comes back with the pill.
+  const libraryHidden = hideLibraryForTake(libraryAtFlowStart);
   await hideThumbnailForCapture();
+  if (libraryHidden) await new Promise((r) => setTimeout(r, HIDE_SETTLE_MS));
+  const exclude = await pillExclusions;
+  if (exclude.length > 0) startParams.excludeWindowIds = exclude;
 
   // Temp storage, not the library (STC-393): the take is not real until the
   // panel's Save or Edit promotes it (STC-487), so a denied grant or a crash
@@ -1887,6 +1943,8 @@ async function recordFlowBody(
     const existing = existsSync(root) ? readdirSync(root) : [];
     const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup!.startRecording(dir, startParams);
+    // `start` has answered: the pill may show now, off the confirmed state.
+    pillStarted(sup!);
     // Only after a successful start: a refused one leaves no take to describe.
     await writeRecordTimeProject(dir, {
       showClicks: options.showClicks,
@@ -1895,6 +1953,9 @@ async function recordFlowBody(
     console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
+    // Nothing is recording, so nothing should be off screen for it. Its
+    // `onOver` brings the library back (STC-550).
+    if (sup?.state !== "recording") discardPill();
     showThumbnailsAfterCapture();
     // A missing Screen Recording grant is the common case and is actionable —
     // surface the helper's own code rather than a generic failure.
