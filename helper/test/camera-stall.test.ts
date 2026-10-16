@@ -7,7 +7,8 @@ describe("camera stall (STC-553)", () => {
   test("Swift pure-function assertions all pass", async () => {
     const out = await runSwiftHarness({
       label: "camera-stall",
-      sources: ["helper/src/CameraStallDecisions.swift", "helper/test/camera-stall/main.swift"],
+      sources: ["helper/src/PauseDecisions.swift", "helper/src/CameraStallDecisions.swift",
+                "helper/test/camera-stall/main.swift"],
     });
     expect(out, out).toContain("ALL PASS");
   });

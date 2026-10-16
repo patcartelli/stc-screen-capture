@@ -21,6 +21,17 @@ struct PauseInterval: Equatable {
     var json: [String: Any] { ["startNs": Int(startNs), "endNs": Int(endNs)] }
 }
 
+/// Where the take's pause stands, as `PauseGate.state()` reads it — for STC-553's
+/// stall check (`CameraStallDecisions.swift`), which must never call paused time a stall.
+struct PauseState: Equatable {
+    /// A pause open now, and when it began.
+    var openSinceNs: Int64?
+    /// The end of the newest closed pause: the last resume.
+    var lastResumeNs: Int64?
+
+    static let none = PauseState(openSinceNs: nil, lastResumeNs: nil)
+}
+
 /// THE predicate. `openSinceNs` is a pause that has begun and not yet ended —
 /// the live case, which no closed interval can express yet.
 ///

@@ -41,16 +41,6 @@ struct StallSpan: Equatable {
     var endNs: Int64?
 }
 
-/// Where the take's pause stands, as `PauseGate.state()` reads it.
-struct PauseState: Equatable {
-    /// A pause open now, and when it began.
-    var openSinceNs: Int64?
-    /// The end of the newest closed pause: the last resume.
-    var lastResumeNs: Int64?
-
-    static let none = PauseState(openSinceNs: nil, lastResumeNs: nil)
-}
-
 /// What changed, for the caller to say (a warning) and record (the partial).
 enum CameraStallChange: Equatable {
     case began(StallSpan)
