@@ -77,6 +77,16 @@ func decideCaptureColour(displayColorSpaceName: String?, isWideGamut: Bool) -> C
     displayColorSpaceName == "kCGColorSpaceDisplayP3" || isWideGamut ? .displayP3 : .srgb
 }
 
+/// `STC_CAPTURE_COLOUR=srgb` pins a take to sRGB whatever the display is (STC-512).
+/// A test-only control, like `STC_CAPTURE_FAULT`: the grant tests that are not about
+/// colour pin an older anchors schema, and on a wide-gamut main display a take is
+/// anchors-9 for the colour space alone. Only "srgb" does anything, and only ever
+/// narrows: nothing can force P3 on a display that is not, which would tag pixels
+/// the screen never had.
+func applyColourOverride(_ c: CaptureColour, override: String?) -> CaptureColour {
+    override == "srgb" ? .srgb : c
+}
+
 enum FrameDecision: Equatable {
     /// Not a complete frame, or older than the session start. VFR emits
     /// nothing here — deliberately not a repeated frame (PHASE-0 §4).

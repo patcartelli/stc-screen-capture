@@ -478,6 +478,11 @@ check("a nameless wide-gamut panel (vendor ICC profile) captures in P3", decideC
 check("an sRGB display stays sRGB", decideCaptureColour(displayColorSpaceName: "kCGColorSpaceSRGB", isWideGamut: false), CaptureColour.srgb)
 check("a nameless narrow-gamut display stays sRGB, as every take was", decideCaptureColour(displayColorSpaceName: nil, isWideGamut: false), CaptureColour.srgb)
 
+check("STC_CAPTURE_COLOUR=srgb narrows a P3 take to sRGB (STC-512)", applyColourOverride(.displayP3, override: "srgb"), CaptureColour.srgb)
+check("any other override value changes nothing", applyColourOverride(.displayP3, override: "displayP3"), CaptureColour.displayP3)
+check("no override changes nothing", applyColourOverride(.displayP3, override: nil), CaptureColour.displayP3)
+check("an override never makes an sRGB take P3", applyColourOverride(.srgb, override: "displayP3"), CaptureColour.srgb)
+
 check("a P3 take records its colour space", anchorsColorSpace(.displayP3) ?? "nil", "displayP3")
 check("an sRGB take records nothing (absence is sRGB)", anchorsColorSpace(.srgb) ?? "nil", "nil")
 

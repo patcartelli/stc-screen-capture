@@ -15,6 +15,7 @@
  * test reads as covered and rots.
  */
 import { describe, test, expect } from "vitest";
+import { SRGB_OPEN_ARGS } from "./_capture-colour.js";
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, existsSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,7 +48,7 @@ describe("system audio capture — requires Screen Recording", () => {
     const player = spawn("/bin/sh", ["-c",
       `sleep 2; for i in 1 2 3 4 5 6; do afplay ${SOUND}; sleep 0.5; done`], { stdio: "ignore" });
     try {
-      execFileSync("open", ["-W", APP, "--args", "--helper", HELPER,
+      execFileSync("open", ["-W", ...SRGB_OPEN_ARGS, APP, "--args", "--helper", HELPER,
                             "--dir", dir, "--ms", "10000", "--system-audio",
                             "--out", join(dir, "result.json")],
                    { timeout: 120_000 });
