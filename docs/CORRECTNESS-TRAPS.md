@@ -15,7 +15,8 @@ configuration. Don't re-discover these.
   hit it were long. It is not: 2.3 GB writes fine. Correlate a stop with the unified log
   (`log show --predicate 'process == "stc-helper"'`, plus `loginwindow` for screen saver and lock)
   before believing a size or duration story. Any new 1 ns-timescale writer needs a hold, or a gap
-  bound, too. The camera's has neither yet.
+  bound, too. The camera's got one in STC-562: there, a PAUSE was the common gap, and paused frames
+  had to stop advancing its ordering guard before any hold could be safe.
 - **Byte-identical MP4 is not the gate** — muxer timestamps and encoder state differ between
   runs. Hash pre-encode RGBA buffers, not container output.
 - **The two channels are independent, and that is now MEASURED, not just described (STC-249).**

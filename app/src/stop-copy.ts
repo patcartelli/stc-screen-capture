@@ -152,6 +152,10 @@ const TRACK_LOSS: Record<string, { pill: string }> = {
   "mic-disconnected": { pill: "Mic lost" },
   "mic-format-mismatch": { pill: "Mic lost" },
   "camera-disconnected": { pill: "Camera lost" },
+  // STC-562: camera.mp4's writer failed mid-take; the take kept recording without the
+  // camera. Not `camera-writer-failed`, which is the writer failing to START (no track at
+  // all, a toast like the camera's other open failures).
+  "camera-track-failed": { pill: "Camera lost" },
   // STC-542: the system-audio stream died; the take kept recording without it.
   "system-audio-stopped": { pill: "System lost" },
 };
@@ -187,7 +191,8 @@ export function trackLossLine(anchors: TrackBlocks | undefined): string | undefi
   }
   const cam = anchors?.camera;
   if (cam?.present === true && cam.endedBy !== undefined) {
-    lines.push(`The camera disconnected${at(cam)}, so the rest of the take has no camera.`);
+    const what = cam.endedBy === "writer-failed" ? "The camera could not be recorded" : "The camera disconnected";
+    lines.push(`${what}${at(cam)}, so the rest of the take has no camera.`);
   }
   const sys = anchors?.system;
   if (sys?.present === true && sys.endedBy !== undefined) {

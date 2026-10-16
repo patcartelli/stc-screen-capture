@@ -43,14 +43,14 @@ export type Recovery = { ok: true; anchors: Anchors } | { ok: false; why: string
 
 /**
  * The versions the HELPER writes. A partial claiming another is not one it wrote: 11 is
- * the app's own (recorder-quit, written only here), and nothing above 14 exists yet.
+ * the app's own (recorder-quit, written only here), and nothing above 15 exists yet.
  * 12 (STC-237) is a take whose mic or camera ended early; the partial carries its
  * `endedBy` too, since both come from one builder. 13 (STC-528) is a take whose mic had
  * a silent span, carried into the partial the same way. 14 (STC-542) is a take whose system
- * audio ended early, likewise.
+ * audio ended early, likewise. 15 (STC-562) is a take whose camera writer failed, likewise.
  */
 const helperWrites = (v: unknown) => Number.isInteger(v) && (v as number) >= 1
-  && ((v as number) <= 10 || v === 12 || v === 13 || v === 14);
+  && ((v as number) <= 10 || v === 12 || v === 13 || v === 14 || v === 15);
 const REQUIRED = ["timebase", "t0Ns", "display", "capture", "files"] as const;
 
 function medianDelta(xs: readonly number[]): number | undefined {

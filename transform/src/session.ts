@@ -167,7 +167,7 @@ function snapGeometryToFrames(anchors: Anchors, framesNs: readonly number[]): An
 
 const ENDED_BY: { mic: readonly string[]; camera: readonly string[]; system: readonly string[] } = {
   mic: ["disconnected", "format-mismatch"],
-  camera: ["disconnected"],
+  camera: ["disconnected", "writer-failed"],   // writer-failed: STC-562, v15
   system: ["stream-stopped"],   // STC-542
 };
 
@@ -183,7 +183,8 @@ function checkEndedBy(anchors: Anchors): void {
     const endedBy = block?.endedBy;
     if (endedBy === undefined) continue;
     // mic/camera arrived at 12 (STC-237); system's came later, at 14 (STC-542).
-    const since = name === "system" ? 14 : 12;
+    // A camera's `writer-failed` came later still, at 15 (STC-562).
+    const since = name === "system" ? 14 : name === "camera" && endedBy === "writer-failed" ? 15 : 12;
     if (anchors.version < since) {
       throw new SessionLoadError(`anchors.${name}.endedBy needs anchors version ${since}; this document is version ${anchors.version}`);
     }
@@ -267,6 +268,8 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // `lastFramePtsNs` already ends the PiP and the audio mix reads silence past a track.
   // v14 (STC-542) adds `endedBy` on `system`: the system-audio stream died before the take
   // did. Checked in checkEndedBy; the audio mix already reads silence past a track.
+  // v15 (STC-562) adds `writer-failed` as a camera `endedBy`: camera.mp4's writer failed
+  // mid-take. Checked in checkEndedBy; the camera's own `lastFramePtsNs` ends the PiP.
   // v13 (STC-528) adds `silentSpans` on `mic`: where the mic delivered no signal for 10 s
   // or more. Checked in checkSilentSpans; nothing here plays it differently.
   if (
@@ -274,9 +277,9 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
     anchors?.version !== 7 && anchors?.version !== 8 && anchors?.version !== 9 &&
     anchors?.version !== 10 && anchors?.version !== 11 && anchors?.version !== 12 &&
-    anchors?.version !== 13 && anchors?.version !== 14
+    anchors?.version !== 13 && anchors?.version !== 14 && anchors?.version !== 15
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 or 14)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 or 15)`);
   }
   checkEndedBy(anchors);
   checkSilentSpans(anchors);
@@ -401,12 +404,27 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     systemAudio = rebaseMicAudio(rawSystemAudio, anchors.system!.firstFramePtsNs);
   }
 
+  // STC-562: a camera writer that FAILED kept accepting appends for a few frames
+  // after the sample that killed it (measured on hardware, 2026-10-16:
+  // `lastFramePtsNs` 8.0 s into the track, the file's last frame ~2 s in), and the
+  // fragment in flight never reached disk. So the helper's `lastFramePtsNs` is the
+  // last frame APPENDED, not the last one WRITTEN, and the PiP (which ends there)
+  // would hold a frozen frame across the difference. For this reason only, the file
+  // is the truth: the track ends at its last demuxed frame.
+  let anchorsOut = anchors;
+  if (!cameraDropped && cameraVideo && anchors.camera?.endedBy === "writer-failed") {
+    const lastOnDisk = cameraVideo.framesNs[cameraVideo.framesNs.length - 1]!;
+    if (lastOnDisk < anchors.camera.lastFramePtsNs) {
+      anchorsOut = { ...anchors, camera: { ...anchors.camera, lastFramePtsNs: lastOnDisk } };
+    }
+  }
+
   return {
     // checkGeometry above ran on the helper's ORIGINAL document; this is the
     // same timeline read on the file's clock — see snapGeometryToFrames.
     // A dropped camera also drops its `endedBy` (STC-237): there is no track left for it
     // to describe, and anchors-12 refuses one on a present:false block.
-    anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: withoutEndedBy({ ...anchors.camera!, present: false }) } : anchors, video.framesNs),
+    anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: withoutEndedBy({ ...anchors.camera!, present: false }) } : anchorsOut, video.framesNs),
     events: [...stabiliseEvents(anchors, pointerEvents)].sort((a, b) => a.t - b.t),
     ...(keyEvents.length > 0 ? { keys: keyEvents.sort((a, b) => a.t - b.t) } : {}),
     frames: video.framesNs,

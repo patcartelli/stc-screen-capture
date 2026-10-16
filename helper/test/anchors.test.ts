@@ -356,5 +356,13 @@ describe("anchors document", () => {
     const validate14 = compileV(14);
     expect(validate14(systemEndedBy), JSON.stringify(validate14.errors, null, 2)).toBe(true);
     expect(validate13(systemEndedBy), "anchors-13 must refuse system endedBy").toBe(false);
+
+    // STC-562: a camera whose writer failed validates against anchors-15, and anchors-14
+    // refuses it — `writer-failed` is the only thing that moved it.
+    const cameraWriterFailed = extractJSON(out, "JSON-CAMERA-WRITER-FAILED:");
+    expect((cameraWriterFailed as { version: number }).version).toBe(15);
+    const validate15 = compileV(15);
+    expect(validate15(cameraWriterFailed), JSON.stringify(validate15.errors, null, 2)).toBe(true);
+    expect(validate14(cameraWriterFailed), "anchors-14 must refuse camera writer-failed").toBe(false);
   });
 }, 60_000);

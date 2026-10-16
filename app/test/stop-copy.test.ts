@@ -199,6 +199,8 @@ describe("a track lost while the take keeps recording (STC-237)", () => {
     expect(trackLossPillLabel("mic-disconnected")).toBe("Mic lost");
     expect(trackLossPillLabel("camera-disconnected")).toBe("Camera lost");
     expect(trackLossPillLabel("system-audio-stopped")).toBe("System lost");   // STC-542
+    expect(trackLossPillLabel("camera-track-failed")).toBe("Camera lost");    // STC-562
+    expect(trackLossPillLabel("camera-writer-failed"), "a writer that never started has no track to lose").toBeUndefined();
     expect(trackLossPillLabel("camera-no-frames"), "a camera that never started is not a lost one").toBeUndefined();
   });
 
@@ -223,6 +225,11 @@ describe("a track lost while the take keeps recording (STC-237)", () => {
     })).toBe("The mic disconnected at 1:10, so the rest of the take has no mic audio. " +
              "System audio stopped at 1:20, so the rest of the take has no system audio.");
     expect(trackLossLine({ system: { present: false, endedBy: "stream-stopped" } })).toBeUndefined();
+  });
+
+  test("the panel line names a camera whose recording failed, and when (STC-562)", () => {
+    expect(trackLossLine({ camera: { present: true, endedBy: "writer-failed", lastFramePtsNs: 70_400_000_000 } }))
+      .toBe("The camera could not be recorded at 1:10, so the rest of the take has no camera.");
   });
 
   test("no line for a track that ran to the end, or that is not there", () => {

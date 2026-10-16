@@ -62,4 +62,46 @@ check(decideHoldFrame(lastWrittenPtsNs: 10 * s, lastAcceptedPtsNs: 11 * s + 400 
 check(decideHoldFrame(lastWrittenPtsNs: 10 * s, lastAcceptedPtsNs: 10 * s + 200 * ms, nowNs: 11 * s + 500 * ms) == 11 * s,
       "refused frames well before last + 1 s do not move the hold")
 
+// STC-562: the camera's gap fault, the camera's half of the same rule.
+check(!cameraGapFaultCovers(ptsNs: 5 * s, firstFramePtsNs: -1), "no camera gap before the first frame")
+check(!cameraGapFaultCovers(ptsNs: 12 * s + 999 * ms, firstFramePtsNs: 10 * s), "the gap starts 3 s in, not before")
+check(cameraGapFaultCovers(ptsNs: 13 * s, firstFramePtsNs: 10 * s), "the gap starts 3 s in")
+check(cameraGapFaultCovers(ptsNs: 17 * s + 999 * ms, firstFramePtsNs: 10 * s), "the gap runs 5 s")
+check(!cameraGapFaultCovers(ptsNs: 18 * s, firstFramePtsNs: 10 * s), "the camera is back 8 s in")
+check(CAMERA_GAP_FAULT_DURATION_NS > WRITER_MAX_SAMPLE_DURATION_NS * 2, "the fault's gap is well past the limit")
+
+// The camera's PTS trails delivery by ~0.1 s (latency compensation). A camera
+// frame arriving now carries a PTS about 0.1 s ago; the hold decided at the same
+// moment must sit before it, or the ordering guard drops the real frame.
+do {
+    let latency: Int64 = 116 * ms              // phase 0's worse measurement
+    let last: Int64 = 10 * s
+    var now: Int64 = last
+    var hold: Int64?
+    while hold == nil { now += 250 * ms; hold = decideHoldFrame(lastWrittenPtsNs: last, lastAcceptedPtsNs: last, nowNs: now) }
+    check(hold! < now - latency, "a camera hold is behind a camera frame delivered at the same moment")
+    check(now - latency - hold! >= 300 * ms, "with room: \(now - latency - hold!) ns")
+}
+
+// A pause: no frame is offered to the writer while paused, so the newest offered
+// PTS stays the last written one and holds keep coming. CameraCapture checks the
+// pause BEFORE its ordering guard for exactly this: a guard that also counted the
+// paused frames, delivered ~0.1 s ago, would leave no hold ever safe.
+do {
+    var last: Int64 = 10 * s
+    var now: Int64 = 10 * s
+    var held = 0
+    while now < 10 * s + 30 * s {
+        now += 250 * ms
+        if let pts = decideHoldFrame(lastWrittenPtsNs: last, lastAcceptedPtsNs: last, nowNs: now) { last = pts; held += 1 }
+    }
+    check(held >= 28, "a 30 s pause is held about once a second (got \(held))")
+    // Paused frames keep arriving, so such a guard is always ~0.1 s behind now,
+    // whenever the timer looks.
+    for later in stride(from: now, to: now + 5 * s, by: Int64.Stride(250 * ms)) {
+        check(decideHoldFrame(lastWrittenPtsNs: last, lastAcceptedPtsNs: later - 100 * ms, nowNs: later) == nil,
+              "a guard counting paused frames would block every hold: why the pause check comes first")
+    }
+}
+
 if failures.isEmpty { print("ALL PASS") } else { for f in failures { print("FAIL: \(f)") } ; exit(1) }

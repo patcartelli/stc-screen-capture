@@ -65,8 +65,11 @@ export interface CameraTrack {
   lastFramePtsNs: number;
   /** median inter-frame delta; bounds the track end (see render()) */
   frameIntervalNs: number;
-  /** anchors-12 (STC-237): why the track ended before the take did. Absent: it ran to the end. */
-  endedBy?: "disconnected";
+  /**
+   * anchors-12 (STC-237): why the track ended before the take did. Absent: it ran to the end.
+   * `writer-failed` is anchors-15 (STC-562): camera.mp4's writer failed mid-take.
+   */
+  endedBy?: "disconnected" | "writer-failed";
 }
 
 /**
@@ -139,9 +142,9 @@ export type CaptureScope =
       };
     };
 
-/** Mirrors schema/anchors-1.schema.json through anchors-7.schema.json. */
+/** Mirrors schema/anchors-1.schema.json through anchors-15.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {

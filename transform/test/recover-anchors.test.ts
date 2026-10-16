@@ -89,9 +89,16 @@ describe("recoverAnchors (STC-530)", () => {
     expect(schema(12)(r.anchors), JSON.stringify(schema(12).errors)).toBe(true);
   });
 
-  test("a partial above 14 is not one the helper wrote", () => {
-    // 14 is real now (STC-542), so 15 stands in for "unknown future version".
-    expect(recoverAnchors({ ...partial(), version: 15 }, media, RECOVERY_STOP_REASON).ok).toBe(false);
+  test("a v15 partial (STC-562: the camera writer failed) recovers with its endedBy", () => {
+    const ended = partial({ version: 15, camera: { ...partial().camera, endedBy: "writer-failed" } });
+    const r = recoverAnchors(ended, media, RECOVERY_STOP_REASON);
+    if (!r.ok) throw new Error(r.why);
+    expect((r.anchors as any).camera).toMatchObject({ present: true, endedBy: "writer-failed" });
+  });
+
+  test("a partial above 15 is not one the helper wrote", () => {
+    // 15 is real now (STC-562), so 16 stands in for "unknown future version".
+    expect(recoverAnchors({ ...partial(), version: 16 }, media, RECOVERY_STOP_REASON).ok).toBe(false);
   });
 
   test("does not mutate its input", () => {

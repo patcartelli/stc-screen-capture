@@ -277,6 +277,9 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     // STC-542: system audio whose stream died before the take did. anchors-14 (13 is STC-528's),
     // because 12 had shipped with STC-237 by then. Read off the block, same reason as above.
     if systemBlock?["endedBy"] != nil { version = max(version, 14) }
+    // STC-562: a camera whose writer failed mid-take. anchors-15, because 12-14 had shipped
+    // with `disconnected` as the camera's only reason. Read off the block, same reason.
+    if (cameraBlock?["endedBy"] as? String) == "writer-failed" { version = max(version, 15) }
     var capturedBlock: [String: Any] = ["width": capture.width, "height": capture.height, "codec": "h264",
                                          "firstFrameNs": max(0, capture.firstFrameNs)]
     if let colorSpace { capturedBlock["colorSpace"] = colorSpace }
