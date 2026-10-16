@@ -154,6 +154,9 @@ describe("a camera gap mid-take (STC-562)", () => {
     expect(anchors.camera.endedBy).toBeUndefined();
     // Real frames came back after the gap, and the track says so.
     expect(anchors.camera.lastFramePtsNs - anchors.camera.firstFramePtsNs).toBeGreaterThan(GAP_END_NS);
+    // STC-553: the gap is also a stall, closed where the frames came back.
+    expect(anchors.camera.stalledSpans, "the gap is on record as a stall").toHaveLength(1);
+    expect(find(h.fd3, "warning", "camera-stalled"), "and was said while it happened").toBeDefined();
 
     const s = await loadTake(dir);
     const frames = s.cameraFrames!;
@@ -217,7 +220,9 @@ describe("a camera gap mid-take (STC-562)", () => {
 
     const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
     validateAnchors(anchors);
-    expect(anchors.version).toBe(15);
+    // 16, not 15: five seconds with no frames is also a stall (STC-553), on record as
+    // `stalledSpans`. `writer-failed` alone would be 15.
+    expect(anchors.version).toBe(16);
     expect(anchors.camera?.present).toBe(true);
     expect(anchors.camera.endedBy).toBe("writer-failed");
     // The helper's track end is the last frame APPENDED, and a failed writer keeps

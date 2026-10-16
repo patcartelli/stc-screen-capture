@@ -19,6 +19,7 @@ describe("capture decisions", () => {
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
         "helper/src/MicSignalDecisions.swift",
+        "helper/src/CameraStallDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/src/CaptureDecisions.swift",
         "helper/test/decisions/main.swift",

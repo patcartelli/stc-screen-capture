@@ -92,4 +92,10 @@ final class PauseGate {
         lock.lock(); defer { lock.unlock() }
         return closed
     }
+
+    /// For STC-553's stall check: the open pause, and the last resume.
+    func state() -> PauseState {
+        lock.lock(); defer { lock.unlock() }
+        return PauseState(openSinceNs: openSinceNs, lastResumeNs: closed.last?.endNs)
+    }
 }

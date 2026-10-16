@@ -1191,6 +1191,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             cam.onWriterFailed = { [weak self, weak cam] err in
                 if let cam { self?.handleCameraWriterFailed(cam, err) }
             }
+            // STC-553: a stall beginning or ending is in the partial at once, so a helper
+            // that dies mid-stall still leaves it on record.
+            cam.onStallChanged = { [weak self] in self?.notePartialChange() }
             let result = cam.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
