@@ -404,12 +404,27 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     systemAudio = rebaseMicAudio(rawSystemAudio, anchors.system!.firstFramePtsNs);
   }
 
+  // STC-562: a camera writer that FAILED kept accepting appends for a few frames
+  // after the sample that killed it (measured on hardware, 2026-10-16:
+  // `lastFramePtsNs` 8.0 s into the track, the file's last frame ~2 s in), and the
+  // fragment in flight never reached disk. So the helper's `lastFramePtsNs` is the
+  // last frame APPENDED, not the last one WRITTEN, and the PiP (which ends there)
+  // would hold a frozen frame across the difference. For this reason only, the file
+  // is the truth: the track ends at its last demuxed frame.
+  let anchorsOut = anchors;
+  if (!cameraDropped && cameraVideo && anchors.camera?.endedBy === "writer-failed") {
+    const lastOnDisk = cameraVideo.framesNs[cameraVideo.framesNs.length - 1]!;
+    if (lastOnDisk < anchors.camera.lastFramePtsNs) {
+      anchorsOut = { ...anchors, camera: { ...anchors.camera, lastFramePtsNs: lastOnDisk } };
+    }
+  }
+
   return {
     // checkGeometry above ran on the helper's ORIGINAL document; this is the
     // same timeline read on the file's clock — see snapGeometryToFrames.
     // A dropped camera also drops its `endedBy` (STC-237): there is no track left for it
     // to describe, and anchors-12 refuses one on a present:false block.
-    anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: withoutEndedBy({ ...anchors.camera!, present: false }) } : anchors, video.framesNs),
+    anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: withoutEndedBy({ ...anchors.camera!, present: false }) } : anchorsOut, video.framesNs),
     events: [...stabiliseEvents(anchors, pointerEvents)].sort((a, b) => a.t - b.t),
     ...(keyEvents.length > 0 ? { keys: keyEvents.sort((a, b) => a.t - b.t) } : {}),
     frames: video.framesNs,

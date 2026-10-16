@@ -220,8 +220,10 @@ describe("a camera gap mid-take (STC-562)", () => {
     expect(anchors.version).toBe(15);
     expect(anchors.camera?.present).toBe(true);
     expect(anchors.camera.endedBy).toBe("writer-failed");
-    // The track ends before the gap: the frame after it is the one that failed.
-    expect(anchors.camera.lastFramePtsNs - anchors.camera.firstFramePtsNs).toBeLessThan(GAP_START_NS + 100_000_000);
+    // The helper's track end is the last frame APPENDED, and a failed writer keeps
+    // accepting a few after the sample that killed it (measured 2026-10-16: 8.0 s, just
+    // past the gap). Not the file's end; loadSession corrects that below.
+    expect(anchors.camera.lastFramePtsNs - anchors.camera.firstFramePtsNs).toBeLessThan(GAP_END_NS + 1_000_000_000);
 
     // The take still opens. camera-writer.test.ts measured what a failed writer's
     // finished file holds: the fragments finished before the failure (61 of 90 frames),
@@ -231,5 +233,11 @@ describe("a camera gap mid-take (STC-562)", () => {
     const kept = s.anchors.camera?.present === true ? s.cameraFrames!.length : 0;
     process.stderr.write(`[camera-gap] unheld: ${kept} camera frames survive the failed writer\n`);
     expect(kept, "the fragments finished before the failure").toBeGreaterThan(0);
+    // Nothing after the gap reached the file, and the loaded track ends where the file
+    // does, so the PiP does not hold a frozen frame up to the helper's lastFramePtsNs.
+    const cam = s.cameraFrames!;
+    const first = anchors.camera.firstFramePtsNs;
+    expect(cam[cam.length - 1]! - first, "a post-gap frame reached the failed file").toBeLessThan(GAP_START_NS);
+    expect(s.anchors.camera!.lastFramePtsNs).toBe(cam[cam.length - 1]);
   }, 90_000);
 });

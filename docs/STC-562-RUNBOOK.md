@@ -54,8 +54,11 @@ at the gap. The PiP just disappeared after the pause.
 - **What a failed camera writer leaves** (measured, `helper/test/camera-writer.test.ts`).
   The finished file is a demuxable prefix that loses only the fragment in flight: 61 of
   90 pre-gap frames come back. `loadSession` keeps the take and the camera.
-  `lastFramePtsNs` (the last frame *appended*) can run up to one 2 s fragment past the
-  file's last frame, and the PiP holds that frame meanwhile.
+  The helper's `lastFramePtsNs` is the last frame *appended*, and a failed writer keeps
+  accepting a few frames after the sample that killed it. On hardware (2026-10-16) that
+  was 8.0 s against a file ending ~2 s in. So for `writer-failed` only, `loadSession`
+  ends the track at the file's last frame, and the PiP does not hold a frozen frame
+  across the difference.
 - **Faults.**
   - `STC_CAPTURE_FAULT=camera-gap` throws away every camera frame from 3 s to 8 s
     after the first, as a stalled camera sends none.
@@ -95,7 +98,7 @@ not pass.
   - a `camera-track-failed` warning whose detail has `-11800` or `-17771`;
   - the take keeps recording, then stops as `user`;
   - `anchors.json` is v15 with `camera.endedBy: "writer-failed"`;
-  - the take still loads.
+  - the take still loads, and its camera ends at the file's last frame, before the gap.
   - It prints `[camera-gap] unheld: N camera frames survive`. **Write N down.** If the
     control fails, the fault made no gap and the first test proves nothing.
 

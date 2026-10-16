@@ -162,6 +162,18 @@ describe("anchors-15 writer-failed on the camera (STC-562)", () => {
     expect((await loadPip(pipAnchors({ endedBy: "disconnected" }, 14))).anchors.camera?.endedBy).toBe("disconnected");
   });
 
+  test("a writer-failed camera ends at the file's last frame, not the helper's last append", async () => {
+    // fixtures/pip's camera.mp4 ends at 3.0245 s; claim the writer took frames to 9 s.
+    const s = await loadPip(pipAnchors({ endedBy: "writer-failed", lastFramePtsNs: 9_000_000_000 }, 15));
+    const lastOnDisk = s.cameraFrames![s.cameraFrames!.length - 1]!;
+    expect(s.anchors.camera!.lastFramePtsNs).toBe(lastOnDisk);
+    const project = load("fixtures/pip/project.json");
+    expect(render(project, s, 6_000_000_000).pip, "no frozen PiP past the file").toBeNull();
+    // The control: a disconnected camera keeps the helper's own end.
+    const d = await loadPip(pipAnchors({ endedBy: "disconnected", lastFramePtsNs: 9_000_000_000 }, 15));
+    expect(d.anchors.camera!.lastFramePtsNs).toBe(9_000_000_000);
+  });
+
   test("the PiP ends at the camera's last written frame", async () => {
     const s = await loadPip(pipAnchors({ endedBy: "writer-failed", lastFramePtsNs: 2_000_000_000 }, 15));
     const project = load("fixtures/pip/project.json");
