@@ -21,7 +21,9 @@ Two things make that gap:
 
 - **Any pause over 2.15 s with the camera on.** `PauseGate` drops camera frames while
   paused, so the first frame after resume is more than 2.15 s after the last written
-  one. This is the ordinary trigger.
+  one. The helper supports pause (STC-240 PR A), but **the app has no pause control
+  yet**, so today this is reachable only through the helper directly. The grant test
+  covers it. It will be the ordinary trigger once a pause UI ships.
 - **A camera that stalls and comes back** (STC-553).
 
 **It was silent.** `CameraCapture` never read its writer's status. Every frame after the
@@ -104,17 +106,11 @@ not pass.
 
 ## §2 The real thing, in the app (needs a person)
 
-1. `npm run app:start`, camera on, and record the whole display.
-2. After ~10 s, **pause for 10 s**, resume, record 10 s more, and stop.
-3. Open the take in the editor.
-
-**Pass:** the PiP is there after the resume (before this branch it vanished at the
-resume). The panel shows no camera line. `anchors.json` has a camera with no `endedBy`.
-
-**Then a stall, if you can make one.** Covering the lens does not stop frames, so it is
-not a stall. Two candidates that might be: switch the Continuity camera's iPhone to
-another app, or start a second app on the same camera mid-take. If one of them makes a
-gap, the take must keep its camera through it.
+The app has no pause control yet, so the pause case is the grant test's alone (§1).
+What only the app can show is §3's frame rate. **A stall**, if you can make one: switch
+the Continuity camera's iPhone to another app mid-take, or start a second app on the
+same camera. Covering the lens does not stop frames. If either makes a gap, the take
+must keep its camera through it.
 
 ## §3 What only a Mac can tell
 
