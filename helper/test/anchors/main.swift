@@ -570,5 +570,27 @@ do {
     check((whole["system"] as? [String: Any])?["endedBy"] == nil, "and carries no endedBy")
 }
 
+// STC-562: a camera whose writer failed mid-take records why, and only then is the take
+// v15 (12-14 had shipped with `disconnected` as the camera's only reason).
+do {
+    var cam = CameraTrack(present: true, device: "Fixture Camera", width: 1280, height: 720,
+                          firstFramePtsNs: 1_000_000_000, lastFramePtsNs: 3_000_000_000,
+                          frameIntervalNs: 33_000_000)
+    cam.endedBy = "writer-failed"
+    let ended = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                capture: capture, camera: cam, requested: true,
+                                pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(ended["version"] as? Int == 15, "a camera whose writer failed must write version 15")
+    check((ended["camera"] as? [String: Any])?["endedBy"] as? String == "writer-failed", "camera writer-failed is written")
+    printJSON(ended, marker: "JSON-CAMERA-WRITER-FAILED:")
+
+    // The control: a disconnect is still v12, so 15 is this reason's alone.
+    cam.endedBy = "disconnected"
+    let unplugged = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                    capture: capture, camera: cam, requested: true,
+                                    pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(unplugged["version"] as? Int == 12, "a camera that disconnected stays v12")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

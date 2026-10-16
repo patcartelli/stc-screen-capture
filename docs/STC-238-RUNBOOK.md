@@ -32,6 +32,7 @@ helper/build.sh
 | encoder stall | `=encoder-stall` (**new**) | warning `frames-dropped` {startNs, endNs, count}; the take goes on; no frame in the file inside that span |
 | camera disconnect | `=camera-disconnected`, `camera: true` | warning `camera-disconnected` with `tNs` (**new field**); the camera track ends there; `anchors.camera.endedBy` is `disconnected` (STC-237) |
 | system audio stop | `=system-audio-stop`, `systemAudio: true`, a sound playing (STC-542) | warning `system-audio-stopped` with `tNs`; `system.m4a` ends there; `anchors.system.endedBy` is `stream-stopped` (anchors-14) |
+| camera gap | `=camera-gap`, `camera: true` (STC-562) | no `camera-track-failed`; the camera track runs past the 3-8 s gap with no sample over 1.6 s; no `camera.endedBy` |
 | IPC pipe close | stdin closed mid-take | stop `stdin-closed`, helper exits 0 |
 | helper crash | SIGKILL mid-take | recovered, `recorder-quit` |
 | pipe close via the supervisor | the real `HelperSupervisor`'s child's stdin closed | `recording-ended` (not `-lost`: the helper saved it) names the take; respawn; back to idle; a second take records |

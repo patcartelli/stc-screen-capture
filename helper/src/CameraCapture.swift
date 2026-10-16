@@ -93,6 +93,33 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     /// the moment this track's start time exists for `anchors.partial.json`. Set before
     /// `start()`; never changed after.
     var onFirstAppend: (() -> Void)?
+    /// STC-562: called once, off the lock, when camera.mp4's writer goes `.failed`.
+    /// Nothing else reads the writer's status, so without this a failed camera writer
+    /// was silent: every later frame was refused and the take carried on. Set before
+    /// `start()`; never changed after.
+    var onWriterFailed: ((Error?) -> Void)?
+    private var writerFailureReported = false
+
+    /// STC-562: writes the last camera frame again while no new one arrives
+    /// (`HoldFrameDecisions.swift`, the display's STC-561 rule). This input's
+    /// timescale is 1 ns too, so a camera gap over 2^31 ns (a stall, or any pause,
+    /// since `PauseGate` drops paused frames) failed this writer on the next frame.
+    /// On `queue`, the queue every camera frame arrives on, so a hold and a real
+    /// frame never reach the writer out of PTS order. Guarded by `lock`.
+    private var holdTimer: DispatchSourceTimer?
+    /// The newest frame in camera.mp4, real or held, and its PTS. NOT `lastPtsNs`:
+    /// a held frame must not move `anchors.camera.lastFramePtsNs`, which ends the
+    /// PiP (render.ts), or a camera that dies without a disconnect would show a
+    /// frozen face to the end of the take. Guarded by `lock`. One buffer kept out
+    /// of the output's pool, released at stop.
+    private var lastWrittenBuffer: CVPixelBuffer?
+    private var lastWrittenPtsNs: Int64 = -1
+    private var framesHeld = 0
+    /// `STC_CAPTURE_FAULT=camera-gap` (STC-562), read once. `camera-gap-unheld` is
+    /// the same gap with the hold timer off: the grant test's control, and the bug.
+    private let cameraGapFault = ["camera-gap", "camera-gap-unheld"]
+        .contains(ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] ?? "")
+    private let holdFramesOff = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "camera-gap-unheld"
 
     /// Set by `stop()` so the liveness watchdog below cannot warn about a take
     /// that has already ended.
@@ -219,6 +246,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         session = s
         s.startRunning()
         armNoFramesWatchdog()
+        startHoldTimer()
         return .success(deviceName)
     }
 
@@ -259,6 +287,67 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
                                         + "covered lens, or another app holding the camera all "
                                         + "look like this"])
         }
+    }
+
+    // MARK: STC-562 hold frames
+
+    private func startHoldTimer() {
+        if cameraGapFault {
+            IO.log("STC_CAPTURE_FAULT=camera-gap\(holdFramesOff ? "-unheld" : ""): camera frames \(CAMERA_GAP_FAULT_AFTER_NS / 1_000_000)-\((CAMERA_GAP_FAULT_AFTER_NS + CAMERA_GAP_FAULT_DURATION_NS) / 1_000_000) ms after the first are withheld, as a stalled camera withholds them")
+        }
+        if holdFramesOff {
+            IO.log("STC_CAPTURE_FAULT=camera-gap-unheld: no camera hold frames this take")
+            return
+        }
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + HOLD_FRAME_CHECK_INTERVAL_SECONDS, repeating: HOLD_FRAME_CHECK_INTERVAL_SECONDS)
+        t.setEventHandler { [weak self] in self?.holdIfStill() }
+        lock.lock()
+        if stopped { lock.unlock(); t.cancel(); return }
+        holdTimer = t
+        lock.unlock()
+        t.resume()
+    }
+
+    /// On `queue`. Writes the newest camera frame again once it is too old for the
+    /// writer (`decideHoldFrame`), paused or not. Through the same monotonic guard
+    /// and `WriterGate` as a real frame, so ordering, teardown and a failed writer
+    /// behave exactly as they do for one.
+    private func holdIfStill() {
+        let nowNs = Int64(Clock.nowNs()) - Int64(t0Ns)
+        lock.lock()
+        guard !stopped, !writerFailureReported, let pb = lastWrittenBuffer,
+              let pts = decideHoldFrame(lastWrittenPtsNs: lastWrittenPtsNs,
+                                        lastAcceptedPtsNs: monotonicGuardPtsNs, nowNs: nowNs)
+        else { lock.unlock(); return }
+        monotonicGuardPtsNs = pts
+        lock.unlock()
+        let outcome = gate.append(pb, at: CMTime(value: pts, timescale: 1_000_000_000))
+        lock.lock()
+        if outcome == .appended {
+            framesHeld += 1
+            lastWrittenPtsNs = pts
+        }
+        lock.unlock()
+        if outcome != .appended { noteRefused() }
+    }
+
+    /// A frame the gate did not take. If that is because the writer has failed,
+    /// say so, once (STC-562). A refusal during teardown or from a writer that is
+    /// only busy is not a failure and says nothing.
+    private func noteRefused() {
+        guard let w = writer, w.status == .failed else { return }
+        lock.lock()
+        let first = !writerFailureReported && !stopped
+        writerFailureReported = true
+        lock.unlock()
+        if first { onWriterFailed?(w.error) }
+    }
+
+    /// Held frames written so far (STC-562), for the stats heartbeat and the stop reply.
+    func heldFrames() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return framesHeld
     }
 
     private func setupWriter() throws {
@@ -318,16 +407,28 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             guard rel >= 0 else { return }          // arrived before the session began
 
             lock.lock()
+            // STC-562's fault: the frames a stalled camera would not have sent.
+            // Upstream of everything, as a camera's silence is.
+            let withheld = cameraGapFault && cameraGapFaultCovers(ptsNs: rel, firstFramePtsNs: firstPtsNs)
+            lock.unlock()
+            if withheld { return }
+            // Paused BEFORE the ordering guard (STC-562): the guard is the newest
+            // PTS offered to the writer, which a hold must come after. A paused
+            // frame is never offered, and counting it there would push every hold
+            // past `decideHoldFrame`'s safety margin, so a pause would write none
+            // and the first frame after it would fail the writer. Outside `lock`,
+            // as it always was: PauseGate has its own.
+            if pauseGate.isPaused(atNs: rel) { return }
+
+            lock.lock()
             if monotonicGuardPtsNs >= 0, rel <= monotonicGuardPtsNs {
                 lock.unlock(); return               // non-monotonic: drop, never offered to the gate
             }
             monotonicGuardPtsNs = rel
             lock.unlock()
 
-            if pauseGate.isPaused(atNs: rel) { return }
-
             let outcome = gate.append(pb, at: CMTime(value: rel, timescale: 1_000_000_000))
-            guard outcome == .appended else { return }
+            guard outcome == .appended else { noteRefused(); return }
 
             // Only record what actually landed in camera.mp4 — a frame the
             // gate dropped (teardown racing the last append) must not widen
@@ -338,6 +439,9 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             if first { firstPtsNs = rel }
             lastPtsNs = rel
             appended += 1
+            // STC-562: what a hold repeats, and when from.
+            lastWrittenPtsNs = rel
+            lastWrittenBuffer = pb
             lock.unlock()
             if first { onFirstAppend?() }
         }
@@ -356,7 +460,13 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     static let stopTimeoutSeconds: Double = 10
 
     func stop(completion: @escaping (CameraTrack?) -> Void) {
-        lock.lock(); stopped = true; lock.unlock()
+        lock.lock()
+        stopped = true
+        let hold = holdTimer
+        holdTimer = nil
+        lastWrittenBuffer = nil
+        lock.unlock()
+        hold?.cancel()
         let answered = NSLock()
         var done = false
         let finish: (CameraTrack?) -> Void = { track in

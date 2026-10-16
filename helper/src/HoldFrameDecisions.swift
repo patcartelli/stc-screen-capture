@@ -91,3 +91,32 @@ func screenIdleFaultCovers(ptsNs: Int64, firstFramePtsNs: Int64) -> Bool {
     let start = firstFramePtsNs + SCREEN_IDLE_FAULT_AFTER_NS
     return ptsNs >= start && ptsNs < start + SCREEN_IDLE_FAULT_DURATION_NS
 }
+
+/// STC-562: the camera writer is the same shape. camera.mp4's input has the same
+/// 1 ns `mediaTimeScale` (CameraCapture.swift `setupWriter`), so a camera gap over
+/// 2^31 ns failed it on the next frame, and `CameraCapture` holds by this same
+/// `decideHoldFrame` on its own sample queue. A camera's PTS is its capture time,
+/// about 0.1 s BEHIND delivery (phase 0 measured 91.5 and 115.8 ms of latency
+/// compensation), not 7 ms ahead like a display frame. The hold still lands safely
+/// behind any real frame in flight: it is at least `HOLD_FRAME_DUE_NS -
+/// HOLD_FRAME_INTERVAL_NS` = 0.5 s behind now, and a frame that arrives later
+/// carries a PTS no more than its delivery delay behind it.
+///
+/// Two things leave a gap that long. A pause: `PauseGate` drops paused camera
+/// frames, so ANY pause over 2.147 s with the camera on failed camera.mp4 on resume.
+/// And a camera that stalls and comes back (STC-553).
+///
+/// `STC_CAPTURE_FAULT=camera-gap`: camera frames whose PTS falls in this window are
+/// thrown away before anything sees them, as a stalled camera sends none. Relative
+/// to the camera's first written frame. The same five seconds as `screen-idle`, but
+/// three seconds in rather than one: camera.mp4's fragments are 2 s, and the control
+/// (`camera-gap-unheld`) must have a finished fragment before the failure, or it
+/// cannot show what of the camera a failed writer leaves behind.
+let CAMERA_GAP_FAULT_AFTER_NS: Int64 = 3_000_000_000
+let CAMERA_GAP_FAULT_DURATION_NS: Int64 = 5_000_000_000
+
+func cameraGapFaultCovers(ptsNs: Int64, firstFramePtsNs: Int64) -> Bool {
+    guard firstFramePtsNs >= 0 else { return false }
+    let start = firstFramePtsNs + CAMERA_GAP_FAULT_AFTER_NS
+    return ptsNs >= start && ptsNs < start + CAMERA_GAP_FAULT_DURATION_NS
+}

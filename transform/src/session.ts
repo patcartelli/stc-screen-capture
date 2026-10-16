@@ -167,7 +167,7 @@ function snapGeometryToFrames(anchors: Anchors, framesNs: readonly number[]): An
 
 const ENDED_BY: { mic: readonly string[]; camera: readonly string[]; system: readonly string[] } = {
   mic: ["disconnected", "format-mismatch"],
-  camera: ["disconnected"],
+  camera: ["disconnected", "writer-failed"],   // writer-failed: STC-562, v15
   system: ["stream-stopped"],   // STC-542
 };
 
@@ -183,7 +183,8 @@ function checkEndedBy(anchors: Anchors): void {
     const endedBy = block?.endedBy;
     if (endedBy === undefined) continue;
     // mic/camera arrived at 12 (STC-237); system's came later, at 14 (STC-542).
-    const since = name === "system" ? 14 : 12;
+    // A camera's `writer-failed` came later still, at 15 (STC-562).
+    const since = name === "system" ? 14 : name === "camera" && endedBy === "writer-failed" ? 15 : 12;
     if (anchors.version < since) {
       throw new SessionLoadError(`anchors.${name}.endedBy needs anchors version ${since}; this document is version ${anchors.version}`);
     }
@@ -267,6 +268,8 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // `lastFramePtsNs` already ends the PiP and the audio mix reads silence past a track.
   // v14 (STC-542) adds `endedBy` on `system`: the system-audio stream died before the take
   // did. Checked in checkEndedBy; the audio mix already reads silence past a track.
+  // v15 (STC-562) adds `writer-failed` as a camera `endedBy`: camera.mp4's writer failed
+  // mid-take. Checked in checkEndedBy; the camera's own `lastFramePtsNs` ends the PiP.
   // v13 (STC-528) adds `silentSpans` on `mic`: where the mic delivered no signal for 10 s
   // or more. Checked in checkSilentSpans; nothing here plays it differently.
   if (
@@ -274,9 +277,9 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
     anchors?.version !== 7 && anchors?.version !== 8 && anchors?.version !== 9 &&
     anchors?.version !== 10 && anchors?.version !== 11 && anchors?.version !== 12 &&
-    anchors?.version !== 13 && anchors?.version !== 14
+    anchors?.version !== 13 && anchors?.version !== 14 && anchors?.version !== 15
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 or 14)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 or 15)`);
   }
   checkEndedBy(anchors);
   checkSilentSpans(anchors);

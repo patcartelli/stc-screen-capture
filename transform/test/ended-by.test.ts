@@ -88,9 +88,9 @@ describe("loadSession and endedBy (STC-237)", () => {
       .rejects.toThrow(/not one of disconnected/);
   });
 
-  test("a version 15 anchors document is rejected by name", async () => {
-    // 14 is real now (STC-542), so 15 stands in for "unknown future version".
-    await expect(loadPip(pipAnchors({}, 15))).rejects.toThrow(/version 15 is not supported/);
+  test("a version 16 anchors document is rejected by name", async () => {
+    // 15 is real now (STC-562), so 16 stands in for "unknown future version".
+    await expect(loadPip(pipAnchors({}, 16))).rejects.toThrow(/version 16 is not supported/);
   });
 
   test("a camera cut half way has a PiP before the cut and none after it", async () => {
@@ -139,5 +139,33 @@ describe("anchors-14 endedBy on system audio (STC-542)", () => {
       .rejects.toThrow(/system\.endedBy is set on a system block with present:false/);
     await expect(loadPip(withSystem({ ...system, endedBy: "disconnected" })))
       .rejects.toThrow(/system\.endedBy "disconnected" is not one of stream-stopped/);
+  });
+});
+
+describe("anchors-15 writer-failed on the camera (STC-562)", () => {
+  test("the schema accepts it on a present camera; 14 refuses it", () => {
+    const v15 = compile("schema/anchors-15.schema.json");
+    expect(v15(pipAnchors({ endedBy: "writer-failed" }, 15)), JSON.stringify(v15.errors)).toBe(true);
+    expect(v15(pipAnchors({ endedBy: "disconnected" }, 15)), "disconnected is still a camera reason").toBe(true);
+    expect(v15({ ...pipAnchors({}, 15), camera: { present: false, endedBy: "writer-failed" } })).toBe(false);
+    const v14 = compile("schema/anchors-14.schema.json");
+    expect(v14(pipAnchors({ endedBy: "writer-failed" }, 14))).toBe(false);
+    expect(v14(pipAnchors({ endedBy: "disconnected" }, 14)), "the control: 14 takes the old reason").toBe(true);
+  });
+
+  test("loadSession keeps it at v15 and refuses it before", async () => {
+    const s = await loadPip(pipAnchors({ endedBy: "writer-failed" }, 15));
+    expect(s.anchors.camera?.endedBy).toBe("writer-failed");
+    await expect(loadPip(pipAnchors({ endedBy: "writer-failed" }, 14)))
+      .rejects.toThrow(/camera\.endedBy needs anchors version 15/);
+    // The control: `disconnected` at 14 still loads, so the 15 is this value's alone.
+    expect((await loadPip(pipAnchors({ endedBy: "disconnected" }, 14))).anchors.camera?.endedBy).toBe("disconnected");
+  });
+
+  test("the PiP ends at the camera's last written frame", async () => {
+    const s = await loadPip(pipAnchors({ endedBy: "writer-failed", lastFramePtsNs: 2_000_000_000 }, 15));
+    const project = load("fixtures/pip/project.json");
+    expect(render(project, s, 1_500_000_000).pip).not.toBeNull();
+    expect(render(project, s, 2_500_000_000).pip).toBeNull();
   });
 });

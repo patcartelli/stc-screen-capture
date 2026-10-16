@@ -80,8 +80,16 @@ let omitExpectedRate = env["STC_FRAG_NO_EXPECTED_RATE"] == "1"
 // its own display time. Held frames repeat the previous frame's pixels.
 let holdFrames = env["STC_FRAG_HOLD"] == "1"
 let notRealtime = env["STC_FRAG_NOT_REALTIME"] == "1"
-
-let W = 320, H = 240
+// STC-562: "1" is CameraCapture.stop on a failed writer. The first refused append
+// ends the feed instead of failing the run: markAsFinished, finishWriting, and the
+// file is left as a real camera.mp4 is after its writer fails mid-take. Stdout says
+// where (`FAILED at=N`) and the status finishWriting ended in.
+let finishOnFail = env["STC_FRAG_FINISH_ON_FAIL"] == "1"
+// STC-562: camera.mp4's own shape (CameraCapture.setupWriter): 1280x720, a key
+// frame every 60. The defaults are the display harness's.
+let W = Int(env["STC_FRAG_W"] ?? "320")!, H = Int(env["STC_FRAG_H"] ?? "240")!
+let keyInterval = Int(env["STC_FRAG_KEYINT"] ?? "45")!
+var failedAt: Int?
 
 func makeBuffer(_ i: Int) -> CVPixelBuffer {
     var pb: CVPixelBuffer?
@@ -119,7 +127,7 @@ if fragmentIntervalSec > 0 {
 }
 var compression: [String: Any] = [
     AVVideoAverageBitRateKey: 8_000_000,
-    AVVideoMaxKeyFrameIntervalKey: 45,
+    AVVideoMaxKeyFrameIntervalKey: keyInterval,
     AVVideoExpectedSourceFrameRateKey: fps,
     AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
     AVVideoAllowFrameReorderingKey: false,
@@ -182,6 +190,13 @@ input.requestMediaDataWhenReady(on: queue) {
         }
         let pts = CMTime(value: ptsNs, timescale: 1_000_000_000)
         if !adaptor.append(makeBuffer(appended), withPresentationTime: pts) {
+            if finishOnFail {
+                failedAt = appended
+                diag("append failed at frame \(appended) (finishing anyway): \(String(describing: writer.error))")
+                input.markAsFinished()
+                done.signal()
+                return
+            }
             fail("append failed at frame \(appended): \(String(describing: writer.error))")
         }
         appended += 1
@@ -205,6 +220,11 @@ let sem = DispatchSemaphore(value: 0)
 writer.finishWriting { sem.signal() }
 sem.wait()
 
+if let failedAt {
+    diag("finished a failed writer: status=\(writer.status.rawValue)")
+    print("FAILED at=\(failedAt) status=\(writer.status.rawValue) error=\(String(describing: writer.error))")
+    exit(0)
+}
 if writer.status != .completed {
     fail("finishWriting ended in status \(writer.status.rawValue): \(String(describing: writer.error))")
 }

@@ -1185,6 +1185,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 // unplug always lands mid-track (armCameraDisconnectFault).
                 if let cam { self?.armCameraDisconnectFault(deviceUid: cam.currentDeviceUid()) }
             }
+            // STC-562: a failed camera writer ends the camera track, said.
+            cam.onWriterFailed = { [weak self, weak cam] err in
+                if let cam { self?.handleCameraWriterFailed(cam, err) }
+            }
             let result = cam.start()
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
@@ -1393,6 +1397,38 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         cam.stop { [weak self] track in
             var ended = track   // STC-237: the camera went away mid-take
             ended?.endedBy = "disconnected"
+            self?.lock.lock()
+            self?.cameraTrack = ended
+            self?.lock.unlock()
+            // STC-530: between `camera = nil` and here the partial could see no camera at all.
+            self?.notePartialChange()
+            teardowns.leave()
+        }
+    }
+
+    /// camera.mp4's writer went `.failed` mid-take (STC-562). Every later frame
+    /// would be refused, so the camera is over: tear down ONLY the camera, the shape
+    /// of `handleCameraDisconnected`, and record why (`endedBy: "writer-failed"`,
+    /// anchors-15). The track keeps what was written before the failure, and
+    /// `lastFramePtsNs` is the last frame that went in. The known cause, a camera
+    /// gap over 2^31 ns, is held off by `CameraCapture`'s hold frames, so this is
+    /// for whatever else fails the writer. The warning is `camera-track-failed`, not
+    /// `camera-writer-failed` (CameraError's, a writer that never started).
+    /// `cam === camera`: a writer failure from
+    /// an instance the stop already took is the stop's to describe.
+    func handleCameraWriterFailed(_ cam: CameraCapture, _ err: Error?) {
+        lock.lock()
+        guard !stoppingBegan, let live = camera, live === cam else { lock.unlock(); return }
+        camera = nil
+        midTakeTeardowns.enter()
+        lock.unlock()
+        IO.send("warning", ["code": "camera-track-failed", "tNs": Int(Clock.nowNs() - t0Ns),
+                            "detail": "the camera's file could not be written (\(String(describing: err))); "
+                                    + "the take continues with no picture-in-picture from this point on"])
+        let teardowns = midTakeTeardowns   // strong: leave() must happen even if self is gone
+        cam.stop { [weak self] track in
+            var ended = track
+            ended?.endedBy = "writer-failed"
             self?.lock.lock()
             self?.cameraTrack = ended
             self?.lock.unlock()
@@ -2605,7 +2641,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // can say whether its camera was still delivering at the kill. Read
         // after `lock` is released, as `currentAnchorsDocument` reads the
         // camera's track, so the two locks never nest.
-        if let liveCam { s["cameraFrames"] = liveCam.appendedFrames() }
+        if let liveCam {
+            s["cameraFrames"] = liveCam.appendedFrames()
+            // STC-562: held camera frames, apart from real ones, as `framesHeld` is.
+            s["cameraFramesHeld"] = liveCam.heldFrames()
+        }
         return s
     }
 
