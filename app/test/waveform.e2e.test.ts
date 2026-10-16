@@ -5,15 +5,15 @@ import { makeTakeFolder, makeMicTakeFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
- * The ruler's audio waveform (STC-454 part 4), wired. What it LOOKS like over
- * real narration needs a Mac (docs/STC-454-RUNBOOK.md §7): the fixtures'
- * placeholder AAC decodes to silence and this sandbox has no AAC encoder,
- * so every waveform here is flat. The arithmetic (the peaks ARE the export's
- * mix) is pinned in Node by transform/test/waveform.test.ts against
- * `mixBlock` itself. What is checked here is what that test cannot see: the
- * toggle only for a take with audio, off by default, the peaks computed once
- * the audio decodes, recomputed when a mute changes what would be exported,
- * and Space on the focused toggle flipping it rather than starting playback.
+ * The editor's audio lane (STC-454 part 4, moved off the ruler by STC-483),
+ * wired. What it LOOKS like over real narration needs a Mac (docs/STC-454-
+ * RUNBOOK.md §7): the fixtures' placeholder AAC decodes to silence and this
+ * sandbox has no AAC encoder, so every waveform here is flat. The arithmetic
+ * (the peaks ARE the export's mix; what counts as clipped) is pinned in Node by
+ * transform/test/waveform.test.ts. What is checked here is what that test
+ * cannot see: the lane only for a take with audio, the peaks computed once the
+ * audio decodes, recomputed when a mute changes what would be exported, and
+ * the lane resizable by its bottom edge within its bounds.
  */
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
@@ -27,33 +27,23 @@ async function openEditor(dir: string): Promise<Page> {
   return editorWin;
 }
 
-const shown = (win: Page) => win.evaluate(() => document.getElementById("ruler")!.hasAttribute("data-waveform"));
-const state = (win: Page) => win.getAttribute("#ruler-waveform", "data-state");
-const run = (win: Page) => win.getAttribute("#ruler-waveform", "data-run");
+const state = (win: Page) => win.getAttribute("#audio-waveform", "data-state");
+const run = (win: Page) => win.getAttribute("#audio-waveform", "data-run");
+const laneHeight = (win: Page) =>
+  win.evaluate(() => document.getElementById("audio-lane")!.getBoundingClientRect().height);
 
-describe("the ruler's waveform", () => {
-  test("no audio, no toggle", async () => {
+describe("the audio lane", () => {
+  test("no audio, no lane", async () => {
     const win = await openEditor(makeTakeFolder().dir);
-    expect(await win.getAttribute("#rulerwaveformtoggle", "hidden")).not.toBeNull();
-    expect(await win.isVisible("#rulerwaveformtoggle")).toBe(false);
+    expect(await win.isVisible("#audio-lane")).toBe(false);
   }, 120_000);
 
-  test("a mic take: the toggle shows, starts off, and the peaks are computed once the audio decodes", async () => {
+  test("a mic take: the lane shows and the peaks are computed once the audio decodes", async () => {
     const win = await openEditor(makeMicTakeFolder().dir);
-    await expect.poll(() => win.isVisible("#rulerwaveformtoggle"), { timeout: 20_000 }).toBe(true);
-    expect(await win.getAttribute("#rulerwaveformtoggle", "aria-pressed")).toBe("false");
-    expect(await shown(win)).toBe(false);
+    await expect.poll(() => win.isVisible("#audio-lane"), { timeout: 20_000 }).toBe(true);
     await expect.poll(() => state(win), { timeout: 20_000 }).toBe("ready");
-
-    await win.click("#rulerwaveformtoggle");
-    expect(await win.getAttribute("#rulerwaveformtoggle", "aria-pressed")).toBe("true");
-    expect(await shown(win)).toBe(true);
-    // Shown means visible: the wrap's opacity is what the attribute drives.
-    await expect.poll(() => win.evaluate(() =>
-      Number(getComputedStyle(document.getElementById("ruler-waveform-wrap")!).opacity))).toBeGreaterThan(0);
-
-    await win.click("#rulerwaveformtoggle");
-    expect(await shown(win)).toBe(false);
+    // The ruler is time only now: Clip activity's canvas is the one left on it.
+    expect(await win.locator("#ruler canvas").count()).toBe(1);
   }, 120_000);
 
   test("muting the mic recomputes the peaks from what the export would now contain", async () => {
@@ -66,14 +56,23 @@ describe("the ruler's waveform", () => {
     expect(await state(win)).toBe("ready");
   }, 120_000);
 
-  test("Space on the focused toggle flips it and does not start playback", async () => {
+  test("dragging the bottom edge resizes the lane, held between its minimum and maximum", async () => {
     const win = await openEditor(makeMicTakeFolder().dir);
-    await expect.poll(() => win.isVisible("#rulerwaveformtoggle"), { timeout: 20_000 }).toBe(true);
-    const clockBefore = await win.textContent("#clock-cur");
-    await win.focus("#rulerwaveformtoggle");
-    await win.keyboard.press(" ");
-    await expect.poll(() => shown(win)).toBe(true);
-    await new Promise((r) => setTimeout(r, 600));
-    expect(await win.textContent("#clock-cur")).toBe(clockBefore);
+    await expect.poll(() => win.isVisible("#audio-lane"), { timeout: 20_000 }).toBe(true);
+    const before = await laneHeight(win);
+    const grip = (await win.locator("#audio-resize").boundingBox())!;
+    const x = grip.x + grip.width / 2;
+    const y = grip.y + grip.height / 2;
+    await win.mouse.move(x, y);
+    await win.mouse.down();
+    await win.mouse.move(x, y + 40, { steps: 5 });
+    await win.mouse.up();
+    expect(await laneHeight(win)).toBeGreaterThan(before + 20);
+    // Far past the maximum and far past the minimum: clamped, never lost.
+    await win.focus("#audio-resize");
+    for (let i = 0; i < 40; i++) await win.keyboard.press("ArrowDown");
+    expect(await laneHeight(win)).toBe(160);
+    for (let i = 0; i < 40; i++) await win.keyboard.press("ArrowUp");
+    expect(await laneHeight(win)).toBe(32);
   }, 120_000);
 });

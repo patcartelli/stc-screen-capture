@@ -70,7 +70,7 @@ import {
 import { decodeMicForMix, decodeSystemForMix } from "@transform/decode-audio";
 import type { DemuxedAudio } from "@transform/demux-audio";
 import { PreviewAudio } from "@transform/preview-audio";
-import { mixPeaks } from "@transform/waveform";
+import { mixPeaks, isClipped } from "@transform/waveform";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
 import {
   projectForWrite, exportWindow, estimateExportMs,
@@ -170,7 +170,7 @@ function applySpanTransform(): void {
   const transform = `scaleX(${scale}) translateX(${translatePct}%)`;
   ($("timeline") as HTMLElement).style.transform = transform;
   ($("ruler-activity-wrap") as HTMLElement).style.transform = transform;
-  ($("ruler-waveform-wrap") as HTMLElement).style.transform = transform;
+  ($("audio-canvas-wrap") as HTMLElement).style.transform = transform;
   ($("zoom-canvas-wrap") as HTMLElement).style.transform = transform;
   ($("ruler-content") as HTMLElement).style.transform = transform;
   // STC-331, found fixing this file: editor.html's own comment already
@@ -614,8 +614,9 @@ $("ruleractivitytoggle").addEventListener("click", toggleRulerActivity);
 
 // ---- the waveform on the ruler (STC-454 part 4) -------------------------
 //
-// The export's mix, drawn on the ruler behind its own toggle (Patrick,
-// 2026-09-25: a ruler overlay, not a lane; the mix, not the raw tracks).
+// The export's mix. It began as a ruler overlay behind a toggle (Patrick,
+// 2026-09-25); STC-483 (2026-10-16) gave it a lane of its own, always shown for
+// a take with audio, with clipped peaks in red. The mix, not the raw tracks.
 // The peaks come from waveform.ts's `mixPeaks`, which runs `mixBlock` over
 // the same tracks and the same `previewLevels()` the preview plays, so a
 // level, a mute or the cleaned mic changes the drawing the way it changes
@@ -623,9 +624,6 @@ $("ruleractivitytoggle").addEventListener("click", toggleRulerActivity);
 // tracks, measured), so the work is spread over short idle slices and a run
 // that a newer change has superseded stops at its next slice. Until the new
 // peaks land, the old drawing stays up.
-//
-// Off by default and never persisted, the same as Clip activity beside it:
-// a view preference, not an edit decision.
 
 const WAVE_SLICE_MS = 8;
 let wavePeaks: Float32Array | null = null;
@@ -634,12 +632,12 @@ let waveRun = 0;
 /** Recompute the peaks from what the preview would play now. */
 function scheduleWaveform(): void {
   const run = ++waveRun;
-  const canvas = $("ruler-waveform") as HTMLCanvasElement;
+  const canvas = $("audio-waveform") as HTMLCanvasElement;
   const audio = previewAudio;
   if (!audio || !player || !audio.hasSound) {
     wavePeaks = null;
     canvas.dataset.state = "none";
-    drawRulerWaveform();
+    drawAudioLane();
     return;
   }
   const levels = previewLevels();
@@ -658,7 +656,7 @@ function scheduleWaveform(): void {
         wavePeaks = r.value;
         canvas.dataset.state = "ready";
         canvas.dataset.run = String(run);
-        drawRulerWaveform();
+        drawAudioLane();
         return;
       }
       if (performance.now() >= until) break;
@@ -668,18 +666,23 @@ function scheduleWaveform(): void {
   setTimeout(step, 0);
 }
 
-/** Mirrored about the ruler's middle, linear: full height is full scale. */
-function drawRulerWaveform(): void {
-  const canvas = $("ruler-waveform") as HTMLCanvasElement;
-  const wrap = $("ruler-waveform-wrap") as HTMLElement;
-  const w = Math.max(1, Math.round(wrap.getBoundingClientRect().width)) || LANE_BUCKETS;
-  const h = 18;
+/** Mirrored about the lane's middle, linear: full height is full scale. A
+ *  clipped bucket (waveform.ts's `isClipped`) is drawn in --wave-clip. */
+function drawAudioLane(): void {
+  const canvas = $("audio-waveform") as HTMLCanvasElement;
+  const wrap = $("audio-canvas-wrap") as HTMLElement;
+  const lane = $("audio-lane") as HTMLElement;
+  const { width: w, height: h } = laneBitmap(
+    wrap.getBoundingClientRect().width || LANE_BUCKETS, lane.clientHeight || audioLaneHeight,
+    window.devicePixelRatio);
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
   const peaks = wavePeaks;
   if (!peaks) return;
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#5fb38a";
+  const css = getComputedStyle(document.documentElement);
+  const normal = css.getPropertyValue("--wave").trim() || "#5fb38a";
+  const hot = css.getPropertyValue("--wave-clip").trim() || "#ff6b6b";
   const n = peaks.length;
   const mid = h / 2;
   const half = mid - 1;
@@ -691,24 +694,75 @@ function drawRulerWaveform(): void {
     for (let b = b0; b < b1 && b < n; b++) peak = Math.max(peak, peaks[b]!);
     if (!(peak > 0)) continue;
     const a = Math.max(0.5, peak * half);
+    ctx.fillStyle = isClipped(peak) ? hot : normal;
     ctx.fillRect(x, mid - a, 1, 2 * a);
   }
 }
 
-function updateWaveformToggle(): void {
+/** The lane exists only for a take with audio. */
+function updateAudioLane(): void {
   const has = !!openSession?.micAudio || !!openSession?.systemAudio;
-  $("rulerwaveformtoggle").toggleAttribute("hidden", !has);
+  $("audio-lane").toggleAttribute("hidden", !has);
+  if (has) drawAudioLane();
 }
 
-function toggleRulerWaveform(): void {
-  const btn = $("rulerwaveformtoggle") as HTMLButtonElement;
-  const on = btn.getAttribute("aria-pressed") !== "true";
-  btn.setAttribute("aria-pressed", String(on));
-  ($("ruler") as HTMLElement).toggleAttribute("data-waveform", on);
+// ---- the audio lane's height (STC-483) ------------------------------------
+//
+// Resizable by dragging its bottom edge (Patrick, 2026-10-16). Defaults, the
+// minimum and the remembered size are this ticket's own calls, still open with
+// him: 56 px default, 32 px minimum (peaks readable), 160 px maximum, remembered
+// per viewer in localStorage (a view preference, not an edit decision).
+const AUDIO_LANE_MIN = 32;
+const AUDIO_LANE_MAX = 160;
+const AUDIO_LANE_DEFAULT = 56;
+const AUDIO_LANE_KEY = "stc.editor.audioLaneHeight";
+
+function clampAudioLane(px: number): number {
+  return Math.round(Math.min(AUDIO_LANE_MAX, Math.max(AUDIO_LANE_MIN, Number.isFinite(px) ? px : AUDIO_LANE_DEFAULT)));
 }
-$("rulerwaveformtoggle").addEventListener("click", toggleRulerWaveform);
+let audioLaneHeight = AUDIO_LANE_DEFAULT;
+try {
+  const saved = Number(localStorage.getItem(AUDIO_LANE_KEY));
+  if (saved > 0) audioLaneHeight = clampAudioLane(saved);
+} catch { /* storage unavailable: the default stands */ }
 
+function setAudioLaneHeight(px: number, persist: boolean): void {
+  audioLaneHeight = clampAudioLane(px);
+  document.documentElement.style.setProperty("--audio-lane-h", `${audioLaneHeight}px`);
+  drawAudioLane();
+  if (persist) {
+    try { localStorage.setItem(AUDIO_LANE_KEY, String(audioLaneHeight)); } catch { /* not remembered */ }
+  }
+}
+setAudioLaneHeight(audioLaneHeight, false);
 
+(() => {
+  const grip = $("audio-resize") as HTMLButtonElement;
+  let startY = 0, startH = 0;
+  grip.addEventListener("pointerdown", (e) => {
+    startY = e.clientY; startH = audioLaneHeight;
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add("dragging");
+    e.preventDefault();
+  });
+  grip.addEventListener("pointermove", (e) => {
+    if (!grip.hasPointerCapture(e.pointerId)) return;
+    setAudioLaneHeight(startH + (e.clientY - startY), false);
+  });
+  const end = (e: PointerEvent): void => {
+    if (!grip.hasPointerCapture(e.pointerId)) return;
+    grip.releasePointerCapture(e.pointerId);
+    grip.classList.remove("dragging");
+    setAudioLaneHeight(audioLaneHeight, true);
+  };
+  grip.addEventListener("pointerup", end);
+  grip.addEventListener("pointercancel", end);
+  grip.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault(); e.stopPropagation();
+    setAudioLaneHeight(audioLaneHeight + (e.key === "ArrowDown" ? 8 : -8), true);
+  });
+})();
 
 /** A crisp square-cell checkerboard (STC-444 slice 2: "LCD crisp", finer of
  *  the two pitches compared) rather than a soft blur — `bg` is the gap
@@ -773,7 +827,7 @@ function drawZoomLane(): void {
   ctx.fill();
 }
 
-function redrawLanes(): void { drawRulerActivity(); drawRulerWaveform(); drawZoomLane(); layoutOverrideBlocks(); }
+function redrawLanes(): void { drawRulerActivity(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks(); }
 window.addEventListener("resize", redrawLanes);
 
 // ---- manual zoom override (STC-330/331) — the block lane's editing half ---
@@ -1677,7 +1731,7 @@ $("sysaudiolevel").addEventListener("change", () => {
 function updateAudioButton(): void {
   const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);
   $("audiobtn").toggleAttribute("hidden", !has);
-  updateWaveformToggle();
+  updateAudioLane();
   updateKeycastUI();
   updateClicksUI();
   updateFramingUI();
