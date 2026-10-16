@@ -14,6 +14,8 @@ import type { Project } from "@transform/types";
 
 export interface TakeIO {
   read(name: string): Promise<ArrayBuffer>;
+  /** For a file a take may lack (STC-525): null when it is not there, never a thrown ENOENT. */
+  readOptional(name: string): Promise<ArrayBuffer | null>;
   size(name: string): Promise<number>;
   chunk(name: string, offset: number, length: number): Promise<ArrayBuffer>;
 }
@@ -73,10 +75,10 @@ export async function loadTake(io: TakeIO): Promise<LoadedTake> {
   const dec = new TextDecoder();
   const [anchors, events, displaySrc, projectRaw] = await Promise.all([
     io.read("anchors.json").then((b) => JSON.parse(dec.decode(b))),
-    io.read("events.json").then((b) => JSON.parse(dec.decode(b)))
+    io.readOptional("events.json").then((b) => (b ? JSON.parse(dec.decode(b)) : { version: 1, events: [] }))
       .catch(() => ({ version: 1, events: [] })),
     ipcSource(io, "display.mp4"),
-    io.read("project.json").then((b) => JSON.parse(dec.decode(b)))
+    io.readOptional("project.json").then((b) => (b ? JSON.parse(dec.decode(b)) : null))
       .catch(() => null),
   ]);
   const cameraSrc = anchors.files?.camera ? await ipcSource(io, anchors.files.camera) : undefined;

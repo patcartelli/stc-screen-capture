@@ -26,6 +26,7 @@ declare const editor: {
   openPreview: (dir: string) => Promise<boolean>;
   closePreview: () => Promise<void>;
   readTakeFile: (name: string) => Promise<ArrayBuffer>;
+  readTakeFileOptional: (name: string) => Promise<ArrayBuffer | null>;
   takeFileSize: (name: string) => Promise<number>;
   readTakeChunk: (name: string, offset: number, length: number) => Promise<ArrayBuffer>;
   writeProject: (bytes: ArrayBuffer) => Promise<boolean>;
@@ -1424,6 +1425,7 @@ $("closeexport").addEventListener("click", () => exportDialog.close());
 /** This window's bridge as session-io.ts's TakeIO (STC-488). */
 const takeIO: TakeIO = {
   read: (n) => editor.readTakeFile(n),
+  readOptional: (n) => editor.readTakeFileOptional(n),
   size: (n) => editor.takeFileSize(n),
   chunk: (n, o, l) => editor.readTakeChunk(n, o, l),
 };

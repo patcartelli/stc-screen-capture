@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("editor", {
   openPreview: (dir: string) => ipcRenderer.invoke("preview:open", dir),
   closePreview: () => ipcRenderer.invoke("preview:close"),
   readTakeFile: (name: string) => ipcRenderer.invoke("preview:read", name),
+  readTakeFileOptional: (name: string) => ipcRenderer.invoke("preview:readOptional", name),
   takeFileSize: (name: string) => ipcRenderer.invoke("preview:size", name),
   readTakeChunk: (name: string, offset: number, length: number) =>
     ipcRenderer.invoke("preview:chunk", name, offset, length),
