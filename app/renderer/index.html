@@ -296,6 +296,13 @@
       -webkit-app-region: no-drag;
     }
     #profilesheet.open { transform: translateX(0); }
+    /* STC-552: the sheet's own no-drag is not enough. It opens by TRANSFORM
+       alone, and Chromium collects drag regions at layout, so a transform
+       does not move the carve-out out from under the title row (measured:
+       the X still produced "Window move completed without beginning"). While
+       the sheet is open the title row stops being a drag region too, which is
+       a style change on an element that laid out, so the regions are redone. */
+    body:has(#profilesheet.open) #title-row { -webkit-app-region: no-drag; }
     #profilesheet h1 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); }
     #profilesheet-head { justify-content: space-between; }
     #profileclose { padding: 3px 9px; font-size: var(--type-body); line-height: 1; }

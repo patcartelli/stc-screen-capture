@@ -233,8 +233,12 @@ describe("the settings sheet", () => {
     await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
     expect(await win.evaluate(() =>
       getComputedStyle(document.getElementById("profilesheet")!).getPropertyValue("-webkit-app-region"))).toBe("no-drag");
+    const region = (id: string) => win.evaluate((i) =>
+      getComputedStyle(document.getElementById(i)!).getPropertyValue("-webkit-app-region"), id);
+    expect(await region("title-row")).toBe("no-drag");
     await win.click("#profileclose");
     await expect.poll(() => win.getAttribute("#profilesheet", "class")).not.toMatch(/open/);
+    expect(await region("title-row")).toBe("drag");
     expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
   }, 60_000);
 
