@@ -7,6 +7,7 @@ import { contextBridge, ipcRenderer } from "electron";
  */
 contextBridge.exposeInMainWorld("copyRender", {
   read: (name: string) => ipcRenderer.invoke("preview:read", name),
+  readOptional: (name: string) => ipcRenderer.invoke("preview:readOptional", name),
   size: (name: string) => ipcRenderer.invoke("preview:size", name),
   chunk: (name: string, offset: number, length: number) =>
     ipcRenderer.invoke("preview:chunk", name, offset, length),

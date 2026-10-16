@@ -42,6 +42,7 @@ import {
   copyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
   copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
 } from "./recording-copy.js";
+import { readOptionalTakeFile } from "./take-read.js";
 import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir, rename } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
@@ -3888,6 +3889,15 @@ ipcMain.handle("preview:read", async (e, name: string) => {
   if (!TAKE_FILES.has(name)) throw new Error(`refusing to read "${name}"`);
   const buf = await readFile(join(openTake, name));
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+});
+
+// STC-525: the files a take may legitimately lack. null, not a throw, so the
+// absence is not logged as a handler error. Everything else uses preview:read.
+ipcMain.handle("preview:readOptional", async (e, name: string) => {
+  const openTake = getOpenTake(e);
+  if (!openTake) throw new Error("no take is open");
+  if (!TAKE_FILES.has(name)) throw new Error(`refusing to read "${name}"`);
+  return readOptionalTakeFile(openTake, name);
 });
 
 ipcMain.handle("preview:size", async (e, name: string) => {

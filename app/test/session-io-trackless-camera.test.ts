@@ -40,6 +40,7 @@ function memoryIO(files: Record<string, Uint8Array>): TakeIO {
   };
   return {
     read: async (name) => (await get(name)).slice().buffer,
+    readOptional: async (name) => (files[name] ? files[name].slice().buffer : null),
     size: async (name) => (await get(name)).byteLength,
     chunk: async (name, offset, length) => (await get(name)).slice(offset, offset + length).buffer,
   };
