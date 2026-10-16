@@ -739,24 +739,24 @@ setAudioLaneHeight(audioLaneHeight, false);
 (() => {
   const grip = $("audio-resize") as HTMLButtonElement;
   let startY = 0, startH = 0;
-  grip.addEventListener("pointerdown", (e) => {
-    startY = e.clientY; startH = audioLaneHeight;
-    grip.setPointerCapture(e.pointerId);
-    grip.classList.add("dragging");
-    e.preventDefault();
-  });
-  grip.addEventListener("pointermove", (e) => {
-    if (!grip.hasPointerCapture(e.pointerId)) return;
-    setAudioLaneHeight(startH + (e.clientY - startY), false);
-  });
-  const end = (e: PointerEvent): void => {
-    if (!grip.hasPointerCapture(e.pointerId)) return;
-    grip.releasePointerCapture(e.pointerId);
+  // Window-level listeners, not pointer capture: the drag keeps working
+  // however the pointer leaves the strip, and does not depend on capture.
+  const move = (e: PointerEvent): void => setAudioLaneHeight(startH + (e.clientY - startY), false);
+  const end = (): void => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
     grip.classList.remove("dragging");
     setAudioLaneHeight(audioLaneHeight, true);
   };
-  grip.addEventListener("pointerup", end);
-  grip.addEventListener("pointercancel", end);
+  grip.addEventListener("pointerdown", (e) => {
+    startY = e.clientY; startH = audioLaneHeight;
+    grip.classList.add("dragging");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    e.preventDefault();
+  });
   grip.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
     e.preventDefault(); e.stopPropagation();
