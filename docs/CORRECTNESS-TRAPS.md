@@ -7,6 +7,15 @@ configuration. Don't re-discover these.
 
 ## Correctness traps to watch for
 
+- **A 1 ns `mediaTimeScale` caps one video sample at 2^31 ns = 2.147 s (STC-561, measured).** A
+  sample's duration is the gap to the next one, and the movie writer stores it in a signed 32-bit
+  field. Under VFR a still screen IS a gap, so the first frame after 2.15 s of stillness failed
+  the writer: `FFR_Movie signalled err=-17771` in the unified log, -11800 from AVFoundation, and
+  the take stopped as `error`. It looked like a 2 GB file-size limit because the two takes that
+  hit it were long. It is not: 2.3 GB writes fine. Correlate a stop with the unified log
+  (`log show --predicate 'process == "stc-helper"'`, plus `loginwindow` for screen saver and lock)
+  before believing a size or duration story. Any new 1 ns-timescale writer needs a hold, or a gap
+  bound, too. The camera's has neither yet.
 - **Byte-identical MP4 is not the gate** — muxer timestamps and encoder state differ between
   runs. Hash pre-encode RGBA buffers, not container output.
 - **The two channels are independent, and that is now MEASURED, not just described (STC-249).**

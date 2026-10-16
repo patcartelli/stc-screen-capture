@@ -72,6 +72,13 @@ let realtime = env["STC_FRAG_REALTIME"] == "1"
 //   STC_FRAG_NO_EXPECTED_RATE=1  omits AVVideoExpectedSourceFrameRateKey;
 //   STC_FRAG_NOT_REALTIME=1      sets expectsMediaDataInRealTime = false.
 let omitExpectedRate = env["STC_FRAG_NO_EXPECTED_RATE"] == "1"
+// STC-561: "1" writes the last frame again through a gap the way
+// `Capture.swift`'s hold timer does, by the SAME `decideHoldFrame`
+// (HoldFrameDecisions.swift is compiled into this harness), run against a
+// simulated clock that ticks every `HOLD_FRAME_CHECK_INTERVAL_SECONDS` and
+// reads "now" as the next frame's PTS — a real frame is delivered at about
+// its own display time. Held frames repeat the previous frame's pixels.
+let holdFrames = env["STC_FRAG_HOLD"] == "1"
 let notRealtime = env["STC_FRAG_NOT_REALTIME"] == "1"
 
 let W = 320, H = 240
@@ -134,6 +141,10 @@ writer.startSession(atSourceTime: .zero)
 let ptsStepNs = Int64(1_000_000_000 / fps)
 let wallStartNs = DispatchTime.now().uptimeNanoseconds
 var appended = 0
+var held = 0
+var lastWrittenNs: Int64 = -1
+var nextCheckNs: Int64 = 0
+let checkStepNs = Int64(HOLD_FRAME_CHECK_INTERVAL_SECONDS * 1_000_000_000)
 let queue = DispatchQueue(label: "stc.fragtest.feed")
 let done = DispatchSemaphore(value: 0)
 
@@ -147,6 +158,23 @@ input.requestMediaDataWhenReady(on: queue) {
         let gapNs: Int64 = (gapAfterFrame.map { appended >= $0 } ?? false)
             ? Int64((gapSec * 1_000_000_000).rounded()) : 0
         let ptsNs = Int64(appended) * ptsStepNs + gapNs
+        if holdFrames, lastWrittenNs >= 0 {
+            var holdPts: Int64?
+            while holdPts == nil && nextCheckNs < ptsNs {
+                holdPts = decideHoldFrame(lastWrittenPtsNs: lastWrittenNs,
+                                          lastAcceptedPtsNs: lastWrittenNs, nowNs: nextCheckNs)
+                nextCheckNs += checkStepNs
+            }
+            if let h = holdPts {
+                if !adaptor.append(makeBuffer(appended - 1),
+                                   withPresentationTime: CMTime(value: h, timescale: 1_000_000_000)) {
+                    fail("hold append failed at \(h) ns after frame \(appended): \(String(describing: writer.error))")
+                }
+                held += 1
+                lastWrittenNs = h
+                continue    // back to the readiness check before the real frame
+            }
+        }
         if realtime {
             let dueNs = wallStartNs + UInt64(ptsNs)
             let nowNs = DispatchTime.now().uptimeNanoseconds
@@ -157,6 +185,7 @@ input.requestMediaDataWhenReady(on: queue) {
             fail("append failed at frame \(appended): \(String(describing: writer.error))")
         }
         appended += 1
+        lastWrittenNs = ptsNs
         if let crashAfter, appended >= crashAfter {
             // The whole point: no markAsFinished, no finishWriting, no
             // flush — whatever AVAssetWriter has already committed to disk
@@ -179,5 +208,5 @@ sem.wait()
 if writer.status != .completed {
     fail("finishWriting ended in status \(writer.status.rawValue): \(String(describing: writer.error))")
 }
-diag("wrote \(appended) frames to \(outPath), status=completed")
-print("DONE frames=\(appended)")
+diag("wrote \(appended) frames (\(held) held) to \(outPath), status=completed")
+print("DONE frames=\(appended) held=\(held)")

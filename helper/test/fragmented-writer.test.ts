@@ -45,12 +45,13 @@ async function write(
   out: string,
   opts: {
     fragmentSec?: number; crashAfter?: number; gapAfterFrame?: number; gapSec?: number;
-    realtime?: boolean; noExpectedRate?: boolean; notRealtime?: boolean;
+    realtime?: boolean; noExpectedRate?: boolean; notRealtime?: boolean; hold?: boolean;
   } = {},
-) {
-  await runSwiftHarness({
+): Promise<string> {
+  return runSwiftHarness({
     label: "fragwriter",
-    sources: ["helper/test/fragmented-writer/main.swift"],
+    // HoldFrameDecisions.swift: STC-561's `decideHoldFrame`, the product's own.
+    sources: ["helper/src/HoldFrameDecisions.swift", "helper/test/fragmented-writer/main.swift"],
     env: {
       STC_FRAG_OUT: out,
       STC_FRAG_FRAMES: String(FRAMES),
@@ -62,6 +63,7 @@ async function write(
       ...(opts.realtime ? { STC_FRAG_REALTIME: "1" } : {}),
       ...(opts.noExpectedRate ? { STC_FRAG_NO_EXPECTED_RATE: "1" } : {}),
       ...(opts.notRealtime ? { STC_FRAG_NOT_REALTIME: "1" } : {}),
+      ...(opts.hold ? { STC_FRAG_HOLD: "1" } : {}),
     },
     // Killing the process IS the test in the crash case — a non-zero/signal
     // exit there is expected, not a harness failure, so this function's own
@@ -74,6 +76,7 @@ async function write(
     // Anything else (compile failure, a REAL crash signal) should still fail
     // the test loudly.
     if (!/exited 9\./.test(String(e?.message ?? e))) throw e;
+    return "";
   });
 }
 
@@ -196,29 +199,30 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
   // file? It does not. `frag-2s` crosses two 1 s fragment boundaries inside
   // the gap and demuxes identically in shape to `nofrag-2s`.
   //
-  // A gap of 3 s or MORE is a separate finding, and it belongs to STC-448. On
-  // CI's encoder the writer rejects an append 5-14 frames after frames resume
-  // (`-11800` / `-17771`). It does this with or without fragmentation, with
-  // real-time pacing, without `AVVideoExpectedSourceFrameRateKey`, and with
-  // `expectsMediaDataInRealTime = false` (run 35902771313 swept all of those).
-  // Those rows are not asserted here: the failure is not this ticket's
-  // property, and nobody has run them on a real encoder yet. CI's encoder is
-  // the paravirtualized one STC-259 measured behaving unlike hardware. The
-  // harness keeps every knob (`realtime`, `noExpectedRate`, `notRealtime`),
-  // so reproducing it is one line per row in CASES. STC-448 puts those rows
-  // back, on a Mac first, as its regression check.
+  // A gap of more than 2.147 s is STC-561 (first seen as STC-448 on CI). The
+  // display input's timescale is 1 ns, a sample's duration is the gap to the
+  // next one, and the format writer stores it in a signed 32-bit field, so
+  // 2^31 ns is the longest sample it can write. One longer and an append
+  // fails a few frames after the gap with -11800 / -17771, whatever the
+  // fragmentation, pacing or real-time settings (STC-448's sweep). The second
+  // test below pins that limit from both sides, on whichever encoder runs it;
+  // the third is the fix, `Capture.swift`'s hold frame, holding through gaps
+  // far past it.
   const GAP_AFTER_FRAME = 120;   // 2s in at 60fps
 
   type GapCase = {
     name: string; gapSec: number;
     fragmentSec?: number; realtime?: boolean; noExpectedRate?: boolean; notRealtime?: boolean;
+    hold?: boolean;
   };
 
   /** Runs one case and describes its outcome in words; never throws. */
   async function gapOutcome(c: GapCase): Promise<string> {
     const out = tmpOut(`${c.name}.mp4`);
+    let held = 0;
     try {
-      await write(out, { ...c, gapAfterFrame: GAP_AFTER_FRAME });
+      const stdout = await write(out, { ...c, gapAfterFrame: GAP_AFTER_FRAME });
+      held = Number(/held=(\d+)/.exec(stdout)?.[1] ?? 0);
     } catch (e) {
       const m = /append failed at frame (\d+)/.exec(String((e as Error)?.message ?? e));
       return m ? `append failed at frame ${m[1]}` : `harness failed: ${String(e).split("\n")[0]}`;
@@ -228,10 +232,23 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
     const video = await demuxTrack(memorySource(readAb(out), c.name), c.name);
     const ptsStepNs = Math.trunc(1_000_000_000 / FPS);
     const gapNs = Math.round(c.gapSec * 1_000_000_000);
-    if (video.framesNs.length !== FRAMES) return `demuxed ${video.framesNs.length} of ${FRAMES} frames`;
+    if (video.framesNs.length !== FRAMES + held) {
+      return `demuxed ${video.framesNs.length} of ${FRAMES} frames + ${held} held`;
+    }
+    // Every real frame where it was written; held ones only inside the gap.
+    const real = video.framesNs.filter((t, i) =>
+      !(i > 0 && t > (GAP_AFTER_FRAME - 1) * ptsStepNs && t < GAP_AFTER_FRAME * ptsStepNs + gapNs));
+    if (real.length !== FRAMES) return `${real.length} real frames outside the gap, expected ${FRAMES}`;
     for (let i = 0; i < FRAMES; i++) {
       const want = i * ptsStepNs + (i >= GAP_AFTER_FRAME ? gapNs : 0);
-      if (video.framesNs[i] !== want) return `frame ${i} at ${video.framesNs[i]} ns, expected ${want}`;
+      if (real[i] !== want) return `frame ${i} at ${real[i]} ns, expected ${want}`;
+    }
+    if (c.hold) {
+      let longest = 0;
+      for (let i = 1; i < video.framesNs.length; i++) longest = Math.max(longest, video.framesNs[i]! - video.framesNs[i - 1]!);
+      // HOLD_FRAME_INTERVAL_NS, plus the seam where real frames resume.
+      if (longest > 1_000_000_000 + 500_000_000) return `a sample ${longest} ns long survived the hold`;
+      return `ok (${held} held)`;
     }
     return "ok";
   }
@@ -249,5 +266,46 @@ describe("STC-394: movieFragmentInterval against Capture.swift's real settings",
     const table = rows.join("\n");
     process.stderr.write(`[fragmented-writer] gap matrix:\n${table}\n`);
     expect(rows.every((r) => r.endsWith(" ok")), `gap matrix:\n${table}`).toBe(true);
+  }, 900_000);
+
+  // The limit itself, from both sides. 2.12 s of gap is a 2.137 s sample and
+  // writes; 2.14 s is a 2.157 s sample and fails. Measured on a real Mac's
+  // encoder (2026-10-16), and the failure rows are STC-448's 3 s and 5 s on CI.
+  // If a later macOS lifts the limit, the failing rows turn "ok" and this test
+  // says so, rather than the hold quietly becoming unnecessary.
+  test("STC-561: a sample over 2^31 ns cannot be written", async () => {
+    const LIMIT: [GapCase, (o: string) => boolean][] = [
+      [{ name: "nofrag-2.12s", gapSec: 2.12 }, (o) => o === "ok"],
+      [{ name: "nofrag-2.14s", gapSec: 2.14 }, (o) => o.startsWith("append failed")],
+      [{ name: "frag-2.14s", gapSec: 2.14, fragmentSec: FRAGMENT_SEC }, (o) => o.startsWith("append failed")],
+      [{ name: "frag-5s", gapSec: 5, fragmentSec: FRAGMENT_SEC }, (o) => o.startsWith("append failed")],
+    ];
+    const rows: string[] = [];
+    let asExpected = true;
+    for (const [c, want] of LIMIT) {
+      const o = await gapOutcome(c);
+      rows.push(`${c.name.padEnd(30)} ${o}`);
+      asExpected &&= want(o);
+    }
+    const table = rows.join("\n");
+    process.stderr.write(`[fragmented-writer] limit:\n${table}\n`);
+    expect(asExpected, `limit:\n${table}`).toBe(true);
+  }, 900_000);
+
+  // The fix: `Capture.swift` writes the last frame again before a sample can
+  // reach the limit, so a gap of any length writes. 165 s is the screen saver
+  // that stopped a real take on 2026-10-16.
+  test("STC-561: with hold frames, a gap of any length writes, every real frame in place", async () => {
+    const HELD: GapCase[] = [
+      { name: "held-nofrag-2.14s", gapSec: 2.14, hold: true },
+      { name: "held-nofrag-5s", gapSec: 5, hold: true },
+      { name: "held-frag-5s", gapSec: 5, fragmentSec: FRAGMENT_SEC, hold: true },
+      { name: "held-frag-165s", gapSec: 165, fragmentSec: 2, hold: true },
+    ];
+    const rows: string[] = [];
+    for (const c of HELD) rows.push(`${c.name.padEnd(30)} ${await gapOutcome(c)}`);
+    const table = rows.join("\n");
+    process.stderr.write(`[fragmented-writer] held:\n${table}\n`);
+    expect(rows.every((r) => / ok \(\d+ held\)$/.test(r)), `held:\n${table}`).toBe(true);
   }, 900_000);
 });

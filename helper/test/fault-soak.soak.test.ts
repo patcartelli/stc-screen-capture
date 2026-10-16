@@ -8,6 +8,7 @@
  *   disk full             STC_CAPTURE_FAULT=disk-full          stop: disk-full
  *   write error           STC_CAPTURE_FAULT=disk-write-failed  stop: disk-full
  *   encoder stall         STC_CAPTURE_FAULT=encoder-stall      warning: frames-dropped (the take goes on)
+ *   still screen          STC_CAPTURE_FAULT=screen-idle        held frames (the take goes on, STC-561)
  *   camera disconnect     STC_CAPTURE_FAULT=camera-disconnected warning + tNs; anchors camera.endedBy
  *   system audio stop     STC_CAPTURE_FAULT=system-audio-stop  warning + tNs; anchors system.endedBy (STC-542)
  *   IPC pipe close        stdin closed mid-take                stop: stdin-closed
@@ -102,6 +103,25 @@ for (let round = 1; round <= ROUNDS; round++) {
       const inHole = session.video.framesNs.filter((t) => t >= startNs && t <= endNs);
       expect(inHole, "frames the warning says were dropped are in the file").toEqual([]);
       expect(session.video.framesNs.some((t) => t > endNs), "nothing was written after the stall").toBe(true);
+    }, 180_000);
+
+    test("screen-idle: five still seconds are held, not a writer failure, and the take exports through them (STC-561)", async () => {
+      const { dir, h } = await startTake({ STC_CAPTURE_FAULT: "screen-idle" }, {}, "the still-screen soak");
+      // The stillness ends 6 s after the first frame (HoldFrameDecisions.swift); run past it.
+      await sleep(8_500);
+      expect(h.fd3.find((l) => l.ev === "stopped"), "a still screen must not end the take").toBeUndefined();
+      expect(warning(h, "writer-failed"), "the display writer failed").toBeUndefined();
+      h.send({ cmd: "stop", seq: 2 });
+      const stopped = await waitFor(() => h.fd3.find((l) => l.seq === 2), 30_000, "stopped");
+      expect(stopped.reason).toBe("user");
+      expect(Number(stopped.framesHeld), "held frames written through the stillness").toBeGreaterThanOrEqual(3);
+      expectStopRecord(dir, "user");
+
+      const session = await accept(dir);
+      const f = session.video.framesNs;
+      let longest = 0;
+      for (let i = 1; i < f.length; i++) longest = Math.max(longest, f[i]! - f[i - 1]!);
+      expect(longest, "a sample near the writer's 2^31 ns limit").toBeLessThan(1_600_000_000);
     }, 180_000);
 
     test("camera-disconnected: the warning says when, the take goes on, and the camera track ends there", async () => {
