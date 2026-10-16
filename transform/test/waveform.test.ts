@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { MIX_SAMPLE_RATE, mixBlock, mixFrameCount, type PcmTrack } from "../src/audio-mix.js";
-import { mixPeaks, mixPeaksSync, WAVEFORM_BUCKETS } from "../src/waveform.js";
+import { mixPeaks, mixPeaksSync, WAVEFORM_BUCKETS, isClipped, CLIP_PEAK } from "../src/waveform.js";
 
 /** A mono track at MIX_SAMPLE_RATE from session time 0. */
 const track = (samples: Float32Array, startNs = 0): PcmTrack =>
@@ -84,5 +84,20 @@ describe("mixPeaks", () => {
   test("defaults to WAVEFORM_BUCKETS", () => {
     const p = mixPeaksSync({ mic: track(dc(1, 0.1)), system: null, micLevel: 1, systemLevel: 1, durationNs: S });
     expect(p.length).toBe(WAVEFORM_BUCKETS);
+  });
+});
+
+describe("clipping (STC-483)", () => {
+  test("a boosted mic that the hard limit catches reads as clipped; a quiet one does not", () => {
+    const loud = mixPeaksSync({ mic: track(dc(1, 0.9)), system: null, micLevel: 4, systemLevel: 1, durationNs: S });
+    const quiet = mixPeaksSync({ mic: track(dc(1, 0.3)), system: null, micLevel: 1, systemLevel: 1, durationNs: S });
+    expect(loud.every((p) => isClipped(p))).toBe(true);
+    expect(quiet.some((p) => isClipped(p))).toBe(false);
+  });
+
+  test("the threshold sits just under full scale", () => {
+    expect(isClipped(1)).toBe(true);
+    expect(isClipped(CLIP_PEAK)).toBe(true);
+    expect(isClipped(0.99)).toBe(false);
   });
 });

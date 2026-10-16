@@ -70,7 +70,7 @@ import {
 import { decodeMicForMix, decodeSystemForMix } from "@transform/decode-audio";
 import type { DemuxedAudio } from "@transform/demux-audio";
 import { PreviewAudio } from "@transform/preview-audio";
-import { mixPeaks } from "@transform/waveform";
+import { mixPeaks, isClipped } from "@transform/waveform";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
 import {
   projectForWrite, exportWindow, estimateExportMs,
@@ -99,7 +99,7 @@ import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./sh
 import { clipActivity, zoomCurve, laneBitmap } from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, snapCenter, resizeFromCorner, styleFromFixedCorner,
-  PIP_SNAP_THRESHOLD_SCREEN_PX, inspectorSide, inspectorLeftPx, type PipEdit, type PipStyle,
+  PIP_SNAP_THRESHOLD_SCREEN_PX, type PipEdit, type PipStyle,
   panFraming, zoomFraming, framingSource,
 } from "@transform/pip-style";
 import { buildPipInspector } from "./pip-inspector.js";
@@ -170,7 +170,7 @@ function applySpanTransform(): void {
   const transform = `scaleX(${scale}) translateX(${translatePct}%)`;
   ($("timeline") as HTMLElement).style.transform = transform;
   ($("ruler-activity-wrap") as HTMLElement).style.transform = transform;
-  ($("ruler-waveform-wrap") as HTMLElement).style.transform = transform;
+  ($("audio-canvas-wrap") as HTMLElement).style.transform = transform;
   ($("zoom-canvas-wrap") as HTMLElement).style.transform = transform;
   ($("ruler-content") as HTMLElement).style.transform = transform;
   // STC-331, found fixing this file: editor.html's own comment already
@@ -614,8 +614,9 @@ $("ruleractivitytoggle").addEventListener("click", toggleRulerActivity);
 
 // ---- the waveform on the ruler (STC-454 part 4) -------------------------
 //
-// The export's mix, drawn on the ruler behind its own toggle (Patrick,
-// 2026-09-25: a ruler overlay, not a lane; the mix, not the raw tracks).
+// The export's mix. It began as a ruler overlay behind a toggle (Patrick,
+// 2026-09-25); STC-483 (2026-10-16) gave it a lane of its own, always shown for
+// a take with audio, with clipped peaks in red. The mix, not the raw tracks.
 // The peaks come from waveform.ts's `mixPeaks`, which runs `mixBlock` over
 // the same tracks and the same `previewLevels()` the preview plays, so a
 // level, a mute or the cleaned mic changes the drawing the way it changes
@@ -623,9 +624,6 @@ $("ruleractivitytoggle").addEventListener("click", toggleRulerActivity);
 // tracks, measured), so the work is spread over short idle slices and a run
 // that a newer change has superseded stops at its next slice. Until the new
 // peaks land, the old drawing stays up.
-//
-// Off by default and never persisted, the same as Clip activity beside it:
-// a view preference, not an edit decision.
 
 const WAVE_SLICE_MS = 8;
 let wavePeaks: Float32Array | null = null;
@@ -634,12 +632,12 @@ let waveRun = 0;
 /** Recompute the peaks from what the preview would play now. */
 function scheduleWaveform(): void {
   const run = ++waveRun;
-  const canvas = $("ruler-waveform") as HTMLCanvasElement;
+  const canvas = $("audio-waveform") as HTMLCanvasElement;
   const audio = previewAudio;
   if (!audio || !player || !audio.hasSound) {
     wavePeaks = null;
     canvas.dataset.state = "none";
-    drawRulerWaveform();
+    drawAudioLane();
     return;
   }
   const levels = previewLevels();
@@ -658,7 +656,7 @@ function scheduleWaveform(): void {
         wavePeaks = r.value;
         canvas.dataset.state = "ready";
         canvas.dataset.run = String(run);
-        drawRulerWaveform();
+        drawAudioLane();
         return;
       }
       if (performance.now() >= until) break;
@@ -668,18 +666,23 @@ function scheduleWaveform(): void {
   setTimeout(step, 0);
 }
 
-/** Mirrored about the ruler's middle, linear: full height is full scale. */
-function drawRulerWaveform(): void {
-  const canvas = $("ruler-waveform") as HTMLCanvasElement;
-  const wrap = $("ruler-waveform-wrap") as HTMLElement;
-  const w = Math.max(1, Math.round(wrap.getBoundingClientRect().width)) || LANE_BUCKETS;
-  const h = 18;
+/** Mirrored about the lane's middle, linear: full height is full scale. A
+ *  clipped bucket (waveform.ts's `isClipped`) is drawn in --wave-clip. */
+function drawAudioLane(): void {
+  const canvas = $("audio-waveform") as HTMLCanvasElement;
+  const wrap = $("audio-canvas-wrap") as HTMLElement;
+  const lane = $("audio-lane") as HTMLElement;
+  const { width: w, height: h } = laneBitmap(
+    wrap.getBoundingClientRect().width || LANE_BUCKETS, lane.clientHeight || audioLaneHeight,
+    window.devicePixelRatio);
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
   const peaks = wavePeaks;
   if (!peaks) return;
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#5fb38a";
+  const css = getComputedStyle(document.documentElement);
+  const normal = css.getPropertyValue("--wave").trim() || "#5fb38a";
+  const hot = css.getPropertyValue("--wave-clip").trim() || "#ff6b6b";
   const n = peaks.length;
   const mid = h / 2;
   const half = mid - 1;
@@ -691,24 +694,75 @@ function drawRulerWaveform(): void {
     for (let b = b0; b < b1 && b < n; b++) peak = Math.max(peak, peaks[b]!);
     if (!(peak > 0)) continue;
     const a = Math.max(0.5, peak * half);
+    ctx.fillStyle = isClipped(peak) ? hot : normal;
     ctx.fillRect(x, mid - a, 1, 2 * a);
   }
 }
 
-function updateWaveformToggle(): void {
+/** The lane exists only for a take with audio. */
+function updateAudioLane(): void {
   const has = !!openSession?.micAudio || !!openSession?.systemAudio;
-  $("rulerwaveformtoggle").toggleAttribute("hidden", !has);
+  $("audio-lane").toggleAttribute("hidden", !has);
+  if (has) drawAudioLane();
 }
 
-function toggleRulerWaveform(): void {
-  const btn = $("rulerwaveformtoggle") as HTMLButtonElement;
-  const on = btn.getAttribute("aria-pressed") !== "true";
-  btn.setAttribute("aria-pressed", String(on));
-  ($("ruler") as HTMLElement).toggleAttribute("data-waveform", on);
+// ---- the audio lane's height (STC-483) ------------------------------------
+//
+// Resizable by dragging its bottom edge (Patrick, 2026-10-16). Defaults, the
+// minimum and the remembered size are this ticket's own calls, still open with
+// him: 56 px default, 32 px minimum (peaks readable), 160 px maximum, remembered
+// per viewer in localStorage (a view preference, not an edit decision).
+const AUDIO_LANE_MIN = 32;
+const AUDIO_LANE_MAX = 160;
+const AUDIO_LANE_DEFAULT = 56;
+const AUDIO_LANE_KEY = "stc.editor.audioLaneHeight";
+
+function clampAudioLane(px: number): number {
+  return Math.round(Math.min(AUDIO_LANE_MAX, Math.max(AUDIO_LANE_MIN, Number.isFinite(px) ? px : AUDIO_LANE_DEFAULT)));
 }
-$("rulerwaveformtoggle").addEventListener("click", toggleRulerWaveform);
+let audioLaneHeight = AUDIO_LANE_DEFAULT;
+try {
+  const saved = Number(localStorage.getItem(AUDIO_LANE_KEY));
+  if (saved > 0) audioLaneHeight = clampAudioLane(saved);
+} catch { /* storage unavailable: the default stands */ }
 
+function setAudioLaneHeight(px: number, persist: boolean): void {
+  audioLaneHeight = clampAudioLane(px);
+  document.documentElement.style.setProperty("--audio-lane-h", `${audioLaneHeight}px`);
+  drawAudioLane();
+  if (persist) {
+    try { localStorage.setItem(AUDIO_LANE_KEY, String(audioLaneHeight)); } catch { /* not remembered */ }
+  }
+}
+setAudioLaneHeight(audioLaneHeight, false);
 
+(() => {
+  const grip = $("audio-resize") as HTMLButtonElement;
+  let startY = 0, startH = 0;
+  // Window-level listeners, not pointer capture: the drag keeps working
+  // however the pointer leaves the strip, and does not depend on capture.
+  const move = (e: PointerEvent): void => setAudioLaneHeight(startH + (e.clientY - startY), false);
+  const end = (): void => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+    grip.classList.remove("dragging");
+    setAudioLaneHeight(audioLaneHeight, true);
+  };
+  grip.addEventListener("pointerdown", (e) => {
+    startY = e.clientY; startH = audioLaneHeight;
+    grip.classList.add("dragging");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    e.preventDefault();
+  });
+  grip.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault(); e.stopPropagation();
+    setAudioLaneHeight(audioLaneHeight + (e.key === "ArrowDown" ? 8 : -8), true);
+  });
+})();
 
 /** A crisp square-cell checkerboard (STC-444 slice 2: "LCD crisp", finer of
  *  the two pitches compared) rather than a soft blur — `bg` is the gap
@@ -773,7 +827,7 @@ function drawZoomLane(): void {
   ctx.fill();
 }
 
-function redrawLanes(): void { drawRulerActivity(); drawRulerWaveform(); drawZoomLane(); layoutOverrideBlocks(); }
+function redrawLanes(): void { drawRulerActivity(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks(); }
 window.addEventListener("resize", redrawLanes);
 
 // ---- manual zoom override (STC-330/331) — the block lane's editing half ---
@@ -1677,7 +1731,7 @@ $("sysaudiolevel").addEventListener("change", () => {
 function updateAudioButton(): void {
   const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);
   $("audiobtn").toggleAttribute("hidden", !has);
-  updateWaveformToggle();
+  updateAudioLane();
   updateKeycastUI();
   updateClicksUI();
   updateFramingUI();
@@ -1775,8 +1829,8 @@ $("clicksbtn").addEventListener("click", () => {
 // hidden while a drag is in flight (layoutPipOverlay checks `pipDrag`), and a
 // drag that ends with the panel closed re-opens it — dragging is part of using
 // the inspector, not leaving it. (docs/STC-461-RUNBOOK.md §3 judges how it feels.)
-// The panel itself opens over the stage on the side away from the PiP
-// (placePipPanel), never on top of the thing it lets you drag.
+// The panel is anchored to its button like the Audio popover (STC-483, Patrick
+// 2026-10-16: the over-the-stage placement collided with the timeline lanes).
 
 function pipCamera(): Size | null {
   const cam = openSession?.anchors.camera;
@@ -1884,35 +1938,11 @@ function layoutPipOverlay(): void {
   });
 }
 
-const PIP_PANEL_WIDTH_PX = 300;
-const PIP_PANEL_GAP_PX = 12;
-
-/**
- * Put the inspector over the stage on the side AWAY from the PiP
- * (pip-style.ts's inspectorSide) — anchored to its button it covered the
- * default bottom-right PiP, the one thing it exists to let you drag. Runs on
- * beforetoggle so there is no flash at the old spot; the panel re-opens after
- * every drag, so it re-sides then.
- */
-function placePipPanel(): void {
-  const style = currentPipStyle();
-  const stage = ($("stage") as HTMLCanvasElement).getBoundingClientRect();
-  const side = style ? inspectorSide(style) : "left";
-  const left = Math.max(0, inspectorLeftPx(stage, side, PIP_PANEL_WIDTH_PX, PIP_PANEL_GAP_PX));
-  const top = stage.top + PIP_PANEL_GAP_PX;
-  Object.assign(pipPanel.style, {
-    left: `${left}px`, top: `${top}px`, width: `${PIP_PANEL_WIDTH_PX}px`,
-    maxHeight: `${Math.max(120, innerHeight - top - PIP_PANEL_GAP_PX)}px`,
-  });
-  pipPanel.dataset.side = side;
-}
-
 pipPanel.addEventListener("beforetoggle", (e) => {
   if ((e as ToggleEvent).newState !== "open") return;
   // The Camera button pressed mid-reframe: finish the reframe first, so the
   // inspector edits the real style and never the temporary display one.
   commitReframe();
-  placePipPanel();
 });
 pipPanel.addEventListener("toggle", () => layoutPipOverlay());
 
@@ -1959,9 +1989,7 @@ function endPipDrag(): void {
   persistPip();
   // Light dismiss runs around this same pointerup; re-open once it has.
   setTimeout(() => {
-    // Re-opening re-sides it (beforetoggle); one that stayed open re-sides here.
-    if (pipPanelOpen()) placePipPanel();
-    else if (!$("pipbtn").hidden) pipPanel.showPopover?.();
+    if (!pipPanelOpen() && !$("pipbtn").hidden) pipPanel.showPopover?.();
     layoutPipOverlay();
   }, 0);
 }
@@ -1969,7 +1997,6 @@ $("pipoverlay").addEventListener("pointerup", endPipDrag);
 $("pipoverlay").addEventListener("pointercancel", endPipDrag);
 
 window.addEventListener("resize", () => {
-  if (pipPanelOpen()) placePipPanel();
   if (!$("pipoverlay").hidden) layoutPipOverlay();
   layoutFramingWindow();
 });
