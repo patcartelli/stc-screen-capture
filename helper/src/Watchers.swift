@@ -90,7 +90,8 @@ final class Watchers {
             autoreleasepool {
                 let bt: Int32 = 0x626C7565   // 'blue'
                 let cams = AVCaptureDevice.devices(for: .video).map {
-                    ["name": $0.localizedName, "uid": $0.uniqueID] as [String: Any]
+                    ["name": $0.localizedName, "uid": $0.uniqueID,
+                     "virtual": $0.transportType == kTransportVirtual] as [String: Any]
                 }
                 let mics = AVCaptureDevice.devices(for: .audio).map {
                     ["name": $0.localizedName, "uid": $0.uniqueID,

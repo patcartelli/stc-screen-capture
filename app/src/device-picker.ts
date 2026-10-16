@@ -24,6 +24,8 @@
 export interface DeviceLike {
   name: string;
   uid: string;
+  /** STC-479. A software camera (the helper's `kTransportVirtual`). Absent on mics and older helpers = not virtual. */
+  virtual?: boolean;
 }
 
 export type DeviceChoice =
@@ -34,6 +36,8 @@ export type DeviceChoice =
 export interface DeviceRow {
   choice: DeviceChoice;
   label: string;
+  /** A quiet second label (STC-479), drawn after `label`. Absent for most rows. */
+  secondary?: string;
   selected: boolean;
 }
 
@@ -70,7 +74,8 @@ export function deviceRows(opts: DeviceRowsOptions): DeviceRow[] {
   }
   for (const d of devices) {
     const choice: DeviceChoice = { kind: "device", uid: d.uid };
-    rows.push({ choice, label: d.name, selected: sameChoice(current, choice) });
+    rows.push({ choice, label: d.name, ...(d.virtual ? { secondary: MENU_LABELS.virtual } : {}),
+      selected: sameChoice(current, choice) });
   }
   if (current.kind === "device" && !devices.some((d) => d.uid === current.uid)) {
     rows.push({ choice: current, label: staleLabel, selected: true });
@@ -101,6 +106,7 @@ export const MENU_LABELS = {
   noCamera: "No Camera",
   autoCamera: "Automatic",
   stale: "(not connected)",
+  virtual: "virtual",
 } as const;
 
 export type MenuIcon = "system-audio" | "mic" | "mic-off" | "camera" | "camera-off";
@@ -127,6 +133,8 @@ export interface MenuRow {
   key: string;
   pick: MenuPick;
   label: string;
+  /** STC-479: "virtual" on a software camera. Never part of `label`. */
+  secondary?: string;
   icon: MenuIcon;
   checked: boolean;
   /** A toggle keeps the menu open; a choice closes it. `closesMenu(pick)`. */
@@ -165,11 +173,14 @@ export function micMenuRows(mics: DeviceLike[], s: DeviceSelection): MenuRow[] {
 export function cameraMenuRows(cameras: DeviceLike[], s: DeviceSelection): MenuRow[] {
   const current: DeviceChoice = !s.camera ? { kind: "off" }
     : s.cameraDeviceUid == null ? { kind: "auto" } : { kind: "device", uid: s.cameraDeviceUid };
-  return deviceRows({ devices: cameras, current, offLabel: MENU_LABELS.noCamera,
+  // Virtual cameras after physical ones, the order "Automatic" ranks them in
+  // (STC-286). Array.sort is stable, so each group keeps the helper's order.
+  const ordered = [...cameras].sort((a, b) => Number(!!a.virtual) - Number(!!b.virtual));
+  return deviceRows({ devices: ordered, current, offLabel: MENU_LABELS.noCamera,
                       autoLabel: MENU_LABELS.autoCamera, staleLabel: MENU_LABELS.stale })
     .map((r): MenuRow => {
       const pick: MenuPick = { kind: "choice", menu: "camera", choice: r.choice };
-      return { key: keyOf(r.choice), pick, label: r.label,
+      return { key: keyOf(r.choice), pick, label: r.label, ...(r.secondary ? { secondary: r.secondary } : {}),
         icon: r.choice.kind === "off" ? "camera-off" : "camera", checked: r.selected, closesMenu: closesMenu(pick) };
     });
 }

@@ -169,6 +169,18 @@ describe("cameraMenuRows (STC-456)", () => {
     const rows = cameraMenuRows(camsTest, sel({ camera: true, cameraDeviceUid: "gone" }));
     expect(rows.at(-1)).toMatchObject({ label: MENU_LABELS.stale, checked: true });
   });
+  test("a virtual camera carries a secondary label and sorts after the physical ones (STC-479)", () => {
+    const cams = [{ name: "Elgato Virtual Camera", uid: "virt", virtual: true }, ...camsTest];
+    const rows = cameraMenuRows(cams, sel());
+    expect(rows.map((r) => r.label)).toEqual(
+      [MENU_LABELS.noCamera, MENU_LABELS.autoCamera, "Elgato Facecam 4k", "Camera 2", "Elgato Virtual Camera"]);
+    expect(rows.filter((r) => r.secondary).map((r) => [r.label, r.secondary]))
+      .toEqual([["Elgato Virtual Camera", MENU_LABELS.virtual]]);
+  });
+  test("a virtual camera can still be picked and checked (STC-479)", () => {
+    const rows = cameraMenuRows([{ name: "OBS", uid: "obs", virtual: true }], sel({ camera: true, cameraDeviceUid: "obs" }));
+    expect(rows.find((r) => r.checked)).toMatchObject({ label: "OBS", key: "device:obs" });
+  });
   test("every camera row closes the menu", () => {
     expect(cameraMenuRows(camsTest, sel()).every((r) => r.closesMenu)).toBe(true);
   });

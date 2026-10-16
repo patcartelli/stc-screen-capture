@@ -30,6 +30,12 @@ export function buildMenuRow(r: MenuRow, onPick?: (row: MenuRow) => void): HTMLE
   row.setAttribute("aria-checked", String(r.checked));
   row.innerHTML = `${iconSvg(r.icon)}<span class="label"></span>${iconSvg("check", "check")}`;
   row.querySelector(".label")!.textContent = r.label;
+  if (r.secondary) {
+    const tag = document.createElement("span");
+    tag.className = "secondary";
+    tag.textContent = r.secondary;
+    row.querySelector(".label")!.after(tag);
+  }
   if (onPick) {
     row.tabIndex = 0;
     // Stopped here, not left to bubble: the main window's popover closes on
