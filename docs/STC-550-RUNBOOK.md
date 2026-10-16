@@ -55,6 +55,14 @@ drag region takes no clicks, so clicking the timer no longer stops the take.
   take started from the menu bar with no window open gave the pill key
   status, so it held the keyboard. Check on hardware that Stop still works on
   the first click and that the drag still moves it, in §5 and §7.
+- **2026-10-16 re-check, this branch:** §4 PASSED (⌘H, then record: the
+  library stays hidden). §7 PASSED (drags repeatedly, eased). §9's dwell
+  PASSED: closing a recorded window showed the stop label on the pill before
+  the panel. The label read "Window resized", not "Window closed": the
+  helper's 1 Hz window watcher caught Finder's close animation mid-shrink
+  (the take's window track shows the origin moving +3/+3 pt at 14.22 s, the
+  stop 90 ms later). That's the helper's reason, from STC-370's watcher, not
+  this ticket's pill; it's a separate fix.
 - Not yet run: §5.
 
 ## §1 The one open question: is the pill out of the video? (requirement 9)
