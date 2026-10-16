@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { positionFor, type Corner, type Size } from "./thumbnail.js";
 import { PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import { UNDO_WINDOW_MS } from "./panel-actions.js";
-import { MESSAGE_TOAST_SIZE, UNDO_TOAST_SIZE, fitMessageHeight, messageToastMs } from "./toast.js";
+import { MESSAGE_TOAST_SIZE, UNDO_TOAST_SIZE, messageToastMs } from "./toast.js";
 import { toToastMessage, type ToastInput } from "./toast-message.js";
-import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
+import { trackClosing } from "./window-geometry.js";
 
 /**
  * The toast that appears when Trash PROMISES a deletion (STC-392 Task 6),
@@ -77,8 +77,8 @@ let current: { win: BrowserWindow; timer: NodeJS.Timeout } | undefined;
  * `runQuitTeardown` awaits pending trash, the panels and the helper's shutdown
  * before it calls `app.quit()`, and a warning raised in that gap used to put
  * up a NEW toast. Electron's own quit then closed that window asynchronously,
- * and a `toast:fit` from its page landed on a native window host already
- * freed while `isDestroyed()` still said false: an `EXC_BAD_ACCESS` in
+ * and a `toast:fit` from its page (since removed, STC-509) landed on a
+ * native window host already freed while `isDestroyed()` still said false: an `EXC_BAD_ACCESS` in
  * `ui::Layer::SetBounds`, one in every stalled CI run on 2026-10-02, and
  * every Electron launch after it hung. A notice nobody will see is not worth
  * a window during a quit.
@@ -102,7 +102,7 @@ export function closeToastsForQuit(): void {
  * has no such promise to protect).
  */
 function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string>,
-                          size: Size, showOnReady = true): BrowserWindow {
+                          size: Size): BrowserWindow {
   hideToast();
   const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const { x, y } = positionFor(opts.corner, workArea, size);
@@ -126,9 +126,7 @@ function buildToastWindow(opts: ToastWindowOptions, query: Record<string, string
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.loadFile(join(opts.rendererDir, "toast.html"), { query });
-  // A caller that shows the window itself (the message toast, once its page
-  // has measured its own height — STC-457) passes `showOnReady = false`.
-  if (showOnReady) win.once("ready-to-show", () => {
+  win.once("ready-to-show", () => {
     // Rule 1: a notice, not a request for input — see the class doc above.
     win.showInactive();
   });
@@ -184,49 +182,49 @@ export function showMessageToast(message: ToastInput, opts: ToastWindowOptions):
   if (quitting) return;
   const m =toToastMessage(message);
   const ms = messageToastMs(m);
-  const query: Record<string, string> = { mode: "message", text: m.body, ms: String(ms) };
+  // `corner` lets the page pin its card to the window edge nearest the
+  // screen corner, so the card sits where a window sized to it would have.
+  const query: Record<string, string> = { mode: "message", text: m.body, ms: String(ms), corner: opts.corner };
   if (m.title) query.title = m.title;
   if (m.tone) query.tone = m.tone;
   if (m.action) { query.action = m.action.id; query.actionLabel = m.action.label; }
-  const win = buildToastWindow(opts, query, MESSAGE_TOAST_SIZE, false);
+  // Always MESSAGE_TOAST_SIZE, and never resized (STC-509). It used to shrink
+  // to the card when its page reported a height (`toast:fit`, STC-457), and
+  // that renderer-driven `setBounds` is the call every CI crash report ended
+  // in: `ui::Layer::SetBounds` on a freed native window host, with
+  // `setBoundsUnlessClosing` in place and never firing, because the app had
+  // not yet begun quitting nor the window closing. No guard can refuse a
+  // resize nothing has warned it about, so the resize is gone instead.
+  const win = buildToastWindow(opts, query, MESSAGE_TOAST_SIZE);
 
-  // The page measures its own card once fonts have loaded and answers with
-  // `toast:fit`; the window shrinks to it, re-anchors to its corner, and only
-  // THEN appears — so it never flashes at the 340 px ceiling first (STC-457).
-  // The fallback shows it at the ceiling if the page never answers: a toast
-  // the reader cannot see is worse than one taller than it needs to be.
-  let shown = false;
-  const reveal = () => {
-    if (shown || win.isDestroyed()) return;
-    shown = true;
-    win.showInactive();
+  // Most of the window is transparent space above (or below) a short card,
+  // and macOS hands a transparent window's clicks to the window anyway —
+  // measured on this app's Electron, a click on the empty area reached the
+  // toast's page, not what was visibly under it. So the whole window starts
+  // click-through, with mouse MOVES still forwarded so the page can see the
+  // pointer arrive on the card, and `toast:hover` takes clicks back only
+  // while it is there (✕, the action button). That toggle runs only when a
+  // person moves a pointer over a toast, never on its own, so unlike
+  // `toast:fit` nothing in an e2e run (which never hovers) sends it during a
+  // quit.
+  win.setIgnoreMouseEvents(true, { forward: true });
+  // Stop at "close", not only "closed": a window Electron closes itself (the
+  // app's quit) tears down its native host while `isDestroyed()` still says
+  // false (STC-496). `destroy()` skips "close", so "closed" stays for
+  // `hideToast`'s path.
+  let closing = false;
+  const onHover = (e: Electron.IpcMainEvent, over: unknown) => {
+    if (e.sender !== win.webContents || win.isDestroyed() || closing || quitting) return;
+    win.setIgnoreMouseEvents(over !== true, { forward: true });
   };
-  const onFit = (e: Electron.IpcMainEvent, cardPx: unknown) => {
-    if (e.sender !== win.webContents || win.isDestroyed() || shown) return;
-    const height = fitMessageHeight(Number(cardPx));
-    const size = { width: MESSAGE_TOAST_SIZE.width, height };
-    const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-    // Not shown either when the resize is refused: the window is going away.
-    if (!setBoundsUnlessClosing(win, { ...positionFor(opts.corner, workArea, size), ...size }, "toast:fit")) return;
-    reveal();
-  };
-  ipcMain.on("toast:fit", onFit);
-  const fallback = setTimeout(reveal, FIT_FALLBACK_MS);
-  // Stop listening at "close", not only "closed": a window Electron closes
-  // itself (the app's quit) tears down its native host while `isDestroyed()`
-  // still says false, and a `toast:fit` already in flight must not reach
-  // `setBounds` in that gap (STC-496). `destroy()` skips "close", so
-  // "closed" stays for `hideToast`'s path.
-  const stop = () => { ipcMain.removeListener("toast:fit", onFit); clearTimeout(fallback); };
+  ipcMain.on("toast:hover", onHover);
+  const stop = () => { closing = true; ipcMain.removeListener("toast:hover", onHover); };
   win.once("close", stop);
   win.on("closed", stop);
 
   const timer = setTimeout(hideToast, ms);
   current = { win, timer };
 }
-
-/** How long a message toast waits for its page to report a height before showing anyway. */
-const FIT_FALLBACK_MS = 1_500;
 
 /**
  * Take the toast off screen right now, if one is up — undo or message alike.
