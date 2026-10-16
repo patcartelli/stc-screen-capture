@@ -84,9 +84,32 @@ What it would still remove is the PCM floor itself, ~34.5 MB/min for mono mic + 
 now ~51 MB/min of RSS all in. That is ~1.5 GB at 30 min and ~3 GB at an hour. Whether that floor
 is acceptable is a product call about how long takes get, not a defect.
 
-## What only a Mac can settle
+### A real take with a mic (2026-10-16, after merge)
 
-1. ~~A real long take~~ — done for system audio alone (25:50, above). A real take WITH a mic is
-   still unmeasured; it is expected to land on the same ~1.5x.
-2. Preview sound on a long take, by ear: it starts, it is in sync, and cleanup on/off still
-   switches. The decode path changed underneath it, though no sample did.
+Measured on master `94d2a7d`. The take is Patrick's `2026-10-16_14-38-06`: 34:10 long, with a mono
+mic, stereo system audio and a camera (`mic.m4a` 34 MB, `system.m4a` 32 MB, `display.mp4` 1.99 GB,
+`camera.mp4` 2.05 GB). Same command.
+
+| renderer RSS growth | |
+|---|---|
+| display only | **+1239 MB** |
+| display + camera | +1510 MB (camera +272 MB) |
+
+The decoded audio floor here is ~1.18 GB (2050 s x 48 000 x 3 ch x 4 B). Total growth, video
+included, is ~1.05x that floor: lower than the synthetic take's ~1.5x. On a real AAC file almost
+nothing beyond the decoded PCM remains. The old path would have cost roughly +4 GB here.
+
+Both real takes stopped themselves with `stop.reason: "error"` when one file reached ~2.05 GB:
+`display.mp4` at 2,049,724,884 B on the first, `camera.mp4` at 2,047,949,903 B on the second. That
+is unrelated to this ticket and is not investigated here.
+
+## What only a Mac can settle — DONE (Patrick, 2026-10-16)
+
+1. **A real long take with a mic**, measured: above.
+2. **Preview sound by ear** on the 34:10 take, all passed:
+   - the sound loads quickly;
+   - it stays in sync at the start, the middle and the end;
+   - there are no clicks, gaps, or pitch or speed errors;
+   - the mic and system levels, and their mutes, work;
+   - Clean up voice switches on and off.
+   - an exported clip sounds the same as the preview.
