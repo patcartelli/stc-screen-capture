@@ -448,3 +448,21 @@ describe("a mic lost mid-take (STC-237)", () => {
     expect(Array.from(left!)).toEqual([0.25, 0.25, 0, 0, 0, 0]);
   });
 });
+
+describe("system audio that stopped mid-take (STC-542)", () => {
+  test("a system track cut at 50% mixes to silence past the cut, for the full window", () => {
+    // anchors-12 `endedBy: "stream-stopped"`: 4 samples of an 8-sample window, no mic.
+    const system = track(0, f32(0.4, 0.4, 0.4, 0.4));
+    const [left] = mixBlock({ mic: null, system, systemLevel: 1, originNs: 0, from: 0, frames: 8 });
+    expect(left!.length, "the block is the window's length, not the track's").toBe(8);
+    expect(Array.from(left!.slice(0, 4))).toEqual([0.4, 0.4, 0.4, 0.4].map(Math.fround));
+    expect(Array.from(left!.slice(4)), "past the cut is silence").toEqual([0, 0, 0, 0]);
+  });
+
+  test("the mic carries on alone past the cut", () => {
+    const mic = track(0, f32(0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2));
+    const system = track(0, f32(0.4, 0.4, 0.4, 0.4));
+    const [left] = mixBlock({ mic, system, systemLevel: 1, originNs: 0, from: 0, frames: 8 });
+    expect(Array.from(left!.slice(4))).toEqual([0.2, 0.2, 0.2, 0.2].map(Math.fround));
+  });
+});

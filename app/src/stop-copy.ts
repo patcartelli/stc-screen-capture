@@ -142,7 +142,7 @@ export function isStopActionId(x: unknown): x is StopActionId {
 }
 
 /**
- * STC-237: a mic or camera that went away while the take KEPT recording. Not a stop, so
+ * STC-237: a mic or camera (STC-542: or system audio) that went away while the take KEPT recording. Not a stop, so
  * not in `ROWS`. The helper's warning for it is no longer a toast (Patrick, 2026-10-14,
  * the same ruling as `STOP_ANNOUNCING_WARNINGS`): the pill shows `pill` for
  * `PILL_STOPPED_DWELL_MS` while the take goes on, and the panel says it afterwards from the
@@ -152,6 +152,8 @@ const TRACK_LOSS: Record<string, { pill: string }> = {
   "mic-disconnected": { pill: "Mic lost" },
   "mic-format-mismatch": { pill: "Mic lost" },
   "camera-disconnected": { pill: "Camera lost" },
+  // STC-542: the system-audio stream died; the take kept recording without it.
+  "system-audio-stopped": { pill: "System lost" },
 };
 
 /** The helper warnings that announce a lost track. The renderer must not toast these. */
@@ -166,6 +168,7 @@ export function trackLossPillLabel(code: string): string | undefined {
 export interface TrackBlocks {
   mic?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number };
   camera?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number };
+  system?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number };
 }
 
 /**
@@ -185,6 +188,10 @@ export function trackLossLine(anchors: TrackBlocks | undefined): string | undefi
   const cam = anchors?.camera;
   if (cam?.present === true && cam.endedBy !== undefined) {
     lines.push(`The camera disconnected${at(cam)}, so the rest of the take has no camera.`);
+  }
+  const sys = anchors?.system;
+  if (sys?.present === true && sys.endedBy !== undefined) {
+    lines.push(`System audio stopped${at(sys)}, so the rest of the take has no system audio.`);
   }
   return lines.length > 0 ? lines.join(" ") : undefined;
 }

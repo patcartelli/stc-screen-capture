@@ -81,6 +81,7 @@ describe("shouldShowTrackNotice (STC-237)", () => {
   it("shows a lost track's label on the pill of a take still recording", () => {
     expect(shouldShowTrackNotice("collapsed", "recording", trackLossPillLabel("mic-disconnected"))).toBe(true);
     expect(shouldShowTrackNotice("collapsed", "recording", trackLossPillLabel("camera-disconnected"))).toBe(true);
+    expect(shouldShowTrackNotice("collapsed", "recording", trackLossPillLabel("system-audio-stopped"))).toBe(true);   // STC-542
   });
 
   it("not on an expanded window, a take that is not recording, or with no label", () => {

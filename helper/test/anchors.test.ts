@@ -348,5 +348,13 @@ describe("anchors document", () => {
     const validate13 = compileV(13);
     expect(validate13(silent), JSON.stringify(validate13.errors, null, 2)).toBe(true);
     expect(validate12(silent), "anchors-12 must refuse silentSpans").toBe(false);
+
+    // STC-542: system audio whose stream died validates against anchors-14, and anchors-13
+    // refuses it — `endedBy` on `system` is the only thing that moved it.
+    const systemEndedBy = extractJSON(out, "JSON-SYSTEM-ENDED-BY:");
+    expect((systemEndedBy as { version: number }).version, "system endedBy earns v14, not 12 (STC-237 had shipped)").toBe(14);
+    const validate14 = compileV(14);
+    expect(validate14(systemEndedBy), JSON.stringify(validate14.errors, null, 2)).toBe(true);
+    expect(validate13(systemEndedBy), "anchors-13 must refuse system endedBy").toBe(false);
   });
 }, 60_000);
