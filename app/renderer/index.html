@@ -290,6 +290,10 @@
       transform: translateX(100%); transition: transform .18s ease;
       padding: 20px; box-sizing: border-box; overflow-y: auto;
       display: flex; flex-direction: column; gap: 16px; z-index: 10;
+      /* STC-552: #title-row is a drag region, and on macOS a drag region wins
+         over anything painted above it, so the X (inside that row's band) was
+         eaten as a window drag. Same carve-out #permissionsheet has. */
+      -webkit-app-region: no-drag;
     }
     #profilesheet.open { transform: translateX(0); }
     #profilesheet h1 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); }

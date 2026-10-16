@@ -223,4 +223,33 @@ describe("the settings sheet", () => {
     await expect.poll(() => JSON.parse(readFileSync(join(userData, "settings.json"), "utf8")).gif,
       { timeout: 15_000 }).toEqual({ fps: 30, maxWidth: "original" });
   }, 60_000);
+
+  // STC-552. Playwright's click dispatches DOM events and never consults
+  // drag regions, so the X test alone passed while the real X was dead: the
+  // sheet must also be proven no-drag, which is what lets a real click land.
+  test("STC-552: the X closes the sheet, which is not a drag region", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await win.click("#settings");
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+    expect(await win.evaluate(() =>
+      getComputedStyle(document.getElementById("profilesheet")!).getPropertyValue("-webkit-app-region"))).toBe("no-drag");
+    await win.click("#profileclose");
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).not.toMatch(/open/);
+    expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  }, 60_000);
+
+  test("STC-552: Esc and \u2318W close the sheet and leave the window open", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    const open = () => win.getAttribute("#profilesheet", "class");
+    await win.click("#settings");
+    await expect.poll(open).toMatch(/open/);
+    await win.keyboard.press("Escape");
+    await expect.poll(open).not.toMatch(/open/);
+    await win.click("#settings");
+    await expect.poll(open).toMatch(/open/);
+    await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents
+      .sendInputEvent({ type: "keyDown", keyCode: "w", modifiers: ["meta"] }));
+    await expect.poll(open).not.toMatch(/open/);
+    expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  }, 60_000);
 });
