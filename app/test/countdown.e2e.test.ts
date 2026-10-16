@@ -44,8 +44,15 @@ const FAKE_HELPER = join(root, "app", "test", "_fake-helper.mjs");
  */
 const LONGER_THAN_THE_TEST_MS = 30_000;
 /** Short enough to elapse inside a test, long enough that the gap before it
- * does is observable rather than a race. */
-const SHORT_MS = 900;
+ * does is observable rather than a race.
+ *
+ * It was 900 ms, and that WAS a race (STC-554, CI 2026-10-15): `countdownPage`
+ * waits for the bridge, `#skip` and a painted number before the test can look,
+ * and on a loaded runner that took longer than the whole countdown. The panel
+ * closed under the wait ("Target page … has been closed"). 4 s leaves seconds
+ * for those waits and still ends well inside the 15 s the test gives the take
+ * to start on its own. */
+const SHORT_MS = 4_000;
 
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
