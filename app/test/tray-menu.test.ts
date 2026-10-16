@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, STOP_RECORDING_LABEL,
+  TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, STOP_RECORDING_LABEL, SETTINGS_ACCELERATOR,
   bgraFromMask, marqueeMask, trayTemplate,
 } from "../src/tray-menu.js";
 import {
@@ -37,6 +37,33 @@ describe("the menu", () => {
     const id = ids({ shortcuts: DEFAULT_SHORTCUTS });
     expect(id).toContain("library");
     expect(id).toContain("quit");
+  });
+
+  test("app items sit in a group above Quit, set off by a divider (STC-551)", () => {
+    const id = ids({ shortcuts: DEFAULT_SHORTCUTS });
+    const tail = id.slice(id.indexOf("settings") - 1);
+    expect(tail).toEqual(["separator", "settings", "about", "separator", "quit"]);
+  });
+
+  test("Settings… carries ⌘, and fires it; no other accelerator fires", () => {
+    const t = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS });
+    const settings = t.find((i) => i.id === "settings")!;
+    expect(settings.label).toBe("Settings…");
+    expect(settings.accelerator).toBe(SETTINGS_ACCELERATOR);
+    expect(settings.fires).toBe(true);
+    expect(t.filter((i) => i.fires).map((i) => i.id)).toEqual(["settings"]);
+  });
+
+  test("there is no Check for Updates… item: the app has no updater", () => {
+    const labels = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS }).map((i) => i.label ?? "");
+    expect(labels.some((l) => /update/i.test(l))).toBe(false);
+  });
+
+  test("Settings… and About stay enabled during a shot and a take", () => {
+    for (const ctx of [{ busy: true }, { recording: true }]) {
+      const t = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS, ...ctx });
+      for (const id of ["settings", "about"]) expect(t.find((i) => i.id === id)!.enabled).not.toBe(false);
+    }
   });
 
   test("a bound action shows its accelerator VERBATIM, not pre-rendered", () => {

@@ -434,6 +434,9 @@ function mountTray(): TrayHandle {
   return installTray(ctx, (id) => {
     if (id === "library") return openLibrary();
     if (id === "quit") return app.quit();
+    // The same door the overlay bar's Settings control uses (STC-551).
+    if (id === "settings") return openSettingsSheet();
+    if (id === "about") { app.focus({ steal: true }); return app.showAboutPanel(); }
     const action = BINDABLE_ACTIONS.find((a) => id === `action:${a}`);
     if (!action) return;
     if (action === "record") {

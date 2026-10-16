@@ -16,7 +16,7 @@ import {
   type BindableAction, type Shortcuts,
 } from "./hotkeys.js";
 
-export type TrayItemId = `action:${BindableAction}` | "library" | "quit" | "separator";
+export type TrayItemId = `action:${BindableAction}` | "library" | "settings" | "about" | "quit" | "separator";
 
 export interface TrayItem {
   id: TrayItemId;
@@ -31,8 +31,18 @@ export interface TrayItem {
    * cannot parse where it expects a binding.
    */
   accelerator?: string;
+  /**
+   * The accelerator is LIVE while this menu is open, not only drawn. Set only
+   * on Settings… (⌘,): the app has no other menu that binds it, so drawing it
+   * without firing would show a key that does nothing (STC-551). Every other
+   * accelerator here stays drawn-only, because a global shortcut holds it.
+   */
+  fires?: boolean;
   enabled?: boolean;
 }
+
+/** The accelerator on Settings…, Electron's spelling; ⌘, on a Mac. */
+export const SETTINGS_ACCELERATOR = "CommandOrControl+,";
 
 export interface TrayContext {
   shortcuts: Shortcuts;
@@ -79,6 +89,11 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
   });
   items.push({ id: "separator", type: "separator" });
   items.push({ id: "library", label: "Open Library" });
+  items.push({ id: "separator", type: "separator" });
+  // The app items (STC-551). No "Check for Updates…": the app has no updater
+  // and this ticket does not build one.
+  items.push({ id: "settings", label: "Settings…", accelerator: SETTINGS_ACCELERATOR, fires: true });
+  items.push({ id: "about", label: `About ${PRODUCT_NAME}` });
   items.push({ id: "separator", type: "separator" });
   items.push({ id: "quit", label: `Quit ${PRODUCT_NAME}` });
   return items;
