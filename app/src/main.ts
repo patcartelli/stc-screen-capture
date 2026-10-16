@@ -1349,8 +1349,9 @@ function runQuitTeardown(): void {
   // because the cleanup (wait out a write, rm the partial) outlives this tick.
   const copyCancelled = cancelAllCopyRenders();
   // Not just `hideToast()`: the awaits below take seconds, and a toast put up
-  // during them is closed by Electron's own quit with its `toast:fit` still in
-  // flight — the use-after-free behind STC-496's stalls.
+  // during them is closed by Electron's own quit with its page's IPC still in
+  // flight — the use-after-free behind STC-496's stalls (`toast:fit` then; the
+  // resize itself is gone since STC-509).
   closeToastsForQuit();
   // `drainAll()`, not `all()` (STC-392 review, I4): the periodic sweep below
   // is still armed for as long as this chain's own `await`s give the event
