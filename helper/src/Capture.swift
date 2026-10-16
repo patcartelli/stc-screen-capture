@@ -212,6 +212,18 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Polls free space on the take's volume (STC-527). Guarded by `lock`,
     /// same race as `windowWatcher`.
     private var diskWatcher: DispatchSourceTimer?
+    /// Writes the last frame again while the screen is still (STC-561,
+    /// `HoldFrameDecisions.swift`). Runs on `screenQueue`, the queue every
+    /// display frame arrives on, so a hold and a real frame can never reach
+    /// the writer out of PTS order. Guarded by `lock`, same race as
+    /// `windowWatcher`.
+    private var holdTimer: DispatchSourceTimer?
+    /// The newest frame that went into display.mp4, and its PTS (STC-561).
+    /// Guarded by `lock`. One ScreenCaptureKit buffer kept out of a pool of
+    /// `queueDepth` 8; released at stop.
+    private var lastWrittenBuffer: CVPixelBuffer?
+    private var lastWrittenPtsNs: Int64 = -1
+    private var framesHeld = 0
     /// Creates and deletes `SIDECAR_RESERVE_FILE`. Serial, so `writeSidecars`
     /// can wait out a reserve still being written before it deletes it — a
     /// reserve created AFTER the delete would be left in the take.
@@ -256,6 +268,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private var dropRuns = DropRunTracker()
     /// `STC_CAPTURE_FAULT=encoder-stall`, read once.
     private let encoderStallFault = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "encoder-stall"
+    /// `STC_CAPTURE_FAULT=screen-idle` (STC-561), read once. `screen-idle-unheld`
+    /// is the same still screen with the hold timer off: the grant test's
+    /// control, the take this ticket was filed for.
+    private let screenIdleFault = ["screen-idle", "screen-idle-unheld"]
+        .contains(ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] ?? "")
+    private let holdFramesOff = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "screen-idle-unheld"
     /// Frames the stream delivered while paused. Counted APART from
     /// `framesDropped`, which means "the writer would not take it" — folding
     /// paused frames in would make every paused take look as though it had
@@ -670,6 +688,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // STC-527: every scope. Started after `started` like the
                     // window watch; the reserve is written off the critical path.
                     self.startDiskWatcher()
+                    self.startHoldTimer()
                     self.reserveSidecarSpace()
                     self.finishStart(.success(self.describe()))
                     self.armStreamDeathFault()
@@ -936,6 +955,55 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         diskWatcher = t
         lock.unlock()
         t.resume()
+    }
+
+    // MARK: STC-561 hold frames
+
+    private func startHoldTimer() {
+        if screenIdleFault {
+            IO.log("STC_CAPTURE_FAULT=screen-idle\(holdFramesOff ? "-unheld" : ""): display frames \(SCREEN_IDLE_FAULT_AFTER_NS / 1_000_000)-\((SCREEN_IDLE_FAULT_AFTER_NS + SCREEN_IDLE_FAULT_DURATION_NS) / 1_000_000) ms into the take are withheld, as a still screen withholds them")
+        }
+        if holdFramesOff {
+            IO.log("STC_CAPTURE_FAULT=screen-idle-unheld: no hold frames this take")
+            return
+        }
+        let t = DispatchSource.makeTimerSource(queue: screenQueue)
+        t.schedule(deadline: .now() + HOLD_FRAME_CHECK_INTERVAL_SECONDS, repeating: HOLD_FRAME_CHECK_INTERVAL_SECONDS)
+        t.setEventHandler { [weak self] in self?.holdIfStill() }
+        lock.lock()
+        if stoppingBegan {
+            lock.unlock()
+            t.cancel()
+            return
+        }
+        holdTimer = t
+        lock.unlock()
+        t.resume()
+    }
+
+    /// On `screenQueue`. Writes the newest frame again if the screen has been
+    /// still too long for the writer (`decideHoldFrame`). Through the same
+    /// `lastPtsNs` and `WriterGate` as a real frame, so ordering, teardown and
+    /// a failed writer all behave exactly as they do for one.
+    private func holdIfStill() {
+        let nowNs = Int64(Clock.nowNs()) - Int64(t0Ns)
+        lock.lock()
+        guard !stoppingBegan, let pb = lastWrittenBuffer,
+              let pts = decideHoldFrame(lastWrittenPtsNs: lastWrittenPtsNs,
+                                        lastAcceptedPtsNs: lastPtsNs, nowNs: nowNs)
+        else { lock.unlock(); return }
+        lastPtsNs = pts
+        lock.unlock()
+        let outcome = gate.append(pb, at: CMTime(value: pts, timescale: 1_000_000_000))
+        lock.lock()
+        if outcome == .appended {
+            framesHeld += 1
+            lastWrittenPtsNs = pts
+        }
+        lock.unlock()
+        if outcome != .appended, let w = writer, w.status == .failed {
+            writerFailed(w.error)
+        }
     }
 
     /// Called from the frame path once the display writer is `.failed`.
@@ -1925,6 +1993,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             switch decision {
             case .skip:
                 lock.unlock(); return       // idle/blank/suppressed: VFR emits nothing
+            case .accept(let pts) where screenIdleFault
+                    && screenIdleFaultCovers(ptsNs: pts, firstFramePtsNs: firstFramePtsNs):
+                // STC-561's fault: the frame ScreenCaptureKit would not have
+                // sent had the screen been still. Upstream of everything, as
+                // `.skip` is.
+                lock.unlock(); return
             case .nonMonotonic:
                 framesNonMonotonic += 1; lock.unlock(); return
             case .accept(let pts):
@@ -2027,7 +2101,14 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 ? .dropped
                 : gate.append(pb, at: CMTime(value: ptsNs, timescale: 1_000_000_000))
             lock.lock()
-            if outcome == .appended { framesAppended += 1 } else { framesDropped += 1 }
+            if outcome == .appended {
+                framesAppended += 1
+                // STC-561: what a hold repeats, and when from.
+                lastWrittenPtsNs = ptsNs
+                lastWrittenBuffer = pb
+            } else {
+                framesDropped += 1
+            }
             let endedRun = dropRuns.record(appended: outcome == .appended, ptsNs: ptsNs)
             lock.unlock()
             if let run = endedRun { IO.send("warning", run.warning) }
@@ -2508,6 +2589,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // two side by side and a take with no pointer motion still reads as
         // such.
         var s: [String: Any] = ["frames": framesAppended, "dropped": framesDropped,
+                "framesHeld": framesHeld,
                 "framesPaused": framesPaused,
                 "eventsPaused": eventsPaused,
                 "paused": pauseGate.isPaused,
@@ -2591,6 +2673,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         windowTracker = nil
         let diskWatch = diskWatcher
         diskWatcher = nil
+        let holdWatch = holdTimer
+        holdTimer = nil
+        lastWrittenBuffer = nil
         // STC-235: read under the lock a refit's restart swaps it under. Nil
         // with `restarting` set means a restart is between streams: the old
         // one is already being stopped by the restart, and the new one either
@@ -2612,6 +2697,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         winWatcher?.cancel()
         winTracker?.cancel()
         diskWatch?.cancel()
+        holdWatch?.cancel()
 
         let answerLock = NSLock()
         var answered = false
