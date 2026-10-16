@@ -61,6 +61,22 @@ camera, so the script's two rows are the same configuration and each run gives t
   5 s fixture display against a real 13 s take) and so do the Electron build and the day. Compare
   rows within one table, never across runbooks.
 
+### A real take (runbook item 1, 2026-10-16)
+
+Patrick's own take `2026-10-16_13-22-55`: 25:50, system audio only (stereo, 48 kHz, `system.m4a`
+37 MB, no mic), `display.mp4` 2.05 GB. It stopped itself with `stop.reason: "error"`, which is
+unrelated to this ticket. Same command, master from a detached `origin/master` worktree (`79c8cce`)
+with this branch's script.
+
+| renderer RSS growth | samples |
+|---|---|
+| master (`79c8cce`) | +3508, +3859 MB |
+| **this branch** | **+1047, +1048 MB** |
+
+The decoded audio floor here is ~595 MB (1550 s x 48 000 x 2 ch x 4 B). The branch's +1047 MB
+includes the 2 GB display read by range, which STC-236 measured at ~+143 MB on another take.
+That leaves ~0.9 GB for audio, ~1.5x its floor: the synthetic take's ratio, on a real AAC file.
+
 ## STC-490
 
 STC-490 is the temp-file PCM cache. It is no longer needed to fix this peak; this ticket fixed it.
@@ -70,7 +86,7 @@ is acceptable is a product call about how long takes get, not a defect.
 
 ## What only a Mac can settle
 
-1. A REAL >= 30 min take with mic + system, measured as above. PCM is PCM, so the floor should
-   match. The residual (compressed bytes per minute) depends on the real AAC bitrate.
+1. ~~A real long take~~ — done for system audio alone (25:50, above). A real take WITH a mic is
+   still unmeasured; it is expected to land on the same ~1.5x.
 2. Preview sound on a long take, by ear: it starts, it is in sync, and cleanup on/off still
    switches. The decode path changed underneath it, though no sample did.
