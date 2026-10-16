@@ -7,6 +7,7 @@ import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
+import { settingsMode } from "./settings-open.js";
 import { isCloseKey, CLOSE_SHEET_SCRIPT } from "./close-shortcut.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
@@ -297,7 +298,13 @@ function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<str
 const TRAFFIC_LIGHT_X_PX = 20;
 const TRAFFIC_LIGHT_Y_PX = 24;
 
+/** Set by `openSettingsSheet` for the one window it is about to make, so that
+ * window LOADS as Settings alone (no grid flashing before a message arrives). */
+let nextWindowSettingsOnly = false;
+
 function createWindow(): void {
+  const settingsOnly = nextWindowSettingsOnly;
+  nextWindowSettingsOnly = false;
   win = new BrowserWindow({
     width: 520, height: 680, title: PRODUCT_NAME,
     // STC-375 chose "hidden" over fully frameless so the library could
@@ -309,7 +316,7 @@ function createWindow(): void {
     trafficLightPosition: { x: TRAFFIC_LIGHT_X_PX, y: TRAFFIC_LIGHT_Y_PX },
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
-  win.loadFile(join(here, "..", "renderer", "index.html"));
+  win.loadFile(join(here, "..", "renderer", "index.html"), settingsOnly ? { query: { settings: "only" } } : undefined);
   // STC-552: ⌘W closes the Settings sheet first, the window only when no sheet
   // is open. Runs ahead of the menu's Close Window accelerator.
   const w = win;
@@ -501,7 +508,7 @@ const DOCK_HIDE_RETRY_MS = 1500;
 /** The way back to a window from the menu bar. */
 function openLibrary(): void {
   if (!win || win.isDestroyed()) createWindow();
-  else { win.show(); win.focus(); }
+  else { win.show(); win.focus(); send("ui:show-library", undefined); }
   reconcileIcons();
   // Without this an accessory app raises the window behind whatever is
   // frontmost, which reads as the click having done nothing.
@@ -2054,13 +2061,21 @@ async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[]
  * renderer's top-level script (where the listener is installed) have run.
  */
 function openSettingsSheet(): void {
+  // Read BEFORE openLibrary, which creates the window.
+  const mode = settingsMode(!!win && !win.isDestroyed());
+  // A window made now loads as Settings alone (see `createWindow`); only an
+  // existing one needs telling.
+  nextWindowSettingsOnly = mode === "standalone";
   openLibrary();
+  nextWindowSettingsOnly = false;
+  if (mode === "standalone") return;
   const w = win;
   if (!w || w.isDestroyed()) return;
+  const payload = { standalone: false };
   if (w.webContents.isLoading()) {
-    w.webContents.once("did-finish-load", () => send("ui:open-settings", undefined));
+    w.webContents.once("did-finish-load", () => send("ui:open-settings", payload));
   } else {
-    send("ui:open-settings", undefined);
+    send("ui:open-settings", payload);
   }
 }
 
