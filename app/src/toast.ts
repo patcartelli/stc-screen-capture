@@ -45,31 +45,20 @@ export const UNDO_TOAST_SIZE: Size = { width: 240, height: 68 };
 /**
  * See the header: sized to hold the app's longest warning (`refusals.ts`) unscrolled.
  *
- * Since STC-457 this is the message toast's WIDTH and its MAXIMUM height, not
- * a fixed box: the page measures its own card and `fitMessageHeight` shrinks
- * the window to it, so a one-line notice is no longer a mostly empty 340 px
- * card. The 340 stays the ceiling — past it `#row` scrolls, exactly the
- * backstop `toast.html` already had.
+ * Since STC-457 this is the message toast's WIDTH and its MAXIMUM card height,
+ * not the card's size: the card is laid out by its content and pinned to the
+ * window's corner edge, so a one-line notice is still a one-line card. Past
+ * the ceiling `#row` scrolls, the backstop `toast.html` already had.
+ *
+ * The WINDOW is always this size, and that is STC-509's fix rather than
+ * laziness. It used to shrink to the card when the page reported its height
+ * (`toast:fit`), and that resize, a `setBounds` driven by renderer IPC, is the
+ * one call CI's crash reports all ended in: `ui::Layer::SetBounds` on a
+ * native window host already freed, with every STC-496 guard in place and
+ * none of them firing. A window that is never resized cannot crash there.
+ * The empty part of the window passes clicks through (`toast-window.ts`).
  */
 export const MESSAGE_TOAST_SIZE: Size = { width: 400, height: 340 };
-
-/** `toast.html`'s `#card` margin on each side — the transparent gutter the shadow lives in. */
-export const TOAST_CARD_INSET_PX = 6;
-
-/** No message toast is shorter than the undo toast: a title alone still needs a card. */
-export const MESSAGE_TOAST_MIN_HEIGHT = UNDO_TOAST_SIZE.height;
-
-/**
- * The window height that holds a card `cardPx` tall (its border box, as the
- * page measures it) plus the gutter, clamped to [the undo toast's height,
- * `MESSAGE_TOAST_SIZE.height`]. Rounded UP: a fractional pixel of clipped
- * card is a visible line cut through the bottom border.
- */
-export function fitMessageHeight(cardPx: number): number {
-  const wanted = Math.ceil(cardPx) + 2 * TOAST_CARD_INSET_PX;
-  if (!Number.isFinite(wanted)) return MESSAGE_TOAST_SIZE.height;
-  return Math.min(MESSAGE_TOAST_SIZE.height, Math.max(MESSAGE_TOAST_MIN_HEIGHT, wanted));
-}
 
 /**
  * A short notice's floor — long enough to notice, read and recognise, which

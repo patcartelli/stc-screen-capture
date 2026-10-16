@@ -57,7 +57,7 @@ export function installTray(
             // from claiming a second, app-menu copy of a key the global
             // shortcut already holds — which would make the same keystroke
             // fire twice whenever this app happened to be frontmost.
-            ...(item.accelerator ? { accelerator: item.accelerator, registerAccelerator: false } : {}),
+            ...(item.accelerator ? { accelerator: item.accelerator, registerAccelerator: item.fires === true } : {}),
             click: () => onSelect(item.id),
           }
     ))));

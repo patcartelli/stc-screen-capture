@@ -24,6 +24,9 @@ import { loadSession, rebaseMicAudio } from "@transform/session.js";
 import type { ByteSource } from "@transform/chunk-reader.js";
 import { PARTIAL_ANCHORS_FILE, recoverAnchors, type RecoveredMedia } from "@transform/recover-anchors.js";
 
+/** `SIDECAR_RESERVE_FILE` in `helper/src/DiskDecisions.swift` (STC-527): 8 MiB the helper holds for its sidecars and deletes at a clean stop. */
+const SIDECAR_RESERVE_FILE = ".sidecar-reserve";
+
 export type TakeRecovery = { ok: true } | { ok: false; why: string };
 
 /** A ranged reader over one file on disk. Exported for STC-238's soak, which loads takes the same way. */
@@ -163,5 +166,8 @@ async function recoverTakeInner(dir: string, reason: string): Promise<TakeRecove
   }
   await rm(tmp, { force: true }).catch(() => {});
   await rm(join(dir, PARTIAL_ANCHORS_FILE), { force: true }).catch(() => {});
+  // A killed helper never reached its own cleanup (STC-540). Only after anchors.json is
+  // published: a FAILED recovery returns above and leaves the directory exactly as it was.
+  await rm(join(dir, SIDECAR_RESERVE_FILE), { force: true }).catch(() => {});
   return { ok: true };
 }

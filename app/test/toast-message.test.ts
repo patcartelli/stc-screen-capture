@@ -3,11 +3,10 @@ import {
   parseToastMessage, toToastMessage, toastMessageText, isToastActionId, TOAST_ACTION_URLS,
 } from "../src/toast-message.js";
 import {
-  fitMessageHeight, messageToastMs, MESSAGE_TOAST_SIZE, MESSAGE_TOAST_MIN_HEIGHT,
-  TOAST_CARD_INSET_PX, MESSAGE_TOAST_MIN_MS,
+  messageToastMs, MESSAGE_TOAST_MIN_MS,
 } from "../src/toast.js";
 
-/** STC-457: the structured message and the content-sized window. */
+/** STC-457: the structured message. */
 describe("a toast message", () => {
   test("a plain string is a body-only message", () => {
     expect(toToastMessage("hi")).toEqual({ body: "hi" });
@@ -63,26 +62,6 @@ describe("a toast message", () => {
 
   test("parse drops extra fields rather than passing them on", () => {
     expect(parseToastMessage({ body: "b", url: "https://evil.example" })).toEqual({ body: "b" });
-  });
-});
-
-describe("the message toast's height", () => {
-  test("fits the card plus the gutter", () => {
-    expect(fitMessageHeight(120)).toBe(120 + 2 * TOAST_CARD_INSET_PX);
-  });
-
-  test("rounds a fractional card UP", () => {
-    expect(fitMessageHeight(100.2)).toBe(101 + 2 * TOAST_CARD_INSET_PX);
-  });
-
-  test("never shorter than the undo toast, never taller than the ceiling", () => {
-    expect(fitMessageHeight(10)).toBe(MESSAGE_TOAST_MIN_HEIGHT);
-    expect(fitMessageHeight(10_000)).toBe(MESSAGE_TOAST_SIZE.height);
-  });
-
-  test("a measurement that is not a number falls back to the ceiling", () => {
-    expect(fitMessageHeight(NaN)).toBe(MESSAGE_TOAST_SIZE.height);
-    expect(fitMessageHeight(Number(undefined))).toBe(MESSAGE_TOAST_SIZE.height);
   });
 });
 
