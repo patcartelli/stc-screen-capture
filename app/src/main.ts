@@ -298,7 +298,13 @@ function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<str
 const TRAFFIC_LIGHT_X_PX = 20;
 const TRAFFIC_LIGHT_Y_PX = 24;
 
+/** Set by `openSettingsSheet` for the one window it is about to make, so that
+ * window LOADS as Settings alone (no grid flashing before a message arrives). */
+let nextWindowSettingsOnly = false;
+
 function createWindow(): void {
+  const settingsOnly = nextWindowSettingsOnly;
+  nextWindowSettingsOnly = false;
   win = new BrowserWindow({
     width: 520, height: 680, title: PRODUCT_NAME,
     // STC-375 chose "hidden" over fully frameless so the library could
@@ -310,7 +316,7 @@ function createWindow(): void {
     trafficLightPosition: { x: TRAFFIC_LIGHT_X_PX, y: TRAFFIC_LIGHT_Y_PX },
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
-  win.loadFile(join(here, "..", "renderer", "index.html"));
+  win.loadFile(join(here, "..", "renderer", "index.html"), settingsOnly ? { query: { settings: "only" } } : undefined);
   // STC-552: ⌘W closes the Settings sheet first, the window only when no sheet
   // is open. Runs ahead of the menu's Close Window accelerator.
   const w = win;
@@ -2056,10 +2062,15 @@ async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[]
 function openSettingsSheet(): void {
   // Read BEFORE openLibrary, which creates the window.
   const mode = settingsMode(!!win && !win.isDestroyed());
+  // A window made now loads as Settings alone (see `createWindow`); only an
+  // existing one needs telling.
+  nextWindowSettingsOnly = mode === "standalone";
   openLibrary();
+  nextWindowSettingsOnly = false;
+  if (mode === "standalone") return;
   const w = win;
   if (!w || w.isDestroyed()) return;
-  const payload = { standalone: mode === "standalone" };
+  const payload = { standalone: false };
   if (w.webContents.isLoading()) {
     w.webContents.once("did-finish-load", () => send("ui:open-settings", payload));
   } else {

@@ -268,6 +268,11 @@ describe("the settings sheet", () => {
     expect(await win.isVisible("#title-row")).toBe(false);
     const box = await win.locator("#profilesheet").boundingBox();
     expect(box!.width).toBeGreaterThan(400);
+    // Not a pane: it does not animate or sit on a transform.
+    expect(await win.evaluate(() => {
+      const c = getComputedStyle(document.getElementById("profilesheet")!);
+      return [c.transform, c.transitionDuration];
+    })).toEqual(["none", "0s"]);
     await win.click("#profileclose");
     await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
   }, 60_000);

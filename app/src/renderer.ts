@@ -483,6 +483,12 @@ profileCloseBtn.addEventListener("click", () => {
 // STC-456: the options bar's own Settings control, with no renderer of its
 // own, asks main to open this sheet — the same function the profile button's
 // click handler calls, so there is one way this sheet opens, not two.
+// A window made for Settings alone loads with ?settings=only (main.ts), so it
+// is that from the first paint rather than after a message.
+if (new URLSearchParams(location.search).get("settings") === "only") {
+  document.body.classList.add("settings-only");
+  setProfileOpen(true);
+}
 recorder.on("ui:open-settings", (p?: { standalone?: boolean }) => {
   document.body.classList.toggle("settings-only", p?.standalone === true);
   setProfileOpen(true);

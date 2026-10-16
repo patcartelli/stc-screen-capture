@@ -307,7 +307,11 @@
        the sheet fills the window. The header is the drag handle (the title row
        is hidden), clear of the traffic lights; the X stays clickable. */
     body.settings-only > *:not(#profilesheet):not(#permissionsheet) { display: none; }
-    body.settings-only #profilesheet { width: 100vw; border-left: 0; padding-top: 20px; }
+    body.settings-only #profilesheet {
+      width: 100vw; border-left: 0; padding-top: 20px;
+      /* An independent surface, not a pane: no slide, no shadow. */
+      transform: none; transition: none; box-shadow: none;
+    }
     body.settings-only #profilesheet-head { padding-left: var(--traffic-light-offset); -webkit-app-region: drag; }
     body.settings-only #profileclose { -webkit-app-region: no-drag; }
     body:has(#profilesheet.open) #title-row { -webkit-app-region: no-drag; }
