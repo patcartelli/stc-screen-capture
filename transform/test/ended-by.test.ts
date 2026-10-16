@@ -88,9 +88,9 @@ describe("loadSession and endedBy (STC-237)", () => {
       .rejects.toThrow(/not one of disconnected/);
   });
 
-  test("a version 16 anchors document is rejected by name", async () => {
-    // 15 is real now (STC-562), so 16 stands in for "unknown future version".
-    await expect(loadPip(pipAnchors({}, 16))).rejects.toThrow(/version 16 is not supported/);
+  test("a version 17 anchors document is rejected by name", async () => {
+    // 16 is real now (STC-553), so 17 stands in for "unknown future version".
+    await expect(loadPip(pipAnchors({}, 17))).rejects.toThrow(/version 17 is not supported/);
   });
 
   test("a camera cut half way has a PiP before the cut and none after it", async () => {

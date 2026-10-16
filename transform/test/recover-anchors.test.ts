@@ -96,9 +96,39 @@ describe("recoverAnchors (STC-530)", () => {
     expect((r.anchors as any).camera).toMatchObject({ present: true, endedBy: "writer-failed" });
   });
 
-  test("a partial above 15 is not one the helper wrote", () => {
-    // 15 is real now (STC-562), so 16 stands in for "unknown future version".
-    expect(recoverAnchors({ ...partial(), version: 16 }, media, RECOVERY_STOP_REASON).ok).toBe(false);
+  test("a v16 partial (STC-553) keeps its closed stall and ends the open one at the stop", () => {
+    const stalled = partial({ version: 16, camera: { ...partial().camera, stalledSpans: [
+      { startNs: 1_100_000_000, endNs: 1_500_000_000 },
+      { startNs: 2_000_000_000 },   // the helper died mid-stall: no end yet
+    ] } });
+    const r = recoverAnchors(stalled, media, RECOVERY_STOP_REASON);
+    if (!r.ok) throw new Error(r.why);
+    expect(r.anchors.version).toBe(16);
+    expect(r.anchors.camera?.stalledSpans).toEqual([
+      { startNs: 1_100_000_000, endNs: 1_500_000_000 },
+      { startNs: 2_000_000_000, endNs: 3_000_000_000 },
+    ]);
+    expect(schema(16)(r.anchors), JSON.stringify(schema(16).errors)).toBe(true);
+  });
+
+  test("an open stall that starts at or after the stop is dropped, and an empty list goes with it", () => {
+    const stalled = partial({ version: 16, camera: { ...partial().camera, stalledSpans: [{ startNs: 3_000_000_000 }] } });
+    const r = recoverAnchors(stalled, media, RECOVERY_STOP_REASON);
+    if (!r.ok) throw new Error(r.why);
+    expect(r.anchors.camera).not.toHaveProperty("stalledSpans");
+    expect(schema(16)(r.anchors), JSON.stringify(schema(16).errors)).toBe(true);
+  });
+
+  test("a stalled camera whose file yielded nothing is dropped with its spans", () => {
+    const stalled = partial({ version: 16, camera: { ...partial().camera, stalledSpans: [{ startNs: 2_000_000_000 }] } });
+    const r = recoverAnchors(stalled, { ...media, cameraFramesNs: [] }, RECOVERY_STOP_REASON);
+    if (!r.ok) throw new Error(r.why);
+    expect(r.anchors.camera).toEqual({ present: false });
+  });
+
+  test("a partial above 16 is not one the helper wrote", () => {
+    // 16 is real now (STC-553), so 17 stands in for "unknown future version".
+    expect(recoverAnchors({ ...partial(), version: 17 }, media, RECOVERY_STOP_REASON).ok).toBe(false);
   });
 
   test("does not mutate its input", () => {

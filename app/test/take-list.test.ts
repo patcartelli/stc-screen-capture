@@ -158,17 +158,17 @@ describe("listTakes — anchors version support (STC-262)", () => {
   });
 
   test("a version this build does not know is still rejected, by name", async () => {
-    // Widening must not become "accept anything". Version 16, not 15: STC-562
-    // made 15 a real, supported version (`writer-failed` on the camera), so it is no
+    // Widening must not become "accept anything". Version 17, not 16: STC-553
+    // made 16 a real, supported version (`stalledSpans` on the camera), so it is no
     // longer a stand-in for "unknown future version" — the same thing already
     // happened to 3 (STC-370), 4 (STC-233), 5 (STC-240), 6 (STC-418),
     // 7 (STC-235), 8 (STC-482), 9 (STC-510), 10 (STC-527), 11 (STC-530), 12 (STC-237),
-    // 13 (STC-528) and 14 (STC-542).
-    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 16 }) });
+    // 13 (STC-528), 14 (STC-542) and 15 (STC-562).
+    makeTake("2026-08-27_11-00-00", { anchors: v2Anchors({ version: 17 }) });
     const { takes, invalid } = await listTakes(env(), null);
     expect(takes).toEqual([]);
     expect(invalid.length).toBe(1);
-    expect(invalid[0]!.reason).toMatch(/version 16 is not supported/);
+    expect(invalid[0]!.reason).toMatch(/version 17 is not supported/);
   });
 });
 

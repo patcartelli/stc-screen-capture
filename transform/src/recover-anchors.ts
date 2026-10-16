@@ -48,9 +48,11 @@ export type Recovery = { ok: true; anchors: Anchors } | { ok: false; why: string
  * `endedBy` too, since both come from one builder. 13 (STC-528) is a take whose mic had
  * a silent span, carried into the partial the same way. 14 (STC-542) is a take whose system
  * audio ended early, likewise. 15 (STC-562) is a take whose camera writer failed, likewise.
+ * 16 (STC-553) is a take whose camera stalled; a stall still going when the helper died is
+ * written OPEN (no `endNs`) and closed here, at the stop.
  */
 const helperWrites = (v: unknown) => Number.isInteger(v) && (v as number) >= 1
-  && ((v as number) <= 10 || v === 12 || v === 13 || v === 14 || v === 15);
+  && ((v as number) <= 10 || (v as number) >= 12 && (v as number) <= 16);
 const REQUIRED = ["timebase", "t0Ns", "display", "capture", "files"] as const;
 
 function medianDelta(xs: readonly number[]): number | undefined {
@@ -97,6 +99,16 @@ export function recoverAnchors(partial: unknown, media: RecoveredMedia, reason: 
   }
   doc.files = files;
   doc.stop = { t: frames[frames.length - 1], reason };
+  if (doc.camera?.present === true && Array.isArray(doc.camera.stalledSpans)) {
+    // STC-553: the stall the helper died in never got its end, so it ends where the take
+    // does — the same rule the helper's own stop follows for a camera that never came
+    // back. A span that would not end after it starts is dropped rather than refused.
+    const spans = doc.camera.stalledSpans
+      .map((s: { startNs: number; endNs?: number }) => ({ startNs: s.startNs, endNs: s.endNs ?? doc.stop.t }))
+      .filter((s: { startNs: number; endNs: number }) => s.endNs > s.startNs);
+    if (spans.length > 0) doc.camera.stalledSpans = spans;
+    else delete doc.camera.stalledSpans;
+  }
 
   // The minimum version that can express the document, the rule anchorsDocument follows.
   let version: number = doc.version;

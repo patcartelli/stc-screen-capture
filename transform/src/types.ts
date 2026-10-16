@@ -70,6 +70,13 @@ export interface CameraTrack {
    * `writer-failed` is anchors-15 (STC-562): camera.mp4's writer failed mid-take.
    */
   endedBy?: "disconnected" | "writer-failed";
+  /**
+   * anchors-16 (STC-553): where the camera, having delivered frames, delivered none for
+   * 3 s or more while recording and not paused. Each span runs from the last real frame
+   * before the stall to the first after it (or the pause that cut it short, or `stop.t`).
+   * Session-relative ns, in order. Absent: none. Only on a present:true track.
+   */
+  stalledSpans?: { startNs: number; endNs: number }[];
 }
 
 /**
@@ -144,7 +151,7 @@ export type CaptureScope =
 
 /** Mirrors schema/anchors-1.schema.json through anchors-15.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {
@@ -175,6 +182,12 @@ export interface Anchors {
   system?: SystemAudioTrack;
   /** STC-370. Absent means the whole display, the same as v1/v2. */
   scope?: CaptureScope;
+  /**
+   * anchors-5 (STC-240): where the take was paused, session-relative `[startNs, endNs)`,
+   * in order. Absent: never paused. The export does not cut these yet; `camera-gaps.ts`
+   * reads them so a pause is never mistaken for a camera stall.
+   */
+  pauses?: { startNs: number; endNs: number }[];
   files: { display: string; camera?: string; mic?: string; system?: string };
   /**
    * `reason` is a plain string, not a union, ON PURPOSE (STC-311).
