@@ -127,7 +127,7 @@ if let outPath = ProcessInfo.processInfo.environment["STC_DISK_FULL_OUT"] {
     gate.install(input: input, adaptor: adaptor)
 
     // Noise, because a flat frame compresses to almost nothing and would take
-    // minutes to fill even 16 MB.
+    // minutes to fill even this small a volume.
     func frame() -> CVPixelBuffer {
         var pb: CVPixelBuffer?
         CVPixelBufferCreate(nil, W, H, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
