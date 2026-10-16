@@ -10,6 +10,7 @@
  * warm-up), and that anchors.camera actually validates against anchors-2.
  */
 import { describe, test, expect } from "vitest";
+import { SRGB_OPEN_ARGS } from "./_capture-colour.js";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,7 +48,7 @@ describe("camera capture — requires Screen Recording AND Camera", () => {
       throw new Error(`${APP} is missing — run tools/test-host/build.sh first`);
     }
     const dir = mkdtempSync(join(tmpdir(), "stc-camcap-"));
-    execFileSync("open", ["-W", APP, "--args", "--helper", HELPER,
+    execFileSync("open", ["-W", ...SRGB_OPEN_ARGS, APP, "--args", "--helper", HELPER,
                           "--dir", dir, "--ms", String(RECORD_MS), "--camera",
                           "--out", join(dir, "result.json")],
                  { timeout: 120_000 });

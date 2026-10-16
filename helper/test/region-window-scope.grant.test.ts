@@ -7,6 +7,7 @@
  * `docs/STC-370-RUNBOOK.md` is what a Mac still owes this ticket.
  */
 import { describe, test, expect, afterEach } from "vitest";
+import { SRGB_ENV } from "./_capture-colour.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,7 +38,7 @@ function collect(stream: Readable, sink: Line[]): void {
 }
 
 function spawnHelper(env: Record<string, string> = {}) {
-  const proc = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
+  const proc = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe", "pipe"], env: { ...process.env, ...SRGB_ENV, ...env } });
   live.push(proc);
   const out: Line[] = [], fd3: Line[] = [];
   collect(proc.stdout!, out);

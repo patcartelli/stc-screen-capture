@@ -14,6 +14,7 @@
  * watch for that.
  */
 import { describe, test, expect, afterEach } from "vitest";
+import { SRGB_ENV } from "./_capture-colour.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,7 +45,7 @@ function collect(stream: Readable, sink: Line[]): void {
 }
 
 function spawnHelper() {
-  const proc = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe", "pipe"] });
+  const proc = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe", "pipe"], env: { ...process.env, ...SRGB_ENV } });
   live.push(proc);
   const out: Line[] = [], fd3: Line[] = [];
   collect(proc.stdout!, out);

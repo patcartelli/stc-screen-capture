@@ -14,6 +14,7 @@
  * test reads as covered and rots.
  */
 import { describe, test, expect } from "vitest";
+import { SRGB_OPEN_ARGS } from "./_capture-colour.js";
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, existsSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -89,7 +90,7 @@ describe("mic capture — requires Screen Recording AND Microphone", () => {
     }
 
     const dir = mkdtempSync(join(tmpdir(), "stc-miccap-"));
-    execFileSync("open", ["-W", APP, "--args", "--helper", HELPER,
+    execFileSync("open", ["-W", ...SRGB_OPEN_ARGS, APP, "--args", "--helper", HELPER,
                           "--dir", dir, "--ms", "15000", "--mic", uid,
                           "--out", join(dir, "result.json")],
                  { timeout: 120_000 });

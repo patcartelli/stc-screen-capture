@@ -22,6 +22,7 @@
  * launching terminal's TCC identity).
  */
 import { describe, test, expect, afterEach } from "vitest";
+import { SRGB_ENV } from "./_capture-colour.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, existsSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,7 +55,7 @@ function collect(stream: Readable, sink: Line[]): void {
 function spawnHelper(env: Record<string, string>) {
   const proc = spawn(BIN, ["--stats-interval-ms", "200"], {
     stdio: ["pipe", "pipe", "pipe", "pipe"],
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...SRGB_ENV, ...env },
   });
   live.push(proc);
   const out: Line[] = [], fd3: Line[] = [];

@@ -20,6 +20,7 @@
  * ends but well after 0.5 s.
  */
 import { describe, test, expect, afterEach } from "vitest";
+import { SRGB_ENV } from "./_capture-colour.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,7 +52,7 @@ function collect(stream: Readable, sink: Line[]): void {
 }
 
 function spawnHelper(env: Record<string, string> = {}, args: string[] = []) {
-  const proc = spawn(BIN, args, { stdio: ["pipe", "pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
+  const proc = spawn(BIN, args, { stdio: ["pipe", "pipe", "pipe", "pipe"], env: { ...process.env, ...SRGB_ENV, ...env } });
   live.push(proc);
   const out: Line[] = [], fd3: Line[] = [];
   collect(proc.stdout!, out);
