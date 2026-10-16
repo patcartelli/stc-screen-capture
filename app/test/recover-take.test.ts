@@ -32,6 +32,21 @@ describe("recoverTake (STC-530)", () => {
     rmSync(dir, { recursive: true });
   });
 
+  test("a recovered take drops the helper's 8 MiB .sidecar-reserve; a failed recovery keeps it (STC-540)", async () => {
+    const ok = crashedTake();
+    writeFileSync(join(ok, ".sidecar-reserve"), Buffer.alloc(1 << 20));
+    expect(await recoverTake(ok, "recorder-quit")).toEqual({ ok: true });
+    expect(existsSync(join(ok, ".sidecar-reserve"))).toBe(false);
+    expect(existsSync(join(ok, "display.mp4"))).toBe(true);
+
+    const bad = crashedTake();
+    writeFileSync(join(bad, "display.mp4"), Buffer.alloc(4096, 7));
+    writeFileSync(join(bad, ".sidecar-reserve"), Buffer.alloc(1 << 20));
+    expect((await recoverTake(bad, "recorder-quit")).ok).toBe(false);
+    expect(existsSync(join(bad, ".sidecar-reserve"))).toBe(true);
+    for (const d of [ok, bad]) rmSync(d, { recursive: true });
+  });
+
   test("disk full with events.json written: reason kept, events untouched (Review Focus 4)", async () => {
     const dir = crashedTake({ events: true });
     const before = readFileSync(join(dir, "events.json"));
