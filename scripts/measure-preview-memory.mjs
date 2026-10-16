@@ -122,6 +122,10 @@ async function measure(withCamera) {
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-mem-temp-")),
       // STC-502: launch shows no window unless asked.
       STC_OPEN_LIBRARY_ON_LAUNCH: "1",
+      // STC-476: with a grant missing (or unreadable from this shell), the
+      // permissions sheet covers the window and swallows the Preview click.
+      // Memory has nothing to do with grants; the e2e suite's own seam.
+      STC_ASSUME_PERMISSIONS: "granted",
     },
   });
   try {

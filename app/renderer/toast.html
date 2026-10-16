@@ -67,11 +67,19 @@
     /*
       STC-457: the message card is laid out by its CONTENT, not by the window.
       `#card` leaves the absolute inset the undo toast uses and becomes an
-      in-flow box, so its natural height is measurable — `toast-renderer.ts`
-      reports it and main sizes the window to it. `max-height` is the same
-      340 px ceiling (`toast.ts`'s MESSAGE_TOAST_SIZE) less the gutter: past
-      it `#row` scrolls, the backstop this file already had.
+      in-flow box at its natural height. `max-height` is the 340 px window
+      (`toast.ts`'s MESSAGE_TOAST_SIZE) less the gutter: past it `#row`
+      scrolls, the backstop this file already had.
+
+      STC-509: the window no longer shrinks to the card (that resize is what
+      crashed Electron on CI), so the card is PINNED to the window edge
+      nearest its screen corner instead: for a bottom corner it sits on the
+      window's bottom edge, exactly where a window sized to it would have put
+      it. The transparent rest of the window is click-through
+      (`toast-window.ts`). `data-corner` is stamped by `toast-renderer.ts`.
     */
+    html[data-mode="message"] body { display: flex; flex-direction: column; }
+    html[data-mode="message"][data-corner^="bottom"] body { justify-content: flex-end; }
     html[data-mode="message"] #card {
       position: relative; inset: auto;
       margin: 6px; max-height: calc(100vh - 12px);

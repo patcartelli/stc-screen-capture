@@ -19,7 +19,7 @@ declare global {
       undo(dir: string): Promise<boolean>;
       dismiss(): void;
       action(id: string): void;
-      fit(cardPx: number): void;
+      hover(over: boolean): void;
       onExpire(cb: () => void): () => void;
     };
   }
@@ -47,6 +47,11 @@ const closeBtn = document.getElementById("close") as HTMLButtonElement;
 // (`toast-window.ts` holds it back until `ready-to-show`), so there is no
 // instant where a message is laid out with the undo toast's rules.
 document.documentElement.dataset.mode = mode;
+// Same moment, same reason: which window edge the message card pins to, the
+// one nearest the screen corner, so it sits where a window sized to it would
+// have (STC-509).
+const corner = params.get("corner");
+if (corner) document.documentElement.dataset.corner = corner;
 // Same moment, same reason: the header icon's look ("success" = check, else the warning "!").
 if (tone === "success") {
   document.documentElement.dataset.tone = tone;
@@ -73,13 +78,13 @@ if (mode === "message") {
       window.toast.action(actionId);
     });
   }
-  // Report the card's height once fonts have settled — Geist's metrics wrap
-  // differently from the system font, and measuring before they load would
-  // size the window for the wrong text. Main shows the window on this
-  // (or on its own timeout, if it never comes).
+  // STC-509: the window is a fixed 400x340, mostly transparent, and main
+  // makes it click-through so the empty part does not swallow clicks meant
+  // for whatever is under it. Main still forwards mouse MOVES, which is what
+  // fires these; it takes clicks back only while the pointer is on the card.
   const card = document.getElementById("card") as HTMLDivElement;
-  const report = () => window.toast.fit(card.getBoundingClientRect().height);
-  void document.fonts.ready.then(() => requestAnimationFrame(report));
+  card.addEventListener("mouseenter", () => window.toast.hover(true));
+  card.addEventListener("mouseleave", () => window.toast.hover(false));
 }
 
 /**

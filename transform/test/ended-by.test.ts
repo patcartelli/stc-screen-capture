@@ -88,9 +88,9 @@ describe("loadSession and endedBy (STC-237)", () => {
       .rejects.toThrow(/not one of disconnected/);
   });
 
-  test("a version 14 anchors document is rejected by name", async () => {
-    // 13 is real now (STC-528), so 14 stands in for "unknown future version".
-    await expect(loadPip(pipAnchors({}, 14))).rejects.toThrow(/version 14 is not supported/);
+  test("a version 15 anchors document is rejected by name", async () => {
+    // 14 is real now (STC-542), so 15 stands in for "unknown future version".
+    await expect(loadPip(pipAnchors({}, 15))).rejects.toThrow(/version 15 is not supported/);
   });
 
   test("a camera cut half way has a PiP before the cut and none after it", async () => {
@@ -102,5 +102,42 @@ describe("loadSession and endedBy (STC-237)", () => {
     expect(render(project, s, 1_500_000_000).pip, "before the cut").not.toBeNull();
     expect(render(project, s, 2_500_000_000).pip, "after the cut").toBeNull();
     expect(render(project, s, 2_500_000_000).frameIndex, "the screen keeps going").not.toBeNull();
+  });
+});
+
+describe("anchors-14 endedBy on system audio (STC-542)", () => {
+  const system = { present: true, sampleRate: 48000, channels: 2, firstFramePtsNs: 0, lastFramePtsNs: 1_000_000_000 };
+  const withSystem = (sys: Record<string, unknown>, version = 14) => ({
+    ...pipAnchors({}, version),
+    system: sys, files: { display: "display.mp4", camera: "camera.mp4", system: "system.m4a" },
+  });
+
+  test("the schema accepts stream-stopped on a present system block", () => {
+    const v = compile("schema/anchors-14.schema.json");
+    expect(v(withSystem({ ...system, endedBy: "stream-stopped" })), JSON.stringify(v.errors)).toBe(true);
+    expect(v(withSystem(system)), "the control: no endedBy is fine").toBe(true);
+  });
+
+  test("the schema refuses it on present:false, or with another value", () => {
+    const v = compile("schema/anchors-14.schema.json");
+    expect(v(withSystem({ present: false, endedBy: "stream-stopped" }))).toBe(false);
+    expect(v(withSystem({ ...system, endedBy: "disconnected" }))).toBe(false);
+  });
+
+  test("anchors-13 and anchors-12 refuse it (new at 14)", () => {
+    for (const n of [12, 13]) {
+      const v = compile(`schema/anchors-${n}.schema.json`);
+      expect(v(withSystem({ ...system, endedBy: "stream-stopped" }, n)), `anchors-${n}`).toBe(false);
+      expect(v(withSystem(system, n)), `the control: anchors-${n} without it`).toBe(true);
+    }
+  });
+
+  test("loadSession refuses it before v14, on present:false, and with a value the helper never writes", async () => {
+    await expect(loadPip(withSystem({ ...system, endedBy: "stream-stopped" }, 13)))
+      .rejects.toThrow(/system\.endedBy needs anchors version 14/);
+    await expect(loadPip(withSystem({ present: false, endedBy: "stream-stopped" })))
+      .rejects.toThrow(/system\.endedBy is set on a system block with present:false/);
+    await expect(loadPip(withSystem({ ...system, endedBy: "disconnected" })))
+      .rejects.toThrow(/system\.endedBy "disconnected" is not one of stream-stopped/);
   });
 });

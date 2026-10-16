@@ -20,6 +20,11 @@ import { EventEmitter } from "node:events";
  * fix: no toast is built once the quit teardown has begun, and a toast that
  * has started closing never resizes in answer to its page.
  *
+ * STC-509: with both of those in place CI still crashed on the same stack,
+ * the guard never firing. So `toast:fit` is gone and the window is never
+ * resized at all; the first test below pins that. Its replacement,
+ * `toast:hover`, toggles click-through and gets the same close/quit refusal.
+ *
  * Electron is faked because the defect is in THIS module's wiring of
  * Electron's events, not in anything a pure function could hold; the fake
  * models only what the module touches.
@@ -29,6 +34,7 @@ class FakeWindow extends EventEmitter {
   static all: FakeWindow[] = [];
   destroyed = false;
   setBoundsCalls = 0;
+  ignoreMouse: boolean[] = [];
   webContents = { send: vi.fn() };
   constructor() { super(); FakeWindow.all.push(this); }
   isDestroyed() { return this.destroyed; }
@@ -37,6 +43,8 @@ class FakeWindow extends EventEmitter {
   loadFile() {}
   showInactive() {}
   setBounds() { this.setBoundsCalls++; }
+  setSize() { this.setBoundsCalls++; }
+  setIgnoreMouseEvents(ignore: boolean) { this.ignoreMouse.push(ignore); }
   destroy() { this.destroyed = true; this.emit("closed"); }
 }
 
@@ -63,20 +71,45 @@ async function freshModule() {
   return import("../src/toast-window.js");
 }
 
-/** What the toast's page does once it has measured itself. */
+/** What the toast's page used to send once it had measured itself (STC-457). */
 function fit(win: FakeWindow, px = 120): void {
   ipc.emit("toast:fit", { sender: win.webContents }, px);
+}
+
+/** What the toast's page sends as the pointer enters or leaves its card. */
+function hover(win: FakeWindow, over: boolean): void {
+  ipc.emit("toast:hover", { sender: win.webContents }, over);
 }
 
 describe("a message toast and the app's quit", () => {
   beforeEach(() => { vi.useFakeTimers(); });
 
-  test("control: an ordinary toast does resize when its page reports a height", async () => {
+  test("a message toast is never resized, whatever its page sends (STC-509)", async () => {
     const t = await freshModule();
     t.showMessageToast("Camera could not be opened.", OPTS);
     const win = FakeWindow.all[0]!;
     fit(win);
-    expect(win.setBoundsCalls).toBe(1);
+    hover(win, true);
+    hover(win, false);
+    expect(ipc.listenerCount("toast:fit")).toBe(0);
+    expect(win.setBoundsCalls).toBe(0);
+  });
+
+  test("control: the window starts click-through and takes clicks only while the card is hovered", async () => {
+    const t = await freshModule();
+    t.showMessageToast("Camera could not be opened.", OPTS);
+    const win = FakeWindow.all[0]!;
+    hover(win, true);
+    hover(win, false);
+    expect(win.ignoreMouse).toEqual([true, false, true]);
+  });
+
+  test("a hover from some other page is ignored", async () => {
+    const t = await freshModule();
+    t.showMessageToast("Camera could not be opened.", OPTS);
+    const win = FakeWindow.all[0]!;
+    ipc.emit("toast:hover", { sender: {} }, true);
+    expect(win.ignoreMouse).toEqual([true]);
   });
 
   test("once the quit teardown has begun, no new message toast is built", async () => {
@@ -101,7 +134,7 @@ describe("a message toast and the app's quit", () => {
     expect(win.destroyed).toBe(true);
   });
 
-  test("a toast:fit that lands after the window began closing does not resize it", async () => {
+  test("a toast:hover that lands after the window began closing does not touch it", async () => {
     const t = await freshModule();
     t.showMessageToast("Camera could not be opened.", OPTS);
     const win = FakeWindow.all[0]!;
@@ -109,7 +142,17 @@ describe("a message toast and the app's quit", () => {
     // the native teardown runs while isDestroyed() is still false.
     win.emit("close", { preventDefault() {} });
     expect(win.isDestroyed()).toBe(false);
-    fit(win);
-    expect(win.setBoundsCalls).toBe(0);
+    hover(win, true);
+    expect(win.ignoreMouse).toEqual([true]);
+    expect(ipc.listenerCount("toast:hover")).toBe(0);
+  });
+
+  test("a toast:hover after the quit teardown began does not touch the window", async () => {
+    const t = await freshModule();
+    t.showMessageToast("Camera could not be opened.", OPTS);
+    const win = FakeWindow.all[0]!;
+    t.closeToastsForQuit();
+    hover(win, true);
+    expect(win.ignoreMouse).toEqual([true]);
   });
 });

@@ -117,6 +117,9 @@ contextBridge.exposeInMainWorld("recorder", {
                       // renderer opens the SAME sheet the profile button
                       // already does, rather than a second implementation.
                       "ui:open-settings",
+                      // STC-551 follow-up: the library was asked for while the
+                      // window is showing Settings alone.
+                      "ui:show-library",
                       // STC-476: the grants changed, or a capture was
                       // refused for them and the panel must come back.
                       "permissions:changed"];

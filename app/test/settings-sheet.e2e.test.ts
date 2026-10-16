@@ -223,4 +223,67 @@ describe("the settings sheet", () => {
     await expect.poll(() => JSON.parse(readFileSync(join(userData, "settings.json"), "utf8")).gif,
       { timeout: 15_000 }).toEqual({ fps: 30, maxWidth: "original" });
   }, 60_000);
+
+  // STC-552. Playwright's click dispatches DOM events and never consults
+  // drag regions, so the X test alone passed while the real X was dead: the
+  // sheet must also be proven no-drag, which is what lets a real click land.
+  test("STC-552: the X closes the sheet, which is not a drag region", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await win.click("#settings");
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+    expect(await win.evaluate(() =>
+      getComputedStyle(document.getElementById("profilesheet")!).getPropertyValue("-webkit-app-region"))).toBe("no-drag");
+    const region = (id: string) => win.evaluate((i) =>
+      getComputedStyle(document.getElementById(i)!).getPropertyValue("-webkit-app-region"), id);
+    expect(await region("title-row")).toBe("no-drag");
+    await win.click("#profileclose");
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).not.toMatch(/open/);
+    expect(await region("title-row")).toBe("drag");
+    expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  }, 60_000);
+
+  test("STC-552: Esc and \u2318W close the sheet and leave the window open", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    const open = () => win.getAttribute("#profilesheet", "class");
+    await win.click("#settings");
+    await expect.poll(open).toMatch(/open/);
+    await win.keyboard.press("Escape");
+    await expect.poll(open).not.toMatch(/open/);
+    await win.click("#settings");
+    await expect.poll(open).toMatch(/open/);
+    await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents
+      .sendInputEvent({ type: "keyDown", keyCode: "w", modifiers: ["meta"] }));
+    await expect.poll(open).not.toMatch(/open/);
+    expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  }, 60_000);
+
+  // STC-551 follow-up: Settings from the tray with no library window is a
+  // window for Settings alone. Driven by the same message main sends.
+  test("STC-551: a Settings-only window hides the library, and the X closes the window", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents
+      .send("ui:open-settings", { standalone: true }));
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+    expect(await win.isVisible("#record")).toBe(false);
+    expect(await win.isVisible("#title-row")).toBe(false);
+    const box = await win.locator("#profilesheet").boundingBox();
+    expect(box!.width).toBeGreaterThan(400);
+    // Not a pane: it does not animate or sit on a transform.
+    expect(await win.evaluate(() => {
+      const c = getComputedStyle(document.getElementById("profilesheet")!);
+      return [c.transform, c.transitionDuration];
+    })).toEqual(["none", "0s"]);
+    await win.click("#profileclose");
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
+  }, 60_000);
+
+  test("STC-551: asking for the library while Settings is alone brings the grid back", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents
+      .send("ui:open-settings", { standalone: true }));
+    await expect.poll(() => win.isVisible("#record")).toBe(false);
+    await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents
+      .send("ui:show-library", undefined));
+    await expect.poll(() => win.isVisible("#record")).toBe(true);
+  }, 60_000);
 });

@@ -1,7 +1,7 @@
 import type { DemuxedAudio } from "./demux-audio.js";
 import { withTimeout, TimeoutError } from "./timeout.js";
 import { cleanNarration } from "./narration-clean.js";
-import { trackFromChunks, type PcmChunk, type PcmTrack } from "./audio-mix.js";
+import { PcmTrackBuilder, type PcmTrack } from "./audio-mix.js";
 
 /** One constant, so the bound and the message it prints cannot disagree — decode.ts's own rule. */
 const FLUSH_MS = 60_000;
@@ -56,26 +56,73 @@ export async function decodeAllAudio(audio: DemuxedAudio): Promise<AudioData[]> 
 }
 
 /**
- * Decoded `AudioData` → one contiguous planar track for audio-mix.ts, closing
- * each `AudioData` as soon as it has been copied out (PHASE-0 §4b.3's rule),
- * so the decoded track is held once, not twice. Shared by export's mix and
- * the editor's preview audio (STC-454), so both hear the same samples.
+ * Decodes a whole track straight into one contiguous planar `PcmTrack` for
+ * audio-mix.ts (STC-491): each `AudioData` is copied into its place and
+ * closed INSIDE the output callback (PHASE-0 §4b.3's rule), so the track is
+ * the only full copy of the audio that ever exists. Placement, refusals and
+ * every sample are `trackFromChunks`'s — `PcmTrackBuilder` is that function,
+ * fed one chunk at a time — and the track's length is sized up front from
+ * the demuxed sample table rather than from chunks held until the flush.
+ *
+ * `decodeAllAudio` stays for the one caller that needs `AudioData` itself
+ * (export.ts's mic-only passthrough re-encodes them).
  */
-export function pcmTrackOf(decoded: AudioData[], label: string): PcmTrack | null {
-  const chunks: PcmChunk[] = [];
+async function decodeToTrack(audio: DemuxedAudio, label: string): Promise<PcmTrack | null> {
+  if (audio.chunks.length === 0) return null;
+  const builder = new PcmTrackBuilder(label, {
+    firstUs: audio.chunks[0]!.timestampUs,
+    lastUs: audio.chunks[audio.chunks.length - 1]!.timestampUs,
+  });
+  let emitted = 0;
+  let failed = false;
+  let rejectAll: (e: Error) => void;
+  const failure = new Promise<never>((_, rej) => { rejectAll = rej; });
+
+  const decoder = new AudioDecoder({
+    output: (d) => {
+      emitted++;
+      try {
+        if (!failed) {
+          builder.add(d.timestamp, d.sampleRate, d.numberOfChannels, d.numberOfFrames,
+            (ch, dst) => d.copyTo(dst, { planeIndex: ch, format: "f32-planar" }));
+        }
+      } catch (e) {
+        failed = true;
+        rejectAll(e as Error);
+      } finally {
+        d.close();
+      }
+    },
+    error: (e) => { failed = true; rejectAll(e); },
+  });
   try {
-    for (const d of decoded) {
-      const channels = Array.from({ length: d.numberOfChannels }, (_, ch) => {
-        const plane = new Float32Array(d.numberOfFrames);
-        d.copyTo(plane, { planeIndex: ch, format: "f32-planar" });
-        return plane;
-      });
-      chunks.push({ timestampUs: d.timestamp, sampleRate: d.sampleRate, channels });
+    decoder.configure({
+      codec: audio.codec,
+      sampleRate: audio.sampleRate,
+      numberOfChannels: audio.numberOfChannels,
+      description: audio.description,
+    });
+    for (const c of audio.chunks) {
+      decoder.decode(new EncodedAudioChunk({
+        type: "key", timestamp: c.timestampUs, data: c.data as BufferSource,
+      }));
+    }
+    try {
+      await withTimeout(Promise.race([decoder.flush(), failure]), FLUSH_MS, `${label} decoder flush`);
+    } catch (e) {
+      if (!(e instanceof TimeoutError)) throw e;
+      throw new Error(
+        `audio decoder flush did not complete within ${FLUSH_MS}ms — submitted ${audio.chunks.length} chunks, ` +
+        `emitted ${emitted}, decodeQueueSize=${decoder.decodeQueueSize}, state=${decoder.state}, ` +
+        `codec=${audio.codec} ${audio.sampleRate}Hz x${audio.numberOfChannels}ch`);
     }
   } finally {
-    for (const d of decoded) d.close();
+    if (decoder.state !== "closed") decoder.close();
   }
-  return trackFromChunks(chunks, label);
+  if (emitted !== audio.chunks.length) {
+    throw new Error(`decoded ${emitted} audio chunks, expected ${audio.chunks.length}`);
+  }
+  return builder.finish();
 }
 
 /**
@@ -88,7 +135,7 @@ export function pcmTrackOf(decoded: AudioData[], label: string): PcmTrack | null
  * from every pause).
  */
 export async function decodeMicForMix(audio: DemuxedAudio, cleanStrength: number | null): Promise<PcmTrack | null> {
-  const track = pcmTrackOf(await decodeAllAudio(audio), "mic.m4a");
+  const track = await decodeToTrack(audio, "mic.m4a");
   return track && cleanStrength !== null ? cleanNarration(track, cleanStrength) : track;
 }
 
@@ -101,5 +148,5 @@ export async function decodeMicForMix(audio: DemuxedAudio, cleanStrength: number
  * There is no cleaning stage; system audio is never cleaned.
  */
 export async function decodeSystemForMix(audio: DemuxedAudio): Promise<PcmTrack | null> {
-  return pcmTrackOf(await decodeAllAudio(audio), "system.m4a");
+  return decodeToTrack(audio, "system.m4a");
 }

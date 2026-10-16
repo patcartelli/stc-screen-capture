@@ -97,7 +97,10 @@ export interface MicTrack {
  * of the mic. `MicTrack` minus `device` — there is one system output, and it
  * is the whole machine's whatever the take's scope.
  */
-export type SystemAudioTrack = Omit<MicTrack, "device">;
+export type SystemAudioTrack = Omit<MicTrack, "device" | "endedBy"> & {
+  /** anchors-14 (STC-542): the system-audio stream died mid-take. Absent: it ran to the end. */
+  endedBy?: "stream-stopped";
+};
 
 /** Mirrors the optional `pip` block in schema/project-2.schema.json; `style` is project-16's (STC-461). */
 export interface Pip {
@@ -138,7 +141,7 @@ export type CaptureScope =
 
 /** Mirrors schema/anchors-1.schema.json through anchors-7.schema.json. */
 export interface Anchors {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
   timebase: { numer: number; denom: number };
   t0Ns: string;
   display: {

@@ -474,13 +474,28 @@ function setProfileOpen(open: boolean): void {
   if (open) void loadPipDefault();
 }
 profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
-profileCloseBtn.addEventListener("click", () => setProfileOpen(false));
+profileCloseBtn.addEventListener("click", () => {
+  setProfileOpen(false);
+  // A window made for Settings alone (STC-551 follow-up) has nothing else to
+  // show; closing it does not quit (the app lives in the menu bar).
+  if (document.body.classList.contains("settings-only")) window.close();
+});
 // STC-456: the options bar's own Settings control, with no renderer of its
 // own, asks main to open this sheet — the same function the profile button's
 // click handler calls, so there is one way this sheet opens, not two.
-recorder.on("ui:open-settings", () => setProfileOpen(true));
+// A window made for Settings alone loads with ?settings=only (main.ts), so it
+// is that from the first paint rather than after a message.
+if (new URLSearchParams(location.search).get("settings") === "only") {
+  document.body.classList.add("settings-only");
+  setProfileOpen(true);
+}
+recorder.on("ui:open-settings", (p?: { standalone?: boolean }) => {
+  document.body.classList.toggle("settings-only", p?.standalone === true);
+  setProfileOpen(true);
+});
+recorder.on("ui:show-library", () => document.body.classList.remove("settings-only"));
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Escape") { setProfileOpen(false); closePopover(); }
+  if (e.code === "Escape") { profileCloseBtn.click(); closePopover(); }
 });
 
 // ---- required grants (STC-476) ---------------------------------------------
@@ -907,8 +922,11 @@ recorder.on("helper:warning", (l) => {
   // at a glance; the pill says it for a moment (pill-window.ts, from main) and the
   // panel says it after. No toast: that was the third copy of the same news.
   if (TRACK_LOSS_WARNINGS.has(code)) {
-    const device = code.startsWith("camera") ? "camera" : "mic";
-    reportDevice(device, code.endsWith("-disconnected") ? "disconnected" : `failed — ${code}`);
+    // System audio has no device row (STC-542): the pill and the panel are all it gets.
+    if (!code.startsWith("system")) {
+      const device = code.startsWith("camera") ? "camera" : "mic";
+      reportDevice(device, code.endsWith("-disconnected") ? "disconnected" : `failed — ${code}`);
+    }
     console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }

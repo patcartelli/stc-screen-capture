@@ -3,9 +3,10 @@ import {
   MIX_SAMPLE_RATE, MIX_CHANNELS, mixBlock, mixFrameCount, trackFromChunks,
   LEVEL_FLOOR_DB, levelFromSliderPct, sliderPctFromLevel, exportAudioPlan,
   MIC_BOOST_DB, MIC_LEVEL_MAX, MIC_UNITY_PCT, micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb, nudgeLevelDb,
-  reusableTracks,
+  reusableTracks, PcmTrackBuilder,
   type PcmChunk, type PcmTrack,
 } from "../src/audio-mix.js";
+import { oracleTrackFromChunks, decoderChunks, sameTrack } from "./_pcm-oracle.js";
 
 const f32 = (...v: number[]) => Float32Array.from(v);
 /** A track at MIX_SAMPLE_RATE starting at `startNs`. */
@@ -52,6 +53,84 @@ describe("trackFromChunks", () => {
       { timestampUs: 0, sampleRate: 48_000, channels: [f32(0)] },
       { timestampUs: 100, sampleRate: 48_000, channels: [f32(0), f32(0)] },
     ], "mic.m4a")).toThrow(/mic\.m4a: decoded chunks are not uniform/);
+  });
+});
+
+/** Feeds chunks to a builder in order, the way decode-audio.ts's output callback does. */
+function built(chunks: PcmChunk[], hint?: { firstUs: number; lastUs: number }, label = "t"): PcmTrack | null {
+  const b = new PcmTrackBuilder(label, hint);
+  for (const c of chunks) {
+    b.add(c.timestampUs, c.sampleRate, c.channels.length, c.channels[0]?.length ?? 0,
+      (ch, dst) => dst.set(c.channels[ch]!));
+  }
+  return b.finish();
+}
+const hintOf = (chunks: PcmChunk[]) =>
+  ({ firstUs: chunks[0]!.timestampUs, lastUs: chunks[chunks.length - 1]!.timestampUs });
+
+describe("PcmTrackBuilder (STC-491): the pre-STC-491 trackFromChunks, one chunk at a time", () => {
+  // The whole ticket's claim is that no sample changes. Every case below is
+  // held to the ORACLE — the old function, verbatim — byte for byte.
+  const shapes = [
+    { rate: 48_000, channels: 1 }, { rate: 48_000, channels: 2 }, { rate: 44_100, channels: 1 },
+  ];
+  for (const shape of shapes) {
+    test(`${shape.channels}ch/${shape.rate}Hz: identical to the old path over 40 random decoder-shaped tracks`, () => {
+      for (let seed = 1; seed <= 40; seed++) {
+        const chunks = decoderChunks(seed, { ...shape, count: 60 });
+        const want = oracleTrackFromChunks(chunks, "t");
+        expect(sameTrack(built(chunks, hintOf(chunks)), want), `seed ${seed}`).toBe(true);
+        // The public function, now built on the builder, too.
+        expect(sameTrack(trackFromChunks(chunks, "t"), want), `seed ${seed} trackFromChunks`).toBe(true);
+      }
+    });
+  }
+
+  test("a size guess that is too small grows, and one too large is trimmed — samples unchanged either way", () => {
+    const chunks = decoderChunks(7, { rate: 48_000, channels: 2, count: 80 });
+    const want = oracleTrackFromChunks(chunks, "t");
+    const { firstUs, lastUs } = hintOf(chunks);
+    expect(sameTrack(built(chunks), want)).toBe(true);                                   // no hint: grows from one chunk
+    expect(sameTrack(built(chunks, { firstUs, lastUs: firstUs }), want)).toBe(true);       // far too small
+    expect(sameTrack(built(chunks, { firstUs, lastUs: lastUs + 60_000_000 }), want)).toBe(true); // a minute too large
+    const t = built(chunks, { firstUs, lastUs: lastUs + 60_000_000 })!;
+    expect(t.channels[0]!.length).toBe(want!.channels[0]!.length);
+  });
+
+  test("the decoder's first chunk starting later than the sample table's is measured from the DECODED first chunk", () => {
+    const chunks = decoderChunks(3, { rate: 48_000, channels: 1, count: 20 });
+    const hint = { firstUs: chunks[0]!.timestampUs - 50_000, lastUs: chunks[19]!.timestampUs };
+    expect(sameTrack(built(chunks, hint), oracleTrackFromChunks(chunks, "t"))).toBe(true);
+  });
+
+  test("a chunk that changes channel count mid-take is refused with the old path's own words", () => {
+    // STC-233: a mic changed format mid-take on real hardware.
+    const chunks = decoderChunks(11, { rate: 48_000, channels: 1, count: 30 });
+    const stereo = decoderChunks(12, { rate: 48_000, channels: 2, count: 1 })[0]!;
+    chunks.splice(17, 1, { ...stereo, timestampUs: chunks[17]!.timestampUs });
+    let want = "";
+    try { oracleTrackFromChunks(chunks, "mic.m4a"); } catch (e: any) { want = e.message; }
+    expect(want).toMatch(/mic\.m4a: decoded chunks are not uniform — 1ch\/48000Hz and 2ch\/48000Hz/);
+    expect(() => built(chunks, hintOf(chunks), "mic.m4a")).toThrow(want);
+  });
+
+  test("a chunk that changes sample rate mid-take is refused with the old path's own words", () => {
+    const chunks = decoderChunks(13, { rate: 48_000, channels: 2, count: 30 });
+    chunks[22] = { ...chunks[22]!, sampleRate: 44_100 };
+    let want = "";
+    try { oracleTrackFromChunks(chunks, "system.m4a"); } catch (e: any) { want = e.message; }
+    expect(want).toMatch(/2ch\/48000Hz and 2ch\/44100Hz/);
+    expect(() => built(chunks, hintOf(chunks), "system.m4a")).toThrow(want);
+  });
+
+  test("a chunk earlier than its predecessor is refused rather than placed under a different overwrite order", () => {
+    const chunks = decoderChunks(5, { rate: 48_000, channels: 1, count: 10 });
+    [chunks[4], chunks[5]] = [chunks[5]!, chunks[4]!];
+    expect(() => built(chunks)).toThrow(/out of timestamp order/);
+  });
+
+  test("no chunk is no track", () => {
+    expect(new PcmTrackBuilder("t").finish()).toBeNull();
   });
 });
 
@@ -446,5 +525,23 @@ describe("a mic lost mid-take (STC-237)", () => {
     const mic = track(0, f32(0.5, 0.5));
     const [left] = mixBlock({ mic, system: null, systemLevel: 1, micLevel: 0.5, originNs: 0, from: 0, frames: 6 });
     expect(Array.from(left!)).toEqual([0.25, 0.25, 0, 0, 0, 0]);
+  });
+});
+
+describe("system audio that stopped mid-take (STC-542)", () => {
+  test("a system track cut at 50% mixes to silence past the cut, for the full window", () => {
+    // anchors-12 `endedBy: "stream-stopped"`: 4 samples of an 8-sample window, no mic.
+    const system = track(0, f32(0.4, 0.4, 0.4, 0.4));
+    const [left] = mixBlock({ mic: null, system, systemLevel: 1, originNs: 0, from: 0, frames: 8 });
+    expect(left!.length, "the block is the window's length, not the track's").toBe(8);
+    expect(Array.from(left!.slice(0, 4))).toEqual([0.4, 0.4, 0.4, 0.4].map(Math.fround));
+    expect(Array.from(left!.slice(4)), "past the cut is silence").toEqual([0, 0, 0, 0]);
+  });
+
+  test("the mic carries on alone past the cut", () => {
+    const mic = track(0, f32(0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2));
+    const system = track(0, f32(0.4, 0.4, 0.4, 0.4));
+    const [left] = mixBlock({ mic, system, systemLevel: 1, originNs: 0, from: 0, frames: 8 });
+    expect(Array.from(left!.slice(4))).toEqual([0.2, 0.2, 0.2, 0.2].map(Math.fround));
   });
 });

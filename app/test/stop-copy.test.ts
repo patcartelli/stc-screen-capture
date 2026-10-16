@@ -198,6 +198,7 @@ describe("a track lost while the take keeps recording (STC-237)", () => {
     }
     expect(trackLossPillLabel("mic-disconnected")).toBe("Mic lost");
     expect(trackLossPillLabel("camera-disconnected")).toBe("Camera lost");
+    expect(trackLossPillLabel("system-audio-stopped")).toBe("System lost");   // STC-542
     expect(trackLossPillLabel("camera-no-frames"), "a camera that never started is not a lost one").toBeUndefined();
   });
 
@@ -211,6 +212,17 @@ describe("a track lost while the take keeps recording (STC-237)", () => {
       camera: { present: true, endedBy: "disconnected", lastFramePtsNs: 90_000_000_000 },
     })).toBe("The mic disconnected at 1:10, so the rest of the take has no mic audio. " +
              "The camera disconnected at 1:30, so the rest of the take has no camera.");
+  });
+
+  test("the panel line names system audio that stopped, and when (STC-542)", () => {
+    expect(trackLossLine({ system: { present: true, endedBy: "stream-stopped", lastFramePtsNs: 70_400_000_000 } }))
+      .toBe("System audio stopped at 1:10, so the rest of the take has no system audio.");
+    expect(trackLossLine({
+      mic: { present: true, endedBy: "disconnected", lastFramePtsNs: 70_000_000_000 },
+      system: { present: true, endedBy: "stream-stopped", lastFramePtsNs: 80_000_000_000 },
+    })).toBe("The mic disconnected at 1:10, so the rest of the take has no mic audio. " +
+             "System audio stopped at 1:20, so the rest of the take has no system audio.");
+    expect(trackLossLine({ system: { present: false, endedBy: "stream-stopped" } })).toBeUndefined();
   });
 
   test("no line for a track that ran to the end, or that is not there", () => {

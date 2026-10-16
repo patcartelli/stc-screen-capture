@@ -124,17 +124,14 @@ describe("a start the helper refuses (STC-315)", () => {
     // i.e. about 15% of the message on screen.
     const page = (await toastPage(app!))!;
     //
-    // STC-457: the window is sized to the card now (`toast:fit`), so "the
-    // label is shorter than a fixed box" became "the row is not scrolling"
-    // (`scrollHeight` above `clientHeight` means content is hidden below) and
-    // "the window is the card plus its 6 px gutter, or the 340 px ceiling".
+    // STC-457: the card is laid out by its content, so "the label is shorter
+    // than a fixed box" became "the row is not scrolling" (`scrollHeight`
+    // above `clientHeight` means content is hidden below).
     //
-    // The window exists (hidden) before the page has measured itself and main
-    // has answered with the fitted height, so wait for the resize first. If
-    // `toast:fit` never lands, the window stays at the ceiling until main's
-    // fallback shows it there, and this poll fails — which is the point.
-    await expect.poll(() => page.evaluate(() => window.innerHeight), { timeout: 5_000 })
-      .toBeLessThan(340);
+    // STC-509: the window is a fixed 340 px and never resized (the resize is
+    // what crashed Electron on CI), so the card is PINNED to the window edge
+    // nearest its corner instead: for the default bottom corner, its bottom
+    // edge plus the 6 px gutter is the window's bottom edge.
     const fit = await page.evaluate(() => {
       const row = document.getElementById("row")!;
       const label = document.getElementById("label")!;
@@ -152,10 +149,11 @@ describe("a start the helper refuses (STC-315)", () => {
     expect(fit.whiteSpace).toBe("pre-wrap");
     expect(fit.hiddenBelow, `${fit.hiddenBelow}px of the message is scrolled out of view`).toBeLessThanOrEqual(0);
     expect(fit.widerBy).toBeLessThanOrEqual(0);
-    // The card's bottom edge (plus its gutter) is inside the window: nothing
-    // is cut off, and the window is not left taller than the card either.
-    expect(fit.cardBottom + 6).toBeLessThanOrEqual(fit.windowHeight + 1);
-    expect(fit.windowHeight, `window ${fit.windowHeight}px, card bottom ${fit.cardBottom}px, row scroll ${fit.hiddenBelow}px`).toBeLessThan(340);
+    // The window was never resized, and the card sits on its bottom edge:
+    // nothing cut off below, no gap left under the card either.
+    const detail = `window ${fit.windowHeight}px, card bottom ${fit.cardBottom}px, row scroll ${fit.hiddenBelow}px`;
+    expect(fit.windowHeight, detail).toBe(340);
+    expect(Math.abs(fit.cardBottom + 6 - fit.windowHeight), detail).toBeLessThanOrEqual(1);
 
     // "Quit and reopen", not "press Record again". Input Monitoring commonly
     // needs the granted process restarted and that is UNOBSERVED for this app
