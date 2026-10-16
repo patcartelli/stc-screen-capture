@@ -108,7 +108,7 @@
  */
 
 import type { DecorationMode } from "@transform/shot.js";
-import { libraryNote, silenceNote } from "./stop-copy.js";
+import { libraryNote, silenceNote, stallNote } from "./stop-copy.js";
 
 export type LibraryKind = "recording" | "still";
 
@@ -259,7 +259,7 @@ export function applyFilter(items: readonly LibraryItem[], id: string): LibraryI
  * imports only node builtins, while the transform is bundled for the renderer.
  * `app/test/take-list.test.ts` pins them together instead.
  */
-export const SUPPORTED_ANCHORS_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+export const SUPPORTED_ANCHORS_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
 /** The cached decorated thumbnail, beside the document it was rendered from. */
 export const THUMBNAIL_FILE = "thumb.png";
@@ -290,6 +290,8 @@ export interface TakeInfo {
   stop?: { t: number; reason: string };
   /** Stretches the mic delivered no signal (anchors-13, STC-528), for the library note (STC-529). */
   silentSpans?: { startNs: number; endNs: number }[];
+  /** Where the camera stalled (anchors-16, STC-553), for the library note. */
+  stalledSpans?: { startNs: number; endNs: number }[];
   /**
    * The matching finished export at top level, when this bundle and a
    * top-level file are linked by an embedded capture id (STC-413). Absent
@@ -391,6 +393,8 @@ export function recordingItem(t: TakeInfo): LibraryItem {
   if (stopNote) notes.push(stopNote);
   const silence = silenceNote(t.silentSpans);
   if (silence) notes.push(silence);
+  const stall = stallNote(t.stalledSpans);
+  if (stall) notes.push(stall);
   return {
     id: t.name,
     kind: "recording",

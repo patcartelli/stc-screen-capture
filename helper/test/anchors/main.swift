@@ -592,5 +592,41 @@ do {
     check(unplugged["version"] as? Int == 12, "a camera that disconnected stays v12")
 }
 
+// STC-553: a camera that stalled records where, and only then is the take v16. A stall
+// still going at the stop closes AT the stop; in the partial (stop 0) it stays open.
+do {
+    var cam = CameraTrack(present: true, device: "Cam", width: 1280, height: 720,
+                          firstFramePtsNs: 1_000_000_000, lastFramePtsNs: 9_000_000_000,
+                          frameIntervalNs: 33_000_000)
+    cam.stalledSpans = [StallSpan(startNs: 2_000_000_000, endNs: 6_000_000_000),
+                        StallSpan(startNs: 9_000_000_000, endNs: nil)]
+    let stalled = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                  capture: capture, camera: cam, requested: true,
+                                  pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(stalled["version"] as? Int == 16, "a camera that stalled must write version 16")
+    let spans = (stalled["camera"] as? [String: Any])?["stalledSpans"] as? [[String: Int]]
+    check(spans?.count == 2 && spans?[0] == ["startNs": 2_000_000_000, "endNs": 6_000_000_000],
+          "a closed stall is written as given")
+    check(spans?[1] == ["startNs": 9_000_000_000, "endNs": 20_000_000_000],
+          "a stall still going at the stop closes at stop.t")
+    printJSON(stalled, marker: "JSON-CAMERA-STALLED:")
+
+    // The partial's own builder call: a placeholder stop of 0 (Capture.writePartialNow).
+    let partial = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                  capture: capture, camera: cam, requested: true,
+                                  pauses: [], stopReason: "user", stopTNs: 0)
+    let open = (partial["camera"] as? [String: Any])?["stalledSpans"] as? [[String: Int]]
+    check(partial["version"] as? Int == 16, "a partial with a stall is v16")
+    check(open?[1] == ["startNs": 9_000_000_000], "in the partial an open stall has no end yet")
+
+    // The control: no spans, no key, and the version its other blocks earned.
+    cam.stalledSpans = []
+    let healthy = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                  capture: capture, camera: cam, requested: true,
+                                  pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(healthy["version"] as? Int == 2, "a camera that never stalled stays v2")
+    check((healthy["camera"] as? [String: Any])?["stalledSpans"] == nil, "and writes no stalledSpans key")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

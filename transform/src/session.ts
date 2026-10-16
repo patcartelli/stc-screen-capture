@@ -198,34 +198,55 @@ function checkEndedBy(anchors: Anchors): void {
 }
 
 /**
- * STC-528: `silentSpans` on the `mic` block — the stretches where the mic delivered no
- * signal. Refused when it cannot be right: before v13, on a present:false block, empty
- * (the helper writes no key rather than an empty list), or out of order. Nothing in
- * render() reads it; it is for the library's notes (STC-529).
+ * A track block's list of `{startNs, endNs}` spans: STC-528's `mic.silentSpans` and
+ * STC-553's `camera.stalledSpans`. Refused when it cannot be right: before the version
+ * that added it, on a present:false block, empty (the helper writes no key rather than
+ * an empty list), or out of order.
  */
-function checkSilentSpans(anchors: Anchors): void {
-  const spans = anchors.mic?.silentSpans;
+function checkSpans(
+  anchors: Anchors, track: "mic" | "camera", key: string, since: number, didWhat: string,
+  spans: readonly { startNs: number; endNs: number }[] | undefined,
+): void {
   if (spans === undefined) return;
-  if (anchors.version < 13) {
-    throw new SessionLoadError(`anchors.mic.silentSpans needs anchors version 13; this document is version ${anchors.version}`);
+  const name = `anchors.${track}.${key}`;
+  if (anchors.version < since) {
+    throw new SessionLoadError(`${name} needs anchors version ${since}; this document is version ${anchors.version}`);
   }
-  if (anchors.mic!.present !== true) {
-    throw new SessionLoadError("anchors.mic.silentSpans is set on a mic block with present:false — there is no track to have been silent");
+  if (anchors[track]!.present !== true) {
+    throw new SessionLoadError(`${name} is set on a ${track} block with present:false — there is no track to have ${didWhat}`);
   }
   if (!Array.isArray(spans) || spans.length === 0) {
-    throw new SessionLoadError("anchors.mic.silentSpans must be a non-empty list when present");
+    throw new SessionLoadError(`${name} must be a non-empty list when present`);
   }
   let prevEnd = 0;
   for (const [i, s] of spans.entries()) {
     if (!Number.isInteger(s?.startNs) || !Number.isInteger(s?.endNs) || s.startNs < prevEnd || s.endNs <= s.startNs) {
-      throw new SessionLoadError(`anchors.mic.silentSpans[${i}] must be whole ns, start < end, and after the span before it`);
+      throw new SessionLoadError(`${name}[${i}] must be whole ns, start < end, and after the span before it`);
     }
     prevEnd = s.endNs;
   }
 }
 
-function withoutEndedBy<T extends { endedBy?: unknown }>(block: T): T {
-  const { endedBy: _dropped, ...rest } = block;
+/**
+ * STC-528: `silentSpans` on the `mic` block — the stretches where the mic delivered no
+ * signal. Nothing in render() reads it; it is for the library's notes (STC-529).
+ */
+function checkSilentSpans(anchors: Anchors): void {
+  checkSpans(anchors, "mic", "silentSpans", 13, "been silent", anchors.mic?.silentSpans);
+}
+
+/**
+ * STC-553: `stalledSpans` on the `camera` block — where a camera that had delivered
+ * frames delivered none for 3 s or more. render() hides the PiP across each
+ * (`camera-gaps.ts`) rather than holding a frozen frame; the panel and library say them.
+ */
+function checkStalledSpans(anchors: Anchors): void {
+  checkSpans(anchors, "camera", "stalledSpans", 16, "stalled", anchors.camera?.stalledSpans);
+}
+
+/** A dropped track drops what described it too: `endedBy` (STC-237), `stalledSpans` (STC-553). */
+function withoutEndedBy<T extends { endedBy?: unknown; stalledSpans?: unknown }>(block: T): T {
+  const { endedBy: _dropped, stalledSpans: _spans, ...rest } = block;
   return rest as T;
 }
 
@@ -272,17 +293,22 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // mid-take. Checked in checkEndedBy; the camera's own `lastFramePtsNs` ends the PiP.
   // v13 (STC-528) adds `silentSpans` on `mic`: where the mic delivered no signal for 10 s
   // or more. Checked in checkSilentSpans; nothing here plays it differently.
+  // v16 (STC-553) adds `stalledSpans` on `camera`: where a camera that had delivered frames
+  // delivered none for 3 s or more. Checked in checkStalledSpans; render() hides the PiP
+  // across each rather than holding the last frame (camera-gaps.ts).
   if (
     anchors?.version !== 1 && anchors?.version !== 2 && anchors?.version !== 3 &&
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
     anchors?.version !== 7 && anchors?.version !== 8 && anchors?.version !== 9 &&
     anchors?.version !== 10 && anchors?.version !== 11 && anchors?.version !== 12 &&
-    anchors?.version !== 13 && anchors?.version !== 14 && anchors?.version !== 15
+    anchors?.version !== 13 && anchors?.version !== 14 && anchors?.version !== 15 &&
+    anchors?.version !== 16
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 or 15)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 or 16)`);
   }
   checkEndedBy(anchors);
   checkSilentSpans(anchors);
+  checkStalledSpans(anchors);
   // v9's `capture.colorSpace` (STC-510): which space the pixels are in, so a sink does
   // not draw a Display P3 take into an sRGB canvas. Refused if unknown, never defaulted.
   checkCaptureColour(anchors);
@@ -422,8 +448,8 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   return {
     // checkGeometry above ran on the helper's ORIGINAL document; this is the
     // same timeline read on the file's clock — see snapGeometryToFrames.
-    // A dropped camera also drops its `endedBy` (STC-237): there is no track left for it
-    // to describe, and anchors-12 refuses one on a present:false block.
+    // A dropped camera also drops its `endedBy` (STC-237) and `stalledSpans` (STC-553):
+    // there is no track left for them to describe, and both are refused on present:false.
     anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: withoutEndedBy({ ...anchors.camera!, present: false }) } : anchorsOut, video.framesNs),
     events: [...stabiliseEvents(anchors, pointerEvents)].sort((a, b) => a.t - b.t),
     ...(keyEvents.length > 0 ? { keys: keyEvents.sort((a, b) => a.t - b.t) } : {}),

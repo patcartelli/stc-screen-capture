@@ -11,6 +11,7 @@
  *   still screen          STC_CAPTURE_FAULT=screen-idle        held frames (the take goes on, STC-561)
  *   camera disconnect     STC_CAPTURE_FAULT=camera-disconnected warning + tNs; anchors camera.endedBy
  *   camera gap            STC_CAPTURE_FAULT=camera-gap         held camera frames (the camera goes on, STC-562)
+ *   camera stall          STC_CAPTURE_FAULT=camera-stall       warning + tNs; anchors camera.stalledSpans (STC-553)
  *   system audio stop     STC_CAPTURE_FAULT=system-audio-stop  warning + tNs; anchors system.endedBy (STC-542)
  *   IPC pipe close        stdin closed mid-take                stop: stdin-closed
  *   helper crash          SIGKILL mid-take                     recovered: recorder-quit
@@ -170,6 +171,29 @@ for (let round = 1; round <= ROUNDS; round++) {
       for (let i = 1; i < cam.length; i++) longest = Math.max(longest, cam[i]! - cam[i - 1]!);
       expect(longest, "a camera sample near the writer's 2^31 ns limit").toBeLessThan(1_600_000_000);
       expect(cam[cam.length - 1]! - cam[0]!, "the camera track runs past the gap").toBeGreaterThan(8_000_000_000);
+    }, 180_000);
+
+    test("camera-stall: a 4 s stall is said with a time, the camera comes back, and the take records the span (STC-553)", async () => {
+      const { dir, h } = await startTake({ STC_CAPTURE_FAULT: "camera-stall" }, { camera: true }, "the camera-stall soak");
+      await waitFor(() => h.fd3.find((l) => l.ev === "camera-started")
+        ?? h.fd3.find((l) => l.ev === "warning" && /^camera-/.test(String(l.code))),
+      15_000, "the camera to open (this case needs a camera and a Camera grant)");
+      expect(h.fd3.find((l) => l.ev === "camera-started"),
+        `the camera did not open: ${JSON.stringify(h.fd3.filter((l) => l.ev === "warning"))}`).toBeDefined();
+      // The stall is 3-7 s after the camera's first frame (CameraStallDecisions.swift).
+      await sleep(13_000);
+      const w = warning(h, "camera-stalled");
+      expect(w, "the stall was said").toBeDefined();
+      expect(typeof w!.tNs, "with a time").toBe("number");
+      await userStop(h);
+      expectStopRecord(dir, "user");
+      const spans = readAnchors(dir).camera?.stalledSpans ?? [];
+      expect(spans, "the stall is on record").toHaveLength(1);
+      expect(spans[0]!.startNs).toBe(Number(w!.tNs));
+
+      const session = await accept(dir);
+      const cam = session.cameraVideo?.framesNs ?? [];
+      expect(cam.some((t) => t > spans[0]!.endNs), "the camera came back").toBe(true);
     }, 180_000);
 
     test("system-audio-stop: the warning says when, the take goes on, and system.m4a ends there (STC-542)", async () => {

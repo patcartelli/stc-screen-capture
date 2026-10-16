@@ -92,6 +92,9 @@ struct CameraTrack {
     /// STC-237: why the track ended before the take did (`disconnected`), or nil when it
     /// ran to the end. A `var` with a default so every existing construction is unchanged.
     var endedBy: String? = nil
+    /// STC-553: where the camera stalled, in order; the last may still be open. Empty
+    /// means none, and writes no key.
+    var stalledSpans: [StallSpan] = []
 }
 
 /// What the mic track turned out to be (STC-233). `nil` means no mic on this
@@ -214,6 +217,16 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                 "frameIntervalNs": c.frameIntervalNs,
             ]
             if let e = c.endedBy { cameraBlock?["endedBy"] = e }
+            // STC-553: written only when there is one, like the mic's silentSpans. A stall
+            // still going closes at the stop: a camera that never came back stalled to the
+            // end. In the partial (whose placeholder stop is 0) it stays open, with no
+            // `endNs`, and recovery closes it (recover-anchors.ts).
+            let spans = c.stalledSpans.compactMap { s -> [String: Int]? in
+                if let e = s.endNs { return ["startNs": Int(s.startNs), "endNs": Int(e)] }
+                if stopTNs > Int(s.startNs) { return ["startNs": Int(s.startNs), "endNs": stopTNs] }
+                return stopTNs == 0 ? ["startNs": Int(s.startNs)] : nil
+            }
+            if !spans.isEmpty { cameraBlock?["stalledSpans"] = spans }
         }
     }
     var micBlock: [String: Any]?
@@ -280,6 +293,8 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     // STC-562: a camera whose writer failed mid-take. anchors-15, because 12-14 had shipped
     // with `disconnected` as the camera's only reason. Read off the block, same reason.
     if (cameraBlock?["endedBy"] as? String) == "writer-failed" { version = max(version, 15) }
+    // STC-553: a camera that stalled at least once. Read off the block, same reason.
+    if cameraBlock?["stalledSpans"] != nil { version = max(version, 16) }
     var capturedBlock: [String: Any] = ["width": capture.width, "height": capture.height, "codec": "h264",
                                          "firstFrameNs": max(0, capture.firstFrameNs)]
     if let colorSpace { capturedBlock["colorSpace"] = colorSpace }

@@ -28,6 +28,7 @@ describe("anchors document", () => {
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
         "helper/src/MicSignalDecisions.swift",
+        "helper/src/CameraStallDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -83,6 +84,7 @@ describe("anchors document", () => {
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
         "helper/src/MicSignalDecisions.swift",
+        "helper/src/CameraStallDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -125,6 +127,7 @@ describe("anchors document", () => {
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
         "helper/src/MicSignalDecisions.swift",
+        "helper/src/CameraStallDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -170,6 +173,7 @@ describe("anchors document", () => {
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
         "helper/src/MicSignalDecisions.swift",
+        "helper/src/CameraStallDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -213,6 +217,7 @@ describe("anchors document", () => {
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
         "helper/src/MicSignalDecisions.swift",
+        "helper/src/CameraStallDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -251,6 +256,7 @@ describe("anchors document", () => {
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
         "helper/src/MicSignalDecisions.swift",
+        "helper/src/CameraStallDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         "helper/test/anchors/main.swift",
       ],
@@ -364,5 +370,13 @@ describe("anchors document", () => {
     const validate15 = compileV(15);
     expect(validate15(cameraWriterFailed), JSON.stringify(validate15.errors, null, 2)).toBe(true);
     expect(validate14(cameraWriterFailed), "anchors-14 must refuse camera writer-failed").toBe(false);
+
+    // STC-553: a camera that stalled validates against anchors-16, and anchors-15 refuses
+    // it — `stalledSpans` is the only thing that moved it.
+    const cameraStalled = extractJSON(out, "JSON-CAMERA-STALLED:");
+    expect((cameraStalled as { version: number }).version).toBe(16);
+    const validate16 = compileV(16);
+    expect(validate16(cameraStalled), JSON.stringify(validate16.errors, null, 2)).toBe(true);
+    expect(validate15(cameraStalled), "anchors-15 must refuse camera stalledSpans").toBe(false);
   });
 }, 60_000);

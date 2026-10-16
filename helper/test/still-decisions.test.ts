@@ -36,6 +36,7 @@ describe("still decisions (STC-289)", () => {
         "helper/src/PauseDecisions.swift",
         "helper/src/CaptureGeometry.swift",
         "helper/src/MicSignalDecisions.swift",
+        "helper/src/CameraStallDecisions.swift",
         "helper/src/AnchorsDoc.swift",
         // For cursorShapeNames — the still writes the same list the recording
         // path classifies into (STC-309), so it is not declared twice.

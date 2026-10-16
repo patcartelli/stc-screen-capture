@@ -123,4 +123,30 @@ describe("a mic or camera lost mid-take (STC-237)", () => {
       .toBe("Stopped at 0:06. The window you were recording was closed. Everything up to then is saved. " +
             "System audio stopped at 0:02, so the rest of the take has no system audio.");
   }, 240_000);
+
+  test("a stalled camera says Camera stalled on the pill, no toast, and a panel line (STC-553)", async () => {
+    const extra = {
+      version: 16,
+      camera: { present: true, device: "Fake Camera", width: 1280, height: 720, firstFramePtsNs: 0,
+                lastFramePtsNs: 5_000_000_000, frameIntervalNs: 33_000_000,
+                stalledSpans: [{ startNs: 1_000_000_000, endNs: 4_000_000_000 }] },
+    };
+    const win = await launch({
+      STC_FAKE_WARNING: "camera-stalled", STC_FAKE_WARNING_MS: WARNING_MS,
+      STC_FAKE_STREAM_DEATH_MS: "6000", STC_FAKE_STOP_REASON: "window-closed",
+      STC_FAKE_ANCHORS_EXTRA: JSON.stringify(extra),
+    });
+    await startRecordFlow(app!, win);
+    await expect.poll(() => pillShowing(app!), { timeout: 30_000 }).toBe(true);
+    const pill = await pillPage(app!);
+    await expect.poll(() => pill.textContent("#pill-label"), { timeout: 30_000 }).toBe("Camera stalled");
+    expect(await pill.isDisabled("#pill-stop"), "the take is still running; its pill is still Stop").toBe(false);
+    expect(await toastText(app!)).not.toMatch(/stalled|reported a problem/i);
+    await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: 30_000 }).toBe(1);
+    const panel = await pageWithUrl(app!, "thumbnail.html");
+    await panel.waitForLoadState("domcontentloaded");
+    await expect.poll(() => panel.textContent("#takereason"), { timeout: 15_000 })
+      .toBe("Stopped at 0:06. The window you were recording was closed. Everything up to then is saved. " +
+            "The camera stalled from 0:01 to 0:04, so the picture-in-picture is hidden there.");
+  }, 240_000);
 });

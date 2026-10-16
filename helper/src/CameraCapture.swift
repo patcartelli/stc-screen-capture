@@ -121,6 +121,19 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         .contains(ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] ?? "")
     private let holdFramesOff = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "camera-gap-unheld"
 
+    /// STC-553: when the camera stalls after its first frame (`CameraStallDecisions.swift`).
+    /// Fed every frame that ARRIVES, and checked every `CameraStall.checkIntervalSeconds`
+    /// on `queue`. Guarded by `lock`.
+    private var stall = CameraStallTracker()
+    private var stallTimer: DispatchSourceTimer?
+    /// Called off the lock when a stall begins or ends, so `anchors.partial.json` says
+    /// it even if the helper dies mid-stall. Set before `start()`; never changed after.
+    var onStallChanged: (() -> Void)?
+    /// `STC_CAPTURE_FAULT=camera-stall` / `=camera-stall-end` (STC-553), read once.
+    private let cameraStallFault = ["camera-stall", "camera-stall-end"]
+        .contains(ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] ?? "")
+    private let cameraStallForever = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "camera-stall-end"
+
     /// Set by `stop()` so the liveness watchdog below cannot warn about a take
     /// that has already ended.
     private var stopped = false
@@ -247,6 +260,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         s.startRunning()
         armNoFramesWatchdog()
         startHoldTimer()
+        startStallTimer()
         return .success(deviceName)
     }
 
@@ -287,6 +301,55 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
                                         + "covered lens, or another app holding the camera all "
                                         + "look like this"])
         }
+    }
+
+    // MARK: STC-553 stall
+
+    /// A timer on `queue`, like the hold timer, so a check and a frame's arrival never
+    /// race. Runs whatever the hold timer does (`camera-gap-unheld` turns holds off,
+    /// never this).
+    private func startStallTimer() {
+        if cameraStallFault {
+            let ms = CAMERA_STALL_FAULT_AFTER_NS / 1_000_000
+            let until = cameraStallForever ? "the end of the take" : "\((CAMERA_STALL_FAULT_AFTER_NS + CAMERA_STALL_FAULT_DURATION_NS) / 1_000_000) ms"
+            IO.log("STC_CAPTURE_FAULT=\(cameraStallForever ? "camera-stall-end" : "camera-stall"): camera frames from \(ms) ms after the first to \(until) never arrive, as a stalled camera sends none")
+        }
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + CameraStall.checkIntervalSeconds, repeating: CameraStall.checkIntervalSeconds)
+        t.setEventHandler { [weak self] in self?.checkStall() }
+        lock.lock()
+        if stopped { lock.unlock(); t.cancel(); return }
+        stallTimer = t
+        lock.unlock()
+        t.resume()
+    }
+
+    private func checkStall() {
+        let nowNs = Int64(Clock.nowNs()) - Int64(t0Ns)
+        let pause = pauseGate.state()
+        lock.lock()
+        guard !stopped else { lock.unlock(); return }
+        let change = stall.check(nowNs: nowNs, pause: pause)
+        let device = deviceName
+        lock.unlock()
+        report(change, device: device)
+    }
+
+    /// Says a stall that began (once per stall, rule 4) and records any change in the partial.
+    private func report(_ change: CameraStallChange?, device: String) {
+        guard let change else { return }
+        if case .began(let span) = change {
+            // IO.send, not IO.stat: like `camera-no-frames`, this decides whether the user
+            // trusts the take. The app shows it on the pill, never as a toast (stop-copy.ts).
+            IO.send("warning", ["code": "camera-stalled",
+                                "device": device,
+                                "tNs": Int(span.startNs),
+                                "detail": "the camera has delivered no frame for "
+                                        + "\(CameraStall.thresholdNs / 1_000_000_000)s; the take is "
+                                        + "still recording and the picture-in-picture is hidden "
+                                        + "until the camera comes back"])
+        }
+        onStallChanged?()
     }
 
     // MARK: STC-562 hold frames
@@ -409,9 +472,20 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             lock.lock()
             // STC-562's fault: the frames a stalled camera would not have sent.
             // Upstream of everything, as a camera's silence is.
+            // STC-553's are the same, for a stall that is said.
             let withheld = cameraGapFault && cameraGapFaultCovers(ptsNs: rel, firstFramePtsNs: firstPtsNs)
+                || cameraStallFault && cameraStallFaultCovers(ptsNs: rel, firstFramePtsNs: firstPtsNs,
+                                                              forever: cameraStallForever)
             lock.unlock()
             if withheld { return }
+            // STC-553: the camera is alive. Stamped on ARRIVAL, before the pause gate, the
+            // ordering guard and the writer, none of which says anything about the camera.
+            let pause = pauseGate.state()
+            lock.lock()
+            let stallChange = stall.frameArrived(nowNs: Int64(Clock.nowNs()) - Int64(t0Ns), ptsNs: rel, pause: pause)
+            let stallDevice = deviceName
+            lock.unlock()
+            report(stallChange, device: stallDevice)
             // Paused BEFORE the ordering guard (STC-562): the guard is the newest
             // PTS offered to the writer, which a hold must come after. A paused
             // frame is never offered, and counting it there would push every hold
@@ -464,9 +538,12 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         stopped = true
         let hold = holdTimer
         holdTimer = nil
+        let stallCheck = stallTimer
+        stallTimer = nil
         lastWrittenBuffer = nil
         lock.unlock()
         hold?.cancel()
+        stallCheck?.cancel()
         let answered = NSLock()
         var done = false
         let finish: (CameraTrack?) -> Void = { track in
@@ -503,7 +580,8 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
                            width: Self.width, height: Self.height,
                            firstFramePtsNs: Int(firstPtsNs),
                            lastFramePtsNs: Int(lastPtsNs),
-                           frameIntervalNs: Int(medianDelta()))
+                           frameIntervalNs: Int(medianDelta()),
+                           stalledSpans: stall.spansSoFar())
     }
 
     /// Median, not mean: a single long stall would drag a mean upward and

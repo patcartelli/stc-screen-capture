@@ -17,6 +17,7 @@ import {
   NAMED_KEYS, keyLabel, keycastText,
 } from "./keycast.js";
 import { FRAMING_PRESETS, DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_RADIUS_MAX } from "./framing.js";
+import { CAMERA_STALL_NS } from "./camera-gaps.js";
 
 /**
  * Which transform made the pixels (STC-308).
@@ -182,8 +183,17 @@ import { FRAMING_PRESETS, DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_RADI
  * 5-argument `drawImage`). The fingerprint moved because `PIP_SHADOW` and `DEFAULT_FRAMING` reach the pixels.
  *
  * (Built as 14; STC-396 merged version 14 and project-15 first.)
+ *
+ * ## Version 16: no frozen PiP across a camera stall (STC-553, folding in STC-557)
+ *
+ * The PiP is hidden inside the camera track wherever the camera stalled: across each of
+ * anchors-16's `camera.stalledSpans`, and across any gap in the camera's frame grid longer
+ * than `CAMERA_STALL_NS` of recording time (paused time does not count, and the PiP is
+ * never hidden inside a pause). camera-gaps.ts. A take whose camera never went 3 s without
+ * a frame outside a pause draws exactly what version 15 did. The fingerprint moved:
+ * `CAMERA_STALL_NS` reaches the pixels.
  */
-export const TRANSFORM_VERSION = 15;
+export const TRANSFORM_VERSION = 16;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -202,6 +212,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 13, since: "2026-10-02", changed: "the keycast (STC-419): events-3 key events (keyboard COMMANDS only — named non-printing keys and cmd/ctrl chords; typing is never recorded) render as one bottom-centre pill on the output canvas, after the crop, with a repeat count; 1.2 s hold, 200 ms fade, in sim ticks (keycast.ts). project-14's keycast.show:false hides it. A take with no keys, or with it hidden, draws exactly what version 12 did. The fingerprint moved: the keycast constants reach the pixels" },
   { version: 14, since: "2026-10-02", changed: "video framing (STC-396): project-15's optional framing insets the recording inside the chosen output and draws a background, a shadow and rounded corners around it. render() carries the layout in FrameState.framing and maps the cursor, click highlight, pointer size, PiP and zoom crop into the inset rect (spaces.ts's existing owners); the one compositor draws background, shadow, then the picture clipped to a rounded rect, with the PiP and pointer clipped to the picture. A project with no framing renders exactly what version 13 did: framing is null, the compositor takes its previous code path argument for argument, and every position is computed from the same numbers. The fingerprint moved: the framing presets and bounds reach the pixels" },
   { version: 15, since: "2026-10-02", changed: "the styled PiP (STC-461): project-16's pip.style — shape (rect/square/circle) and corner radius, an authored centre and width (UV over the content rect, i.e. the whole output when there is no framing), a framing crop of the camera, mirror, border in display points and one drop shadow, all resolved in render() and drawn by the one compositor. A document with no style draws exactly what version 14 did. The fingerprint moved: PIP_SHADOW and DEFAULT_FRAMING reach the pixels" },
+  { version: 16, since: "2026-10-16", changed: "no frozen PiP across a camera stall (STC-553, folding in STC-557): inside the camera track, the PiP is hidden from one frame interval after the last real frame to the first real frame after, across each anchors-16 camera.stalledSpans span and across any camera frame-grid gap longer than CAMERA_STALL_NS (3 s) of recording time. Paused time does not count toward a gap, and the PiP is never hidden inside a pause (camera-gaps.ts). A take whose camera never went 3 s without a frame outside a pause draws exactly what version 15 did. The fingerprint moved: CAMERA_STALL_NS reaches the pixels" },
 ];
 
 /**
@@ -235,6 +246,8 @@ export function transformFingerprint(): string {
       NAMED_KEYS.map((k) => keyLabel(k, ["ctrl", "opt", "shift", "cmd"])),
       keycastText({ label: "x", count: 2, opacity: 1 })],
     framing: { FRAMING_PRESETS, DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_RADIUS_MAX },
+    // STC-553: how long a camera gap must be before the PiP hides rather than freezes.
+    cameraStall: CAMERA_STALL_NS,
   };
   const text = JSON.stringify(inputs);
   let h = 0x811c9dc5;

@@ -2,8 +2,9 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  panelReason, panelAction, pillLabel, libraryNote, silenceNote, formatTakeTime, isStopActionId, HELPER_STOP_REASONS,
-  STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, trackLossPillLabel, trackLossLine,
+  panelReason, panelAction, pillLabel, libraryNote, silenceNote, stallNote, formatTakeTime, isStopActionId,
+  HELPER_STOP_REASONS, STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS, trackLossPillLabel,
+  trackLossLine,
 } from "../src/stop-copy.js";
 import { recordingItem, type TakeInfo } from "../src/library-items.js";
 
@@ -184,6 +185,22 @@ describe("stop copy (STC-530, STC-531)", () => {
     expect(item.notes).toEqual(["Stopped early: disk full at 4:12", "No mic signal from 1:10 to 4:30"]);
     expect(recordingItem({ ...aTake(), stop: { t: 5e9, reason: "user" } }).notes).toEqual([]);
   });
+
+  test("stall notes (STC-553): one span, two, and 'and N more', in silenceNote's shape", () => {
+    expect(stallNote(undefined)).toBeUndefined();
+    expect(stallNote([])).toBeUndefined();
+    expect(stallNote([span(70, 85)])).toBe("Camera stalled from 1:10 to 1:25");
+    expect(stallNote([span(70, 85), span(300, 330)])).toBe("Camera stalled from 1:10 to 1:25 and 5:00 to 5:30");
+    expect(stallNote([span(70, 85), span(300, 330), span(400, 420)]))
+      .toBe("Camera stalled from 1:10 to 1:25, 5:00 to 5:30, and 1 more");
+  });
+
+  test("a stalled camera becomes a note on the item, after the silence note", () => {
+    const item = recordingItem({
+      ...aTake(), silentSpans: [span(10, 30)], stalledSpans: [span(70, 85)],
+    });
+    expect(item.notes).toEqual(["No mic signal from 0:10 to 0:30", "Camera stalled from 1:10 to 1:25"]);
+  });
 });
 
 describe("a track lost while the take keeps recording (STC-237)", () => {
@@ -230,6 +247,27 @@ describe("a track lost while the take keeps recording (STC-237)", () => {
   test("the panel line names a camera whose recording failed, and when (STC-562)", () => {
     expect(trackLossLine({ camera: { present: true, endedBy: "writer-failed", lastFramePtsNs: 70_400_000_000 } }))
       .toBe("The camera could not be recorded at 1:10, so the rest of the take has no camera.");
+  });
+
+  test("the panel line names where the camera stalled, before any end (STC-553)", () => {
+    const stalled = { present: true, lastFramePtsNs: 300e9, stalledSpans: [{ startNs: 70e9, endNs: 85e9 }] };
+    expect(trackLossLine({ camera: stalled }))
+      .toBe("The camera stalled from 1:10 to 1:25, so the picture-in-picture is hidden there.");
+    expect(trackLossLine({ camera: { ...stalled, endedBy: "disconnected" } }))
+      .toBe("The camera stalled from 1:10 to 1:25, so the picture-in-picture is hidden there. " +
+            "The camera disconnected at 5:00, so the rest of the take has no camera.");
+    expect(trackLossLine({ camera: { present: false, stalledSpans: stalled.stalledSpans } })).toBeUndefined();
+  });
+
+  test("a stall is said on the pill like a loss, but is not one (STC-553)", () => {
+    const swift = readFileSync(join(root, "helper/src/CameraCapture.swift"), "utf8");
+    for (const code of TRACK_STALL_WARNINGS) {
+      expect(swift, `the helper no longer sends ${code}; drop it here`).toContain(`"code": "${code}"`);
+      expect(trackLossPillLabel(code)!.length).toBeLessThanOrEqual(14);
+      expect(TRACK_LOSS_WARNINGS.has(code), "the camera row must not be marked failed for a stall").toBe(false);
+      expect(STOP_ANNOUNCING_WARNINGS.has(code)).toBe(false);
+    }
+    expect(trackLossPillLabel("camera-stalled")).toBe("Camera stalled");
   });
 
   test("no line for a track that ran to the end, or that is not there", () => {

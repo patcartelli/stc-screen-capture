@@ -163,15 +163,30 @@ const TRACK_LOSS: Record<string, { pill: string }> = {
 /** The helper warnings that announce a lost track. The renderer must not toast these. */
 export const TRACK_LOSS_WARNINGS: ReadonlySet<string> = new Set(Object.keys(TRACK_LOSS));
 
-/** The pill's label for a track lost mid-take, or undefined for any other warning. */
+/**
+ * STC-553: a camera that STALLED, said the same way (the pill for `PILL_STOPPED_DWELL_MS`,
+ * the panel after, no toast) but not a loss: nothing is torn down and the camera may come
+ * back, so the renderer must not mark the camera's row failed as it does for the rows above.
+ */
+const TRACK_STALL: Record<string, { pill: string }> = {
+  "camera-stalled": { pill: "Camera stalled" },
+};
+
+/** The helper warnings that announce a stall. The renderer must neither toast these nor fail the device row. */
+export const TRACK_STALL_WARNINGS: ReadonlySet<string> = new Set(Object.keys(TRACK_STALL));
+
+/** The pill's label for a track lost (or, STC-553, stalled) mid-take, or undefined for any other warning. */
 export function trackLossPillLabel(code: string): string | undefined {
-  return Object.hasOwn(TRACK_LOSS, code) ? TRACK_LOSS[code]!.pill : undefined;
+  if (Object.hasOwn(TRACK_LOSS, code)) return TRACK_LOSS[code]!.pill;
+  return Object.hasOwn(TRACK_STALL, code) ? TRACK_STALL[code]!.pill : undefined;
 }
+
+type Spans = readonly { startNs: number; endNs: number }[];
 
 /** The part of an anchors document `trackLossLine` reads. */
 export interface TrackBlocks {
   mic?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number };
-  camera?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number };
+  camera?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number; stalledSpans?: Spans };
   system?: { present?: boolean; endedBy?: string; lastFramePtsNs?: number };
 }
 
@@ -190,6 +205,9 @@ export function trackLossLine(anchors: TrackBlocks | undefined): string | undefi
     lines.push(`${what}${at(mic)}, so the rest of the take has no mic audio.`);
   }
   const cam = anchors?.camera;
+  // STC-553: before any end, since a stall happens before the track ends.
+  const stalled = cam?.present === true ? spanList(cam.stalledSpans) : undefined;
+  if (stalled) lines.push(`The camera stalled from ${stalled}, so the picture-in-picture is hidden there.`);
   if (cam?.present === true && cam.endedBy !== undefined) {
     const what = cam.endedBy === "writer-failed" ? "The camera could not be recorded" : "The camera disconnected";
     lines.push(`${what}${at(cam)}, so the rest of the take has no camera.`);
@@ -221,14 +239,26 @@ export function libraryNote(stop: StopBlock): string | undefined {
 }
 
 /**
- * "No mic signal from 1:10 to 4:30", several spans listing the first two, then "and N more".
- * Spans arrive in order (anchors-13), so "first" is the earliest.
+ * "1:10 to 4:30", several spans listing the first two, then "and N more". Spans arrive in
+ * order (anchors-13, anchors-16), so "first" is the earliest. Undefined for none.
  */
-export function silenceNote(spans: SilentSpans): string | undefined {
+function spanList(spans: Spans | undefined): string | undefined {
   if (!spans || spans.length === 0) return undefined;
   const listed = spans.slice(0, SILENT_SPANS_LISTED)
     .map((s) => `${formatTakeTime(s.startNs)} to ${formatTakeTime(s.endNs)}`);
   const more = spans.length - listed.length;
   const tail = more > 0 ? `, and ${more} more` : "";
-  return `No mic signal from ${listed.join(more > 0 ? ", " : " and ")}${tail}`;
+  return `${listed.join(more > 0 ? ", " : " and ")}${tail}`;
+}
+
+/** "No mic signal from 1:10 to 4:30" (STC-528). */
+export function silenceNote(spans: SilentSpans): string | undefined {
+  const list = spanList(spans);
+  return list && `No mic signal from ${list}`;
+}
+
+/** "Camera stalled from 1:10 to 1:25" (STC-553), the same shape as `silenceNote`. */
+export function stallNote(spans: Spans | undefined): string | undefined {
+  const list = spanList(spans);
+  return list && `Camera stalled from ${list}`;
 }

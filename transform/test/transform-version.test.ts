@@ -24,7 +24,7 @@ const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
  * constants — hold and fade, font, sizing, placement, both colours, every key
  * label with and without the modifier glyphs, and the ` ×N` count format.)
  */
-const PINNED_FINGERPRINT = "5dfae8d8";
+const PINNED_FINGERPRINT = "d64a8204";
 
 describe("the transform version is honest about what it renders", () => {
   test("the fingerprint of every pixel-deciding constant is pinned to this version", () => {
