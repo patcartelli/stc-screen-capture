@@ -403,7 +403,10 @@ describe("the self-timer (scope → countdown → capture)", () => {
   test("the countdown comes AFTER the scope is set, and then the capture happens", async () => {
     const { win, stillLog } = await launch();
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    void win.evaluate(() => (window as any).recorder.captureStill("self-timer"));
+    // Held, not `void`ed, and awaited below: left to settle on its own it could
+    // reject with "page has been closed" once `afterEach` quit the app, and
+    // nothing handled that (STC-462). Awaiting it also lets a real failure fail.
+    const result = win.evaluate(() => (window as any).recorder.captureStill("self-timer"));
 
     // Scope first — the ticket makes them separate steps, and nothing has
     // been captured while the overlay is still up.
@@ -419,6 +422,7 @@ describe("the self-timer (scope → countdown → capture)", () => {
     // destroyed before the request is ever sent, so by the time the stand-in
     // has logged one there can be no countdown window left to photograph.
     expect(await hasCountdownWindow()).toBe(false);
+    await result;
   }, 120_000);
 
   test("Escape during a self-timer captures nothing at all", async () => {
@@ -442,12 +446,13 @@ describe("the self-timer (scope → countdown → capture)", () => {
   test("an ordinary capture still fires immediately — the self-timer is one shot, not a mode", async () => {
     const { win, stillLog } = await launch();
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
-    void win.evaluate(() => (window as any).recorder.captureStill("region"));
+    const result = win.evaluate(() => (window as any).recorder.captureStill("region"));
     await pickAnArea();
     // No countdown between the selection and the frame, with a 30s countdown
     // configured: "Capture fires immediately unless it was started with the
     // self-timer."
     await expect.poll(() => lines(stillLog).length, { timeout: 15_000 }).toBe(1);
     expect(await hasCountdownWindow()).toBe(false);
+    await result; // settle before `afterEach` closes the app (STC-462)
   }, 120_000);
 });
