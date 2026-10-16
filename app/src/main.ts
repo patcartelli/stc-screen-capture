@@ -7,6 +7,7 @@ import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
+import { settingsMode } from "./settings-open.js";
 import { isCloseKey, CLOSE_SHEET_SCRIPT } from "./close-shortcut.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
@@ -501,7 +502,7 @@ const DOCK_HIDE_RETRY_MS = 1500;
 /** The way back to a window from the menu bar. */
 function openLibrary(): void {
   if (!win || win.isDestroyed()) createWindow();
-  else { win.show(); win.focus(); }
+  else { win.show(); win.focus(); send("ui:show-library", undefined); }
   reconcileIcons();
   // Without this an accessory app raises the window behind whatever is
   // frontmost, which reads as the click having done nothing.
@@ -2053,13 +2054,16 @@ async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[]
  * renderer's top-level script (where the listener is installed) have run.
  */
 function openSettingsSheet(): void {
+  // Read BEFORE openLibrary, which creates the window.
+  const mode = settingsMode(!!win && !win.isDestroyed());
   openLibrary();
   const w = win;
   if (!w || w.isDestroyed()) return;
+  const payload = { standalone: mode === "standalone" };
   if (w.webContents.isLoading()) {
-    w.webContents.once("did-finish-load", () => send("ui:open-settings", undefined));
+    w.webContents.once("did-finish-load", () => send("ui:open-settings", payload));
   } else {
-    send("ui:open-settings", undefined);
+    send("ui:open-settings", payload);
   }
 }
 

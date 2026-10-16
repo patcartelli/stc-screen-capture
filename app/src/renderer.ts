@@ -474,13 +474,22 @@ function setProfileOpen(open: boolean): void {
   if (open) void loadPipDefault();
 }
 profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
-profileCloseBtn.addEventListener("click", () => setProfileOpen(false));
+profileCloseBtn.addEventListener("click", () => {
+  setProfileOpen(false);
+  // A window made for Settings alone (STC-551 follow-up) has nothing else to
+  // show; closing it does not quit (the app lives in the menu bar).
+  if (document.body.classList.contains("settings-only")) window.close();
+});
 // STC-456: the options bar's own Settings control, with no renderer of its
 // own, asks main to open this sheet — the same function the profile button's
 // click handler calls, so there is one way this sheet opens, not two.
-recorder.on("ui:open-settings", () => setProfileOpen(true));
+recorder.on("ui:open-settings", (p?: { standalone?: boolean }) => {
+  document.body.classList.toggle("settings-only", p?.standalone === true);
+  setProfileOpen(true);
+});
+recorder.on("ui:show-library", () => document.body.classList.remove("settings-only"));
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Escape") { setProfileOpen(false); closePopover(); }
+  if (e.code === "Escape") { profileCloseBtn.click(); closePopover(); }
 });
 
 // ---- required grants (STC-476) ---------------------------------------------

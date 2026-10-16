@@ -256,4 +256,29 @@ describe("the settings sheet", () => {
     await expect.poll(open).not.toMatch(/open/);
     expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
   }, 60_000);
+
+  // STC-551 follow-up: Settings from the tray with no library window is a
+  // window for Settings alone. Driven by the same message main sends.
+  test("STC-551: a Settings-only window hides the library, and the X closes the window", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents
+      .send("ui:open-settings", { standalone: true }));
+    await expect.poll(() => win.getAttribute("#profilesheet", "class")).toMatch(/open/);
+    expect(await win.isVisible("#record")).toBe(false);
+    expect(await win.isVisible("#title-row")).toBe(false);
+    const box = await win.locator("#profilesheet").boundingBox();
+    expect(box!.width).toBeGreaterThan(400);
+    await win.click("#profileclose");
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
+  }, 60_000);
+
+  test("STC-551: asking for the library while Settings is alone brings the grid back", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: makeTakeFolder().dir });
+    await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents
+      .send("ui:open-settings", { standalone: true }));
+    await expect.poll(() => win.isVisible("#record")).toBe(false);
+    await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents
+      .send("ui:show-library", undefined));
+    await expect.poll(() => win.isVisible("#record")).toBe(true);
+  }, 60_000);
 });
