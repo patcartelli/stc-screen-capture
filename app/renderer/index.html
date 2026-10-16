@@ -290,8 +290,19 @@
       transform: translateX(100%); transition: transform .18s ease;
       padding: 20px; box-sizing: border-box; overflow-y: auto;
       display: flex; flex-direction: column; gap: 16px; z-index: 10;
+      /* STC-552: #title-row is a drag region, and on macOS a drag region wins
+         over anything painted above it, so the X (inside that row's band) was
+         eaten as a window drag. Same carve-out #permissionsheet has. */
+      -webkit-app-region: no-drag;
     }
     #profilesheet.open { transform: translateX(0); }
+    /* STC-552: the sheet's own no-drag is not enough. It opens by TRANSFORM
+       alone, and Chromium collects drag regions at layout, so a transform
+       does not move the carve-out out from under the title row (measured:
+       the X still produced "Window move completed without beginning"). While
+       the sheet is open the title row stops being a drag region too, which is
+       a style change on an element that laid out, so the regions are redone. */
+    body:has(#profilesheet.open) #title-row { -webkit-app-region: no-drag; }
     #profilesheet h1 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); }
     #profilesheet-head { justify-content: space-between; }
     #profileclose { padding: 3px 9px; font-size: var(--type-body); line-height: 1; }
