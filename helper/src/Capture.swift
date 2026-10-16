@@ -237,6 +237,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// The window a window-scope take is recording, so a dead stream can be
     /// checked against it (`decideStreamDeath`, STC-531). nil for any other scope.
     private var watchedWindowId: UInt32?
+    /// A size change the window watcher is waiting to look at again
+    /// (STC-555, `pollWindow`). Guarded by `lock`.
+    private var windowRecheckPending = false
     /// Samples a window-scope take's window origin at 30 Hz (STC-482). Guarded
     /// by `lock` for the same reason as `windowWatcher`.
     private var windowTracker: DispatchSourceTimer?
@@ -694,19 +697,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                   repeating: Self.windowWatchIntervalSeconds)
         t.setEventHandler { [weak self] in
             guard let self else { return }
-            let current = Self.currentWindowSize(windowId: windowId)
-            switch decideWindowWatch(initial: initialSize, current: current) {
-            case .unchanged:
-                return
-            case .resized:
-                IO.send("warning", ["code": "window-resized-during-recording",
-                                    "detail": "stopping cleanly — a window-scope take cannot change size mid-file"])
-                self.onWindowChanged?("window-resized")
-            case .gone:
-                IO.send("warning", ["code": "window-closed-during-recording",
-                                    "detail": "stopping cleanly — the captured window is no longer on screen"])
-                self.onWindowChanged?("window-closed")
-            }
+            self.pollWindow(windowId: windowId, initialSize: initialSize, isRecheck: false)
         }
         // Same race as the cursor sampler and the camera (HIGH 1's shape): a
         // stop() that arrived before this timer was stored must not be
@@ -724,6 +715,45 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         watchedWindowId = windowId
         lock.unlock()
         t.resume()
+    }
+
+    /// One reading of the watched window (STC-370), acted on through
+    /// `decideWindowPoll` (STC-555). A size change is not a resize until a
+    /// second look `WINDOW_RESIZE_RECHECK_SECONDS` later still finds the
+    /// window at another size: a window being CLOSED shrinks in its close
+    /// animation first, and the 1 Hz poll can land inside it. Only one
+    /// re-check is ever pending; the poll that lands while it is skips its
+    /// own suspicion rather than scheduling a second.
+    private func pollWindow(windowId: UInt32, initialSize: (width: Double, height: Double), isRecheck: Bool) {
+        let current = Self.currentWindowSize(windowId: windowId)
+        switch decideWindowPoll(initial: initialSize, current: current, isRecheck: isRecheck) {
+        case .none:
+            return
+        case .recheck:
+            lock.lock()
+            let skip = windowRecheckPending || stoppingBegan
+            if !skip { windowRecheckPending = true }
+            lock.unlock()
+            if skip { return }
+            IO.log("window: size changed to \(current.map { "\($0.width)x\($0.height)" } ?? "-"); looking again in \(WINDOW_RESIZE_RECHECK_SECONDS) s before calling it a resize")
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + WINDOW_RESIZE_RECHECK_SECONDS) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                self.windowRecheckPending = false
+                let stopping = self.stoppingBegan
+                self.lock.unlock()
+                if stopping { return }
+                self.pollWindow(windowId: windowId, initialSize: initialSize, isRecheck: true)
+            }
+        case .resized:
+            IO.send("warning", ["code": "window-resized-during-recording",
+                                "detail": "stopping cleanly — a window-scope take cannot change size mid-file"])
+            onWindowChanged?("window-resized")
+        case .closed:
+            IO.send("warning", ["code": "window-closed-during-recording",
+                                "detail": "stopping cleanly — the captured window is no longer on screen"])
+            onWindowChanged?("window-closed")
+        }
     }
 
     /// STC-482: records where the window is, so the transform can take a

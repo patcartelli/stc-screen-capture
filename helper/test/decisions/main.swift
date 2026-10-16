@@ -384,6 +384,22 @@ check("a height change past tolerance is a resize",
 check("the window no longer being found is gone, not resized",
       decideWindowWatch(initial: (800, 600), current: nil), WindowWatchDecision.gone)
 
+// ── a size change is re-checked before it is called a resize (STC-555) ────
+check("an unchanged window on the poll keeps recording",
+      decideWindowPoll(initial: (800, 600), current: (800, 600), isRecheck: false), WindowPollAction.none)
+check("a window gone on the poll is window-closed at once",
+      decideWindowPoll(initial: (800, 600), current: nil, isRecheck: false), WindowPollAction.closed)
+check("a size change on the poll is only a suspicion: re-check, do not stop",
+      decideWindowPoll(initial: (800, 600), current: (794, 594), isRecheck: false), WindowPollAction.recheck)
+check("the close animation: smaller on the poll, gone on the re-check, is window-closed",
+      decideWindowPoll(initial: (800, 600), current: nil, isRecheck: true), WindowPollAction.closed)
+check("a real resize: still there at another size on the re-check, is window-resized",
+      decideWindowPoll(initial: (800, 600), current: (900, 700), isRecheck: true), WindowPollAction.resized)
+check("a window back at its start size on the re-check keeps recording",
+      decideWindowPoll(initial: (800, 600), current: (800.2, 600), isRecheck: true), WindowPollAction.none)
+check("the re-check waits long enough to clear a close animation, and is short",
+      WINDOW_RESIZE_RECHECK_SECONDS >= 0.3 && WINDOW_RESIZE_RECHECK_SECONDS < 1.0, true)
+
 // ── a dead stream on a window take whose window is gone (STC-531) ───────────
 check("a window take whose window is gone stops as window-closed",
       decideStreamDeath(windowGone: true), "window-closed")
