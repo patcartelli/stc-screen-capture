@@ -285,7 +285,12 @@ process.stdin.on("data", (chunk) => {
         if (process.env.STC_FAKE_MICS) {
           try { mics = JSON.parse(process.env.STC_FAKE_MICS); } catch { /* keep the default */ }
         }
-        send("devices", { seq, cameras: [], mics, displays });
+        // STC_FAKE_CAMERAS: a JSON array of {name, uid, virtual?}; none by default (STC-479).
+        let cameras = [];
+        if (process.env.STC_FAKE_CAMERAS) {
+          try { cameras = JSON.parse(process.env.STC_FAKE_CAMERAS); } catch { /* keep the default */ }
+        }
+        send("devices", { seq, cameras, mics, displays });
         break;
       }
       // ── the still path (STC-289/290) ────────────────────────────────────
