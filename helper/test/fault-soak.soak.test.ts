@@ -9,6 +9,7 @@
  *   write error           STC_CAPTURE_FAULT=disk-write-failed  stop: disk-full
  *   encoder stall         STC_CAPTURE_FAULT=encoder-stall      warning: frames-dropped (the take goes on)
  *   camera disconnect     STC_CAPTURE_FAULT=camera-disconnected warning + tNs; anchors camera.endedBy
+ *   system audio stop     STC_CAPTURE_FAULT=system-audio-stop  warning + tNs; anchors system.endedBy (STC-542)
  *   IPC pipe close        stdin closed mid-take                stop: stdin-closed
  *   helper crash          SIGKILL mid-take                     recovered: recorder-quit
  *   ...and the last two again through the REAL HelperSupervisor, which must
@@ -20,7 +21,7 @@
  * skip reads as covered. `STC_SOAK_ROUNDS=N` runs the whole table N times.
  */
 import { describe, test, expect, afterEach } from "vitest";
-import type { ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -125,6 +126,29 @@ for (let round = 1; round <= ROUNDS; round++) {
       expect(cam.length, "the camera track before the unplug is gone").toBeGreaterThan(0);
       // Nothing after the unplug, give or take one camera frame in flight (30 fps).
       expect(cam[cam.length - 1]).toBeLessThanOrEqual(Number(w.tNs) + 34_000_000);
+    }, 180_000);
+
+    test("system-audio-stop: the warning says when, the take goes on, and system.m4a ends there (STC-542)", async () => {
+      // Something to hear from the first moment, so the stream has samples before the fault.
+      const player = spawn("/bin/sh", ["-c",
+        "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do afplay /System/Library/Sounds/Glass.aiff; done"], { stdio: "ignore" });
+      try {
+        const { dir, h } = await startTake({ STC_CAPTURE_FAULT: "system-audio-stop" }, { systemAudio: true }, "the system audio soak");
+        const w = await waitFor(() => warning(h, "system-audio-stopped"), 15_000, "the system-audio-stopped warning");
+        expect(Number.isInteger(w.tNs) && Number(w.tNs) > 0, `no session time on the warning: ${JSON.stringify(w)}`).toBe(true);
+        await sleep(1_500);
+        expect(h.fd3.find((l) => l.ev === "stopped"), "system audio stopping must not end the take").toBeUndefined();
+        await userStop(h);
+        expectStopRecord(dir, "user");
+        const sys = readAnchors(dir).system;
+        expect(sys?.present, "no system track (output muted?)").toBe(true);
+        expect(sys?.endedBy).toBe("stream-stopped");
+        // The track ends at the cut, give or take one audio buffer in flight.
+        expect(sys!.lastFramePtsNs).toBeLessThanOrEqual(Number(w.tNs) + 100_000_000);
+        await accept(dir);
+      } finally {
+        player.kill();
+      }
     }, 180_000);
 
     test("IPC pipe close: stdin closing mid-take ends it as stdin-closed, cleanly, and it loads and exports", async () => {

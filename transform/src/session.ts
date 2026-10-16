@@ -165,24 +165,27 @@ function snapGeometryToFrames(anchors: Anchors, framesNs: readonly number[]): An
   return { ...anchors, geometry: out };
 }
 
-const ENDED_BY: { mic: readonly string[]; camera: readonly string[] } = {
+const ENDED_BY: { mic: readonly string[]; camera: readonly string[]; system: readonly string[] } = {
   mic: ["disconnected", "format-mismatch"],
   camera: ["disconnected"],
+  system: ["stream-stopped"],   // STC-542
 };
 
 /**
- * STC-237: `endedBy` on a `mic`/`camera` block says why that track ended before the take
+ * STC-237: `endedBy` on a `mic`/`camera`/`system` block says why that track ended before the take
  * did. Refused rather than ignored when it cannot be right: before v12 (an older reader
  * would never have been handed one), on a present:false block (there is no track to have
  * ended), or with a value the helper never writes.
  */
 function checkEndedBy(anchors: Anchors): void {
-  for (const name of ["mic", "camera"] as const) {
+  for (const name of ["mic", "camera", "system"] as const) {
     const block = anchors[name];
     const endedBy = block?.endedBy;
     if (endedBy === undefined) continue;
-    if (anchors.version < 12) {
-      throw new SessionLoadError(`anchors.${name}.endedBy needs anchors version 12; this document is version ${anchors.version}`);
+    // mic/camera arrived at 12 (STC-237); system's came later, at 14 (STC-542).
+    const since = name === "system" ? 14 : 12;
+    if (anchors.version < since) {
+      throw new SessionLoadError(`anchors.${name}.endedBy needs anchors version ${since}; this document is version ${anchors.version}`);
     }
     if (block!.present !== true) {
       throw new SessionLoadError(`anchors.${name}.endedBy is set on a ${name} block with present:false — there is no track to have ended`);
@@ -262,6 +265,8 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
   // v12 (STC-237) adds `endedBy` on `mic`/`camera`: why that track ended before the take
   // did. Checked in checkEndedBy; render() needs nothing new, since a track's own
   // `lastFramePtsNs` already ends the PiP and the audio mix reads silence past a track.
+  // v14 (STC-542) adds `endedBy` on `system`: the system-audio stream died before the take
+  // did. Checked in checkEndedBy; the audio mix already reads silence past a track.
   // v13 (STC-528) adds `silentSpans` on `mic`: where the mic delivered no signal for 10 s
   // or more. Checked in checkSilentSpans; nothing here plays it differently.
   if (
@@ -269,9 +274,9 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     anchors?.version !== 4 && anchors?.version !== 5 && anchors?.version !== 6 &&
     anchors?.version !== 7 && anchors?.version !== 8 && anchors?.version !== 9 &&
     anchors?.version !== 10 && anchors?.version !== 11 && anchors?.version !== 12 &&
-    anchors?.version !== 13
+    anchors?.version !== 13 && anchors?.version !== 14
   ) {
-    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 or 13)`);
+    throw new SessionLoadError(`anchors.json version ${anchors?.version} is not supported (expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 or 14)`);
   }
   checkEndedBy(anchors);
   checkSilentSpans(anchors);

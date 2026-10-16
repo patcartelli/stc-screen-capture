@@ -84,6 +84,10 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var firstPtsNs: Int64 = -1
     private var lastPtsNs: Int64 = -1
     private var appended = 0
+    /// STC-542: the stream died and `die()` has closed the gate to samples. Samples after
+    /// this are dropped, so `lastPtsNs` is the cut even when (as under the injected fault)
+    /// the real stream keeps delivering.
+    private var died = false
     /// STC-530: called once, off the lock, when the first sample lands in the file —
     /// the moment this track's start time exists for `anchors.partial.json`. Set before
     /// `start()`; never changed after.
@@ -197,6 +201,7 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             guard rel >= 0 else { return }          // arrived before the session began
 
             lock.lock()
+            if died { lock.unlock(); return }
             if monotonicGuardPtsNs >= 0, rel <= monotonicGuardPtsNs {
                 lock.unlock(); return               // non-monotonic: drop, never offered to the gate
             }
@@ -219,14 +224,29 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
+        handleDeath(error)
+    }
+
+    private func handleDeath(_ error: Error) {
         lock.lock()
         let wasRunning = running
         running = false
         let ended = stopped
+        if wasRunning, !ended { died = true }
         lock.unlock()
         // A stop we asked for is not a death.
         guard wasRunning, !ended else { return }
         onStreamDied?(error)
+    }
+
+    /// `STC_CAPTURE_FAULT=system-audio-stop` (STC-542): the SAME reaction a real death
+    /// drives. The real stream is stopped as well, so it cannot keep delivering into a
+    /// writer the teardown is closing. Driven by helper/test/system-audio-capture.grant.test.ts.
+    func injectDeath() {
+        lock.lock(); let s = stream; lock.unlock()
+        handleDeath(NSError(domain: "stc.fault", code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "injected by STC_CAPTURE_FAULT=system-audio-stop"]))
+        s?.stopCapture { _ in }
     }
 
     /// Strictly SHORTER than `CaptureSession.stopTimeoutSeconds`, for the

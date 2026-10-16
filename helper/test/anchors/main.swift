@@ -541,5 +541,34 @@ do {
     check((live["mic"] as? [String: Any])?["silentSpans"] == nil, "and writes no silentSpans key")
 }
 
+// STC-542: system audio whose stream died mid-take records why, and only then is the take
+// v14 (12 shipped with STC-237, 13 is STC-528's). Same rules as the mic and camera above.
+do {
+    var sys = SystemAudioTrack(present: true, sampleRate: 48000, channels: 2,
+                               firstFramePtsNs: 12_000_000, lastFramePtsNs: 7_000_000_000)
+    sys.endedBy = "stream-stopped"
+    let ended = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                capture: capture, camera: nil, requested: false, systemAudio: sys, systemAudioRequested: true,
+                                pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(ended["version"] as? Int == 14, "system audio that ended early must write version 14")
+    check((ended["system"] as? [String: Any])?["endedBy"] as? String == "stream-stopped", "system endedBy is written")
+    printJSON(ended, marker: "JSON-SYSTEM-ENDED-BY:")
+
+    let absent = SystemAudioTrack(present: false, sampleRate: 0, channels: 0, firstFramePtsNs: 0,
+                                  lastFramePtsNs: 0, endedBy: "stream-stopped")
+    let none = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                               capture: capture, camera: nil, requested: false, systemAudio: absent, systemAudioRequested: true,
+                               pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check((none["system"] as? [String: Any])?["endedBy"] == nil, "present:false writes no endedBy")
+    check(none["version"] as? Int == 6, "and stays at the version its blocks earned")
+
+    sys.endedBy = nil
+    let whole = anchorsDocument(timebase: (125, 3), t0Ns: 1000, display: display,
+                                capture: capture, camera: nil, requested: false, systemAudio: sys, systemAudioRequested: true,
+                                pauses: [], stopReason: "user", stopTNs: 20_000_000_000)
+    check(whole["version"] as? Int == 6, "system audio that ran to the end stays v6")
+    check((whole["system"] as? [String: Any])?["endedBy"] == nil, "and carries no endedBy")
+}
+
 if failures.isEmpty { print("ALL PASS") }
 else { for f in failures { print("FAIL: \(f)") }; exit(1) }

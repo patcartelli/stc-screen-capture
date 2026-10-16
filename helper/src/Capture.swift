@@ -1334,6 +1334,49 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    /// `STC_CAPTURE_FAULT=system-audio-stop` (STC-542): shortly after the system-audio
+    /// stream starts, it dies through the same path a real `didStopWithError` takes
+    /// (`SystemAudioCapture.injectDeath`), so the teardown below is watched firing rather
+    /// than reasoned about. What actually kills the stream on real hardware is unknown
+    /// and deliberately not hunted (Patrick, 2026-10-16): any death takes this path.
+    static let systemAudioStopFaultDelaySeconds: Double = 0.5
+    private func armSystemAudioStopFault(_ a: SystemAudioCapture) {
+        guard ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "system-audio-stop" else { return }
+        IO.log("STC_CAPTURE_FAULT=system-audio-stop: the system audio stream will die in \(Self.systemAudioStopFaultDelaySeconds) s")
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.systemAudioStopFaultDelaySeconds) { [weak a] in
+            a?.injectDeath()
+        }
+    }
+
+    /// The system-audio stream died mid-take (STC-542). Tears down ONLY system audio, the
+    /// shape of `handleMicDisconnected`: finalise `system.m4a` NOW (so it holds everything
+    /// up to the death and `lastFramePtsNs` is the cut), record why, and leave video, mic
+    /// and camera running. `stop()` waits on `midTakeTeardowns`, so a stop straight after
+    /// the death still gets the track. `!stoppingBegan`: if the whole-take stop already
+    /// claimed `systemAudio`, back off rather than finish its writer twice.
+    func handleSystemAudioStopped(_ err: Error) {
+        lock.lock()
+        guard !stoppingBegan, let a = systemAudio else { lock.unlock(); return }
+        systemAudio = nil
+        midTakeTeardowns.enter()
+        lock.unlock()
+        // STC-238: `tNs` on the session clock, as the mic's and camera's warnings carry.
+        IO.send("warning", ["code": "system-audio-stopped", "tNs": Int(Clock.nowNs() - t0Ns),
+                            "detail": "system audio stopped mid-take (\(err)); the rest of this "
+                                    + "take has no system audio"])
+        let teardowns = midTakeTeardowns   // strong: leave() must happen even if self is gone
+        a.stop { [weak self] track in
+            var ended = track
+            ended?.endedBy = "stream-stopped"
+            self?.lock.lock()
+            self?.systemAudioTrack = ended
+            self?.lock.unlock()
+            // STC-530: between `systemAudio = nil` and here the partial could see no system track.
+            self?.notePartialChange()
+            teardowns.leave()
+        }
+    }
+
     /// Starts the system-audio stream (STC-418). Unlike the mic, nothing here
     /// blocks — `SCStream.startCapture` answers through a callback — so there
     /// is no background hop; but the same race with `stop()` is closed the
@@ -1352,12 +1395,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         systemAudio = a
         lock.unlock()
 
-        a.onStreamDied = { err in
-            IO.send("warning", ["code": "system-audio-stopped",
-                                "detail": "system audio stopped mid-take (\(err)); the rest of this "
-                                        + "take has no system audio"])
-        }
-        a.start(display: display) { err in
+        a.onStreamDied = { [weak self] err in self?.handleSystemAudioStopped(err) }
+        a.start(display: display) { [weak self] err in
+            guard let self else { return }
             if let err {
                 let e = err as? SystemAudioError
                 IO.send("warning", ["code": e?.code ?? "system-audio-failed",
@@ -1365,6 +1405,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             } else {
                 IO.send("system-audio-started", ["sampleRate": SystemAudioCapture.sampleRate,
                                                  "channels": SystemAudioCapture.channelCount])
+                self.armSystemAudioStopFault(a)
             }
         }
     }

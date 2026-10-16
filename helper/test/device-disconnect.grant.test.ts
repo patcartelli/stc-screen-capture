@@ -202,3 +202,46 @@ describe("a device that disconnects mid-take ends only its own track (STC-433)",
     }
   }, 90_000);
 });
+
+describe("system audio that stops mid-take ends only its own track (STC-542)", () => {
+  test("system audio: warning, the take keeps recording, system.m4a holds everything up to the cut and says why", async () => {
+    // Something to hear from the first moment: the fault fires 0.5 s after the stream
+    // starts, and a silent machine may deliver no sample before then (STC-418 runbook).
+    const player = spawn("/bin/sh", ["-c",
+      "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do afplay /System/Library/Sounds/Glass.aiff; done"],
+      { stdio: "ignore" });
+    try {
+      const { h, dir } = await startWith("system-audio-stop", { systemAudio: true }, "system-audio-started");
+      await waitFor(() => find(h.fd3, "warning", "system-audio-stopped"), 5_000, "the system-audio-stopped warning");
+
+      // Video, mic and camera are untouched: two seconds later it is still recording.
+      const at = h.out.length;
+      await sleep(2_000);
+      expect(h.fd3.find((l) => l.ev === "stopped"), "the take ended when system audio stopped").toBeUndefined();
+      expect(h.out.slice(at).some((l) => l.ev === "stats" && l.state === "recording"),
+        "no `recording` heartbeat after the cut").toBe(true);
+
+      h.send({ cmd: "stop", seq: 9 });
+      const stopped = await waitFor(() => h.fd3.find((l) => l.seq === 9), 30_000, "stop");
+      expect(stopped.ev).toBe("stopped");
+      expect(stopped.stopWarning, "the stop hit its backstop").toBeUndefined();
+
+      expect(hasMoov(join(dir, "display.mp4")), "display.mp4 was not finalised").toBe(true);
+      const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
+      validateAnchors(anchors);
+      if (anchors.system?.present !== true) {
+        throw new Error("system audio delivered no sample before the cut (output muted?): "
+          + JSON.stringify(anchors.system));
+      }
+      expect(statSync(join(dir, "system.m4a")).size).toBeGreaterThan(0);
+      expect(hasMoov(join(dir, "system.m4a")), "system.m4a was not finalised at the cut").toBe(true);
+      // The track stopped at the cut, not at the end of the take: the real stream was
+      // stopped too, so nothing after the fault can have been appended.
+      expect(anchors.system.lastFramePtsNs).toBeLessThan(anchors.stop.t - 1_000_000_000);
+      expect(anchors.system.endedBy).toBe("stream-stopped");
+      expect(anchors.version).toBe(14);
+    } finally {
+      player.kill();
+    }
+  }, 90_000);
+});

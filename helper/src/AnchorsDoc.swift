@@ -122,6 +122,9 @@ struct SystemAudioTrack {
     let sampleRate: Int, channels: Int
     let firstFramePtsNs: Int
     let lastFramePtsNs: Int
+    /// STC-542: `stream-stopped` when the system-audio stream died mid-take, or nil when
+    /// the track ran to the end. A `var` with a default so every construction is unchanged.
+    var endedBy: String? = nil
 }
 
 /// Builds anchors.json.
@@ -246,6 +249,7 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
                 "firstFramePtsNs": a.firstFramePtsNs,
                 "lastFramePtsNs": a.lastFramePtsNs,
             ]
+            if let e = a.endedBy { systemBlock?["endedBy"] = e }
         }
     }
     var version = scope.kind == .display ? 2 : 3
@@ -270,6 +274,9 @@ func anchorsDocument(timebase: (numer: Int, denom: Int),
     if cameraBlock?["endedBy"] != nil || micBlock?["endedBy"] != nil { version = max(version, 12) }
     // STC-528: a mic with at least one stretch of no signal. Read off the block, same reason.
     if micBlock?["silentSpans"] != nil { version = max(version, 13) }
+    // STC-542: system audio whose stream died before the take did. anchors-14 (13 is STC-528's),
+    // because 12 had shipped with STC-237 by then. Read off the block, same reason as above.
+    if systemBlock?["endedBy"] != nil { version = max(version, 14) }
     var capturedBlock: [String: Any] = ["width": capture.width, "height": capture.height, "codec": "h264",
                                          "firstFrameNs": max(0, capture.firstFrameNs)]
     if let colorSpace { capturedBlock["colorSpace"] = colorSpace }

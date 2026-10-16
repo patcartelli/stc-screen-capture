@@ -907,8 +907,11 @@ recorder.on("helper:warning", (l) => {
   // at a glance; the pill says it for a moment (pill-window.ts, from main) and the
   // panel says it after. No toast: that was the third copy of the same news.
   if (TRACK_LOSS_WARNINGS.has(code)) {
-    const device = code.startsWith("camera") ? "camera" : "mic";
-    reportDevice(device, code.endsWith("-disconnected") ? "disconnected" : `failed — ${code}`);
+    // System audio has no device row (STC-542): the pill and the panel are all it gets.
+    if (!code.startsWith("system")) {
+      const device = code.startsWith("camera") ? "camera" : "mic";
+      reportDevice(device, code.endsWith("-disconnected") ? "disconnected" : `failed — ${code}`);
+    }
     console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }
