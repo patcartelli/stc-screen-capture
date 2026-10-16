@@ -159,6 +159,12 @@ describe("recording scope — region and window (STC-370)", () => {
   // What this canNOT prove is stated in docs/STC-370-RUNBOOK.md §3a/§3b: that
   // a real resize/close is actually DETECTED by the 1 Hz poll in the first
   // place. Only a Mac, with a real window, answers that.
+  //
+  // The fault calls the reaction with its reason directly, so it also skips
+  // the watcher's DECISION, including STC-555's re-check (a size change is
+  // looked at again 0.5 s later, because a closing window shrinks before it
+  // goes). That decision is pure and is tested in helper/test/decisions/;
+  // docs/STC-555-RUNBOOK.md is the real close and the real resize.
   test("a window resize (STC_CAPTURE_FAULT=window-resized) ends the take cleanly", async () => {
     const h = spawnHelper({ STC_CAPTURE_FAULT: "window-resized" });
     await waitFor(() => find(h.fd3, "ready"));

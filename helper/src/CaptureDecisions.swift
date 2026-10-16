@@ -608,6 +608,50 @@ func decideWindowWatch(initial: (width: Double, height: Double),
     return changed ? .resized : .unchanged
 }
 
+/// What one poll of a window-scope take's window does (STC-555).
+enum WindowPollAction: Equatable {
+    /// Keep recording.
+    case none
+    /// The size changed: look again in `WINDOW_RESIZE_RECHECK_SECONDS` before
+    /// calling it anything.
+    case recheck
+    /// End the take as `window-closed`.
+    case closed
+    /// End the take as `window-resized`.
+    case resized
+}
+
+/// How long a size change waits before the watcher looks again (STC-555).
+///
+/// Closing a window ANIMATES it: it shrinks toward its centre before it is
+/// gone, so a 1 Hz poll that lands inside that animation reads a smaller
+/// window that is still there. Taken at face value that is a resize, and a
+/// closed Finder window stopped as `window-resized` (Patrick's Mac,
+/// 2026-10-16: the window track's last sample, 90 ms before the stop, had the
+/// origin moving +3/+3 pt). Half a second clears the close animation with
+/// room to spare, and costs a real resize nothing that matters: the take
+/// still stops, half a second later.
+let WINDOW_RESIZE_RECHECK_SECONDS = 0.5
+
+/// What the window watcher does with one reading of the window's size.
+///
+/// `isRecheck` is false for the 1 Hz poll and true for the look that a size
+/// change schedules. A window that is gone is `window-closed` either time.
+/// A size change on the poll is only a suspicion (`recheck`): a window still
+/// there at a different size on the re-check is `window-resized`, which still
+/// ends the take because `AVAssetWriter` cannot change size mid-file; a window
+/// back at its starting size on the re-check keeps recording, since nothing
+/// the file depends on changed.
+func decideWindowPoll(initial: (width: Double, height: Double),
+                      current: (width: Double, height: Double)?,
+                      isRecheck: Bool) -> WindowPollAction {
+    switch decideWindowWatch(initial: initial, current: current) {
+    case .unchanged: return .none
+    case .gone: return .closed
+    case .resized: return isRecheck ? .resized : .recheck
+    }
+}
+
 /// Why a live display stream died, as a `stop.reason` (STC-531).
 ///
 /// Closing the window a window-scope take is recording ends the SCStream
