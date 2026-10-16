@@ -123,7 +123,7 @@ import {
   placeholderFor, LOADING_PLACEHOLDER, UPDATING_NOTE, UPDATING_SHOW_AFTER_MS,
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
-import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
+import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS } from "./stop-copy.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
@@ -916,6 +916,12 @@ recorder.on("helper:warning", (l) => {
   // without which an automatic camera's unplug still got this generic toast.
   if (code === "device-disconnected" && l.uid != null &&
       (l.uid === storedCameraUid || l.uid === liveCameraUid)) {
+    return;
+  }
+  // STC-553: a camera that stalled. The pill says it and the panel says it after; the row
+  // keeps its state, since the camera was not lost and may come back. No toast.
+  if (TRACK_STALL_WARNINGS.has(code)) {
+    console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }
   // STC-237: a mic or camera lost while the take keeps recording. The row says it
