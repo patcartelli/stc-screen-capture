@@ -17,6 +17,7 @@ import { geometryAt } from "./display-geometry.js";
 import { DEFAULT_ZOOM } from "./trim.js";
 import { createCursorSim, type CursorSim } from "./cursor.js";
 import { pipRect, framingSource } from "./pip-style.js";
+import { inCameraGap } from "./camera-gaps.js";
 import { buildKeycastPresses, keycastAt, type KeycastPress, type KeycastState } from "./keycast.js";
 
 /**
@@ -139,6 +140,9 @@ function pipStateAt(
 
   if (tNs < cam.firstFramePtsNs) return null;
   if (tNs > cam.lastFramePtsNs + cam.frameIntervalNs) return null;
+  // ...and wrong across a stall INSIDE it (STC-553): the camera stopped and came back,
+  // and holding would show its last frame frozen for the whole gap. camera-gaps.ts.
+  if (inCameraGap(session, tNs)) return null;
 
   const frameIndex = frameIndexAt(frames, tNs);
   if (frameIndex === null) return null;
