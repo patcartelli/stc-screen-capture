@@ -63,7 +63,8 @@ drag region takes no clicks, so clicking the timer no longer stops the take.
   (the take's window track shows the origin moving +3/+3 pt at 14.22 s, the
   stop 90 ms later). That's the helper's reason, from STC-370's watcher, not
   this ticket's pill; it's a separate fix.
-- Not yet run: §5.
+- §5 PASSED 2026-10-16: relaunch, record from the hotkey; the pill appeared,
+  and no library appeared after. **Every section has now passed on hardware.**
 
 ## §1 The one open question: is the pill out of the video? (requirement 9)
 
