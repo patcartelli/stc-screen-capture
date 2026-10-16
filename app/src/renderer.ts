@@ -4,9 +4,9 @@ interface DisplayInfo {
   pointW: number; pointH: number; pixelW: number; pixelH: number;
   originX?: number; originY?: number;
 }
-/** STC-414. Mirrors Watchers.enumerateDevices's own "cameras" shape — name and uid only, no bluetooth. */
+/** STC-414. Mirrors Watchers.enumerateDevices's own "cameras" shape — name, uid and (STC-479) virtual; no bluetooth. */
 interface CameraInfo {
-  name: string; uid: string;
+  name: string; uid: string; virtual?: boolean;
 }
 interface StillSettingsView {
   format: string; quality: number; scale: string;
