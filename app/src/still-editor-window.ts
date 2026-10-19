@@ -64,6 +64,13 @@ export function stillEditorIsOpen(): boolean {
   return win !== undefined && !win.isDestroyed();
 }
 
+/** As `editor-window.ts`'s `hideEditor` (STC-556). */
+export function hideStillEditor(): boolean {
+  if (!win || win.isDestroyed() || win.isMinimized()) return false;
+  win.hide();
+  return true;
+}
+
 export function closeStillEditor(): void {
   if (win && !win.isDestroyed()) win.close();
 }

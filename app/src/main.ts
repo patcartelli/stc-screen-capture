@@ -73,8 +73,8 @@ import {
 } from "./thumbnail-window.js";
 import { promotes, trashStyle } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
-import { editorIsOpen, fitEditorToContent, openEditor } from "./editor-window.js";
-import { openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
+import { editorIsOpen, fitEditorToContent, hideEditor, openEditor } from "./editor-window.js";
+import { hideStillEditor, openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
 import { discardPill, pillStarted, preparePill } from "./pill-window.js";
 import { PILL_STOPPED_DWELL_MS, libraryAroundTake, type LibraryAtTakeStart } from "./pill.js";
@@ -362,8 +362,16 @@ function hideLibraryForTake(atFlowStart: LibraryAtTakeStart): boolean {
   const hide = now.exists && !now.minimized && (now.visible || now.appHidden);
   libraryReturnsAfterTake = plan.showAfter;
   if (hide) win!.hide();
-  if (now.appHidden) app.show();
-  return hide;
+  // STC-556: `app.show()` restores EVERY window hidden with the app, so the
+  // editors go off screen first, as the library did. They were not on screen
+  // when the take started, so nothing brings them back after it.
+  let hiddenEditors = false;
+  if (now.appHidden) {
+    hiddenEditors = hideEditor();
+    hiddenEditors = hideStillEditor() || hiddenEditors;
+    app.show();
+  }
+  return hide || hiddenEditors;
 }
 
 /** The library window's state right now, for `libraryAroundTake`. */
@@ -1946,8 +1954,10 @@ async function recordFlowBody(
   // is lost: each panel's take stays in temp storage with its panel intact.
   // After the countdown, so a cancelled one costs a pending panel nothing.
   // The library goes the same way (STC-550), and comes back with the pill.
-  const libraryHidden = hideLibraryForTake(libraryAtFlowStart);
+  // Panels first (STC-556): `hideLibraryForTake` may `app.show()` an app hidden
+  // with ⌘H, which would bring a visible-when-hidden panel back for a moment.
   await hideThumbnailForCapture();
+  const libraryHidden = hideLibraryForTake(libraryAtFlowStart);
   if (libraryHidden) await new Promise((r) => setTimeout(r, HIDE_SETTLE_MS));
   const exclude = await pillExclusions;
   if (exclude.length > 0) startParams.excludeWindowIds = exclude;
