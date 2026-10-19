@@ -824,7 +824,6 @@ const CAMERA_FAULTS: Record<string, string> = {
   "virtual-camera-only":
     "Only a virtual camera was available. It was not used, so this take has no " +
     "picture-in-picture — connect a real camera and record again.",
-  "device-disconnected": "A capture device was disconnected during the recording.",
   // STC-286. The one that looked exactly like success: the camera opens,
   // reports its name, and delivers nothing. Confirmed in clamshell on real
   // hardware — camera-started with "FaceTime HD Camera", then a 0-byte
@@ -901,23 +900,9 @@ const INFORMATIONAL_WARNINGS = new Set(["display-reconfigured", "display-refit",
 
 recorder.on("helper:warning", (l) => {
   const code = String(l.code);
-  // `device-disconnected` fires for EITHER a camera or a mic, from the
-  // generic AVCaptureDevice watcher — before `mic-disconnected` existed it
-  // was the only signal a mic unplug got, mislabeled as a camera fault
-  // (CAMERA_FAULTS' own entry below). Now that the helper also sends the
-  // specific code, a mic's own uid is skipped here rather than shown twice
-  // under the wrong label.
-  if (code === "device-disconnected" && l.uid != null && l.uid === storedMicUid) {
-    return;
-  }
-  // Same dedup for a camera unplug's own specific code. `storedCameraUid` is the
-  // REQUEST (null for the common "automatic" pick, STC-414); `liveCameraUid` is
-  // the device the helper actually resolved to, from `camera-started` (STC-237),
-  // without which an automatic camera's unplug still got this generic toast.
-  if (code === "device-disconnected" && l.uid != null &&
-      (l.uid === storedCameraUid || l.uid === liveCameraUid)) {
-    return;
-  }
+  // STC-559: `device-disconnected` is no longer a warning. The helper tells a take's own
+  // mic and camera by `mic-disconnected` / `camera-disconnected`; any other device
+  // (headphones, a headset) is not news about the take.
   // STC-553: a camera that stalled. The pill says it and the panel says it after; the row
   // keeps its state, since the camera was not lost and may come back. No toast.
   if (TRACK_STALL_WARNINGS.has(code)) {

@@ -25,7 +25,14 @@ final class Watchers {
         let nc = NotificationCenter.default
         nc.addObserver(forName: .AVCaptureDeviceWasDisconnected, object: nil, queue: .main) { [weak self] n in
             guard let d = n.object as? AVCaptureDevice else { return }
-            IO.send("warning", ["code": "device-disconnected", "device": d.localizedName, "uid": d.uniqueID])
+            // STC-559: NOT a warning. This fires for ANY capture device on the machine
+            // (headphones register as an audio one), so it says nothing about a take.
+            // A take's own mic or camera is told by `mic-disconnected` /
+            // `camera-disconnected` (each handler compares the uid against what the
+            // take resolved); every other device is not news. `info` plus a log line
+            // keeps the name and uid on record for the hardware check.
+            IO.log("capture device disconnected: \(d.localizedName) uid=\(d.uniqueID)")
+            IO.send("info", ["code": "device-disconnected", "device": d.localizedName, "uid": d.uniqueID])
             self?.onDeviceChange?("disconnected", d.uniqueID, d.localizedName)
         }
         nc.addObserver(forName: .AVCaptureDeviceWasConnected, object: nil, queue: .main) { [weak self] n in
