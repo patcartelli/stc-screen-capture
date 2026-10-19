@@ -48,10 +48,12 @@ describe("zoom bar", () => {
 
   test("⌘= and ⌘0 reach the page as keys", async () => {
     const win = await open();
+    // In the app main claims these chords (before-input-event) and answers
+    // over IPC, so the result lands a moment after the key — poll, don't read.
     await win.keyboard.press("Meta+=");
-    expect(await windowWidthPct(win)).toBeLessThan(100);
+    await expect.poll(() => windowWidthPct(win), { timeout: 10_000 }).toBeLessThan(100);
     await win.keyboard.press("Meta+0");
-    expect(await windowWidthPct(win)).toBeCloseTo(100, 3);
+    await expect.poll(() => windowWidthPct(win), { timeout: 10_000 }).toBeCloseTo(100, 3);
   }, 60_000);
 
   test("⌘-scroll zooms; plain scroll pans", async () => {
