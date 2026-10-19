@@ -705,6 +705,7 @@ function updateAudioLane(): void {
   const has = !!openSession?.micAudio || !!openSession?.systemAudio;
   $("audio-lane").toggleAttribute("hidden", !has);
   if (has) drawAudioLane();
+  scheduleFitWindow();
 }
 
 // ---- the audio lane's height (STC-483) ------------------------------------
@@ -1573,7 +1574,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   applySpanTransform();
   redrawLanes();
   // STC-483: show every lane without scrolling. After layout, once per open take.
-  requestAnimationFrame(() => void editor.fitWindow(document.documentElement.scrollHeight));
+  scheduleFitWindow();
 }
 
 async function closeTake(): Promise<void> {
@@ -1730,6 +1731,18 @@ $("sysaudiolevel").addEventListener("change", () => {
 // The mic level can BOOST (+12 dB at 100%, as recorded at 75%) and is saved
 // as project-11's `micLevel`; the preview reads it per chunk, so a move is
 // heard while playing. Same input/change split as the other sliders.
+
+/** Ask main to grow the window to the content (STC-483). Debounced: lanes appear as
+ *  the take's pieces load, and the content height settles a moment after the last. */
+let fitTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleFitWindow(): void {
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(() => {
+    requestAnimationFrame(() => void editor.fitWindow(document.documentElement.scrollHeight + FIT_MARGIN_PX));
+  }, 150);
+}
+/** Room beyond the measured content, so a rounding error never leaves a scrollbar. */
+const FIT_MARGIN_PX = 24;
 
 function updateAudioButton(): void {
   const has = !!openProject && (!!openSession?.micAudio || !!openSession?.systemAudio);

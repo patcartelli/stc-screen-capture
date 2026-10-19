@@ -378,6 +378,10 @@
       position: absolute; left: var(--lane-pad); top: 0; width: calc(100% - 2 * var(--lane-pad)); height: 100%;
       transform-origin: 0 0;
     }
+    /* STC-483: the Clip lane keeps a 16px strip above its track for its own label, so
+       the trim brackets and playhead at the start no longer sit on top of the word. */
+    .laneviewport.clip { height: 46px; }
+    #timeline { top: 16px; height: calc(100% - 16px); }
     /* #override-blocks-dynamic holds every button layoutOverrideBlocks()
        rebuilds (STC-330's derived blocks, STC-331's committed manual ones —
        NEVER the one currently being edited, of either kind, which lives on
