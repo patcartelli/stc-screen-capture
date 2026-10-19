@@ -284,7 +284,8 @@
        shortcuts editor. `[hidden]` is not used here (it forces display:none,
        which cannot transition) — visibility is the `.open` class alone. */
     #profilesheet {
-      position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 92vw);
+      /* STC-560: 440, up from 360, which wrapped most of Preferences' rows. */
+      position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw);
       background: var(--surface); border-left: 1px solid var(--border);
       box-shadow: var(--shadow-sheet);
       transform: translateX(100%); transition: transform .18s ease;
@@ -312,6 +313,11 @@
       /* An independent surface, not a pane: no slide, no shadow. */
       transform: none; transition: none; box-shadow: none;
     }
+    /* STC-560: one form column. main.ts opens this window at 560 wide, which
+       fills it; a window dragged wider keeps the column at a readable width
+       rather than stretching every row across it. The header is left out so
+       the drag handle and the X still span the window. */
+    body.settings-only #profilesheet > :not(#profilesheet-head) { max-width: 560px; }
     body.settings-only #profilesheet-head { padding-left: var(--traffic-light-offset); -webkit-app-region: drag; }
     body.settings-only #profileclose { -webkit-app-region: no-drag; }
     body:has(#profilesheet.open) #title-row { -webkit-app-region: no-drag; }

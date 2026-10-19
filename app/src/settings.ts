@@ -5,6 +5,7 @@ import {
 } from "./hotkeys.js";
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import { cleanIconPlacement, DEFAULT_ICON_PLACEMENT, type IconPlacement } from "./icon-placement.js";
+import { cleanWindowBounds, type Rect } from "./window-size.js";
 import {
   DEFAULT_EXPORT_OPTIONS, DEFAULT_FILENAME_TEMPLATE, clampQuality, parseFormat, parseScale,
   type ExportOptions,
@@ -124,6 +125,14 @@ export interface Settings {
    * survives a relaunch.
    */
   capturePrimed: boolean;
+  /**
+   * Where the library window was when it last closed (STC-560), or null for
+   * never. Main's alone, like `capturePrimed`: written from the window's own
+   * `close`, never from a renderer. `window-size.ts`'s `libraryBounds` decides
+   * whether it is still usable on the displays connected now. A window made
+   * for Settings alone never writes it.
+   */
+  libraryWindow: Rect | null;
   /**
    * The global capture shortcuts (STC-292), as Electron accelerators. `null`
    * for an action the user deliberately unbound — which is a preference like
@@ -260,6 +269,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pipStyle: { ...DEFAULT_PIP_STYLE, center: { ...DEFAULT_PIP_STYLE.center } },
   previewMuted: false,
   capturePrimed: false,
+  libraryWindow: null,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   gif: { ...DEFAULT_GIF_SETTINGS },
@@ -423,6 +433,7 @@ export function readSettings(dir: string): Settings {
     pipStyle: cleanStoredPipStyle(doc.pipStyle),
     previewMuted: doc.previewMuted === true,
     capturePrimed: doc.capturePrimed === true,
+    libraryWindow: cleanWindowBounds(doc.libraryWindow),
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
@@ -472,6 +483,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     pipStyle: cleanStoredPipStyle(merged.pipStyle),
     previewMuted: merged.previewMuted === true,
     capturePrimed: merged.capturePrimed === true,
+    libraryWindow: cleanWindowBounds(merged.libraryWindow),
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),
