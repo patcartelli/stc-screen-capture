@@ -24,6 +24,8 @@ interface AppSettings {
 }
 declare const editor: {
   fitWindow: (contentHeight: number) => Promise<void>;
+  /** STC-484: ⌘= ⌘− ⌘0, claimed by main ahead of the page-zoom menu items. */
+  onTimelineZoom: (cb: (intent: string) => void) => void;
   openPreview: (dir: string) => Promise<boolean>;
   closePreview: () => Promise<void>;
   readTakeFile: (name: string) => Promise<ArrayBuffer>;
@@ -97,6 +99,10 @@ import {
   type ScrubState,
 } from "./scrubber.js";
 import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
+import {
+  grabOffset, isFit, isMinSpan, overviewBox, overviewSpanFor, panBy, timelineZoomKeyIntent,
+  wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
+} from "./timeline-zoom.js";
 import { clipActivity, zoomCurve, laneBitmap } from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, snapCenter, resizeFromCorner, styleFromFixedCorner,
@@ -156,11 +162,16 @@ let exportAbort: AbortController | undefined;
 // it did in the single in-page player.
 let spanStart = 0;
 let spanEnd = 0;
-const MIN_SPAN_FRACTION = 1 / 64;
 
 function resetSpan(): void {
   spanStart = 0;
   spanEnd = player?.durationNs ?? 0;
+}
+
+/** The span the lane canvases draw: the whole take until a span is set. */
+function visibleSpan(): { start: number; end: number } {
+  const dur = player?.durationNs ?? 0;
+  return spanEnd > spanStart ? { start: spanStart, end: spanEnd } : { start: 0, end: dur };
 }
 
 function applySpanTransform(): void {
@@ -170,10 +181,14 @@ function applySpanTransform(): void {
   const translatePct = durationNs > 0 ? -(spanStart / span) * 100 : 0;
   const transform = `scaleX(${scale}) translateX(${translatePct}%)`;
   ($("timeline") as HTMLElement).style.transform = transform;
-  ($("ruler-activity-wrap") as HTMLElement).style.transform = transform;
-  ($("audio-canvas-wrap") as HTMLElement).style.transform = transform;
-  ($("zoom-canvas-wrap") as HTMLElement).style.transform = transform;
+  // STC-484: what the transform stretches, the trim brackets and the playhead
+  // thumb counter-scale by (editor.html's `scale: var(--inv)`), so they stay
+  // the same width however far in the lane is zoomed.
+  ($("timeline") as HTMLElement).style.setProperty("--inv", String(1 / scale));
   ($("ruler-content") as HTMLElement).style.transform = transform;
+  // The three canvases are NOT transformed any more: stretching a bitmap is
+  // what made a zoomed lane blocky. They are redrawn for the visible span.
+  scheduleLaneRedraw();
   // STC-331, found fixing this file: editor.html's own comment already
   // claimed "the shared transform on #override-blocks does the pan/zoom",
   // but this function never actually set it here — the CSS rule that makes
@@ -189,6 +204,7 @@ function applySpanTransform(): void {
   updateTicks();
   renderRulerTicks();
   renderBookmarks();
+  updateZoomBar();
 }
 
 // ---- the ruler's adaptive ticks + played line (STC-444 slice 2) ------------
@@ -306,18 +322,14 @@ function updateRulerPlayhead(tNs: number): void {
   const pct = Math.max(0, Math.min(100, (tNs / durationNs) * 100));
   ($("ruler-played") as HTMLElement).style.width = `${pct}%`;
   ($("ruler-playhead") as HTMLElement).style.left = `${pct}%`;
+  ($("overview-playhead") as HTMLElement).style.left = `${pct}%`;
 }
 
 /** Pan by a fraction of the CURRENT span (positive moves later in the take). */
 function panSpan(deltaFraction: number): void {
   const durationNs = player?.durationNs ?? 0;
   if (durationNs <= 0) return;
-  const span = spanEnd - spanStart;
-  let start = spanStart + deltaFraction * span;
-  start = Math.max(0, Math.min(durationNs - span, start));
-  spanStart = start;
-  spanEnd = start + span;
-  applySpanTransform();
+  setSpan(panBy({ startNs: spanStart, endNs: spanEnd }, durationNs, deltaFraction));
 }
 
 /** Zoom by `factor` (>1 zooms in), anchored so `anchorFraction` (0..1 of the
@@ -325,16 +337,95 @@ function panSpan(deltaFraction: number): void {
 function zoomSpan(factor: number, anchorFraction: number): void {
   const durationNs = player?.durationNs ?? 0;
   if (durationNs <= 0) return;
-  const span = spanEnd - spanStart;
-  const minSpan = durationNs * MIN_SPAN_FRACTION;
-  const nextSpan = Math.max(minSpan, Math.min(durationNs, span / factor));
-  const anchorNs = spanStart + anchorFraction * span;
-  let start = anchorNs - anchorFraction * nextSpan;
-  start = Math.max(0, Math.min(durationNs - nextSpan, start));
-  spanStart = start;
-  spanEnd = start + nextSpan;
-  applySpanTransform();
+  const anchorNs = spanStart + anchorFraction * (spanEnd - spanStart);
+  setSpan(zoomAbout({ startNs: spanStart, endNs: spanEnd }, durationNs, factor, anchorNs));
 }
+
+/** The one writer of the span after a user's input (STC-484): applies it and
+ *  lets the hidden readout say so. resetSpan() is not that — opening a take
+ *  is not the user zooming. */
+function setSpan(next: { startNs: number; endNs: number }): void {
+  if (next.startNs === spanStart && next.endNs === spanEnd) return;
+  spanStart = next.startNs;
+  spanEnd = next.endNs;
+  applySpanTransform();
+  pulseZoomReadout();
+}
+
+/** The button / key doors: playhead-anchored (timeline-zoom.ts rule 2). */
+function zoomIntent(intent: ZoomIntent): void {
+  const durationNs = player?.durationNs ?? 0;
+  if (durationNs <= 0) return;
+  setSpan(zoomByIntent({ startNs: spanStart, endNs: spanEnd }, durationNs, intent, player?.currentNs ?? 0));
+}
+
+// ---- the zoom bar: overview strip, buttons, readout (STC-484) ---------------
+
+let zoomReadoutTimer: ReturnType<typeof setTimeout> | undefined;
+const ZOOM_READOUT_MS = 1500;
+
+function pulseZoomReadout(): void {
+  const el = $("zoomreadout") as HTMLElement;
+  el.setAttribute("data-live", "");
+  if (zoomReadoutTimer !== undefined) clearTimeout(zoomReadoutTimer);
+  zoomReadoutTimer = setTimeout(() => el.removeAttribute("data-live"), ZOOM_READOUT_MS);
+}
+
+function updateZoomBar(): void {
+  const durationNs = player?.durationNs ?? 0;
+  const span = { startNs: spanStart, endNs: spanEnd };
+  const box = overviewBox(span, durationNs);
+  const win = $("overview-window") as HTMLElement;
+  win.style.left = `${box.leftPct}%`;
+  win.style.width = `${box.widthPct}%`;
+  const strip = $("overview") as HTMLElement;
+  strip.setAttribute("aria-valuenow", String(Math.round(box.leftPct)));
+  strip.setAttribute("aria-valuetext", zoomReadout(span, durationNs));
+  $("zoomreadout").textContent = zoomReadout(span, durationNs);
+  const open = durationNs > 0;
+  ($("zoomin") as HTMLButtonElement).disabled = !open || isMinSpan(span, durationNs);
+  ($("zoomout") as HTMLButtonElement).disabled = !open || isFit(span, durationNs);
+  ($("zoomfit") as HTMLButtonElement).disabled = !open || isFit(span, durationNs);
+}
+
+$("zoomin").addEventListener("click", () => zoomIntent("in"));
+$("zoomout").addEventListener("click", () => zoomIntent("out"));
+$("zoomfit").addEventListener("click", () => zoomIntent("fit"));
+
+let overviewGrab: number | null = null;
+function overviewFraction(e: PointerEvent): number {
+  const r = $("overview").getBoundingClientRect();
+  return r.width > 0 ? (e.clientX - r.left) / r.width : 0;
+}
+function overviewMoveTo(e: PointerEvent): void {
+  const durationNs = player?.durationNs ?? 0;
+  if (durationNs <= 0 || overviewGrab === null) return;
+  setSpan(overviewSpanFor({ startNs: spanStart, endNs: spanEnd }, durationNs, overviewFraction(e), overviewGrab));
+}
+$("overview").addEventListener("pointerdown", (e) => {
+  const durationNs = player?.durationNs ?? 0;
+  if (durationNs <= 0) return;
+  const pe = e as PointerEvent;
+  const box = overviewBox({ startNs: spanStart, endNs: spanEnd }, durationNs);
+  overviewGrab = grabOffset(box, overviewFraction(pe)) ?? 0.5;
+  $("overview-window").classList.add("dragging");
+  $("overview").setPointerCapture(pe.pointerId);
+  overviewMoveTo(pe);
+});
+$("overview").addEventListener("pointermove", (e) => overviewMoveTo(e as PointerEvent));
+const endOverviewDrag = () => {
+  overviewGrab = null;
+  $("overview-window").classList.remove("dragging");
+};
+$("overview").addEventListener("pointerup", endOverviewDrag);
+$("overview").addEventListener("pointercancel", endOverviewDrag);
+$("overview").addEventListener("keydown", (e) => {
+  const k = (e as KeyboardEvent).key;
+  if (k !== "ArrowLeft" && k !== "ArrowRight") return;
+  e.preventDefault();
+  e.stopPropagation(); // the timeline's own Left/Right step the playhead
+  panSpan((k === "ArrowRight" ? 1 : -1) * 0.25);
+});
 
 let panning = false;
 let panLastX = 0;
@@ -359,13 +450,36 @@ $("ruler").addEventListener("pointermove", (e) => {
 const stopPan = () => { panning = false; };
 $("ruler").addEventListener("pointerup", stopPan);
 $("ruler").addEventListener("pointercancel", stopPan);
-$("ruler").addEventListener("wheel", (e) => {
+// Wheel on the ruler AND the lanes (STC-484): ⌘-scroll or a pinch zooms around
+// the pointer, plain scroll pans. The pointer's place is read against the
+// RULER, whose box is the untransformed viewport every lane shares.
+function onTimelineWheel(e: WheelEvent): void {
   e.preventDefault();
   const r = $("ruler").getBoundingClientRect();
-  const anchor = r.width > 0 ? Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) : 0.5;
-  const factor = Math.exp(-e.deltaY * 0.0015);
-  zoomSpan(factor, anchor);
-}, { passive: false });
+  if (r.width <= 0) return;
+  const intent = wheelIntent(e);
+  if (intent.kind === "zoom") {
+    zoomSpan(intent.factor, Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+  } else if (intent.kind === "pan") {
+    panSpan(intent.deltaPx / r.width);
+  }
+}
+for (const el of [$("ruler"), $("overview"), ...Array.from(document.querySelectorAll<HTMLElement>(".laneviewport"))]) {
+  el.addEventListener("wheel", (e) => onTimelineWheel(e as WheelEvent), { passive: false });
+}
+
+// ⌘= ⌘− ⌘0. In the packaged app main claims these in before-input-event (they
+// are Electron's page-zoom menu items otherwise) and sends the intent; this
+// listener is the same door for anything that still reaches the page.
+window.addEventListener("keydown", (e) => {
+  const intent = timelineZoomKeyIntent(e);
+  if (!intent || !player) return;
+  e.preventDefault();
+  zoomIntent(intent);
+});
+editor.onTimelineZoom((intent) => {
+  if (intent === "in" || intent === "out" || intent === "fit") zoomIntent(intent);
+});
 
 // ---- trim UI ----------------------------------------------------------------
 
@@ -585,14 +699,19 @@ function drawRulerActivity(): void {
   ctx.clearRect(0, 0, w, h);
   if (!player || !openSession) return;
   const activity = clipActivity(openSession.events, player.durationNs, LANE_BUCKETS);
-  const barW = w / activity.length;
+  // STC-484: drawn for the visible span, not stretched (see drawAudioLane).
+  const vis = visibleSpan();
+  const spanW = Math.max(1, vis.end - vis.start);
+  const barW = (w * (player.durationNs / activity.length)) / spanW;
+  const x0 = -(vis.start / spanW) * w;
   const style = getComputedStyle(document.documentElement).getPropertyValue("--clip").trim() || "#6a8fd8";
   ctx.fillStyle = style || "#6a8fd8";
   const bw = Math.max(1, barW - 1);
   const rowStride = LED_ROW_SEG_PX + LED_ROW_GAP_PX;
   for (let i = 0; i < activity.length; i++) {
     const bh = Math.max(1, activity[i]! * (h - 2));
-    const x = i * barW;
+    const x = x0 + i * barW;
+    if (x + bw < 0 || x > w) continue;
     const top = h - bh;
     for (let y = h; y > top; y -= rowStride) {
       const segH = Math.min(LED_ROW_SEG_PX, y - top);
@@ -687,10 +806,16 @@ function drawAudioLane(): void {
   const n = peaks.length;
   const mid = h / 2;
   const half = mid - 1;
+  // STC-484: the canvas shows the VISIBLE span only, redrawn on every zoom or
+  // pan rather than CSS-stretched, so a zoomed lane stays sharp.
+  const dur = player?.durationNs ?? 0;
+  const vis = visibleSpan();
+  const f0 = dur > 0 ? vis.start / dur : 0;
+  const f1 = dur > 0 ? vis.end / dur : 1;
   for (let x = 0; x < w; x++) {
     // Every bucket that falls in this column, so a narrow window cannot skip a peak.
-    const b0 = Math.floor((x * n) / w);
-    const b1 = Math.max(b0 + 1, Math.floor(((x + 1) * n) / w));
+    const b0 = Math.max(0, Math.floor((f0 + (x / w) * (f1 - f0)) * n));
+    const b1 = Math.max(b0 + 1, Math.floor((f0 + ((x + 1) / w) * (f1 - f0)) * n));
     let peak = 0;
     for (let b = b0; b < b1 && b < n; b++) peak = Math.max(peak, peaks[b]!);
     if (!(peak > 0)) continue;
@@ -803,6 +928,8 @@ function drawZoomLane(): void {
     (tNs) => render(openProject!, openSession!, tNs).zoom.amount,
     player.durationNs,
     LANE_BUCKETS,
+    visibleSpan().start,
+    visibleSpan().end,
   );
   // STC-330: a FILLED area, not a stroked line — the same sampled curve now
   // reads as one trapezoid per derived window (ease-in ramp, flat top,
@@ -830,6 +957,18 @@ function drawZoomLane(): void {
 }
 
 function redrawLanes(): void { drawRulerActivity(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks(); }
+
+/** A zoom or pan redraws the three canvases; a drag fires many per frame, so
+ *  they are coalesced to one per animation frame. */
+let laneRedrawQueued = false;
+function scheduleLaneRedraw(): void {
+  if (laneRedrawQueued) return;
+  laneRedrawQueued = true;
+  requestAnimationFrame(() => {
+    laneRedrawQueued = false;
+    drawRulerActivity(); drawAudioLane(); drawZoomLane();
+  });
+}
 window.addEventListener("resize", redrawLanes);
 
 // ---- manual zoom override (STC-330/331) — the block lane's editing half ---
@@ -943,6 +1082,25 @@ function stageUv(clientX: number, clientY: number): { x: number; y: number } {
     y: r.height > 0 ? Math.max(0, Math.min(1, (clientY - r.top) / r.height)) : 0,
   };
 }
+
+// STC-484: the override box is drawn only while the pointer is over the
+// selected Zoom block or over the box itself, and for the length of a drag.
+// The editing state (`draftRect`, the overlay) is untouched: hiding it is a
+// matter of paint, not of what the override is.
+let overrideBlockHover = false;
+let overrideBoxHover = false;
+function syncOverrideBoxShown(): void {
+  const box = $("overridebox") as HTMLElement;
+  const dragging = dragAnchorUv !== null;
+  if (dragging || overrideBlockHover || overrideBoxHover) box.setAttribute("data-shown", "");
+  else box.removeAttribute("data-shown");
+}
+function overBlockTarget(e: Event): boolean {
+  return (e.target as HTMLElement | null)?.closest?.(".zoomblock.selected, #manualdraft") != null;
+}
+document.addEventListener("pointerover", (e) => {
+  if (overBlockTarget(e) !== overrideBlockHover) { overrideBlockHover = overBlockTarget(e); syncOverrideBoxShown(); }
+});
 
 function drawOverrideBox(rect: Rect | null): void {
   const box = $("overridebox") as HTMLElement;
@@ -1273,19 +1431,33 @@ $("rectoverlay").addEventListener("pointerdown", (e) => {
   // immediately rather than waiting for a move that may never come.
   draftRect = rectFromGesture(dragAnchorUv, dragAnchorUv, aspectWH());
   drawOverrideBox(draftRect);
+  syncOverrideBoxShown();
 });
 $("rectoverlay").addEventListener("pointermove", (e) => {
-  if (!dragAnchorUv) return;
   const pe = e as PointerEvent;
+  if (!dragAnchorUv) {
+    // Not dragging: is the pointer over the box? (the box itself takes no
+    // pointer events, so this is a hit test against its rect.)
+    const uv = stageUv(pe.clientX, pe.clientY);
+    const over = draftRect !== null
+      && uv.x >= draftRect.x && uv.x <= draftRect.x + draftRect.width
+      && uv.y >= draftRect.y && uv.y <= draftRect.y + draftRect.height;
+    if (over !== overrideBoxHover) { overrideBoxHover = over; syncOverrideBoxShown(); }
+    return;
+  }
   draftRect = rectFromGesture(dragAnchorUv, stageUv(pe.clientX, pe.clientY), aspectWH());
   drawOverrideBox(draftRect);
 });
 const endOverrideDrag = () => {
   if (!dragAnchorUv) return;
   dragAnchorUv = null;
+  syncOverrideBoxShown(); // a finished drag leaves the pointer on the box: still hovered
   ($("overrideclear") as HTMLButtonElement).disabled = !draftRect;
   layoutOverrideBlocks(); // the "overridden" dot follows a fresh drag immediately, not just on Done
 };
+$("rectoverlay").addEventListener("pointerleave", () => {
+  if (overrideBoxHover) { overrideBoxHover = false; syncOverrideBoxShown(); }
+});
 $("rectoverlay").addEventListener("pointerup", endOverrideDrag);
 $("rectoverlay").addEventListener("pointercancel", endOverrideDrag);
 
@@ -1564,6 +1736,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   };
   await player.seek(player.firstRenderableNs);
   resetSpan();
+  applySpanTransform(); // draws the zoom bar and the lanes for the opening span (STC-484)
   updateTrimUI();
   updateOutputSizeUI();
   updateLegibilityUI();

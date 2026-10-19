@@ -41,6 +41,13 @@ contextBridge.exposeInMainWorld("editor", {
   revealPublished: () => ipcRenderer.invoke("share:reveal"),
   // STC-483: grow the window to show every lane, once a take is open.
   fitWindow: (contentHeight: number) => ipcRenderer.invoke("editor:fit", contentHeight),
+  // STC-484: main claims ⌘= ⌘− ⌘0 (Electron's page-zoom menu items) and
+  // sends the timeline's intent here.
+  onTimelineZoom: (cb: (intent: string) => void) => {
+    ipcRenderer.on("editor:timelineZoom", (_e, intent: unknown) => {
+      if (typeof intent === "string") cb(intent);
+    });
+  },
   // STC-399: the export manifest stamp's version half.
   getVersion: () => ipcRenderer.invoke("app:version"),
 });

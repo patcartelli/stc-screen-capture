@@ -2,6 +2,7 @@ import { BrowserWindow, screen, type WebContents } from "electron";
 import { join } from "node:path";
 import { PRODUCT_NAME } from "./product.js";
 import { setBoundsUnlessClosing } from "./window-geometry.js";
+import { timelineZoomKeyIntent } from "./timeline-zoom.js";
 
 /**
  * The editor's window (STC-373) — the second surface in the three-surface
@@ -70,6 +71,19 @@ export function openEditor(opts: EditorOptions): void {
     },
   });
   win.on("closed", () => { win = undefined; });
+  // STC-484: ⌘= ⌘− ⌘0 are the default View menu's page-zoom items. In this
+  // window they zoom the TIMELINE instead; claiming them here, ahead of the
+  // menu, is the only reliable way (a page keydown can lose to the menu's key
+  // equivalent). Every other window keeps the platform's behaviour.
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    const intent = timelineZoomKeyIntent({
+      key: input.key, metaKey: input.meta, ctrlKey: input.control, altKey: input.alt, shiftKey: input.shift,
+    });
+    if (!intent) return;
+    event.preventDefault();
+    win?.webContents.send("editor:timelineZoom", intent);
+  });
   load(opts);
 }
 
