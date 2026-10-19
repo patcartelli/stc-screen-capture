@@ -73,8 +73,8 @@ import {
 } from "./thumbnail-window.js";
 import { promotes, trashStyle } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
-import { editorIsOpen, fitEditorToContent, openEditor } from "./editor-window.js";
-import { openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
+import { editorIsOpen, fitEditorToContent, hideEditor, openEditor } from "./editor-window.js";
+import { hideStillEditor, openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
 import { discardPill, pillStarted, preparePill } from "./pill-window.js";
 import { PILL_STOPPED_DWELL_MS, libraryAroundTake, type LibraryAtTakeStart } from "./pill.js";
@@ -82,7 +82,10 @@ import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast, closeToastsForQuit } from "./toast-window.js";
-import { noteAppQuitting } from "./window-geometry.js";
+import { noteAppQuitting, setBoundsUnlessClosing } from "./window-geometry.js";
+import {
+  libraryBounds, settingsBounds, clampSize, LIBRARY_MIN_SIZE, SETTINGS_MIN_SIZE, type Rect,
+} from "./window-size.js";
 import { startQuitWindowLog } from "./quit-window-log.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
@@ -303,11 +306,36 @@ const TRAFFIC_LIGHT_Y_PX = 24;
  * window LOADS as Settings alone (no grid flashing before a message arrives). */
 let nextWindowSettingsOnly = false;
 
+/**
+ * Whether `win` is, right now, a window for Settings alone (STC-551 follow-up).
+ * Its size is Settings' own and is never remembered as the library's (STC-560).
+ */
+let winSettingsOnly = false;
+
+/** The display a window with no remembered place opens on: the one under the pointer. */
+function workAreaUnderPointer(): Rect {
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+}
+
+/** Where the library goes (STC-560): where it last was, if that is still on a display. */
+function libraryPlace(fallback: Rect): Rect {
+  return libraryBounds(
+    readSettings(app.getPath("userData")).libraryWindow,
+    screen.getAllDisplays().map((d) => d.workArea),
+    fallback,
+  );
+}
+
 function createWindow(): void {
   const settingsOnly = nextWindowSettingsOnly;
   nextWindowSettingsOnly = false;
+  // STC-560: sized for what it shows, and clamped to the display.
+  const area = workAreaUnderPointer();
+  const bounds = settingsOnly ? settingsBounds(area) : libraryPlace(area);
+  const min = clampSize(settingsOnly ? SETTINGS_MIN_SIZE : LIBRARY_MIN_SIZE, area);
+  winSettingsOnly = settingsOnly;
   win = new BrowserWindow({
-    width: 520, height: 680, title: PRODUCT_NAME,
+    ...bounds, minWidth: min.width, minHeight: min.height, title: PRODUCT_NAME,
     // STC-375 chose "hidden" over fully frameless so the library could
     // collapse to a 26px pill. The pill has its own window since STC-550; the
     // chrome stays as STC-432 tuned it.
@@ -328,7 +356,27 @@ function createWindow(): void {
       .then((closedSheet) => { if (!closedSheet && !w.isDestroyed()) w.close(); })
       .catch(() => { if (!w.isDestroyed()) w.close(); });
   });
+  // STC-560: remember where the library was. Normal bounds, so a window closed
+  // while full screen or zoomed reopens at the size it had before that.
+  w.on("close", () => {
+    if (w !== win || winSettingsOnly) return;
+    writeSettings(app.getPath("userData"), { libraryWindow: w.getNormalBounds() });
+  });
   reconcileIcons();
+}
+
+/**
+ * A window made for Settings alone, asked to show the library (STC-560): it
+ * takes the library's place and size, since Settings' narrow column would
+ * squeeze the grid. Through `setBoundsUnlessClosing` (STC-496); the minimum is
+ * raised only once the new bounds are in, so raising it never resizes.
+ */
+function becomeLibrary(w: BrowserWindow): void {
+  winSettingsOnly = false;
+  const area = screen.getDisplayMatching(w.getBounds()).workArea;
+  if (!setBoundsUnlessClosing(w, libraryPlace(area), "openLibrary (Settings alone becomes the library)")) return;
+  const min = clampSize(LIBRARY_MIN_SIZE, area);
+  w.setMinimumSize(min.width, min.height);
 }
 
 /**
@@ -362,8 +410,16 @@ function hideLibraryForTake(atFlowStart: LibraryAtTakeStart): boolean {
   const hide = now.exists && !now.minimized && (now.visible || now.appHidden);
   libraryReturnsAfterTake = plan.showAfter;
   if (hide) win!.hide();
-  if (now.appHidden) app.show();
-  return hide;
+  // STC-556: `app.show()` restores EVERY window hidden with the app, so the
+  // editors go off screen first, as the library did. They were not on screen
+  // when the take started, so nothing brings them back after it.
+  let hiddenEditors = false;
+  if (now.appHidden) {
+    hiddenEditors = hideEditor();
+    hiddenEditors = hideStillEditor() || hiddenEditors;
+    app.show();
+  }
+  return hide || hiddenEditors;
 }
 
 /** The library window's state right now, for `libraryAroundTake`. */
@@ -378,12 +434,18 @@ function libraryNow(): LibraryAtTakeStart {
 }
 
 /**
- * A library hidden with the app (⌘H) is taken off screen for real before the
+ * A library (and any editor) hidden with the app (⌘H) is taken off screen for real before the
  * overlay opens, so the overlay activating the app cannot bring it back. It
  * stays that way after the take, which is what ⌘H already meant.
  */
 function keepHiddenLibraryHidden(atFlowStart: LibraryAtTakeStart): void {
-  if (atFlowStart.appHidden && atFlowStart.exists && !atFlowStart.minimized) win!.hide();
+  if (!atFlowStart.appHidden) return;
+  if (atFlowStart.exists && !atFlowStart.minimized) win!.hide();
+  // STC-556: the overlay's activation unhides every window hidden with the
+  // app, not only the library. The editors go the same way, here, before it
+  // opens; by `hideLibraryForTake` the app is no longer hidden.
+  hideEditor();
+  hideStillEditor();
 }
 
 /**
@@ -509,7 +571,10 @@ const DOCK_HIDE_RETRY_MS = 1500;
 /** The way back to a window from the menu bar. */
 function openLibrary(): void {
   if (!win || win.isDestroyed()) createWindow();
-  else { win.show(); win.focus(); send("ui:show-library", undefined); }
+  else {
+    if (winSettingsOnly) becomeLibrary(win);
+    win.show(); win.focus(); send("ui:show-library", undefined);
+  }
   reconcileIcons();
   // Without this an accessory app raises the window behind whatever is
   // frontmost, which reads as the click having done nothing.
@@ -1587,11 +1652,15 @@ async function reclaimSpace(): Promise<{ moved: number; failed: number }> {
  * `capturePrimed` (STC-522) is main's alone too, for a duller reason: a
  * renderer echoing back the settings it was handed would write a stale
  * `false` and the throwaway stream would run again at the next launch.
+ * `libraryWindow` (STC-560) the same way: an echo would put back the place the
+ * window had when the sheet loaded, over the one its `close` just wrote.
  */
 ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Promise<Settings> => {
   // Destructured rather than deleted, so `saveFolder` is named here and a
   // reader can see exactly which keys do not survive.
-  const { saveFolder: _mainsAlone, capturePrimed: _alsoMains, ...withoutMainsKeys } = { ...(patch ?? {}) };
+  const {
+    saveFolder: _mainsAlone, capturePrimed: _alsoMains, libraryWindow: _mainsToo, ...withoutMainsKeys
+  } = { ...(patch ?? {}) };
   const clean: Partial<Settings> = withoutMainsKeys as Partial<Settings>;
   if (clean.share) {
     // Same rule, same reason (STC-242): `share.destination` is a folder in the
@@ -1946,8 +2015,10 @@ async function recordFlowBody(
   // is lost: each panel's take stays in temp storage with its panel intact.
   // After the countdown, so a cancelled one costs a pending panel nothing.
   // The library goes the same way (STC-550), and comes back with the pill.
-  const libraryHidden = hideLibraryForTake(libraryAtFlowStart);
+  // Panels first (STC-556): `hideLibraryForTake` may `app.show()` an app hidden
+  // with ⌘H, which would bring a visible-when-hidden panel back for a moment.
   await hideThumbnailForCapture();
+  const libraryHidden = hideLibraryForTake(libraryAtFlowStart);
   if (libraryHidden) await new Promise((r) => setTimeout(r, HIDE_SETTLE_MS));
   const exclude = await pillExclusions;
   if (exclude.length > 0) startParams.excludeWindowIds = exclude;

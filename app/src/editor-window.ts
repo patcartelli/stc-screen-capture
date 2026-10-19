@@ -92,6 +92,19 @@ export function editorIsOpen(): boolean {
   return win !== undefined && !win.isDestroyed();
 }
 
+/**
+ * Take the editor off screen without closing it (STC-556): a take started with
+ * the app hidden (⌘H) has to unhide the app for the pill to show, and that
+ * restores every window hidden with it. Not gated on `isVisible()`, which a
+ * window hidden with the app may report false; minimized is left alone.
+ * Answers whether anything went off.
+ */
+export function hideEditor(): boolean {
+  if (!win || win.isDestroyed() || win.isMinimized()) return false;
+  win.hide();
+  return true;
+}
+
 export function closeEditor(): void {
   if (win && !win.isDestroyed()) win.close();
 }

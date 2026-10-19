@@ -24,7 +24,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, libraryWindow: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -66,7 +66,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, libraryWindow: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -122,7 +122,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, libraryWindow: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -218,6 +218,24 @@ describe("the capture-primed flag (STC-522)", () => {
     const e = dir();
     writeFileSync(join(e, "settings.json"), JSON.stringify({ capturePrimed: "yes" }));
     expect(readSettings(e).capturePrimed).toBe(false);
+  });
+});
+
+describe("the library window's place (STC-560)", () => {
+  test("never stored: null", () => {
+    expect(readSettings(dir()).libraryWindow).toBeNull();
+  });
+  test("round-trips, and survives an unrelated write", () => {
+    const d = dir();
+    const r = { x: 100, y: 80, width: 1100, height: 760 };
+    expect(writeSettings(d, { libraryWindow: r }).libraryWindow).toEqual(r);
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).libraryWindow).toEqual(r);
+  });
+  test("a malformed stored value is treated as never stored", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ libraryWindow: { x: 0, y: 0, width: "wide", height: 700 } }));
+    expect(readSettings(d).libraryWindow).toBeNull();
   });
 });
 
