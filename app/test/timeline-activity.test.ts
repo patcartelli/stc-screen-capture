@@ -49,6 +49,12 @@ describe("clipActivity", () => {
 });
 
 describe("zoomCurve", () => {
+  test("a span samples only that part of the take, end to end (STC-484)", () => {
+    const seen: number[] = [];
+    zoomCurve((t) => { seen.push(t); return 0; }, 100 * S, 5, 20 * S, 40 * S);
+    expect(seen).toEqual([20 * S, 25 * S, 30 * S, 35 * S, 40 * S]);
+  });
+
   test("samples a constant function at a constant value", () => {
     expect(zoomCurve(() => 0.5, 10 * S, 5)).toEqual([0.5, 0.5, 0.5, 0.5, 0.5]);
   });

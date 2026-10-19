@@ -60,11 +60,16 @@ export function zoomCurve(
   sampleAt: (tNs: number) => number,
   durationNs: number,
   samples: number,
+  /** STC-484: the visible span, when zoomed; default is the whole take. */
+  startNs = 0,
+  endNs = durationNs,
 ): number[] {
   const n = Math.max(2, Math.floor(samples));
   const out = new Array<number>(n);
+  const a = Math.max(0, startNs);
+  const b = Math.max(a, endNs);
   for (let i = 0; i < n; i++) {
-    out[i] = sampleAt((i / (n - 1)) * Math.max(0, durationNs));
+    out[i] = sampleAt(a + (i / (n - 1)) * (b - a));
   }
   return out;
 }
