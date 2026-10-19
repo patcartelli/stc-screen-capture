@@ -139,10 +139,14 @@
        while open; a press on the PiP's overlay closes it and a drag re-opens it. */
     #pippanel { position-anchor: --pipbtn; position-area: top span-left; margin: 0 0 6px;
                 position-try-fallbacks: flip-block; inset: auto; overflow: auto; box-sizing: border-box;
-                width: 300px; max-height: calc(100vh - 80px);
+                width: 340px; max-height: calc(100vh - 80px);
                 padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                 background: var(--surface, var(--bg)); color: var(--text);
                 box-shadow: var(--shadow-card); }
+    /* pip-inspector.css puts `display: grid` on the host (the class lands on #pippanel
+       itself), which beats the UA's display:none for a closed popover: the panel was
+       always visible. Hide it unless open. */
+    #pippanel:not(:popover-open) { display: none; }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
     /* STC-460: the pane, redesigned. A popover still (Patrick's default: it
