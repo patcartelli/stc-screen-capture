@@ -71,8 +71,17 @@
        start a drag nobody asked for. */
     #rectoverlay { position: absolute; inset: 0; cursor: crosshair; }
     #rectoverlay[hidden] { display: none; }
+    /* Hidden until hovered (STC-484): visible only while the pointer is over
+       the selected Zoom block or over the box itself (editor.ts toggles
+       data-shown), and for as long as it is being dragged. It is still in the
+       DOM and still the drag's target, just not drawn. */
     #overridebox { position: absolute; border: 1.5px solid var(--zoom);
-                   background: color-mix(in srgb, var(--zoom) 12%, transparent); pointer-events: none; }
+                   background: color-mix(in srgb, var(--zoom) 12%, transparent); pointer-events: none;
+                   opacity: 0; }
+    #overridebox[data-shown] { opacity: 1; }
+    @media (prefers-reduced-motion: no-preference) {
+      #overridebox { transition: opacity .12s ease; }
+    }
 
     /* ── the header row (STC-444, Figma pass): transport LEFT, output right
        ────────────────────────────────────────────────────────────────────
@@ -308,6 +317,35 @@
     #audio-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; margin: 0; padding: 0;
                     border: none; background: transparent; cursor: ns-resize; z-index: 6; touch-action: none; }
     #audio-resize:hover, #audio-resize:focus-visible, #audio-resize.dragging { background: var(--accent-soft); outline: none; }
+    /* The zoom bar (STC-484): the overview strip, the three buttons and the
+       readout, on one row above the ruler. The strip is the whole take; its
+       window is the part the lanes show, and it is a handle (drag to pan,
+       press outside to bring the window there). The readout is HIDDEN until
+       the span changes (#zoomreadout[data-live]); it fades out on its own.
+       No transition runs under prefers-reduced-motion, and the span itself
+       never animates at all - the lanes jump. */
+    #zoombar { display: flex; align-items: center; gap: 6px; height: 16px; margin-bottom: 2px; }
+    #overview { position: relative; flex: 1 1 auto; height: 8px; border-radius: 2px; cursor: pointer;
+                background: var(--surface-hover); touch-action: none; }
+    #overview-window { position: absolute; top: 0; bottom: 0; min-width: 6px; border-radius: 2px;
+                       background: color-mix(in srgb, var(--accent) 45%, transparent);
+                       border: 1px solid var(--accent); box-sizing: border-box; cursor: grab; }
+    #overview-window.dragging { cursor: grabbing; }
+    #overview-playhead { position: absolute; top: -1px; bottom: -1px; width: 1px; background: var(--text-dim);
+                         pointer-events: none; }
+    #overview:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .zoombtn { width: 18px; height: 16px; padding: 0; border: none; border-radius: 3px; background: transparent;
+               color: var(--text-dim); font: inherit; font-size: var(--type-meta); line-height: 1; cursor: pointer; }
+    .zoombtn.fit { width: auto; padding: 0 5px; }
+    .zoombtn:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+    .zoombtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .zoombtn:disabled { opacity: .35; cursor: default; }
+    #zoomreadout { font-family: var(--font-mono); font-size: var(--type-meta); color: var(--text-dim);
+                   min-width: 0; white-space: nowrap; opacity: 0; pointer-events: none; }
+    #zoomreadout[data-live] { opacity: 1; }
+    @media (prefers-reduced-motion: no-preference) {
+      #zoomreadout { transition: opacity .25s ease; }
+    }
     .rulertoggle[hidden] { display: none; }
     .rulertoggle { position: absolute; left: 2px; top: 1px; width: 16px; height: 16px;
                    padding: 0; border: none; background: transparent; color: var(--text-faint);
@@ -701,6 +739,23 @@
               title="Show keystrokes in the preview and export">
         <span>Keys</span>
       </button>
+    </div>
+    <!-- STC-484: the zoom bar. #overview is the whole take and #overview-window
+         the visible part of it; the buttons are the same three verbs the
+         wheel, a pinch and the keys (⌘= ⌘− ⌘0) reach. #zoomreadout is hidden
+         until the span changes. -->
+    <div id="zoombar">
+      <div id="overview" role="slider" tabindex="0" aria-label="Visible part of the take"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+           title="The part of the take shown below. Drag to pan.">
+        <div id="overview-window"></div>
+        <div id="overview-playhead"></div>
+      </div>
+      <span id="zoomreadout" aria-live="polite"></span>
+      <button type="button" class="zoombtn" id="zoomout" aria-label="Zoom out" title="Zoom out (⌘−)">−</button>
+      <button type="button" class="zoombtn" id="zoomin" aria-label="Zoom in" title="Zoom in (⌘=)">+</button>
+      <button type="button" class="zoombtn fit" id="zoomfit" aria-label="Fit the whole take"
+              title="Fit the whole take (⌘0)">Fit</button>
     </div>
     <!-- STC-444 slice 2: adaptive ticks + the played line, drawn by
          editor.ts's renderRulerTicks/updateRulerPlayhead. #ruler-ticks holds
