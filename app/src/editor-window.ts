@@ -1,6 +1,7 @@
-import { BrowserWindow } from "electron";
+import { BrowserWindow, screen, type WebContents } from "electron";
 import { join } from "node:path";
 import { PRODUCT_NAME } from "./product.js";
+import { setBoundsUnlessClosing } from "./window-geometry.js";
 
 /**
  * The editor's window (STC-373) — the second surface in the three-surface
@@ -79,4 +80,21 @@ export function editorIsOpen(): boolean {
 
 export function closeEditor(): void {
   if (win && !win.isDestroyed()) win.close();
+}
+
+/**
+ * Grow the editor to show its whole content (STC-483: a take opened with a lane
+ * below the fold made the user scroll). Never shrinks, never leaves the display's
+ * work area, and only for a request from the editor's own page.
+ */
+export function fitEditorToContent(sender: WebContents, contentHeight: number): void {
+  if (!win || win.isDestroyed() || win.webContents !== sender) return;
+  if (!Number.isFinite(contentHeight) || contentHeight <= 0) return;
+  const bounds = win.getBounds();
+  const chrome = bounds.height - win.getContentBounds().height;
+  const area = screen.getDisplayMatching(bounds).workArea;
+  const want = Math.min(Math.ceil(contentHeight) + chrome, area.height);
+  if (want <= bounds.height) return;
+  const y = Math.max(area.y, Math.min(bounds.y, area.y + area.height - want));
+  setBoundsUnlessClosing(win, { y, height: want }, "editor-fit");
 }

@@ -20,7 +20,7 @@
     /* --bookmark (STC-444 slice 4): a marker's own color, distinct from the
        played bar / selection's --accent (blue) and the Zoom lane's --zoom
        (orange) so a bookmark reads as its own kind of mark on the ruler. */
-    :root { --clip: #6a8fd8; --zoom: #d88a3b; --zoom-fill: #4f7fe0; --bookmark: #e0c14f; --wave: #5fb38a; }
+    :root { --clip: #6a8fd8; --zoom: #d88a3b; --zoom-fill: #4f7fe0; --bookmark: #e0c14f; --wave: #5fb38a; --wave-clip: var(--rec); --audio-lane-h: 56px; --lane-pad: 12px; }
     /* STC-444 (Figma pass, 2026-09-24): the editor is ALWAYS dark, per
        Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
        "follow the OS" default (the still editor was moved OFF forced dark
@@ -123,7 +123,8 @@
        margin. Camera comes first when the take has one; Clicks is always
        present, so it takes the margin otherwise. Audio and Keys follow, 8px
        apart. */
-    #pipbtn, #clicksbtn { anchor-name: none; }
+    #pipbtn { anchor-name: --pipbtn; }
+    #clicksbtn { anchor-name: none; }
     #pipbtn:not([hidden]) ~ #clicksbtn { margin-left: 8px; }
     #audiobtn { margin-left: 8px; }
     /* On is drawn with a thicker line (2px accent: the 1px border plus a 1px
@@ -132,14 +133,23 @@
     #clicksbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
                                       box-shadow: inset 0 0 0 1px var(--accent); }
     #clicksbtn[aria-pressed="false"] { opacity: .6; }
-    /* Not anchored to the button: it opens OVER the stage on the side away
-       from the PiP (editor.ts's placePipPanel, pip-style.ts's inspectorSide),
-       so the PiP stays pressable while it is open. left/top/max-height are set
-       on beforetoggle; width is PIP_PANEL_WIDTH_PX there. */
-    #pippanel { position: fixed; inset: auto; margin: 0; overflow: auto; box-sizing: border-box;
+    /* The Camera popover is anchored to its button above the timecode row, the
+       same as #audiopanel (STC-483, Patrick 2026-10-16: the earlier over-the-
+       stage placement collided with the timeline lanes). It can cover the PiP
+       while open; a press on the PiP's overlay closes it and a drag re-opens it. */
+    #pippanel { position-anchor: --pipbtn; position-area: top span-left; margin: 0 0 6px;
+                position-try-fallbacks: flip-block; inset: auto; overflow: auto; box-sizing: border-box;
+                width: 340px; max-height: calc(100vh - 80px);
                 padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                 background: var(--surface, var(--bg)); color: var(--text);
                 box-shadow: var(--shadow-card); }
+    /* pip-inspector.css puts `display: grid` on the host (the class lands on #pippanel
+       itself), which beats the UA's display:none for a closed popover: the panel was
+       always visible. Hide it unless open. */
+    #pippanel:not(:popover-open) { display: none; }
+    /* The Camera button reads as on while its panel is open, drawn like Clicks/Keys on. */
+    #pipbtn:has(+ #pippanel:popover-open) { color: var(--accent); border-color: var(--accent);
+                                           box-shadow: inset 0 0 0 1px var(--accent); }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
     /* STC-460: the pane, redesigned. A popover still (Patrick's default: it
@@ -288,15 +298,16 @@
     #ruler-activity-wrap { opacity: 0; transition: opacity .12s ease; }
     #ruler[data-activity] #ruler-activity-wrap { opacity: .4; }
     #ruler-activity { display: block; width: 100%; height: 100%; }
-    /* The audio waveform (STC-454 part 4): the export's mix, on the ruler for
-       the same reason Clip activity is (no new lane), behind its own toggle
-       and off by default. Mirrored about the middle; a different hue from
-       --clip so the two read apart when both are on. */
-    #ruler-waveform-wrap { opacity: 0; transition: opacity .12s ease; }
-    #ruler[data-waveform] #ruler-waveform-wrap { opacity: .55; }
-    #ruler-waveform { display: block; width: 100%; height: 100%; }
-    #rulerwaveformtoggle { left: 20px; }
-    #rulerwaveformtoggle[aria-pressed="true"] { color: var(--wave); }
+    /* The audio waveform lane (STC-483): the export's mix on a lane of its own
+       below the ruler, so the ruler shows time only. Height is --audio-lane-h,
+       set by dragging #audio-resize (editor.ts); clipped peaks are drawn in
+       --wave-clip (the shared --rec, which has a light and a dark value). */
+    .laneviewport.audio { height: var(--audio-lane-h); margin-top: 0; }
+    .laneviewport.audio[hidden] { display: none; }
+    #audio-waveform { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+    #audio-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; margin: 0; padding: 0;
+                    border: none; background: transparent; cursor: ns-resize; z-index: 6; touch-action: none; }
+    #audio-resize:hover, #audio-resize:focus-visible, #audio-resize.dragging { background: var(--accent-soft); outline: none; }
     .rulertoggle[hidden] { display: none; }
     .rulertoggle { position: absolute; left: 2px; top: 1px; width: 16px; height: 16px;
                    padding: 0; border: none; background: transparent; color: var(--text-faint);
@@ -353,16 +364,24 @@
        (trim) and Zoom read as two different kinds of control, not two rows
        of one list. */
     .laneviewport.zoom { height: 22px; margin-top: 16px; }
+    /* STC-483: the track is inset by --lane-pad inside each lane's full-width viewport,
+       so the playhead and the trim brackets at 0 and at the end sit inside the lane
+       instead of half-clipped at its edge. Every frame<->px read is of #timeline's
+       own box, which already reflects the inset. */
     /* The FULL-DURATION content, transformed to show only the visible span
        (STC-373: "pan lives on the ruler, zoom anchors on the pointer"). Every
        frame<->px conversion in editor.ts reads getBoundingClientRect() of
        #timeline itself, which already reflects this transform — so the
        existing scrubber/trim arithmetic (app/src/scrubber.ts) needs no
        span-aware rewrite. */
-    #timeline, #ruler-content, #ruler-activity-wrap, #ruler-waveform-wrap, #zoom-canvas-wrap, #override-blocks {
-      position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    #timeline, #ruler-content, #ruler-activity-wrap, #audio-canvas-wrap, #zoom-canvas-wrap, #override-blocks {
+      position: absolute; left: var(--lane-pad); top: 0; width: calc(100% - 2 * var(--lane-pad)); height: 100%;
       transform-origin: 0 0;
     }
+    /* STC-483: the Clip lane keeps a 16px strip above its track for its own label, so
+       the trim brackets and playhead at the start no longer sit on top of the word. */
+    .laneviewport.clip { height: 46px; }
+    #timeline { top: 16px; height: calc(100% - 16px); }
     /* #override-blocks-dynamic holds every button layoutOverrideBlocks()
        rebuilds (STC-330's derived blocks, STC-331's committed manual ones —
        NEVER the one currently being edited, of either kind, which lives on
@@ -696,21 +715,21 @@
               title="Show clip activity on the ruler">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 11V6M8 11V3M13 11V8"/></svg>
       </button>
-      <!-- STC-454 part 4: the export's mix as a waveform, shown only while
-           #rulerwaveformtoggle is pressed; the toggle only for a take with audio. -->
-      <button type="button" class="rulertoggle" id="rulerwaveformtoggle" hidden
-              aria-label="Show the audio waveform on the ruler" aria-pressed="false"
-              title="Show the audio waveform on the ruler">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h1M5 6v4M8 3v10M11 5v6M14 8h0"/></svg>
-      </button>
       <div id="ruler-activity-wrap"><canvas id="ruler-activity"></canvas></div>
-      <div id="ruler-waveform-wrap"><canvas id="ruler-waveform"></canvas></div>
       <div id="ruler-content">
         <div id="ruler-ticks"></div>
         <div id="ruler-played"></div>
         <div id="ruler-playhead"></div>
         <div id="ruler-bookmarks"></div>
       </div>
+    </div>
+    <!-- STC-483: the export's mix (STC-454 part 4) on its own lane; hidden for a
+         take with no audio. The bottom-edge button resizes it. -->
+    <div class="laneviewport audio" id="audio-lane" hidden>
+      <span class="lanelabel">Audio</span>
+      <div id="audio-canvas-wrap"><canvas id="audio-waveform"></canvas></div>
+      <button type="button" id="audio-resize" aria-label="Resize the audio lane"
+              title="Drag to resize the audio lane (Up/Down keys nudge it)"></button>
     </div>
     <div class="laneviewport clip">
       <span class="lanelabel">Clip</span>

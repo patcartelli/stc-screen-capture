@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld("editor", {
   setPipStyleDefault: (style: unknown) => ipcRenderer.invoke("recorder:setSettings", { pipStyle: style }),
   publish: () => ipcRenderer.invoke("share:publish"),
   revealPublished: () => ipcRenderer.invoke("share:reveal"),
+  // STC-483: grow the window to show every lane, once a take is open.
+  fitWindow: (contentHeight: number) => ipcRenderer.invoke("editor:fit", contentHeight),
   // STC-399: the export manifest stamp's version half.
   getVersion: () => ipcRenderer.invoke("app:version"),
 });

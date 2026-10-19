@@ -73,7 +73,7 @@ import {
 } from "./thumbnail-window.js";
 import { promotes, trashStyle } from "./panel-actions.js";
 import { quitDecision } from "./quit-guard.js";
-import { editorIsOpen, openEditor } from "./editor-window.js";
+import { editorIsOpen, fitEditorToContent, openEditor } from "./editor-window.js";
 import { openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
 import { discardPill, pillStarted, preparePill } from "./pill-window.js";
@@ -2808,6 +2808,8 @@ ipcMain.handle("editor:open", async (_e, dir: string, name: string, autoShare?: 
   openEditor({ dir, name, dist: here, rendererDir: join(here, "..", "renderer"), autoShare });
   return true;
 });
+
+ipcMain.handle("editor:fit", (e, contentHeight: number) => { fitEditorToContent(e.sender, contentHeight); });
 
 ipcMain.handle("preview:writeProject", async (e, bytes: ArrayBuffer) => {
   const openTake = getOpenTake(e);

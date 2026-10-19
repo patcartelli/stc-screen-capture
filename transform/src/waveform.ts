@@ -1,6 +1,6 @@
 /**
  * The editor's audio WAVEFORM (STC-454 part 4): one peak per bucket of the
- * EXPORT's mix, drawn on the ruler.
+ * EXPORT's mix, drawn on the editor's audio lane (STC-483; the ruler until then).
  *
  * ## The decisions (Patrick, 2026-09-25)
  *
@@ -40,6 +40,14 @@ import { mixBlock, MIX_SAMPLE_RATE, mixFrameCount, type PcmTrack } from "./audio
 export const WAVEFORM_BUCKETS = 1024;
 /** One second of the mix per step: small enough to keep a slice short. */
 export const WAVEFORM_BLOCK_FRAMES = MIX_SAMPLE_RATE;
+
+/**
+ * A bucket whose peak reaches this is CLIPPED (STC-483): the mix is hard-limited
+ * at 1.0, so a clipped sample reads exactly 1; the margin absorbs float32 rounding.
+ * The editor draws such a bucket in red, the only clip indicator.
+ */
+export const CLIP_PEAK = 0.999;
+export const isClipped = (peak: number): boolean => peak >= CLIP_PEAK;
 
 export interface MixPeaksInput {
   mic: PcmTrack | null;
