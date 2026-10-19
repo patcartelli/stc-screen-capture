@@ -55,7 +55,7 @@ describe("zoom bar", () => {
   }, 60_000);
 
   test("⌘-scroll zooms; plain scroll pans", async () => {
-    const win = await open();
+    const win: any = await open();
     const sent = (init: WheelEventInit) => win.evaluate((i: WheelEventInit) => {
       document.getElementById("ruler")!.dispatchEvent(new WheelEvent("wheel", { ...i, bubbles: true, cancelable: true }));
     }, init);
