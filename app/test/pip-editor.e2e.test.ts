@@ -62,9 +62,9 @@ describe("the editor's Camera popover (STC-461)", () => {
     const style = savedPip(takeDir).style;
     const r = pipRect(style, { width: output.width, height: output.height }, { width: cam.width, height: cam.height });
     expect([r.x, r.y]).toEqual([PIP_SNAP_MARGIN_PX, PIP_SNAP_MARGIN_PX]);
-    // The drag must not cost the person the inspector (light dismiss is re-opened).
+    // The panel is temporary (STC-483): the drag closes it and it stays closed.
     await expect.poll(() => editorWin.evaluate(() => document.getElementById("pippanel")!.matches(":popover-open")),
-      { timeout: 5_000 }).toBe(true);
+      { timeout: 5_000 }).toBe(false);
   }, 120_000);
 
   test("reframe: dragging the window right moves framing.x right, and Done saves it", async () => {

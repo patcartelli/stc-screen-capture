@@ -1824,11 +1824,10 @@ $("clicksbtn").addEventListener("click", () => {
 // is a mutation plus a repaint; a COMMIT also persists.
 //
 // #pippanel is `popover="auto"`, and a press on #pipoverlay is OUTSIDE it, so
-// the browser's light dismiss closes the inspector on a drag. Two things keep
-// that from breaking the gesture or losing the panel: the overlay is never
-// hidden while a drag is in flight (layoutPipOverlay checks `pipDrag`), and a
-// drag that ends with the panel closed re-opens it — dragging is part of using
-// the inspector, not leaving it. (docs/STC-461-RUNBOOK.md §3 judges how it feels.)
+// the browser's light dismiss closes the inspector on a drag. The overlay is never
+// hidden while a drag is in flight (layoutPipOverlay checks `pipDrag`), so the
+// gesture survives that; the panel itself stays closed afterwards (STC-483: a
+// temporary surface, opened from the Camera button and closed again).
 // The panel is anchored to its button like the Audio popover (STC-483, Patrick
 // 2026-10-16: the over-the-stage placement collided with the timeline lanes).
 
@@ -1987,11 +1986,9 @@ function endPipDrag(): void {
   if (!pipDrag) return;
   pipDrag = null;
   persistPip();
-  // Light dismiss runs around this same pointerup; re-open once it has.
-  setTimeout(() => {
-    if (!pipPanelOpen() && !$("pipbtn").hidden) pipPanel.showPopover?.();
-    layoutPipOverlay();
-  }, 0);
+  // The panel is temporary (STC-483): light dismiss closes it on the drag and it
+  // stays closed. Re-read the overlay once that has run.
+  setTimeout(layoutPipOverlay, 0);
 }
 $("pipoverlay").addEventListener("pointerup", endPipDrag);
 $("pipoverlay").addEventListener("pointercancel", endPipDrag);
