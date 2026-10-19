@@ -19,6 +19,10 @@ async function open() {
   const { app: a, editorWin } = await launchWithTakeInEditor();
   app = a;
   await waitForTakeLoaded(editorWin);
+  // The zoom bar is drawn once the opening span is set, a beat after #scrub.
+  await expect.poll(() => editorWin.evaluate(
+    () => parseFloat((document.getElementById("overview-window") as HTMLElement).style.width),
+  ), { timeout: 10_000 }).toBeCloseTo(100, 3);
   return editorWin;
 }
 

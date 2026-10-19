@@ -168,6 +168,12 @@ function resetSpan(): void {
   spanEnd = player?.durationNs ?? 0;
 }
 
+/** The span the lane canvases draw: the whole take until a span is set. */
+function visibleSpan(): { start: number; end: number } {
+  const dur = player?.durationNs ?? 0;
+  return spanEnd > spanStart ? { start: spanStart, end: spanEnd } : { start: 0, end: dur };
+}
+
 function applySpanTransform(): void {
   const durationNs = player?.durationNs ?? 0;
   const span = Math.max(1, spanEnd - spanStart);
@@ -694,9 +700,10 @@ function drawRulerActivity(): void {
   if (!player || !openSession) return;
   const activity = clipActivity(openSession.events, player.durationNs, LANE_BUCKETS);
   // STC-484: drawn for the visible span, not stretched (see drawAudioLane).
-  const spanW = Math.max(1, spanEnd - spanStart);
+  const vis = visibleSpan();
+  const spanW = Math.max(1, vis.end - vis.start);
   const barW = (w * (player.durationNs / activity.length)) / spanW;
-  const x0 = -(spanStart / spanW) * w;
+  const x0 = -(vis.start / spanW) * w;
   const style = getComputedStyle(document.documentElement).getPropertyValue("--clip").trim() || "#6a8fd8";
   ctx.fillStyle = style || "#6a8fd8";
   const bw = Math.max(1, barW - 1);
@@ -802,8 +809,9 @@ function drawAudioLane(): void {
   // STC-484: the canvas shows the VISIBLE span only, redrawn on every zoom or
   // pan rather than CSS-stretched, so a zoomed lane stays sharp.
   const dur = player?.durationNs ?? 0;
-  const f0 = dur > 0 ? spanStart / dur : 0;
-  const f1 = dur > 0 ? spanEnd / dur : 1;
+  const vis = visibleSpan();
+  const f0 = dur > 0 ? vis.start / dur : 0;
+  const f1 = dur > 0 ? vis.end / dur : 1;
   for (let x = 0; x < w; x++) {
     // Every bucket that falls in this column, so a narrow window cannot skip a peak.
     const b0 = Math.max(0, Math.floor((f0 + (x / w) * (f1 - f0)) * n));
@@ -920,8 +928,8 @@ function drawZoomLane(): void {
     (tNs) => render(openProject!, openSession!, tNs).zoom.amount,
     player.durationNs,
     LANE_BUCKETS,
-    spanStart,
-    spanEnd,
+    visibleSpan().start,
+    visibleSpan().end,
   );
   // STC-330: a FILLED area, not a stroked line — the same sampled curve now
   // reads as one trapezoid per derived window (ease-in ramp, flat top,
@@ -1728,6 +1736,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   };
   await player.seek(player.firstRenderableNs);
   resetSpan();
+  applySpanTransform(); // draws the zoom bar and the lanes for the opening span (STC-484)
   updateTrimUI();
   updateOutputSizeUI();
   updateLegibilityUI();
