@@ -386,12 +386,18 @@ function libraryNow(): LibraryAtTakeStart {
 }
 
 /**
- * A library hidden with the app (⌘H) is taken off screen for real before the
+ * A library (and any editor) hidden with the app (⌘H) is taken off screen for real before the
  * overlay opens, so the overlay activating the app cannot bring it back. It
  * stays that way after the take, which is what ⌘H already meant.
  */
 function keepHiddenLibraryHidden(atFlowStart: LibraryAtTakeStart): void {
-  if (atFlowStart.appHidden && atFlowStart.exists && !atFlowStart.minimized) win!.hide();
+  if (!atFlowStart.appHidden) return;
+  if (atFlowStart.exists && !atFlowStart.minimized) win!.hide();
+  // STC-556: the overlay's activation unhides every window hidden with the
+  // app, not only the library. The editors go the same way, here, before it
+  // opens; by `hideLibraryForTake` the app is no longer hidden.
+  hideEditor();
+  hideStillEditor();
 }
 
 /**
