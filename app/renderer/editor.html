@@ -20,7 +20,7 @@
     /* --bookmark (STC-444 slice 4): a marker's own color, distinct from the
        played bar / selection's --accent (blue) and the Zoom lane's --zoom
        (orange) so a bookmark reads as its own kind of mark on the ruler. */
-    :root { --clip: #6a8fd8; --zoom: #d88a3b; --zoom-fill: #4f7fe0; --bookmark: #e0c14f; --wave: #5fb38a; --wave-clip: var(--rec); --audio-lane-h: 56px; }
+    :root { --clip: #6a8fd8; --zoom: #d88a3b; --zoom-fill: #4f7fe0; --bookmark: #e0c14f; --wave: #5fb38a; --wave-clip: var(--rec); --audio-lane-h: 56px; --lane-pad: 12px; }
     /* STC-444 (Figma pass, 2026-09-24): the editor is ALWAYS dark, per
        Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
        "follow the OS" default (the still editor was moved OFF forced dark
@@ -304,7 +304,6 @@
        --wave-clip (the shared --rec, which has a light and a dark value). */
     .laneviewport.audio { height: var(--audio-lane-h); margin-top: 0; }
     .laneviewport.audio[hidden] { display: none; }
-    #audio-canvas-wrap { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform-origin: 0 0; }
     #audio-waveform { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
     #audio-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; margin: 0; padding: 0;
                     border: none; background: transparent; cursor: ns-resize; z-index: 6; touch-action: none; }
@@ -365,14 +364,18 @@
        (trim) and Zoom read as two different kinds of control, not two rows
        of one list. */
     .laneviewport.zoom { height: 22px; margin-top: 16px; }
+    /* STC-483: the track is inset by --lane-pad inside each lane's full-width viewport,
+       so the playhead and the trim brackets at 0 and at the end sit inside the lane
+       instead of half-clipped at its edge. Every frame<->px read is of #timeline's
+       own box, which already reflects the inset. */
     /* The FULL-DURATION content, transformed to show only the visible span
        (STC-373: "pan lives on the ruler, zoom anchors on the pointer"). Every
        frame<->px conversion in editor.ts reads getBoundingClientRect() of
        #timeline itself, which already reflects this transform — so the
        existing scrubber/trim arithmetic (app/src/scrubber.ts) needs no
        span-aware rewrite. */
-    #timeline, #ruler-content, #ruler-activity-wrap, #zoom-canvas-wrap, #override-blocks {
-      position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    #timeline, #ruler-content, #ruler-activity-wrap, #audio-canvas-wrap, #zoom-canvas-wrap, #override-blocks {
+      position: absolute; left: var(--lane-pad); top: 0; width: calc(100% - 2 * var(--lane-pad)); height: 100%;
       transform-origin: 0 0;
     }
     /* #override-blocks-dynamic holds every button layoutOverrideBlocks()

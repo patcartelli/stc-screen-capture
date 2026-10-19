@@ -23,6 +23,7 @@ interface AppSettings {
   share: { destination: string | null };
 }
 declare const editor: {
+  fitWindow: (contentHeight: number) => Promise<void>;
   openPreview: (dir: string) => Promise<boolean>;
   closePreview: () => Promise<void>;
   readTakeFile: (name: string) => Promise<ArrayBuffer>;
@@ -1571,6 +1572,8 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   void loadPreviewAudio(session, audioGen);
   applySpanTransform();
   redrawLanes();
+  // STC-483: show every lane without scrolling. After layout, once per open take.
+  requestAnimationFrame(() => void editor.fitWindow(document.documentElement.scrollHeight));
 }
 
 async function closeTake(): Promise<void> {
