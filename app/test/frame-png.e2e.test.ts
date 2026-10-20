@@ -94,7 +94,8 @@ describe("the current preview frame as a PNG, from the editor window (STC-373)",
     await win.dispatchEvent("#scrub", "input");
     await expect.poll(() => win.textContent("#clock"), { timeout: 20_000 }).not.toMatch(/^0:00:00 /);
 
-    await win.click("#framegrab", { modifiers: ["Alt"] }); // ⌥-click saves (STC-444)
+    await win.click("#framegrab", { button: "right" }); // right-click menu saves (STC-453)
+    await win.click("#saveframe");
     await expect.poll(() => win.textContent("#framestatus"), { timeout: 20_000 }).toMatch(/^Saved frame at/);
     const pngs = readdirSync(root).filter((f) => /^frame-2026-08-24_10-00-00-\d+ms\.png$/.test(f));
     expect(pngs).toHaveLength(1);
@@ -134,7 +135,8 @@ describe("the current preview frame as a PNG, from the editor window (STC-373)",
     const { win, takeDir, root } = await openTake();
     await win.click("#playpause");
     await expect.poll(() => win.getAttribute("#playpause", "aria-label"), { timeout: 10_000 }).toBe("Pause");
-    await win.click("#framegrab", { modifiers: ["Alt"] }); // ⌥-click saves (STC-444)
+    await win.click("#framegrab", { button: "right" }); // right-click menu saves (STC-453)
+    await win.click("#saveframe");
     await expect.poll(() => win.textContent("#framestatus"), { timeout: 20_000 }).toMatch(/^Saved frame at/);
     expect(framesAtRoot(root)).toHaveLength(1);
     expect(framesInBundle(takeDir)).toHaveLength(0);

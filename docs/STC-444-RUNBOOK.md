@@ -34,9 +34,9 @@ centres the transport at all — see the CSS comment in `editor.html`.
   Home and End, which now go to the trim's in and out points (the ends of the
   take when untrimmed, as before). The step buttons are ← and →; ⇧-click
   steps ten frames, the same as ⇧←/⇧→.
-- **Frame grab** is one icon in the right group. Click copies, ⌥-click saves,
-  and right-clicking the icon or the preview opens a Copy frame / Save frame
-  menu.
+- **Frame grab** is one icon in the right group. Click copies, and
+  right-clicking the icon or the preview opens a Copy frame / Save frame
+  menu (STC-453: ⌥-click to save was removed; the menu is the way to Save).
 - **Export** is now a download icon and **Close** is an ×. Close stays because
   the e2e suite closes the window through it, and there is no ⌘W binding to
   replace it yet.
@@ -60,8 +60,8 @@ centres the transport at all — see the CSS comment in `editor.html`.
 4. **Space after a click.** Click `|▷`, then press Space. Playback must toggle
    exactly once. A focused button would normally also "click" on Space, and
    this checks that the keyboard grammar's `preventDefault` still wins.
-5. **⌥-click saves.** Confirm macOS doesn't take ⌥-click on a button for
-   anything else.
+5. **⌥-click no longer saves (STC-453).** ⌥-click the frame icon: it copies,
+   like a plain click. Save is in the right-click menu.
 6. **Right-click on the preview** opens the frame menu at the pointer. Escape
    or a click outside closes it.
 7. **Play glyph over the preview.** Is it legible on a white or busy frame? It
