@@ -891,33 +891,21 @@ setAudioLaneHeight(audioLaneHeight, false);
   });
 })();
 
-/** A crisp square-cell checkerboard (STC-444 slice 2: "LCD crisp", finer of
- *  the two pitches compared) rather than a soft blur — `bg` is the gap
- *  color between lit cells, so it should be the lane's own background. */
-const DITHER_TILE_PX = 4;
-function ditherPattern(ctx: CanvasRenderingContext2D, color: string, bg: string, scale: number): CanvasPattern {
-  // STC-451: the tile is built in DEVICE pixels (whole cells, so a fractional
-  // ratio never blurs an edge) because the lane's bitmap is drawn at device
-  // resolution — see laneBitmap.
-  const half = Math.max(1, Math.round((DITHER_TILE_PX / 2) * scale));
-  const size = half * 2;
-  const tile = document.createElement("canvas");
-  tile.width = size; tile.height = size;
-  const tctx = tile.getContext("2d")!;
-  tctx.fillStyle = bg;
-  tctx.fillRect(0, 0, size, size);
-  tctx.fillStyle = color;
-  tctx.fillRect(0, 0, half, half);
-  tctx.fillRect(half, half, half, half);
-  return ctx.createPattern(tile, "repeat")!;
+/** `#rrggbb` as `rgba(...)` — a canvas gradient stop takes a color string, and
+ *  fading to transparent needs an alpha the token itself does not carry. */
+function withAlpha(hex: string, alpha: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1]!, 16);
+  return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
 function drawZoomLane(): void {
   const canvas = $("zoom-curve") as HTMLCanvasElement;
   const wrap = $("zoom-canvas-wrap") as HTMLElement;
   // STC-451: a bitmap at DEVICE resolution, drawn in device pixels (no
-  // ctx.scale) so the dither stays crisp on a 2x display; CSS still sizes
-  // the canvas to the lane (#zoom-curve is 100% x 100%).
+  // ctx.scale) so the curve's edge stays crisp on a 2x display; CSS still
+  // sizes the canvas to the lane (#zoom-curve is 100% x 100%).
   const { width: w, height: h, scale } = laneBitmap(
     wrap.getBoundingClientRect().width || LANE_BUCKETS, 22, window.devicePixelRatio);
   canvas.width = w; canvas.height = h;
@@ -935,12 +923,15 @@ function drawZoomLane(): void {
   // reads as one trapezoid per derived window (ease-in ramp, flat top,
   // ease-out ramp), with #override-blocks laying the click targets over it.
   // Nothing about the sampling changed; only how it is drawn.
-  // STC-444 slice 2: the fill itself is a dithered --zoom-fill checkerboard
-  // now, not solid --zoom (which still owns the override-selection accents
-  // — see editor.html's --zoom-fill comment for why those stayed separate).
+  // STC-566: the fill is a vertical gradient of --zoom-fill now (solid at the
+  // curve's peak, fading toward the lane's floor), not STC-444's checkerboard
+  // dither. --zoom-fill still owns only this fill; --zoom keeps the
+  // override-selection accents (see editor.html's --zoom-fill comment).
   const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#4f7fe0";
-  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0a0a0b";
-  ctx.fillStyle = ditherPattern(ctx, fillColor, bg, scale);
+  const gradient = ctx.createLinearGradient(0, 0, 0, h);
+  gradient.addColorStop(0, withAlpha(fillColor, 0.9));
+  gradient.addColorStop(1, withAlpha(fillColor, 0.15));
+  ctx.fillStyle = gradient;
   ctx.beginPath();
   ctx.moveTo(0, h);
   for (let i = 0; i < curve.length; i++) {

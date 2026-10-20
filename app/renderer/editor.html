@@ -366,8 +366,8 @@
        played bar's WIDTH is deliberately left alone: like .kept, it is a
        time RANGE and is supposed to stretch with zoom. Ticks: kept at "keep
        A" (thin off-white lines) from the STC-444 HTML variant comparison —
-       dots and glow were tried and dropped; the Zoom lane's dithered fill is
-       the only place that texture survived. */
+       dots and glow were tried and dropped. (The Zoom lane's dithered fill was
+       the one place that texture survived, until STC-566 made it a gradient.) */
     #ruler-ticks { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; pointer-events: none; }
     .ruler-tick { position: absolute; bottom: 0; height: 8px; background: color-mix(in srgb, var(--text) 55%, transparent); }
     .ruler-tick.minor { height: 4px; background: color-mix(in srgb, var(--text) 25%, transparent); }
