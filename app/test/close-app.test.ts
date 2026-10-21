@@ -1,7 +1,7 @@
 import { describe, test, expect, vi, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { ElectronApplication } from "playwright";
-import { closeApp, SLOW_CLOSE_MS, APP_CLOSE_MS, CLOSE_GIVE_UP_MARGIN_MS } from "./_quit-fixture.js";
+import { closeApp, watchWindowLog, SLOW_CLOSE_MS, APP_CLOSE_MS, CLOSE_GIVE_UP_MARGIN_MS } from "./_quit-fixture.js";
 import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { DEFAULT_REQUEST_TIMEOUT_MS, QUIT_GRACE_MS } from "../src/helper-client.js";
 
@@ -142,5 +142,45 @@ describe("closeApp (STC-449)", () => {
     // fit inside the time closeApp actually waits.
     expect(APP_CLOSE_MS - CLOSE_GIVE_UP_MARGIN_MS).toBeGreaterThan(chain);
     expect(APP_CLOSE_MS).toBeGreaterThan(10_000);
+  });
+});
+
+describe("watchWindowLog (STC-568)", () => {
+  function watched() {
+    const { app, stderr } = stubApp(10, []);
+    const proc = app.process() as unknown as EventEmitter;
+    watchWindowLog(app);
+    stderr.emit("data", Buffer.from("noise\n[window] launch +0ms: 1 window: #1 index.html visible\n"));
+    stderr.emit("data", Buffer.from("[window] test: destroying stale #4 countdown.html hidden\n"));
+    return { app, proc };
+  }
+
+  test("an app that goes away mid-test prints its window log, last line last", () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { proc } = watched();
+    proc.emit("close", null, "SIGSEGV");
+    const out = write.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toContain("[watchWindowLog] pid 4242 went away mid-test (code null, signal SIGSEGV)");
+    expect(out.indexOf("launch +0ms")).toBeLessThan(out.indexOf("destroying stale #4"));
+    expect(out).not.toContain("noise");
+  });
+
+  test("a clean close by closeApp prints nothing", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { app, proc } = watched();
+    await closeApp(app);
+    proc.emit("close", 0, null);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  test("a crash during closeApp's close is printed once, by the watcher", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { app, proc } = watched();
+    Object.assign(proc, { signalCode: "SIGSEGV" });
+    await closeApp(app);
+    proc.emit("close", null, "SIGSEGV");
+    const out = write.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toContain("[watchWindowLog] pid 4242 died while closing");
+    expect(out).not.toContain("[closeApp] pid 4242 died from");
   });
 });

@@ -103,6 +103,40 @@ export function diedFromCrash(signal: NodeJS.Signals | null): boolean {
     || signal === "SIGILL" || signal === "SIGTRAP";
 }
 
+/** Processes `watchWindowLog` is printing for, so `closeApp` does not print twice. */
+const watchedProcs = new WeakSet<object>();
+/** Processes `closeApp` has started closing: a death after this is not mid-test. */
+const closingProcs = new WeakSet<object>();
+
+/**
+ * Print main.ts's `[window]` log if the app goes away under a test (STC-568).
+ *
+ * `closeApp` only collects those lines from the moment it starts closing, and
+ * only prints them for a crash during the close. The countdown's
+ * teardown-throws test lost its app MID-test on the macOS runner, before
+ * `closeApp` ran, so nothing named the window. Call this straight after
+ * `electron.launch()` with `STC_WINDOW_LOG=launch` in the app's env (main.ts
+ * then logs from launch): if the process exits before `closeApp` closes it, or
+ * dies from a crash signal while it does, every `[window]` line it printed goes
+ * to stderr, last line last.
+ */
+export function watchWindowLog(app: ElectronApplication): void {
+  const proc = app.process();
+  watchedProcs.add(proc);
+  const windowLines: string[] = [];
+  proc.stderr?.on("data", (chunk: Buffer | string) => {
+    for (const line of String(chunk).split("\n")) if (line.includes("[window]")) windowLines.push(line.trim());
+  });
+  // `close`, not `exit`: it fires once stdio has ended, so the last lines are in.
+  proc.once("close", (code: number | null, signal: NodeJS.Signals | null) => {
+    const midTest = !closingProcs.has(proc);
+    if (!midTest && !diedFromCrash(signal)) return;
+    process.stderr.write(`[watchWindowLog] pid ${proc.pid} ${midTest ? "went away mid-test" : "died while closing"} `
+      + `(code ${code}, signal ${signal}) (STC-568); its window log, last line last:\n`
+      + (windowLines.map((l) => `  ${l}\n`).join("") || "  (no [window] line was printed)\n"));
+  });
+}
+
 /**
  * Close an app the way every e2e `afterEach` should (STC-449).
  *
@@ -132,6 +166,7 @@ export function diedFromCrash(signal: NodeJS.Signals | null): boolean {
 export async function closeApp(app: ElectronApplication | undefined, hookBoundMs = APP_CLOSE_MS): Promise<void> {
   if (!app) return;
   const proc = app.process();
+  closingProcs.add(proc);
   const quitLines: string[] = [];
   // STC-534: main.ts's window log from the moment the quit commits. Printed
   // only if the app died from a crash signal, since then the last of these
@@ -168,7 +203,7 @@ export async function closeApp(app: ElectronApplication | undefined, hookBoundMs
     });
   }
   proc.stderr?.off("data", onData);
-  if (closed && diedFromCrash(signal)) {
+  if (closed && diedFromCrash(signal) && !watchedProcs.has(proc)) {
     process.stderr.write(`[closeApp] pid ${proc.pid} died from ${signal} while closing (STC-534); `
       + `its window log, last line last:\n${windowLines.map((l) => `  ${l}\n`).join("") || "  (no [window] line was printed)\n"}`);
   }

@@ -31,6 +31,14 @@ import type { App, BrowserWindow } from "electron";
  *
  * `describeWindow` and `pageName` are pure; `startQuitWindowLog` only reads
  * windows and attaches listeners — it never changes one.
+ *
+ * STC-568: the same log can start at LAUNCH, for an e2e test whose app dies
+ * mid-test rather than at quit (`countdown.e2e.test.ts`'s teardown-throws
+ * test). With `STC_WINDOW_LOG=launch` main.ts calls `startWindowLog(…,
+ * "launch")` as soon as the app is ready, and `watchWindowLog`
+ * (app/test/_quit-fixture.ts) prints the lines if the process goes away before
+ * the test closes it. The quit still adds its own snapshot line then; it just
+ * does not attach a second set of listeners.
  */
 
 export interface WindowState {
@@ -81,7 +89,14 @@ function stateOf(win: BrowserWindow): WindowState {
 const WINDOW_EVENTS = ["focus", "blur", "show", "hide", "close", "closed"] as const;
 const APP_EVENTS = ["did-become-active", "did-resign-active"] as const;
 
+/** The env var that starts the log at launch, and its one value. */
+export const WINDOW_LOG_ENV = "STC_WINDOW_LOG";
+export const WINDOW_LOG_AT_LAUNCH = "launch";
+
 let started = false;
+/** When the log started; every line's `+Nms` is from here. */
+let t0 = 0;
+const snapshotted = new Set<string>();
 
 /**
  * Call where the quit commits to tearing down (`runQuitTeardown`). One-way
@@ -89,14 +104,26 @@ let started = false;
  * every line.
  */
 export function startQuitWindowLog(app: App, windows: BrowserWindow[], now: () => number = Date.now): void {
+  startWindowLog(app, windows, "quit", now);
+}
+
+/**
+ * Log every window's state under `reason`, then follow each window's events.
+ * Listeners are attached once per process however many reasons call this; the
+ * snapshot line is logged once per reason, so a launch-started log still says
+ * what was open when the quit committed.
+ */
+export function startWindowLog(app: App, windows: BrowserWindow[], reason: string, now: () => number = Date.now): void {
+  if (snapshotted.has(reason)) return;
+  snapshotted.add(reason);
+  const log = (line: string) => { console.error(`[window] ${line}`); };
+  if (!started) t0 = now();
+  const at = () => `+${now() - t0}ms`;
+
+  log(`${reason} ${at()}: ${windows.length} window${windows.length === 1 ? "" : "s"}: `
+    + (windows.map((w) => describeWindow(stateOf(w))).join(" | ") || "none"));
   if (started) return;
   started = true;
-  const t0 = now();
-  const at = () => `+${now() - t0}ms`;
-  const log = (line: string) => { console.error(`[window] ${line}`); };
-
-  log(`quit ${at()}: ${windows.length} window${windows.length === 1 ? "" : "s"}: `
-    + (windows.map((w) => describeWindow(stateOf(w))).join(" | ") || "none"));
 
   const follow = (win: BrowserWindow) => {
     for (const event of WINDOW_EVENTS) {
