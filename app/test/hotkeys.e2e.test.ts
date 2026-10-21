@@ -4,7 +4,7 @@ import { mkdtempSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
-import { DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
+import { DEFAULT_SHORTCUTS, OUTCOMES, outcomeAccelerator } from "../src/hotkeys.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { windowCount } from "./_windows.js";
@@ -96,7 +96,7 @@ describe("the capture shortcuts", () => {
       await expect.poll(() => win.textContent(`#shortcutwhy-${action}`), { timeout: 15_000 })
         .toBe("Active");
     }
-    expect(await win.textContent("#shortcut-region")).toBe("⌃⌥⇧⌘1");
+    expect(await win.textContent("#shortcut-region")).toBe("⇧⌘4");
   }, 120_000);
 
   test("a rebinding registers the new key, releases the old one, and survives a relaunch", async () => {
@@ -121,15 +121,15 @@ describe("the capture shortcuts", () => {
 
   test("a binding macOS has already claimed is refused, and is NOT stored", async () => {
     // The acceptance criterion. A rejection that quietly wrote something else
-    // would leave the user believing they had bound ⌘⇧4.
+    // would leave the user believing they had bound ⌘Space.
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const { win } = await launch({ userData });
 
-    await rebind(win, "window", "Meta+Shift+4");
+    await rebind(win, "window", "Meta+Space");
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/macOS/);
     // The previous binding stays live and stays shown.
-    expect(await win.textContent("#shortcut-window")).toBe("⌃⌥⇧⌘2");
+    expect(await win.textContent("#shortcut-window")).toBe("⇧⌘2");
     expect(await isRegistered(DEFAULT_SHORTCUTS.window!)).toBe(true);
     // Nothing was written AT ALL: a refused binding is not a change. Reading
     // the file back would not discriminate — `writeSettings` normalises a bad
@@ -147,8 +147,8 @@ describe("the capture shortcuts", () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const { win } = await launch({ userData });
     const r = await win.evaluate(() =>
-      (window as any).recorder.setShortcut("window", "Command+Shift+4"));
-    expect(r.shortcuts.window).toBe("Control+Alt+Shift+Command+2");
+      (window as any).recorder.setShortcut("window", "Command+Space"));
+    expect(r.shortcuts.window).toBe("Shift+Command+2");
     expect(r.report.find((x: any) => x.action === "window"))
       .toMatchObject({ problem: "reserved", registered: false });
     expect(await isRegistered(DEFAULT_SHORTCUTS.window!)).toBe(true);
@@ -181,7 +181,7 @@ describe("the capture shortcuts", () => {
     await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌃⌥⇧F9");
 
     await win.click("#resetshortcuts");
-    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌃⌥⇧⌘1");
+    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⇧⌘4");
     for (const accelerator of Object.values(DEFAULT_SHORTCUTS)) {
       expect(await isRegistered(accelerator!), accelerator!).toBe(true);
     }
@@ -190,11 +190,12 @@ describe("the capture shortcuts", () => {
 
   test("a second action cannot take a key the first already has", async () => {
     const { win } = await launch();
-    await rebind(win, "window", `Control+Alt+Shift+Meta+1`);
+    // Area's own default, spelled differently (the grammar is normalised).
+    await rebind(win, "window", "Shift+Meta+4");
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/already uses this/);
     // And the first action keeps it.
-    expect(await isRegistered(`${HYPER}+1`)).toBe(true);
+    expect(await isRegistered(DEFAULT_SHORTCUTS.region!)).toBe(true);
   }, 120_000);
 });
 
@@ -339,5 +340,37 @@ describe("a full-display capture", () => {
       .toBe("hotkey");
     await expect.poll(() => win.textContent("#stillstatus"), { timeout: 10_000 })
       .toMatch(/^Shot full display/);
+  }, 120_000);
+});
+
+describe("the capture-time outcome variants (STC-415)", () => {
+  test("every shot's ⌃ and ⌥ variants are registered with the window server, Record's are not", async () => {
+    await launch();
+    for (const action of ["region", "window", "display", "self-timer"] as const) {
+      for (const outcome of OUTCOMES) {
+        const v = outcomeAccelerator(DEFAULT_SHORTCUTS[action]!, outcome)!;
+        expect(await isRegistered(v), `${action}/${outcome}: ${v}`).toBe(true);
+      }
+    }
+    for (const outcome of OUTCOMES) {
+      expect(await isRegistered(outcomeAccelerator(DEFAULT_SHORTCUTS.record!, outcome)!), `record/${outcome}`)
+        .toBe(false);
+    }
+  }, 120_000);
+
+  test("a rebinding releases the old variants, and a base that holds every modifier has none", async () => {
+    const { win } = await launch();
+    await rebind(win, "region", "Control+Alt+Shift+F9");
+    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌃⌥⇧F9");
+    // The old base's variants are released rather than left firing from a key
+    // preferences no longer shows.
+    for (const outcome of OUTCOMES) {
+      expect(await isRegistered(outcomeAccelerator(DEFAULT_SHORTCUTS.region!, outcome)!), outcome).toBe(false);
+    }
+    // Control+Alt+Shift+F9 has no Command, so its variants add ⌃ and ⌥, which it
+    // already holds: neither exists.
+    for (const outcome of OUTCOMES) {
+      expect(outcomeAccelerator("Control+Alt+Shift+F9", outcome)).toBeUndefined();
+    }
   }, 120_000);
 });

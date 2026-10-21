@@ -6,7 +6,7 @@ import {
   readSettings, writeSettings, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
   DEFAULT_THUMBNAIL_SETTINGS,
 } from "../src/settings.js";
-import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, HYPER } from "../src/hotkeys.js";
+import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
 import { DEFAULT_GIF_SETTINGS } from "@transform/gif-options.js";
 import { DEFAULT_PIP_STYLE } from "@transform/pip-style.js";
@@ -298,13 +298,27 @@ describe("the shutter sound preference", () => {
  * be the thing that binds.
  */
 describe("the capture shortcuts", () => {
-  test("default to the hyperkey row when nothing has been saved", () => {
+  test("default to the ⇧⌘ row when nothing has been saved", () => {
     expect(readSettings(dir()).shortcuts).toEqual({
-      region: `${HYPER}+1`, window: `${HYPER}+2`, display: `${HYPER}+3`,
-      // STC-388: Record takes 4, the slot STC-391 left open for it.
-      record: `${HYPER}+4`,
-      "self-timer": `${HYPER}+5`,
+      region: "Shift+Command+4", window: "Shift+Command+2", display: "Shift+Command+3",
+      record: "Shift+Command+6",
+      "self-timer": "Shift+Command+7",
     });
+  });
+
+  test("an untouched pre-STC-415 hyperkey set moves to the new defaults", () => {
+    const d = dir();
+    writeSettings(d, { shortcuts: { ...LEGACY_DEFAULT_SHORTCUTS } });
+    expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
+  });
+
+  test("a set with even one customised binding keeps all of its own, hyperkey included", () => {
+    const d = dir();
+    writeSettings(d, { shortcuts: { ...LEGACY_DEFAULT_SHORTCUTS, region: "Alt+Shift+R" } });
+    expect(readSettings(d).shortcuts).toEqual({ ...LEGACY_DEFAULT_SHORTCUTS, region: "Alt+Shift+R" });
+    // An unbound action is a customisation too.
+    writeSettings(d, { shortcuts: { ...LEGACY_DEFAULT_SHORTCUTS, display: null } });
+    expect(readSettings(d).shortcuts).toEqual({ ...LEGACY_DEFAULT_SHORTCUTS, display: null });
   });
 
   test("a rebinding round-trips, which is the acceptance criterion", () => {

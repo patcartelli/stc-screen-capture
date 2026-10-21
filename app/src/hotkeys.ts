@@ -116,26 +116,39 @@ export type Shortcuts = Record<BindableAction, string | null>;
 /**
  * All four modifiers at once — what a caps-lock "hyperkey" remap sends.
  *
- * Chosen as the default because it is the one combination nothing else on a
- * Mac can plausibly hold: the ticket's requirement is only that the defaults
- * not collide with ⌘⇧3/4/5/6, and every two-modifier combination that clears
- * those is still cheap for some other app to have taken first.
+ * The defaults until STC-415. It stays exported for two reasons: a settings
+ * file that still holds exactly this set is an UNTOUCHED set and moves to
+ * `DEFAULT_SHORTCUTS` (`LEGACY_DEFAULT_SHORTCUTS`, `settings.ts`), and a
+ * rebinding to it is as valid as any other.
  */
 export const HYPER = "Control+Alt+Shift+Command";
 
+/**
+ * What a fresh install binds (STC-415): CleanShot's own row, ⇧⌘3 / ⇧⌘4, with
+ * the gaps filled beside it. Moved off HYPER because the capture-time outcome
+ * variants (`OUTCOME_MODIFIERS`) ADD a modifier to a binding, and a base that
+ * already holds all four has nothing left to add.
+ *
+ * `window` is 2 and `self-timer` is 7 so 2/3/4 read as window / display /
+ * area and 6 stays Record's, with 5 left free for an "all-in-one" later.
+ */
 export const DEFAULT_SHORTCUTS: Shortcuts = {
+  region: "Shift+Command+4",
+  window: "Shift+Command+2",
+  display: "Shift+Command+3",
+  record: "Shift+Command+6",
+  "self-timer": "Shift+Command+7",
+};
+
+/**
+ * The pre-STC-415 defaults, kept only to recognise an untouched settings file
+ * (`settings.ts`'s `cleanShortcuts`). Never bound by anything but that check.
+ */
+export const LEGACY_DEFAULT_SHORTCUTS: Shortcuts = {
   region: `${HYPER}+1`,
   window: `${HYPER}+2`,
   display: `${HYPER}+3`,
-  // The slot STC-391 deliberately left open, in a comment naming this ticket:
-  // 1/2/3 shot, 4 records, 5 shoots on a timer — adjacent, not interleaved.
   record: `${HYPER}+4`,
-  // 5, not 4: the ticket names it, and 4 is Record's own default above —
-  // the two are a pair in the user's head and read better adjacent than
-  // interleaved (STC-388 review, Finding 10: this used to say 4 was left
-  // FREE for Record to bind later; STC-388 landed and bound it, so the slot
-  // is no longer free, it is taken — deliberately, by design, right next to
-  // this one).
   "self-timer": `${HYPER}+5`,
 };
 
@@ -196,15 +209,16 @@ export type ParsedAccelerator =
  * Deliberately SHORT and deliberately not exhaustive — a full map of every
  * system binding would be wrong within one macOS release and would read as
  * authoritative. This is the set worth refusing before the user has pressed
- * anything else: the screenshot family the ticket names, plus the three
- * switchers whose loss would be immediately confusing. Everything else is left
+ * anything else: the switchers whose loss would be immediately confusing. Everything else is left
  * to `globalShortcut.register`, which is the real authority and is reported.
  */
 export const SYSTEM_CLAIMED: readonly string[] = [
-  // Screenshots and their clipboard variants.
-  "Command+Shift+3", "Command+Shift+4", "Command+Shift+5", "Command+Shift+6",
-  "Control+Command+Shift+3", "Control+Command+Shift+4",
-  "Control+Command+Shift+5", "Control+Command+Shift+6",
+  // STC-415: ⌘⇧3/4/5/6 and their ⌃ clipboard variants used to be here. They
+  // are macOS's screenshot family and this app now defaults to them, which
+  // only works on a Mac where those system shortcuts are switched off (the
+  // CleanShot arrangement). `globalShortcut.register` stays the authority: if
+  // macOS still holds one it returns false and preferences says "something
+  // else on this Mac already holds this shortcut".
   // Spotlight, the character/emoji viewer, the app switcher, quit.
   "Command+Space", "Control+Space", "Alt+Command+Space",
   "Control+Command+Space",
@@ -357,6 +371,88 @@ export function explainShortcut(r: ShortcutReport): string | undefined {
     case "unavailable":
       return "Something else on this Mac already holds this shortcut.";
   }
+}
+
+// ── the capture-time outcome (STC-415) ───────────────────────────────────────
+
+/**
+ * What a shot does once it is taken, chosen at the keystroke.
+ *
+ * - `clipboard`: straight to the clipboard, no panel — the "Skip it"
+ *   preference, for this one capture.
+ * - `editor`: promoted into the library and opened in the still editor, no
+ *   panel.
+ *
+ * The base binding is the third, default outcome: whatever the panel
+ * preference says. Not a member here because it is not a variant of anything.
+ */
+export const OUTCOMES = ["clipboard", "editor"] as const;
+export type Outcome = (typeof OUTCOMES)[number];
+
+/**
+ * The modifier each outcome ADDS to a shot's own binding. ⌃ is macOS's own
+ * "to the clipboard" modifier on its screenshot shortcuts (⌃⇧⌘4); ⌥ is free.
+ *
+ * Variants are DERIVED, never stored: a stored one would be a second binding
+ * to rebind, reset and migrate, and could drift from the base it belongs to.
+ * Rebinding a shot moves its variants with it.
+ */
+export const OUTCOME_MODIFIERS: Record<Outcome, Modifier> = {
+  clipboard: "Control",
+  editor: "Alt",
+};
+
+/** `undefined` when the binding already holds that modifier, so there is no
+ * second keystroke to derive — a HYPER binding has all four. */
+export function outcomeAccelerator(base: string, outcome: Outcome): string | undefined {
+  const parsed = normalise(base);
+  if (!parsed.ok) return undefined;
+  const parts = parsed.accelerator.split("+");
+  const mod = OUTCOME_MODIFIERS[outcome];
+  if (parts.includes(mod)) return undefined;
+  const key = parts[parts.length - 1]!;
+  const mods = new Set<string>(parts.slice(0, -1));
+  mods.add(mod);
+  return [...MODIFIER_ORDER.filter((m) => mods.has(m)), key].join("+");
+}
+
+export interface OutcomeVariantPlan {
+  action: ShotAction;
+  outcome: Outcome;
+  /** `null` when there is nothing to register, with `problem` saying why. */
+  accelerator: string | null;
+  problem?: "held" | "duplicate";
+}
+
+/**
+ * Every outcome variant the bindable shots would register, resolved against
+ * the whole plan: a variant that lands on another action's binding (or on an
+ * earlier variant) is dropped rather than registered twice — the base
+ * bindings win, because they are what the user typed.
+ *
+ * Only shots have variants. Record has no panel to skip, and Self-Timer's
+ * variants are included: the countdown is the mechanism, the outcome is
+ * still a shot's.
+ */
+export function planOutcomeVariants(plans: readonly ShortcutPlan[]): OutcomeVariantPlan[] {
+  const taken = new Set<string>();
+  for (const p of plans) if (p.problem === undefined && p.accelerator) taken.add(p.accelerator);
+  const out: OutcomeVariantPlan[] = [];
+  for (const p of plans) {
+    if (p.problem !== undefined || !p.accelerator || !isShotAction(p.action)) continue;
+    for (const outcome of OUTCOMES) {
+      const accelerator = outcomeAccelerator(p.accelerator, outcome);
+      if (accelerator === undefined) {
+        out.push({ action: p.action, outcome, accelerator: null, problem: "held" });
+      } else if (taken.has(accelerator)) {
+        out.push({ action: p.action, outcome, accelerator: null, problem: "duplicate" });
+      } else {
+        taken.add(accelerator);
+        out.push({ action: p.action, outcome, accelerator });
+      }
+    }
+  }
+  return out;
 }
 
 // ── recording a keystroke, and showing one ──────────────────────────────────

@@ -4,7 +4,7 @@ import {
   bgraFromMask, marqueeMask, trayTemplate,
 } from "../src/tray-menu.js";
 import {
-  BINDABLE_ACTIONS, SHOT_ACTIONS, DEFAULT_SHORTCUTS, HYPER,
+  BINDABLE_ACTIONS, SHOT_ACTIONS, DEFAULT_SHORTCUTS,
 } from "../src/hotkeys.js";
 
 /**
@@ -70,7 +70,7 @@ describe("the menu", () => {
     // Electron does the ⌃⌥⇧⌘ substitution itself; handing it glyphs would put
     // a string it cannot parse where it expects a binding.
     const [region] = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS });
-    expect(region!.accelerator).toBe(`${HYPER}+1`);
+    expect(region!.accelerator).toBe("Shift+Command+4");
   });
 
   test("an unbound action shows no accelerator at all", () => {

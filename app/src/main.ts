@@ -4,7 +4,8 @@ import {
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
-  SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, isShotAction,
+  SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, planOutcomeVariants, isShotAction,
+  type Outcome,
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { settingsMode } from "./settings-open.js";
@@ -2193,7 +2194,12 @@ export interface StillResult {
 
 type CaptureSource = "window" | "hotkey" | "menu-bar";
 
-async function captureStill(action: ShotAction, source: CaptureSource): Promise<StillResult> {
+/**
+ * `undefined` is the base binding: whatever the panel preference says. A
+ * variant (STC-415) decides for this one capture and never touches the
+ * preference.
+ */
+async function captureStill(action: ShotAction, source: CaptureSource, afterShot?: Outcome): Promise<StillResult> {
   // Never throws, whatever the door. A hotkey has no caller to reject to: an
   // exception here would be an unhandled rejection in the main process and a
   // capture that silently did nothing.
@@ -2272,13 +2278,30 @@ async function captureStill(action: ShotAction, source: CaptureSource): Promise<
     // disk in `dir` by this point, the same "nothing lost by doing nothing"
     // rule the old still panel followed for exactly this reason.
     try {
-      const { thumbnail } = readSettings(app.getPath("userData"));
-      presentThumbnail({
-        dir, shot: r.shot, corner: thumbnail.corner,
-        take: { kind: "shot", origin: "fresh" },
-        dist: here, rendererDir: join(here, "..", "renderer"),
-        ...(thumbnail.skip ? { silent: true } : {}),
-      });
+      const settingsNow = readSettings(app.getPath("userData"));
+      const { thumbnail } = settingsNow;
+      // STC-415: the editor outcome has no panel at all. It promotes the shot
+      // (both editors refuse a path outside the library, as `panel:edit`
+      // says) and opens it. If that fails the capture is still in temp
+      // storage, so it falls back to the panel rather than losing the shot.
+      let opened = false;
+      if (afterShot === "editor") {
+        try {
+          const promoted = await promoteIntoLibrary(settingsNow.saveFolder, dir);
+          openStillEditor({ dir: promoted, dist: here, rendererDir: join(here, "..", "renderer") });
+          opened = true;
+        } catch (e) {
+          console.error("[capture] could not open the editor, showing the panel instead:", e);
+        }
+      }
+      if (!opened) {
+        presentThumbnail({
+          dir, shot: r.shot, corner: thumbnail.corner,
+          take: { kind: "shot", origin: "fresh" },
+          dist: here, rendererDir: join(here, "..", "renderer"),
+          ...(afterShot === "clipboard" || (afterShot === undefined && thumbnail.skip) ? { silent: true } : {}),
+        });
+      }
     } catch (e) {
       console.error("[thumbnail] could not present:", e);
     }
@@ -2395,8 +2418,8 @@ function excludeAlso(params: CaptureParams, ids: number[]): void {
  * normal case. The window's own listener stays quiet for the same reason
  * (`reportStill(r, false)`), so an open window does not say it twice.
  */
-async function captureAndAnnounce(action: ShotAction, source: CaptureSource): Promise<void> {
-  const r = await captureStill(action, source);
+async function captureAndAnnounce(action: ShotAction, source: CaptureSource, afterShot?: Outcome): Promise<void> {
+  const r = await captureStill(action, source, afterShot);
   showNotice(stillNoticeText(r));
   send("still:captured", r);
 }
@@ -2451,6 +2474,21 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     }
     return ok ? { ...plan, registered: true } : { ...plan, problem: "unavailable", registered: false };
   });
+  // STC-415: each shot's ⌃ (clipboard) and ⌥ (editor) variants, derived from
+  // the plan rather than stored. A variant that is held, doubled or refused by
+  // the system is logged, not surfaced: the base binding is what preferences
+  // shows, and a missing variant costs nothing the panel does not still do.
+  for (const v of planOutcomeVariants(planShortcuts(next))) {
+    if (v.accelerator === null) {
+      console.warn(`[shortcuts] no ${v.outcome} variant for ${v.action}: ${v.problem}`);
+      continue;
+    }
+    let ok = false;
+    try {
+      ok = globalShortcut.register(v.accelerator, () => void captureAndAnnounce(v.action, "hotkey", v.outcome));
+    } catch { ok = false; }
+    if (!ok) console.warn(`[shortcuts] ${v.accelerator} (${v.action} → ${v.outcome}) is unavailable`);
+  }
   tray?.update({ shortcuts, busy: capturing, recording: sup?.state === "recording" });
   return shortcutReport;
 }
