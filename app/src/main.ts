@@ -87,7 +87,7 @@ import { noteAppQuitting, setBoundsUnlessClosing } from "./window-geometry.js";
 import {
   libraryBounds, settingsBounds, clampSize, LIBRARY_MIN_SIZE, SETTINGS_MIN_SIZE, type Rect,
 } from "./window-size.js";
-import { startQuitWindowLog } from "./quit-window-log.js";
+import { startQuitWindowLog, startWindowLog, WINDOW_LOG_ENV, WINDOW_LOG_AT_LAUNCH } from "./quit-window-log.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
   ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
@@ -1247,6 +1247,12 @@ app.whenReady().then(async () => {
   // missed. See the comment at `quitDecision`'s call site for the whole
   // story; this line by itself proves only that the module is reachable.
   powerMonitor.on("shutdown", () => { systemShuttingDown = true; });
+
+  // STC-568: an e2e test whose app may die mid-test asks for the window log
+  // from launch, so the lines before the death name the window.
+  if (process.env[WINDOW_LOG_ENV] === WINDOW_LOG_AT_LAUNCH) {
+    startWindowLog(app, BrowserWindow.getAllWindows(), WINDOW_LOG_AT_LAUNCH);
+  }
 
   // STC-466: one guard covering every WebContents this app ever creates —
   // the main window, the editor, the still editor, one overlay per display,

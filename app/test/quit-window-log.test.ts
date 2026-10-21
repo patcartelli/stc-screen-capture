@@ -102,6 +102,40 @@ describe("startQuitWindowLog", () => {
   });
 });
 
+describe("startWindowLog from launch (STC-568)", () => {
+  let mod: typeof import("../src/quit-window-log.js");
+  let lines: string[];
+  beforeEach(async () => {
+    vi.resetModules();
+    mod = await import("../src/quit-window-log.js");
+    lines = [];
+    vi.spyOn(console, "error").mockImplementation((l: string) => { lines.push(l); });
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const stub = (id: number) => Object.assign(new EventEmitter(), {
+    id, isDestroyed: () => false, isVisible: () => true, isFocused: () => false,
+    webContents: { isDestroyed: () => false, getURL: () => "file:///r/countdown.html" },
+  });
+
+  test("the quit after a launch-started log adds its snapshot line, without doubling every event", () => {
+    const app = new EventEmitter();
+    let t = 0;
+    mod.startWindowLog(app as never, [], mod.WINDOW_LOG_AT_LAUNCH, () => t);
+    const panel = stub(3);
+    app.emit("browser-window-created", {}, panel);
+    t = 40;
+    mod.startQuitWindowLog(app as never, [panel] as unknown as BrowserWindow[], () => t);
+    panel.emit("hide");
+    expect(lines).toEqual([
+      "[window] launch +0ms: 0 windows: none",
+      "[window] +0ms #3 countdown.html visible: created",
+      "[window] quit +40ms: 1 window: #3 countdown.html visible",
+      "[window] +40ms #3 countdown.html visible: hide",
+    ]);
+  });
+});
+
 describe("diedFromCrash", () => {
   test("a fault signal is a crash", () => {
     for (const s of ["SIGSEGV", "SIGBUS", "SIGABRT", "SIGILL", "SIGTRAP"] as const) expect(diedFromCrash(s)).toBe(true);

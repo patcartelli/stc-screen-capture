@@ -246,6 +246,9 @@ jobs:
           done
           echo "collected $(ls crash-reports 2>/dev/null | wc -l | tr -d ' ') report(s)"
           ls -la crash-reports 2>/dev/null || true
+          # The artifact is unreachable from the agent sessions (STC-568), so
+          # each report's exception and faulting frames go in the log too.
+          if ls crash-reports/* >/dev/null 2>&1; then node scripts/ips-summary.mjs crash-reports/* || true; fi
 
       - name: Upload failure artifacts
         # cancelled() too: a run that hits the job cap is exactly the one whose

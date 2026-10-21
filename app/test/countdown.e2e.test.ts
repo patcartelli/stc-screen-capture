@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
-import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { stubQuitDialog, closeApp, watchWindowLog, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { toastPage } from "./_toast.js";
 
 /**
@@ -272,7 +272,13 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     // the throw meant `settle` was never called: the caller's promise never
     // resolved, `capturing` stayed true and `active` stayed set, so the app
     // could not capture OR record again for the rest of the session.
-    const { win, startLog } = await launch({ STC_COUNTDOWN_FAULT: "teardown-throws" });
+    //
+    // STC-568: on the macOS runner the app has died mid-test here, after the
+    // Escape and before the stale panel's destroy below, leaving only
+    // `Electron-*.ips` reports. The window log runs from launch so that death
+    // prints which window was moving last.
+    const { win, startLog } = await launch({ STC_COUNTDOWN_FAULT: "teardown-throws", STC_WINDOW_LOG: "launch" });
+    watchWindowLog(app!);
     await withCountdown(win, LONGER_THAN_THE_TEST_MS);
     await startRecordFlow(app!, win);
     const page = await countdownPage();
@@ -293,7 +299,11 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     // past 72 s (run 36163869597).
     await app!.evaluate(({ BrowserWindow }) => {
       for (const w of BrowserWindow.getAllWindows()) {
-        if (w.webContents.getURL().includes("countdown.html")) w.destroy();
+        if (!w.webContents.getURL().includes("countdown.html")) continue;
+        // In the window log's own stream, so a crash after it reads as one.
+        console.error(`[window] test: destroying stale #${w.id} countdown.html`
+          + ` ${w.isVisible() ? "visible" : "hidden"}${w.isFocused() ? " focused" : ""}`);
+        w.destroy();
       }
     });
     await expect.poll(hasCountdownWindow, { timeout: 10_000 }).toBe(false);
