@@ -4,7 +4,7 @@ import { mkdtempSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
-import { DEFAULT_SHORTCUTS, HYPER, OUTCOMES, outcomeAccelerator } from "../src/hotkeys.js";
+import { DEFAULT_SHORTCUTS, OUTCOMES, outcomeAccelerator } from "../src/hotkeys.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { windowCount } from "./_windows.js";
@@ -190,11 +190,12 @@ describe("the capture shortcuts", () => {
 
   test("a second action cannot take a key the first already has", async () => {
     const { win } = await launch();
-    await rebind(win, "window", `Control+Alt+Shift+Meta+1`);
+    // Area's own default, spelled differently (the grammar is normalised).
+    await rebind(win, "window", "Shift+Meta+4");
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/already uses this/);
     // And the first action keeps it.
-    expect(await isRegistered(`${HYPER}+1`)).toBe(true);
+    expect(await isRegistered(DEFAULT_SHORTCUTS.region!)).toBe(true);
   }, 120_000);
 });
 
