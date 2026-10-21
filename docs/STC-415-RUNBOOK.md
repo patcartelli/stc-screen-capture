@@ -49,5 +49,7 @@ only edited. CI is the first run of those.
 
 ## Not done here
 
-CleanShot's other menu items (All-In-One, Capture Previous Area, Scrolling Capture, Capture
-Text (OCR), Pin to the Screen, Capture History, Show Desktop Icons) are not part of this ticket.
+CleanShot's other menu items were filed as backlog tickets, not built: STC-569 All-In-One,
+STC-570 Capture Previous Area, STC-571 Scrolling Capture, STC-572 Capture Text (OCR),
+STC-573 Capture History, STC-574 Show Desktop Icons, STC-575 Open an existing image.
+"Pin to the Screen" was not filed.
