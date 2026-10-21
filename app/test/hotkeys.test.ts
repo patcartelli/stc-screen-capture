@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
-  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
+  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
+  OUTCOMES, OUTCOME_MODIFIERS, outcomeAccelerator, planOutcomeVariants,
   acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction,
   parseAccelerator, planShortcuts,
   type ShortcutReport, type Shortcuts,
@@ -29,7 +30,7 @@ describe("parsing an accelerator", () => {
     // to the one string the settings file and the menu bar both carry.
     expect(parseAccelerator("Command+Shift+Alt+Control+1"))
       .toEqual({ ok: true, accelerator: `${HYPER}+1` });
-    expect(DEFAULT_SHORTCUTS.region).toBe(`${HYPER}+1`);
+    expect(LEGACY_DEFAULT_SHORTCUTS.region).toBe(`${HYPER}+1`);
   });
 
   test("a bare key is refused — it would be taken from every app on the machine", () => {
@@ -60,12 +61,16 @@ describe("parsing an accelerator", () => {
     expect(parseAccelerator("Command+VolumeUp").ok).toBe(false);
   });
 
-  test("the system screenshot bindings are refused, in every spelling", () => {
+  test("the screenshot family is bindable now — it is the default (STC-415)", () => {
+    // The app defaults to ⇧⌘3/4 like CleanShot, which needs a Mac with the
+    // system shortcuts off. `globalShortcut.register` stays the authority.
     for (const n of ["3", "4", "5", "6"]) {
-      expect(parseAccelerator(`Command+Shift+${n}`)).toEqual({ ok: false, problem: "reserved" });
-      expect(parseAccelerator(`shift+cmd+${n}`)).toEqual({ ok: false, problem: "reserved" });
-      expect(parseAccelerator(`ctrl+shift+cmd+${n}`)).toEqual({ ok: false, problem: "reserved" });
+      expect(parseAccelerator(`Command+Shift+${n}`).ok).toBe(true);
+      expect(parseAccelerator(`ctrl+shift+cmd+${n}`).ok).toBe(true);
     }
+    // What stays reserved is what stays reserved.
+    expect(parseAccelerator("Command+Space")).toEqual({ ok: false, problem: "reserved" });
+    expect(parseAccelerator("Command+Q")).toEqual({ ok: false, problem: "reserved" });
   });
 
   test("every entry of the reserved list is refused however it is spelled", () => {
@@ -127,7 +132,7 @@ describe("planning a whole set", () => {
   });
 
   test("a duplicate is judged on the NORMALISED form, not the spelling", () => {
-    const p = plan({ window: "shift+alt+control+command+1" });
+    const p = plan({ window: "cmd+SHIFT+4" });
     expect(p[1]!.problem).toBe("duplicate");
   });
 
@@ -198,11 +203,14 @@ describe("recording a keystroke", () => {
   });
 
   test("what it records is still put through the grammar", () => {
-    // ⌘⇧4 can be TYPED at the field; it must be refused there like anywhere
-    // else, which is why this returns an accelerator rather than a verdict.
+    // A recorded chord goes through the same grammar as a typed one, which is
+    // why this returns an accelerator rather than a verdict.
     const recorded = stroke("Digit4", { metaKey: true, shiftKey: true });
     expect(recorded).toBe("Shift+Command+4");
-    expect(parseAccelerator(recorded!)).toEqual({ ok: false, problem: "reserved" });
+    expect(parseAccelerator(recorded!)).toEqual({ ok: true, accelerator: "Shift+Command+4" });
+    // ...while a binding that is still reserved is refused there too.
+    expect(parseAccelerator(stroke("Space", { metaKey: true })!))
+      .toEqual({ ok: false, problem: "reserved" });
   });
 });
 
@@ -251,8 +259,7 @@ describe("stills are Shot (STC-398)", () => {
     // A real pre-rename shortcuts block, keyed by id rather than by label —
     // plus `record` (STC-388), since `Shortcuts` now covers every bindable
     // action and a caller can no longer omit it.
-    const stored: Shortcuts = { region: `${HYPER}+1`, window: `${HYPER}+2`,
-                     display: `${HYPER}+3`, record: `${HYPER}+4`, "self-timer": `${HYPER}+5` };
+    const stored: Shortcuts = { ...LEGACY_DEFAULT_SHORTCUTS };
     const planned = planShortcuts(stored);
     for (const p of planned) {
       expect(p.accelerator, `${p.action} lost its binding`).toBe(stored[p.action]);
@@ -279,28 +286,26 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
     expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer"]);
   });
 
-  test("Record's default is the slot STC-391 left open", () => {
-    expect(DEFAULT_SHORTCUTS.record).toBe(`${HYPER}+4`);
+  test("Record's default is ⇧⌘6 (STC-415)", () => {
+    expect(DEFAULT_SHORTCUTS.record).toBe("Shift+Command+6");
     expect(parseAccelerator(DEFAULT_SHORTCUTS.record!)).toEqual({
-      ok: true, accelerator: `${HYPER}+4`,
+      ok: true, accelerator: "Shift+Command+6",
     });
   });
 
-  test("the action list and the numeric defaults cannot drift apart", () => {
-    // BINDABLE_ACTIONS' order is load-bearing twice over: it is the order
-    // preferences lists actions in, and the order planShortcuts resolves
-    // duplicates in. The numeric defaults are a second statement of the same
-    // ordering, so they are asserted to agree rather than left to drift.
+  test("every default is ⇧⌘+<digit>, one digit each, and plans without a problem", () => {
     const digits = BINDABLE_ACTIONS.map((a) => {
       const acc = DEFAULT_SHORTCUTS[a];
       expect(acc, `${a} has no default binding`).toBeTruthy();
-      const m = /^(.*)\+(\d)$/.exec(acc!);
-      expect(m, `${a}'s default is not HYPER+<digit>: ${acc}`).not.toBeNull();
-      expect(m![1]).toBe(HYPER);
-      return Number(m![2]);
+      const m = /^Shift\+Command\+(\d)$/.exec(acc!);
+      expect(m, `${a}'s default is not Shift+Command+<digit>: ${acc}`).not.toBeNull();
+      return Number(m![1]);
     });
-    expect(digits).toEqual([...digits].sort((x, y) => x - y));
     expect(new Set(digits).size).toBe(digits.length);
+    for (const p of planShortcuts(DEFAULT_SHORTCUTS)) expect(p.problem, p.action).toBeUndefined();
+    // CleanShot's own row: area 4, fullscreen 3.
+    expect(DEFAULT_SHORTCUTS.region).toBe("Shift+Command+4");
+    expect(DEFAULT_SHORTCUTS.display).toBe("Shift+Command+3");
   });
 
   test("every bindable action has a label, and Record's says Record", () => {
@@ -316,5 +321,64 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
     // region comes first in BINDABLE_ACTIONS, so it keeps the key.
     expect(plans.find((p) => p.action === "region")!.problem).toBeUndefined();
     expect(plans.find((p) => p.action === "record")!.problem).toBe("duplicate");
+  });
+});
+
+describe("the capture-time outcome variants (STC-415)", () => {
+  test("⌃ adds the clipboard outcome and ⌥ the editor, in canonical order", () => {
+    expect(OUTCOME_MODIFIERS).toEqual({ clipboard: "Control", editor: "Alt" });
+    expect(outcomeAccelerator("Shift+Command+4", "clipboard")).toBe("Control+Shift+Command+4");
+    expect(outcomeAccelerator("Shift+Command+4", "editor")).toBe("Alt+Shift+Command+4");
+    // However the base was spelled, the variant is the normalised string.
+    expect(outcomeAccelerator("cmd+shift+4", "editor")).toBe("Alt+Shift+Command+4");
+  });
+
+  test("a binding that already holds the modifier has no variant — HYPER has all four", () => {
+    for (const o of OUTCOMES) expect(outcomeAccelerator(`${HYPER}+1`, o)).toBeUndefined();
+    expect(outcomeAccelerator("Control+Shift+Command+4", "clipboard")).toBeUndefined();
+    expect(outcomeAccelerator("Control+Shift+Command+4", "editor")).toBe("Control+Alt+Shift+Command+4");
+  });
+
+  test("an unparseable base has no variant", () => {
+    expect(outcomeAccelerator("nonsense", "clipboard")).toBeUndefined();
+  });
+
+  test("every default shot gets both variants; Record gets none", () => {
+    const v = planOutcomeVariants(planShortcuts(DEFAULT_SHORTCUTS));
+    expect(v.map((x) => x.action)).not.toContain("record");
+    for (const action of SHOT_ACTIONS) {
+      for (const outcome of OUTCOMES) {
+        const hit = v.find((x) => x.action === action && x.outcome === outcome);
+        expect(hit, `${action}/${outcome}`).toBeDefined();
+        expect(hit!.problem, `${action}/${outcome}`).toBeUndefined();
+        expect(hit!.accelerator).toBe(outcomeAccelerator(DEFAULT_SHORTCUTS[action]!, outcome));
+      }
+    }
+    // Every registered accelerator, bases and variants, is distinct.
+    const all = [
+      ...planShortcuts(DEFAULT_SHORTCUTS).map((p) => p.accelerator),
+      ...v.map((x) => x.accelerator),
+    ];
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  test("on the old hyperkey defaults every variant is reported as held, never registered", () => {
+    const v = planOutcomeVariants(planShortcuts(LEGACY_DEFAULT_SHORTCUTS));
+    expect(v.length).toBe(SHOT_ACTIONS.length * OUTCOMES.length);
+    for (const x of v) expect(x).toMatchObject({ accelerator: null, problem: "held" });
+  });
+
+  test("a variant that lands on another action's binding is dropped, the base wins", () => {
+    // window is bound to what region's clipboard variant would be.
+    const plans = planShortcuts({ ...DEFAULT_SHORTCUTS, window: "Control+Shift+Command+4" });
+    const v = planOutcomeVariants(plans);
+    expect(v.find((x) => x.action === "region" && x.outcome === "clipboard"))
+      .toMatchObject({ accelerator: null, problem: "duplicate" });
+    expect(plans.find((p) => p.action === "window")!.accelerator).toBe("Control+Shift+Command+4");
+  });
+
+  test("an unbound or refused base has no variants", () => {
+    const v = planOutcomeVariants(planShortcuts({ ...DEFAULT_SHORTCUTS, region: null, window: "Command+Space" }));
+    expect(v.some((x) => x.action === "region" || x.action === "window")).toBe(false);
   });
 });

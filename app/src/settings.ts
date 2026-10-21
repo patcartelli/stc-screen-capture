@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
+  BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
 } from "./hotkeys.js";
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import { cleanIconPlacement, DEFAULT_ICON_PLACEMENT, type IconPlacement } from "./icon-placement.js";
@@ -391,6 +391,13 @@ function cleanShortcuts(v: unknown): Shortcuts {
     // Stored NORMALISED, so what preferences shows and what the menu bar draws
     // is the same string the registration used.
     out[action] = parsed?.ok ? parsed.accelerator : DEFAULT_SHORTCUTS[action];
+  }
+  // STC-415 moved the defaults off the hyperkey. A file that still holds the
+  // WHOLE old set is an untouched one (the sheet writes every binding on any
+  // change, so a customised set differs somewhere) and takes the new defaults;
+  // a set with even one other binding keeps all of its own.
+  if (BINDABLE_ACTIONS.every((a) => out[a] === LEGACY_DEFAULT_SHORTCUTS[a])) {
+    return { ...DEFAULT_SHORTCUTS };
   }
   return out;
 }
