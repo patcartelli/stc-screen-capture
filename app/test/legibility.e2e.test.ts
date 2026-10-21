@@ -198,9 +198,10 @@ describe("legibility at embed width (STC-318), inside the editor's export dialog
     await expect.poll(() => stageSize(win), { timeout: 20_000 })
       .toEqual({ width: 1232, height: 694 });
 
-    // Save frame is a header-row action (⌥-click the frame icon), outside the export dialog.
+    // Save frame is a header-row action (right-click the frame icon, Save frame), outside the export dialog.
     await win.click("#closeexport");
-    await win.click("#framegrab", { modifiers: ["Alt"] });
+    await win.click("#framegrab", { button: "right" });
+    await win.click("#saveframe");
     await expect.poll(() => existsSync(log) ? readFileSync(log, "utf8") : "",
                       { timeout: 20_000 }).toContain("export-still");
 

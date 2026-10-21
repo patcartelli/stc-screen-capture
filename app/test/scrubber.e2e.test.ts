@@ -458,6 +458,9 @@ describe("the header row's icon transport (STC-444)", () => {
     expect(title("toin")).toMatch(/Home/);
     expect(title("toout")).toMatch(/End/);
     expect(title("framegrab")).toMatch(/⌘⇧C/);
+    // STC-453: right-click is the advertised way to Save; ⌥-click is gone.
+    expect(title("framegrab")).toMatch(/right-click/);
+    expect(title("framegrab")).not.toMatch(/⌥/);
   }, 60_000);
 
   test("the step buttons move one frame, and shift-click ten", async () => {
@@ -499,6 +502,16 @@ describe("the header row's icon transport (STC-444)", () => {
     await win.click("#stage");
     await expect.poll(() => win.getAttribute("#playpause", "aria-label"), { timeout: 10_000 }).toBe("Play");
     expect(await win.isVisible("#stageplay")).toBe(true);
+  }, 60_000);
+
+  test("right-clicking the frame icon offers Copy frame and Save frame (STC-453)", async () => {
+    const { win } = await openPreview();
+    await win.click("#framegrab", { button: "right" });
+    expect(await win.isVisible("#framemenu")).toBe(true);
+    expect(await win.isVisible("#saveframe")).toBe(true);
+    expect(await win.isVisible("#copyframe")).toBe(true);
+    await win.keyboard.press("Escape");
+    expect(await win.isVisible("#framemenu")).toBe(false);
   }, 60_000);
 
   test("right-clicking the preview offers Copy frame and Save frame", async () => {

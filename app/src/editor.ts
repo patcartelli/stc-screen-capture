@@ -3270,9 +3270,11 @@ async function withFrame(action: "copy" | "save"): Promise<void> {
     frameBusy = false;
   }
 }
-// One icon (STC-444): click copies, ⌥-click saves, and a right-click on it
-// OR on the preview opens a two-item menu with both.
-$("framegrab").addEventListener("click", (e) => void withFrame((e as MouseEvent).altKey ? "save" : "copy"));
+// One icon (STC-444): click copies, and a right-click on it OR on the preview
+// opens a two-item menu with Copy and Save. STC-453: that menu is the one
+// path to Save with the mouse — the ⌥-click shortcut was removed because it
+// applied to the icon only and nothing showed it.
+$("framegrab").addEventListener("click", () => void withFrame("copy"));
 
 const frameMenu = $("framemenu") as HTMLElement;
 function openFrameMenu(x: number, y: number): void {
