@@ -1,6 +1,39 @@
 # STC-506 — focus and reduced-motion audit
 
-**Status: audit only. No fixes yet — this is the stop for review.**
+**Status: audit done, fixes pushed (the table below is the BEFORE state).**
+
+## After the fix pass
+
+Decisions (Patrick): pill uses tokens; overlay bar becomes real buttons;
+keyboard alternatives for the pill drag and the redaction canvas are a
+follow-up, not this ticket.
+
+| Finding | Now |
+|---|---|
+| 1. Overlay bar not Tab-reachable | `button.ctl`; disabled ones `aria-disabled` + `tabindex=-1`; Return/Space press the focused control; mic/camera menu opened from the keyboard takes focus, rows take ↑/↓ + Return/Space, and focus returns to the trigger when it closes. A press no longer moves focus onto a button (so click-Expand then Return still means Capture) |
+| 2. Panel actions invisible to focus | `#card:focus-within` reveals them; format radios are one tab stop with arrow keys |
+| 3. Countdown Return on Cancel | `decideCountdownKey` leaves Return to a focused button (`onButton`); unit-tested |
+| 4. Missing rings | one zero-specificity `:focus-visible` rule in `tokens.css` on `--focus`; overlay `.ctl` and menu rows, pill Stop (was hard-coded), panel and countdown buttons get it |
+| 5. Missing reduced motion | panel (fade only, discard fades in place), marquee Expand (fade), profile sheet (fade + `visibility`), editor `#framestatus`/`#ruler-activity-wrap`/`#overridebox`/`#zoomreadout`/`#overview-window`, still-editor `:active` scale |
+| 6. Pill hard-coded colours | hover → `--surface-deep-hover`, ring → `--focus`. `PILL_THEME.hover` in `pill.ts` is now unused by the CSS |
+| `:active` gaps | added on overlay `.ctl`, countdown and panel buttons, pill Stop |
+
+**axe** (`npm run axe:renderers`, WCAG 2.0/2.1 A+AA, light and dark, preload
+bridges stubbed): after adding `lang`, every page is clean **except three
+colour-contrast failures, all from `--text-faint`/`--text-dim` at 10-12px**:
+`index.html` (`#modelcode`, every `.subhead`, `#pipsettingshint`,
+`#shortcuthint`; 2.2-2.6:1 light, 3.7:1 dark), `still-editor.html` `#hint`
+(2.8:1 light, 4.0:1 dark), `countdown.html` `#cancel kbd` (4.2:1). Not fixed:
+the fix is a darker token or a different text colour, which is a visual
+decision. Hidden-until-state UI (overlay bar, open menus, expanded panel) is
+not audited by axe.
+
+**Not run:** the Electron e2e suite (this sandbox runs as root, which Electron
+refuses without `--no-sandbox`, and the Swift helper cannot build on Linux).
+The overlay pointer/focus interplay and the Return/Space handling are therefore
+typechecked only. **(Mac)**: click a bar control, then Return, and check it
+still captures; Tab through the bar; open the mic menu from the keyboard.
+
 
 **How this was made.** A static read of every `app/renderer/*.html`/`*.css` and the
 matching `app/src/*-renderer.ts` key handlers, at `4cfb1c6`. Nothing was launched,
