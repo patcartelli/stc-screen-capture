@@ -36,7 +36,7 @@ describe("source: the three short-lived surfaces", () => {
     });
     it(`${file} links tokens.css and declares itself a dark surface`, () => {
       expect(src).toMatch(/<link rel="stylesheet" href="tokens\.css">/);
-      expect(src).toMatch(/<html data-surface="dark">/);
+      expect(src).toMatch(/<html(?: lang="en")? data-surface="dark">/);
     });
     it(`${file} reads its values from var(--…)`, () => {
       expect((src.match(/var\(--/g) ?? []).length).toBeGreaterThan(10);

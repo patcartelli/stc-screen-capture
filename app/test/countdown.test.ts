@@ -143,6 +143,9 @@ describe("what a keystroke means (rule 3)", () => {
     // Nothing else on this surface binds shift, and someone holding it while
     // confirming still meant to confirm.
     expect(decideCountdownKey({ code: "Enter", shiftKey: true })).toBe("skip");
+    // STC-506: on a focused button Return belongs to the button (Cancel stays Cancel).
+    expect(decideCountdownKey({ code: "Enter", onButton: true })).toBeNull();
+    expect(decideCountdownKey({ code: "Escape", onButton: true })).toBe("cancel");
   });
 
   test("a modifier chord is not ours, and is left alone", () => {

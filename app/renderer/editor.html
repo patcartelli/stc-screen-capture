@@ -1,5 +1,5 @@
 <!doctype html>
-<html data-surface="dark">
+<html lang="en" data-surface="dark">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; worker-src 'self'">
@@ -322,8 +322,9 @@
        window is the part the lanes show, and it is a handle (drag to pan,
        press outside to bring the window there). The readout is HIDDEN until
        the span changes (#zoomreadout[data-live]); it fades out on its own.
-       No transition runs under prefers-reduced-motion, and the span itself
-       never animates at all - the lanes jump. */
+       Under prefers-reduced-motion the readout only fades (see the block
+       at the end of this stylesheet), and the span itself never animates at
+       all - the lanes jump. */
     #zoombar { display: flex; align-items: center; gap: 6px; height: 16px; margin-bottom: 2px; }
     #overview { position: relative; flex: 1 1 auto; height: 8px; border-radius: 2px; cursor: pointer;
                 background: var(--surface-hover); touch-action: none; }
@@ -560,6 +561,15 @@
     #sitedestnote { opacity: .6; font-size: var(--type-meta); overflow: hidden;
                     text-overflow: ellipsis; white-space: nowrap; }
     #sharestatus { opacity: .75; }
+    /* Reduced motion (STC-506): a movement becomes a short fade, never an
+       instant pop. These are the opacity transitions that were unguarded or
+       dropped entirely, plus the overview window's transform. */
+    @media (prefers-reduced-motion: reduce) {
+      #framestatus, #ruler-activity-wrap, #overridebox, #zoomreadout {
+        transition: opacity var(--dur-quick) ease;
+      }
+      #overview-window { transition: color var(--dur-quick) ease; }
+    }
   </style>
 </head>
 <body>
