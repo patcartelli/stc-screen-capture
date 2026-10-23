@@ -208,11 +208,16 @@ export function countdownView(input: CountdownInput): CountdownView {
 export interface CountdownKey {
   code: string;
   metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean;
+  /** The key landed on a focused button, which then owns Return (STC-506). */
+  onButton?: boolean;
 }
 
 /** What a keystroke over the countdown means, or `null` for "not mine" — which
  * the view must then leave alone rather than swallow (rule 3). */
 export function decideCountdownKey(e: CountdownKey): "cancel" | "skip" | null {
+  // Return on a focused button presses THAT button (STC-506): with Cancel
+  // focused after a Tab, Return used to skip. Space needs no rule, it was never ours.
+  if (e.onButton && (e.code === "Enter" || e.code === "NumpadEnter")) return null;
   // A chord belongs to whatever else the app binds. Escape is deliberately
   // included in that rule: ⌘⎋ is not the ticket's "Esc cancels".
   if (e.metaKey || e.ctrlKey || e.altKey) return null;

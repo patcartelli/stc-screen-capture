@@ -80,7 +80,10 @@ $("skip").addEventListener("click", () => window.countdown.send({ kind: "skip" }
 $("cancel").addEventListener("click", () => window.countdown.send({ kind: "cancel" }));
 
 window.addEventListener("keydown", (e) => {
-  const decision = decideCountdownKey(e);
+  const decision = decideCountdownKey({
+    code: e.code, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey,
+    onButton: e.target instanceof HTMLButtonElement,
+  });
   // Not ours: left alone rather than swallowed, so a chord still reaches
   // whatever else binds it (`countdown.ts` rule 3).
   if (!decision) return;
