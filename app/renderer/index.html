@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
@@ -297,6 +297,15 @@
       -webkit-app-region: no-drag;
     }
     #profilesheet.open { transform: translateX(0); }
+    /* Reduced motion (STC-506): no slide; a short crossfade. `visibility` keeps a
+       closed sheet's controls out of the Tab order, which the offscreen
+       transform alone never did. */
+    @media (prefers-reduced-motion: reduce) {
+      #profilesheet { transform: none; opacity: 0; visibility: hidden;
+                      transition: opacity var(--dur-quick) ease, visibility 0s linear var(--dur-quick); }
+      #profilesheet.open, body.settings-only #profilesheet {
+        opacity: 1; visibility: visible; transition: opacity var(--dur-quick) ease; }
+    }
     /* STC-552: the sheet's own no-drag is not enough. It opens by TRANSFORM
        alone, and Chromium collects drag regions at layout, so a transform
        does not move the carve-out out from under the title row (measured:

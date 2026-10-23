@@ -1,5 +1,5 @@
 <!doctype html>
-<html data-surface="dark">
+<html lang="en" data-surface="dark">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'">
@@ -118,7 +118,13 @@
   }
   .ctl { position: fixed; box-sizing: border-box; display: flex; align-items: center;
          justify-content: center; border-radius: var(--radius-md); color: var(--text-dim);
-         pointer-events: auto; cursor: default; }
+         pointer-events: auto; cursor: default;
+         /* Buttons since STC-506 (Tab reaches them); this is the reset that
+            keeps them looking like the divs they replaced. */
+         appearance: none; border: 0; background: none; margin: 0; padding: 0; font: inherit; }
+  .ctl:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .ctl:active { background: var(--overlay-fill); }
+  .ctl[aria-disabled="true"]:active { background: none; }
   .ctl:hover { color: var(--text); background: var(--overlay-fill-faint); }
   .ctl[data-on="1"] { color: var(--text); }
   #ctl-clicks[data-on="0"] { opacity: .45; }   /* a toggle: off must read as off, not as hover-less */
@@ -141,6 +147,12 @@
   #ctl-record .label { flex: 1; }
   #ctl-record .kbd { display: flex; opacity: .56; }
   #menu { cursor: default; }
+  #menu .row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  /* Reduced motion (STC-506): Expand's glide becomes a short fade of the
+     marquee, not a jump. overlay.ts skips the geometry animation under this
+     preference and adds .expand-fade instead. */
+  #marquee.expand-fade { animation: expand-fade var(--dur-quick) ease-out; }
+  @keyframes expand-fade { from { opacity: 0; } to { opacity: 1; } }
 </style>
 </head>
 <body>
@@ -153,14 +165,14 @@
   <div id="bar" hidden>
     <div id="pane"></div>
     <div class="ctl" id="ctl-size"><input id="size-w" inputmode="numeric" aria-label="Width in pixels"><span class="x">×</span><input id="size-h" inputmode="numeric" aria-label="Height in pixels"></div>
-    <div class="ctl" id="ctl-expand" title="Whole display"><span data-icon="expand"></span></div>
-    <div class="ctl" id="ctl-crop" title="Select an area"><span data-icon="crop"></span></div>
-    <div class="ctl" id="ctl-settings" title="Settings"><span data-icon="settings"></span></div>
-    <div class="ctl" id="ctl-mic" aria-label="Microphone"><span data-icon="mic"></span><span data-icon="caret" data-class="caret"></span></div>
-    <div class="ctl" id="ctl-camera" aria-label="Camera"><span data-icon="camera"></span><span data-icon="caret" data-class="caret"></span></div>
-    <div class="ctl" id="ctl-keys" role="switch" aria-label="Show keystrokes" title="Show keystrokes — commands and shortcuts only; typing is never recorded"><span data-icon="command"></span></div>
-    <div class="ctl" id="ctl-clicks" role="switch" aria-label="Show clicks" title="Show clicks"><span data-icon="click"></span></div>
-    <div class="ctl" id="ctl-record"><span data-icon="record"></span><span class="label">Capture Video</span><span class="kbd"><span data-icon="return"></span></span></div>
+    <button type="button" class="ctl" id="ctl-expand" aria-label="Whole display" title="Whole display"><span data-icon="expand"></span></button>
+    <button type="button" class="ctl" id="ctl-crop" aria-label="Select an area" title="Select an area"><span data-icon="crop"></span></button>
+    <button type="button" class="ctl" id="ctl-settings" aria-label="Settings" title="Settings"><span data-icon="settings"></span></button>
+    <button type="button" class="ctl" id="ctl-mic" aria-label="Microphone"><span data-icon="mic"></span><span data-icon="caret" data-class="caret"></span></button>
+    <button type="button" class="ctl" id="ctl-camera" aria-label="Camera"><span data-icon="camera"></span><span data-icon="caret" data-class="caret"></span></button>
+    <button type="button" class="ctl" id="ctl-keys" role="switch" aria-label="Show keystrokes" title="Show keystrokes — commands and shortcuts only; typing is never recorded"><span data-icon="command"></span></button>
+    <button type="button" class="ctl" id="ctl-clicks" role="switch" aria-label="Show clicks" title="Show clicks"><span data-icon="click"></span></button>
+    <button type="button" class="ctl" id="ctl-record"><span data-icon="record"></span><span class="label">Capture Video</span><span class="kbd"><span data-icon="return"></span></span></button>
   </div>
   <div id="menu" class="device-menu" hidden role="menu"></div>
   <script src="../dist/overlay.js"></script>
