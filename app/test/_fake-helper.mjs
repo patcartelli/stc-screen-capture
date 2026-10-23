@@ -453,6 +453,14 @@ process.stdin.on("data", (chunk) => {
         else if (cmd.grant !== "screen-recording") { send("error", { seq, code: "bad-request" }); break; }
         send("permissions", { seq, ...permissions });
         break;
+      // The camera warm-up: there is no camera here, so a warm-up is refused the way a
+      // machine with none refuses it, and a release always answers.
+      case "camera-warm":
+        send("error", { seq, code: "camera-no-device" });
+        break;
+      case "camera-release":
+        send("camera-released", { seq });
+        break;
       case "quit":
         send("bye", { seq });
         process.exit(0);

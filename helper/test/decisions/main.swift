@@ -108,6 +108,16 @@ check("a failed open is still just a failure even if a stop arrived — there is
       decideCameraOpen(opened: false, stoppingBegan: true),
       CameraOpenDecision.reportFailure)
 
+// ── adopting a warmed camera session ────────────────────────────────────────
+check("a named request adopts a warm session for that uid",
+      decideWarmAdoption(requestedUid: "A", warmUid: "A", warmAutomatic: false), true)
+check("a named request refuses a warm session for another device",
+      decideWarmAdoption(requestedUid: "A", warmUid: "B", warmAutomatic: true), false)
+check("an automatic request adopts a session that was itself an automatic pick",
+      decideWarmAdoption(requestedUid: nil, warmUid: "B", warmAutomatic: true), true)
+check("an automatic request refuses a session warmed for a NAMED device",
+      decideWarmAdoption(requestedUid: nil, warmUid: "B", warmAutomatic: false), false)
+
 // ── will the event tap deliver? (STC-480) ───────────────────────────────────
 // The VM case: tapCreate handed back a port with Input Monitoring OFF, and the
 // take recorded no cursor at all. A created tap is not enough on its own.

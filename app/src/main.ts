@@ -2010,11 +2010,23 @@ async function recordFlowBody(
   // than a shot. After the overlay has gone, never during it.
   const ms = clampCountdownMs(stored.countdownMs);
   if (needsCountdown(ms)) {
+    // The camera opens while the countdown runs (a cold open is 1 to 2 s; the
+    // countdown is 3), so it is delivering frames at the take's t0 instead of
+    // starting ~1.5 s behind the screen. Fire and forget: a failure only means
+    // the take opens the camera itself, as it always did. No countdown, no
+    // warm-up (nothing to hide the open behind, and the LED lights for nothing).
+    if (options.camera === true) {
+      sup!.warmCamera(options.cameraDeviceUid ?? undefined, ms + 15_000)
+        .catch((e) => console.error("[camera] warm-up failed:", e?.code ?? e?.message ?? e));
+    }
     const counted = await runCountdown({
       ms, purpose: "record", displayId: countdownDisplay,
       dist: here, rendererDir: join(here, "..", "renderer"),
     });
-    if (!countdownFired(counted.outcome)) { discardPill(); return { ok: false, cancelled: true }; }
+    if (!countdownFired(counted.outcome)) {
+      if (options.camera === true) void sup?.releaseCamera().catch(() => {});
+      discardPill(); return { ok: false, cancelled: true };
+    }
   }
   // Any floating panel still on screen would be IN the take, so they are HIDDEN
   // for its length (STC-392 focus rule 2), and `take-ended` (or any exit below

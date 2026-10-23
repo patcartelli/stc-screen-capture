@@ -157,6 +157,19 @@ func decideCameraOpen(opened: Bool, stoppingBegan: Bool) -> CameraOpenDecision {
     return stoppingBegan ? .closeImmediately : .store
 }
 
+/// May a take adopt the camera session that was warmed before Record? A warm
+/// session is the device the helper resolved earlier, so it is only right when
+/// the take would have resolved to that same device: a NAMED request must match
+/// its uid exactly (the rule `CameraCapture.openSession` applies), and an
+/// automatic request (`requestedUid == nil`) only accepts a session that was
+/// itself an automatic pick, because `pickCamera`'s ranking is the one thing
+/// that answers "which camera does automatic mean". Anything else is a stale
+/// warm-up for another device: stop it and open fresh.
+func decideWarmAdoption(requestedUid: String?, warmUid: String, warmAutomatic: Bool) -> Bool {
+    guard let requestedUid else { return warmAutomatic }
+    return requestedUid == warmUid
+}
+
 /// Input Monitoring's TCC state, as `IOHIDCheckAccess` reports it. Its own
 /// enum so the decision below is a function of values a test can write,
 /// not of IOKit constants.
