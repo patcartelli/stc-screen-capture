@@ -136,6 +136,27 @@ export class HelperSupervisor {
     return this.client.request("prime-capture", {}, { timeoutMs: 15_000 });
   }
 
+  /**
+   * Open the camera now so it is already delivering frames when Record fires
+   * (a cold open put the camera's first frame 1.1 to 1.6 s behind the screen's).
+   * Answers `camera-warmed` once the session runs. Rejects with the helper's
+   * code if there is no camera; the take then opens its own, as it always did.
+   * The helper releases an unclaimed one itself after `holdMs` (default 20 s).
+   */
+  async warmCamera(deviceUid?: string, holdMs?: number): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    const params: Record<string, unknown> = {};
+    if (deviceUid != null) params.deviceUid = deviceUid;
+    if (holdMs != null) params.holdMs = holdMs;
+    return this.client.request("camera-warm", params, { timeoutMs: 15_000 });
+  }
+
+  /** Put a warmed camera away (a cancelled countdown). Always answers. */
+  async releaseCamera(): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("camera-release", {}, { timeoutMs: 5_000 });
+  }
+
   /** The file paths on the pasteboard right now: the copy purge's one check. */
   async pasteboardFiles(): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");

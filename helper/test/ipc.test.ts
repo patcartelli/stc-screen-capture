@@ -198,6 +198,22 @@ describe("reliable channel — fd3, request/response with sequence numbers", () 
     expect(r.code).toBe("bad-request");
   });
 
+  test("camera-warm for a camera that is not there errors reliably and opens nothing; camera-release always answers", async () => {
+    // A uid no device has: refused as not-authorized (CI, no grant) or not-found
+    // (a Mac with the grant), and in neither case is a session opened, so the
+    // LED stays off on every `npm test` run, the camera-probe rule.
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "camera-warm", deviceUid: "no-such-camera", seq: 30 });
+    const w = await waitFor(() => h.fd3.find((l) => l.seq === 30), 8000, "camera-warm reply");
+    expect(w.ev).toBe("error");
+    expect(["camera-not-authorized", "camera-not-found"]).toContain(w.code);
+    // Releasing a warm camera that does not exist is not an error.
+    h.send({ cmd: "camera-release", seq: 31 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 31), 5000, "camera-release reply");
+    expect(r.ev).toBe("camera-released");
+  });
+
   test("malformed JSON produces a reliable error without wedging the stream", async () => {
     const h = spawnHelper();
     await waitFor(() => find(h.fd3, "ready"));
