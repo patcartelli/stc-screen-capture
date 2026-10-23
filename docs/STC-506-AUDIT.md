@@ -19,14 +19,18 @@ follow-up, not this ticket.
 | `:active` gaps | added on overlay `.ctl`, countdown and panel buttons, pill Stop |
 
 **axe** (`npm run axe:renderers`, WCAG 2.0/2.1 A+AA, light and dark, preload
-bridges stubbed): after adding `lang`, every page is clean **except three
-colour-contrast failures, all from `--text-faint`/`--text-dim` at 10-12px**:
-`index.html` (`#modelcode`, every `.subhead`, `#pipsettingshint`,
-`#shortcuthint`; 2.2-2.6:1 light, 3.7:1 dark), `still-editor.html` `#hint`
-(2.8:1 light, 4.0:1 dark), `countdown.html` `#cancel kbd` (4.2:1). Not fixed:
-the fix is a darker token or a different text colour, which is a visual
-decision. Hidden-until-state UI (overlay bar, open menus, expanded panel) is
-not audited by axe.
+bridges stubbed): **zero violations on every renderer HTML.** The last three
+colour-contrast failures were `--text-faint`/`--text-dim` text at 10-12px
+(2.2-4.2:1). Fixed by darkening `--text-faint` (light alpha .40 → .60, dark
+.42 → .54, both dark lists, minimum alphas for 4.5:1 computed against the
+darkest/lightest surface each theme uses), dropping the extra `opacity` on
+`#modelcode` and the still-editor `#hint`, and `--text` for the countdown's
+`kbd`. Visible effect: faint labels are darker/brighter than before. Also
+darkens the two non-text uses of the token (a triangle in `index.html`, the
+PiP inspector's camera placeholder art). Hidden-until-state UI (overlay bar,
+open menus, expanded panel) is not audited by axe.
+
+The pill drag and redaction canvas keyboard paths were filed as STC-576.
 
 **Not run:** the Electron e2e suite (this sandbox runs as root, which Electron
 refuses without `--no-sandbox`, and the Swift helper cannot build on Linux).
