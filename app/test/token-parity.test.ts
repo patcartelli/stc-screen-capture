@@ -46,6 +46,15 @@ describe("source: the three short-lived surfaces", () => {
   it("the countdown ring sweeps in the record colour, from a token", () => {
     expect(read("countdown.html")).toMatch(/#sweep \{[^}]*stroke: var\(--rec\)/);
   });
+  it("a muted mic on the options bar gets a 2px record-colour outline that yields to the focus ring (STC-583)", () => {
+    expect(read("overlay.html")).toMatch(/#ctl-mic\[data-on="0"\]:not\(:focus-visible\) \{[^}]*outline: 2px solid color-mix\(in srgb, var\(--rec\)/);
+  });
+  it("the pill swaps its meter for a slashed-mic glyph on a take with no mic (STC-583)", () => {
+    const html = read("pill.html");
+    expect(html).toMatch(/id="pill-mic-off"/);
+    expect(html).toMatch(/#pill\.mic-muted #pill-meter \{ display: none; \}/);
+    expect(html).toMatch(/#pill\.notice #pill-timer, #pill\.notice #pill-meter, #pill\.notice #pill-mic-off/);
+  });
   it("the device menu's toggle row is a switch, drawn without adding height", () => {
     expect(read("device-menu.css")).toMatch(/\.row\.toggle \{ box-shadow: inset/);
     const dom = readFileSync(fileURLToPath(new URL("../src/device-menu-dom.ts", import.meta.url)), "utf8");

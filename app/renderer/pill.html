@@ -75,6 +75,12 @@
       display: block; right: 0; top: 2px; width: 4px; height: 4px; border-radius: 50%;
       background: #ff9f0a;
     }
+    /* STC-583: a take with no mic. The slashed-mic glyph stands in for the meter
+       (renderer: `.mic-muted`, set by pill:mic); PILL_THEME.micOff is its color. */
+    #pill-mic-off { display: none; flex: none; width: 14px; height: 14px; color: #a1a1a6; }
+    #pill-mic-off svg { display: block; width: 14px; height: 14px; fill: currentColor; }
+    #pill.mic-muted #pill-meter { display: none; }
+    #pill.mic-muted #pill-mic-off { display: block; }
     /* Stop: the universal stop glyph (QuickTime/Zoom/OBS). Its own button
        now, the one place a press does not start a drag, with the hover fill
        (PILL_THEME's .hover) that used to sit on the whole pill. */
@@ -94,7 +100,7 @@
     /* STC-237: a mic or camera lost while the take KEEPS recording. The label
        stands in for the timer and meter only: the dot still says recording,
        and Stop stays, because this take is still running. */
-    #pill.notice #pill-timer, #pill.notice #pill-meter { display: none; }
+    #pill.notice #pill-timer, #pill.notice #pill-meter, #pill.notice #pill-mic-off { display: none; }
     #pill.notice #pill-label {
       display: block; flex: 1 1 auto; min-width: 0; text-align: center;
       font: 500 11px/1 -apple-system, system-ui, sans-serif;
@@ -108,6 +114,7 @@
       <span id="pill-dot" aria-hidden="true"></span>
       <span id="pill-timer">00:00</span>
       <span id="pill-meter" aria-hidden="true"><span id="pill-meter-bar"></span><span id="pill-meter-dot"></span></span>
+      <span id="pill-mic-off" role="img"></span>
       <button id="pill-stop" aria-label="Stop recording"><span id="pill-stop-glyph" aria-hidden="true"></span></button>
       <span id="pill-label"></span>
     </span>

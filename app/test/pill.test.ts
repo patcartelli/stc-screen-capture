@@ -111,6 +111,16 @@ describe("the level meter (STC-528)", () => {
     expect(meterView(undefined, false)).toEqual({ mode: "hatched", fill: 0 });
   });
 
+  // STC-583: a take with no mic says so, and is not mistaken for "no reading yet".
+  it("is muted (not hatched) on a take with no mic, whatever else arrives", () => {
+    expect(meterView(undefined, false, true)).toEqual({ mode: "muted", fill: 0 });
+    expect(meterView({ peak: 0.5, silent: false }, false, true).mode).toBe("muted");
+    expect(meterView({ peak: 0, silent: true }, true, true).mode).toBe("muted");
+  });
+  it("an unmuted take is unchanged by the new argument", () => {
+    expect(meterView(undefined, false, false).mode).toBe("hatched");
+    expect(meterView({ peak: 0.2, silent: false }, false, false).mode).toBe("live");
+  });
   it("is hatched once the mic is lost, even if a reading is still in flight", () => {
     expect(meterView({ peak: 0.5, silent: false }, true).mode).toBe("hatched");
   });

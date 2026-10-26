@@ -91,8 +91,8 @@ export async function preparePill(opts: PrepareOptions): Promise<number[]> {
 }
 
 /** Step 2: `start` answered and the take is live. */
-export function pillStarted(sup: HelperSupervisor): void {
-  active?.attach(sup);
+export function pillStarted(sup: HelperSupervisor, take: { micMuted?: boolean } = {}): void {
+  active?.attach(sup, take.micMuted === true);
 }
 
 /** `start` was never sent, or was refused: put the prepared pill away. */
@@ -161,9 +161,11 @@ class PillSession {
     return id === undefined ? [] : [id];
   }
 
-  attach(sup: HelperSupervisor): void {
+  attach(sup: HelperSupervisor, micMuted = false): void {
     if (this.over || this.detach) return;
     this.sup = sup;
+    // STC-583: a take with no mic says so on the pill, for its whole length.
+    if (micMuted) sendPill(this.win, "pill:mic", { muted: true });
     const pill = attachPillToSupervisor(this.win, sup, {
       show: () => this.show(),
       hide: () => this.end(),

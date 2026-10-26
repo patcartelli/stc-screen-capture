@@ -127,6 +127,10 @@
   .ctl[aria-disabled="true"]:active { background: none; }
   .ctl:hover { color: var(--text); background: var(--overlay-fill-faint); }
   .ctl[data-on="1"] { color: var(--text); }
+  /* STC-583: a muted mic says so at a glance — a 2px record-colour outline and a
+     tinted glyph. :not(:focus-visible) keeps the focus ring above on top of it. */
+  #ctl-mic[data-on="0"]:not(:focus-visible) { color: var(--rec);
+    outline: 2px solid color-mix(in srgb, var(--rec) 70%, transparent); outline-offset: -2px; }
   #ctl-clicks[data-on="0"] { opacity: .45; }   /* a toggle: off must read as off, not as hover-less */
   .ctl[data-enabled="0"] { opacity: .32; }
   .ctl[data-enabled="0"]:hover { background: none; color: var(--text-dim); }
