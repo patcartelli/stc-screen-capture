@@ -14,7 +14,7 @@
  * A browser that cannot launch FAILS the pixel half rather than skipping it: a
  * skip reads as covered (CLAUDE.md, *.grant.test.ts).
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -43,8 +43,23 @@ describe("source: the three short-lived surfaces", () => {
     });
   }
 
-  it("the countdown numerals are not Silkscreen (it renders elapsed take time only)", () => {
+  it("the countdown numerals are in the readout face", () => {
+    expect(read("countdown.html")).toMatch(/font-family: var\(--font-readout\)/);
     expect(read("countdown.html")).not.toMatch(/font-pixel|Silkscreen|type-timer/);
+  });
+});
+
+describe("source: the readout face (STC-583)", () => {
+  it("tokens.css makes JetBrains Mono the one readout face and keeps no Silkscreen", () => {
+    const css = read("tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(css).toMatch(/--font-readout:\s*'JetBrains Mono'/);
+    expect(css).not.toMatch(/Silkscreen|--font-pixel|--font-mono|--type-timer|Departure Mono'/);
+    expect(existsSync(join(RENDERER, "fonts/Silkscreen-Regular.woff2"))).toBe(false);
+  });
+  it("the pill timer, the record bar's size and the menu rows draw in the readout face", () => {
+    expect(read("pill.html")).toMatch(/var\(--type-readout-pill\)\/1 var\(--font-readout\)/);
+    expect(read("overlay.html")).toMatch(/#ctl-size \{[^}]*var\(--font-readout\)/);
+    expect(read("device-menu.css")).toMatch(/font: 400 var\(--type-readout-menu\)\/1 var\(--font-readout\)/);
   });
 });
 

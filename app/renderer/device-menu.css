@@ -10,7 +10,7 @@
   padding: 4px 0; border-radius: 16px;
   background: var(--menu-surface); color: var(--menu-on-surface);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
-  font: 400 14px/1 var(--font-sans);
+  font: 400 var(--type-readout-menu)/1 var(--font-readout);
 }
 .device-menu[hidden] { display: none; }
 .device-menu .row {

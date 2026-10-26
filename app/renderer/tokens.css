@@ -38,17 +38,11 @@
   src: url('fonts/JetBrainsMono-Medium.woff2') format('woff2');
   font-weight: 500; font-style: normal; font-display: swap;
 }
-@font-face {
-  font-family: 'Silkscreen';
-  src: url('fonts/Silkscreen-Regular.woff2') format('woff2');
-  font-weight: 400; font-style: normal; font-display: swap;
-}
 
 :root {
   color-scheme: light dark;
   --font-sans: 'Geist', -apple-system, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-pixel: 'Silkscreen', 'JetBrains Mono', ui-monospace, monospace;
+  --font-readout: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Type ramp — sans (Geist). No view sets a font-size inline. */
   --type-label: 10px; --type-label-weight: 500; --type-label-tracking: 0.10em;
@@ -60,13 +54,21 @@
   --type-title: 15px; --type-title-weight: 300; --type-title-tracking: -0.01em; --type-title-lh: 1.3;
   --type-display: 20px; --type-display-weight: 300; --type-display-tracking: -0.02em; --type-display-lh: 1.1;
 
-  /* Type ramp — mono (JetBrains Mono) with tabular-nums */
+  /* The type rule (STC-583, rewording STC-369): Geist carries language;
+     "the readout face" (--font-readout, JetBrains Mono) carries every value
+     that changes — timers, sizes, lengths, key chords, the countdown — and
+     literal text such as file paths and model codes. Silkscreen is retired.
+     Departure Mono was tried and not adopted (2026-10-26). Readout sizes:
+     34 (countdown), 24 (record bar), 16 (pill), 14 (menu rows), 12 and 11
+     (Library meta, keys). Sans: 20 / 15 / 13 / 12 / 11 / 10 (10 is the floor). */
+
+  /* Type ramp — readout (JetBrains Mono) with tabular-nums */
   --type-value-sm: 11px; --type-value-sm-weight: 400; --type-value-sm-lh: 1.4;
   --type-value: 12px; --type-value-weight: 400; --type-value-lh: 1.4;
 
-  /* Type ramp — pixel (Silkscreen) at 8px grid multiples only */
-  --type-timer-pill: 16px; --type-timer-pill-lh: 1;
-  --type-timer: 32px; --type-timer-lh: 1;
+  --type-readout-xl: 24px; --type-readout-xl-lh: 1;
+  --type-readout-pill: 16px; --type-readout-pill-lh: 1;
+  --type-readout-menu: 14px; --type-readout-menu-lh: 1;
 
   /* Light tokens. There is no in-app theme switch — prefers-color-scheme
      below is the only signal, same as the color-scheme line already was. */
@@ -134,11 +136,8 @@
   --dur-base: 160ms;    /* panel enter / swipe release */
   --dur-move: 180ms;    /* Expand's marquee glide */
 
-  /* Countdown numerals. NOT --type-timer: that is Silkscreen and Silkscreen
-     renders elapsed take time and nothing else. The countdown is time until a
-     take STARTS, so it is Geist (STC-504 checked — it was already a system
-     sans, never pixel; this keeps it that way, on the token system). */
-  --type-count: 34px; --type-count-weight: 600; --type-count-lh: 1;
+  /* Countdown numerals: time until a take STARTS, in the readout face. */
+  --type-count: 34px; --type-count-weight: 500; --type-count-lh: 1;
 
   font-family: var(--font-sans);
   font-size: var(--type-body);

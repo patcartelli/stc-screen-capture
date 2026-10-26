@@ -51,7 +51,7 @@
     button[disabled] { opacity: .4; cursor: default; }
     select, input { font: inherit; color: inherit; background: var(--surface);
                     border: 1px solid var(--border); border-radius: 5px; }
-    .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .mono { font-family: var(--font-readout); font-variant-numeric: tabular-nums; }
 
     #alert { padding: 10px 12px; border-radius: 7px; border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
              background: var(--warn-soft); display: none; white-space: pre-wrap; }
@@ -287,7 +287,7 @@
     #framemenu button { border: none; border-radius: 5px; text-align: left; padding: 5px 8px;
                         display: flex; justify-content: space-between; gap: 16px; }
     #framemenu button:hover, #framemenu button:focus-visible { background: var(--accent-soft); outline: none; }
-    #framemenu kbd { font-family: var(--font-mono); font-size: var(--type-meta); color: var(--text-faint); }
+    #framemenu kbd { font-family: var(--font-readout); font-size: var(--type-meta); color: var(--text-faint); }
 
     /* ── the timeline: a ruler and two lanes over one shared [a, b] span ─── */
     .timelinewrap { display: flex; flex-direction: column; gap: 2px; }
@@ -341,7 +341,7 @@
     .zoombtn:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
     .zoombtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .zoombtn:disabled { opacity: .35; cursor: default; }
-    #zoomreadout { font-family: var(--font-mono); font-size: var(--type-meta); color: var(--text-dim);
+    #zoomreadout { font-family: var(--font-readout); font-size: var(--type-meta); color: var(--text-dim);
                    min-width: 0; white-space: nowrap; opacity: 0; pointer-events: none; }
     #zoomreadout[data-live] { opacity: 1; }
     @media (prefers-reduced-motion: no-preference) {

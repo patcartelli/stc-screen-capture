@@ -104,7 +104,7 @@
 
   /* The Record options bar (STC-456; Patrick's Figma, Capture SK 016 Frame 9).
      Dark in BOTH OS appearances (data-surface="dark"): --surface-deep on --text. Geist for
-     everything but the size field, which is JetBrains Mono. Every rect is
+     everything but the size field, which is the readout face (JetBrains Mono). Every rect is
      decided by record-options.ts and placed by overlay.ts; this only paints.
      #pane is a background with no children, so every control is a sibling
      positioned in the same window-local space. */
@@ -133,7 +133,7 @@
   .ctl svg { width: 20px; height: 20px; flex: none; fill: currentColor; }
   .ctl svg.caret { width: 16px; height: 16px; margin-left: 2px; }
   #ctl-size { justify-content: flex-start; gap: var(--space-3); padding: 0 var(--space-1); color: var(--text);
-              font: 400 24px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+              font: 400 var(--type-readout-xl)/1 var(--font-readout); font-variant-numeric: tabular-nums; }
   #ctl-size:hover { background: none; }
   #ctl-size input { all: unset; field-sizing: content; min-width: 1ch; font: inherit;
                     color: inherit; caret-color: var(--text); cursor: text; }
