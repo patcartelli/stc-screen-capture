@@ -16,7 +16,7 @@ each of the ten keys: all fire Capture, none fires a system or CleanShot action.
 ## 2. Migration
 Seed `settings.json` with each of: the STC-415 row (⇧⌘4/2/3/8/7), the hyperkey row, a mix, and the STC-415 row
 with one key changed. Launch each.
-- Expect one dialog "New default shortcuts" listing only the keys still on an old default (before → after),
+- Expect one dialog "Switch to the new default shortcuts?" listing only the keys still on an old default, each as "Your shortcut now" / "New default",
   buttons "Reset to new defaults" / "Keep mine". It never appears a second launch (`shortcutsOffered`), whatever
   was chosen. A fresh install, or a file already on the new defaults, never shows it.
 - Reset moves only the listed keys, takes effect immediately (no relaunch), and leaves a changed or unbound key.

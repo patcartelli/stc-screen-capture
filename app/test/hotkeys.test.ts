@@ -434,7 +434,7 @@ describe("resetting to the new defaults (STC-582)", () => {
 
   test("the offer names each key before and after", () => {
     const t = resetOfferText({ ...DEFAULT_SHORTCUTS, region: "Shift+Command+4" })!;
-    expect(t.detail).toContain("Shot Area: ⇧⌘4 → ⌥⌘1");
+    expect(t.detail).toContain("Shot Area\n    Your shortcut now: ⇧⌘4\n    New default: ⌥⌘1");
     expect(t.detail).not.toContain("Record");
   });
 });

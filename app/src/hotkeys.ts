@@ -194,12 +194,12 @@ export function resetOfferText(s: Shortcuts): { message: string; detail: string 
   const keys = shortcutsToReset(s);
   if (keys.length === 0) return undefined;
   const lines = keys.map((a) =>
-    `${ACTION_LABELS[a]}: ${formatAccelerator(s[a]!)} → ${formatAccelerator(DEFAULT_SHORTCUTS[a]!)}`);
+    `${ACTION_LABELS[a]}\n    Your shortcut now: ${formatAccelerator(s[a]!)}\n    New default: ${formatAccelerator(DEFAULT_SHORTCUTS[a]!)}`);
   return {
-    message: "New default shortcuts",
-    detail: "The defaults changed to avoid the macOS screenshot keys and CleanShot. These still use the old ones:\n\n"
-      + lines.join("\n")
-      + "\n\nShortcuts you changed yourself are left alone.",
+    message: "Switch to the new default shortcuts?",
+    detail: "Capture's defaults changed to avoid the macOS screenshot keys and CleanShot. These actions are still on the old defaults:\n\n"
+      + lines.join("\n\n")
+      + "\n\n“Reset to new defaults” switches only these. Shortcuts you set yourself are left alone.",
   };
 }
 
