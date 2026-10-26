@@ -33,7 +33,7 @@ Not the cause: `captureOutput`'s `rel >= 0` drop only discards frames stamped be
 
 ## Run 1 — measure the old behaviour first (the numbers are the point)
 
-Warm-up off for a control: in `app/src/main.ts` comment out the `warmCamera` call, or just set Settings' countdown to off. Then record 5 s takes and read `anchors.json` and the helper stderr:
+Warm-up off for a control: start the app with `STC_CAMERA_WARM=off npm run app:start`. The terminal prints `[camera] started: {... "warm": false ...}` for every take (`true` when the warm-up was used). Then record 5 s takes and read `anchors.json` and the helper stderr:
 
 | # | camera | mic | system audio | write down |
 |---|---|---|---|---|

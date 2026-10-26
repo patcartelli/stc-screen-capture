@@ -761,7 +761,12 @@ function startSupervisor(): void {
   // helper has always announced that; nothing was listening, so the user's only
   // evidence the camera worked was a PiP appearing ~1.4 s into playback, which
   // reads as a glitch rather than as the camera starting.
-  sup.on("helper:camera-started", (l) => send("helper:camera-started", l));
+  sup.on("helper:camera-started", (l) => {
+    // Where the camera's open went and whether the pre-Record warm-up was used, in the
+    // terminal where the heartbeat's `[camera] N frames` lines already are.
+    console.log(`[camera] started: ${JSON.stringify((l as any).timings ?? {})}`);
+    send("helper:camera-started", l);
+  });
   // STC-233: same reasoning, one device over — the mic also opens off the
   // critical path (MicCapture.swift) and reports separately once it resolves.
   sup.on("helper:mic-started", (l) => send("helper:mic-started", l));
@@ -2015,7 +2020,8 @@ async function recordFlowBody(
     // starting ~1.5 s behind the screen. Fire and forget: a failure only means
     // the take opens the camera itself, as it always did. No countdown, no
     // warm-up (nothing to hide the open behind, and the LED lights for nothing).
-    if (options.camera === true) {
+    // STC_CAMERA_WARM=off turns the warm-up off, for measuring the old behaviour.
+    if (options.camera === true && process.env.STC_CAMERA_WARM !== "off") {
       sup!.warmCamera(options.cameraDeviceUid ?? undefined, ms + 15_000)
         .catch((e) => console.error("[camera] warm-up failed:", e?.code ?? e?.message ?? e));
     }
