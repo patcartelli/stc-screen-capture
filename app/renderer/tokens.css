@@ -59,8 +59,9 @@
      that changes — timers, sizes, lengths, key chords, the countdown — and
      literal text such as file paths and model codes. Silkscreen is retired.
      Departure Mono was tried and not adopted (2026-10-26). Readout sizes:
-     34 (countdown), 24 (record bar), 16 (pill), 14 (menu rows), 12 and 11
-     (Library meta, keys). Sans: 20 / 15 / 13 / 12 / 11 / 10 (10 is the floor). */
+     34 (countdown), 24 (record bar), 16 (pill), 12 and 11 (Library meta,
+     keys). Menu rows are device NAMES, not values, so they stay Geist (14).
+     Sans: 20 / 15 / 13 / 12 / 11 / 10 (10 is the floor). */
 
   /* Type ramp — readout (JetBrains Mono) with tabular-nums */
   --type-value-sm: 11px; --type-value-sm-weight: 400; --type-value-sm-lh: 1.4;
@@ -68,7 +69,6 @@
 
   --type-readout-xl: 24px; --type-readout-xl-lh: 1;
   --type-readout-pill: 16px; --type-readout-pill-lh: 1;
-  --type-readout-menu: 14px; --type-readout-menu-lh: 1;
 
   /* Light tokens. There is no in-app theme switch — prefers-color-scheme
      below is the only signal, same as the color-scheme line already was. */

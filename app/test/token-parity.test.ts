@@ -56,10 +56,10 @@ describe("source: the readout face (STC-583)", () => {
     expect(css).not.toMatch(/Silkscreen|--font-pixel|--font-mono|--type-timer|Departure Mono'/);
     expect(existsSync(join(RENDERER, "fonts/Silkscreen-Regular.woff2"))).toBe(false);
   });
-  it("the pill timer, the record bar's size and the menu rows draw in the readout face", () => {
+  it("the pill timer and the record bar's size draw in the readout face; menu rows stay Geist", () => {
     expect(read("pill.html")).toMatch(/var\(--type-readout-pill\)\/1 var\(--font-readout\)/);
     expect(read("overlay.html")).toMatch(/#ctl-size \{[^}]*var\(--font-readout\)/);
-    expect(read("device-menu.css")).toMatch(/font: 400 var\(--type-readout-menu\)\/1 var\(--font-readout\)/);
+    expect(read("device-menu.css")).toMatch(/font: 400 14px\/1 var\(--font-sans\)/);
   });
 });
 
