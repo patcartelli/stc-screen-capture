@@ -1,10 +1,11 @@
 # STC-505 runbook — the failure states, run end to end on the Mac (STC-532)
 
-**Branch:** `claude/exciting-hamilton-lg7sdu` (draft PR). **Not on `master` yet**, so run it from the branch:
+**Branch:** `master`. This runbook merged in #368, so run it from `master` (the branch it was written on, `claude/exciting-hamilton-lg7sdu`, may no longer exist):
 
 ```
 git fetch origin
-git checkout claude/exciting-hamilton-lg7sdu
+git checkout master
+git pull origin master
 npm ci
 helper/build.sh
 npm run app:start
@@ -24,16 +25,18 @@ The rule for every row: the take **plays to the failure point** in the editor, a
 
 ## The states
 
-| # | State | Reach it with | Pill (2 s) | Panel line | Library tile |
+| # | State | Reach it with | Pill (STC-579: recording only) | Panel line | Library tile |
 |---|---|---|---|---|---|
 | 1 | Screen Recording denied, before a take | Remove Capture from Screen Recording, relaunch, press Record | n/a (no take) | n/a. The grants panel (STC-476) covers the main window | n/a |
 | 2 | Screen Recording revoked, mid-take | Switch Capture off in System Settings during a take | **no label: not a stop** | none | none |
-| 3 | Disk full | `hdiutil` volume + `STC_TEMP_TAKES_DIR`, or `STC_CAPTURE_FAULT=disk-full` | Disk full | `Stopped at m:ss. Your disk is full. Everything up to then is saved.` + **Reclaim space** | `Stopped early: disk full at m:ss` |
-| 4a | Window closed | Record a window, close it. Fault: `STC_CAPTURE_FAULT=window-closed` | Window closed | `…The window you were recording was closed.…` | `Stopped early: window closed at m:ss` |
-| 4b | Window resized | Record a window, resize it. Fault: `=window-resized` | Window resized | `…The window you were recording was resized.…` | `Stopped early: window resized at m:ss` |
-| 5 | Display unplugged | Record a second display, unplug it. Fault: `=display-gone` | Display lost | `…The display you were recording was disconnected.…` | `Stopped early: display disconnected at m:ss` |
-| 6 | Helper `kill -9` | `pkill -9 stc-helper` mid-take | n/a (the helper is dead; there is no pill label) | `Capture's recorder quit unexpectedly…`, no "not saved" toast | `Recovered after the recorder quit. No cursor data.` |
+| 3 | Disk full | `hdiutil` volume + `STC_TEMP_TAKES_DIR`, or `STC_CAPTURE_FAULT=disk-full` | gone at once, no label | `Stopped at m:ss. Your disk is full. Everything up to then is saved.` + **Reclaim space** | `Stopped early: disk full at m:ss` |
+| 4a | Window closed | Record a window, close it. Fault: `STC_CAPTURE_FAULT=window-closed` | gone at once, no label | `…The window you were recording was closed.…` | `Stopped early: window closed at m:ss` |
+| 4b | Window resized | Record a window, resize it. Fault: `=window-resized` | gone at once, no label | `…The window you were recording was resized.…` | `Stopped early: window resized at m:ss` |
+| 5 | Display unplugged | Record a second display, unplug it. Fault: `=display-gone` | gone at once, no label | `…The display you were recording was disconnected.…` | `Stopped early: display disconnected at m:ss` |
+| 6 | Helper `kill -9` | `pkill -9 stc-helper` mid-take | n/a (the helper is dead; the pill goes with it) | `Capture's recorder quit unexpectedly…`, no "not saved" toast | `Recovered after the recorder quit. No cursor data.` |
 | 7 | Silent mic | Mic input volume to zero, or fault `=mic-silent` | amber dot + flat bar after 10 s, tooltip "No mic signal for 10 s" (take keeps recording) | none | `No mic signal from m:ss to m:ss` |
+
+**Retired by STC-579 (2026-10-26):** the pill no longer shows a label after a stop, and there is no 2 s dwell. In rows 3 to 5 the pill goes away at once and the panel arrives with no wait. Any pill-label check below that says otherwise is retired and kept only as the record of the 2026-10-23 run.
 
 Wording is `app/src/stop-copy.ts` and `app/src/pill.ts`. If what you see differs from this table, `stop-copy.ts` is the truth and this table is stale: say so in the results.
 
@@ -43,8 +46,8 @@ Other stops the helper can make, not in the spec's seven, with the same chain: `
 
 For every row 3 to 7, do these in order and write down what you saw:
 
-1. **The pill.** Label, how long it stayed, whether the label fit (an ellipsis means it did not), whether the window jumped when it restored.
-2. **The panel.** It appears *after* the pill label, not with it. Reason line present, Copy/Save/Edit all visible on the 250 px card, no toast anywhere.
+1. **The pill.** It goes away at once with no label (STC-579). Retired: the label, its 2 s, its fit.
+2. **The panel.** It appears at once, with no 2 s gap after the pill goes. Reason line present, Copy/Save/Edit all visible on the 250 px card, no toast anywhere.
 3. **The library tile.** Save the take, open the library, read the note on the tile.
 4. **The take.** Open it in the editor. It plays from the start to the failure point and the cursor is there (except row 6, which has no cursor data). Export it.
 5. **`anchors.json`.** `stop.reason` is what the table says, and `files` lists every file that exists on disk.
@@ -93,7 +96,7 @@ Record the whole screen with a video playing. Then run the `dd` variant (fill th
 
 **Fault route.** `STC_CAPTURE_FAULT=disk-full npm run app:start`, then record. Use `=disk-write-failed` for the writer path.
 
-Chain: pill **Disk full**, then the panel with the line and **Reclaim space**, then the tile `Stopped early: disk full at m:ss`. Open the take: it plays to the stop. `anchors.json` is v10 with `"reason": "disk-full"`.
+Chain: the pill goes with no label, then the panel with the line and **Reclaim space**, then the tile `Stopped early: disk full at m:ss`. Open the take: it plays to the stop. `anchors.json` is v10 with `"reason": "disk-full"`.
 
 **Judgement call: does Reclaim space work from the panel?** Click it. It must run the same sweep as the profile sheet's button: a native sheet listing what would move to the Trash (confirm or cancel), or "nothing to reclaim" as a toast. Two things to check that a unit test cannot:
 - the sheet appears in front of the panel and is not hidden behind it, and the panel is still there after you cancel;
@@ -131,13 +134,13 @@ Needs a second display. Record it by id (overlay), unplug it mid-take. Also unpl
 
 Fault route: `STC_CAPTURE_FAULT=display-gone`.
 
-Expect **Display lost**, then the panel, then the tile `Stopped early: display disconnected at m:ss`. The pill is on the recorded display's work area, so check where it goes when that display disappears: it must not be stranded on a screen that no longer exists.
+Expect the pill to go with no label, then the panel, then the tile `Stopped early: display disconnected at m:ss`. The pill is on the recorded display's work area, so check where it goes when that display disappears: it must not be stranded on a screen that no longer exists.
 
 | Result | Notes |
 |---|---|
 | ⚠️ recorded display | Ran twice: the laptop screen closed (stopped at 0:12) and the HP Z27 unplugged (stopped at 0:06). Both stopped the take and put up a panel, and both takes play. **The wording is the generic `stream-stopped` row, not `display-reconfigured`:** the panel said "The screen capture stopped unexpectedly." and the tile said "Stopped early: capture source lost at m:ss", where the table above expects "Display lost" / "The display you were recording was disconnected." See Findings (STC-577). Pill label **not seen** (the recorded display was gone). |
 | ✅ other display (continues) | Recording continued through full playback. The mic on the same USB hub dropped with the unplug and was handled as a track loss ("The mic disconnected at 0:05…"), not a stop. |
-| ☐ pill label and placement on loss | Not verified, and now moot: Patrick's decision (2026-10-26) is that the pill is for active recording only, so the pill does not carry a lost display's message. The label check moves to STC-577's hardware step if stopped labels stay at all; see Findings 5 and STC-579. |
+| ☐ pill label and placement on loss (retired, STC-579) | Not verified, and now moot: Patrick's decision (2026-10-26) is that the pill is for active recording only, so the pill does not carry a lost display's message. The label check moves to STC-577's hardware step if stopped labels stay at all; see Findings 5 and STC-579. |
 
 ## §6 Helper `kill -9`
 
@@ -188,23 +191,21 @@ The change, if any, is one constant: `MicSignal.silenceFloorDbfs` or `silentSpan
 | ✅ narration take: spans (list) | Redone 2026-10-26: about 3 min of real narration with one break of about 10 s, roughly 10 s in. No `silentSpans` in `anchors.json`, and the amber dot never appeared. |
 | ✅ verdict on 10 s / -60 dBFS | **Keep both as they are** (Patrick, 2026-10-26). Natural pauses do not trigger the marker, and a real muted mic does. On this mic (Elgato Wave:3) the room's noise sits above -60 dBFS, so "nobody talking" still reads as signal and the marker means "the mic recorded nothing", which is the spec's "no audio" state. The 10 s duration was **not exercised**: the break was right at 10 s, so the take cannot tell "too short" from "room noise above the floor". The quiet-room result is the better evidence, and it points at the floor, not the duration. Raising the floor (for example to -50 dBFS) would also catch a quiet room, but there is no data on where it starts firing on a breath, so it is not changed. |
 
-## §8 The ~2 s pill dwell
+## §8 The ~2 s pill dwell (retired by STC-579)
 
-Judge it across §3 to §5 rather than on its own. `PILL_STOPPED_DWELL_MS` is 2000 (`app/src/pill.ts`). For each stop:
+**Retired 2026-10-26 (STC-579, #375).** The pill is for an active recording only: after a stop it goes away at once with no label, the 2 s dwell (`PILL_STOPPED_DWELL_MS`) is gone, and the panel goes up with no wait. What stays on the pill is what shows while a take is still recording: "Mic lost", "Camera lost", "System lost", "Camera stalled" (now `PILL_NOTICE_MS`) and the no-signal amber dot.
 
-- is 2 s long enough to *read* the label before the panel arrives?
-- does the pill's collapse/restore (STC-375, now its own window per STC-550) fight the dwell? Does the window jump on restore?
-- does starting a new take during the dwell end it cleanly (it should)?
-
-If it reads too fast or too slow, the change is the one constant. The panel waits the same time (`onTakeEnded`), so they move together.
+What was judged here on 2026-10-23 and 2026-10-26, kept as the record:
 
 | Result | Notes |
 |---|---|
 | ✅ readable | "Yes" for the labels seen (disk full, window closed/resized). Display loss could not be judged: the pill was not visible. |
 | ✅ no jump on restore | Patrick has not noticed a jump (2026-10-26). |
-| ✅ verdict on 2 s | Long enough. |
+| ✅ verdict on 2 s | Long enough, then superseded by the decision below. |
 
-**Decision (Patrick, 2026-10-26): the pill is for active recording only.** A label that shows for 2 s and then disappears, next to a panel that says the same thing, is two places for one message, and it cannot be shown at all when the recorded display is gone. So the stopped-state labels and the 2 s dwell should go, and the panel alone carries every stop. This reverses part of STC-531's 2026-10-14 design (`PILL_STOPPED_DWELL_MS`, the stopped labels in `stop-copy.ts`, the panel waiting out the dwell in `onTakeEnded`), so it has its own ticket, STC-579. Assumed boundary, to confirm: the labels shown **while a take is still recording** ("Mic lost", "Camera lost", "System lost", "Camera stalled", the no-signal amber dot) stay.
+**Decision (Patrick, 2026-10-26): the pill is for active recording only.** A label that shows for 2 s and then disappears, next to a panel that says the same thing, is two places for one message, and it cannot be shown at all when the recorded display is gone. This reversed part of STC-531's 2026-10-14 design. The boundary was confirmed with Patrick when STC-579 was built: the in-take labels stay.
+
+What is still to check on a Mac (STC-579's own hardware step): stop a take by filling a disk and by closing a window, and watch that the pill disappears and the panel arrives with no 2 s gap. Starting a new take right after a stop should behave as before.
 
 ## Findings
 
@@ -213,11 +214,11 @@ If it reads too fast or too slow, the change is the one constant. The panel wait
 3. **A fill from outside ends the camera first (§3).** On the `dd` run the camera ended `writer-failed` about 0.2 s before the display's `disk-full` stop. Designed (STC-562), listed so nobody reads it as a fault.
 
 4. **Reclaim space trashes saved-but-unexported takes (§3).** Confirming its sheet moved the 10-23 test takes to the Trash. Designed, and the Trash is the undo. It is listed so the next person running §3 does not lose takes they wanted.
-5. **The pill should be recording-only (§8).** Patrick's decision, 2026-10-26. The stopped-state labels and their 2 s dwell would go, and the panel alone would carry every stop. It reverses part of STC-531 and is filed as STC-579. If it ships, the pill-label checks in this runbook (§5 label, §8 dwell) and in STC-531's are retired, and STC-577's label acceptance reduces to the panel and tile wording.
+5. **The pill is recording-only (§8).** Patrick's decision, 2026-10-26. The stopped-state labels and their 2 s dwell are gone and the panel alone carries every stop. It reversed part of STC-531 and shipped as STC-579 (#375). The pill-label checks in this runbook (§5 label, §8 dwell) and in STC-531's are retired, and STC-577's label acceptance reduces to the panel and tile wording.
 
 ## Still to do
 
-- Confirm the boundary on STC-579 (the recording-only pill): the labels shown while a take is still recording stay.
+- STC-579's hardware step: fill a disk and close a window mid-take, and confirm the pill disappears and the panel arrives with no 2 s gap. (The boundary, that in-take labels stay, is confirmed.)
 - STC-577's hardware step (unplug a recorded display, close the laptop lid with an external attached), once that is fixed.
 
 ## What is deliberately not here
