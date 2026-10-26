@@ -73,6 +73,10 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     /// match a disconnect notification against the device this session
     /// actually resolved to rather than the request that opened it.
     private var resolvedDeviceUid = ""
+    /// `start()`'s phase timings and the first frame's arrival, for `timings()`.
+    /// Guarded by `lock`.
+    private var openTimings: [String: Any] = [:]
+    private var firstArrivalNs: Int64 = -1
 
     private let lock = NSLock()
     /// Last pts that passed the monotonic-ordering check, appended or not.
@@ -176,10 +180,19 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         self.deviceUid = deviceUid
     }
 
-    func start() -> Result<String, Error> {
+    /// Opens the device and builds a session around it (discovery, input,
+    /// output, `commitConfiguration`), optionally running it. No delegate and no
+    /// writer: those belong to a take, so the same open serves a warm-up
+    /// (`CameraWarm.swift`) and a cold start alike.
+    ///
+    /// This is where the camera's lag behind the screen lives. Every phase is
+    /// timed, because the lag was only ever seen as one number (the first frame
+    /// 1.1 to 1.6 s after the display's) and nothing said which phase it was.
+    static func openSession(deviceUid: String?, startRunning: Bool) -> Result<OpenedCamera, Error> {
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         guard status == .authorized else { return .failure(CameraError.notAuthorized(status)) }
 
+        let tStart = Clock.nowNs()
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
             mediaType: .video, position: .unspecified)
@@ -218,11 +231,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
                                             + "for a usable picture-in-picture"])
             }
         }
-        // Guarded by `lock`, same as the frame counters below: this runs on
-        // the open queue (CaptureSession.startCameraAsync's background
-        // queue) while `track()` reads it from the stop path, which can run
-        // concurrently on a different queue.
-        lock.lock(); deviceName = device.localizedName; resolvedDeviceUid = device.uniqueID; lock.unlock()
+        let tDiscovered = Clock.nowNs()
 
         let s = AVCaptureSession()
         s.beginConfiguration()
@@ -246,22 +255,90 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         // Dropping a late camera frame is correct: the PiP holds the previous
         // one, exactly as the display track does across a VFR stall.
         output.alwaysDiscardsLateVideoFrames = true
-        output.setSampleBufferDelegate(self, queue: queue)
         guard s.canAddOutput(output) else {
             s.commitConfiguration()
             return .failure(CameraError.sessionRefusedInput)
         }
         s.addOutput(output)
         s.commitConfiguration()
+        let tConfigured = Clock.nowNs()
 
-        do { try setupWriter() } catch { return .failure(error) }
+        var tRunning = tConfigured
+        if startRunning {
+            s.startRunning()
+            tRunning = Clock.nowNs()
+        }
+        return .success(OpenedCamera(
+            session: s, output: output, name: device.localizedName, uid: device.uniqueID,
+            automatic: deviceUid == nil, running: startRunning,
+            discoverMs: Int((tDiscovered - tStart) / 1_000_000),
+            configureMs: Int((tConfigured - tDiscovered) / 1_000_000),
+            startRunningMs: Int((tRunning - tConfigured) / 1_000_000)))
+    }
 
-        session = s
-        s.startRunning()
+    /// Starts the take's camera. `warm` is a session `CameraWarm.swift` opened
+    /// before Record: adopted when it is the device this take would have picked
+    /// (`decideWarmAdoption`), so its first frame is one frame interval away
+    /// rather than a cold open. Anything else is stopped and opened fresh.
+    func start(warm: OpenedCamera? = nil) -> Result<String, Error> {
+        let tBegan = Clock.nowNs()
+        let opened: OpenedCamera
+        var adopted = false
+        if let warm, decideWarmAdoption(requestedUid: deviceUid, warmUid: warm.uid, warmAutomatic: warm.automatic) {
+            opened = warm
+            adopted = true
+        } else {
+            warm?.session.stopRunning()
+            switch Self.openSession(deviceUid: deviceUid, startRunning: false) {
+            case .failure(let e): return .failure(e)
+            case .success(let o): opened = o
+            }
+        }
+        // Guarded by `lock`, same as the frame counters below: this runs on
+        // the open queue (CaptureSession.startCameraAsync's background
+        // queue) while `track()` reads it from the stop path, which can run
+        // concurrently on a different queue.
+        lock.lock(); deviceName = opened.name; resolvedDeviceUid = opened.uid; lock.unlock()
+
+        // The writer BEFORE the delegate: a warm session is already producing
+        // frames, and the first one to reach `captureOutput` needs somewhere to go.
+        let tWriter0 = Clock.nowNs()
+        do { try setupWriter() } catch {
+            if adopted { opened.session.stopRunning() }
+            return .failure(error)
+        }
+        let writerMs = Int((Clock.nowNs() - tWriter0) / 1_000_000)
+        opened.output.setSampleBufferDelegate(self, queue: queue)
+
+        session = opened.session
+        var startRunningMs = opened.startRunningMs
+        if !opened.running {
+            let t = Clock.nowNs()
+            opened.session.startRunning()
+            startRunningMs = Int((Clock.nowNs() - t) / 1_000_000)
+        }
+        lock.lock()
+        openTimings = ["warm": adopted,
+                       "discoverMs": opened.discoverMs, "configureMs": opened.configureMs,
+                       "startRunningMs": startRunningMs, "writerMs": writerMs,
+                       "startMs": Int((Clock.nowNs() - tBegan) / 1_000_000)]
+        lock.unlock()
         armNoFramesWatchdog()
         startHoldTimer()
         startStallTimer()
         return .success(deviceName)
+    }
+
+    /// Where the open's time went (`start()`), plus, once the first frame lands,
+    /// when it ARRIVED (`Clock.nowNs() - t0Ns`) next to the PTS it carries.
+    /// Arrival minus PTS is the device's pipeline latency; PTS is what anchors.json
+    /// records, so the two together say whether the lag is the open or the pipeline.
+    func timings() -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        var t = openTimings
+        if firstArrivalNs >= 0 { t["firstFrameArrivalNs"] = Int(firstArrivalNs) }
+        if firstPtsNs >= 0 { t["firstFramePtsNs"] = Int(firstPtsNs) }
+        return t
     }
 
     /// The device this session actually resolved to, once `start()` has run —
@@ -510,7 +587,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             lock.lock()
             if lastPtsNs >= 0 { deltas.append(rel - lastPtsNs) }
             let first = firstPtsNs < 0
-            if first { firstPtsNs = rel }
+            if first { firstPtsNs = rel; firstArrivalNs = Int64(Clock.nowNs()) - Int64(t0Ns) }
             lastPtsNs = rel
             appended += 1
             // STC-562: what a hold repeats, and when from.

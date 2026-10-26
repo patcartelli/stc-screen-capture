@@ -664,6 +664,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // success and failure both, whenever the open actually resolves.
                     if wantCamera {
                         self.startCameraAsync()
+                    } else {
+                        // A warm-up the app asked for and then did not use (the camera was
+                        // switched off between the countdown and Record) must not stay lit.
+                        WarmCamera.shared.release()
                     }
                     // STC-233: same off-critical-path reasoning as the camera
                     // just above — AVCaptureSession.startRunning() blocks, so
@@ -705,6 +709,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             CFMachPortInvalidate(tap)
             finishStart(.failure(error))
         }
+    }
+
+    /// The display track's first accepted frame, session-relative; -1 before it.
+    /// Read for the camera's first-frame log line only.
+    fileprivate func displayFirstFramePtsNs() -> Int64 {
+        lock.lock(); defer { lock.unlock() }
+        return firstFramePtsNs
     }
 
     /// How often a window-scope take polls its window's bounds (STC-370).
@@ -1183,6 +1194,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             let cam = CameraCapture(dir: dir, t0Ns: t0Ns, pauseGate: self.pauseGate, deviceUid: deviceUid)
             cam.onFirstAppend = { [weak self, weak cam] in
                 self?.notePartialChange()   // STC-530
+                // Arrival next to PTS next to the display's first frame: the three
+                // numbers that say whether a camera still lags and by which part.
+                if let cam, let t0 = self?.t0Ns {
+                    var t = cam.timings()
+                    if let d = self?.displayFirstFramePtsNs(), d >= 0 { t["displayFirstFrameNs"] = Int(d) }
+                    IO.log("[camera] first frame, t0=\(t0): \(t)")
+                }
                 // STC-238: from the first FRAME, not the open, so the injected
                 // unplug always lands mid-track (armCameraDisconnectFault).
                 if let cam { self?.armCameraDisconnectFault(deviceUid: cam.currentDeviceUid()) }
@@ -1194,7 +1212,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             // STC-553: a stall beginning or ending is in the partial at once, so a helper
             // that dies mid-stall still leaves it on record.
             cam.onStallChanged = { [weak self] in self?.notePartialChange() }
-            let result = cam.start()
+            // The camera opened before Record, if the app asked for that
+            // (`camera-warm`): its session is already running, so its first frame
+            // is a frame interval away instead of a cold open. Taken here, off
+            // the critical path with the rest of the open, and handed back to
+            // `start` to adopt or stop.
+            let result = cam.start(warm: WarmCamera.shared.take())
             let opened: Bool
             if case .success = result { opened = true } else { opened = false }
 
@@ -1222,7 +1245,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // the generic `device-disconnected` for THIS camera from one for
                     // some other device, and say nothing for the former.
                     let uid = cam.currentDeviceUid()
-                    IO.send("camera-started", ["device": name, "uid": uid])
+                    // `timings`: where the open's time went and whether the warm
+                    // session was adopted. The first frame's arrival follows below.
+                    IO.send("camera-started", ["device": name, "uid": uid, "timings": cam.timings()])
                 }
             case .closeImmediately:
                 // stop() already ran and found no camera to close, because

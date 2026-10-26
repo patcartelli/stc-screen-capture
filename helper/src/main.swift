@@ -143,6 +143,30 @@ final class App {
                 case .failure(let e): IO.send("error", seq: seq, ["code": e.code, "detail": e.detail])
                 }
             }
+        case "camera-warm":
+            // Opens the camera ahead of Record so it is already running at the
+            // take's t0 (a cold open took 1.1 to 1.6 s). The app sends it when the
+            // countdown begins. Idle only: a take that is starting or running
+            // owns the camera. The reply waits for the open, which can take
+            // seconds, so it is answered off the main thread's work.
+            guard state == .idle else {
+                IO.send("error", seq: seq, ["code": "bad-state", "detail": "camera-warm needs an idle helper"]); return
+            }
+            WarmCamera.shared.warmUp(deviceUid: cmd["deviceUid"] as? String,
+                                     holdSeconds: (cmd["holdMs"] as? Double).map { $0 / 1000 } ?? WarmCamera.defaultHoldSeconds) { result in
+                switch result {
+                case .success(let o):
+                    IO.send("camera-warmed", seq: seq, ["device": o.name, "uid": o.uid, "openMs": o.openMs])
+                case .failure(let e):
+                    let code = (e as? CameraError)?.code ?? (e as? CameraWarmError)?.code ?? "camera-failed"
+                    IO.send("error", seq: seq, ["code": code, "detail": "\(e)"])
+                }
+            }
+        case "camera-release":
+            // The countdown was cancelled, or the camera was switched off: put the
+            // warm camera away. Always answers; releasing nothing is not an error.
+            WarmCamera.shared.release()
+            IO.send("camera-released", seq: seq, [:])
         case "capture-still":
             captureStill(cmd, seq: seq)
         case "copy-file":
@@ -338,6 +362,9 @@ final class App {
                     o.merge(info) { a, _ in a }
                     IO.send("started", seq: seq, o)
                 case .failure(let err):
+                    // A start that fails before the camera was ever adopted leaves the
+                    // warm one running; nothing else would stop it for 20 s.
+                    WarmCamera.shared.release()
                     let ce = err as? CaptureError
                     IO.send("error", seq: seq,
                             ["code": ce?.code ?? "start-failed",
