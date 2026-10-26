@@ -1292,7 +1292,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             if stoppingAlready { return }
 
             let m = MicCapture(dir: dir, t0Ns: t0Ns, deviceUid: deviceUid, pauseGate: self.pauseGate)
-            m.onFirstAppend = { [weak self] in self?.notePartialChange() }   // STC-530
+            m.onFirstAppend = { [weak self, weak m] in
+                self?.notePartialChange()                                    // STC-530
+                // STC-590: how late the mic's first sample is against the display's.
+                guard let self, let m else { return }
+                self.sendAudioFirstSample("mic", firstNs: m.firstSampleRelNs(), timings: m.timings())
+            }
             m.onSilenceChange = { [weak self] in self?.notePartialChange() } // STC-528
             let result = m.start()
             let opened: Bool
@@ -1308,7 +1313,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             switch decision {
             case .store:
                 if case .success(let name) = result {
-                    IO.send("mic-started", ["device": name])
+                    IO.send("mic-started", ["device": name, "timings": m.timings()])
                     self.armMicDisconnectFault(deviceUid: deviceUid)
                 }
             case .closeImmediately:
@@ -1521,6 +1526,16 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    /// STC-590: where an audio track's first sample landed against the display's first
+    /// frame, both relative to t0, with the track's open timings. One event per track per
+    /// take; the app prints it. Reliable channel: it is once per take.
+    fileprivate func sendAudioFirstSample(_ track: String, firstNs: Int64, timings: [String: Int]) {
+        var f: [String: Any] = ["track": track, "firstSampleMs": Int(firstNs / 1_000_000), "timings": timings]
+        let d = displayFirstFramePtsNs()
+        if d >= 0 { f["displayFirstFrameMs"] = Int(d / 1_000_000) }
+        IO.send("audio-first-sample", f)
+    }
+
     /// Starts the system-audio stream (STC-418). Unlike the mic, nothing here
     /// blocks — `SCStream.startCapture` answers through a callback — so there
     /// is no background hop; but the same race with `stop()` is closed the
@@ -1535,7 +1550,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         if stoppingBegan { lock.unlock(); return }
         let a = SystemAudioCapture(dir: dir, t0Ns: t0Ns, pauseGate: pauseGate)
-        a.onFirstAppend = { [weak self] in self?.notePartialChange() }   // STC-530
+        a.onFirstAppend = { [weak self, weak a] in
+            self?.notePartialChange()                                        // STC-530
+            // STC-590: same line as the mic's.
+            guard let self, let a else { return }
+            self.sendAudioFirstSample("system", firstNs: a.firstSampleRelNs(), timings: a.timings())
+        }
         systemAudio = a
         lock.unlock()
 

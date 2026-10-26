@@ -92,6 +92,20 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// the moment this track's start time exists for `anchors.partial.json`. Set before
     /// `start()`; never changed after.
     var onFirstAppend: (() -> Void)?
+    /// STC-590: `startCapture`'s own duration in ms (request to completion) and when the
+    /// first buffer ARRIVED relative to t0, before any gate.
+    private var openTimings: [String: Int] = [:]
+    private var firstArrivalRelNs: Int64 = -1
+    func timings() -> [String: Int] {
+        lock.lock(); defer { lock.unlock() }
+        var t = openTimings
+        if firstArrivalRelNs >= 0 { t["firstArrivalRelMs"] = Int(firstArrivalRelNs / 1_000_000) }
+        return t
+    }
+    func firstSampleRelNs() -> Int64 {
+        lock.lock(); defer { lock.unlock() }
+        return firstPtsNs
+    }
 
     /// Called if the stream dies mid-take (`didStopWithError`). The take goes
     /// on without system audio from that point — this is an optional
@@ -146,6 +160,7 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         stream = s
         lock.unlock()
 
+        let startT = Clock.nowNs()
         s.startCapture { [weak self] err in
             guard let self else { return }
             if let err {
@@ -153,6 +168,7 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
                 return
             }
             self.lock.lock()
+            self.openTimings["startCaptureMs"] = Int((Clock.nowNs() - startT) / 1_000_000)
             let stopAlready = self.stopped
             self.running = !stopAlready
             self.lock.unlock()
@@ -202,6 +218,7 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
             lock.lock()
             if died { lock.unlock(); return }
+            if firstArrivalRelNs < 0 { firstArrivalRelNs = rel }   // STC-590
             if monotonicGuardPtsNs >= 0, rel <= monotonicGuardPtsNs {
                 lock.unlock(); return               // non-monotonic: drop, never offered to the gate
             }
