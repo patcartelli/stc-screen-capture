@@ -92,12 +92,12 @@
        this window, so it reads as "the app reporting a state" rather than
        as a caption hanging off the last button. `margin-left: auto` pushes
        it (and #settings after it) to the row's trailing edge. */
-    #state { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    #state { font-family: var(--font-readout); font-variant-numeric: tabular-nums;
               font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
               text-transform: uppercase; color: var(--text-dim);
               background: var(--surface-hover); border: 1px solid var(--border);
               border-radius: 999px; padding: 4px 10px; margin-left: auto; }
-    table { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    table { border-collapse: collapse; font-family: var(--font-readout); font-variant-numeric: tabular-nums; }
     td { padding: 2px 14px 2px 0; }
     td:first-child { color: var(--text-dim); font-family: var(--font-sans); }
 
@@ -128,7 +128,7 @@
     h2 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); margin: 4px 0 0; color: var(--text-dim); }
     .take { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
             padding: 7px 0; border-top: 1px solid var(--border); }
-    .take .meta { color: var(--text-dim); font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--type-value); }
+    .take .meta { color: var(--text-dim); font-family: var(--font-readout); font-variant-numeric: tabular-nums; font-size: var(--type-value); }
     .take button { padding: 3px 10px; font-size: var(--type-body); }
     .broken { color: var(--warn); font-size: var(--type-body); padding: 6px 0; }
 
@@ -185,8 +185,8 @@
        duration already sits in `summary` too, but a corner chip is what a
        glance actually reads, the same idiom Finder/Photos use. */
     .libdur { position: absolute; right: 6px; bottom: 6px; background: var(--on-image-scrim);
-              color: var(--on-image); font-family: var(--font-mono); font-size: 10px;
-              padding: 2px 6px; border-radius: 4px; letter-spacing: .02em; }
+              color: var(--on-image); font-family: var(--font-readout); font-size: var(--type-value-sm);
+              padding: 2px 6px; border-radius: 4px; }
     /* A second door to "open" (STC-429) — see `wireOpenOnThumb`. */
     .libthumb.clickable { cursor: pointer; }
     .libthumb.clickable:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -205,7 +205,7 @@
     .libedited .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); }
     .libtitle { font-size: var(--type-body-strong); font-weight: var(--type-body-strong-weight); overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
-    .libtile .meta, .librow .meta { color: var(--text-dim); font-size: var(--type-value-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    .libtile .meta, .librow .meta { color: var(--text-dim); font-size: var(--type-value-sm); font-family: var(--font-readout); font-variant-numeric: tabular-nums;
                      overflow: hidden; text-overflow: ellipsis; }
     .libactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; }
     .libactions button { padding: 2px 9px; font-size: var(--type-value-sm); }
@@ -266,8 +266,8 @@
     .shortcut { display: flex; align-items: baseline; gap: 10px; padding: 5px 0;
                 border-top: 1px solid var(--border); }
     .shortcut .name { min-width: 150px; }
-    .shortcut .keys { font: inherit; font-weight: 500; min-width: 88px; text-align: center; padding: 3px 10px;
-                      font-size: var(--type-body); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .shortcut .keys { font: inherit; font-weight: 400; min-width: 88px; text-align: center; padding: 3px 10px;
+                      font-size: var(--type-body); font-family: var(--font-readout); font-variant-numeric: tabular-nums; }
     .shortcut .keys.listening { border-color: var(--accent); color: var(--accent); }
     .shortcut .clear { padding: 3px 8px; font-size: var(--type-body); }
     .shortcut .why { font-size: var(--type-body); color: var(--warn); flex: 1; }
@@ -278,7 +278,7 @@
     .shortcut .variant { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; }
     .shortcut .variant .name { min-width: 150px; padding-left: 14px; color: var(--text-dim); font-size: var(--type-body); }
     .shortcut .variant .keys { min-width: 88px; text-align: center; padding: 1px 10px; color: var(--text-dim);
-                               font-size: var(--type-body); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+                               font-size: var(--type-body); font-family: var(--font-readout); font-variant-numeric: tabular-nums; }
     #shortcutfoot { display: flex; gap: 10px; align-items: baseline; padding-top: 8px; }
     #shortcutfoot button { padding: 3px 10px; font-size: var(--type-body); }
     #pipsettingshint { font-size: var(--type-meta); color: var(--text-faint); margin: 0 0 8px; }
