@@ -63,7 +63,7 @@ stopBtn.addEventListener("click", async () => {
   stopBtn.disabled = true;
   const r = await window.pill.stop().catch(() => ({ ok: false }));
   // The window goes away when the take ends; a refused stop gives the button back.
-  if (!r.ok && !pill.classList.contains("stopped")) stopBtn.disabled = false;
+  if (!r.ok) stopBtn.disabled = false;
 });
 
 // Main sizes the window to the content (`resizePillBounds`). Only the content
@@ -102,23 +102,10 @@ const labelOf = (p: unknown): string | null => {
   return typeof l === "string" && l ? l : null;
 };
 
-// STC-531: the helper stopped the take by itself. For PILL_STOPPED_DWELL_MS
-// main sends the cause (`stop-copy.ts`'s `pillLabel`), then puts the pill away.
-// Stop is disabled meanwhile: there is no take left to stop.
-window.pill.on("pill:stopped", (p) => {
-  const label = labelOf(p);
-  pill.classList.toggle("stopped", label !== null);
-  if (label !== null) pill.classList.remove("notice"); // STC-237: a stop ends any notice
-  stopBtn.disabled = label !== null;
-  labelEl.textContent = label ?? "";
-  pill.setAttribute("aria-label", label ? `Recording stopped: ${label}` : "Recording");
-});
-
 // STC-237: a mic or camera was lost and the take keeps recording. The label
-// stands in for the timer for PILL_STOPPED_DWELL_MS; Stop stays Stop.
+// stands in for the timer for PILL_NOTICE_MS; Stop stays Stop.
 window.pill.on("pill:notice", (p) => {
   const label = labelOf(p);
-  if (pill.classList.contains("stopped")) return; // a stop's label outranks it
   pill.classList.toggle("notice", label !== null);
   labelEl.textContent = label ?? "";
   stopBtn.setAttribute("aria-label", label ? `Stop recording (${label})` : "Stop recording");

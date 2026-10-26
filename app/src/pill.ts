@@ -189,39 +189,25 @@ export function libraryAroundTake(s: LibraryAtTakeStart): { hide: boolean; showA
 export function decidePillAction(
   current: PillWindowState,
   recordingState: SupervisorState,
-  dwelling = false,
 ): "collapse" | "restore" | "none" {
   const recording = recordingState === "recording";
   if (recording && current === "expanded") return "collapse";
-  // STC-531: a pill showing why its take stopped holds until the dwell ends.
-  // Only a restore waits; a new take (`recording`) never does.
-  if (!recording && current === "collapsed" && !dwelling) return "restore";
+  if (!recording && current === "collapsed") return "restore";
   return "none";
 }
 
 /**
- * How long the pill shows why the helper stopped a take (STC-531, the spec's
- * "about 2 s") before the window restores and the take's panel goes up. The
- * panel waits the SAME time (main.ts's `onTakeEnded`), so the label and the
- * panel are never on screen together.
+ * How long a track notice ("Mic lost", "Camera stalled") stands in for the timer while the
+ * take keeps recording (STC-237). The pill says nothing after a stop (STC-579): it goes
+ * away at once and the take's panel carries the cause.
  */
-export const PILL_STOPPED_DWELL_MS = 2000;
-
-/**
- * Whether a stop shows its label on the pill: only when there IS a label
- * (`stop-copy.ts`'s `pillLabel`, i.e. the helper stopped the take by itself)
- * and the window is the pill right now. A stop the user asked for, or one
- * that lands on an expanded window, restores exactly as it always did.
- */
-export function shouldDwell(current: PillWindowState, label: string | undefined): boolean {
-  return current === "collapsed" && label !== undefined && label !== "";
-}
+export const PILL_NOTICE_MS = 2000;
 
 /**
  * STC-237: whether a mic or camera lost mid-take shows its label (`stop-copy.ts`'s
  * `trackLossPillLabel`) on the pill. Only while the take is still recording and the window
- * is the pill. Unlike `shouldDwell` this moves nothing: the label stands in for the timer
- * for `PILL_STOPPED_DWELL_MS`, the button stays Stop, and `decidePillAction` never sees it.
+ * is the pill. It moves nothing: the label stands in for the timer for `PILL_NOTICE_MS`,
+ * the button stays Stop, and `decidePillAction` never sees it.
  */
 export function shouldShowTrackNotice(
   current: PillWindowState, recordingState: SupervisorState, label: string | undefined,

@@ -9,7 +9,7 @@ import { contextBridge, ipcRenderer } from "electron";
  * in a preload is the "one value, two copies" defect this repo keeps finding.
  * `pill-renderer.ts` narrows them against `pill.ts`.
  */
-const CHANNELS = new Set(["pill:elapsed", "pill:level", "pill:micLost", "pill:stopped", "pill:notice"]);
+const CHANNELS = new Set(["pill:elapsed", "pill:level", "pill:micLost", "pill:notice"]);
 
 contextBridge.exposeInMainWorld("pill", {
   stop: () => ipcRenderer.invoke("pill:stop"),

@@ -13,7 +13,7 @@ import { pillPage, pillShowing } from "./_pill.js";
 
 /**
  * A mic or camera lost while the take KEEPS recording (STC-237): the pill shows
- * "Mic lost" / "Camera lost" in place of its timer for PILL_STOPPED_DWELL_MS and
+ * "Mic lost" / "Camera lost" in place of its timer for PILL_NOTICE_MS and
  * stays Stop, nothing toasts, and the take's panel names the track and when.
  *
  * `_fake-helper.mjs`'s `STC_FAKE_WARNING` + `STC_FAKE_WARNING_MS` send the warning
@@ -61,7 +61,6 @@ describe("a mic or camera lost mid-take (STC-237)", () => {
     const pill = await pillPage(app!);
     await expect.poll(() => pill.textContent("#pill-label"), { timeout: 30_000 }).toBe("Mic lost");
     expect(await pill.getAttribute("#pill", "class")).toContain("notice");
-    expect(await pill.getAttribute("#pill", "class")).not.toContain("stopped");
     expect(await pill.isDisabled("#pill-stop"), "the take is still running; its pill is still Stop").toBe(false);
     // STC-528: no mic track from here on, so the meter is back to hatched.
     expect(await pill.getAttribute("#pill-meter", "class") ?? "").not.toMatch(/live|no-signal/);

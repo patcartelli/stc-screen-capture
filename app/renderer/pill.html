@@ -87,18 +87,15 @@
     #pill-stop:active:not([disabled]) { background: var(--overlay-fill); }
     #pill-stop:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #pill-stop-glyph { width: 8px; height: 8px; border-radius: 2px; background: #f5f5f5; }
-    /* STC-531: the helper stopped the take by itself, and for PILL_STOPPED_DWELL_MS
-       the pill says why ("Window closed") instead of the timer. The label
-       replaces everything else, in the system font, which is narrower than the
-       pixel font at this size; one that still does not fit is cut with an
-       ellipsis rather than clipped mid-letter. */
+    /* The notice label, in the system font, which is narrower than the pixel
+       font at this size; one that still does not fit is cut with an ellipsis
+       rather than clipped mid-letter. */
     #pill-label { display: none; }
-    #pill.stopped #pill-row > :not(#pill-label) { display: none; }
     /* STC-237: a mic or camera lost while the take KEEPS recording. The label
        stands in for the timer and meter only: the dot still says recording,
        and Stop stays, because this take is still running. */
     #pill.notice #pill-timer, #pill.notice #pill-meter { display: none; }
-    #pill.stopped #pill-label, #pill.notice #pill-label {
+    #pill.notice #pill-label {
       display: block; flex: 1 1 auto; min-width: 0; text-align: center;
       font: 500 11px/1 -apple-system, system-ui, sans-serif;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
