@@ -156,11 +156,14 @@ describe("pixels: tokens are applied", () => {
       await Promise.all([light.close(), dark.close()]);
     });
 
-    it(`${file} visibly changes when --accent changes`, async () => {
+    // The countdown's ring is the record colour (STC-583), so that is the token
+    // whose change must show there; every other surface draws accent.
+    const token = file === "countdown.html" ? "--rec" : "--accent";
+    it(`${file} visibly changes when ${token} changes`, async () => {
       const page = await open(file, "dark");
       await showAccent(page, file);
       const before = await shot(page);
-      await page.evaluate(() => document.documentElement.style.setProperty("--accent", "#ff00ff"));
+      await page.evaluate((t) => document.documentElement.style.setProperty(t, "#ff00ff"), token);
       const after = await shot(page);
       expect(Buffer.compare(before, after)).not.toBe(0);
       await page.close();
