@@ -88,3 +88,19 @@ Countdown on (the default 3 s). Repeat the four takes.
 ## Export: the PiP no longer draws over black (TRANSFORM_VERSION 17)
 
 With the warm-up the camera can start 7-56 ms before the screen's first frame. The export starts at t = 0 and paints black while there is no screen frame, so up to three output frames showed the face bubble over black. `render()` now returns no PiP while the screen has no frame (`frameIndex === null`); a take whose screen starts first renders exactly what version 16 did. Pinned by `render.test.ts` ("no PiP while the screen has no frame yet"). To check by eye on a warm take: export it, step through the first 5 frames; the bubble should appear with the first screen frame, never before it.
+
+## camera.mp4 starts black for about a second (found 2026-10-26, after the warm-up)
+
+Take `2026-10-26_11-01-49` (warm, camera first frame at 0.1 s): `camera.mp4` opened in QuickTime shows **black for about a second** before the face. So the export's PiP appearing ~1.5 s in was correct for that file; the warm-up got the first frame early, but not a picture. The camera had been running for the whole 3 s countdown, so this is not simply "the camera needs time to start".
+
+**Working theory (unproven):** an `AVCaptureVideoDataOutput` with no delegate does not really consume the camera; the black stretch only starts when the take attaches its delegate. Change: a warm session's output gets a discarding `WarmFrameSink` delegate from the start (`CameraWarm.swift`), so it is live during the countdown; the take swaps itself in.
+
+**Diagnostics** (terminal, per take with a camera):
+- `[camera] started: {... "warm": true, "warmFramesSeen": N, "warmLuma": L ...}`: how many frames the sink saw before the take adopted the session, and the brightness (0-255) of the latest sampled one. A healthy picture is roughly 60-200; video-range **black is ~16**.
+- `[camera] first frames: #0@123ms=16 #5@290ms=16 ...`: brightness of the take's first frames (every 5th of the first 60), with their time since the take began.
+
+**Run (from `master`, rebuild the helper: `helper/build.sh`):** record 2-3 warm takes (camera idle for a couple of minutes before each), then open each `camera.mp4`.
+- `warmFramesSeen` large and `warmLuma` normal, `first frames` normal, no black in the file: the sink fixed it.
+- `warmLuma` ~16 (black even during the warm-up): the camera itself produces black for a stretch; the warm-up needs more lead than the 3 s countdown, or leading black frames must be skipped.
+- `warmLuma` normal but the first frames after adoption ~16: attaching still causes it; skip frames until the picture is real.
+

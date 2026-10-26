@@ -17,13 +17,75 @@ final class OpenedCamera {
     let discoverMs: Int
     let configureMs: Int
     let startRunningMs: Int
+    /// The warm output's delegate while no take owns it. An `AVCaptureVideoDataOutput` holds its
+    /// delegate WEAKLY, so this is what keeps the sink alive. nil for a cold open.
+    let sink: WarmFrameSink?
 
     init(session: AVCaptureSession, output: AVCaptureVideoDataOutput, name: String, uid: String,
-         automatic: Bool, running: Bool, discoverMs: Int, configureMs: Int, startRunningMs: Int) {
+         automatic: Bool, running: Bool, discoverMs: Int, configureMs: Int, startRunningMs: Int,
+         sink: WarmFrameSink? = nil) {
         self.session = session; self.output = output; self.name = name; self.uid = uid
         self.automatic = automatic; self.running = running
         self.discoverMs = discoverMs; self.configureMs = configureMs; self.startRunningMs = startRunningMs
+        self.sink = sink
     }
+}
+
+/// Keeps a warm camera's output PULLING frames, and discards them, until a take adopts the session.
+///
+/// Measured on hardware 2026-10-26: with the output attached to nothing, a warmed camera's first
+/// ~1 s in camera.mp4 was BLACK, although the camera had been running for the whole countdown.
+/// The first frame landed at 0.1 s but was not a picture. The working theory is that the output
+/// only starts consuming the camera once it has a delegate, so the black stretch moved from before
+/// the take into it. A sink makes the output live during the warm-up; the take swaps itself in.
+/// `stats()` says what the sink saw, so the next run shows whether that was the cause.
+final class WarmFrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    let queue = DispatchQueue(label: "stc.capture.camera.warm")
+    private let lock = NSLock()
+    private var frames = 0
+    private var lastLuma = -1
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        // Brightness every 10th frame only: this runs for the whole countdown and must stay cheap.
+        var luma = -1
+        lock.lock(); let n = frames; lock.unlock()
+        if n % 10 == 0, let pb = CMSampleBufferGetImageBuffer(sb) { luma = meanLuma(pb) }
+        lock.lock()
+        frames += 1
+        if luma >= 0 { lastLuma = luma }
+        lock.unlock()
+    }
+
+    /// Frames seen so far and the brightness (0-255, -1 unread) of the latest sampled one.
+    func stats() -> (frames: Int, luma: Int) {
+        lock.lock(); defer { lock.unlock() }
+        return (frames, lastLuma)
+    }
+}
+
+/// Mean brightness of a frame's luma plane, 0-255, from a coarse grid (about 600 samples), or -1
+/// when it is not a planar format. Video-range black is 16, so a black frame reads ~16.
+func meanLuma(_ pb: CVPixelBuffer) -> Int {
+    guard CVPixelBufferGetPlaneCount(pb) > 0 else { return -1 }
+    CVPixelBufferLockBaseAddress(pb, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+    guard let base = CVPixelBufferGetBaseAddressOfPlane(pb, 0) else { return -1 }
+    let w = CVPixelBufferGetWidthOfPlane(pb, 0), h = CVPixelBufferGetHeightOfPlane(pb, 0)
+    let stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+    guard w > 0, h > 0 else { return -1 }
+    let p = base.assumingMemoryBound(to: UInt8.self)
+    var sum = 0, count = 0
+    var y = h / 40
+    while y < h {
+        var x = w / 40
+        while x < w {
+            sum += Int(p[y * stride + x]); count += 1
+            x += max(1, w / 30)
+        }
+        y += max(1, h / 20)
+    }
+    return count == 0 ? -1 : sum / count
 }
 
 /// The camera, opened before Record so it is already delivering frames at the

@@ -77,6 +77,11 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     /// Guarded by `lock`.
     private var openTimings: [String: Any] = [:]
     private var firstArrivalNs: Int64 = -1
+    /// Brightness of the first frames a take receives, for the black-start diagnosis: one sample
+    /// every 5th frame for the first 60, reported once through `onDiag`. Guarded by `lock`.
+    private var diagSeen = 0
+    private var diagSamples: [[String: Int]] = []
+    var onDiag: (([[String: Int]]) -> Void)?
 
     private let lock = NSLock()
     /// Last pts that passed the monotonic-ordering check, appended or not.
@@ -264,7 +269,13 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         let tConfigured = Clock.nowNs()
 
         var tRunning = tConfigured
+        // A warm session's output gets a discarding delegate BEFORE it runs, so it is pulling frames
+        // from the start (see WarmFrameSink).
+        var sink: WarmFrameSink?
         if startRunning {
+            let k = WarmFrameSink()
+            output.setSampleBufferDelegate(k, queue: k.queue)
+            sink = k
             s.startRunning()
             tRunning = Clock.nowNs()
         }
@@ -273,7 +284,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             automatic: deviceUid == nil, running: startRunning,
             discoverMs: Int((tDiscovered - tStart) / 1_000_000),
             configureMs: Int((tConfigured - tDiscovered) / 1_000_000),
-            startRunningMs: Int((tRunning - tConfigured) / 1_000_000)))
+            startRunningMs: Int((tRunning - tConfigured) / 1_000_000), sink: sink))
     }
 
     /// Starts the take's camera. `warm` is a session `CameraWarm.swift` opened
@@ -308,6 +319,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             return .failure(error)
         }
         let writerMs = Int((Clock.nowNs() - tWriter0) / 1_000_000)
+        let warmSeen = opened.sink?.stats()
         opened.output.setSampleBufferDelegate(self, queue: queue)
 
         session = opened.session
@@ -322,6 +334,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
                        "discoverMs": opened.discoverMs, "configureMs": opened.configureMs,
                        "startRunningMs": startRunningMs, "writerMs": writerMs,
                        "startMs": Int((Clock.nowNs() - tBegan) / 1_000_000)]
+        if let w = warmSeen { openTimings["warmFramesSeen"] = w.frames; openTimings["warmLuma"] = w.luma }
         lock.unlock()
         armNoFramesWatchdog()
         startHoldTimer()
@@ -545,6 +558,17 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             let ptsNs = Self.ptsNs(CMSampleBufferGetPresentationTimeStamp(sb))
             let rel = ptsNs - Int64(t0Ns)
             guard rel >= 0 else { return }          // arrived before the session began
+
+            // Black-start diagnosis: how bright are the first frames a take actually receives?
+            lock.lock(); let diagIndex = diagSeen; if diagSeen < 60 { diagSeen += 1 }; lock.unlock()
+            if diagIndex < 60 && diagIndex % 5 == 0 {
+                let l = meanLuma(pb)
+                lock.lock()
+                diagSamples.append(["frame": diagIndex, "tMs": Int(rel / 1_000_000), "luma": l])
+                let done = diagIndex == 55 ? diagSamples : nil
+                lock.unlock()
+                if let done { onDiag?(done) }
+            }
 
             lock.lock()
             // STC-562's fault: the frames a stalled camera would not have sent.

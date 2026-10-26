@@ -1222,6 +1222,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             // STC-553: a stall beginning or ending is in the partial at once, so a helper
             // that dies mid-stall still leaves it on record.
             cam.onStallChanged = { [weak self] in self?.notePartialChange() }
+            // Brightness of the take's first camera frames, to the app terminal (black-start diagnosis).
+            cam.onDiag = { samples in IO.send("camera-diag", ["samples": samples]) }
             // The camera opened before Record, if the app asked for that
             // (`camera-warm`): its session is already running, so its first frame
             // is a frame interval away instead of a cold open. Taken here, off

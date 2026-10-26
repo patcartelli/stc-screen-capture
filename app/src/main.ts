@@ -761,6 +761,12 @@ function startSupervisor(): void {
   // helper has always announced that; nothing was listening, so the user's only
   // evidence the camera worked was a PiP appearing ~1.4 s into playback, which
   // reads as a glitch rather than as the camera starting.
+  // Brightness (0-255; video black is ~16) of the take's first camera frames: `frame` index, `tMs`
+  // since the take began. A black start reads ~16 for the first second.
+  sup.on("helper:camera-diag", (l) => {
+    const rows = ((l as any).samples ?? []) as { frame: number; tMs: number; luma: number }[];
+    console.log(`[camera] first frames: ${rows.map((r) => `#${r.frame}@${r.tMs}ms=${r.luma}`).join(" ")}`);
+  });
   sup.on("helper:camera-started", (l) => {
     // Where the camera's open went and whether the pre-Record warm-up was used, in the
     // terminal where the heartbeat's `[camera] N frames` lines already are.
