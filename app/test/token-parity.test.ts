@@ -43,6 +43,23 @@ describe("source: the three short-lived surfaces", () => {
     });
   }
 
+  it("the countdown ring sweeps in the record colour, from a token", () => {
+    expect(read("countdown.html")).toMatch(/#sweep \{[^}]*stroke: var\(--rec\)/);
+  });
+  it("a muted mic on the options bar gets a 2px record-colour outline that yields to the focus ring (STC-583)", () => {
+    expect(read("overlay.html")).toMatch(/#ctl-mic\[data-on="0"\]:not\(:focus-visible\) \{[^}]*outline: 2px solid color-mix\(in srgb, var\(--rec\)/);
+  });
+  it("the pill swaps its meter for a slashed-mic glyph on a take with no mic (STC-583)", () => {
+    const html = read("pill.html");
+    expect(html).toMatch(/id="pill-mic-off"/);
+    expect(html).toMatch(/#pill\.mic-muted #pill-meter \{ display: none; \}/);
+    expect(html).toMatch(/#pill\.notice #pill-timer, #pill\.notice #pill-meter, #pill\.notice #pill-mic-off/);
+  });
+  it("the device menu's toggle row is a switch, drawn without adding height", () => {
+    expect(read("device-menu.css")).toMatch(/\.row\.toggle \{ box-shadow: inset/);
+    const dom = readFileSync(fileURLToPath(new URL("../src/device-menu-dom.ts", import.meta.url)), "utf8");
+    expect(dom).toMatch(/"switch"/);
+  });
   it("the countdown numerals are in the readout face", () => {
     expect(read("countdown.html")).toMatch(/font-family: var\(--font-readout\)/);
     expect(read("countdown.html")).not.toMatch(/font-pixel|Silkscreen|type-timer/);
@@ -56,10 +73,10 @@ describe("source: the readout face (STC-583)", () => {
     expect(css).not.toMatch(/Silkscreen|--font-pixel|--font-mono|--type-timer|Departure Mono'/);
     expect(existsSync(join(RENDERER, "fonts/Silkscreen-Regular.woff2"))).toBe(false);
   });
-  it("the pill timer, the record bar's size and the menu rows draw in the readout face", () => {
+  it("the pill timer and the record bar's size draw in the readout face; menu rows stay Geist", () => {
     expect(read("pill.html")).toMatch(/var\(--type-readout-pill\)\/1 var\(--font-readout\)/);
     expect(read("overlay.html")).toMatch(/#ctl-size \{[^}]*var\(--font-readout\)/);
-    expect(read("device-menu.css")).toMatch(/font: 400 var\(--type-readout-menu\)\/1 var\(--font-readout\)/);
+    expect(read("device-menu.css")).toMatch(/font: 400 14px\/1 var\(--font-sans\)/);
   });
 });
 
@@ -139,11 +156,14 @@ describe("pixels: tokens are applied", () => {
       await Promise.all([light.close(), dark.close()]);
     });
 
-    it(`${file} visibly changes when --accent changes`, async () => {
+    // The countdown's ring is the record colour (STC-583), so that is the token
+    // whose change must show there; every other surface draws accent.
+    const token = file === "countdown.html" ? "--rec" : "--accent";
+    it(`${file} visibly changes when ${token} changes`, async () => {
       const page = await open(file, "dark");
       await showAccent(page, file);
       const before = await shot(page);
-      await page.evaluate(() => document.documentElement.style.setProperty("--accent", "#ff00ff"));
+      await page.evaluate((t) => document.documentElement.style.setProperty(t, "#ff00ff"), token);
       const after = await shot(page);
       expect(Buffer.compare(before, after)).not.toBe(0);
       await page.close();

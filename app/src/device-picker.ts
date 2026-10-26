@@ -185,11 +185,23 @@ export function cameraMenuRows(cameras: DeviceLike[], s: DeviceSelection): MenuR
     });
 }
 
-/** What a row press does to the selection: the ONE place, for both surfaces. */
+/**
+ * What a row press does to the selection: the ONE place, for both surfaces.
+ *
+ * Pressing the row that is ALREADY selected clears it (STC-583): the mic goes
+ * to none (muted), the camera goes off. The off rows ("Mute External", "No
+ * Camera") are untouched by this: pressing the selected one stays off, since
+ * there is nothing further to clear.
+ */
 export function applyMenuPick(s: DeviceSelection, pick: MenuPick): DeviceSelection {
   if (pick.kind === "toggle-system-audio") return { ...s, systemAudio: !s.systemAudio };
   const c = pick.choice;
-  if (pick.menu === "mic") return { ...s, micDeviceUid: c.kind === "device" ? c.uid : null };
+  if (pick.menu === "mic") {
+    if (c.kind === "device" && s.micDeviceUid === c.uid) return { ...s, micDeviceUid: null };
+    return { ...s, micDeviceUid: c.kind === "device" ? c.uid : null };
+  }
   if (c.kind === "off") return { ...s, camera: false };
+  const selected = s.camera && (c.kind === "auto" ? s.cameraDeviceUid == null : s.cameraDeviceUid === c.uid);
+  if (selected) return { ...s, camera: false };
   return { ...s, camera: true, cameraDeviceUid: c.kind === "device" ? c.uid : null };
 }

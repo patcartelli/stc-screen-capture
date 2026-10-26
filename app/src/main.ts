@@ -2101,7 +2101,7 @@ async function recordFlowBody(
     const dir = newTempTakeDir(process.env, new Date(), existing);
     const r = await sup!.startRecording(dir, startParams);
     // `start` has answered: the pill may show now, off the confirmed state.
-    pillStarted(sup!);
+    pillStarted(sup!, { micMuted: startParams.micDeviceUid == null });
     // Only after a successful start: a refused one leaves no take to describe.
     await writeRecordTimeProject(dir, {
       showClicks: options.showClicks,

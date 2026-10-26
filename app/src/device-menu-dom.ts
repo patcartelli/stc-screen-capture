@@ -26,9 +26,13 @@ export function buildMenuRow(r: MenuRow, onPick?: (row: MenuRow) => void): HTMLE
   const row = document.createElement("div");
   row.className = "row";
   row.dataset.key = r.key;
-  row.setAttribute("role", r.closesMenu ? "menuitemradio" : "menuitemcheckbox");
+  // A toggle (Include System Audio) is a switch, not a pick: it flips in place
+  // and keeps the menu open (STC-583). A choice is a radio you can also clear.
+  row.setAttribute("role", r.closesMenu ? "menuitemradio" : "switch");
   row.setAttribute("aria-checked", String(r.checked));
-  row.innerHTML = `${iconSvg(r.icon)}<span class="label"></span>${iconSvg("check", "check")}`;
+  const trailing = r.closesMenu ? iconSvg("check", "check") : `<span class="sw" aria-hidden="true"><i></i></span>`;
+  row.innerHTML = `${iconSvg(r.icon)}<span class="label"></span>${trailing}`;
+  if (!r.closesMenu) row.classList.add("toggle");
   row.querySelector(".label")!.textContent = r.label;
   if (r.secondary) {
     const tag = document.createElement("span");

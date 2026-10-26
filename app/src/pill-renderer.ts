@@ -1,4 +1,5 @@
-import { formatElapsedTimer, meterView, NO_SIGNAL_TOOLTIP, parseLevel, type LevelReading } from "./pill.js";
+import { formatElapsedTimer, meterView, MIC_OFF_TOOLTIP, NO_SIGNAL_TOOLTIP, parseLevel, type LevelReading } from "./pill.js";
+import { iconSvg } from "./icons.js";
 
 /**
  * The pill's view (STC-550; the pill itself is STC-375). It draws what main
@@ -26,6 +27,7 @@ const pill = $("pill");
 const row = $("pill-row");
 const timer = $("pill-timer");
 const meter = $("pill-meter");
+const micOff = $("pill-mic-off");
 const labelEl = $("pill-label");
 const stopBtn = $("pill-stop") as HTMLButtonElement;
 
@@ -81,8 +83,11 @@ window.pill.on("pill:elapsed", (p) => {
 // STC-528: the level meter. `meterView` decides; this only draws.
 let lastLevel: LevelReading | undefined;
 let micLost = false;
+let micMuted = false;
 function drawMeter(): void {
-  const v = meterView(lastLevel, micLost);
+  const v = meterView(lastLevel, micLost, micMuted);
+  // STC-583: a take with no mic swaps the meter for a slashed-mic glyph.
+  pill.classList.toggle("mic-muted", v.mode === "muted");
   meter.classList.toggle("live", v.mode === "live");
   meter.classList.toggle("no-signal", v.mode === "no-signal");
   meter.style.setProperty("--level", v.fill.toFixed(3));
@@ -96,6 +101,12 @@ window.pill.on("pill:level", (l) => {
   drawMeter();
 });
 window.pill.on("pill:micLost", () => { micLost = true; drawMeter(); });
+micOff.innerHTML = iconSvg("mic-off");
+micOff.title = MIC_OFF_TOOLTIP;
+micOff.setAttribute("aria-label", MIC_OFF_TOOLTIP);
+window.pill.on("pill:mic", (p) => {
+  if ((p as { muted?: unknown } | null)?.muted === true) { micMuted = true; drawMeter(); }
+});
 
 const labelOf = (p: unknown): string | null => {
   const l = (p as { label?: unknown } | null)?.label;

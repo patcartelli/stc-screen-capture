@@ -240,12 +240,17 @@ export function formatElapsedTimer(ms: number): string {
  * - `hatched` — no reading has arrived this take: no mic, a mic that never
  *   delivered a sample, or one that was lost (STC-237). Never a guessed level.
  * - `live` — the bar's width is the last reading's peak.
+ * - `muted` — the take began with no mic selected (STC-583) and no reading has
+ *   arrived. Not a meter: the pill draws a slashed-mic glyph in its place, so
+ *   "I chose no mic" never reads as "no reading yet" (hatched). A reading that
+ *   DOES arrive wins: it is the helper's measurement, while the muted flag is
+ *   only main's inference from the start parameters.
  * - `no-signal` — the helper says the mic has been silent for 10 s. The bar
  *   flattens to a baseline and an amber dot sits at its end, tooltip
  *   `NO_SIGNAL_TOOLTIP` (Patrick, 2026-10-15). Warn only: no toast, no sound,
  *   no offer to stop (STC-505). It clears the moment signal returns.
  */
-export type LevelMeterMode = "hatched" | "live" | "no-signal";
+export type LevelMeterMode = "hatched" | "live" | "no-signal" | "muted";
 
 /** One `level` reading, as the helper sends it: peak 0..1 (linear) and the 10 s silence flag. */
 export interface LevelReading { peak: number; silent: boolean }
@@ -269,6 +274,9 @@ export const METER_FLOOR_DB = -60;
  */
 export const NO_SIGNAL_TOOLTIP = "No mic signal for 10 s";
 
+/** The tooltip and accessible name of the slashed-mic glyph on a take with no mic (STC-583). */
+export const MIC_OFF_TOOLTIP = "Microphone off";
+
 /**
  * A peak on a dB scale from `METER_FLOOR_DB` (empty) to 0 dBFS (full). Linear
  * would leave ordinary speech (-30 to -12 dBFS) as a sliver.
@@ -284,8 +292,8 @@ export function meterFill(peak: number): number {
  * none has come; `micLost` is a lost mic (STC-237), after which a reading still
  * in flight on the lossy channel must not bring the meter back.
  */
-export function meterView(reading: LevelReading | undefined, micLost = false): MeterView {
-  if (!reading || micLost) return { mode: "hatched", fill: 0 };
+export function meterView(reading: LevelReading | undefined, micLost = false, micMuted = false): MeterView {
+  if (!reading || micLost) return micMuted ? { mode: "muted", fill: 0 } : { mode: "hatched", fill: 0 };
   if (reading.silent) return { mode: "no-signal", fill: 0 };
   return { mode: "live", fill: meterFill(reading.peak) };
 }
@@ -330,6 +338,8 @@ export const PILL_THEME = {
   meterTrack: "#2c2c2e",
   meterBaseline: "#636366",
   meterNoSignal: "#ff9f0a",
+  /** STC-583: the slashed-mic glyph on a take with no mic. Dimmer than the text, brighter than the hatch. */
+  micOff: "#a1a1a6",
   /**
    * STC-447, answering the STC-375 runbook's open question: "is the whole
    * pill legible against whatever is likely to be behind it". A dark pill had
