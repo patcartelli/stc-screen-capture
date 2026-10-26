@@ -363,7 +363,10 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
       style: project.cursor.style,
       pxPerPoint: project.cursor.scale * m.sx * magnification,
     },
-    pip: pipStateAt(project, session, tNs, frame, m.sx),
+    // No PiP while there is no screen frame to put it on (STC-578): a camera started before the
+    // screen's first frame (the warm-up, camera.firstFramePtsNs < capture.firstFrameNs) would
+    // otherwise draw a face bubble over the black the compositor paints for "no frame yet".
+    pip: frameIndex === null ? null : pipStateAt(project, session, tNs, frame, m.sx),
     zoom: { amount: zoomAmount, crop },
     keycast: keycastFor(project, session, tick),
     framing: layout ?? null,

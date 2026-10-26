@@ -84,3 +84,7 @@ Countdown on (the default 3 s). Repeat the four takes.
 - Run 1 decides whether the premise holds. Nothing is concluded until it is read.
 - Whether the display's own 0.25 s start should be chased once the camera matches it is not part of this change.
 - Warming at the overlay instead of the countdown would give more lead time and light the LED while still choosing; it was not chosen (Patrick, 2026-10-23).
+
+## Export: the PiP no longer draws over black (TRANSFORM_VERSION 17)
+
+With the warm-up the camera can start 7-56 ms before the screen's first frame. The export starts at t = 0 and paints black while there is no screen frame, so up to three output frames showed the face bubble over black. `render()` now returns no PiP while the screen has no frame (`frameIndex === null`); a take whose screen starts first renders exactly what version 16 did. Pinned by `render.test.ts` ("no PiP while the screen has no frame yet"). To check by eye on a warm take: export it, step through the first 5 frames; the bubble should appear with the first screen frame, never before it.

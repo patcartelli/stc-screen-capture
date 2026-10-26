@@ -192,8 +192,17 @@ import { CAMERA_STALL_NS } from "./camera-gaps.js";
  * never hidden inside a pause). camera-gaps.ts. A take whose camera never went 3 s without
  * a frame outside a pause draws exactly what version 15 did. The fingerprint moved:
  * `CAMERA_STALL_NS` reaches the pixels.
+ *
+ * ## Version 17: no PiP before the screen's first frame (STC-578)
+ *
+ * The camera is warmed during the countdown now, so on a take its first frame can land before
+ * the display's (measured 7-56 ms ahead). An export starts at t = 0, the compositor paints
+ * black while there is no screen frame, and the PiP was drawn over that black for up to three
+ * output frames. render() now returns no PiP whenever the screen has no frame yet. A take whose
+ * screen starts at or before its camera draws exactly what version 16 did. No constant moved,
+ * so the fingerprint is unchanged.
  */
-export const TRANSFORM_VERSION = 16;
+export const TRANSFORM_VERSION = 17;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -213,6 +222,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 14, since: "2026-10-02", changed: "video framing (STC-396): project-15's optional framing insets the recording inside the chosen output and draws a background, a shadow and rounded corners around it. render() carries the layout in FrameState.framing and maps the cursor, click highlight, pointer size, PiP and zoom crop into the inset rect (spaces.ts's existing owners); the one compositor draws background, shadow, then the picture clipped to a rounded rect, with the PiP and pointer clipped to the picture. A project with no framing renders exactly what version 13 did: framing is null, the compositor takes its previous code path argument for argument, and every position is computed from the same numbers. The fingerprint moved: the framing presets and bounds reach the pixels" },
   { version: 15, since: "2026-10-02", changed: "the styled PiP (STC-461): project-16's pip.style — shape (rect/square/circle) and corner radius, an authored centre and width (UV over the content rect, i.e. the whole output when there is no framing), a framing crop of the camera, mirror, border in display points and one drop shadow, all resolved in render() and drawn by the one compositor. A document with no style draws exactly what version 14 did. The fingerprint moved: PIP_SHADOW and DEFAULT_FRAMING reach the pixels" },
   { version: 16, since: "2026-10-16", changed: "no frozen PiP across a camera stall (STC-553, folding in STC-557): inside the camera track, the PiP is hidden from one frame interval after the last real frame to the first real frame after, across each anchors-16 camera.stalledSpans span and across any camera frame-grid gap longer than CAMERA_STALL_NS (3 s) of recording time. Paused time does not count toward a gap, and the PiP is never hidden inside a pause (camera-gaps.ts). A take whose camera never went 3 s without a frame outside a pause draws exactly what version 15 did. The fingerprint moved: CAMERA_STALL_NS reaches the pixels" },
+  { version: 17, since: "2026-10-26", changed: "no PiP before the screen's first frame (STC-578): the camera is warmed during the countdown, so its first frame can land before the display's, and the PiP was drawn over the black painted for 'no screen frame yet' for up to three output frames. render() now returns no PiP while the screen has no frame. A take whose screen starts at or before its camera draws exactly what version 16 did. No constant reaches the pixels, so the fingerprint is unchanged" },
 ];
 
 /**
