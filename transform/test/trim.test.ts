@@ -6,11 +6,12 @@ import AjvImport from "ajv";
 import { DEFAULT_TEXT_PT } from "../src/legibility.js";
 import type { Project } from "../src/types.js";
 import {
-  availableFrames, clampTrim, defaultProject, estimateExportMs, exportWindow,
+  availableFrames, clampTrim, defaultProject, estimateExportMs, exportWindow, firstShowableFrame,
   isFullTake, minTrimNs, parseProject, projectForWrite, EXPORT_MS_PER_FRAME,
   DEFAULT_SYSTEM_AUDIO_LEVEL, DEFAULT_NARRATION_CLEANUP, DEFAULT_MIC_LEVEL,
 } from "../src/trim.js";
 import { MIC_LEVEL_MAX } from "../src/audio-mix.js";
+import { exportFrameTimeNs, frameIndexAt } from "../src/time.js";
 
 const root = join(__dirname, "..", "..");
 const FPS = 60;
@@ -58,6 +59,55 @@ describe("exportWindow", () => {
     );
     expect(trimmed.maxFrames).toBe(full.maxFrames);
     expect(trimmed.fromFrame).toBe(0);
+  });
+});
+
+describe("an export does not open on black (STC-578)", () => {
+  // Measured on a real take: the screen's first frame at 149.2 ms, 9 output frames earlier than
+  // any picture exists. Frame 0 was black with the cursor drawn over it.
+  const FIRST = 149_243_959;
+  const frames = [FIRST, FIRST + 16_666_667, FIRST + 33_333_334];
+
+  test("the window starts at the first output frame that has a screen frame", () => {
+    const w = exportWindow(defaultProject(640, 360), duration, FIRST);
+    expect(w.fromFrame).toBe(9);                                  // 9 / 60 s = 150 ms >= 149.24 ms
+    expect(w.maxFrames).toBe(availableFrames(duration, FPS) - 9); // the end is untouched
+  });
+
+  test("the first exported frame shows the screen, and the one before it would not", () => {
+    for (const first of [0, 1, FIRST, 250_554_459, exportFrameTimeNs(12), exportFrameTimeNs(12) + 1]) {
+      const k = firstShowableFrame(first, FPS);
+      const grid = [first, first + 50_000_000];
+      expect(frameIndexAt(grid, exportFrameTimeNs(k))).not.toBeNull();
+      if (k > 0) expect(frameIndexAt(grid, exportFrameTimeNs(k - 1))).toBeNull();
+    }
+    expect(frameIndexAt(frames, exportFrameTimeNs(firstShowableFrame(FIRST, FPS)))).toBe(0);
+  });
+
+  test("a screen that starts at t = 0 changes nothing (every fixture)", () => {
+    const p = defaultProject(640, 360);
+    expect(exportWindow(p, duration, 0)).toEqual(exportWindow(p, duration));
+    expect(exportWindow(p, duration, 0).fromFrame).toBe(0);
+  });
+
+  test("a trim that starts before the first frame is raised to it; one that starts later is kept", () => {
+    const early = defaultProject(640, 360, { startNs: 50_000_000, endNs: 3 * NS });
+    expect(exportWindow(early, duration, FIRST).fromFrame).toBe(9);
+    const late = defaultProject(640, 360, { startNs: 2 * NS, endNs: 3 * NS });
+    expect(exportWindow(late, duration, FIRST).fromFrame).toBe(120);
+  });
+
+  test("every place that builds an export window passes the screen's first frame", () => {
+    // One value, two copies: a sink calling exportWindow(project, last) with the old two
+    // arguments would silently keep opening on black.
+    for (const file of ["transform/src/export.ts", "transform/src/gif-export.ts"]) {
+      const src = withoutComments(readFileSync(join(root, file), "utf8"));
+      const calls = src.match(/exportWindow\([^)]*\)/g) ?? [];
+      expect(calls.length, file).toBeGreaterThan(0);
+      for (const c of calls) expect(c, `${file}: ${c}`).toContain("session.frames[0]");
+    }
+    const editor = withoutComments(readFileSync(join(root, "app/src/editor.ts"), "utf8"));
+    expect(editor).toContain("exportWindow(openProject, player.durationNs, player.firstRenderableNs)");
   });
 });
 

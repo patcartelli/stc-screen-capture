@@ -5,6 +5,7 @@ import { isProjectVersion } from "./project-version.js";
 import { TRANSFORM_VERSION } from "./transform-version.js";
 import { DEFAULT_PIP_FIXED, cleanPipStyle } from "./pip-style.js";
 import { cleanFraming } from "./framing.js";
+import { exportFrameTimeNs } from "./time.js";
 
 const NS_PER_S = 1_000_000_000;
 
@@ -39,19 +40,39 @@ export function isFullTake(project: Project, durationNs: number): boolean {
 }
 
 /**
+ * The first output frame that has a screen frame to show (STC-578). Frame selection returns
+ * "nothing yet" before the screen's first PTS, and the compositor paints black for that, so an
+ * export starting at frame 0 opens on 0.15-0.28 s of black with the cursor drawn over it (the
+ * screen's first frame lands after the take's t0). The smallest k whose time is at or after
+ * `firstFrameNs`, on the same grid `render()` is sampled on.
+ */
+export function firstShowableFrame(firstFrameNs: number, fps: number): number {
+  let k = Math.max(0, Math.floor((firstFrameNs * fps) / NS_PER_S));
+  while (exportFrameTimeNs(k) < firstFrameNs) k++;
+  return k;
+}
+
+/**
  * Convert a project trim into the (fromFrame, maxFrames) window export already
  * understands. Inclusive of the 60 fps frame at endNs.
+ *
+ * `firstFrameNs` is the screen's first frame (`session.frames[0]`): the window never starts
+ * before the first output frame that shows it, whatever the trim says, so an export (and the
+ * audio, which is clipped to the same start) does not open on black. 0 (the default) changes
+ * nothing, which is every fixture whose screen starts at t = 0.
  */
 export function exportWindow(
   project: Project,
   durationNs: number,
+  firstFrameNs = 0,
 ): { fromFrame: number; maxFrames: number; startNs: number; endNs: number } {
   const fps = project.output.fps;
   const available = availableFrames(durationNs, fps);
   const trim = project.trim
     ? clampTrim(project.trim.startNs, project.trim.endNs, durationNs, fps)
     : { startNs: 0, endNs: durationNs };
-  const fromFrame = Math.max(0, Math.min(Math.floor((trim.startNs * fps) / NS_PER_S), available - 1));
+  const trimFrom = Math.floor((trim.startNs * fps) / NS_PER_S);
+  const fromFrame = Math.max(0, Math.min(Math.max(trimFrom, firstShowableFrame(firstFrameNs, fps)), available - 1));
   const endFrame = Math.max(fromFrame, Math.min(Math.floor((trim.endNs * fps) / NS_PER_S), available - 1));
   return { fromFrame, maxFrames: endFrame - fromFrame + 1, startNs: trim.startNs, endNs: trim.endNs };
 }
