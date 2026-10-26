@@ -512,7 +512,7 @@ function updateTrimUI(): void {
   zTail.style.width = `${Math.max(0, 100 - outPct)}%`;
   updateTicks();
 
-  const w = exportWindow(openProject, player.durationNs);
+  const w = exportWindow(openProject, player.durationNs, player.firstRenderableNs);
   const est = fmtEstimate(estimateExportMs(w.maxFrames));
   $("triminfo").textContent = isFullTake(openProject, player.durationNs)
     ? `Full take · ${fmtClock(player.durationNs)} · ${est}`

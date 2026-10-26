@@ -202,7 +202,7 @@ export async function exportSession(
   // here agreed with it by inspection only, and "one value, two copies" is
   // this repo's most repeated defect.
   const available = availableFrames(lastFrameNs, fps);
-  const clip = exportWindow(project, lastFrameNs);
+  const clip = exportWindow(project, lastFrameNs, session.frames[0]!);
   const from = Math.max(0, Math.min(opts.fromFrame ?? clip.fromFrame, available - 1));
   const total = Math.min(opts.maxFrames ?? clip.maxFrames, available - from);
   // An exported clip is its own file and its timeline starts at zero. render()

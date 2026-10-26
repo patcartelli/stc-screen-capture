@@ -41,7 +41,7 @@ export async function exportGif(session: LoadedSession, project: Project,
   const gp: Project = { ...project, output: { ...project.output, ...size } };
   const lastFrameNs = session.frames[session.frames.length - 1]!;
   // Exactly what exportSession does with the window.
-  const clip = exportWindow(gp, lastFrameNs);
+  const clip = exportWindow(gp, lastFrameNs, session.frames[0]!);
   const available = availableFrames(lastFrameNs, gp.output.fps);
   const from = Math.max(0, Math.min(clip.fromFrame, available - 1));
   const total = Math.min(clip.maxFrames, available - from);
