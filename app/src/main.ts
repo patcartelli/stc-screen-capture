@@ -516,21 +516,23 @@ async function offerNewShortcutDefaults(): Promise<void> {
   const settings = readSettings(dir);
   if (settings.shortcutsOffered) return;
   const offer = resetOfferText(settings.shortcuts);
-  if (offer) {
-    const { response } = await dialog.showMessageBox({
-      type: "question",
-      buttons: ["Reset to new defaults", "Keep mine"],
-      defaultId: 0,
-      cancelId: 1,
-      message: offer.message,
-      detail: offer.detail,
-    });
-    if (response === 0) {
-      const saved = writeSettings(dir, { shortcuts: resetToNewDefaults(settings.shortcuts) });
-      applyShortcuts(saved.shortcuts);
-    }
-  }
-  writeSettings(dir, { shortcutsOffered: true });
+  // Nothing to move: no question, and no write either — a launch that changes
+  // nothing must not create `settings.json`.
+  if (!offer) return;
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    buttons: ["Reset to new defaults", "Keep mine"],
+    defaultId: 0,
+    cancelId: 1,
+    message: offer.message,
+    detail: offer.detail,
+  });
+  // One write for either answer, so "asked" and "reset" cannot disagree.
+  const saved = writeSettings(dir, {
+    shortcutsOffered: true,
+    ...(response === 0 ? { shortcuts: resetToNewDefaults(settings.shortcuts) } : {}),
+  });
+  if (response === 0) applyShortcuts(saved.shortcuts);
 }
 
 /**

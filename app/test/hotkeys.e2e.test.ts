@@ -96,7 +96,7 @@ describe("the capture shortcuts", () => {
       await expect.poll(() => win.textContent(`#shortcutwhy-${action}`), { timeout: 15_000 })
         .toBe("Active");
     }
-    expect(await win.textContent("#shortcut-region")).toBe("⇧⌘4");
+    expect(await win.textContent("#shortcut-region")).toBe("⌥⌘1");
   }, 120_000);
 
   test("a rebinding registers the new key, releases the old one, and survives a relaunch", async () => {
@@ -129,7 +129,7 @@ describe("the capture shortcuts", () => {
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/macOS/);
     // The previous binding stays live and stays shown.
-    expect(await win.textContent("#shortcut-window")).toBe("⇧⌘2");
+    expect(await win.textContent("#shortcut-window")).toBe("⌥⌘2");
     expect(await isRegistered(DEFAULT_SHORTCUTS.window!)).toBe(true);
     // Nothing was written AT ALL: a refused binding is not a change. Reading
     // the file back would not discriminate — `writeSettings` normalises a bad
@@ -181,7 +181,7 @@ describe("the capture shortcuts", () => {
     await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌃⌥⇧F9");
 
     await win.click("#resetshortcuts");
-    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⇧⌘4");
+    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌥⌘1");
     for (const accelerator of Object.values(DEFAULT_SHORTCUTS)) {
       expect(await isRegistered(accelerator!), accelerator!).toBe(true);
     }
@@ -191,7 +191,7 @@ describe("the capture shortcuts", () => {
   test("a second action cannot take a key the first already has", async () => {
     const { win } = await launch();
     // Area's own default, spelled differently (the grammar is normalised).
-    await rebind(win, "window", "Shift+Meta+4");
+    await rebind(win, "window", "Alt+Meta+1");
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/already uses this/);
     // And the first action keeps it.
