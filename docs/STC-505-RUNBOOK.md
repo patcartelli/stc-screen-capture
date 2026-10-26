@@ -14,7 +14,7 @@ Use the **packaged** app (`npm run app:package`) for §1 and §2. `npm run app:s
 
 Written 2026-10-23 from `docs/superpowers/specs/2026-10-12-stc-505-failure-states-design.md` ("Reaching each state on the Mac"), after all six follow-ups merged. The session that wrote it was Linux with no Mac, so the author ran none of it.
 
-**Run on hardware by Patrick, 2026-10-23, on an M-series Mac with an HP Z27 as the second display.** The results below are what he reported; where a check was not reported it says so, and a row from an earlier ticket's runbook is not counted as done here. Still open: the narration take for the 10 s threshold (§7), the launch-recovery extra (§6), whether the pill window jumps on restore (§8), and the pill's label and placement on a lost display (§5). See "Findings" for what the run turned up.
+**Run on hardware by Patrick, 2026-10-23, on an M-series Mac with an HP Z27 as the second display.** The results below are what he reported; where a check was not reported it says so, and a row from an earlier ticket's runbook is not counted as done here. Still open: the launch-recovery extra (§6), whether the pill window jumps on restore (§8), and the pill's label and placement on a lost display (§5). The narration take for the 10 s threshold (§7) was redone on 2026-10-26 and is decided: keep 10 s and -60 dBFS. See "Findings" for what the run turned up.
 
 ## What this runbook is for
 
@@ -183,8 +183,8 @@ The change, if any, is one constant: `MicSignal.silenceFloorDbfs` or `silentSpan
 | ✅ fault route: tile note | "No mic signal from 0:00 to 0:34". |
 | ✅ real muted mic | Elgato Wave:3 muted, ~16 s take: one `silentSpans` entry from 0.51 s to 15.97 s, covering the whole mic recording. The tile text and whether the dot showed on this take were not reported. |
 | ✅ quiet room, mic live (30 s) | No `silentSpans`: the room's noise sits above -60 dBFS, so "nobody talking" does not read as "no signal". |
-| ☐ narration take: spans (list) | **Not run / to redo.** Patrick did not remember the take's length or pauses. A blank result on a short take does not settle the 10 s threshold. |
-| ☐ verdict on 10 s / -60 dBFS | Open until the narration take is done. |
+| ✅ narration take: spans (list) | Redone 2026-10-26: about 3 min of real narration with one break of about 10 s, roughly 10 s in. No `silentSpans` in `anchors.json`, and the amber dot never appeared. |
+| ✅ verdict on 10 s / -60 dBFS | **Keep both as they are** (Patrick, 2026-10-26). Natural pauses do not trigger the marker, and a real muted mic does. On this mic (Elgato Wave:3) the room's noise sits above -60 dBFS, so "nobody talking" still reads as signal and the marker means "the mic recorded nothing", which is the spec's "no audio" state. The 10 s duration was **not exercised**: the break was right at 10 s, so the take cannot tell "too short" from "room noise above the floor". The quiet-room result is the better evidence, and it points at the floor, not the duration. Raising the floor (for example to -50 dBFS) would also catch a quiet room, but there is no data on where it starts firing on a breath, so it is not changed. |
 
 ## §8 The ~2 s pill dwell
 
@@ -210,7 +210,6 @@ If it reads too fast or too slow, the change is the one constant. The panel wait
 
 ## Still to do
 
-- §7: the narration take (3 to 5 min, natural pauses) for the 10 s and -60 dBFS threshold.
 - §6: launch recovery (kill, Cmd-Q, relaunch).
 - §5: the pill's label and placement on a lost display (record the laptop display, unplug an external).
 - §4: a window move must not stop the take.
