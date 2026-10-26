@@ -685,9 +685,22 @@ func decideWindowPoll(initial: (width: Double, height: Double),
 /// `window-closed`, the same reason the watcher would have given a second later.
 ///
 /// `windowGone` is nil for a take with no window (display or region scope).
-/// A window that is still there leaves the death unexplained: `stream-stopped`.
-func decideStreamDeath(windowGone: Bool?) -> String {
-    windowGone == true ? "window-closed" : "stream-stopped"
+///
+/// A display or region take gets the same check against its DISPLAY (STC-577):
+/// unplugging the display, or closing the lid on the built-in one, kills the
+/// stream before the display-change watcher's `DISPLAY_CHANGE_SETTLE_MS`
+/// debounce decides, so the take stopped as `stream-stopped` ("Source lost")
+/// when the cause was known (seen on hardware 2026-10-23). Display gone means
+/// `display-reconfigured`, the reason the watcher would have given, for a
+/// region take too (Patrick, 2026-10-26: the region only says where on the
+/// display to look; with the display gone the display is the cause, not
+/// `region-out-of-bounds`). `displayGone` is nil for a window take.
+///
+/// Anything still there leaves the death unexplained: `stream-stopped`.
+func decideStreamDeath(windowGone: Bool?, displayGone: Bool?) -> String {
+    if windowGone == true { return "window-closed" }
+    if displayGone == true { return "display-reconfigured" }
+    return "stream-stopped"
 }
 
 // ── where a window-scope take's window is, over time (STC-482) ──────────────
