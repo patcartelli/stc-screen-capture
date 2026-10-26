@@ -1,13 +1,12 @@
 # Camera starts 1.1–1.6 s after the screen — runbook
 
-No Linear ticket yet (searched 2026-10-23: STC-286/539/553/562 are camera tickets, none is this). Rename this file to `STC-NNN-RUNBOOK.md` when one exists.
+Ticket: STC-578 (filed after PR #369 merged; none existed when the work was done).
 Found running STC-532's failure-states runbook on hardware, 2026-10-23.
 
-**Not on `master` yet. Run it from `claude/eager-einstein-n9sgd3`:**
+**On `master` since PR #369:**
 
 ```
-git fetch origin claude/eager-einstein-n9sgd3
-git checkout claude/eager-einstein-n9sgd3
+git checkout master && git pull
 helper/build.sh && npm run app:start
 ```
 
