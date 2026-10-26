@@ -18,7 +18,7 @@ npm run app:start
   only then is the take v12.
 - **No toast** for `mic-disconnected`, `camera-disconnected` or `mic-format-mismatch` (Patrick,
   2026-10-14). The collapsed pill shows **Mic lost** / **Camera lost** in place of its timer for
-  2 s (`PILL_STOPPED_DWELL_MS`), then goes back to the timer. The button stays Stop the whole
+  2 s (`PILL_NOTICE_MS`), then goes back to the timer. The button stays Stop the whole
   time, and nothing about the window moves.
 - **The panel** adds a sentence after the stop's own line, e.g. "The mic disconnected at 1:10,
   so the rest of the take has no mic audio."

@@ -4,12 +4,12 @@ import { join } from "node:path";
 import {
   clampPillWidth, decidePillAction, formatElapsedTimer,
   MIN_PILL_WIDTH_PX, RESIZE_STYLE, PILL_HEIGHT_PX,
-  PILL_STOPPED_DWELL_MS, shouldDwell, shouldShowTrackNotice,
+  PILL_NOTICE_MS, shouldShowTrackNotice,
   METER_FLOOR_DB, NO_SIGNAL_TOOLTIP, meterFill, meterView, parseLevel,
   PILL_CHROME_PX, PILL_TOP_INSET_PX, pillBounds, resizePillBounds, libraryAroundTake,
   dragTarget, easeStep, PILL_DRAG_FRAME_MS,
 } from "../src/pill.js";
-import { HELPER_STOP_REASONS, pillLabel, trackLossPillLabel } from "../src/stop-copy.js";
+import { trackLossPillLabel } from "../src/stop-copy.js";
 
 describe("clampPillWidth", () => {
   it("adds padding to a real measurement", () => {
@@ -44,36 +44,16 @@ describe("decidePillAction", () => {
     expect(decidePillAction("expanded", "idle")).toBe("none");
   });
 
-  // STC-531: the stopped label holds the restore, and ONLY the restore.
-  it("holds a restore while the stopped label is up", () => {
-    for (const s of ["idle", "stopped", "failed", "starting"] as const) {
-      expect(decidePillAction("collapsed", s, true)).toBe("none");
-    }
-  });
-
-  it("never holds a collapse: a new take during the label is that take's pill", () => {
-    expect(decidePillAction("expanded", "recording", true)).toBe("collapse");
-    expect(decidePillAction("collapsed", "recording", true)).toBe("none");
+  // STC-579: nothing holds a restore; the pill is for a recording in progress.
+  it("a new take after a stop collapses with no leftover state", () => {
+    expect(decidePillAction("collapsed", "idle")).toBe("restore");
+    expect(decidePillAction("expanded", "recording")).toBe("collapse");
   });
 });
 
-describe("shouldDwell (STC-531)", () => {
-  it("dwells only for a labelled stop on the collapsed pill", () => {
-    expect(shouldDwell("collapsed", "Window closed")).toBe(true);
-    expect(shouldDwell("expanded", "Window closed")).toBe(false);
-    expect(shouldDwell("collapsed", undefined)).toBe(false);
-    expect(shouldDwell("collapsed", "")).toBe(false);
-  });
-
-  it("each labelled stop the helper decides on dwells; a user stop does not", () => {
-    for (const r of HELPER_STOP_REASONS) expect(shouldDwell("collapsed", pillLabel(r)), r).toBe(true);
-    for (const r of ["user", "quit", "stopped", "helper-idle", "recorder-quit"]) {
-      expect(shouldDwell("collapsed", pillLabel(r)), r).toBe(false);
-    }
-  });
-
-  it("is the spec's ~2 s", () => {
-    expect(PILL_STOPPED_DWELL_MS).toBe(2000);
+describe("PILL_NOTICE_MS", () => {
+  it("is the ~2 s a track notice stands in for the timer", () => {
+    expect(PILL_NOTICE_MS).toBe(2000);
   });
 });
 
@@ -91,9 +71,9 @@ describe("shouldShowTrackNotice (STC-237)", () => {
     expect(shouldShowTrackNotice("collapsed", "recording", "")).toBe(false);
   });
 
-  it("never moves the window: a notice is a label swap, not a dwell", () => {
+  it("never moves the window: a notice is a label swap", () => {
     // The take keeps recording, so the pill stays collapsed whatever the notice does.
-    expect(decidePillAction("collapsed", "recording", false)).toBe("none");
+    expect(decidePillAction("collapsed", "recording")).toBe("none");
   });
 });
 

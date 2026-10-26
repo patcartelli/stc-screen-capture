@@ -247,7 +247,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// must not be outlived by it.
     private var windowWatcher: DispatchSourceTimer?
     /// The window a window-scope take is recording, so a dead stream can be
-    /// checked against it (`decideStreamDeath`, STC-531). nil for any other scope.
+    /// checked against it (`decideStreamDeath`, STC-531). nil for any other
+    /// scope, whose dead stream is checked against `displayID` (STC-577).
     private var watchedWindowId: UInt32?
     /// A size change the window watcher is waiting to look at again
     /// (STC-555, `pollWindow`). Guarded by `lock`.
@@ -1151,15 +1152,24 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// genuine death `stopCapture` answers with an error that is ignored, on
     /// the fault it answers cleanly; both reach `finishWriting`.
     /// Driven by helper/test/stream-died.grant.test.ts.
+    ///
+    /// `STC_CAPTURE_FAULT=stream-died-display-gone` (STC-577) is the same death
+    /// with the display-presence check reading "gone", so the
+    /// `display-reconfigured` arm of `decideStreamDeath` is watched firing on
+    /// the real binary. Plain `stream-died` is its control: the display is
+    /// really there, so the same death must still read `stream-stopped`.
     static let streamDeathFaultDelaySeconds: Double = 0.5
+    private let streamDeathDisplayGoneFault =
+        ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "stream-died-display-gone"
     private func armStreamDeathFault() {
-        guard ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"] == "stream-died",
+        guard let fault = ProcessInfo.processInfo.environment["STC_CAPTURE_FAULT"],
+              fault == "stream-died" || fault == "stream-died-display-gone",
               let s = stream else { return }
-        IO.log("STC_CAPTURE_FAULT=stream-died: the stream will report itself dead in \(Self.streamDeathFaultDelaySeconds) s")
+        IO.log("STC_CAPTURE_FAULT=\(fault): the stream will report itself dead in \(Self.streamDeathFaultDelaySeconds) s")
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.streamDeathFaultDelaySeconds) { [weak self] in
             self?.stream(s, didStopWithError: NSError(
                 domain: "stc.fault", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "injected by STC_CAPTURE_FAULT=stream-died"]))
+                userInfo: [NSLocalizedDescriptionKey: "injected by STC_CAPTURE_FAULT=\(fault)"]))
         }
     }
 
@@ -2211,28 +2221,58 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // up to the failure, which is what a clean stop preserves.
         if answeredStart { return }
         // STC-531: on a window take, closing the window is what kills the
-        // stream, and it does so before the 1 Hz watcher looks. Ask the window
-        // server now, and once more shortly after in case it lags the stream;
-        // a window gone either time is `window-closed`, through the same
-        // `onWindowChanged` the watcher uses. App.stop's state guard makes a
-        // second report (the watcher's own, a moment later) a no-op.
-        lock.lock(); let windowId = watchedWindowId; lock.unlock()
-        guard let windowId else { onStreamDied?(error); return }
-        let gone = { Self.currentWindowSize(windowId: windowId) == nil }
-        if decideStreamDeath(windowGone: gone()) == "window-closed" {
-            IO.log("stream: died with its window gone; stopping as window-closed")
-            onWindowChanged?("window-closed")
-            return
+        // stream, and it does so before the 1 Hz watcher looks. STC-577: on a
+        // display or region take, unplugging the display (or closing the lid
+        // on the built-in one) kills it before the display watcher's 250 ms
+        // debounce decides. Ask now, and once more shortly after in case the
+        // window server or the display list lags the stream; a window gone
+        // either time is `window-closed` (through the same `onWindowChanged`
+        // the watcher uses), a display gone is `display-reconfigured`
+        // (through `failRefit`, as the watcher's own stop arm reaches it).
+        // App.stop's state guard makes a second report a no-op.
+        lock.lock(); let windowId = watchedWindowId; let displayId = displayID; lock.unlock()
+        let decide: () -> String = {
+            if let windowId {
+                return decideStreamDeath(windowGone: Self.currentWindowSize(windowId: windowId) == nil,
+                                         displayGone: nil)
+            }
+            return decideStreamDeath(windowGone: nil,
+                                     displayGone: self.streamDeathDisplayGoneFault || !Self.displayIsActive(displayId))
         }
+        let explain: (String, String) -> Bool = { [weak self] verdict, when in
+            guard let self else { return true }
+            switch verdict {
+            case "window-closed":
+                IO.log("stream: died with its window gone\(when); stopping as window-closed")
+                self.onWindowChanged?("window-closed")
+            case "display-reconfigured":
+                IO.log("stream: died with its display gone\(when); stopping as display-reconfigured")
+                self.refitQueue.async { self.failRefit("display-reconfigured") }
+            default:
+                return false
+            }
+            return true
+        }
+        if explain(decide(), "") { return }
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.streamDeathWindowRecheckSeconds) { [weak self] in
             guard let self else { return }
-            if decideStreamDeath(windowGone: gone()) == "window-closed" {
-                IO.log("stream: died with its window gone (on the re-check); stopping as window-closed")
-                self.onWindowChanged?("window-closed")
-            } else {
-                self.onStreamDied?(error)
-            }
+            if !explain(decide(), " (on the re-check)") { self.onStreamDied?(error) }
         }
+    }
+
+    /// Whether `id` is in CoreGraphics' ACTIVE display list (STC-577), read
+    /// synchronously. Not a fresh `SCShareableContent`: that is asynchronous,
+    /// and two ScreenCaptureKit calls landing within ~1 ms can lose one
+    /// (STC-470). Active, not online: a display asleep behind a closed lid is
+    /// still online, and the lid is one of the two cases this exists for —
+    /// whether macOS drops it from the active list in time is the runbook's
+    /// question (docs/STC-577-RUNBOOK.md). A list that cannot be read says
+    /// "present", which leaves the death unexplained rather than guessed at.
+    static func displayIsActive(_ id: CGDirectDisplayID) -> Bool {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 32)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return true }
+        return ids.prefix(Int(count)).contains(id)
     }
 
     // MARK: - event tap

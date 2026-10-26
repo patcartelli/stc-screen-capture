@@ -44,7 +44,7 @@ drag region takes no clicks, so clicking the timer no longer stops the take.
   - §9: closing a recorded window went straight to the panel, with no
     "Window closed" on the pill. The supervisor emits `take-ended` before
     `recording-ended`, and the pill was put away on the first. Pinned by
-    `app/test/pill-dwell.test.ts`.
+    `app/test/pill-stop.test.ts` (was `pill-dwell.test.ts`; STC-579).
   - §4: after ⌘H, the library came back when Record was chosen from the menu
     bar (the overlay activates the app, which unhides it) and again after the
     take. The library's state is now read when the Record flow starts.

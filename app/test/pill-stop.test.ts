@@ -8,15 +8,12 @@ vi.mock("electron", () => ({
 }));
 
 import { attachPillToSupervisor } from "../src/pill-window.js";
-import { PILL_STOPPED_DWELL_MS } from "../src/pill.js";
 
 /**
- * The pill's STC-531 dwell against the supervisor's REAL event order
- * (STC-550). `HelperSupervisor.endRecording` sets `state` idle, then emits
- * `take-ended`, then `recording-ended`. Reacting to `take-ended` as a plain
- * reconcile put the pill away before the helper's reason could hold it up, so
- * on hardware a closed window went straight to the panel with no "Window
- * closed" on the pill. These drive that exact order.
+ * The pill after a stop, against the supervisor's REAL event order (STC-550,
+ * STC-579). `HelperSupervisor.endRecording` sets `state` idle, then emits
+ * `take-ended`, then `recording-ended`. The pill goes away at once on the first
+ * and says nothing: the take's panel carries why.
  */
 function fakeSupervisor() {
   const handlers = new Map<string, Set<(p: unknown) => void>>();
@@ -47,11 +44,11 @@ function helperEnds(sup: ReturnType<typeof fakeSupervisor>, reason: string): voi
   sup.emit("recording-ended", { reason, dir: "/tmp/take" });
 }
 
-describe("the pill's dwell survives the supervisor's event order (STC-550)", () => {
+describe("the pill after a stop (STC-579)", () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it("a helper-decided stop shows its label for the dwell, THEN the pill goes", () => {
+  it("a helper-decided stop puts the pill away at once, with no label and no wait", () => {
     const sup = fakeSupervisor();
     const { win, sent } = fakeWindow();
     const show = vi.fn(), hide = vi.fn();
@@ -59,12 +56,9 @@ describe("the pill's dwell survives the supervisor's event order (STC-550)", () 
     expect(show).toHaveBeenCalledTimes(1);
 
     helperEnds(sup, "window-closed");
-    expect(hide, "put away before the label could show").not.toHaveBeenCalled();
-    expect(sent).toContainEqual({ channel: "pill:stopped", payload: { label: "Window closed" } });
-
-    vi.advanceTimersByTime(PILL_STOPPED_DWELL_MS - 1);
-    expect(hide).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
+    expect(hide).toHaveBeenCalledTimes(1);
+    expect(sent.filter((s) => s.channel === "pill:stopped")).toEqual([]);
+    vi.advanceTimersByTime(10_000);
     expect(hide).toHaveBeenCalledTimes(1);
   });
 
@@ -78,6 +72,18 @@ describe("the pill's dwell survives the supervisor's event order (STC-550)", () 
     sup.state = "idle";
     sup.emit("take-ended", { dir: "/tmp/take", reason: "stopped" });
     expect(hide).toHaveBeenCalledTimes(1);
-    expect(sent.some((s) => s.channel === "pill:stopped" && (s.payload as { label: unknown }).label !== null)).toBe(false);
+    expect(sent.filter((s) => s.channel === "pill:stopped")).toEqual([]);
+  });
+
+  it("a new take right after a stop shows the pill again, with nothing left over", () => {
+    const sup = fakeSupervisor();
+    const { win } = fakeWindow();
+    const show = vi.fn(), hide = vi.fn();
+    const att = attachPillToSupervisor(win as never, sup as never, { show, hide });
+    att.reconcileNow();
+    helperEnds(sup, "disk-full");
+    sup.state = "recording";
+    att.reconcileNow();
+    expect(show).toHaveBeenCalledTimes(2);
   });
 });

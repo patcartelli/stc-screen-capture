@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  panelReason, panelAction, pillLabel, libraryNote, silenceNote, stallNote, formatTakeTime, isStopActionId,
+  panelReason, panelAction, isHelperDecidedStop, stopCause, libraryNote, silenceNote, stallNote, formatTakeTime, isStopActionId,
   HELPER_STOP_REASONS, STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS, trackLossPillLabel,
   trackLossLine,
 } from "../src/stop-copy.js";
@@ -37,7 +37,7 @@ describe("stop copy (STC-530, STC-531)", () => {
     const stop = { t: 1, reason: "recorder-quit" };
     expect(panelReason(stop)).toBe("Capture's recorder quit unexpectedly. This is what was saved before it stopped. Cursor and event data are missing.");
     expect(libraryNote(stop)).toBe("Recovered after the recorder quit. No cursor data.");
-    expect(pillLabel("recorder-quit")).toBeUndefined();
+    expect(isHelperDecidedStop("recorder-quit")).toBe(false);
     expect(panelAction(stop)).toBeUndefined();
   });
 
@@ -48,12 +48,13 @@ describe("stop copy (STC-530, STC-531)", () => {
     ]));
   });
 
-  test("ACCEPTANCE: every stop the helper decides on has a pill label, a panel line and is in the schema", () => {
+  test("ACCEPTANCE: every stop the helper decides on has a panel line and a library note, and is in the schema", () => {
     for (const r of helperDecidedReasons()) {
       expect(HELPER_STOP_REASONS, r).toContain(r);
       expect(reasons, r).toContain(r);
       for (const reason of [r, `${r}-timeout`]) {
-        expect(pillLabel(reason), reason).toBeTruthy();
+        expect(isHelperDecidedStop(reason), reason).toBe(true);
+        expect(libraryNote({ t: 90_000_000_000, reason }), reason).toMatch(/^Stopped early: .+ at 1:30$/);
         expect(panelReason({ t: 90_000_000_000, reason }), reason).toMatch(/^Stopped at 1:30\. .+ Everything up to then is saved\.$/);
       }
     }
@@ -80,19 +81,13 @@ describe("stop copy (STC-530, STC-531)", () => {
     }
   });
 
-  test("pill labels are 14 characters or fewer (the spec's English ceiling)", () => {
-    for (const r of HELPER_STOP_REASONS) expect(pillLabel(r)!.length, r).toBeLessThanOrEqual(14);
-  });
-
   test.each([
-    ["disk-full", "Disk full", "Stopped at 4:12. Your disk is full. Everything up to then is saved."],
-    ["window-closed", "Window closed", "Stopped at 4:12. The window you were recording was closed. Everything up to then is saved."],
-    ["window-resized", "Window resized", "Stopped at 4:12. The window you were recording was resized. Everything up to then is saved."],
-    ["display-reconfigured", "Display lost", "Stopped at 4:12. The display you were recording was disconnected. Everything up to then is saved."],
-    // The spec's "Display changed" is over its own 14-character ceiling; see stop-copy.ts.
-    ["region-out-of-bounds", "Area lost", "Stopped at 4:12. The display settings changed and the area you were recording no longer fits. Everything up to then is saved."],
-  ])("%s: the spec's pill label and panel line", (reason, pill, line) => {
-    expect(pillLabel(reason)).toBe(pill);
+    ["disk-full", "Stopped at 4:12. Your disk is full. Everything up to then is saved."],
+    ["window-closed", "Stopped at 4:12. The window you were recording was closed. Everything up to then is saved."],
+    ["window-resized", "Stopped at 4:12. The window you were recording was resized. Everything up to then is saved."],
+    ["display-reconfigured", "Stopped at 4:12. The display you were recording was disconnected. Everything up to then is saved."],
+    ["region-out-of-bounds", "Stopped at 4:12. The display settings changed and the area you were recording no longer fits. Everything up to then is saved."],
+  ])("%s: the spec's panel line", (reason, line) => {
     expect(panelReason({ t: 252_400_000_000, reason })).toBe(line);
   });
 
@@ -109,14 +104,15 @@ describe("stop copy (STC-530, STC-531)", () => {
 
   test("a stop the user asked for says nothing", () => {
     for (const reason of ["user", "quit", "stdin-closed", "user-timeout", "signal-15", "stopped-during-start"]) {
-      expect(pillLabel(reason), reason).toBeUndefined();
+      expect(isHelperDecidedStop(reason), reason).toBe(false);
+      expect(stopCause(reason), reason).toBeUndefined();
       expect(panelReason({ t: 1, reason }), reason).toBeUndefined();
       expect(panelAction({ t: 1, reason }), reason).toBeUndefined();
     }
     expect(panelReason(undefined)).toBeUndefined();
-    expect(pillLabel(undefined)).toBeUndefined();
+    expect(isHelperDecidedStop(undefined)).toBe(false);
     // Not an own key: a reason that happens to name an Object.prototype member.
-    expect(pillLabel("constructor")).toBeUndefined();
+    expect(isHelperDecidedStop("constructor")).toBe(false);
   });
 
   test("a stop with no time still says what happened", () => {

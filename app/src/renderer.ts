@@ -695,9 +695,9 @@ recorder.on("helper:recording-ended", () => {
   // The file is valid; what would be wrong is leaving the button saying "Stop"
   // (or, before Finding 2's fix, the pickers still locked).
   //
-  // No toast (STC-531, Patrick 2026-10-14). The WHY is said twice already: the
-  // pill shows it for PILL_STOPPED_DWELL_MS, then the take's panel carries it as
-  // its reason line (`stop-copy.ts`, the one copy table). STC-505's rule:
+  // No toast (STC-531, Patrick 2026-10-14). The take's panel carries the WHY as its
+  // reason line (`stop-copy.ts`, the one copy table); the pill says nothing after a
+  // stop (STC-579). STC-505's rule:
   // toasts are for events with no take to attach to. Main raises one only if the
   // panel cannot go up (`onTakeEnded`).
   applyRecordingState(false);
