@@ -212,4 +212,29 @@ describe("applyMenuPick (STC-456)", () => {
     expect(applyMenuPick(sel({ cameraDeviceUid: "cam2" }), { kind: "choice", menu: "camera", choice: { kind: "auto" } }))
       .toEqual(sel({ camera: true, cameraDeviceUid: null }));
   });
+  // STC-583: pressing the row that is already selected clears it.
+  test("pressing the selected mic clears it (mute), and leaves system audio and camera alone", () => {
+    const s = applyMenuPick(sel({ micDeviceUid: "wave", systemAudio: true, camera: true }),
+      { kind: "choice", menu: "mic", choice: { kind: "device", uid: "wave" } });
+    expect(s).toEqual(sel({ micDeviceUid: null, systemAudio: true, camera: true }));
+  });
+  test("pressing a DIFFERENT mic still switches to it", () => {
+    expect(applyMenuPick(sel({ micDeviceUid: "wave" }), { kind: "choice", menu: "mic", choice: { kind: "device", uid: "usb" } }))
+      .toEqual(sel({ micDeviceUid: "usb" }));
+  });
+  test("pressing Mute External while already muted stays muted", () => {
+    expect(applyMenuPick(sel(), { kind: "choice", menu: "mic", choice: { kind: "off" } })).toEqual(sel());
+  });
+  test("pressing the selected camera clears it (off) and keeps the uid for next time", () => {
+    expect(applyMenuPick(sel({ camera: true, cameraDeviceUid: "cam2" }), { kind: "choice", menu: "camera", choice: { kind: "device", uid: "cam2" } }))
+      .toEqual(sel({ camera: false, cameraDeviceUid: "cam2" }));
+  });
+  test("pressing Automatic while it is selected turns the camera off", () => {
+    expect(applyMenuPick(sel({ camera: true, cameraDeviceUid: null }), { kind: "choice", menu: "camera", choice: { kind: "auto" } }))
+      .toEqual(sel({ camera: false, cameraDeviceUid: null }));
+  });
+  test("a device that is only REMEMBERED while the camera is off is not 'selected', so pressing it turns the camera on", () => {
+    expect(applyMenuPick(sel({ camera: false, cameraDeviceUid: "cam2" }), { kind: "choice", menu: "camera", choice: { kind: "device", uid: "cam2" } }))
+      .toEqual(sel({ camera: true, cameraDeviceUid: "cam2" }));
+  });
 });

@@ -43,6 +43,14 @@ describe("source: the three short-lived surfaces", () => {
     });
   }
 
+  it("the countdown ring sweeps in the record colour, from a token", () => {
+    expect(read("countdown.html")).toMatch(/#sweep \{[^}]*stroke: var\(--rec\)/);
+  });
+  it("the device menu's toggle row is a switch, drawn without adding height", () => {
+    expect(read("device-menu.css")).toMatch(/\.row\.toggle \{ box-shadow: inset/);
+    const dom = readFileSync(fileURLToPath(new URL("../src/device-menu-dom.ts", import.meta.url)), "utf8");
+    expect(dom).toMatch(/"switch"/);
+  });
   it("the countdown numerals are in the readout face", () => {
     expect(read("countdown.html")).toMatch(/font-family: var\(--font-readout\)/);
     expect(read("countdown.html")).not.toMatch(/font-pixel|Silkscreen|type-timer/);

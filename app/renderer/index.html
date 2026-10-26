@@ -207,6 +207,9 @@
                 text-overflow: ellipsis; white-space: nowrap; }
     .libtile .meta, .librow .meta { color: var(--text-dim); font-size: var(--type-value-sm); font-family: var(--font-readout); font-variant-numeric: tabular-nums;
                      overflow: hidden; text-overflow: ellipsis; }
+    /* STC-583: the badge pill pads its text 7px in, so the title and meta lines
+       take the same inset and all three text lines share one left edge. */
+    .libtile .libtitle, .libtile .meta { padding-left: 7px; }
     .libactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; }
     .libactions button { padding: 2px 9px; font-size: var(--type-value-sm); }
     /* The button hierarchy (STC-429): Edit/Share bold and accent-bordered —
