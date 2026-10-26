@@ -1,9 +1,10 @@
 # STC-586 — can the title bar alone get native macOS 26 glass?
 
-**Answer (provisional, from the source and a Linux run): no. Ship the CSS bar.**
-The Mac run below must confirm it with a screenshot of each approach before
-the ticket closes. Run it from `claude/brave-brown-z2zjmb` until that merges,
-then from `master`.
+**Answer: no. Ship the CSS bar.** Decided by Patrick on 2026-10-26, after
+the source reading below and an interactive browser mock of the three looks
+(CSS bar, whole-window glass, glass sidebar). The Mac runbook at the end is
+not needed for that decision. It stays for whenever native glass comes up
+again, run from `master`.
 
 ## The question, restated
 
@@ -160,5 +161,7 @@ Reduce transparency, toggled while each window is open.
   expected to go opaque grey. `NSGlassEffectView` is reported to have no
   opacity control.
 
-Attach `css.png` and one `*-under.png` to STC-586 with a one-line yes or no.
-A no (expected) closes STC-586, and STC-581 builds the CSS bar.
+A glass sidebar (Electron's `vibrancy: "sidebar"` with the page opaque
+everywhere except the 180 px sidebar) was raised by the mock as possible
+with public API and no transparent window, since nothing scrolls under a
+sidebar. It is untested and was not chosen.
