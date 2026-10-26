@@ -13,14 +13,14 @@ npm run app:start
 ## What changed
 
 - **No toast** when the helper stops a take by itself (Patrick, 2026-10-14). Instead:
-  - the pill shows the cause for 2 s (`PILL_STOPPED_DWELL_MS`) in place of the timer, and is disabled meanwhile;
-  - then the window restores and the take's panel goes up with `Stopped at m:ss. <cause>. Everything up to then is saved.`
+  - ~~the pill shows the cause for 2 s~~ **Removed by STC-579 (2026-10-26):** the pill goes away at once with no label, and the panel goes up immediately;
+  - the take's panel goes up with `Stopped at m:ss. <cause>. Everything up to then is saved.`
 - Every word comes from `app/src/stop-copy.ts`. `ENDED_BY_HELPER` is gone.
 - The warning the helper sends just before such a stop (`window-resized-during-recording`, `window-closed-during-recording`, `stream-stopped`, `disk-full`, `writer-failed`) is no longer a toast either: `STOP_ANNOUNCING_WARNINGS`, found on hardware 2026-10-14 when a resized window still got "The recorder reported a problem: window-resized-during-recording".
 - One panel action: **Reclaim space** for a full disk. It runs the same sweep as the profile sheet's button.
 - Labels:
 
-| Reason | Pill | Panel cause |
+| Reason | ~~Pill~~ (STC-579: none) | Panel cause |
 |---|---|---|
 | `window-closed` | Window closed | The window you were recording was closed. |
 | `window-resized` | Window resized | The window you were recording was resized. |
@@ -45,9 +45,9 @@ So the spec's state 1 has no pill label or panel line. A `screen-recording-revok
 
 **Trap:** `npm run app:start` runs as Electron or the terminal app, not as Capture. Switching off Capture's entry does nothing to it, so test anything involving permissions on the packaged app (`npm run app:package`).
 
-## §1 The pill label, by eye
+## §1 The pill label, by eye — RETIRED (STC-579)
 
-Work through §2 to §4 and look at the pill during the 2 s.
+The pill no longer shows a label after a stop, so the checks below about the label, the 2 s and the restore jump no longer apply. In §2 to §4, expect the pill to go away with no label and the panel to arrive with no 2 s gap.
 
 - **Does the label fit?** CONFIRMED for "Window resized" on hardware 2026-10-14. The window keeps the width it collapsed to, sized for the timer, so the label is in the system font. The longest label is "Window resized". An ellipsis means it does not fit: report it.
 - **Is 2 s long enough to read?**
