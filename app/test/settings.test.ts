@@ -301,7 +301,7 @@ describe("the capture shortcuts", () => {
   test("default to the ⇧⌘ row when nothing has been saved", () => {
     expect(readSettings(dir()).shortcuts).toEqual({
       region: "Shift+Command+4", window: "Shift+Command+2", display: "Shift+Command+3",
-      record: "Shift+Command+6",
+      record: "Shift+Command+8",
       "self-timer": "Shift+Command+7",
     });
   });
@@ -411,6 +411,23 @@ describe("the Record binding (STC-388)", () => {
       },
     }));
     expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
+  });
+
+  test("a set holding Record's superseded ⇧⌘6 moves to the current defaults (STC-415)", () => {
+    // The default Record shipped with first, and collided with Siri image search.
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({
+      shortcuts: { ...DEFAULT_SHORTCUTS, record: "Shift+Command+6" },
+    }));
+    expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
+    expect(readSettings(d).shortcuts.record).toBe("Shift+Command+8");
+  });
+
+  test("⇧⌘6 beside a customised binding is the user's own choice and stays (STC-415)", () => {
+    const d = dir();
+    const stored = { ...DEFAULT_SHORTCUTS, display: "Alt+Shift+R", record: "Shift+Command+6" };
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ shortcuts: stored }));
+    expect(readSettings(d).shortcuts).toEqual(stored);
   });
 
   test("one genuinely customised binding keeps the whole set, mix included (STC-415)", () => {

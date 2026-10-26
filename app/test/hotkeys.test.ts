@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
+  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, SUPERSEDED_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
   OUTCOMES, OUTCOME_MODIFIERS, OUTCOME_LABELS, outcomeAccelerator, planOutcomeVariants, explainVariant,
   type OutcomeVariantReport,
   acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction,
@@ -287,10 +287,11 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
     expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer"]);
   });
 
-  test("Record's default is ⇧⌘6 (STC-415)", () => {
-    expect(DEFAULT_SHORTCUTS.record).toBe("Shift+Command+6");
+  test("Record's default is ⇧⌘8, not the ⇧⌘6 that collided with Siri (STC-415)", () => {
+    expect(DEFAULT_SHORTCUTS.record).toBe("Shift+Command+8");
+    expect(SUPERSEDED_DEFAULT_SHORTCUTS.record).toContain("Shift+Command+6");
     expect(parseAccelerator(DEFAULT_SHORTCUTS.record!)).toEqual({
-      ok: true, accelerator: "Shift+Command+6",
+      ok: true, accelerator: "Shift+Command+8",
     });
   });
 
@@ -411,5 +412,17 @@ describe("what a variant's line says (STC-415)", () => {
 
   test("both outcomes have a label", () => {
     for (const o of OUTCOMES) expect(OUTCOME_LABELS[o]).toBeTruthy();
+  });
+});
+
+describe("superseded defaults (STC-415)", () => {
+  test("every superseded default is a real accelerator and none is a current default", () => {
+    for (const a of BINDABLE_ACTIONS) {
+      expect(SUPERSEDED_DEFAULT_SHORTCUTS[a].length, a).toBeGreaterThan(0);
+      for (const old of SUPERSEDED_DEFAULT_SHORTCUTS[a]) {
+        expect(parseAccelerator(old).ok, `${a}: ${old}`).toBe(true);
+        expect(old, `${a} still ships ${old}`).not.toBe(DEFAULT_SHORTCUTS[a]);
+      }
+    }
   });
 });
