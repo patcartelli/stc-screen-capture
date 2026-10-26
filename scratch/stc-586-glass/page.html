@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>STC-586 glass spike</title>
+<style>
+  /* A stand-in for STC-581's Settings window: a 52px title bar, a 180px
+     sidebar, and a pane of rows that scrolls under the bar. */
+  :root { --window: #141414; --hairline: rgba(255,255,255,0.08); --text: #ededed; --muted: #8a8a8a; --accent: #3d8bff; --bar: 52px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; color: var(--text); font: 13px/1.4 -apple-system, system-ui, sans-serif; }
+  body { background: var(--window); overflow: hidden; }
+  /* Native modes: the window itself is the effect, so the page must not
+     paint over the bar. Everything else is painted opaque below. */
+  body.native { background: transparent; }
+
+  #bar {
+    position: fixed; inset: 0 0 auto 0; height: var(--bar); z-index: 10;
+    display: flex; align-items: center; padding: 0 16px 0 84px; gap: 12px;
+    -webkit-app-region: drag;
+  }
+  #bar h1 { margin: 0; font-size: 13px; font-weight: 600; flex: 1; }
+  #bar button { -webkit-app-region: no-drag; }
+
+  /* The CSS version, as Figma draws it: window colour at 88% fading out,
+     over a 24px blur of whatever has scrolled underneath. */
+  body.css #bar {
+    background: linear-gradient(to bottom, rgb(20 20 20 / 0.88), rgb(20 20 20 / 0));
+    -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
+  }
+  /* Reduce Transparency: the same bar, opaque, with a hairline. Driven by
+     main's nativeTheme.prefersReducedTransparency (data-reduced), and by the
+     media query in case Chromium reports it itself (the runbook checks which). */
+  body.css[data-reduced="true"] #bar { background: var(--window); backdrop-filter: none; -webkit-backdrop-filter: none; border-bottom: 1px solid var(--hairline); }
+  @media (prefers-reduced-transparency: reduce) {
+    body.css #bar { background: var(--window); backdrop-filter: none; -webkit-backdrop-filter: none; border-bottom: 1px solid var(--hairline); }
+  }
+
+  #sidebar { position: fixed; top: 0; bottom: 0; left: 0; width: 180px; padding: calc(var(--bar) + 8px) 8px 8px; background: #101010; border-right: 1px solid var(--hairline); z-index: 5; }
+  #sidebar div { padding: 6px 10px; border-radius: 6px; color: var(--muted); }
+  #sidebar div.on { background: rgba(255,255,255,0.08); color: var(--text); }
+  /* Native modes leave the sidebar's top under the bar unpainted too. */
+  body.native #sidebar { background: linear-gradient(to bottom, transparent var(--bar), #101010 var(--bar)); }
+
+  /* layout=under: the pane scrolls under the bar (the design).
+     layout=below: the pane is clipped at the bar's bottom edge, which is the
+     most a native view BEHIND the page can show: the bar then blurs the
+     desktop, never the pane. */
+  #pane { position: fixed; top: 0; bottom: 0; left: 180px; right: 0; overflow-y: auto; padding: calc(var(--bar) + 12px) 24px 24px; background: var(--window); }
+  body.below #pane { top: var(--bar); padding-top: 12px; }
+
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--hairline); }
+  .row small { display: block; color: var(--muted); }
+  .swatch { height: 64px; border-radius: 8px; margin: 12px 0; }
+  canvas { width: 100%; height: 120px; border-radius: 8px; display: block; margin: 12px 0; background: #222; }
+  #diag { position: fixed; right: 12px; bottom: 12px; z-index: 20; background: rgba(0,0,0,0.75); padding: 8px 10px; border-radius: 6px; font: 11px/1.5 ui-monospace, monospace; white-space: pre; pointer-events: none; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <h1>Camera</h1>
+    <button id="barbutton" type="button">Bar button (0)</button>
+  </div>
+  <div id="sidebar">
+    <div>Capture</div><div class="on">Camera</div><div>Shortcuts</div><div>Output</div><div>Advanced</div>
+  </div>
+  <div id="pane"></div>
+  <div id="diag"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const mode = q.get("mode") || "css";
+  const layout = q.get("layout") || (mode === "css" ? "under" : "below");
+  document.body.classList.add(mode, layout);
+  if (mode !== "css") document.body.classList.add("native");
+
+  // Rows with strong colour, so a blur (or its absence) is obvious in a screenshot.
+  const pane = document.getElementById("pane");
+  const hues = [0, 35, 60, 140, 200, 260, 310];
+  const canvas = document.createElement("canvas");
+  for (let i = 0; i < 28; i++) {
+    if (i === 3) pane.append(canvas);
+    if (i % 4 === 1) {
+      const s = document.createElement("div");
+      s.className = "swatch";
+      s.style.background = `linear-gradient(90deg, hsl(${hues[i % 7]} 90% 55%), hsl(${hues[(i + 3) % 7]} 90% 55%))`;
+      pane.append(s);
+    }
+    const r = document.createElement("div");
+    r.className = "row";
+    r.innerHTML = `<span>Setting ${i + 1}<small>One line of helper text for row ${i + 1}.</small></span>` +
+      (i % 3 === 0 ? `<input type="text" value="Focus me" size="10">` : `<button type="button">Control</button>`);
+    pane.append(r);
+  }
+  pane.scrollTop = Number(q.get("scroll") || 0);
+
+  // Hit-testing: does a click in the bar reach the page, in every mode?
+  let clicks = 0;
+  const barbutton = document.getElementById("barbutton");
+  barbutton.addEventListener("click", () => { barbutton.textContent = `Bar button (${++clicks})`; });
+
+  // A WebGPU surface scrolling under the bar, standing in for the editor's
+  // WGSL compositor: does it composite under backdrop-filter and in a
+  // transparent window?
+  let gpu = "not started";
+  async function startGpu() {
+    if (!navigator.gpu) { gpu = "unavailable (navigator.gpu)"; return; }
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) { gpu = "unavailable (no adapter)"; return; }
+    const device = await adapter.requestDevice();
+    const ctx = canvas.getContext("webgpu");
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    canvas.width = canvas.clientWidth * devicePixelRatio;
+    canvas.height = canvas.clientHeight * devicePixelRatio;
+    ctx.configure({ device, format, alphaMode: "opaque" });
+    const module = device.createShaderModule({ code: `
+      struct U { t: f32 };
+      @group(0) @binding(0) var<uniform> u: U;
+      @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+        let p = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
+        return vec4f(p[i], 0, 1);
+      }
+      @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+        let x = p.x / 400.0 + u.t;
+        return vec4f(0.5 + 0.5 * sin(x), 0.5 + 0.5 * sin(x + 2.1), 0.5 + 0.5 * sin(x + 4.2), 1);
+      }` });
+    const pipeline = device.createRenderPipeline({ layout: "auto", vertex: { module }, fragment: { module, targets: [{ format }] } });
+    const buf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: buf } }] });
+    gpu = "running";
+    const frame = (ms) => {
+      device.queue.writeBuffer(buf, 0, new Float32Array([ms / 1000, 0, 0, 0]));
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 1] }] });
+      pass.setPipeline(pipeline); pass.setBindGroup(0, bind); pass.draw(3); pass.end();
+      device.queue.submit([enc.finish()]);
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+  startGpu().catch((e) => { gpu = `failed: ${e.message}`; });
+
+  // Main pushes its state in; the page only draws it.
+  let main = {};
+  const diag = document.getElementById("diag");
+  const draw = () => {
+    const mq = matchMedia("(prefers-reduced-transparency: reduce)").matches;
+    diag.textContent = [
+      `mode ${mode}  layout ${layout}`,
+      `transparent ${main.transparent}  hasShadow ${main.hasShadow}`,
+      `reduce transparency: main ${main.reducedTransparency}  css ${mq}`,
+      `glassId ${main.glassId}  webgpu ${gpu}`,
+      `focused ${document.hasFocus()}  scrollTop ${pane.scrollTop}`,
+    ].join("\n");
+  };
+  window.spikeState = (s) => { main = s; document.body.dataset.reduced = String(s.reducedTransparency); draw(); };
+  setInterval(draw, 500);
+  pane.addEventListener("scroll", draw);
+  draw();
+</script>
+</body>
+</html>
