@@ -12,7 +12,9 @@ npm run app:start
 
 Use the **packaged** app (`npm run app:package`) for §1 and §2. `npm run app:start` runs as Electron or the terminal app, not as Capture, so switching Capture's entry off in System Settings does nothing to it (STC-531).
 
-Written 2026-10-23 from `docs/superpowers/specs/2026-10-12-stc-505-failure-states-design.md` ("Reaching each state on the Mac"), after all six follow-ups merged. **Nothing in this file has been run by the author.** The session that wrote it was Linux with no Mac, so the results column is empty. Fill it in as you go, and do not mark a row from an earlier ticket's runbook as done here.
+Written 2026-10-23 from `docs/superpowers/specs/2026-10-12-stc-505-failure-states-design.md` ("Reaching each state on the Mac"), after all six follow-ups merged. The session that wrote it was Linux with no Mac, so the author ran none of it.
+
+**Run on hardware by Patrick, 2026-10-23, on an M-series Mac with an HP Z27 as the second display.** The results below are what he reported; where a check was not reported it says so, and a row from an earlier ticket's runbook is not counted as done here. Still open: the narration take for the 10 s threshold (§7), the launch-recovery extra (§6), whether the pill window jumps on restore (§8), and the pill's label and placement on a lost display (§5). See "Findings" for what the run turned up.
 
 ## What this runbook is for
 
@@ -57,7 +59,7 @@ This was settled by STC-476/STC-518 in a VM (`docs/STC-476-RUNBOOK.md`). Here th
 
 | Result | Notes |
 |---|---|
-| ☐ | |
+| ✅ pass | Reported as a pass, packaged app. No detail beyond that. |
 
 ## §2 Screen Recording revoked, mid-take
 
@@ -74,8 +76,8 @@ Judgement call: whether *doing nothing* is the right behaviour, given the take i
 
 | Result | Notes |
 |---|---|
-| ☐ keeps recording | |
-| ☐ Quit & Reopen recovers the take | |
+| ✅ keeps recording | Reported as a pass. The judgement call (is doing nothing right?) was not recorded. |
+| ✅ Quit & Reopen recovers the take | Reported as a pass with §2 as a whole; not itemised. |
 
 ## §3 Disk full
 
@@ -101,10 +103,11 @@ STC-531 §4 confirmed this on 2026-10-14 for a 256 MB volume. Do it again on the
 
 | Result | Notes |
 |---|---|
-| ☐ volume route: stopped by itself, take plays | |
-| ☐ `dd` variant: `anchors.json` still present | |
-| ☐ Reclaim space from the panel | |
-| ☐ tile note | |
+| ✅ fault route (`STC_CAPTURE_FAULT=disk-full`) | Pill "Disk full", then the panel line with Reclaim space, no toast. |
+| ✅ volume route: stopped by itself | 256 MB volume, free space fell 65Mi to 57Mi at the stop. `anchors.json` v10, `stop.reason` `disk-full` at 39.47 s, no `.sidecar-reserve`, all five tracks present and ending within 0.3 s of the stop. Take had camera, mic and system audio on. Playback and export of this take **not checked**: it was discarded. |
+| ✅ `dd` variant: `anchors.json` still present | Stopped at 5.92 s, `anchors.json` v15, `disk-full`. The camera ended `writer-failed` (its writer hit the full disk 0.2 s before the display watch): designed (STC-562), not a bug. Pill and panel said Disk full. The take played; a 6.9 MB rendered copy was made. Whether the pill flashed "Camera lost" first was **not reported**. |
+| ✅ Reclaim space from the panel | Works; ran the same sweep as the profile sheet. |
+| ✅ tile note | `Stopped early: disk full`-shaped note on the tile (exact text not pasted). |
 
 ## §4 Window closed / resized
 
@@ -116,9 +119,9 @@ Chain per the table. Both are CONFIRMED on hardware (2026-10-14), including the 
 
 | Result | Notes |
 |---|---|
-| ☐ closed | |
-| ☐ resized | |
-| ☐ move does not stop it | |
+| ✅ closed | Reported as a pass. |
+| ✅ resized | Reported as a pass. |
+| ☐ move does not stop it | Not reported. |
 
 ## §5 Display unplugged
 
@@ -130,9 +133,9 @@ Expect **Display lost**, then the panel, then the tile `Stopped early: display d
 
 | Result | Notes |
 |---|---|
-| ☐ recorded display | |
-| ☐ other display (continues) | |
-| ☐ pill placement on loss | |
+| ⚠️ recorded display | Ran twice: the laptop screen closed (stopped at 0:12) and the HP Z27 unplugged (stopped at 0:06). Both stopped the take and put up a panel, and both takes play. **The wording is the generic `stream-stopped` row, not `display-reconfigured`:** the panel said "The screen capture stopped unexpectedly." and the tile said "Stopped early: capture source lost at m:ss", where the table above expects "Display lost" / "The display you were recording was disconnected." See Findings. Pill label **not seen** (the recorded display was gone). |
+| ✅ other display (continues) | Recording continued through full playback. The mic on the same USB hub dropped with the unplug and was handled as a track loss ("The mic disconnected at 0:05…"), not a stop. |
+| ☐ pill placement on loss | Not verified: Patrick noticed the panels but could not say where the pill went. |
 
 ## §6 Helper `kill -9`
 
@@ -153,9 +156,11 @@ Full detail is in `docs/STC-530-RUNBOOK.md`. Run it here only to see it next to 
 
 | Result | Notes |
 |---|---|
-| ☐ panel, no toast | |
-| ☐ plays to within ~2 s of the kill (gap: ) | |
-| ☐ tile | |
+| ✅ panel, no toast | Panel appeared at the corner with no "not saved" toast. |
+| ✅ plays to within ~2 s of the kill (gap: ~0 s) | Reported as "almost instantaneous" from the kill to the end of the video. Mic and camera present; the camera's first frame came about 1.1 s into the take (see Findings). |
+| ✅ tile | Reads "Recovered after the recorder quit. No cursor data." |
+| ✅ deferred panel (new take within 2 s of a kill) | The recovered panel stayed hidden while the new take recorded. |
+| ☐ launch recovery (kill, Cmd-Q, relaunch) | Not run, or not reported. |
 
 ## §7 Silent mic
 
@@ -174,11 +179,12 @@ The change, if any, is one constant: `MicSignal.silenceFloorDbfs` or `silentSpan
 
 | Result | Notes |
 |---|---|
-| ☐ meter, dot, tooltip | |
-| ☐ tile note | |
-| ☐ narration take: spans (list) | |
-| ☐ quiet room: span? | |
-| ☐ verdict on 10 s / -60 dBFS | |
+| ✅ fault route: meter, dot | Amber dot appeared and the timer kept running (warn only, not interrupted). Tooltip text not reported. |
+| ✅ fault route: tile note | "No mic signal from 0:00 to 0:34". |
+| ✅ real muted mic | Elgato Wave:3 muted, ~16 s take: one `silentSpans` entry from 0.51 s to 15.97 s, covering the whole mic recording. The tile text and whether the dot showed on this take were not reported. |
+| ✅ quiet room, mic live (30 s) | No `silentSpans`: the room's noise sits above -60 dBFS, so "nobody talking" does not read as "no signal". |
+| ☐ narration take: spans (list) | **Not run / to redo.** Patrick did not remember the take's length or pauses. A blank result on a short take does not settle the 10 s threshold. |
+| ☐ verdict on 10 s / -60 dBFS | Open until the narration take is done. |
 
 ## §8 The ~2 s pill dwell
 
@@ -192,9 +198,23 @@ If it reads too fast or too slow, the change is the one constant. The panel wait
 
 | Result | Notes |
 |---|---|
-| ☐ readable | |
-| ☐ no jump on restore | |
-| ☐ verdict on 2 s | |
+| ✅ readable | "Yes" for the labels seen (disk full, window closed/resized). Display loss could not be judged: the pill was not visible. |
+| ☐ no jump on restore | Not answered clearly. |
+| ✅ verdict on 2 s | Long enough. |
+
+## Findings
+
+1. **A lost display is named "capture source lost", not "display disconnected" (§5).** Both the laptop-screen close and the HP Z27 unplug stopped as `stream-stopped`, so the pill label would be "Source lost" and the panel and tile say "stopped unexpectedly" / "capture source lost". The `display-reconfigured` row ("Display lost", "The display you were recording was disconnected.") never fired. Likely cause, read from the code and not confirmed against the running helper: ScreenCaptureKit stops the stream before the display watcher decides, and `decideStreamDeath` (`helper/src/CaptureDecisions.swift`) only asks whether a *window* is gone, so a dead display stream falls through to `stream-stopped`. It is the same race STC-531 fixed for a closed window. No data is lost: the takes are saved and play. Wanted: a display take whose stream dies should check whether its display is still present and say `display-reconfigured`. Needs its own ticket; not fixed here.
+2. **The camera's first frame comes 1.1 to 1.6 s after the screen's.** Measured from `anchors.json`: display first frame about 0.25 to 0.29 s, mic about 0.5 s, camera 1.56 s and 1.61 s (and about 1.1 s in a recovered take). Patrick's expectation is that the camera and screen start together. Queued as a separate task, "Start the camera with the screen capture".
+3. **A fill from outside ends the camera first (§3).** On the `dd` run the camera ended `writer-failed` about 0.2 s before the display's `disk-full` stop. Designed (STC-562), listed so nobody reads it as a fault.
+
+## Still to do
+
+- §7: the narration take (3 to 5 min, natural pauses) for the 10 s and -60 dBFS threshold.
+- §6: launch recovery (kill, Cmd-Q, relaunch).
+- §5: the pill's label and placement on a lost display (record the laptop display, unplug an external).
+- §4: a window move must not stop the take.
+- §3: playback and export of a volume-route take.
 
 ## What is deliberately not here
 
