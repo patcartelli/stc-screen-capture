@@ -272,6 +272,13 @@
     .shortcut .clear { padding: 3px 8px; font-size: var(--type-body); }
     .shortcut .why { font-size: var(--type-body); color: var(--warn); flex: 1; }
     .shortcut .why.ok { color: var(--text-dim); opacity: 1; }
+    /* STC-415: a shot's ⌃/⌥ variants, a second line inside its row. */
+    .shortcut { flex-wrap: wrap; }
+    .shortcut .variants { flex: 0 0 100%; padding: 2px 0 0 0; }
+    .shortcut .variant { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; }
+    .shortcut .variant .name { min-width: 150px; padding-left: 14px; color: var(--text-dim); font-size: var(--type-body); }
+    .shortcut .variant .keys { min-width: 88px; text-align: center; padding: 1px 10px; color: var(--text-dim);
+                               font-size: var(--type-body); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     #shortcutfoot { display: flex; gap: 10px; align-items: baseline; padding-top: 8px; }
     #shortcutfoot button { padding: 3px 10px; font-size: var(--type-body); }
     #pipsettingshint { font-size: var(--type-meta); color: var(--text-faint); margin: 0 0 8px; }

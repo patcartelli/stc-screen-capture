@@ -27,7 +27,11 @@ only edited. CI is the first run of those.
 0. Turn off macOS's own screenshot shortcuts (System Settings → Keyboard → Keyboard Shortcuts
    → Screenshots) so `⇧⌘3/4` are free, as they are with CleanShot. Quit CleanShot or move its
    bindings first, or it holds the same keys.
-1. **Fresh install:** delete `settings.json`, launch. Settings → Shot shortcuts shows
+1. **Fresh install:** under each shot, Settings lists "To clipboard ⌃⇧⌘N" and "To editor
+   ⌥⇧⌘N" with "Active" or the reason it is not. Anything other than "Active" says what holds the
+   key; if a variant says "Something else on this Mac already holds this shortcut", another app
+   (or a macOS screenshot shortcut such as ⌃⇧⌘3/4) has it, so free it or rebind the shot.
+   Then: delete `settings.json`, launch. Settings → Shot shortcuts shows
    `⇧⌘2`, `⇧⌘3`, `⇧⌘4`, `⇧⌘6`, `⇧⌘7`, all "Active".
 2. **Existing install** with the old hyperkey set: launch. It shows the new set.
    Then change ONE binding, relaunch, and confirm the others did not move.

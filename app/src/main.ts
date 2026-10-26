@@ -5,7 +5,7 @@ import {
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, planOutcomeVariants, isShotAction,
-  type Outcome,
+  type Outcome, type OutcomeVariantReport,
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { settingsMode } from "./settings-open.js";
@@ -2457,7 +2457,8 @@ ipcMain.handle("still:capture", async (_e, action?: ShotAction) =>
 function applyShortcuts(next: Shortcuts): ShortcutReport[] {
   shortcuts = next;
   globalShortcut.unregisterAll();
-  shortcutReport = planShortcuts(next).map((plan): ShortcutReport => {
+  const plans = planShortcuts(next);
+  shortcutReport = plans.map((plan): ShortcutReport => {
     if (plan.problem !== undefined || plan.accelerator == null) {
       return { ...plan, registered: false };
     }
@@ -2475,20 +2476,24 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     return ok ? { ...plan, registered: true } : { ...plan, problem: "unavailable", registered: false };
   });
   // STC-415: each shot's ⌃ (clipboard) and ⌥ (editor) variants, derived from
-  // the plan rather than stored. A variant that is held, doubled or refused by
-  // the system is logged, not surfaced: the base binding is what preferences
-  // shows, and a missing variant costs nothing the panel does not still do.
-  for (const v of planOutcomeVariants(planShortcuts(next))) {
+  // the plan rather than stored, and REPORTED with the shot they belong to so
+  // preferences can say which are live and why one is not.
+  const variantReports = planOutcomeVariants(plans).map((v): OutcomeVariantReport => {
     if (v.accelerator === null) {
       console.warn(`[shortcuts] no ${v.outcome} variant for ${v.action}: ${v.problem}`);
-      continue;
+      return { ...v, registered: false };
     }
     let ok = false;
     try {
       ok = globalShortcut.register(v.accelerator, () => void captureAndAnnounce(v.action, "hotkey", v.outcome));
     } catch { ok = false; }
     if (!ok) console.warn(`[shortcuts] ${v.accelerator} (${v.action} → ${v.outcome}) is unavailable`);
-  }
+    return ok ? { ...v, registered: true } : { ...v, problem: "unavailable", registered: false };
+  });
+  shortcutReport = shortcutReport.map((r): ShortcutReport => {
+    const variants = variantReports.filter((v) => v.action === r.action);
+    return variants.length > 0 ? { ...r, variants } : r;
+  });
   tray?.update({ shortcuts, busy: capturing, recording: sup?.state === "recording" });
   return shortcutReport;
 }

@@ -344,6 +344,29 @@ describe("a full-display capture", () => {
 });
 
 describe("the capture-time outcome variants (STC-415)", () => {
+  test("Settings lists each shot's variants, with their keys and whether they are live", async () => {
+    const { win } = await launch();
+    for (const action of ["region", "window", "display", "self-timer"]) {
+      await expect.poll(() => win.textContent(`#shortcutwhy-${action}-clipboard`), { timeout: 15_000 })
+        .toBe("Active");
+      expect(await win.textContent(`#shortcutwhy-${action}-editor`)).toBe("Active");
+    }
+    expect(await win.textContent("#shortcut-region-clipboard")).toBe("⌃⇧⌘4");
+    expect(await win.textContent("#shortcut-region-editor")).toBe("⌥⇧⌘4");
+    // Record has no outcome to choose.
+    expect(await win.locator("#shortcut-record-clipboard").count()).toBe(0);
+    // The variants sit INSIDE their action's row, so the list's own order is the actions'.
+    expect(await win.locator("#shortcuts > .shortcut").count()).toBe(5);
+  }, 120_000);
+
+  test("a base that already holds a modifier says why it has no variant", async () => {
+    const { win } = await launch();
+    await rebind(win, "region", "Control+Alt+Shift+F9");
+    await expect.poll(() => win.textContent("#shortcutwhy-region-clipboard"), { timeout: 15_000 })
+      .toMatch(/already uses ⌃/);
+    expect(await win.textContent("#shortcutwhy-region-editor")).toMatch(/already uses ⌥/);
+  }, 120_000);
+
   test("every shot's ⌃ and ⌥ variants are registered with the window server, Record's are not", async () => {
     await launch();
     for (const action of ["region", "window", "display", "self-timer"] as const) {
