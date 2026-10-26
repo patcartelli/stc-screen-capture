@@ -25,6 +25,28 @@ The camera lag is the **cold open**, and it sits on the take's timeline because 
 
 Not the cause: `captureOutput`'s `rel >= 0` drop only discards frames stamped before t0, which a not-yet-open camera has none of; the pause gate and ordering guard act on frames after the first.
 
+## Measured on Patrick's Mac, 2026-10-26 (FaceTime HD Camera, anchors in ms)
+
+Control, `STC_CAMERA_WARM=off`, camera idle beforehand (`warm: false`):
+
+| take | camera first frame | display first frame | camera lag |
+|---|---|---|---|
+| 11-24-02 (mic) | 1712 | 148 | +1564 |
+| 11-26-38 | 1604 | 152 | +1452 |
+| 11-29-04 (mic) | 1608 | 148 | +1459 |
+
+Warm-up on (`warm: true`):
+
+| take | camera first frame | display first frame | camera minus display |
+|---|---|---|---|
+| 11-38-13 | 274 | 281 | -7 |
+| 11-47-06 (mic + system) | 166 | 191 | -25 |
+| earlier session, six takes (terminal lines not kept) | 94-137 | 149-155 | -17 to -56 |
+
+**The control reproduced the 1.5 s lag. The open phases are NOT where it comes from:** in the control takes `discoverMs` was 0, `configureMs` 14-54, `startRunningMs` 14-38 and the whole `start()` 71-116 ms, and the first heartbeat still read `0 frames at 0.5s`. `startRunning()` returns almost at once; the camera then takes ~1.4 s to deliver its first frame. The warm-up works because it starts the session earlier so that wait has already passed by t0, not because it makes an open faster. (The PR description and the first draft of this runbook said the open itself was the 1-2 s; that was wrong.)
+
+With the warm-up the camera now leads or matches the screen by 7-56 ms. It cannot be later than the screen's first frame by construction: it is adopted when the display stream is up. Within 33 ms in 3 of the 8 warm takes; the other 5 have the camera ahead by 38-56 ms (1-2 frames).
+
 ## What changed
 
 - **Timings** (`camera-started.timings`, plus a `[camera] first frame` line on the helper's stderr): `discoverMs`, `configureMs`, `startRunningMs`, `writerMs`, `startMs`, `warm`, and once the first frame lands `firstFrameArrivalNs` (wall time since t0 when it arrived), `firstFramePtsNs` (what anchors.json records) and `displayFirstFrameNs`.
