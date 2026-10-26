@@ -392,6 +392,38 @@ describe("the Record binding (STC-388)", () => {
     // Absent means "never set" and takes the default — the rule every other
     // binding already follows. An upgrade must not cost the user the feature.
     expect(readSettings(d).shortcuts.record).toBe(DEFAULT_SHORTCUTS.record);
+    // STC-415: four old bindings and no Record is an untouched set, so the
+    // whole of it takes the new defaults rather than a hyperkey/⇧⌘ mix.
+    expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
+  });
+
+  test("a set that is part old default, part new default moves whole (STC-415)", () => {
+    // What a machine actually held: some keys filled in by the new build and
+    // saved once, the rest still the old hyperkey.
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({
+      shortcuts: {
+        region: "Control+Alt+Shift+Command+1",
+        window: "Shift+Command+2",
+        display: "Control+Alt+Shift+Command+3",
+        record: "Control+Alt+Shift+Command+4",
+        "self-timer": "Shift+Command+7",
+      },
+    }));
+    expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
+  });
+
+  test("one genuinely customised binding keeps the whole set, mix included (STC-415)", () => {
+    const d = dir();
+    const stored = {
+      region: "Control+Alt+Shift+Command+1",
+      window: "Shift+Command+2",
+      display: "Alt+Shift+R",
+      record: "Control+Alt+Shift+Command+4",
+      "self-timer": "Shift+Command+7",
+    };
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ shortcuts: stored }));
+    expect(readSettings(d).shortcuts).toEqual(stored);
   });
 
   test("a deliberately unbound Record survives a round trip", () => {

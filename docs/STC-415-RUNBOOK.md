@@ -16,10 +16,11 @@ only edited. CI is the first run of those.
    straight to the clipboard (no panel) and adding **⌥** promotes the shot and opens the still
    editor (no panel). `⌃⇧⌘4` is also macOS's own "screenshot to clipboard" chord. The base
    binding keeps doing what the panel preference says, and "Skip it" is unchanged.
-4. **Migration.** A `settings.json` that holds exactly the old five hyperkey bindings is
-   treated as untouched and takes the new defaults. A set with any other binding, or any
-   unbound action, keeps everything it has, and its hyperkey bindings have no variants
-   (a base that already holds ⌃ or ⌥ has nothing to add).
+4. **Migration.** A `settings.json` whose bindings are each an old hyperkey default or a new
+   default, with at least one old, is treated as untouched and takes the new defaults whole (this
+   includes a file that predates Record, and a mix the new build wrote after filling in missing
+   keys). Any set with a binding that is neither, or an unbound action, keeps everything it has,
+   and its hyperkey bindings have no variants (a base that already holds ⌃ or ⌥ has nothing to add).
 
 ## What only a Mac can settle
 
