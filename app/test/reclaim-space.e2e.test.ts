@@ -7,6 +7,7 @@ import { launchApp } from "./_editor-fixture.js";
 import { toastPage, toastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { mintCaptureId } from "@transform/capture-id.js";
+import { openSettings } from "./_settings-window.js";
 
 /**
  * Reclaim space (STC-435), WIRED: the profile sheet's button, main's
@@ -52,11 +53,11 @@ const asked = (): Promise<Array<{ message: string; detail: string; buttons: stri
   app!.evaluate(() => (globalThis as unknown as { __reclaimAsked: never[] }).__reclaimAsked);
 
 async function pressReclaim(): Promise<void> {
-  await page.click("#settings");
-  await expect.poll(() => page.getAttribute("#profilesheet", "class")).toMatch(/open/);
-  await page.click("#reclaimspace");
+  // STC-581: Clean up is on the Settings window's Output pane.
+  const settings = await openSettings(app!, page, "output");
+  await settings.click("#reclaimspace");
   // The renderer disables the button for the whole round trip.
-  await expect.poll(() => page.locator("#reclaimspace").isDisabled(), { timeout: 20_000 }).toBe(false);
+  await expect.poll(() => settings.locator("#reclaimspace").isDisabled(), { timeout: 20_000 }).toBe(false);
 }
 
 beforeEach(async () => {
@@ -71,7 +72,7 @@ describe("Reclaim space, through the real app", () => {
   test("shows the orphan first, trashes it on confirm, and leaves the untagged image alone", async () => {
     const rec = bundle(RECORDING, "anchors.json");
     writeFileSync(join(root, "holiday.jpg"), JPEG);           // untagged, but a still's kind
-    ({ app, win: page } = await launchApp(root, {}, { ready: "#reclaimspace" }));
+    ({ app, win: page } = await launchApp(root, {}, { ready: "#record" }));
     await stubDialog(0);
 
     await pressReclaim();
@@ -87,7 +88,7 @@ describe("Reclaim space, through the real app", () => {
 
   test("Cancel moves nothing", async () => {
     const rec = bundle(RECORDING, "anchors.json");
-    ({ app, win: page } = await launchApp(root, {}, { ready: "#reclaimspace" }));
+    ({ app, win: page } = await launchApp(root, {}, { ready: "#record" }));
     await stubDialog(1);
 
     await pressReclaim();
@@ -99,7 +100,7 @@ describe("Reclaim space, through the real app", () => {
   test("the skip case is a visible toast naming the file in the way — no dialog, nothing moved", async () => {
     const still = bundle(STILL, "shot.json");
     writeFileSync(join(root, "holiday.jpg"), JPEG);           // blocks the still bundle
-    ({ app, win: page } = await launchApp(root, {}, { ready: "#reclaimspace" }));
+    ({ app, win: page } = await launchApp(root, {}, { ready: "#record" }));
     await stubDialog(0);
 
     await pressReclaim();

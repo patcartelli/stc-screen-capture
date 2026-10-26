@@ -17,8 +17,8 @@ describe("the default sizes (STC-560)", () => {
   test("its floor still fits two", () => {
     expect(LIBRARY_MIN_SIZE.width).toBeGreaterThanOrEqual(2 * 210 + 14 + 2 * 20);
   });
-  test("Settings alone is narrower than the library", () => {
-    expect(SETTINGS_SIZE.width).toBeLessThan(LIBRARY_SIZE.width);
+  test("Settings is STC-581's 760 x 560: a 180px sidebar and a 580px pane", () => {
+    expect(SETTINGS_SIZE).toEqual({ width: 180 + 580, height: 560 });
   });
 });
 
@@ -70,7 +70,7 @@ describe("libraryBounds", () => {
   });
 });
 
-test("Settings alone opens at its own size, centred and clamped", () => {
+test("Settings opens at its own size, centred and clamped", () => {
   expect(settingsBounds(laptop)).toEqual(centredIn(SETTINGS_SIZE, laptop));
   expect(settingsBounds({ x: 0, y: 0, width: 500, height: 500 })).toEqual({ x: 0, y: 0, width: 500, height: 500 });
 });

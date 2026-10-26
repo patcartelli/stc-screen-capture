@@ -33,7 +33,7 @@
               "app/src/library-view.ts", "app/src/editor.ts", "app/src/countdown-renderer.ts",
               "app/src/toast-renderer.ts", "app/src/still-editor-renderer.ts",
               "app/src/narration-worker.ts", "app/src/copy-render.ts",
-              "app/src/pill-renderer.ts",
+              "app/src/pill-renderer.ts", "app/src/settings-renderer.ts",
               // Not a page — a DOM-touching row-building module (STC-456)
               // shared by two page entry points (overlay.ts, renderer.ts),
               // which are themselves excluded above. `document.createElement`

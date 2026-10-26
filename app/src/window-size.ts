@@ -1,17 +1,15 @@
 /**
  * What size the main window opens at (STC-560) — pure, no Electron.
  *
- * The main window is two things: the library, and (STC-551 follow-up)
- * Settings alone when it is opened from the menu bar with no library on
- * screen. Both used to open at 520 x 680, a narrow column the grid and the
- * sheet were cramped in. Decisions, Patrick 2026-10-19:
+ * The library and the Settings window. Both used to open at 520 x 680, a
+ * narrow column the grid and the sheet were cramped in. Decisions, Patrick
+ * 2026-10-19, and STC-581 for Settings:
  *
  * 1. The library opens at `LIBRARY_SIZE`: four of the grid's 210px columns
  *    (`.libgrid`'s `minmax(210px, 1fr)`, 14px gaps) inside the body's 20px
  *    gutters. Its floor, `LIBRARY_MIN_SIZE`, still fits two.
- * 2. Settings alone opens at `SETTINGS_SIZE`: one form column at a readable
- *    width. It is never remembered; it is a different surface from the
- *    library, and its size must not overwrite the library's.
+ * 2. Settings is its own window at `SETTINGS_SIZE` (STC-581: 760 x 560, a
+ *    180px sidebar and a 580px pane), fixed in size. It is never remembered.
  * 3. The library remembers where it was (`Settings.libraryWindow`), and only
  *    main writes that. A remembered place is used only while its title bar
  *    is on a connected display, and is pulled fully inside that display's
@@ -25,8 +23,7 @@ export interface Size { width: number; height: number }
 
 export const LIBRARY_SIZE: Size = { width: 960, height: 720 };
 export const LIBRARY_MIN_SIZE: Size = { width: 480, height: 420 };
-export const SETTINGS_SIZE: Size = { width: 560, height: 720 };
-export const SETTINGS_MIN_SIZE: Size = { width: 420, height: 400 };
+export const SETTINGS_SIZE: Size = { width: 760, height: 560 };
 
 /**
  * How far below a window's top edge its title bar is taken to be. The window
@@ -75,7 +72,7 @@ export function libraryBounds(saved: Rect | null, workAreas: readonly Rect[], he
   return centredIn(LIBRARY_SIZE, here);
 }
 
-/** Where a window for Settings alone opens. */
+/** Where the Settings window opens. */
 export function settingsBounds(here: Rect): Rect {
   return centredIn(SETTINGS_SIZE, here);
 }

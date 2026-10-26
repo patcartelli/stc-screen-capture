@@ -27,7 +27,7 @@ describe("every renderer page declares a Content-Security-Policy (STC-467)", () 
     // vacuously pass having checked nothing.
     expect(files).toEqual(expect.arrayContaining([
       "index.html", "overlay.html", "countdown.html", "toast.html",
-      "thumbnail.html", "editor.html", "still-editor.html", "pill.html",
+      "thumbnail.html", "editor.html", "still-editor.html", "pill.html", "settings.html",
     ]));
   });
 

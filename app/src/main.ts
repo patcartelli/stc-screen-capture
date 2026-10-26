@@ -8,8 +8,9 @@ import {
   type Outcome, type OutcomeVariantReport,
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
-import { settingsMode } from "./settings-open.js";
-import { isCloseKey, CLOSE_SHEET_SCRIPT } from "./close-shortcut.js";
+import {
+  closeSettingsWindow, isSettingsWindow, notifySettingsWindow, openSettingsWindow, settingsWindowIsOpen,
+} from "./settings-window.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
   buildThumbMenu, type ThumbMenuContext, type ThumbMenuId,
@@ -85,7 +86,7 @@ import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
 import { showUndoToast, showMessageToast, hideToast, closeToastsForQuit } from "./toast-window.js";
 import { noteAppQuitting, setBoundsUnlessClosing } from "./window-geometry.js";
 import {
-  libraryBounds, settingsBounds, clampSize, LIBRARY_MIN_SIZE, SETTINGS_MIN_SIZE, type Rect,
+  libraryBounds, clampSize, LIBRARY_MIN_SIZE, type Rect,
 } from "./window-size.js";
 import { startQuitWindowLog, startWindowLog, WINDOW_LOG_ENV, WINDOW_LOG_AT_LAUNCH } from "./quit-window-log.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
@@ -303,16 +304,6 @@ function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<str
 const TRAFFIC_LIGHT_X_PX = 20;
 const TRAFFIC_LIGHT_Y_PX = 24;
 
-/** Set by `openSettingsSheet` for the one window it is about to make, so that
- * window LOADS as Settings alone (no grid flashing before a message arrives). */
-let nextWindowSettingsOnly = false;
-
-/**
- * Whether `win` is, right now, a window for Settings alone (STC-551 follow-up).
- * Its size is Settings' own and is never remembered as the library's (STC-560).
- */
-let winSettingsOnly = false;
-
 /** The display a window with no remembered place opens on: the one under the pointer. */
 function workAreaUnderPointer(): Rect {
   return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
@@ -328,13 +319,10 @@ function libraryPlace(fallback: Rect): Rect {
 }
 
 function createWindow(): void {
-  const settingsOnly = nextWindowSettingsOnly;
-  nextWindowSettingsOnly = false;
-  // STC-560: sized for what it shows, and clamped to the display.
+  // STC-560: where it last was, clamped to the display.
   const area = workAreaUnderPointer();
-  const bounds = settingsOnly ? settingsBounds(area) : libraryPlace(area);
-  const min = clampSize(settingsOnly ? SETTINGS_MIN_SIZE : LIBRARY_MIN_SIZE, area);
-  winSettingsOnly = settingsOnly;
+  const bounds = libraryPlace(area);
+  const min = clampSize(LIBRARY_MIN_SIZE, area);
   win = new BrowserWindow({
     ...bounds, minWidth: min.width, minHeight: min.height, title: PRODUCT_NAME,
     // STC-375 chose "hidden" over fully frameless so the library could
@@ -346,38 +334,15 @@ function createWindow(): void {
     trafficLightPosition: { x: TRAFFIC_LIGHT_X_PX, y: TRAFFIC_LIGHT_Y_PX },
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
-  win.loadFile(join(here, "..", "renderer", "index.html"), settingsOnly ? { query: { settings: "only" } } : undefined);
-  // STC-552: ⌘W closes the Settings sheet first, the window only when no sheet
-  // is open. Runs ahead of the menu's Close Window accelerator.
+  win.loadFile(join(here, "..", "renderer", "index.html"));
   const w = win;
-  w.webContents.on("before-input-event", (event, input) => {
-    if (!isCloseKey(input)) return;
-    event.preventDefault();
-    void w.webContents.executeJavaScript(CLOSE_SHEET_SCRIPT)
-      .then((closedSheet) => { if (!closedSheet && !w.isDestroyed()) w.close(); })
-      .catch(() => { if (!w.isDestroyed()) w.close(); });
-  });
   // STC-560: remember where the library was. Normal bounds, so a window closed
   // while full screen or zoomed reopens at the size it had before that.
   w.on("close", () => {
-    if (w !== win || winSettingsOnly) return;
+    if (w !== win) return;
     writeSettings(app.getPath("userData"), { libraryWindow: w.getNormalBounds() });
   });
   reconcileIcons();
-}
-
-/**
- * A window made for Settings alone, asked to show the library (STC-560): it
- * takes the library's place and size, since Settings' narrow column would
- * squeeze the grid. Through `setBoundsUnlessClosing` (STC-496); the minimum is
- * raised only once the new bounds are in, so raising it never resizes.
- */
-function becomeLibrary(w: BrowserWindow): void {
-  winSettingsOnly = false;
-  const area = screen.getDisplayMatching(w.getBounds()).workArea;
-  if (!setBoundsUnlessClosing(w, libraryPlace(area), "openLibrary (Settings alone becomes the library)")) return;
-  const min = clampSize(LIBRARY_MIN_SIZE, area);
-  w.setMinimumSize(min.width, min.height);
 }
 
 /**
@@ -411,6 +376,10 @@ function hideLibraryForTake(atFlowStart: LibraryAtTakeStart): boolean {
   const hide = now.exists && !now.minimized && (now.visible || now.appHidden);
   libraryReturnsAfterTake = plan.showAfter;
   if (hide) win!.hide();
+  // STC-581: Settings was a sheet in the library and went with it. As its own
+  // window it would be in the take, so it closes (every change is already saved).
+  const settingsWent = settingsWindowIsOpen();
+  closeSettingsWindow();
   // STC-556: `app.show()` restores EVERY window hidden with the app, so the
   // editors go off screen first, as the library did. They were not on screen
   // when the take started, so nothing brings them back after it.
@@ -420,7 +389,7 @@ function hideLibraryForTake(atFlowStart: LibraryAtTakeStart): boolean {
     hiddenEditors = hideStillEditor() || hiddenEditors;
     app.show();
   }
-  return hide || hiddenEditors;
+  return hide || hiddenEditors || settingsWent;
 }
 
 /** The library window's state right now, for `libraryAroundTake`. */
@@ -563,7 +532,7 @@ function mountTray(): TrayHandle {
     if (id === "editor") return void openLatestInEditor().catch((e) => console.error("[editor] open latest failed:", e));
     if (id === "quit") return app.quit();
     // The same door the overlay bar's Settings control uses (STC-551).
-    if (id === "settings") return openSettingsSheet();
+    if (id === "settings") return openSettings();
     if (id === "about") { app.focus({ steal: true }); return app.showAboutPanel(); }
     const action = BINDABLE_ACTIONS.find((a) => id === `action:${a}`);
     if (!action) return;
@@ -584,7 +553,8 @@ function mountTray(): TrayHandle {
 
 /** Document windows only: see icon-placement.ts rule 4. */
 function documentWindowCount(): number {
-  return (win && !win.isDestroyed() ? 1 : 0) + (editorIsOpen() ? 1 : 0) + (stillEditorIsOpen() ? 1 : 0);
+  return (win && !win.isDestroyed() ? 1 : 0) + (editorIsOpen() ? 1 : 0) + (stillEditorIsOpen() ? 1 : 0)
+    + (settingsWindowIsOpen() ? 1 : 0);
 }
 
 /**
@@ -619,8 +589,7 @@ const DOCK_HIDE_RETRY_MS = 1500;
 function openLibrary(): void {
   if (!win || win.isDestroyed()) createWindow();
   else {
-    if (winSettingsOnly) becomeLibrary(win);
-    win.show(); win.focus(); send("ui:show-library", undefined);
+    win.show(); win.focus();
   }
   reconcileIcons();
   // Without this an accessory app raises the window behind whatever is
@@ -750,7 +719,7 @@ ipcMain.handle("permissions:act", async (_e, grant: unknown, action: unknown): P
     if (grant === "microphone") writeSettings(app.getPath("userData"), { micDeviceUid: null });
     else if (grant === "camera") writeSettings(app.getPath("userData"), { camera: false });
     else return permState;
-    send("settings:changed", undefined);
+    broadcastSettingsChanged();
     return checkPermissions();
   }
   permMemory = { ...permMemory, requested: new Set([...permMemory.requested, grant]) };
@@ -1637,7 +1606,7 @@ ipcMain.handle("recorder:resolvedSaveFolder", async (): Promise<string> =>
  * asking: the sheet is modal once it is up, but the find before it is not.
  */
 let reclaiming = false;
-ipcMain.handle("recorder:reclaimSpace", () => reclaimSpace());
+ipcMain.handle("recorder:reclaimSpace", (e) => reclaimSpace(BrowserWindow.fromWebContents(e.sender) ?? undefined));
 
 /**
  * STC-531: a stopped take's one action, from its panel. The page names an id
@@ -1651,7 +1620,8 @@ ipcMain.handle("panel:stopAction", async (_e, id: unknown): Promise<boolean> => 
   return true;
 });
 
-async function reclaimSpace(): Promise<{ moved: number; failed: number }> {
+/** `parent` is the window the sheet attaches to: the one that asked, else the library. */
+async function reclaimSpace(parent: BrowserWindow | undefined = win): Promise<{ moved: number; failed: number }> {
   if (reclaiming) return { moved: 0, failed: 0 };
   reclaiming = true;
   try {
@@ -1662,8 +1632,8 @@ async function reclaimSpace(): Promise<{ moved: number; failed: number }> {
       return { moved: 0, failed: 0 };
     }
     const { kind: _kind, dirs, ...box } = prompt;
-    const { response } = win && !win.isDestroyed()
-      ? await dialog.showMessageBox(win, { type: "warning", ...box })
+    const { response } = parent && !parent.isDestroyed()
+      ? await dialog.showMessageBox(parent, { type: "warning", ...box })
       : await dialog.showMessageBox({ type: "warning", ...box });
     if (response !== 0) return { moved: 0, failed: 0 };
 
@@ -1705,7 +1675,7 @@ async function reclaimSpace(): Promise<{ moved: number; failed: number }> {
  * `libraryWindow` (STC-560) the same way: an echo would put back the place the
  * window had when the sheet loaded, over the one its `close` just wrote.
  */
-ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Promise<Settings> => {
+ipcMain.handle("recorder:setSettings", async (e, patch: Partial<Settings>): Promise<Settings> => {
   // Destructured rather than deleted, so `saveFolder` is named here and a
   // reader can see exactly which keys do not survive.
   const {
@@ -1727,6 +1697,11 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
   const saved = writeSettings(app.getPath("userData"), clean);
   // Applies right away, no relaunch (STC-502).
   if (clean.iconPlacement !== undefined) reconcileIcons();
+  // STC-581: the library and Settings are two windows now. The one that did
+  // not write re-reads (the library's diagnostics table, Settings' PiP default
+  // after the editor's "Use as default"). The writer already shows its own.
+  if (isSettingsWindow(e.sender)) send("settings:changed", undefined);
+  else notifySettingsWindow("settings:changed");
   return saved;
 });
 
@@ -1907,7 +1882,7 @@ function writeBarOptions(options: OptionsState): void {
     recordKeys: options.keys,
     showClicks: options.showClicks,
   });
-  send("settings:changed", undefined);
+  broadcastSettingsChanged();
 }
 
 /** The flow proper. Split out so `recordFlowActive` has exactly one `finally`
@@ -1945,7 +1920,7 @@ async function recordFlowBody(
   // of the same argument object.
   if (afterClose === "settings") {
     if (options) writeBarOptions(options);
-    openSettingsSheet();
+    openSettings();
     return { ok: false, cancelled: true };
   }
   if (outcome.kind === "cancelled" || !options) return { ok: false, cancelled: true };
@@ -2030,7 +2005,7 @@ async function recordFlowBody(
         // vanished uid — correct it so the popover doesn't keep offering a
         // device that isn't there.
         writeSettings(app.getPath("userData"), { micDeviceUid: null });
-        send("settings:changed", undefined);
+        broadcastSettingsChanged();
       } else {
         return { ok: false, cancelled: true };
       }
@@ -2175,43 +2150,26 @@ async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[]
 }
 
 /**
- * The bar's Settings control (STC-456): the overlay closes with no take, and
- * this hands off to the main window's existing sheet — `openLibrary` is the
- * SAME "show and focus the window" step the tray's own Library item already
- * uses, so a settings hand-off with no window open behaves exactly like any
- * other way back into the app.
- *
- * Fix round 1 (CRITICAL): reachable from the tray or a hotkey with no main
- * window open, in which case `openLibrary` -> `createWindow` calls
- * `win.loadFile(...)` WITHOUT awaiting it — the renderer's preload script
- * (and the `recorder.on("ui:open-settings", ...)` listener it installs) has
- * not run yet. Sending synchronously right after, as this used to, is not
- * queued by Electron; the message simply never arrives and Settings silently
- * fails to open. `webContents.isLoading()` is true the instant `loadFile` is
- * called (navigation starts synchronously; only the returned promise is
- * async) and stays true through an existing window mid-navigation too, so
- * checking it — rather than asking whether `createWindow` ran — is the one
- * signal that covers both the fresh-window and the already-loading cases
- * with no second mechanism. `did-finish-load` fires once preload and the
- * renderer's top-level script (where the listener is installed) have run.
+ * Settings (STC-581): its own window, from the library's gear, the menu bar's
+ * Settings… and the record bar's Settings control alike. It never opens the
+ * library, which is what the old sheet had to do to have somewhere to slide
+ * over (STC-551).
  */
-function openSettingsSheet(): void {
-  // Read BEFORE openLibrary, which creates the window.
-  const mode = settingsMode(!!win && !win.isDestroyed());
-  // A window made now loads as Settings alone (see `createWindow`); only an
-  // existing one needs telling.
-  nextWindowSettingsOnly = mode === "standalone";
-  openLibrary();
-  nextWindowSettingsOnly = false;
-  if (mode === "standalone") return;
-  const w = win;
-  if (!w || w.isDestroyed()) return;
-  const payload = { standalone: false };
-  if (w.webContents.isLoading()) {
-    w.webContents.once("did-finish-load", () => send("ui:open-settings", payload));
-  } else {
-    send("ui:open-settings", payload);
-  }
+function openSettings(): void {
+  openSettingsWindow({ dist: here, rendererDir: join(here, "..", "renderer"), onClosed: reconcileIconsSoon });
+  reconcileIcons();
+  // An accessory app raises its window behind whatever is frontmost otherwise.
+  app.focus({ steal: true });
+}
+ipcMain.handle("settings:open", () => { openSettings(); });
+
+/**
+ * A preference changed outside the window showing it: tell the library and
+ * the Settings window, which both re-read rather than edit from a stale copy.
+ */
+function broadcastSettingsChanged(): void {
+  send("settings:changed", undefined);
+  notifySettingsWindow("settings:changed");
 }
 
 /**
@@ -3411,10 +3369,12 @@ ipcMain.handle("still:export", async (_e, req: {
  * and every subsequent export is silent. A save panel per shot would be the
  * interaction the design is trying to remove.
  */
-ipcMain.handle("still:chooseDestination", async () => {
-  if (!win) throw new Error("no window");
+ipcMain.handle("still:chooseDestination", async (e) => {
+  // On the window that asked (STC-581: Settings may be open with no library).
+  const parent = BrowserWindow.fromWebContents(e.sender);
+  if (!parent) throw new Error("no window");
   const current = readSettings(app.getPath("userData")).saveFolder;
-  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+  const { canceled, filePaths } = await dialog.showOpenDialog(parent, {
     title: "Where should recordings and shots be saved?",
     properties: ["openDirectory", "createDirectory"],
     ...(current ? { defaultPath: current } : {}),
@@ -4133,10 +4093,12 @@ ipcMain.handle("preview:chunk", async (e, name: string, offset: number, length: 
  *
  * Every decision is in `share.ts`; these do the I/O and decide nothing.
  */
-ipcMain.handle("share:chooseDestination", async () => {
-  if (!win) throw new Error("no window");
+ipcMain.handle("share:chooseDestination", async (e) => {
+  // On the window that asked (STC-581: Settings may be open with no library).
+  const parent = BrowserWindow.fromWebContents(e.sender);
+  if (!parent) throw new Error("no window");
   const current = readSettings(app.getPath("userData")).share.destination;
-  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+  const { canceled, filePaths } = await dialog.showOpenDialog(parent, {
     title: "Which folder in the site repo holds the video?",
     properties: ["openDirectory", "createDirectory"],
     ...(current ? { defaultPath: current } : {}),

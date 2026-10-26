@@ -76,6 +76,8 @@ contextBridge.exposeInMainWorld("recorder", {
   start: () => ipcRenderer.invoke("recorder:start"),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),
+  // STC-581: Settings is its own window. Main opens it, or brings it forward.
+  openSettings: () => ipcRenderer.invoke("settings:open"),
   // STC-412: main-window warnings route through the toast.
   showToast: (message: string | { title?: string; body: string; action?: { id: string; label: string } }) =>
     ipcRenderer.send("toast:message", message),
@@ -110,16 +112,6 @@ contextBridge.exposeInMainWorld("recorder", {
                       // is the one place this is ever sent, off the same
                       // `sup.state` authority the tray already reconciles from.
                       "recorder:recording-state",
-                      // STC-456: the options bar's own Settings control has
-                      // no renderer of its own to route through (it lives in
-                      // the overlay window) — main closes the overlay, shows
-                      // and focuses this window, then sends this so the
-                      // renderer opens the SAME sheet the profile button
-                      // already does, rather than a second implementation.
-                      "ui:open-settings",
-                      // STC-551 follow-up: the library was asked for while the
-                      // window is showing Settings alone.
-                      "ui:show-library",
                       // STC-476: the grants changed, or a capture was
                       // refused for them and the panel must come back.
                       "permissions:changed"];

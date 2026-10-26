@@ -460,9 +460,8 @@ async function fireTrayRecord(): Promise<void> {
 const pickersLocked = (win: Page): Promise<boolean> =>
   win.evaluate(() => {
     const camera = document.getElementById("camera-picker") as HTMLButtonElement;
-    const display = document.getElementById("display") as HTMLSelectElement;
     const mic = document.getElementById("mic-picker") as HTMLButtonElement;
-    return camera.disabled && display.disabled && mic.disabled;
+    return camera.disabled && mic.disabled;
   });
 
 describe("the hotkey/tray toggles reach the main window (Finding 2, STC-388 review)", () => {
@@ -796,7 +795,7 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     expect(readLines(startLog)).toEqual([]);
   }, 120_000);
 
-  test("Settings closes the overlay without a take, opens the sheet, and KEEPS a choice made first (fix round 1, controller ruling)", async () => {
+  test("Settings closes the overlay without a take, opens the Settings window, and KEEPS a choice made first (fix round 1, controller ruling)", async () => {
     const { win, startLog, ud } = await launch();
     await withoutCountdown(win);
     const overlay = await toOptionsPhase(win);
@@ -818,7 +817,8 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
 
     await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
     expect(readLines(startLog)).toEqual([]);
-    await expect.poll(() => win.getAttribute("#profilesheet", "class"), { timeout: 10_000 }).toMatch(/open/);
+    // STC-581: its own window now.
+    await expect.poll(() => hasWindow(app!, "settings.html"), { timeout: 10_000 }).toBe(true);
     await expect.poll(() => readWrittenSettings(ud).systemAudio, { timeout: 10_000 }).toBe(true);
     await expect.poll(() => readWrittenSettings(ud).micDeviceUid, { timeout: 10_000 }).toBe("fixture-mic-1");
     // Finding 2's actual bug: `writeBarOptions` never told the main window
@@ -829,13 +829,11 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 10_000 }).toBe("Fixture USB Mic");
   }, 120_000);
 
-  test("Settings from the tray, with NO main window open, still opens the sheet once it is created (fix round 1, CRITICAL)", async () => {
-    // `openLibrary` -> `createWindow` calls `win.loadFile(...)` without
-    // awaiting it; before the fix, `ui:open-settings` was sent synchronously
-    // right after, before the fresh window's preload/renderer had installed
-    // its listener, and Electron does not queue an unheard `send`. Reachable
-    // only when the main window is closed and Record starts from the tray or
-    // a hotkey — `win.click("#record")` always has a window already, so this
+  test("Settings from the bar, with NO main window open, opens the Settings window and not the library (STC-581)", async () => {
+    // This used to prove the old sheet still opened in a freshly made library
+    // window (a `ui:open-settings` sent before the page could hear it).
+    // Reachable only when the main window is closed and Record starts from
+    // the tray or a hotkey — `win.click("#record")` always has a window already, so this
     // path needs the tray's own callback (`fireTrayRecord`, defined below)
     // against a window count of zero, the same starting condition
     // `hotkeys.e2e.test.ts`'s "with the last window closed" test uses.
@@ -863,10 +861,9 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
     expect(readLines(startLog)).toEqual([]);
 
-    // The window `openSettingsSheet` -> `openLibrary` -> `createWindow` just
-    // made, picked up fresh rather than reusing the CLOSED `win` above (a
-    // destroyed Page is not this new window).
-    const newWin = await pageWithUrl(app!, "index.html");
-    await expect.poll(() => newWin.getAttribute("#profilesheet", "class"), { timeout: 15_000 }).toMatch(/open/);
+    // Settings is its own window (STC-581): it opens, and the library does
+    // not come back with it (STC-551's requirement, now structural).
+    await expect.poll(() => hasWindow(app!, "settings.html"), { timeout: 15_000 }).toBe(true);
+    expect(await hasWindow(app!, "index.html")).toBe(false);
   }, 120_000);
 });

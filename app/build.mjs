@@ -42,4 +42,7 @@ await build({ ...common, entryPoints: ["app/src/pill-renderer.ts"], outfile: "ap
 // STC-488: the hidden window that renders a recording's Copy.
 await build({ ...common, entryPoints: ["app/src/copy-render-preload.ts"], outfile: "app/dist/copy-render-preload.cjs", format: "cjs" });
 await build({ ...common, entryPoints: ["app/src/copy-render.ts"], outfile: "app/dist/copy-render.js", format: "iife", platform: "browser" });
+// STC-581: Settings is its own window, with its own narrow bridge.
+await build({ ...common, entryPoints: ["app/src/settings-preload.ts"], outfile: "app/dist/settings-preload.cjs", format: "cjs" });
+await build({ ...common, entryPoints: ["app/src/settings-renderer.ts"], outfile: "app/dist/settings-renderer.js", format: "iife", platform: "browser" });
 console.log("app built -> app/dist/");
