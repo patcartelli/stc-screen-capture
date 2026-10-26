@@ -8,7 +8,7 @@ only edited. CI is the first run of those.
 ## What changed
 
 1. **Defaults moved off the hyperkey** to CleanShot's row: Area `⇧⌘4`, Window `⇧⌘2`,
-   Full Display `⇧⌘3`, Record `⇧⌘6`, Self-Timer `⇧⌘7`. `⇧⌘5` is left free.
+   Full Display `⇧⌘3`, Record `⇧⌘8`, Self-Timer `⇧⌘7`. `⇧⌘5` is left free. (Record first shipped as `⇧⌘6`, which collided with Siri image search; a set holding it with every other binding a default moves to `⇧⌘8`.)
 2. **`⌘⇧3/4/5/6` and their `⌃` forms are no longer on the reserved list** (`SYSTEM_CLAIMED`),
    because they are now defaults. `globalShortcut.register` is the authority: if macOS still
    owns one it reports "Something else on this Mac already holds this shortcut".
@@ -32,7 +32,7 @@ only edited. CI is the first run of those.
    key; if a variant says "Something else on this Mac already holds this shortcut", another app
    (or a macOS screenshot shortcut such as ⌃⇧⌘3/4) has it, so free it or rebind the shot.
    Then: delete `settings.json`, launch. Settings → Shot shortcuts shows
-   `⇧⌘2`, `⇧⌘3`, `⇧⌘4`, `⇧⌘6`, `⇧⌘7`, all "Active".
+   `⇧⌘2`, `⇧⌘3`, `⇧⌘4`, `⇧⌘7`, `⇧⌘8`, all "Active".
 2. **Existing install** with the old hyperkey set: launch. It shows the new set.
    Then change ONE binding, relaunch, and confirm the others did not move.
 3. **`⇧⌘4`** — overlay, drag, release: the usual panel (or silent copy if "Skip it" is on).
@@ -50,7 +50,7 @@ only edited. CI is the first run of those.
    rather than vanish.
 9. **Rebinding Area** to something else moves its two variants with it, and the old ones stop
    firing.
-10. **Record** (`⇧⌘6`) still starts a take, and the same key still stops it.
+10. **Record** (`⇧⌘8`) still starts a take, and the same key still stops it.
 
 ## Not done here
 

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
+  BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, SUPERSEDED_DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
 } from "./hotkeys.js";
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import { cleanIconPlacement, DEFAULT_ICON_PLACEMENT, type IconPlacement } from "./icon-placement.js";
@@ -392,16 +392,17 @@ function cleanShortcuts(v: unknown): Shortcuts {
     // is the same string the registration used.
     out[action] = parsed?.ok ? parsed.accelerator : DEFAULT_SHORTCUTS[action];
   }
-  // STC-415 moved the defaults off the hyperkey. A set where EVERY binding is
-  // either an old default or a new one, and at least one is old, was never
-  // customised: it is what the sheet wrote before the move, or a mix of that
-  // and keys the read filled in with the new defaults (a file that lacked
-  // some keys, then saved once under the new build). It takes the new
-  // defaults whole. Any other binding, or an unbound action, is a choice
-  // somebody made, and the whole set stays as it is.
-  const untouched = BINDABLE_ACTIONS.every((a) =>
-    out[a] === LEGACY_DEFAULT_SHORTCUTS[a] || out[a] === DEFAULT_SHORTCUTS[a]);
-  if (untouched && BINDABLE_ACTIONS.some((a) => out[a] === LEGACY_DEFAULT_SHORTCUTS[a])) {
+  // STC-415 moved the defaults off the hyperkey, and then Record off ⇧⌘6. A
+  // set where EVERY binding is either a superseded default or a current one,
+  // and at least one is superseded, was never customised: it is what the sheet
+  // wrote before the move, or a mix of that and keys the read filled in with
+  // the new defaults (a file that lacked some keys, then saved once under the
+  // new build). It takes the current defaults whole. Any other binding, or an
+  // unbound action, is a choice somebody made, and the whole set stays.
+  const isOld = (a: (typeof BINDABLE_ACTIONS)[number]) =>
+    out[a] != null && SUPERSEDED_DEFAULT_SHORTCUTS[a].includes(out[a]!);
+  const untouched = BINDABLE_ACTIONS.every((a) => isOld(a) || out[a] === DEFAULT_SHORTCUTS[a]);
+  if (untouched && BINDABLE_ACTIONS.some(isOld)) {
     return { ...DEFAULT_SHORTCUTS };
   }
   return out;

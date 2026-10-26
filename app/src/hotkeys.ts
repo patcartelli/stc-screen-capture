@@ -130,13 +130,14 @@ export const HYPER = "Control+Alt+Shift+Command";
  * already holds all four has nothing left to add.
  *
  * `window` is 2 and `self-timer` is 7 so 2/3/4 read as window / display /
- * area and 6 stays Record's, with 5 left free for an "all-in-one" later.
+ * area, with 5 left free for an "all-in-one" later. Record is 8: it first
+ * shipped as 6 and collided with Siri image search on a real Mac (STC-415).
  */
 export const DEFAULT_SHORTCUTS: Shortcuts = {
   region: "Shift+Command+4",
   window: "Shift+Command+2",
   display: "Shift+Command+3",
-  record: "Shift+Command+6",
+  record: "Shift+Command+8",
   "self-timer": "Shift+Command+7",
 };
 
@@ -150,6 +151,20 @@ export const LEGACY_DEFAULT_SHORTCUTS: Shortcuts = {
   display: `${HYPER}+3`,
   record: `${HYPER}+4`,
   "self-timer": `${HYPER}+5`,
+};
+
+/**
+ * Every default an earlier build shipped and a later one replaced, per action:
+ * the hyperkey row, and Record's ⇧⌘6 (which collided with Siri image search).
+ * `settings.ts` reads a set made only of these and current defaults as
+ * untouched. Never bound by anything but that check.
+ */
+export const SUPERSEDED_DEFAULT_SHORTCUTS: Record<BindableAction, readonly string[]> = {
+  region: [LEGACY_DEFAULT_SHORTCUTS.region!],
+  window: [LEGACY_DEFAULT_SHORTCUTS.window!],
+  display: [LEGACY_DEFAULT_SHORTCUTS.display!],
+  record: [LEGACY_DEFAULT_SHORTCUTS.record!, "Shift+Command+6"],
+  "self-timer": [LEGACY_DEFAULT_SHORTCUTS["self-timer"]!],
 };
 
 // ── the accelerator grammar ─────────────────────────────────────────────────
