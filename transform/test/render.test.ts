@@ -191,6 +191,32 @@ describe("PiP placement and track bounds", () => {
     expect(render(project, session, CAM_FIRST - 1).pip).toBeNull();
   });
 
+  test("no PiP while the screen has no frame yet, even if the camera has started (STC-578)", () => {
+    // The warm camera's first frame (100 ms) lands before the screen's (150 ms). The compositor
+    // paints black for "no screen frame", and a face bubble over it was the flicker this pins.
+    const { project, session } = pipSession();
+    const MS_ = 1_000_000;
+    const camera = Array.from({ length: 30 }, (_, i) => 100 * MS_ + i * 33 * MS_);
+    const leads: Session = {
+      ...session,
+      frames: Array.from({ length: 60 }, (_, i) => 150 * MS_ + Math.round(i * 16.6667 * MS_)),
+      cameraFrames: camera,
+      anchors: {
+        ...session.anchors,
+        camera: { ...session.anchors.camera!, firstFramePtsNs: camera[0]!, lastFramePtsNs: camera[camera.length - 1]!,
+                  frameIntervalNs: 33 * MS_ },
+      },
+    };
+    expect(render(project, leads, 120 * MS_).frameIndex).toBeNull();
+    expect(render(project, leads, 120 * MS_).pip).toBeNull();
+    expect(render(project, leads, 149 * MS_).pip).toBeNull();
+    // From the screen's first frame on, the PiP shows the newest camera frame at or before t.
+    const at = render(project, leads, 150 * MS_);
+    expect(at.frameIndex).toBe(0);
+    expect(at.pip).not.toBeNull();
+    expect(at.pip!.framePtsNs).toBe(133 * MS_);
+  });
+
   test("PiP appears at the camera's first frame", () => {
     const { project, session } = pipSession();
     const pip = render(project, session, CAM_FIRST).pip;
