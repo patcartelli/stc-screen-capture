@@ -39,6 +39,13 @@ describe("the menu", () => {
     expect(id).toContain("quit");
   });
 
+  test("the editor is reachable from the menu, since it has no default hotkey (STC-582)", () => {
+    const t = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS });
+    const editor = t.find((i) => i.id === "editor")!;
+    expect(editor.label).toBe("Open Latest in Editor");
+    expect(editor.accelerator).toBeUndefined();
+  });
+
   test("app items sit in a group above Quit, set off by a divider (STC-551)", () => {
     const id = ids({ shortcuts: DEFAULT_SHORTCUTS });
     const tail = id.slice(id.indexOf("settings") - 1);
@@ -70,7 +77,7 @@ describe("the menu", () => {
     // Electron does the ⌃⌥⇧⌘ substitution itself; handing it glyphs would put
     // a string it cannot parse where it expects a binding.
     const [region] = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS });
-    expect(region!.accelerator).toBe("Shift+Command+4");
+    expect(region!.accelerator).toBe("Alt+Command+1");
   });
 
   test("an unbound action shows no accelerator at all", () => {

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, SUPERSEDED_DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
+  BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, parseAccelerator, type Shortcuts,
 } from "./hotkeys.js";
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import { cleanIconPlacement, DEFAULT_ICON_PLACEMENT, type IconPlacement } from "./icon-placement.js";
@@ -125,6 +125,12 @@ export interface Settings {
    * survives a relaunch.
    */
   capturePrimed: boolean;
+  /**
+   * Whether the one-time "Reset to new defaults" question (STC-582) has been
+   * asked. Main's alone, like `capturePrimed`: set whatever the answer was, so
+   * a user who kept their old keys is never asked again.
+   */
+  shortcutsOffered: boolean;
   /**
    * Where the library window was when it last closed (STC-560), or null for
    * never. Main's alone, like `capturePrimed`: written from the window's own
@@ -269,6 +275,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pipStyle: { ...DEFAULT_PIP_STYLE, center: { ...DEFAULT_PIP_STYLE.center } },
   previewMuted: false,
   capturePrimed: false,
+  shortcutsOffered: false,
   libraryWindow: null,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
@@ -392,19 +399,9 @@ function cleanShortcuts(v: unknown): Shortcuts {
     // is the same string the registration used.
     out[action] = parsed?.ok ? parsed.accelerator : DEFAULT_SHORTCUTS[action];
   }
-  // STC-415 moved the defaults off the hyperkey, and then Record off ⇧⌘6. A
-  // set where EVERY binding is either a superseded default or a current one,
-  // and at least one is superseded, was never customised: it is what the sheet
-  // wrote before the move, or a mix of that and keys the read filled in with
-  // the new defaults (a file that lacked some keys, then saved once under the
-  // new build). It takes the current defaults whole. Any other binding, or an
-  // unbound action, is a choice somebody made, and the whole set stays.
-  const isOld = (a: (typeof BINDABLE_ACTIONS)[number]) =>
-    out[a] != null && SUPERSEDED_DEFAULT_SHORTCUTS[a].includes(out[a]!);
-  const untouched = BINDABLE_ACTIONS.every((a) => isOld(a) || out[a] === DEFAULT_SHORTCUTS[a]);
-  if (untouched && BINDABLE_ACTIONS.some(isOld)) {
-    return { ...DEFAULT_SHORTCUTS };
-  }
+  // Superseded defaults are NOT rewritten here (STC-582): a stored key stays
+  // what it was, and main offers `resetToNewDefaults` once at launch, so the
+  // user is asked rather than changed.
   return out;
 }
 
@@ -446,6 +443,7 @@ export function readSettings(dir: string): Settings {
     pipStyle: cleanStoredPipStyle(doc.pipStyle),
     previewMuted: doc.previewMuted === true,
     capturePrimed: doc.capturePrimed === true,
+    shortcutsOffered: doc.shortcutsOffered === true,
     libraryWindow: cleanWindowBounds(doc.libraryWindow),
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
@@ -496,6 +494,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     pipStyle: cleanStoredPipStyle(merged.pipStyle),
     previewMuted: merged.previewMuted === true,
     capturePrimed: merged.capturePrimed === true,
+    shortcutsOffered: merged.shortcutsOffered === true,
     libraryWindow: cleanWindowBounds(merged.libraryWindow),
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),

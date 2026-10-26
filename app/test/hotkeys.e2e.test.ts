@@ -96,7 +96,7 @@ describe("the capture shortcuts", () => {
       await expect.poll(() => win.textContent(`#shortcutwhy-${action}`), { timeout: 15_000 })
         .toBe("Active");
     }
-    expect(await win.textContent("#shortcut-region")).toBe("⇧⌘4");
+    expect(await win.textContent("#shortcut-region")).toBe("⌥⌘1");
   }, 120_000);
 
   test("a rebinding registers the new key, releases the old one, and survives a relaunch", async () => {
@@ -129,7 +129,7 @@ describe("the capture shortcuts", () => {
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/macOS/);
     // The previous binding stays live and stays shown.
-    expect(await win.textContent("#shortcut-window")).toBe("⇧⌘2");
+    expect(await win.textContent("#shortcut-window")).toBe("⌥⌘2");
     expect(await isRegistered(DEFAULT_SHORTCUTS.window!)).toBe(true);
     // Nothing was written AT ALL: a refused binding is not a change. Reading
     // the file back would not discriminate — `writeSettings` normalises a bad
@@ -148,7 +148,7 @@ describe("the capture shortcuts", () => {
     const { win } = await launch({ userData });
     const r = await win.evaluate(() =>
       (window as any).recorder.setShortcut("window", "Command+Space"));
-    expect(r.shortcuts.window).toBe("Shift+Command+2");
+    expect(r.shortcuts.window).toBe("Alt+Command+2");
     expect(r.report.find((x: any) => x.action === "window"))
       .toMatchObject({ problem: "reserved", registered: false });
     expect(await isRegistered(DEFAULT_SHORTCUTS.window!)).toBe(true);
@@ -181,7 +181,7 @@ describe("the capture shortcuts", () => {
     await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌃⌥⇧F9");
 
     await win.click("#resetshortcuts");
-    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⇧⌘4");
+    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌥⌘1");
     for (const accelerator of Object.values(DEFAULT_SHORTCUTS)) {
       expect(await isRegistered(accelerator!), accelerator!).toBe(true);
     }
@@ -191,7 +191,7 @@ describe("the capture shortcuts", () => {
   test("a second action cannot take a key the first already has", async () => {
     const { win } = await launch();
     // Area's own default, spelled differently (the grammar is normalised).
-    await rebind(win, "window", "Shift+Meta+4");
+    await rebind(win, "window", "Alt+Meta+1");
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/already uses this/);
     // And the first action keeps it.
@@ -343,16 +343,16 @@ describe("a full-display capture", () => {
   }, 120_000);
 });
 
-describe("the capture-time outcome variants (STC-415)", () => {
+describe("the capture-time outcome variants (STC-415, ⇧ since STC-582)", () => {
   test("Settings lists each shot's variants, with their keys and whether they are live", async () => {
     const { win } = await launch();
     for (const action of ["region", "window", "display", "self-timer"]) {
       await expect.poll(() => win.textContent(`#shortcutwhy-${action}-clipboard`), { timeout: 15_000 })
         .toBe("Active");
-      expect(await win.textContent(`#shortcutwhy-${action}-editor`)).toBe("Active");
+      // The editor has no hotkey variant (STC-582).
+      expect(await win.locator(`#shortcut-${action}-editor`).count()).toBe(0);
     }
-    expect(await win.textContent("#shortcut-region-clipboard")).toBe("⌃⇧⌘4");
-    expect(await win.textContent("#shortcut-region-editor")).toBe("⌥⇧⌘4");
+    expect(await win.textContent("#shortcut-region-clipboard")).toBe("⌥⇧⌘1");
     // Record has no outcome to choose.
     expect(await win.locator("#shortcut-record-clipboard").count()).toBe(0);
     // The variants sit INSIDE their action's row, so the list's own order is the actions'.
@@ -363,11 +363,10 @@ describe("the capture-time outcome variants (STC-415)", () => {
     const { win } = await launch();
     await rebind(win, "region", "Control+Alt+Shift+F9");
     await expect.poll(() => win.textContent("#shortcutwhy-region-clipboard"), { timeout: 15_000 })
-      .toMatch(/already uses ⌃/);
-    expect(await win.textContent("#shortcutwhy-region-editor")).toMatch(/already uses ⌥/);
+      .toMatch(/already uses ⇧/);
   }, 120_000);
 
-  test("every shot's ⌃ and ⌥ variants are registered with the window server, Record's are not", async () => {
+  test("every shot's ⇧ variant is registered with the window server, Record's are not", async () => {
     await launch();
     for (const action of ["region", "window", "display", "self-timer"] as const) {
       for (const outcome of OUTCOMES) {
@@ -390,8 +389,7 @@ describe("the capture-time outcome variants (STC-415)", () => {
     for (const outcome of OUTCOMES) {
       expect(await isRegistered(outcomeAccelerator(DEFAULT_SHORTCUTS.region!, outcome)!), outcome).toBe(false);
     }
-    // Control+Alt+Shift+F9 has no Command, so its variants add ⌃ and ⌥, which it
-    // already holds: neither exists.
+    // Control+Alt+Shift+F9 already holds ⇧, so it has no clipboard variant.
     for (const outcome of OUTCOMES) {
       expect(outcomeAccelerator("Control+Alt+Shift+F9", outcome)).toBeUndefined();
     }
