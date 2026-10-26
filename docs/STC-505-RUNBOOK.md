@@ -137,7 +137,7 @@ Expect **Display lost**, then the panel, then the tile `Stopped early: display d
 |---|---|
 | ⚠️ recorded display | Ran twice: the laptop screen closed (stopped at 0:12) and the HP Z27 unplugged (stopped at 0:06). Both stopped the take and put up a panel, and both takes play. **The wording is the generic `stream-stopped` row, not `display-reconfigured`:** the panel said "The screen capture stopped unexpectedly." and the tile said "Stopped early: capture source lost at m:ss", where the table above expects "Display lost" / "The display you were recording was disconnected." See Findings (STC-577). Pill label **not seen** (the recorded display was gone). |
 | ✅ other display (continues) | Recording continued through full playback. The mic on the same USB hub dropped with the unplug and was handled as a track loss ("The mic disconnected at 0:05…"), not a stop. |
-| ☐ pill label and placement on loss | Not verified, and now moot: Patrick's decision (2026-10-26) is that the pill is for active recording only, so the pill does not carry a lost display's message. The label check moves to STC-577's hardware step if stopped labels stay at all; see Findings 5. |
+| ☐ pill label and placement on loss | Not verified, and now moot: Patrick's decision (2026-10-26) is that the pill is for active recording only, so the pill does not carry a lost display's message. The label check moves to STC-577's hardware step if stopped labels stay at all; see Findings 5 and STC-579. |
 
 ## §6 Helper `kill -9`
 
@@ -204,7 +204,7 @@ If it reads too fast or too slow, the change is the one constant. The panel wait
 | ✅ no jump on restore | Patrick has not noticed a jump (2026-10-26). |
 | ✅ verdict on 2 s | Long enough. |
 
-**Decision (Patrick, 2026-10-26): the pill is for active recording only.** A label that shows for 2 s and then disappears, next to a panel that says the same thing, is two places for one message, and it cannot be shown at all when the recorded display is gone. So the stopped-state labels and the 2 s dwell should go, and the panel alone carries every stop. This reverses part of STC-531's 2026-10-14 design (`PILL_STOPPED_DWELL_MS`, the stopped labels in `stop-copy.ts`, the panel waiting out the dwell in `onTakeEnded`), so it needs its own ticket, which is not filed yet. Assumed boundary, to confirm: the labels shown **while a take is still recording** ("Mic lost", "Camera lost", "System lost", "Camera stalled", the no-signal amber dot) stay.
+**Decision (Patrick, 2026-10-26): the pill is for active recording only.** A label that shows for 2 s and then disappears, next to a panel that says the same thing, is two places for one message, and it cannot be shown at all when the recorded display is gone. So the stopped-state labels and the 2 s dwell should go, and the panel alone carries every stop. This reverses part of STC-531's 2026-10-14 design (`PILL_STOPPED_DWELL_MS`, the stopped labels in `stop-copy.ts`, the panel waiting out the dwell in `onTakeEnded`), so it has its own ticket, STC-579. Assumed boundary, to confirm: the labels shown **while a take is still recording** ("Mic lost", "Camera lost", "System lost", "Camera stalled", the no-signal amber dot) stay.
 
 ## Findings
 
@@ -213,11 +213,11 @@ If it reads too fast or too slow, the change is the one constant. The panel wait
 3. **A fill from outside ends the camera first (§3).** On the `dd` run the camera ended `writer-failed` about 0.2 s before the display's `disk-full` stop. Designed (STC-562), listed so nobody reads it as a fault.
 
 4. **Reclaim space trashes saved-but-unexported takes (§3).** Confirming its sheet moved the 10-23 test takes to the Trash. Designed, and the Trash is the undo. It is listed so the next person running §3 does not lose takes they wanted.
-5. **The pill should be recording-only (§8).** Patrick's decision, 2026-10-26. The stopped-state labels and their 2 s dwell would go, and the panel alone would carry every stop. It reverses part of STC-531 and needs its own ticket. If it ships, the pill-label checks in this runbook (§5 label, §8 dwell) and in STC-531's are retired, and STC-577's label acceptance reduces to the panel and tile wording.
+5. **The pill should be recording-only (§8).** Patrick's decision, 2026-10-26. The stopped-state labels and their 2 s dwell would go, and the panel alone would carry every stop. It reverses part of STC-531 and is filed as STC-579. If it ships, the pill-label checks in this runbook (§5 label, §8 dwell) and in STC-531's are retired, and STC-577's label acceptance reduces to the panel and tile wording.
 
 ## Still to do
 
-- File the ticket for finding 5 (the recording-only pill) and confirm its boundary.
+- Confirm the boundary on STC-579 (the recording-only pill): the labels shown while a take is still recording stay.
 - STC-577's hardware step (unplug a recorded display, close the laptop lid with an external attached), once that is fixed.
 
 ## What is deliberately not here
