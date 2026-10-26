@@ -16,7 +16,7 @@ import {
   type BindableAction, type Shortcuts,
 } from "./hotkeys.js";
 
-export type TrayItemId = `action:${BindableAction}` | "library" | "settings" | "about" | "quit" | "separator";
+export type TrayItemId = `action:${BindableAction}` | "library" | "editor" | "settings" | "about" | "quit" | "separator";
 
 export interface TrayItem {
   id: TrayItemId;
@@ -89,6 +89,8 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
   });
   items.push({ id: "separator", type: "separator" });
   items.push({ id: "library", label: "Open Library" });
+  // STC-582: the editor has no default hotkey, so the menu is one of its doors.
+  items.push({ id: "editor", label: "Open Latest in Editor" });
   items.push({ id: "separator", type: "separator" });
   // The app items (STC-551). No "Check for Updates…": the app has no updater
   // and this ticket does not build one.

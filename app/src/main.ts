@@ -4,7 +4,7 @@ import {
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
-  SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, planShortcuts, planOutcomeVariants, isShotAction,
+  SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, resetOfferText, resetToNewDefaults, planShortcuts, planOutcomeVariants, isShotAction,
   type Outcome, type OutcomeVariantReport,
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
@@ -507,6 +507,49 @@ function setDockVisible(visible: boolean): void {
 }
 
 /**
+ * STC-582's one-time question: keys still on a superseded default can move to
+ * the new ones. Asked once (`shortcutsOffered`), whatever the answer, and only
+ * when there is something to move. Per key — a key the user changed stays.
+ */
+async function offerNewShortcutDefaults(): Promise<void> {
+  const dir = app.getPath("userData");
+  const settings = readSettings(dir);
+  if (settings.shortcutsOffered) return;
+  const offer = resetOfferText(settings.shortcuts);
+  if (offer) {
+    const { response } = await dialog.showMessageBox({
+      type: "question",
+      buttons: ["Reset to new defaults", "Keep mine"],
+      defaultId: 0,
+      cancelId: 1,
+      message: offer.message,
+      detail: offer.detail,
+    });
+    if (response === 0) {
+      const saved = writeSettings(dir, { shortcuts: resetToNewDefaults(settings.shortcuts) });
+      applyShortcuts(saved.shortcuts);
+    }
+  }
+  writeSettings(dir, { shortcutsOffered: true });
+}
+
+/**
+ * The menu bar's "Open Latest in Editor" (STC-582): the newest library item in
+ * the editor for its kind. The editor has no default hotkey, so this and the
+ * post-capture panel are its doors. An empty library opens the library instead
+ * of doing nothing.
+ */
+async function openLatestInEditor(): Promise<void> {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  const { items } = await listLibrary(process.env, saveFolder);
+  const latest = items.find((i) => i.dir !== undefined);
+  if (!latest?.dir) return openLibrary();
+  const rendererDir = join(here, "..", "renderer");
+  if (latest.kind === "still") openStillEditor({ dir: latest.dir, dist: here, rendererDir });
+  else openEditor({ dir: latest.dir, name: basename(latest.dir), dist: here, rendererDir });
+}
+
+/**
  * Puts the menu-bar item up with whatever state the app is in now. Called at
  * launch and again whenever the "Show icon in" preference brings the item back
  * (STC-502), so the rebuilt menu says Stop if a take is live.
@@ -515,6 +558,7 @@ function mountTray(): TrayHandle {
   const ctx = { shortcuts, busy: capturing, recording: sup?.state === "recording" };
   return installTray(ctx, (id) => {
     if (id === "library") return openLibrary();
+    if (id === "editor") return void openLatestInEditor().catch((e) => console.error("[editor] open latest failed:", e));
     if (id === "quit") return app.quit();
     // The same door the overlay bar's Settings control uses (STC-551).
     if (id === "settings") return openSettingsSheet();
@@ -1346,6 +1390,7 @@ app.whenReady().then(async () => {
   // the way in (unless the preference is Dock only).
   reconcileIcons();
   applyShortcuts(shortcuts);
+  void offerNewShortcutDefaults().catch((e) => console.error("[shortcuts] defaults offer failed:", e));
   // STC-502: launch shows no window. The e2e suite opts back in
   // (`_e2e-setup.ts`) because most of its tests drive the library's page.
   if (process.env.STC_OPEN_LIBRARY_ON_LAUNCH === "1") createWindow();
@@ -1671,7 +1716,7 @@ ipcMain.handle("recorder:setSettings", async (_e, patch: Partial<Settings>): Pro
   // Destructured rather than deleted, so `saveFolder` is named here and a
   // reader can see exactly which keys do not survive.
   const {
-    saveFolder: _mainsAlone, capturePrimed: _alsoMains, libraryWindow: _mainsToo, ...withoutMainsKeys
+    saveFolder: _mainsAlone, capturePrimed: _alsoMains, shortcutsOffered: _mainsOffered, libraryWindow: _mainsToo, ...withoutMainsKeys
   } = { ...(patch ?? {}) };
   const clean: Partial<Settings> = withoutMainsKeys as Partial<Settings>;
   if (clean.share) {
@@ -2298,28 +2343,12 @@ async function captureStill(action: ShotAction, source: CaptureSource, afterShot
     try {
       const settingsNow = readSettings(app.getPath("userData"));
       const { thumbnail } = settingsNow;
-      // STC-415: the editor outcome has no panel at all. It promotes the shot
-      // (both editors refuse a path outside the library, as `panel:edit`
-      // says) and opens it. If that fails the capture is still in temp
-      // storage, so it falls back to the panel rather than losing the shot.
-      let opened = false;
-      if (afterShot === "editor") {
-        try {
-          const promoted = await promoteIntoLibrary(settingsNow.saveFolder, dir);
-          openStillEditor({ dir: promoted, dist: here, rendererDir: join(here, "..", "renderer") });
-          opened = true;
-        } catch (e) {
-          console.error("[capture] could not open the editor, showing the panel instead:", e);
-        }
-      }
-      if (!opened) {
-        presentThumbnail({
-          dir, shot: r.shot, corner: thumbnail.corner,
-          take: { kind: "shot", origin: "fresh" },
-          dist: here, rendererDir: join(here, "..", "renderer"),
-          ...(afterShot === "clipboard" || (afterShot === undefined && thumbnail.skip) ? { silent: true } : {}),
-        });
-      }
+      presentThumbnail({
+        dir, shot: r.shot, corner: thumbnail.corner,
+        take: { kind: "shot", origin: "fresh" },
+        dist: here, rendererDir: join(here, "..", "renderer"),
+        ...(afterShot === "clipboard" || (afterShot === undefined && thumbnail.skip) ? { silent: true } : {}),
+      });
     } catch (e) {
       console.error("[thumbnail] could not present:", e);
     }
@@ -2493,7 +2522,7 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     }
     return ok ? { ...plan, registered: true } : { ...plan, problem: "unavailable", registered: false };
   });
-  // STC-415: each shot's ⌃ (clipboard) and ⌥ (editor) variants, derived from
+  // STC-415/582: each shot's ⇧ (clipboard) variant, derived from
   // the plan rather than stored, and REPORTED with the shot they belong to so
   // preferences can say which are live and why one is not.
   const variantReports = planOutcomeVariants(plans).map((v): OutcomeVariantReport => {

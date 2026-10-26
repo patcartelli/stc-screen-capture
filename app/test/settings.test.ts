@@ -24,7 +24,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, libraryWindow: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -66,7 +66,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, libraryWindow: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -122,7 +122,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, libraryWindow: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -298,27 +298,29 @@ describe("the shutter sound preference", () => {
  * be the thing that binds.
  */
 describe("the capture shortcuts", () => {
-  test("default to the ⇧⌘ row when nothing has been saved", () => {
+  test("default to the ⌘⌥ row when nothing has been saved", () => {
     expect(readSettings(dir()).shortcuts).toEqual({
-      region: "Shift+Command+4", window: "Shift+Command+2", display: "Shift+Command+3",
-      record: "Shift+Command+8",
-      "self-timer": "Shift+Command+7",
+      region: "Alt+Command+1", window: "Alt+Command+2", display: "Alt+Command+3",
+      record: "Alt+Command+4",
+      "self-timer": "Alt+Command+5",
     });
   });
 
-  test("an untouched pre-STC-415 hyperkey set moves to the new defaults", () => {
+  test("a stored old default is kept, not rewritten — main offers the reset once (STC-582)", () => {
     const d = dir();
     writeSettings(d, { shortcuts: { ...LEGACY_DEFAULT_SHORTCUTS } });
-    expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
-  });
-
-  test("a set with even one customised binding keeps all of its own, hyperkey included", () => {
-    const d = dir();
+    expect(readSettings(d).shortcuts).toEqual(LEGACY_DEFAULT_SHORTCUTS);
     writeSettings(d, { shortcuts: { ...LEGACY_DEFAULT_SHORTCUTS, region: "Alt+Shift+R" } });
     expect(readSettings(d).shortcuts).toEqual({ ...LEGACY_DEFAULT_SHORTCUTS, region: "Alt+Shift+R" });
-    // An unbound action is a customisation too.
     writeSettings(d, { shortcuts: { ...LEGACY_DEFAULT_SHORTCUTS, display: null } });
     expect(readSettings(d).shortcuts).toEqual({ ...LEGACY_DEFAULT_SHORTCUTS, display: null });
+  });
+
+  test("shortcutsOffered persists and starts false", () => {
+    const d = dir();
+    expect(readSettings(d).shortcutsOffered).toBe(false);
+    writeSettings(d, { shortcutsOffered: true });
+    expect(readSettings(d).shortcutsOffered).toBe(true);
   });
 
   test("a rebinding round-trips, which is the acceptance criterion", () => {
@@ -356,7 +358,7 @@ describe("the capture shortcuts", () => {
 
   test("a hand-edited file naming a system binding falls back rather than storing it", () => {
     const d = dir();
-    writeFileSync(join(d, "settings.json"), JSON.stringify({ shortcuts: { region: "Command+Shift+4" } }));
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ shortcuts: { region: "Command+Space" } }));
     expect(readSettings(d).shortcuts.region).toBe(DEFAULT_SHORTCUTS.region);
   });
 
@@ -392,12 +394,16 @@ describe("the Record binding (STC-388)", () => {
     // Absent means "never set" and takes the default — the rule every other
     // binding already follows. An upgrade must not cost the user the feature.
     expect(readSettings(d).shortcuts.record).toBe(DEFAULT_SHORTCUTS.record);
-    // STC-415: four old bindings and no Record is an untouched set, so the
-    // whole of it takes the new defaults rather than a hyperkey/⇧⌘ mix.
-    expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
+    // STC-582: the four old bindings stay as stored (main asks before moving
+    // them); only the absent Record takes the new default.
+    expect(readSettings(d).shortcuts).toEqual({
+      region: "Control+Alt+Shift+Command+1", window: "Control+Alt+Shift+Command+2",
+      display: "Control+Alt+Shift+Command+3", record: DEFAULT_SHORTCUTS.record,
+      "self-timer": "Control+Alt+Shift+Command+5",
+    });
   });
 
-  test("a set that is part old default, part new default moves whole (STC-415)", () => {
+  test("a set that is part old default, part new default is kept as stored (STC-582)", () => {
     // What a machine actually held: some keys filled in by the new build and
     // saved once, the rest still the old hyperkey.
     const d = dir();
@@ -410,17 +416,11 @@ describe("the Record binding (STC-388)", () => {
         "self-timer": "Shift+Command+7",
       },
     }));
-    expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
-  });
-
-  test("a set holding Record's superseded ⇧⌘6 moves to the current defaults (STC-415)", () => {
-    // The default Record shipped with first, and collided with Siri image search.
-    const d = dir();
-    writeFileSync(join(d, "settings.json"), JSON.stringify({
-      shortcuts: { ...DEFAULT_SHORTCUTS, record: "Shift+Command+6" },
-    }));
-    expect(readSettings(d).shortcuts).toEqual(DEFAULT_SHORTCUTS);
-    expect(readSettings(d).shortcuts.record).toBe("Shift+Command+8");
+    expect(readSettings(d).shortcuts).toEqual({
+      region: "Control+Alt+Shift+Command+1", window: "Shift+Command+2",
+      display: "Control+Alt+Shift+Command+3", record: "Control+Alt+Shift+Command+4",
+      "self-timer": "Shift+Command+7",
+    });
   });
 
   test("⇧⌘6 beside a customised binding is the user's own choice and stays (STC-415)", () => {

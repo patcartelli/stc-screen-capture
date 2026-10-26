@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, SUPERSEDED_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
+  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, SUPERSEDED_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED, STC415_DEFAULT_SHORTCUTS, shortcutsToReset, resetToNewDefaults, resetOfferText,
   OUTCOMES, OUTCOME_MODIFIERS, OUTCOME_LABELS, outcomeAccelerator, planOutcomeVariants, explainVariant,
   type OutcomeVariantReport,
   acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction,
@@ -133,7 +133,7 @@ describe("planning a whole set", () => {
   });
 
   test("a duplicate is judged on the NORMALISED form, not the spelling", () => {
-    const p = plan({ window: "cmd+SHIFT+4" });
+    const p = plan({ window: "OPT+cmd+1" });
     expect(p[1]!.problem).toBe("duplicate");
   });
 
@@ -287,27 +287,27 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
     expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer"]);
   });
 
-  test("Record's default is ⇧⌘8, not the ⇧⌘6 that collided with Siri (STC-415)", () => {
-    expect(DEFAULT_SHORTCUTS.record).toBe("Shift+Command+8");
+  test("Record's default is ⌘⌥4, and the ⇧⌘8 and ⇧⌘6 it shipped on are superseded (STC-582)", () => {
+    expect(DEFAULT_SHORTCUTS.record).toBe("Alt+Command+4");
     expect(SUPERSEDED_DEFAULT_SHORTCUTS.record).toContain("Shift+Command+6");
+    expect(SUPERSEDED_DEFAULT_SHORTCUTS.record).toContain("Shift+Command+8");
     expect(parseAccelerator(DEFAULT_SHORTCUTS.record!)).toEqual({
-      ok: true, accelerator: "Shift+Command+8",
+      ok: true, accelerator: "Alt+Command+4",
     });
   });
 
-  test("every default is ⇧⌘+<digit>, one digit each, and plans without a problem", () => {
+  test("every default is ⌘⌥+<digit>, 1-5 in the table's order, and plans without a problem", () => {
     const digits = BINDABLE_ACTIONS.map((a) => {
       const acc = DEFAULT_SHORTCUTS[a];
       expect(acc, `${a} has no default binding`).toBeTruthy();
-      const m = /^Shift\+Command\+(\d)$/.exec(acc!);
-      expect(m, `${a}'s default is not Shift+Command+<digit>: ${acc}`).not.toBeNull();
+      const m = /^Alt\+Command\+(\d)$/.exec(acc!);
+      expect(m, `${a}'s default is not Alt+Command+<digit>: ${acc}`).not.toBeNull();
       return Number(m![1]);
     });
     expect(new Set(digits).size).toBe(digits.length);
     for (const p of planShortcuts(DEFAULT_SHORTCUTS)) expect(p.problem, p.action).toBeUndefined();
-    // CleanShot's own row: area 4, fullscreen 3.
-    expect(DEFAULT_SHORTCUTS.region).toBe("Shift+Command+4");
-    expect(DEFAULT_SHORTCUTS.display).toBe("Shift+Command+3");
+    // STC-582: area, window, full display, record, self-timer = 1..5.
+    expect(digits).toEqual([1, 2, 3, 4, 5]);
   });
 
   test("every bindable action has a label, and Record's says Record", () => {
@@ -327,25 +327,24 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
 });
 
 describe("the capture-time outcome variants (STC-415)", () => {
-  test("⌃ adds the clipboard outcome and ⌥ the editor, in canonical order", () => {
-    expect(OUTCOME_MODIFIERS).toEqual({ clipboard: "Control", editor: "Alt" });
-    expect(outcomeAccelerator("Shift+Command+4", "clipboard")).toBe("Control+Shift+Command+4");
-    expect(outcomeAccelerator("Shift+Command+4", "editor")).toBe("Alt+Shift+Command+4");
+  test("⇧ adds the clipboard outcome, in canonical order; there is no editor outcome (STC-582)", () => {
+    expect(OUTCOME_MODIFIERS).toEqual({ clipboard: "Shift" });
+    expect([...OUTCOMES]).toEqual(["clipboard"]);
+    expect(outcomeAccelerator("Alt+Command+1", "clipboard")).toBe("Alt+Shift+Command+1");
     // However the base was spelled, the variant is the normalised string.
-    expect(outcomeAccelerator("cmd+shift+4", "editor")).toBe("Alt+Shift+Command+4");
+    expect(outcomeAccelerator("cmd+opt+1", "clipboard")).toBe("Alt+Shift+Command+1");
   });
 
   test("a binding that already holds the modifier has no variant — HYPER has all four", () => {
     for (const o of OUTCOMES) expect(outcomeAccelerator(`${HYPER}+1`, o)).toBeUndefined();
-    expect(outcomeAccelerator("Control+Shift+Command+4", "clipboard")).toBeUndefined();
-    expect(outcomeAccelerator("Control+Shift+Command+4", "editor")).toBe("Control+Alt+Shift+Command+4");
+    expect(outcomeAccelerator("Shift+Command+4", "clipboard")).toBeUndefined();
   });
 
   test("an unparseable base has no variant", () => {
     expect(outcomeAccelerator("nonsense", "clipboard")).toBeUndefined();
   });
 
-  test("every default shot gets both variants; Record gets none", () => {
+  test("every default shot gets its clipboard variant; Record gets none", () => {
     const v = planOutcomeVariants(planShortcuts(DEFAULT_SHORTCUTS));
     expect(v.map((x) => x.action)).not.toContain("record");
     for (const action of SHOT_ACTIONS) {
@@ -372,11 +371,11 @@ describe("the capture-time outcome variants (STC-415)", () => {
 
   test("a variant that lands on another action's binding is dropped, the base wins", () => {
     // window is bound to what region's clipboard variant would be.
-    const plans = planShortcuts({ ...DEFAULT_SHORTCUTS, window: "Control+Shift+Command+4" });
+    const plans = planShortcuts({ ...DEFAULT_SHORTCUTS, window: "Alt+Shift+Command+1" });
     const v = planOutcomeVariants(plans);
     expect(v.find((x) => x.action === "region" && x.outcome === "clipboard"))
       .toMatchObject({ accelerator: null, problem: "duplicate" });
-    expect(plans.find((p) => p.action === "window")!.accelerator).toBe("Control+Shift+Command+4");
+    expect(plans.find((p) => p.action === "window")!.accelerator).toBe("Alt+Shift+Command+1");
   });
 
   test("an unbound or refused base has no variants", () => {
@@ -387,7 +386,7 @@ describe("the capture-time outcome variants (STC-415)", () => {
 
 describe("what a variant's line says (STC-415)", () => {
   const variant = (o: Partial<OutcomeVariantReport> = {}): OutcomeVariantReport => ({
-    action: "region", outcome: "clipboard", accelerator: "Control+Shift+Command+4", registered: false, ...o,
+    action: "region", outcome: "clipboard", accelerator: "Alt+Shift+Command+1", registered: false, ...o,
   });
 
   test("a live variant has nothing to explain", () => {
@@ -396,9 +395,7 @@ describe("what a variant's line says (STC-415)", () => {
 
   test("a held modifier names the modifier and the variant it costs", () => {
     expect(explainVariant(variant({ outcome: "clipboard", accelerator: null, problem: "held" })))
-      .toMatch(/⌃.*to clipboard/);
-    expect(explainVariant(variant({ outcome: "editor", accelerator: null, problem: "held" })))
-      .toMatch(/⌥.*to editor/);
+      .toMatch(/⇧.*clipboard/);
   });
 
   test("every problem has its own sentence, and an unknown one is still not silent", () => {
@@ -410,8 +407,35 @@ describe("what a variant's line says (STC-415)", () => {
     expect(explainVariant(variant({ problem: "duplicate" }))).toMatch(/Another binding/);
   });
 
-  test("both outcomes have a label", () => {
+  test("every outcome has a label", () => {
     for (const o of OUTCOMES) expect(OUTCOME_LABELS[o]).toBeTruthy();
+  });
+});
+
+describe("resetting to the new defaults (STC-582)", () => {
+  test("STC-415's whole row, and the hyperkey row, are offered", () => {
+    expect(shortcutsToReset(STC415_DEFAULT_SHORTCUTS)).toEqual([...BINDABLE_ACTIONS]);
+    expect(shortcutsToReset(LEGACY_DEFAULT_SHORTCUTS)).toEqual([...BINDABLE_ACTIONS]);
+    expect(resetToNewDefaults(STC415_DEFAULT_SHORTCUTS)).toEqual(DEFAULT_SHORTCUTS);
+  });
+
+  test("a customised or unbound key is neither offered nor touched", () => {
+    const s: Shortcuts = { ...STC415_DEFAULT_SHORTCUTS, region: "Alt+Shift+R", window: null };
+    expect(shortcutsToReset(s)).toEqual(["display", "record", "self-timer"]);
+    expect(resetToNewDefaults(s)).toEqual({
+      ...DEFAULT_SHORTCUTS, region: "Alt+Shift+R", window: null,
+    });
+  });
+
+  test("the current defaults offer nothing, and so say nothing", () => {
+    expect(shortcutsToReset(DEFAULT_SHORTCUTS)).toEqual([]);
+    expect(resetOfferText(DEFAULT_SHORTCUTS)).toBeUndefined();
+  });
+
+  test("the offer names each key before and after", () => {
+    const t = resetOfferText({ ...DEFAULT_SHORTCUTS, region: "Shift+Command+4" })!;
+    expect(t.detail).toContain("Shot Area: ⇧⌘4 → ⌥⌘1");
+    expect(t.detail).not.toContain("Record");
   });
 });
 
