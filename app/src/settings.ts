@@ -392,11 +392,16 @@ function cleanShortcuts(v: unknown): Shortcuts {
     // is the same string the registration used.
     out[action] = parsed?.ok ? parsed.accelerator : DEFAULT_SHORTCUTS[action];
   }
-  // STC-415 moved the defaults off the hyperkey. A file that still holds the
-  // WHOLE old set is an untouched one (the sheet writes every binding on any
-  // change, so a customised set differs somewhere) and takes the new defaults;
-  // a set with even one other binding keeps all of its own.
-  if (BINDABLE_ACTIONS.every((a) => out[a] === LEGACY_DEFAULT_SHORTCUTS[a])) {
+  // STC-415 moved the defaults off the hyperkey. A set where EVERY binding is
+  // either an old default or a new one, and at least one is old, was never
+  // customised: it is what the sheet wrote before the move, or a mix of that
+  // and keys the read filled in with the new defaults (a file that lacked
+  // some keys, then saved once under the new build). It takes the new
+  // defaults whole. Any other binding, or an unbound action, is a choice
+  // somebody made, and the whole set stays as it is.
+  const untouched = BINDABLE_ACTIONS.every((a) =>
+    out[a] === LEGACY_DEFAULT_SHORTCUTS[a] || out[a] === DEFAULT_SHORTCUTS[a]);
+  if (untouched && BINDABLE_ACTIONS.some((a) => out[a] === LEGACY_DEFAULT_SHORTCUTS[a])) {
     return { ...DEFAULT_SHORTCUTS };
   }
   return out;

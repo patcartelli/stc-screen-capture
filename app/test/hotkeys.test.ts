@@ -1,7 +1,8 @@
 import { describe, test, expect } from "vitest";
 import {
   ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED,
-  OUTCOMES, OUTCOME_MODIFIERS, outcomeAccelerator, planOutcomeVariants,
+  OUTCOMES, OUTCOME_MODIFIERS, OUTCOME_LABELS, outcomeAccelerator, planOutcomeVariants, explainVariant,
+  type OutcomeVariantReport,
   acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction,
   parseAccelerator, planShortcuts,
   type ShortcutReport, type Shortcuts,
@@ -380,5 +381,35 @@ describe("the capture-time outcome variants (STC-415)", () => {
   test("an unbound or refused base has no variants", () => {
     const v = planOutcomeVariants(planShortcuts({ ...DEFAULT_SHORTCUTS, region: null, window: "Command+Space" }));
     expect(v.some((x) => x.action === "region" || x.action === "window")).toBe(false);
+  });
+});
+
+describe("what a variant's line says (STC-415)", () => {
+  const variant = (o: Partial<OutcomeVariantReport> = {}): OutcomeVariantReport => ({
+    action: "region", outcome: "clipboard", accelerator: "Control+Shift+Command+4", registered: false, ...o,
+  });
+
+  test("a live variant has nothing to explain", () => {
+    expect(explainVariant(variant({ registered: true }))).toBeUndefined();
+  });
+
+  test("a held modifier names the modifier and the variant it costs", () => {
+    expect(explainVariant(variant({ outcome: "clipboard", accelerator: null, problem: "held" })))
+      .toMatch(/⌃.*to clipboard/);
+    expect(explainVariant(variant({ outcome: "editor", accelerator: null, problem: "held" })))
+      .toMatch(/⌥.*to editor/);
+  });
+
+  test("every problem has its own sentence, and an unknown one is still not silent", () => {
+    const said = (["held", "duplicate", "unavailable", undefined] as const)
+      .map((problem) => explainVariant(variant({ problem })));
+    for (const m of said) expect(m).toBeTruthy();
+    expect(new Set(said).size).toBe(said.length);
+    expect(explainVariant(variant({ problem: "unavailable" }))).toMatch(/Something else/);
+    expect(explainVariant(variant({ problem: "duplicate" }))).toMatch(/Another binding/);
+  });
+
+  test("both outcomes have a label", () => {
+    for (const o of OUTCOMES) expect(OUTCOME_LABELS[o]).toBeTruthy();
   });
 });

@@ -114,7 +114,7 @@ declare const recorder: {
 import { COUNTDOWN_OPTIONS } from "./countdown.js";
 import { ICON_PLACEMENTS, ICON_PLACEMENT_LABELS, cleanIconPlacement, type IconPlacement } from "./icon-placement.js";
 import {
-  ACTION_LABELS, BINDABLE_ACTIONS, acceleratorFromKeyStroke, explainShortcut,
+  ACTION_LABELS, BINDABLE_ACTIONS, OUTCOME_LABELS, acceleratorFromKeyStroke, explainShortcut, explainVariant,
   formatAccelerator, parseAccelerator,
   type BindableAction, type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
@@ -1486,6 +1486,32 @@ function renderShortcuts(): void {
     else if (r?.registered) { why.textContent = "Active"; why.classList.add("ok"); }
 
     row.append(name, keys, clear, why);
+    // STC-415: the shot's ⌃/⌥ variants, read-only, inside the same row so the
+    // list's row order (and `.shortcut:nth-child`) is the actions' alone.
+    if (r?.variants) {
+      const variants = document.createElement("div");
+      variants.className = "variants";
+      for (const v of r.variants) {
+        const line = document.createElement("div");
+        line.className = "variant";
+        const vname = document.createElement("span");
+        vname.className = "name";
+        vname.textContent = OUTCOME_LABELS[v.outcome];
+        const vkeys = document.createElement("span");
+        vkeys.className = "keys";
+        vkeys.id = `shortcut-${action}-${v.outcome}`;
+        vkeys.textContent = formatAccelerator(v.accelerator);
+        const vwhy = document.createElement("span");
+        vwhy.className = "why";
+        vwhy.id = `shortcutwhy-${action}-${v.outcome}`;
+        const vmessage = explainVariant(v);
+        if (vmessage) vwhy.textContent = vmessage;
+        else { vwhy.textContent = "Active"; vwhy.classList.add("ok"); }
+        line.append(vname, vkeys, vwhy);
+        variants.append(line);
+      }
+      row.append(variants);
+    }
     shortcutList.append(row);
   }
 }

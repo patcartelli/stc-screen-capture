@@ -335,9 +335,47 @@ export function planShortcuts(s: Shortcuts): ShortcutPlan[] {
   });
 }
 
+/**
+ * One outcome variant after registration (STC-415). `problem` is the plan's
+ * own ("held", "duplicate") or "unavailable" once the system refused it.
+ */
+export interface OutcomeVariantReport {
+  action: ShotAction;
+  outcome: Outcome;
+  accelerator: string | null;
+  problem?: "held" | "duplicate" | "unavailable";
+  registered: boolean;
+}
+
 /** A plan plus what registration actually did with it. */
 export interface ShortcutReport extends ShortcutPlan {
   registered: boolean;
+  /** A shot's ⌃/⌥ variants, absent when the base has none (unbound, refused, Record). */
+  variants?: OutcomeVariantReport[];
+}
+
+/** What a variant is CALLED in preferences. */
+export const OUTCOME_LABELS: Record<Outcome, string> = {
+  clipboard: "To clipboard",
+  editor: "To editor",
+};
+
+/**
+ * The one line preferences shows beside a variant: "Active" is the caller's,
+ * this is only the reason it is not. `undefined` for a registered variant.
+ */
+export function explainVariant(v: OutcomeVariantReport): string | undefined {
+  if (v.registered) return undefined;
+  switch (v.problem) {
+    case "held":
+      return `This shortcut already uses ${SYMBOLS[OUTCOME_MODIFIERS[v.outcome]]}, so it has no ${OUTCOME_LABELS[v.outcome].toLowerCase()} variant.`;
+    case "duplicate":
+      return "Another binding already uses this.";
+    case "unavailable":
+      return "Something else on this Mac already holds this shortcut.";
+    case undefined:
+      return "Not registered.";
+  }
 }
 
 /**
