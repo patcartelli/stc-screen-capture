@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
@@ -33,7 +33,7 @@
       padding: 10px 14px; border-top: 1px solid var(--border);
       background: var(--surface);
     }
-    #hint { opacity: .7; flex: 1; font-size: var(--type-body); color: var(--text-dim); }
+    #hint { flex: 1; font-size: var(--type-body); color: var(--text-dim); }
 
     .iconbtn {
       display: inline-flex; align-items: center; justify-content: center;
@@ -49,6 +49,10 @@
     .iconbtn:active:not([disabled]) { transform: scale(.93); }
     .iconbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .iconbtn[disabled] { opacity: .4; cursor: default; }
+    /* Reduced motion (STC-506): the press shows as a fill, not a shrink. */
+    @media (prefers-reduced-motion: reduce) {
+      .iconbtn:active:not([disabled]) { transform: none; background: var(--border); }
+    }
     /* Done keeps its primary weight (the ticket's own words) — the shared
        accent token now, not a hardcoded #3b6fe0 this window used to own. */
     #done { border-color: var(--accent); color: var(--accent); }

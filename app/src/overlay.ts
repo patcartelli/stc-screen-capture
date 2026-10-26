@@ -109,6 +109,15 @@ function place(el: HTMLElement, r: Rect): void {
  */
 function expandMarquee(from: Rect, to: Rect): void {
   const id = ++expandAnimation;
+  // Reduced motion (STC-506): no glide, a short fade of the new rectangle.
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    marquee.classList.remove("expand-transition", "expand-fade");
+    place(marquee, to);
+    void marquee.offsetWidth;
+    marquee.classList.add("expand-fade");
+    window.setTimeout(() => { if (id === expandAnimation) marquee.classList.remove("expand-fade"); }, 160);
+    return;
+  }
   marquee.classList.remove("expand-transition");
   place(marquee, from);
   // Commit the start rectangle before enabling the transition. Without this
@@ -198,6 +207,12 @@ function renderBar(p: OverlayPayload): void {
     const el = ctl(c.id);
     placeAt(el, toLocal(c.rect));
     el.dataset.enabled = controlEnabled(c.id) ? "1" : "0";
+    // Focusable but inert while disabled would be a trap; aria-disabled plus
+    // tabindex -1 keeps it announced and out of the Tab order (STC-506).
+    if (el instanceof HTMLButtonElement) {
+      el.setAttribute("aria-disabled", controlEnabled(c.id) ? "false" : "true");
+      el.tabIndex = controlEnabled(c.id) ? 0 : -1;
+    }
   }
   // The anchor, not `p.state.rect` — the latter is undefined for a window
   // pick (selection.ts never sets one), which used to leave this reading "—"
@@ -238,6 +253,8 @@ function renderBar(p: OverlayPayload): void {
  * one) can skip rebuilding them — see `renderMenu` below. `undefined` when
  * the menu is closed or has never been drawn. */
 let lastMenuRowsSignature: string | undefined;
+/** The bar button that last had focus, so a menu closing can give it back (STC-506). */
+let lastMenuTrigger: HTMLElement | undefined;
 const menuRowsSignature = (rows: MenuRow[]): string =>
   rows.map((r) => `${r.key}:${r.checked}`).join("|");
 
@@ -257,21 +274,40 @@ const menuRowsSignature = (rows: MenuRow[]): string =>
  * the rows.
  */
 function renderMenu(m: { anchor: MenuAnchor; rows: MenuRow[] } | undefined): void {
-  if (!m) { menuEl.hidden = true; menuEl.replaceChildren(); lastMenuRowsSignature = undefined; return; }
+  if (!m) {
+    // Closed with focus inside it: hand focus back to the trigger rather than
+    // letting it fall to <body>, where the next Return would mean Capture.
+    const hadFocus = menuEl.contains(document.activeElement);
+    menuEl.hidden = true; menuEl.replaceChildren(); lastMenuRowsSignature = undefined;
+    if (hadFocus) {
+      lastMenuTrigger?.focus();
+    }
+    return;
+  }
   const signature = menuRowsSignature(m.rows);
   if (signature !== lastMenuRowsSignature) {
     // No `onPick` — this menu's rows are pressed through the delegated
     // `pointerdown` handler below (`barPress`'s ordering rules), not their
     // own listeners. See device-menu-dom.ts's header for why.
-    menuEl.replaceChildren(...m.rows.map((r) => buildMenuRow(r)));
+    menuEl.replaceChildren(...m.rows.map((r) => {
+      const row = buildMenuRow(r);
+      row.tabIndex = -1;   // arrows move between rows (STC-506); Tab leaves the menu
+      return row;
+    }));
     lastMenuRowsSignature = signature;
   }
+  const wasHidden = menuEl.hidden;
   menuEl.hidden = false;
   const a = { x: m.anchor.x - origin.x, y: m.anchor.y - origin.y };
   const w = menuEl.offsetWidth, h = menuEl.offsetHeight;
   const top = m.anchor.side === "below" ? a.y : a.y - h;
   menuEl.style.left = `${Math.max(8, Math.min(a.x, window.innerWidth - w - 8))}px`;
   menuEl.style.top = `${Math.max(8, Math.min(top, window.innerHeight - h - 8))}px`;
+  // Opened from the keyboard (focus is on its trigger): move into it, onto the
+  // checked row if there is one. An opening by pointer leaves focus alone.
+  if (wasHidden && document.activeElement?.matches("button.ctl")) {
+    (menuEl.querySelector<HTMLElement>('.row[aria-checked="true"]') ?? menuEl.querySelector<HTMLElement>(".row"))?.focus();
+  }
 }
 
 function render(p: OverlayPayload): void {
@@ -457,6 +493,10 @@ window.addEventListener("pointerdown", (e) => {
       if (a.t === "commitSize") commitAndLeaveField();
       else send(a);
     }
+    // A press must not move keyboard focus onto a bar button (STC-506): the
+    // user who clicks Expand and then presses Return means Capture, not Expand
+    // again. The size fields are the exception, they take focus by design.
+    if (hit !== undefined && !onField) e.preventDefault();
     if (swallow) return;
   }
   const state = current?.state;
@@ -506,6 +546,34 @@ window.addEventListener("keydown", (e) => {
     }
     return;   // nothing typed in the field reaches the selection reducer
   }
+  // Keys on a focused bar button or menu row (STC-506). Return and Space press
+  // what has focus; the reducer's own meaning of Return (Capture) applies only
+  // when nothing on the bar has it.
+  const onCtl = t.closest?.("button.ctl") as HTMLElement | null;
+  const onRow = t.closest?.("#menu .row") as HTMLElement | null;
+  if (onRow) {
+    const rows = [...menuEl.querySelectorAll<HTMLElement>(".row")];
+    const at = rows.indexOf(onRow);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      rows[(at + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length]?.focus();
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      const picked = current?.menu?.rows.find((r) => r.key === onRow.dataset.key);
+      if (picked) send({ t: "menuPick", pick: picked.pick });
+      return;
+    }
+  }
+  if (onCtl && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault();
+    lastMenuTrigger = onCtl;
+    const id = onCtl.id.replace(/^ctl-/, "") as ControlId;
+    if (controlEnabled(id)) send({ t: "control", id });
+    return;
+  }
+  if (onCtl) lastMenuTrigger = onCtl;
   if (e.key === "Escape" && current?.menu) {
     // First Escape closes the open menu; the next one cancels, as before.
     e.preventDefault();

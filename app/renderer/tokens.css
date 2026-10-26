@@ -77,7 +77,7 @@
   --border-strong: rgba(15, 15, 12, .30);
   --text: #171714;
   --text-dim: rgba(23, 23, 20, .62);
-  --text-faint: rgba(23, 23, 20, .40);
+  --text-faint: rgba(23, 23, 20, .60);
   --accent: #3b6fe0;
   --accent-soft: rgba(59, 111, 224, .14);
   --rec: #d33a3a;
@@ -153,7 +153,7 @@
     --border-strong: rgba(255, 255, 255, .26);
     --text: #f1f1ee;
     --text-dim: rgba(241, 241, 238, .64);
-    --text-faint: rgba(241, 241, 238, .42);
+    --text-faint: rgba(241, 241, 238, .54);
     --accent: #7aa2ff;
     --accent-soft: rgba(122, 162, 255, .18);
     --rec: #ff6b6b;
@@ -177,7 +177,7 @@
   --border-strong: rgba(255, 255, 255, .26);
   --text: #f1f1ee;
   --text-dim: rgba(241, 241, 238, .64);
-  --text-faint: rgba(241, 241, 238, .42);
+  --text-faint: rgba(241, 241, 238, .54);
   --accent: #7aa2ff;
   --accent-soft: rgba(122, 162, 255, .18);
   --rec: #ff6b6b;
@@ -185,4 +185,17 @@
   --warn: #e0925a;
   --warn-soft: rgba(224, 146, 90, .16);
   --focus: #7aa2ff;
+}
+
+/* The focus ring (STC-506). One rule for every window that loads this file, at
+   zero specificity (`:where`) so a surface's own `:focus-visible` still wins:
+   the editors keep their `--accent` rings on the timeline, and the overlay's
+   size field keeps its underline. What this guarantees is that a control with
+   no rule of its own gets the token ring instead of the UA's, which is not
+   the same colour in any two windows. Inputs are left to their own styling:
+   a text field already shows focus with its caret. */
+:where(button, [role="button"], [role="radio"], [role="switch"], [role="menuitem"],
+       [role="menuitemradio"], [role="menuitemcheckbox"], [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }

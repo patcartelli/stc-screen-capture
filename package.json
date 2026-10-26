@@ -19,6 +19,7 @@
     "gate:seek": "node scripts/gate-retry.mjs scripts/seek-gate.mjs",
     "gate:identity": "node scripts/gate-retry.mjs scripts/identity-gate.mjs",
     "gate:framing": "node scripts/gate-retry.mjs scripts/framing-gate.mjs",
+    "axe:renderers": "node scripts/axe-renderers.mjs",
     "gate:still": "node scripts/gate-retry.mjs scripts/still-gate.mjs",
     "test:slow": "vitest run --config vitest.slow.config.ts",
     "test:soak": "vitest run --config vitest.soak.config.ts",
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@types/node": "^26.2.0",
     "ajv": "^8.20.0",
+    "axe-core": "^4.10.2",
     "electron": "43.4.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",

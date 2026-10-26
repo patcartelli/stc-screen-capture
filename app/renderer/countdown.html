@@ -1,5 +1,5 @@
 <!doctype html>
-<html data-surface="dark">
+<html lang="en" data-surface="dark">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'">
@@ -56,9 +56,10 @@
       cursor: pointer;
     }
     button:hover { background: var(--overlay-fill); }
+    button:active { background: var(--overlay-fill-hover); }
     #skip { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
     kbd {
-      font: inherit; font-size: var(--type-label); color: var(--text-dim); margin-left: var(--space-1);
+      font: inherit; font-size: var(--type-label); color: var(--text); margin-left: var(--space-1);
     }
     /*
       Reduced motion (STC-391 rule 5): the ring goes, the COUNT goes on

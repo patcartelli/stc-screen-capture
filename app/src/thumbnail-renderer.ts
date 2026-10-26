@@ -414,6 +414,7 @@ const gifLabelEl = $("giflabel") as HTMLDivElement;
 function drawGif(): void {
   for (const b of formatGroup.querySelectorAll<HTMLButtonElement>("button[data-format]")) {
     b.setAttribute("aria-checked", String(b.dataset.format === formatOf(gif)));
+    b.tabIndex = b.dataset.format === formatOf(gif) ? 0 : -1;
     // An mp4 Copy in flight cannot be cancelled without losing a Copy someone asked for.
     b.disabled = copying || busy;
   }
@@ -460,6 +461,22 @@ async function pickFormat(format: OutputFormat): Promise<void> {
 formatGroup.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLButtonElement>("button[data-format]");
   if (b && !b.disabled) void pickFormat(b.dataset.format as OutputFormat);
+});
+// A radiogroup is one tab stop with the arrows moving inside it (STC-506).
+// Roving tabindex is set in `drawGif`; this is the keys.
+formatGroup.addEventListener("keydown", (ev) => {
+  const step = ev.key === "ArrowRight" || ev.key === "ArrowDown" ? 1
+    : ev.key === "ArrowLeft" || ev.key === "ArrowUp" ? -1 : 0;
+  if (!step) return;
+  const all = [...formatGroup.querySelectorAll<HTMLButtonElement>("button[data-format]")].filter((b) => !b.disabled);
+  const at = all.indexOf(document.activeElement as HTMLButtonElement);
+  if (at < 0) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const next = all[(at + step + all.length) % all.length];
+  if (!next) return;
+  next.focus();
+  void pickFormat(next.dataset.format as OutputFormat);
 });
 formatGroup.hidden = !offersFormat(take);
 drawGif();
@@ -901,7 +918,10 @@ card.addEventListener("pointercancel", () => {
  * `deleteShot` call made.
  */
 async function discard(): Promise<void> {
-  card.style.transform = `translateX(${420 * discardDirection(corner)}px)`;
+  // Reduced motion (STC-506): fade out in place, no fly-off.
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    card.style.transform = `translateX(${420 * discardDirection(corner)}px)`;
+  }
   card.style.opacity = "0";
   const ok = await perform("trash");
   if (!ok) {

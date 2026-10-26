@@ -1,5 +1,5 @@
 <!doctype html>
-<html data-surface="dark">
+<html lang="en" data-surface="dark">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:">
@@ -39,6 +39,15 @@
       back to the corner, and flying off the edge — animate rather than jump.
     */
     #card.dragging { transition: none; }
+    /* Reduced motion (STC-506): no scale, no slide-in; a short crossfade
+       instead, so the panel still arrives rather than popping. The swipe still
+       follows the pointer (that is direct manipulation, not an animation);
+       what it loses is the spring back and the fly-off, which
+       `thumbnail-renderer.ts`'s `discard` replaces with the same fade. */
+    @media (prefers-reduced-motion: reduce) {
+      #card, #card.in { transform: none; transition: opacity var(--dur-quick) ease-out; }
+      #card.dragging { transition: none; }
+    }
     /*
       Close without deciding (STC-412) — a small ghost circle in the corner,
       OUTSIDE `#actions`'s four buttons and visually distinct from `#trash`'s
@@ -52,6 +61,7 @@
       font-size: var(--type-title); cursor: pointer;
     }
     #dismiss:hover { background: var(--overlay-fill-hover); }
+    #format button:focus-visible { outline-offset: -2px; }  /* the group clips its own overflow */
     #thumbwrap {
       flex: 1; display: flex; align-items: center; justify-content: center;
       padding: var(--space-4) var(--space-4) 0;
@@ -91,6 +101,7 @@
       padding: var(--space-1) var(--space-3); cursor: pointer;
     }
     button:hover { background: var(--overlay-fill-hover); }
+    button:active:not(:disabled) { background: var(--overlay-fill-hover); filter: brightness(1.15); }
     button:disabled { opacity: 0.4; cursor: default; }
     button:disabled:hover { background: var(--overlay-fill); }
     button[hidden] { display: none; }
@@ -125,11 +136,13 @@
       working unmodified.
     */
     #actions button[data-action] { opacity: 0; transition: opacity var(--dur-quick) ease-out; }
-    #card:hover #actions button[data-action] { opacity: 1; }
+    #card:hover #actions button[data-action],
+    #card:focus-within #actions button[data-action] { opacity: 1; }
     /* A disabled button (an action in flight, STC-392 review M6) stays
        dimmed even while hovering — :disabled here outweighs the rule above
        on specificity alone, not on source order. */
-    #card:hover #actions button[data-action]:disabled { opacity: 0.4; }
+    #card:hover #actions button[data-action]:disabled,
+    #card:focus-within #actions button[data-action]:disabled { opacity: 0.4; }
     /*
       The overflow badge (Task 5b / STC-392 D7) — how many captures the
       MAX_STACKED cap is hiding behind this one, reachable through the SAME
