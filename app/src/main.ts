@@ -40,7 +40,7 @@ import {
   startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight, copyRenderFormat,
 } from "./copy-render-window.js";
 import { GifCache } from "./gif-cache.js";
-import { panelReason, panelAction, pillLabel, isStopActionId, trackLossLine, type StopAction } from "./stop-copy.js";
+import { panelReason, panelAction, isHelperDecidedStop, stopCause, isStopActionId, trackLossLine, type StopAction } from "./stop-copy.js";
 import {
   copyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
   copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
@@ -78,7 +78,7 @@ import { editorIsOpen, fitEditorToContent, hideEditor, openEditor } from "./edit
 import { hideStillEditor, openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
 import { discardPill, pillStarted, preparePill } from "./pill-window.js";
-import { PILL_STOPPED_DWELL_MS, libraryAroundTake, type LibraryAtTakeStart } from "./pill.js";
+import { libraryAroundTake, type LibraryAtTakeStart } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
@@ -746,11 +746,11 @@ function startSupervisor(): void {
   sup.on("recording-ended", (i) => send("helper:recording-ended", i));
   // STC-531: the renderer no longer toasts a helper-decided stop; the take's
   // panel says why. A stop with no take directory has no panel to say it, so
-  // that one alone is still a toast — the pill's label, or the bare reason.
+  // that one alone is still a toast — the bare cause, or the bare reason.
   sup.on("recording-ended", (i) => {
     if (quitting || typeof i?.dir === "string") return;
     const reason = typeof i?.reason === "string" ? i.reason : "unknown";
-    showNotice(`The recording stopped (${pillLabel(reason) ?? reason}).`);
+    showNotice(stopCause(reason) ? `The recording stopped. ${stopCause(reason)}` : `The recording stopped (${reason}).`);
   });
   // A take ended cleanly — asked for or not — and is waiting for a decision
   // (STC-487). The ONE place a recording's panel is presented from a stop.
@@ -942,18 +942,9 @@ async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
     if (quitting) return;
     if (sup?.state === "recording") { if (r.ok) deferredRecoveredPanels.push(dir); return; }
   }
-  // STC-531: the helper stopped this take by itself, and the pill is saying why
-  // (`pill-window.ts`). The panel waits the same `PILL_STOPPED_DWELL_MS`, so
-  // the label and the panel are never up together (Patrick, 2026-10-14). A
-  // stop the user asked for has no label and presents at once, as it always did.
-  const helperDecided = typeof reason === "string" && pillLabel(reason) !== undefined;
-  if (helperDecided) {
-    await new Promise((r) => setTimeout(r, PILL_STOPPED_DWELL_MS));
-    // The wait is time a quit or a new take can begin in, the same re-check
-    // recovery makes above; a panel presented mid-take would be filmed.
-    if (quitting) return;
-    if (sup?.state === "recording") { deferredRecoveredPanels.push(dir); return; }
-  }
+  // STC-579: the pill is for a recording in progress and says nothing after a stop (it
+  // is already gone), so the panel goes up at once for every stop, with no wait.
+  const helperDecided = typeof reason === "string" && isHelperDecidedStop(reason);
   // The panel is the only place a helper-decided stop says why (STC-531: no
   // toast). If it cannot go up, the take is still in temp storage for launch
   // recovery, and the why is said here instead of nowhere.

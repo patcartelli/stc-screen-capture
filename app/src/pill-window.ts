@@ -2,10 +2,10 @@ import { BrowserWindow, ipcMain, screen, type Rectangle } from "electron";
 import { join } from "node:path";
 import type { HelperSupervisor } from "./supervisor.js";
 import {
-  MIN_PILL_WIDTH_PX, PILL_DRAG_FRAME_MS, PILL_STOPPED_DWELL_MS, decidePillAction, dragTarget, easeStep,
-  pillBounds, resizePillBounds, shouldDwell, shouldShowTrackNotice, type PillPoint, type PillWindowState,
+  MIN_PILL_WIDTH_PX, PILL_DRAG_FRAME_MS, PILL_NOTICE_MS, decidePillAction, dragTarget, easeStep,
+  pillBounds, resizePillBounds, shouldShowTrackNotice, type PillPoint, type PillWindowState,
 } from "./pill.js";
-import { pillLabel, trackLossPillLabel, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
+import { trackLossPillLabel, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
 import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
 import { PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
@@ -31,7 +31,7 @@ import { HIDE_SETTLE_MS, windowIdOf } from "./overlay-session.js";
  * 2. `pillStarted`, once `start` has ANSWERED: attached to the supervisor.
  *    It becomes visible only off `sup.state`, the helper-confirmed value
  *    (traps 1 and 3 in `pill.ts`'s header), never off the Record click.
- * 3. When the take ends (and any STC-531 dwell is over), or `start` never
+ * 3. When the take ends, or `start` never
  *    happened (`discardPill`), the window is hidden, then destroyed, and the
  *    caller's `onOver` runs once. `main.ts` brings the library back there.
  *
@@ -279,7 +279,7 @@ ipcMain.handle("pill:stop", (e) => active?.stop(e.sender) ?? { ok: false });
 export interface AttachOptions {
   /** The confirmed state says the take is live: make the pill visible. */
   show: () => void;
-  /** The take is over and any dwell has run: put the pill away. */
+  /** The take is over: put the pill away. */
   hide: () => void;
 }
 
@@ -308,21 +308,10 @@ export function attachPillToSupervisor(
   opts: AttachOptions,
 ): PillAttachment {
   let current: PillWindowState = "expanded";
-  // STC-531: the pill showing why the helper stopped its take. While this is
-  // set, `decidePillAction` holds the hide; it ends on its own timer.
-  let dwell: ReturnType<typeof setTimeout> | undefined;
-
-  const endDwell = (): void => {
-    if (dwell === undefined) return;
-    clearTimeout(dwell);
-    dwell = undefined;
-    sendPill(win, "pill:stopped", { label: null });
-  };
-
   // STC-237: a mic or camera lost while the take KEEPS recording. The pill shows it in
-  // place of the timer for the same time a stop's label shows, then goes back. It moves
-  // no window, so it never touches `reconcile`. A second loss restarts the clock with its
-  // own label; a stop takes over from it (`onEnded`).
+  // place of the timer for `PILL_NOTICE_MS`, then goes back. It moves no window, so it
+  // never touches `reconcile`. A second loss restarts the clock with its own label; a
+  // stop ends it (`onEnded`).
   let notice: ReturnType<typeof setTimeout> | undefined;
   const endNotice = (): void => {
     if (notice === undefined) return;
@@ -341,12 +330,12 @@ export function attachPillToSupervisor(
     notice = setTimeout(() => {
       notice = undefined;
       sendPill(win, "pill:notice", { label: null });
-    }, PILL_STOPPED_DWELL_MS);
+    }, PILL_NOTICE_MS);
   };
 
   const reconcile = (): void => {
-    if (win.isDestroyed()) { endDwell(); return; }
-    const action = decidePillAction(current, sup.state, dwell !== undefined);
+    if (win.isDestroyed()) return;
+    const action = decidePillAction(current, sup.state);
     if (action === "collapse") {
       current = "collapsed";
       opts.show();
@@ -356,24 +345,12 @@ export function attachPillToSupervisor(
     }
   };
 
-  // `recording-ended` is only ever a stop the HELPER decided on (the
-  // supervisor's own contract), so its reason is what the pill says.
-  //
-  // `take-ended` comes through here too, and FIRST: the supervisor emits it
-  // just before `recording-ended`, for every clean stop. Reconciling on it
-  // alone put the pill away before the helper's reason could hold it up, so
-  // "Window closed" never showed (found on hardware, 2026-10-15). A stop the
-  // user asked for has reason "stopped", which has no label, so it goes at once.
-  const onEnded = (i: { reason?: unknown } | undefined): void => {
+  // Any end of a take, the helper's own stop or the user's, puts the pill away at
+  // once and says nothing (STC-579): the pill is for a recording in progress, and the
+  // take's panel carries why it stopped. `recording-ended` and `take-ended` both come
+  // through here; `reconcile` is idempotent, so the second is a no-op.
+  const onEnded = (): void => {
     endNotice();
-    const label = pillLabel(typeof i?.reason === "string" ? i.reason : undefined);
-    if (dwell === undefined && !win.isDestroyed() && shouldDwell(current, label)) {
-      sendPill(win, "pill:stopped", { label });
-      dwell = setTimeout(() => {
-        dwell = undefined;
-        reconcile();
-      }, PILL_STOPPED_DWELL_MS);
-    }
     reconcile();
   };
 
@@ -388,7 +365,7 @@ export function attachPillToSupervisor(
   const offWarning = sup.on("helper:warning", onWarning);
   return {
     detach: () => {
-      endDwell(); endNotice();
+      endNotice();
       offStats(); offLevel(); offEnded(); offLost(); offTakeEnded(); offWarning();
     },
     reconcileNow: reconcile,
