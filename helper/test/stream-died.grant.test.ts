@@ -159,6 +159,38 @@ describe("a display stream that dies mid-take (STC-306)", () => {
     expect(JSON.parse(readFileSync(join(dir2, "anchors.json"), "utf8")).stop?.reason).toBe("stream-stopped");
   }, 120_000);
 
+  // STC-577: unplugging the recorded display (or closing the lid on it) kills
+  // the stream before the display watcher's 250 ms debounce decides, so the
+  // take used to stop as stream-stopped ("Source lost"). The stream's death
+  // now asks CoreGraphics whether the display is still active.
+  // `stream-died-display-gone` is the same death with that check reading
+  // "gone"; the test above, with the display really there, is its control
+  // and must still read stream-stopped.
+  test("a stream that dies with its display gone stops as display-reconfigured (STC-577)", async () => {
+    const dir = session();
+    const h = spawnHelper({ STC_CAPTURE_FAULT: "stream-died-display-gone" });
+    await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
+    h.send({ cmd: "start", dir, seq: 1 });
+    const started = await waitFor(() => h.fd3.find((l) => l.seq === 1), 20_000, "start outcome");
+    if (started.ev !== "started") throw skipGrant(started);
+
+    const stopped = await waitFor(
+      () => h.fd3.find((l) => l.ev === "stopped" && typeof l.seq !== "number"),
+      30_000, "an unsolicited `stopped`");
+    expect(stopped.reason).toBe("display-reconfigured");
+    expect(stopped.stopWarning, "the writer did not finalise in time").toBeUndefined();
+    expect(hasMoov(join(dir, "display.mp4")), "display.mp4 has no moov — the writer never finished").toBe(true);
+
+    const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
+    expect(anchors.stop?.reason).toBe("display-reconfigured");
+    const ajv = new Ajv({ allErrors: true, strict: true });
+    const validate = ajv.compile(JSON.parse(readFileSync(
+      join(root, `schema/anchors-${anchors.version}.schema.json`), "utf8")));
+    expect(validate(anchors), JSON.stringify(validate.errors, null, 2)).toBe(true);
+
+    await waitFor(() => h.out.some((l) => l.ev === "stats" && l.state === "idle"), 5_000, "an idle heartbeat");
+  }, 60_000);
+
   test("without the fault, the same helper records and stops on request — the injector is opt-in", async () => {
     const dir = session();
     const h = spawnHelper({});

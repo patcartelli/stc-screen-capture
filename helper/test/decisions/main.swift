@@ -412,11 +412,19 @@ check("the re-check waits long enough to clear a close animation, and is short",
 
 // ── a dead stream on a window take whose window is gone (STC-531) ───────────
 check("a window take whose window is gone stops as window-closed",
-      decideStreamDeath(windowGone: true), "window-closed")
+      decideStreamDeath(windowGone: true, displayGone: nil), "window-closed")
 check("a window take whose window is still there stays stream-stopped",
-      decideStreamDeath(windowGone: false), "stream-stopped")
-check("a take with no window (display or region) stays stream-stopped",
-      decideStreamDeath(windowGone: nil), "stream-stopped")
+      decideStreamDeath(windowGone: false, displayGone: nil), "stream-stopped")
+
+// ── a dead stream on a display or region take whose display is gone (STC-577)
+check("a display or region take whose display is gone stops as display-reconfigured",
+      decideStreamDeath(windowGone: nil, displayGone: true), "display-reconfigured")
+check("a display or region take whose display is still there stays stream-stopped",
+      decideStreamDeath(windowGone: nil, displayGone: false), "stream-stopped")
+check("a take that asked neither stays stream-stopped",
+      decideStreamDeath(windowGone: nil, displayGone: nil), "stream-stopped")
+check("a gone window is the cause even if its display is reported gone too",
+      decideStreamDeath(windowGone: true, displayGone: true), "window-closed")
 
 // ── the window track records only real movement (STC-482) ───────────────────
 check("an unmoved window records nothing",
