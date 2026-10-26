@@ -43,31 +43,23 @@ describe("source: the three short-lived surfaces", () => {
     });
   }
 
-  it("the countdown numerals are not the readout face (time until a take starts is a display numeral, Geist)", () => {
-    expect(read("countdown.html")).not.toMatch(/font-readout|Departure|type-readout/);
+  it("the countdown numerals are in the readout face", () => {
+    expect(read("countdown.html")).toMatch(/font-family: var\(--font-readout\)/);
+    expect(read("countdown.html")).not.toMatch(/font-pixel|Silkscreen|type-timer/);
   });
 });
 
 describe("source: the readout face (STC-583)", () => {
-  it("tokens.css vendors Departure Mono from the bundle and keeps no Silkscreen", () => {
-    const css = read("tokens.css");
-    expect(css).toMatch(/--font-readout:\s*'Departure Mono'/);
-    expect(css).toMatch(/url\('fonts\/DepartureMono-Regular\.woff2'\)/);
-    expect(css).not.toMatch(/Silkscreen|--font-pixel|--type-timer/);
-    expect(existsSync(join(RENDERER, "fonts/DepartureMono-Regular.woff2"))).toBe(true);
-    expect(existsSync(join(RENDERER, "fonts/OFL-DepartureMono.txt"))).toBe(true);
+  it("tokens.css makes JetBrains Mono the one readout face and keeps no Silkscreen", () => {
+    const css = read("tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(css).toMatch(/--font-readout:\s*'JetBrains Mono'/);
+    expect(css).not.toMatch(/Silkscreen|--font-pixel|--font-mono|--type-timer|Departure Mono'/);
     expect(existsSync(join(RENDERER, "fonts/Silkscreen-Regular.woff2"))).toBe(false);
   });
   it("the pill timer, the record bar's size and the menu rows draw in the readout face", () => {
     expect(read("pill.html")).toMatch(/var\(--type-readout-pill\)\/1 var\(--font-readout\)/);
     expect(read("overlay.html")).toMatch(/#ctl-size \{[^}]*var\(--font-readout\)/);
     expect(read("device-menu.css")).toMatch(/font: 400 var\(--type-readout-menu\)\/1 var\(--font-readout\)/);
-  });
-  it("--font-mono (JetBrains) is only for literal text — paths and model codes — never a value", () => {
-    for (const f of ["index.html", "editor.html", "overlay.html", "pill.html", "device-menu.css"]) {
-      const lines = read(f).split("\n").filter((l) => l.includes("var(--font-mono)"));
-      for (const l of lines) expect(l).toMatch(/#modelcode|\.libplacepath/);
-    }
   });
 });
 
