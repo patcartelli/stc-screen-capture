@@ -89,17 +89,9 @@ declare const recorder: {
   openEditor(dir: string, name: string, autoShare?: boolean): Promise<boolean>;
   captureStill(action?: ShotAction): Promise<StillResult>;
   getShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
-  setShortcut(action: BindableAction, accelerator: string | null):
-    Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
-  resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   chooseStillDestination(): Promise<{ saveFolder: string | null }>;
-  /** STC-444 slice 3: the site folder picker, moved here from the editor
-   *  window's own bridge — same handler, a person choosing either way. */
-  chooseShareDestination(): Promise<{ destination: string | null }>;
   /** The resolved save location — never null, never a phrase (STC-412 I1). */
   resolvedSaveFolder(): Promise<string>;
-  /** STC-435: find unused `raw/` bundles, ask, trash. Main shows every result itself. */
-  reclaimSpace(): Promise<{ moved: number; failed: number }>;
   /** STC-476: re-read the grants; main pushes the same shape on `permissions:changed`. */
   permissions(): Promise<PermissionsState>;
   permissionsAct(grant: Grant, action: RowAction): Promise<PermissionsState>;
@@ -109,14 +101,13 @@ declare const recorder: {
   on(event: string, cb: (p: any) => void): () => void;
   /** STC-412: show a warning via the toast. */
   showToast(message: ToastInput): void;
+  /** STC-581: Settings is its own window; main opens (or brings forward) it. */
+  openSettings(): Promise<void>;
 };
 
-import { COUNTDOWN_OPTIONS } from "./countdown.js";
-import { ICON_PLACEMENTS, ICON_PLACEMENT_LABELS, cleanIconPlacement, type IconPlacement } from "./icon-placement.js";
+import type { IconPlacement } from "./icon-placement.js";
 import {
-  ACTION_LABELS, BINDABLE_ACTIONS, OUTCOME_LABELS, acceleratorFromKeyStroke, explainShortcut, explainVariant,
-  formatAccelerator, parseAccelerator,
-  type BindableAction, type ShotAction, type ShortcutReport, type Shortcuts,
+  formatAccelerator, type BindableAction, type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import { renderLibrary, renderPlaceholderOnly, showUpdating, type LibraryCallbacks } from "./library-view.js";
 import {
@@ -128,7 +119,7 @@ import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { colorSpaceFor } from "@transform/still-export";
 import type { Shot } from "@transform/shot";
-import { type GifSettings, GIF_FPS_OPTIONS, GIF_WIDTH_OPTIONS } from "@transform/gif-options";
+import type { GifSettings } from "@transform/gif-options";
 import { MODEL_CODE } from "./product.js";
 import { PERMISSION_ACTION_LABELS, type Grant, type PermissionsState, type RowAction } from "./permissions.js";
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
@@ -139,10 +130,7 @@ import {
   type DeviceLike, type DeviceChoice, type PopoverId, type DeviceSelection, type MenuRow,
 } from "./device-picker.js";
 import { buildMenuRow } from "./device-menu-dom.js";
-import {
-  editPipStyle, pipRect, pipSize, snapCenter, PIP_SNAP_THRESHOLD_SCREEN_PX, PIP_SHADOW, type PipStyle,
-} from "@transform/pip-style.js";
-import { buildPipInspector } from "./pip-inspector.js";
+import type { PipStyle } from "@transform/pip-style.js";
 import { TakeDeviceReports, type TakeDevice } from "./take-device-status.js";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -156,71 +144,6 @@ $("modelcode").textContent = MODEL_CODE;
 
 // The pill (STC-375) lived in this page while it was this window collapsed.
 // It is its own window since STC-550: `pill-window.ts`, `pill-renderer.ts`.
-
-/**
- * Which display to record (STC-247). "Automatic" is the phase-1 behaviour —
- * whichever display the helper lists first — and the only choice a
- * single-display machine ever needs. The list comes from the helper's own
- * `devices` enumeration, so what is offered is exactly what it can capture;
- * it is refreshed when the helper comes up and whenever a display is plugged
- * in or out while idle. A stored choice whose display is gone is shown as
- * such rather than silently dropped: `start` would then be refused with
- * `display-not-found`, and the user should see why before pressing Record.
- */
-const displaySel = $("display") as HTMLSelectElement;
-let storedDisplayId: number | null = null;
-
-function displayLabel(d: DisplayInfo): string {
-  const name = d.name ?? `Display ${d.id}`;
-  return `${name} ${Math.round(d.pointW)}×${Math.round(d.pointH)}${d.main ? " (main)" : ""}`;
-}
-
-async function refreshDisplays(): Promise<void> {
-  let displays: DisplayInfo[] = [];
-  try {
-    const r = await recorder.devices();
-    displays = Array.isArray(r.displays) ? r.displays : [];
-  } catch {
-    displays = [];
-  }
-  const wanted = storedDisplayId;
-  displaySel.replaceChildren();
-  const auto = document.createElement("option");
-  auto.value = ""; auto.textContent = "Automatic";
-  displaySel.append(auto);
-  for (const d of displays) {
-    const o = document.createElement("option");
-    o.value = String(d.id); o.textContent = displayLabel(d);
-    displaySel.append(o);
-  }
-  if (wanted != null && !displays.some((d) => d.id === wanted)) {
-    const o = document.createElement("option");
-    o.value = String(wanted); o.textContent = `Display ${wanted} (not connected)`;
-    displaySel.append(o);
-  }
-  displaySel.value = wanted == null ? "" : String(wanted);
-}
-
-void (async () => {
-  try {
-    storedDisplayId = (await recorder.getSettings()).displayId;
-  } catch {
-    storedDisplayId = null;
-  }
-  await refreshDisplays();
-})();
-
-displaySel.addEventListener("change", async () => {
-  const chosen = displaySel.value === "" ? null : Number(displaySel.value);
-  try {
-    const saved = await recorder.setSettings({ displayId: chosen });
-    // Show what was actually stored, not what was clicked.
-    storedDisplayId = saved.displayId;
-  } catch (e) {
-    alertUser(`Could not save the display setting: ${String(e)}`);
-  }
-  await refreshDisplays();
-});
 
 /**
  * Mic and camera device selection (STC-414), sharing one popover — see
@@ -392,7 +315,6 @@ void (async () => {
  * to lock. */
 function lockSettings(locked: boolean): void {
   cameraTrigger.disabled = locked;
-  displaySel.disabled = locked;
   micTrigger.disabled = locked;
   // A disabled trigger cannot be the reason the popover stays open — close it
   // outright rather than leaving it floating over a now-unclickable button.
@@ -452,49 +374,13 @@ async function refreshCaptureSettingsForRecording(): Promise<void> {
   const mic = takeReports.placeholder("mic", storedMicUid != null);
   if (mic !== undefined) setMic(mic);
 }
-// ---- profile sheet (STC-374) ------------------------------------------------
+// ---- Settings (STC-581) ------------------------------------------------------
 //
-// "A panel inside this window, not a fourth window" — still-capture
-// preferences and the shortcuts editor moved here from the main flow.
-// Escape closing it is safe alongside the shortcuts editor's own Escape
-// handling below: that handler runs in the CAPTURE phase and calls
-// `stopImmediatePropagation` whenever a shortcut is being listened for, so
-// this bubble-phase listener never sees the keystroke in that case.
-const profileBtn = $("settings") as HTMLButtonElement;
-const profileSheet = $("profilesheet");
-const profileCloseBtn = $("profileclose") as HTMLButtonElement;
-
-function setProfileOpen(open: boolean): void {
-  profileSheet.classList.toggle("open", open);
-  // STC-461: re-read the PiP default on every open. The editor's "Use as
-  // default" writes through recorder:setSettings, which does not broadcast
-  // settings:changed, so without this the sheet would show (and then edit
-  // from) a stale style and overwrite the editor's default.
-  if (open) void loadPipDefault();
-}
-profileBtn.addEventListener("click", () => setProfileOpen(!profileSheet.classList.contains("open")));
-profileCloseBtn.addEventListener("click", () => {
-  setProfileOpen(false);
-  // A window made for Settings alone (STC-551 follow-up) has nothing else to
-  // show; closing it does not quit (the app lives in the menu bar).
-  if (document.body.classList.contains("settings-only")) window.close();
-});
-// STC-456: the options bar's own Settings control, with no renderer of its
-// own, asks main to open this sheet — the same function the profile button's
-// click handler calls, so there is one way this sheet opens, not two.
-// A window made for Settings alone loads with ?settings=only (main.ts), so it
-// is that from the first paint rather than after a message.
-if (new URLSearchParams(location.search).get("settings") === "only") {
-  document.body.classList.add("settings-only");
-  setProfileOpen(true);
-}
-recorder.on("ui:open-settings", (p?: { standalone?: boolean }) => {
-  document.body.classList.toggle("settings-only", p?.standalone === true);
-  setProfileOpen(true);
-});
-recorder.on("ui:show-library", () => document.body.classList.remove("settings-only"));
+// Its own window now, not a sheet over this one: the gear asks main to open it,
+// through the same function the menu bar and the record bar use.
+($("settings") as HTMLButtonElement).addEventListener("click", () => void recorder.openSettings());
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Escape") { profileCloseBtn.click(); closePopover(); }
+  if (e.code === "Escape") closePopover();
 });
 
 // ---- required grants (STC-476) ---------------------------------------------
@@ -657,8 +543,7 @@ recordBtn.addEventListener("click", async () => {
 recorder.on("helper:ready", (l) => {
   $("pid").textContent = String(l.pid ?? "—");
   // A (re)started helper can enumerate; a respawned one may see a different
-  // set of displays (or mics) than the last one did.
-  void refreshDisplays();
+  // set of mics than the last one did.
   void refreshDevices();
   if (!recording) setState("idle");
   // No precondition left to check (STC-388): Record opens the scope overlay
@@ -801,16 +686,30 @@ recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The 
 recorder.on("settings:changed", () => {
   void (async () => {
     const s = await recorder.getSettings();
+    // STC-581: Settings writes here too, a slider at a time. A full device
+    // enumeration only when a device field actually moved.
+    const devicesMoved = storedMicUid !== s.micDeviceUid || storedSystemAudio !== s.systemAudio
+      || storedCamera !== s.camera || storedCameraUid !== s.cameraDeviceUid;
     storedMicUid = s.micDeviceUid;
     storedSystemAudio = s.systemAudio;
     storedCamera = s.camera;
     storedCameraUid = s.cameraDeviceUid;
-    pipDefault = s.pipStyle;
-    pipSettingsInspector.render(pipDefault, true);
-    drawPipMock();
-    await refreshDevices();
+    if (devicesMoved) await refreshDevices();
+    // The grid lists the save folder, and its empty state names the keys.
+    const listing = await listingInputs();
+    if (listing !== listedFor) await refreshTakes();
+    listedFor = listing;
   })();
 });
+/** The save folder and the shortcuts, which the grid and its empty state are drawn from. */
+async function listingInputs(): Promise<string> {
+  let shortcuts = "";
+  try { shortcuts = JSON.stringify((await recorder.getShortcuts()).shortcuts); } catch { /* unread: no re-list for it */ }
+  return JSON.stringify([(await recorder.getSettings()).saveFolder, shortcuts]);
+}
+/** What the grid was last drawn for, as `settings:changed` compares it. */
+let listedFor: string | undefined;
+void listingInputs().then((l) => { listedFor ??= l; }, () => {});
 
 /**
  * Camera failures the user must actually see. Every one of these was already
@@ -927,10 +826,6 @@ recorder.on("helper:warning", (l) => {
     return;
   }
   if (INFORMATIONAL_WARNINGS.has(code)) {
-    // An idle display change is not an alert, but it is a new list of
-    // displays; the picker must not go on offering one that was unplugged.
-    // A survived refit (STC-235) changes the same list, for the same reason.
-    if (code === "display-reconfigured" || code === "display-refit") void refreshDisplays();
     // A refit is otherwise invisible: it is not a toast, and nothing writes
     // helper warnings to disk. Its payload (`path` update/restart/record,
     // `startNs`, `display`, `contentRect`) is the only record of HOW a take
@@ -994,151 +889,14 @@ const fmtSize = (b: number) =>
 // it does not any more. Both are read through the same `recorder:getSettings`
 // / `recorder:setSettings` every other preference in this window uses.
 
-/**
- * The save location, as a real path — always, whether or not one was ever
- * chosen (STC-412 final review, I1).
- *
- * This used to be `showDestination(dest ?? "beside the shot")`, reading
- * `saveFolder` straight off the settings and rendering null as a phrase. Both
- * halves were wrong once STC-412 unified the setting: "beside the shot"
- * described `still.destination`'s per-shot fallback, which no longer exists,
- * and a null `saveFolder` is not "nowhere chosen yet" — it resolves to a real
- * directory this process is already writing takes into. So it is asked for
- * rather than derived: main answers with `takesRoot`'s own output, the same
- * function that decides where the files actually go.
- */
-async function refreshDestination(): Promise<void> {
-  $("stilldest").textContent = await recorder.resolvedSaveFolder();
-}
-
-/**
- * The site folder (STC-444 slice 3, moved here from the editor window's own
- * sharebar) — unlike `saveFolder`, `share.destination` has no resolved
- * fallback: null really does mean "not chosen yet", so it is shown as such
- * rather than asking main to paper over it the way `resolvedSaveFolder` does
- * for recordings.
- */
-async function refreshSiteDestination(): Promise<void> {
-  const { share } = await recorder.getSettings();
-  $("sitedest").textContent = share.destination ?? "Not set";
-}
-
-const thumbCornerSel = $("thumbcorner") as HTMLSelectElement;
-const thumbSkipBox = $("thumbskip") as HTMLInputElement;
-const showDiagnosticsBox = $("showdiagnostics") as HTMLInputElement;
+// The diagnostics table follows the Settings window's Show diagnostics. Main
+// tells this window when another window wrote a preference.
 const diagnosticsTable = $("diagnostics") as HTMLTableElement;
-const countdownSel = $("countdownms") as HTMLSelectElement;
-
-// Built from the module that owns the clamp, never hand-listed in the markup
-// (STC-391) — an option the stored value could not hold would otherwise look
-// like a control that silently snaps back.
-for (const { ms, label } of COUNTDOWN_OPTIONS) {
-  const opt = document.createElement("option");
-  opt.value = String(ms);
-  opt.textContent = label;
-  countdownSel.append(opt);
+async function refreshDiagnosticsVisibility(): Promise<void> {
+  diagnosticsTable.hidden = !(await recorder.getSettings()).showDiagnostics;
 }
-
-// STC-395: the GIF row, built from the lists the validator uses.
-const gifFpsSel = $("giffps") as HTMLSelectElement;
-const gifWidthSel = $("gifwidth") as HTMLSelectElement;
-for (const fps of GIF_FPS_OPTIONS) gifFpsSel.add(new Option(`${fps} fps`, String(fps)));
-for (const w of GIF_WIDTH_OPTIONS) gifWidthSel.add(new Option(w === "original" ? "Original" : `${w} px`, String(w)));
-
-const iconPlacementSel = $("iconplacement") as HTMLSelectElement;
-for (const value of ICON_PLACEMENTS) {
-  const opt = document.createElement("option");
-  opt.value = value;
-  opt.textContent = ICON_PLACEMENT_LABELS[value];
-  iconPlacementSel.append(opt);
-}
-iconPlacementSel.addEventListener("change", async () => {
-  try {
-    // Show what was actually stored, not what was picked. Main applies it
-    // before this resolves, so there is no relaunch.
-    iconPlacementSel.value = (await recorder.setSettings({
-      iconPlacement: cleanIconPlacement(iconPlacementSel.value),
-    })).iconPlacement;
-  } catch (e) {
-    alertUser(`Could not save where the icon shows: ${String(e)}`);
-  }
-});
-
-async function loadStillPreferences(): Promise<void> {
-  const { thumbnail, countdownMs, showDiagnostics, iconPlacement, gif } = await recorder.getSettings();
-  iconPlacementSel.value = iconPlacement;
-  thumbCornerSel.value = thumbnail.corner;
-  thumbSkipBox.checked = thumbnail.skip;
-  showDiagnosticsBox.checked = showDiagnostics;
-  diagnosticsTable.hidden = !showDiagnostics;
-  // A stored value that is not one of the offered options — 0, or a number
-  // someone typed into the file — leaves the select showing nothing rather
-  // than silently misreporting itself as 3 seconds.
-  countdownSel.value = COUNTDOWN_OPTIONS.some((o) => o.ms === countdownMs)
-    ? String(countdownMs) : "";
-  gifFpsSel.value = String(gif.fps);
-  gifWidthSel.value = String(gif.maxWidth);
-  // LAST, and deliberately: this one is a second IPC round trip rather than a
-  // field of the settings already in hand, and the whole function is called
-  // as `void … .catch(() => {})`. Put first, a failure here would leave every
-  // control below it unset for a reason that has nothing to do with them.
-  await refreshDestination();
-  await refreshSiteDestination();
-}
-
-/** Every control here changes ONE field; the rest of `thumbnail` is read fresh and kept. */
-async function patchThumbnail(patch: Partial<AppSettings["thumbnail"]>): Promise<void> {
-  const current = (await recorder.getSettings()).thumbnail;
-  await recorder.setSettings({ thumbnail: { ...current, ...patch } });
-}
-
-async function patchGif(patch: Partial<AppSettings["gif"]>): Promise<void> {
-  const current = (await recorder.getSettings()).gif;
-  await recorder.setSettings({ gif: { ...current, ...patch } });
-}
-gifFpsSel.addEventListener("change", () => void patchGif({ fps: Number(gifFpsSel.value) as AppSettings["gif"]["fps"] }));
-gifWidthSel.addEventListener("change", () => {
-  const v = gifWidthSel.value;
-  void patchGif({ maxWidth: (v === "original" ? "original" : Number(v)) as AppSettings["gif"]["maxWidth"] });
-});
-
-$("stillchoosedest").addEventListener("click", async () => {
-  // The picker's own reply is deliberately not what is displayed: a cancel
-  // answers with the CURRENT `saveFolder`, which is null on an untouched
-  // install, and re-deriving a path from that here is the second computation
-  // of the default `refreshDestination` exists to avoid.
-  await recorder.chooseStillDestination();
-  await refreshDestination();
-});
-$("reclaimspace").addEventListener("click", async () => {
-  // Disabled for the round trip: the sheet main puts up is modal, but the
-  // find before it is not, and a second press there would be swallowed by
-  // main's own guard with no feedback at all.
-  const btn = $("reclaimspace") as HTMLButtonElement;
-  btn.disabled = true;
-  try { await recorder.reclaimSpace(); } finally { btn.disabled = false; }
-});
-$("sitechoosedest").addEventListener("click", async () => {
-  // Same reason `stillchoosedest` above re-fetches rather than trusting the
-  // picker's own reply: a cancel answers with the CURRENT destination.
-  await recorder.chooseShareDestination();
-  await refreshSiteDestination();
-});
-thumbCornerSel.addEventListener("change", () => {
-  void patchThumbnail({ corner: thumbCornerSel.value as AppSettings["thumbnail"]["corner"] });
-});
-thumbSkipBox.addEventListener("change", () => void patchThumbnail({ skip: thumbSkipBox.checked }));
-showDiagnosticsBox.addEventListener("change", async () => {
-  diagnosticsTable.hidden = !showDiagnosticsBox.checked;
-  await recorder.setSettings({ showDiagnostics: showDiagnosticsBox.checked });
-});
-countdownSel.addEventListener("change", () => {
-  // `countdownMs` is a top-level preference rather than a block, so it needs
-  // no read-merge-write the way `thumbnail` does — `writeSettings` merges it
-  // over what is stored and clamps it on the way in.
-  const ms = Number(countdownSel.value);
-  if (Number.isFinite(ms)) void recorder.setSettings({ countdownMs: ms });
-});
+void refreshDiagnosticsVisibility().catch(() => {});
+recorder.on("settings:changed", () => { void refreshDiagnosticsVisibility().catch(() => {}); });
 
 // ---- library -------------------------------------------------------------
 
@@ -1430,276 +1188,3 @@ void (async () => {
   libraryViewMode = (await recorder.getSettings()).libraryView;
   await refreshTakes();
 })();
-
-// ---- capture shortcuts (STC-292) ------------------------------------------
-//
-// Rebinding, and the one thing the ticket asks for that a silent failure would
-// ruin: a shortcut that did not bind must SAY so. The grammar, the reserved
-// list and the wording all live in `hotkeys.ts` — this draws the answer and
-// records keystrokes, and decides nothing on its own.
-
-const shortcutList = $("shortcuts");
-let shortcutState: { shortcuts: Shortcuts; report: ShortcutReport[] } | undefined;
-/** Which row is waiting for a keystroke, if any. */
-let listening: BindableAction | undefined;
-
-function reportFor(action: BindableAction): ShortcutReport | undefined {
-  return shortcutState?.report.find((r) => r.action === action);
-}
-
-function renderShortcuts(): void {
-  shortcutList.replaceChildren();
-  // BINDABLE_ACTIONS, not the shot-only subset (STC-388): Record gets a
-  // rebindable row here like every other action.
-  for (const action of BINDABLE_ACTIONS) {
-    const row = document.createElement("div");
-    row.className = "shortcut";
-
-    const name = document.createElement("span");
-    name.className = "name";
-    name.textContent = ACTION_LABELS[action];
-
-    const keys = document.createElement("button");
-    keys.className = "keys";
-    keys.id = `shortcut-${action}`;
-    const bound = shortcutState?.shortcuts[action] ?? null;
-    keys.textContent = listening === action ? "Press keys…" : formatAccelerator(bound);
-    if (listening === action) keys.classList.add("listening");
-    keys.addEventListener("click", () => {
-      listening = listening === action ? undefined : action;
-      renderShortcuts();
-    });
-
-    const clear = document.createElement("button");
-    clear.className = "clear";
-    clear.textContent = "Clear";
-    clear.disabled = bound == null;
-    clear.addEventListener("click", () => { void applyShortcut(action, null); });
-
-    const why = document.createElement("span");
-    why.className = "why";
-    why.id = `shortcutwhy-${action}`;
-    const r = reportFor(action);
-    const message = r ? explainShortcut(r) : undefined;
-    if (message) why.textContent = message;
-    else if (r?.registered) { why.textContent = "Active"; why.classList.add("ok"); }
-
-    row.append(name, keys, clear, why);
-    // STC-415: the shot's ⌃/⌥ variants, read-only, inside the same row so the
-    // list's row order (and `.shortcut:nth-child`) is the actions' alone.
-    if (r?.variants) {
-      const variants = document.createElement("div");
-      variants.className = "variants";
-      for (const v of r.variants) {
-        const line = document.createElement("div");
-        line.className = "variant";
-        const vname = document.createElement("span");
-        vname.className = "name";
-        vname.textContent = OUTCOME_LABELS[v.outcome];
-        const vkeys = document.createElement("span");
-        vkeys.className = "keys";
-        vkeys.id = `shortcut-${action}-${v.outcome}`;
-        vkeys.textContent = formatAccelerator(v.accelerator);
-        const vwhy = document.createElement("span");
-        vwhy.className = "why";
-        vwhy.id = `shortcutwhy-${action}-${v.outcome}`;
-        const vmessage = explainVariant(v);
-        if (vmessage) vwhy.textContent = vmessage;
-        else { vwhy.textContent = "Active"; vwhy.classList.add("ok"); }
-        line.append(vname, vkeys, vwhy);
-        variants.append(line);
-      }
-      row.append(variants);
-    }
-    shortcutList.append(row);
-  }
-}
-
-async function applyShortcut(action: BindableAction, accelerator: string | null): Promise<void> {
-  listening = undefined;
-  try {
-    shortcutState = await recorder.setShortcut(action, accelerator);
-  } catch (e) {
-    alertUser(`Could not set that shortcut: ${String(e)}`);
-  }
-  renderShortcuts();
-}
-
-/**
- * Records the chord.
- *
- * Capture phase and `stopImmediatePropagation` because the preview's own
- * ⌘⇧C / ⌘⇧S bindings are listening on the same document, and a user binding a
- * capture shortcut must not also trigger one. `code` rather than `key`: on
- * macOS ⌥⇧1 arrives as an unrelated glyph, so a layout-independent name is the
- * only one that can be replayed as an accelerator.
- *
- * A press that is only modifiers is not an answer — the chord is still being
- * pressed — so the field keeps waiting rather than binding ⌘ on its own.
- */
-document.addEventListener("keydown", (e) => {
-  if (!listening) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
-  if (e.code === "Escape") { listening = undefined; renderShortcuts(); return; }
-  const accelerator = acceleratorFromKeyStroke({
-    code: e.code, metaKey: e.metaKey, ctrlKey: e.ctrlKey,
-    altKey: e.altKey, shiftKey: e.shiftKey,
-  });
-  if (accelerator === null) return;
-  const action = listening;
-  // Checked here as well as in main so the field can refuse instantly, without
-  // a round trip that would briefly show the binding as accepted.
-  const parsed = parseAccelerator(accelerator);
-  if (!parsed.ok) {
-    listening = undefined;
-    shortcutState = shortcutState && {
-      shortcuts: shortcutState.shortcuts,
-      report: shortcutState.report.map((r) => r.action === action
-        ? { ...r, accelerator, problem: parsed.problem, registered: false,
-            ...(parsed.token ? { token: parsed.token } : {}) }
-        : r),
-    };
-    renderShortcuts();
-    return;
-  }
-  void applyShortcut(action, parsed.accelerator);
-}, true);
-
-/**
- * Whether a capture makes a noise.
- *
- * Here rather than only in System Settings because a capture started by a
- * hotkey is the one the sound exists for, and someone who wants it quiet
- * should not have to know that macOS keeps the switch under "Play user
- * interface sound effects". It only ever silences: ticked, the sound still
- * follows the Mac's own setting and alert volume.
- */
-const shutterBox = $("shuttersound") as HTMLInputElement;
-
-void (async () => {
-  try {
-    shutterBox.checked = (await recorder.getSettings()).shutterSound;
-  } catch {
-    // The default is ON, so a failed read must not present as silence.
-    shutterBox.checked = true;
-  }
-})();
-
-shutterBox.addEventListener("change", async () => {
-  try {
-    // Show what was actually stored, not what was clicked.
-    shutterBox.checked = (await recorder.setSettings({ shutterSound: shutterBox.checked })).shutterSound;
-  } catch (e) {
-    shutterBox.checked = !shutterBox.checked;
-    alertUser(`Could not save the shutter sound setting: ${String(e)}`);
-  }
-});
-
-// ---- PiP default (STC-461) ----------------------------------------------------
-// The same inspector as the editor's, over a mock 16:9 frame: no camera is
-// opened to set a preference. Framing is per take, so there is no Reframe here.
-const MOCK_OUT = { width: 1920, height: 1080 };
-const MOCK_CAM = { width: 1280, height: 720 };
-let pipDefault: PipStyle | null = null;
-
-function drawPipMock(): void {
-  if (!pipDefault) return;
-  const frame = $("pipmock").getBoundingClientRect();
-  const k = frame.width / MOCK_OUT.width;
-  const r = pipRect(pipDefault, MOCK_OUT, MOCK_CAM);
-  const short = Math.min(r.width, r.height);
-  const box = $("pipmockbox");
-  // The border's widthPt x 2 x k assumes a 2x (retina) display — 2 output px
-  // per point — an approximation, fine for a preview.
-  Object.assign(box.style, {
-    left: `${r.x * k}px`, top: `${r.y * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
-    borderRadius: pipDefault.shape === "circle" ? "50%" : `${pipDefault.cornerRadius * short * k}px`,
-    border: pipDefault.border ? `${pipDefault.border.widthPt * k * 2}px solid ${pipDefault.border.color}` : "none",
-    boxShadow: pipDefault.shadow
-      ? `0 ${PIP_SHADOW.offsetYFraction * short * k}px ${PIP_SHADOW.blurFraction * short * k}px ${PIP_SHADOW.color}` : "none",
-  });
-  (box.firstElementChild as HTMLElement).style.transform = pipDefault.mirror ? "scaleX(-1)" : "";
-}
-
-async function savePipDefault(style: PipStyle, persist: boolean): Promise<void> {
-  pipDefault = style;
-  pipSettingsInspector.render(style, true);
-  drawPipMock();
-  if (persist) {
-    try {
-      pipDefault = (await recorder.setSettings({ pipStyle: style })).pipStyle;
-    } catch (e) {
-      alertUser(`Could not save the camera default: ${String(e)}`);
-    }
-    pipSettingsInspector.render(pipDefault, true);
-    drawPipMock();
-  }
-}
-
-const pipSettingsInspector = buildPipInspector($("pipsettings"), {
-  surface: "settings",
-  onEdit(edit, phase) {
-    if (pipDefault) void savePipDefault(editPipStyle(pipDefault, edit, MOCK_CAM), phase === "commit");
-  },
-});
-
-async function loadPipDefault(): Promise<void> {
-  try {
-    pipDefault = (await recorder.getSettings()).pipStyle;
-    pipSettingsInspector.render(pipDefault, true);
-    drawPipMock();
-  } catch { /* the sheet simply shows no mock until settings load */ }
-}
-void loadPipDefault();
-// The mock's scale follows the sheet's width.
-window.addEventListener("resize", drawPipMock);
-
-let mockDrag: { dx: number; dy: number } | null = null;
-$("pipmockbox").addEventListener("pointerdown", (e) => {
-  if (!pipDefault) return;
-  const frame = $("pipmock").getBoundingClientRect();
-  const k = frame.width / MOCK_OUT.width;
-  mockDrag = {
-    dx: (e.clientX - frame.left) / k - pipDefault.center.x * MOCK_OUT.width,
-    dy: (e.clientY - frame.top) / k - pipDefault.center.y * MOCK_OUT.height,
-  };
-  $("pipmockbox").setPointerCapture(e.pointerId);
-});
-$("pipmockbox").addEventListener("pointermove", (e) => {
-  if (!mockDrag || !pipDefault) return;
-  const frame = $("pipmock").getBoundingClientRect();
-  const k = frame.width / MOCK_OUT.width;
-  const raw = {
-    x: ((e.clientX - frame.left) / k - mockDrag.dx) / MOCK_OUT.width,
-    y: ((e.clientY - frame.top) / k - mockDrag.dy) / MOCK_OUT.height,
-  };
-  const c = snapCenter(raw, pipSize(pipDefault, MOCK_OUT, MOCK_CAM), MOCK_OUT, PIP_SNAP_THRESHOLD_SCREEN_PX / k);
-  void savePipDefault(editPipStyle(pipDefault, { kind: "move", center: c }, MOCK_CAM), false);
-});
-$("pipmockbox").addEventListener("pointerup", () => {
-  if (!mockDrag || !pipDefault) return;
-  mockDrag = null;
-  void savePipDefault(pipDefault, true);
-});
-
-($("resetshortcuts") as HTMLButtonElement).addEventListener("click", async () => {
-  listening = undefined;
-  try {
-    shortcutState = await recorder.resetShortcuts();
-  } catch (e) {
-    alertUser(`Could not restore the default shortcuts: ${String(e)}`);
-  }
-  renderShortcuts();
-});
-
-void (async () => {
-  try {
-    shortcutState = await recorder.getShortcuts();
-  } catch {
-    shortcutState = undefined;
-  }
-  renderShortcuts();
-})();
-
-void loadStillPreferences().catch(() => {});

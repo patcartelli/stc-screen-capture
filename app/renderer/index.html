@@ -6,7 +6,6 @@
   <title>Capture</title>
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="device-menu.css">
-  <link rel="stylesheet" href="pip-inspector.css">
   <style>
     /* ── instrument visual language (STC-372) ───────────────────────────────
        A restyle only: renderer.ts and library-view.ts reach the document
@@ -258,111 +257,8 @@
        this branch's own removal of #player and everything under it wins the
        conflict rather than reintroducing a restyled copy of a section that
        no longer exists in this window. */
-    /* The Preferences section's rows: the save location (STC-293's
-       destination folder, unified by STC-412 into the one `saveFolder` that
-       governs recordings, shots and the library root alike) and the
-       post-capture floating thumbnail's own preferences (STC-296). The
-       DECORATED still itself is composited and exported from the thumbnail's
-       own window now — see app/renderer/thumbnail.html — so nothing here
-       draws a preview. The class name is older than the section. */
-    .stillrow { display: flex; align-items: center; gap: 8px; margin-top: 6px;
-                font-size: var(--type-body); flex-wrap: wrap; }
-    .stillrow label { display: flex; align-items: center; gap: 4px; }
-    .stillrow button { padding: 3px 10px; font-size: var(--type-body); }
-    #stilldest, #sitedest { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
-                 white-space: nowrap; max-width: 260px; direction: rtl; }
-    .shortcut { display: flex; align-items: baseline; gap: 10px; padding: 5px 0;
-                border-top: 1px solid var(--border); }
-    .shortcut .name { min-width: 150px; }
-    .shortcut .keys { font: inherit; font-weight: 400; min-width: 88px; text-align: center; padding: 3px 10px;
-                      font-size: var(--type-body); font-family: var(--font-readout); font-variant-numeric: tabular-nums; }
-    .shortcut .keys.listening { border-color: var(--accent); color: var(--accent); }
-    .shortcut .clear { padding: 3px 8px; font-size: var(--type-body); }
-    .shortcut .why { font-size: var(--type-body); color: var(--warn); flex: 1; }
-    .shortcut .why.ok { color: var(--text-dim); opacity: 1; }
-    /* STC-415: a shot's ⌃/⌥ variants, a second line inside its row. */
-    .shortcut { flex-wrap: wrap; }
-    .shortcut .variants { flex: 0 0 100%; padding: 2px 0 0 0; }
-    .shortcut .variant { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; }
-    .shortcut .variant .name { min-width: 150px; padding-left: 14px; color: var(--text-dim); font-size: var(--type-body); }
-    .shortcut .variant .keys { min-width: 88px; text-align: center; padding: 1px 10px; color: var(--text-dim);
-                               font-size: var(--type-body); font-family: var(--font-readout); font-variant-numeric: tabular-nums; }
-    #shortcutfoot { display: flex; gap: 10px; align-items: baseline; padding-top: 8px; }
-    #shortcutfoot button { padding: 3px 10px; font-size: var(--type-body); }
-    #pipsettingshint { font-size: var(--type-meta); color: var(--text-faint); margin: 0 0 8px; }
-    #shortcuthint { font-size: var(--type-meta); color: var(--text-faint); }
-
-    /* ── the profile sheet (STC-374) ──────────────────────────────────────
-       A panel INSIDE this window, not a fourth window — slides in from the
-       right over the take grid rather than opening as its own surface. Holds
-       what used to sit in the main flow: still-capture prefs and the
-       shortcuts editor. `[hidden]` is not used here (it forces display:none,
-       which cannot transition) — visibility is the `.open` class alone. */
-    #profilesheet {
-      /* STC-560: 440, up from 360, which wrapped most of Preferences' rows. */
-      position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw);
-      background: var(--surface); border-left: 1px solid var(--border);
-      box-shadow: var(--shadow-sheet);
-      transform: translateX(100%); transition: transform .18s ease;
-      padding: 20px; box-sizing: border-box; overflow-y: auto;
-      display: flex; flex-direction: column; gap: 16px; z-index: 10;
-      /* STC-552: #title-row is a drag region, and on macOS a drag region wins
-         over anything painted above it, so the X (inside that row's band) was
-         eaten as a window drag. Same carve-out #permissionsheet has. */
-      -webkit-app-region: no-drag;
-    }
-    #profilesheet.open { transform: translateX(0); }
-    /* Reduced motion (STC-506): no slide; a short crossfade. `visibility` keeps a
-       closed sheet's controls out of the Tab order, which the offscreen
-       transform alone never did. */
-    @media (prefers-reduced-motion: reduce) {
-      #profilesheet { transform: none; opacity: 0; visibility: hidden;
-                      transition: opacity var(--dur-quick) ease, visibility 0s linear var(--dur-quick); }
-      #profilesheet.open, body.settings-only #profilesheet {
-        opacity: 1; visibility: visible; transition: opacity var(--dur-quick) ease; }
-    }
-    /* STC-552: the sheet's own no-drag is not enough. It opens by TRANSFORM
-       alone, and Chromium collects drag regions at layout, so a transform
-       does not move the carve-out out from under the title row (measured:
-       the X still produced "Window move completed without beginning"). While
-       the sheet is open the title row stops being a drag region too, which is
-       a style change on an element that laid out, so the regions are redone. */
-    /* STC-551 follow-up: Settings from the tray with no library window open
-       is a window for Settings alone — everything but the sheet is hidden and
-       the sheet fills the window. The header is the drag handle (the title row
-       is hidden), clear of the traffic lights; the X stays clickable. */
-    body.settings-only > *:not(#profilesheet):not(#permissionsheet) { display: none; }
-    body.settings-only #profilesheet {
-      width: 100vw; border-left: 0; padding-top: 20px;
-      /* An independent surface, not a pane: no slide, no shadow. */
-      transform: none; transition: none; box-shadow: none;
-    }
-    /* STC-560: one form column. main.ts opens this window at 560 wide, which
-       fills it; a window dragged wider keeps the column at a readable width
-       rather than stretching every row across it. The header is left out so
-       the drag handle and the X still span the window. */
-    body.settings-only #profilesheet > :not(#profilesheet-head) { max-width: 560px; }
-    body.settings-only #profilesheet-head { padding-left: var(--traffic-light-offset); -webkit-app-region: drag; }
-    body.settings-only #profileclose { -webkit-app-region: no-drag; }
-    body:has(#profilesheet.open) #title-row { -webkit-app-region: no-drag; }
-    #profilesheet h1 { font-size: var(--type-heading); font-weight: var(--type-heading-weight); }
-    #profilesheet-head { justify-content: space-between; }
-    #profileclose { padding: 3px 9px; font-size: var(--type-body); line-height: 1; }
-    /* STC-430: the sheet has exactly two PEER sections — Profile (how a
-       recording is formatted: Scope/Source — Camera and Mic moved out to
-       #devicestate, STC-414) and Preferences
-       (everything app-level, shortcuts included). "Countdown" and "Shot
-       shortcuts" used to be their own <h2>, styled identically to Profile
-       and Preferences, so the sheet read as four flat sections and the
-       boundary the split exists to draw was invisible. They are grouping
-       labels WITHIN Preferences now — same small/uppercase treatment as
-       #modelcode and .libbadge — subordinate rather than a peer heading. */
-    .subhead { font-size: var(--type-label); font-weight: var(--type-label-weight);
-               letter-spacing: var(--type-label-tracking); text-transform: uppercase;
-               color: var(--text-faint); }
-
     /* ── the required-grants panel (STC-476) ─────────────────────────────
-       Covers the whole window, above the profile sheet: while it is up there
+       Covers the whole window: while it is up there
        is nothing in the window a capture could usefully start from. */
     #permissionsheet {
       position: fixed; inset: 0; z-index: 20; background: var(--surface);
@@ -395,7 +291,7 @@
     <button id="record">Record</button>
     <button id="capturestill" title="Select an area or a window and take one shot">Shot</button>
     <span id="state">starting…</span>
-    <button id="settings" title="Profile, preferences and shortcuts">Settings</button>
+    <button id="settings" title="Open Settings">Settings</button>
   </div>
   <div id="stillstatus" hidden></div>
 
@@ -457,143 +353,6 @@
 
   <h2 id="lib-heading">Recordings</h2>
   <div id="takes"></div>
-
-  <!--
-    The profile sheet (STC-374): still-capture prefs and the shortcuts editor,
-    moved out of the main flow behind the Profile button. Nothing in here
-    changed behaviour — only where it lives.
-  -->
-  <aside id="profilesheet">
-    <div class="row" id="profilesheet-head">
-      <h1>Settings</h1>
-      <button id="profileclose" aria-label="Close">×</button>
-    </div>
-
-    <h2>Profile</h2>
-    <div class="row">
-      <label id="display-label">Source <select id="display"><option value="">Automatic</option></select></label>
-    </div>
-    <!-- Camera and mic used to be picked here (a checkbox and a <select>).
-         STC-414 moved both onto the always-visible #devicestate row — the
-         "controls that already show their feedback" — so Profile is Scope
-         and Source alone now. -->
-
-    <h2>Preferences</h2>
-    <!--
-      The save location first, because it is the one preference here that
-      decides where a user's own files END UP.
-
-      It used to sit under its own `<h2>Shot</h2>` heading, which was true
-      while it was `still.destination` and governed stills alone. STC-412
-      unified it: `saveFolder` is where RECORDINGS go, where shots go, AND
-      which root the library scans (`takes.ts`'s `takesRoot`) — so a "Shot"
-      heading over it named a third of what it does, and a section of its own
-      read as a peer of Preferences rather than part of it. The post-capture
-      panel's own preferences follow it here for the same reason: they are
-      preferences, and the heading that used to separate them was the stale
-      half of this row's own story.
-
-      `#stilldest` shows a REAL resolved path, never "beside the shot" —
-      there is no per-shot override left to describe, and an unset
-      `saveFolder` resolves to a real folder (`recorder:resolvedSaveFolder`,
-      which calls the same `takesRoot` main writes through rather than
-      re-deriving the default in the renderer).
-    -->
-    <div class="stillrow">
-      <span>Recordings and shots save to</span>
-      <span id="stilldest">…</span>
-      <button id="stillchoosedest">Change…</button>
-      <!-- STC-435: about THIS folder's raw/ bundles, so it lives on its row.
-           Shows what it would remove before anything moves. -->
-      <button id="reclaimspace" title="Find source folders no file in this folder uses any more, and move them to the Trash">Reclaim space…</button>
-    </div>
-    <!--
-      The site folder (STC-444 slice 3), moved here from the editor window's
-      own sharebar — one folder for the whole app's shared demos, the same
-      reason `stilldest` above lives in Preferences and not per-take. Unlike
-      `stilldest`, `#sitedest` shows the RAW stored value, "Not set" and all
-      — `share.destination` has no resolved fallback to paper over a null
-      with (see `refreshSiteDestination`'s own comment in renderer.ts).
-    -->
-    <div class="stillrow">
-      <span>Shared demos publish to</span>
-      <span id="sitedest">…</span>
-      <button id="sitechoosedest">Change…</button>
-    </div>
-    <!--
-      The post-capture floating thumbnail's own preferences (STC-296). The
-      decorated still itself — style, redact, copy, save — is the thumbnail's
-      compact panel now (app/renderer/thumbnail.html, "the whole still UI in
-      v1"); nothing here previews or exports a shot.
-
-      STC-392: the panel no longer closes itself, so there is no timeout or
-      settle-action preference to offer here any more — it waits for you to
-      choose an action.
-    -->
-    <div class="stillrow">
-      <label>Panel corner <select id="thumbcorner">
-        <option value="bottom-right">Bottom right</option>
-        <option value="bottom-left">Bottom left</option>
-        <option value="top-right">Top right</option>
-        <option value="top-left">Top left</option>
-      </select></label>
-      <label title="Skip the panel entirely and copy every shot straight to the clipboard">
-        <input type="checkbox" id="thumbskip"> Skip it — straight to clipboard</label>
-    </div>
-    <div class="stillrow">
-      <label title="Show helper pid, frame/drop counts and event counts on the main window">
-        <input type="checkbox" id="showdiagnostics"> Show diagnostics</label>
-    </div>
-
-    <!--
-      STC-391. One countdown, two ways in: Record always counts down, and a
-      still capture only when it was started with the self-timer. The options
-      are built from `countdown.ts`'s COUNTDOWN_OPTIONS rather than listed
-      here, so the list and the clamp that has to accept it cannot drift.
-
-      STC-430: "Countdown" was its own `<h2>`, a peer of Profile and
-      Preferences — this is a Preferences field like the ones above it, not
-      a third section, so it gets `.subhead` rather than another heading.
-    -->
-    <div class="subhead">Countdown</div>
-    <div class="stillrow">
-      <label title="Record always counts down. A shot counts down only when started with the self-timer.">Counts
-        down for <select id="countdownms"></select></label>
-      <span id="countdownhint">Applies to Record, and to Shot with Self-Timer.</span>
-    </div>
-
-    <!-- STC-395: what a recording's GIF is converted with. The options are
-         built from gif-options.ts's lists, like the countdown's, so the list
-         and the validator cannot drift. -->
-    <div class="subhead">GIF</div>
-    <div class="stillrow">
-      <label>Frame rate <select id="giffps"></select></label>
-      <label>Max width <select id="gifwidth"></select></label>
-    </div>
-
-    <!-- STC-461: the PiP default. The editor's inspector over a mock frame —
-         no camera is opened to set a preference. -->
-    <div class="subhead">Camera</div>
-    <p id="pipsettingshint">How the camera looks in new recordings. Each recording can still be changed in the editor.</p>
-    <div id="pipmock" aria-hidden="true"><div id="pipmockbox"><div class="silhouette"></div></div></div>
-    <div id="pipsettings"></div>
-
-    <!-- STC-430: same as Countdown above — a Preferences field, not a
-         fourth section, so `.subhead` rather than `<h2>`. -->
-    <div class="subhead">Shot shortcuts</div>
-    <div id="shortcuts"></div>
-    <div id="shortcutfoot">
-      <button id="resetshortcuts">Restore defaults</button>
-      <label id="shutter-label" title="Play the system camera-shutter sound when a still is captured">
-        <input type="checkbox" id="shuttersound" checked> Shutter sound</label>
-      <span id="shortcuthint">Work with the app in the background. Click a shortcut, then press the keys. Add ⌃ to a shot shortcut to copy it straight to the clipboard, or ⌥ to open it in the editor.</span>
-    </div>
-
-    <!-- STC-502: a Preferences field, so `.subhead` like the two above. Options
-         are built from icon-placement.ts, never listed here. -->
-    <div class="subhead">Show icon in</div>
-    <select id="iconplacement" aria-label="Show icon in"></select>
-  </aside>
 
   <!--
     The required-grants panel (STC-476 MVP slice). Covers the window while a

@@ -8,10 +8,9 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
-import { fakeDisplayIds } from "./_fake-displays.mjs";
 
 /**
- * The display picker (STC-247), end to end through the real app: the real IPC
+ * The display a recording targets (STC-247), end to end through the real app: the real IPC
  * handlers, the real settings file, the real start path. The helper stand-in
  * answers `devices` with two displays and records the start payload; it
  * captures nothing, and nothing here claims anything about capture — whether
@@ -49,71 +48,21 @@ async function launch(opts: { userData: string; recordings: string; startLog?: s
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
-  // STC-412: the Source picker lives inside the Settings sheet now. Open it
-  // once here, as a user does, so these tests drive it the way it is reached.
-  await win.click("#settings");
   return win;
 }
 
-// The stand-in's display ids follow the machine's real primary display
-// (STC-464), so they are read, never written as "1" and "2".
-const IDS = fakeDisplayIds();
-const BUILT_IN = String(IDS.builtIn);
-const EXTERNAL = String(IDS.external);
-
-const optionValues = (win: any) =>
-  win.$$eval("#display option", (os: HTMLOptionElement[]) => os.map((o) => o.value));
-const optionTexts = (win: any) =>
-  win.$$eval("#display option", (os: HTMLOptionElement[]) => os.map((o) => o.textContent));
-
-describe("the display picker", () => {
-  test("offers Automatic first, then what the helper enumerates, and defaults to Automatic", async () => {
-    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-    const { dir: recordings } = makeTakeFolder();
-    const win = await launch({ userData, recordings });
-
-    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", BUILT_IN, EXTERNAL]);
-    const texts = await optionTexts(win);
-    expect(texts[0]).toBe("Automatic");
-    expect(texts[1]).toContain("Built-in Display");
-    expect(texts[1]).toContain("(main)");
-    expect(texts[2]).toContain("External Display");
-    expect(texts[2]).not.toContain("(main)");
-    expect(await win.inputValue("#display")).toBe("");
-  }, 180_000);
-
-  test("a picked display survives a restart", async () => {
-    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-    const { dir: recordings } = makeTakeFolder();
-
-    let win = await launch({ userData, recordings });
-    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", BUILT_IN, EXTERNAL]);
-    await win.selectOption("#display", EXTERNAL);
-    await expect.poll(() => win.inputValue("#display")).toBe(EXTERNAL);
-    await app!.close();
-    app = undefined;
-
-    win = await launch({ userData, recordings });
-    await expect.poll(() => win.inputValue("#display"), { timeout: 20_000 }).toBe(EXTERNAL);
-  }, 180_000);
-
+describe("the display a recording targets", () => {
   // STC-388 found this test asserting the OLD contract and it is restated
   // rather than loosened: Task 6 made scope a per-take choice, chosen fresh
   // from the overlay every time Record is pressed, and "the old sticky-scope
   // settings path is gone" (main.ts's own comment on `runRecordFlow`) is
   // literal — `stored.displayId` is read nowhere in the recording path
-  // anymore. Source (`#display`) still exists in the window, and its stored
-  // value still round-trips (the test above this one), but as of this review
-  // NOTHING in the shipped app currently reads `Settings.displayId` at all —
-  // `captureStill` takes its display from the CURSOR's position (STC-374's
-  // `getDisplayNearestPoint`), not from this setting, and a recording is
-  // scoped from the overlay every time, per this file's own header. Do not
-  // invent a new purpose for the control here; whether `#display` should
-  // still exist, and what it should mean if it does, is unscoped follow-up
-  // work for STC-388 rather than something this test can settle. What the
-  // helper is actually told, and what this test still checks, is the display
-  // the selection was DRAGGED on — a real, checkable claim regardless of
-  // what `#display` does or doesn't feed: the display has to reach the
+  // anymore. NOTHING in the shipped app reads `Settings.displayId`, which is
+  // why STC-581 removed Source (`#display`) from Settings: `captureStill`
+  // takes its display from the CURSOR's position (STC-374's
+  // `getDisplayNearestPoint`), and a recording is scoped from the overlay
+  // every time. What the helper is actually told, and what this test checks,
+  // is the display the selection was DRAGGED on: the display has to reach the
   // process that opens the stream.
   test("recording sends the displayId of the display the selection was made on", async () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
@@ -126,16 +75,14 @@ describe("the display picker", () => {
     // Read from Electron's own primary display rather than assumed — the
     // overlay's `ctx.displays` comes from `screen.getAllDisplays()`
     // (overlay-session.ts's `toDisplayInfo`), not from the stand-in's
-    // STC_FAKE_DISPLAYS list, which only feeds the `#display` dropdown's text.
+    // STC_FAKE_DISPLAYS list.
     const wantDisplayId = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().id);
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.displayId, `start payload was ${JSON.stringify(cmd)}`).toBe(wantDisplayId);
-    // The whole settings panel still locks during a take (`lockSettings` in
-    // renderer.ts), Source included, even though Source itself no longer
-    // feeds a recording's target.
-    await expect.poll(() => win.isDisabled("#display"), { timeout: 20_000 }).toBe(true);
+    // The device pickers lock during a take (`lockSettings` in renderer.ts).
+    await expect.poll(() => win.isDisabled("#camera-picker"), { timeout: 20_000 }).toBe(true);
   }, 180_000);
 
   // The old "Automatic sends no displayId at all" test asserted a dead
@@ -172,27 +119,5 @@ describe("the display picker", () => {
     const cmd = await waitForStart(startLog);
     expect(cmd.displayId, `start payload was ${JSON.stringify(cmd)}`).toBe(wantDisplayId);
     expect("region" in cmd, `start payload was ${JSON.stringify(cmd)}`).toBe(false);
-  }, 180_000);
-
-  // The stored choice outlives the display. Dropping it silently would record
-  // the wrong screen without a word; the helper refuses such a start with
-  // display-not-found, so the user should see the stale choice before then.
-  test("a stored display that is no longer listed is shown as not connected, not dropped", async () => {
-    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-    const { dir: recordings } = makeTakeFolder();
-
-    let win = await launch({ userData, recordings });
-    await expect.poll(() => optionValues(win), { timeout: 20_000 }).toEqual(["", BUILT_IN, EXTERNAL]);
-    await win.selectOption("#display", EXTERNAL);
-    await expect.poll(() => win.inputValue("#display")).toBe(EXTERNAL);
-    await app!.close();
-    app = undefined;
-
-    const onlyMain = JSON.stringify([{ id: IDS.builtIn, main: true, name: "Built-in Display", pointW: 1800, pointH: 1169,
-                                       pixelW: 3600, pixelH: 2338, originX: 0, originY: 0 }]);
-    win = await launch({ userData, recordings, displays: onlyMain });
-    await expect.poll(() => win.inputValue("#display"), { timeout: 20_000 }).toBe(EXTERNAL);
-    const texts = await optionTexts(win);
-    expect(texts.at(-1)).toBe(`Display ${EXTERNAL} (not connected)`);
   }, 180_000);
 });

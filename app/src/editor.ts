@@ -2060,7 +2060,6 @@ function setPipStyle(style: PipStyle, persist: boolean): void {
 }
 
 const pipInspector = buildPipInspector($("pippanel"), {
-  surface: "editor",
   onEdit(edit: PipEdit, phase) {
     const style = currentPipStyle();
     const cam = pipCamera();

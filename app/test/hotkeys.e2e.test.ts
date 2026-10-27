@@ -8,6 +8,7 @@ import { DEFAULT_SHORTCUTS, OUTCOMES, outcomeAccelerator } from "../src/hotkeys.
 import { parseShot } from "../../transform/src/shot.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { windowCount } from "./_windows.js";
+import { openSettings } from "./_settings-window.js";
 
 /**
  * Global shortcuts and menu-bar capture, end to end (STC-292).
@@ -32,7 +33,9 @@ let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
 interface Launched {
+  /** The Settings window, on its Shortcuts pane. */
   win: Page;
+  library: Page;
   recordings: string;
   userData: string;
   stillLog: string;
@@ -55,12 +58,13 @@ async function launch(o: { userData?: string; recordings?: string; stillLog?: st
     },
   });
   await stubQuitDialog(app);
-  const win = await app.firstWindow();
-  // The shortcuts editor moved behind the profile sheet (STC-374) — open it
-  // once per launch so every selector below can still reach it directly.
-  await win.click("#settings");
-  await win.waitForSelector("#shortcuts .shortcut");
-  return { win, recordings, userData, stillLog };
+  const library = await app.firstWindow();
+  // The shortcuts editor is the Settings window's Shortcuts pane (STC-581):
+  // open it once per launch, and hand back THAT page as `win`, so every
+  // selector below reaches it directly. `library` is the library window.
+  const win = await openSettings(app, library, "shortcuts");
+  await win.waitForSelector("#shortcuts-shots .shortcut");
+  return { win, library, recordings, userData, stillLog };
 }
 
 const isRegistered = (accelerator: string): Promise<boolean> =>
@@ -93,8 +97,8 @@ describe("the capture shortcuts", () => {
   test("preferences shows each action as active", async () => {
     const { win } = await launch();
     for (const action of ["region", "window", "display"]) {
-      await expect.poll(() => win.textContent(`#shortcutwhy-${action}`), { timeout: 15_000 })
-        .toBe("Active");
+      await expect.poll(() => win.getAttribute(`#shortcutwhy-${action}`, "data-state"), { timeout: 15_000 })
+        .toBe("registered");
     }
     expect(await win.textContent("#shortcut-region")).toBe("⌥⌘1");
   }, 120_000);
@@ -147,7 +151,7 @@ describe("the capture shortcuts", () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const { win } = await launch({ userData });
     const r = await win.evaluate(() =>
-      (window as any).recorder.setShortcut("window", "Command+Space"));
+      (window as any).settingsBridge.setShortcut("window", "Command+Space"));
     expect(r.shortcuts.window).toBe("Alt+Command+2");
     expect(r.report.find((x: any) => x.action === "window"))
       .toMatchObject({ problem: "reserved", registered: false });
@@ -159,7 +163,7 @@ describe("the capture shortcuts", () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const { win } = await launch({ userData });
 
-    await win.click("#shortcuts .shortcut:nth-child(3) .clear");
+    await win.click("#shortcuts-shots .shortcut:nth-child(3) .clear");
     await expect.poll(() => win.textContent("#shortcut-display"), { timeout: 15_000 }).toBe("—");
     expect(await isRegistered(DEFAULT_SHORTCUTS.display!)).toBe(false);
     expect(storedShortcuts(userData).display).toBeNull();
@@ -205,6 +209,8 @@ describe("the shutter sound preference", () => {
     // looks for it — this is the control in the app's own window.
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const { win } = await launch({ userData });
+    // On the Capture pane since STC-581.
+    await win.click('#sidebar button[data-pane="capture"]');
     const box = win.locator("#shuttersound");
     expect(await box.isChecked()).toBe(true);
 
@@ -216,7 +222,7 @@ describe("the shutter sound preference", () => {
     await app!.close();
     app = undefined;
     const second = await launch({ userData });
-    expect(await second.win.locator("#shuttersound").isChecked()).toBe(false);
+    await expect.poll(() => second.win.locator("#shuttersound").isChecked(), { timeout: 10_000 }).toBe(false);
   }, 180_000);
 });
 
@@ -248,8 +254,9 @@ describe("the menu bar", () => {
       process.stderr.write("SKIP: menu-bar-first survival is macOS-only behaviour\n");
       return;
     }
-    const { win } = await launch();
+    const { win, library } = await launch();
     await win.close();
+    await library.close();
 
     // The window really is gone first. Without this the Dock assertion below
     // could fail for a completely different reason — a window that survived —
@@ -286,7 +293,7 @@ describe("a full-display capture", () => {
     // The action a hotkey reaches with nothing on screen: no selection, no
     // dimming, no window. It goes through the same main-process entry point
     // the hotkey and the menu bar call.
-    const { win, stillLog } = await launch();
+    const { library: win, stillLog } = await launch();
     const windowsBefore = await windowCount(app!);
 
     const r = await win.evaluate(() => (window as any).recorder.captureStill("display"));
@@ -326,14 +333,15 @@ describe("a full-display capture", () => {
   test("the window is told about a capture it did not ask for", async () => {
     // A hotkey capture has no renderer waiting on a reply. An open window must
     // not be left showing a stale take list with no explanation.
-    const { win } = await launch();
+    const { library: win } = await launch();
     await win.evaluate(() => (window as any).recorder.on("still:captured", (r: any) => {
       (window as any).__announced = r;
     }));
     await app!.evaluate(({ webContents }) => {
       // Stand in for the hotkey's own announcement, which needs a real global
       // keypress this process cannot make.
-      webContents.getAllWebContents()[0]!.send("still:captured",
+      // The library's page, not Settings' (STC-581: two windows are open).
+      webContents.getAllWebContents().find((w) => w.getURL().includes("index.html"))!.send("still:captured",
         { ok: true, kind: "display", dir: "/tmp/x/2026-09-08_hotkey", source: "hotkey" });
     });
     await expect.poll(() => win.evaluate(() => (window as any).__announced?.source), { timeout: 10_000 })
@@ -347,16 +355,17 @@ describe("the capture-time outcome variants (STC-415, ⇧ since STC-582)", () =>
   test("Settings lists each shot's variants, with their keys and whether they are live", async () => {
     const { win } = await launch();
     for (const action of ["region", "window", "display", "self-timer"]) {
-      await expect.poll(() => win.textContent(`#shortcutwhy-${action}-clipboard`), { timeout: 15_000 })
-        .toBe("Active");
+      await expect.poll(() => win.getAttribute(`#shortcutwhy-${action}-clipboard`, "data-state"), { timeout: 15_000 })
+        .toBe("registered");
       // The editor has no hotkey variant (STC-582).
       expect(await win.locator(`#shortcut-${action}-editor`).count()).toBe(0);
     }
     expect(await win.textContent("#shortcut-region-clipboard")).toBe("⌥⇧⌘1");
     // Record has no outcome to choose.
     expect(await win.locator("#shortcut-record-clipboard").count()).toBe(0);
-    // The variants sit INSIDE their action's row, so the list's own order is the actions'.
-    expect(await win.locator("#shortcuts > .shortcut").count()).toBe(5);
+    // The variants sit INSIDE their action's row: four shot rows, then Record's group.
+    expect(await win.locator("#shortcuts-shots > .shortcut").count()).toBe(4);
+    expect(await win.locator("#shortcuts-recording > .shortcut").count()).toBe(1);
   }, 120_000);
 
   test("a base that already holds a modifier says why it has no variant", async () => {

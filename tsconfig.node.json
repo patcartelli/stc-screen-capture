@@ -33,12 +33,14 @@
               "app/src/library-view.ts", "app/src/editor.ts", "app/src/countdown-renderer.ts",
               "app/src/toast-renderer.ts", "app/src/still-editor-renderer.ts",
               "app/src/narration-worker.ts", "app/src/copy-render.ts",
-              "app/src/pill-renderer.ts",
+              "app/src/pill-renderer.ts", "app/src/settings-renderer.ts",
               // Not a page — a DOM-touching row-building module (STC-456)
               // shared by two page entry points (overlay.ts, renderer.ts),
               // which are themselves excluded above. `document.createElement`
               // makes it a TS2584 here otherwise.
               "app/src/device-menu-dom.ts",
+              // STC-581: the Settings dropdown, the same position (settings-renderer.ts).
+              "app/src/settings-dropdown.ts",
               "app/src/pip-inspector.ts",
               // Same position (STC-477): the still composite shared by the
               // panel and the still editor, both excluded above.

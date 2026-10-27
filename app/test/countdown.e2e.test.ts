@@ -8,6 +8,7 @@ import { withCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { stubQuitDialog, closeApp, watchWindowLog, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { toastPage } from "./_toast.js";
+import { openSettings } from "./_settings-window.js";
 
 /**
  * The countdown, wired through the real app (STC-391).
@@ -359,21 +360,23 @@ describe("a countdown that loses its own window does not wedge the app", () => {
 });
 
 describe("the countdown duration is choosable (STC-391, from hardware)", () => {
-  test("the profile sheet offers the options, and the pick is what Record waits", async () => {
+  test("Settings offers the options, and the pick is what Record waits", async () => {
     const { win, startLog } = await launch();
-    await win.click("#settings");
-    await win.waitForSelector("#countdownms");
+    const settings = await openSettings(app!, win);
+    const values = () => settings.evaluate(() =>
+      [...document.querySelectorAll("#countdownms button")].map((b) => (b as HTMLButtonElement).dataset.value));
+    const picked = () => settings.evaluate(() =>
+      (document.querySelector('#countdownms button[aria-checked="true"]') as HTMLButtonElement | null)?.dataset.value);
 
-    // Built from COUNTDOWN_OPTIONS, not hand-listed in the markup.
-    const values = await win.evaluate(() =>
-      [...document.querySelectorAll("#countdownms option")].map((o) => (o as HTMLOptionElement).value));
-    expect(values).toEqual(["3000", "5000", "10000"]);
-    expect(await win.inputValue("#countdownms")).toBe("3000");
+    // Off, then COUNTDOWN_OPTIONS, not hand-listed in the markup (STC-581).
+    expect(await values()).toEqual(["0", "3000", "5000", "10000"]);
+    await expect.poll(picked, { timeout: 10_000 }).toBe("3000");
 
     // Pick 10s, then prove Record really waits it out rather than the stored
     // default: no start within a window that 3s would comfortably have cleared.
-    await win.selectOption("#countdownms", "10000");
-    await win.click("#profileclose");
+    await settings.click('#countdownms button[data-value="10000"]');
+    await expect.poll(picked, { timeout: 10_000 }).toBe("10000");
+    await settings.close();
     await startRecordFlow(app!, win);
     await countdownPage();
     await sleep(4_000);
@@ -394,18 +397,18 @@ describe("the countdown duration is choosable (STC-391, from hardware)", () => {
       await stubQuitDialog(app);
       const w = await app.firstWindow();
       await w.waitForSelector("#record");
-      await w.click("#settings");
-      await w.waitForSelector("#countdownms");
-      return w;
+      return openSettings(app, w);
     };
+    const picked = (p: Page) => p.evaluate(() =>
+      (document.querySelector('#countdownms button[aria-checked="true"]') as HTMLButtonElement | null)?.dataset.value);
 
     const first = await open();
-    await first.selectOption("#countdownms", "5000");
-    await expect.poll(() => first.inputValue("#countdownms"), { timeout: 10_000 }).toBe("5000");
+    await first.click('#countdownms button[data-value="5000"]');
+    await expect.poll(() => picked(first), { timeout: 10_000 }).toBe("5000");
     await app!.close();
 
     const second = await open();
-    expect(await second.inputValue("#countdownms")).toBe("5000");
+    await expect.poll(() => picked(second), { timeout: 10_000 }).toBe("5000");
   }, 120_000);
 });
 

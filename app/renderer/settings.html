@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en" data-surface="dark">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <title>Capture Settings</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="device-menu.css">
+  <style>
+    /* STC-581: the Settings window, built to Capture SK 016's five Settings
+       frames and its "Row pattern spec". Always dark, whatever the OS
+       appearance: the frames are drawn dark only. The window is 760 x 560
+       and fixed; a pane scrolls under the glass title bar.
+
+       Every row is the one pattern: label (and an optional one-line helper)
+       on the left, ONE control on the right, 12px vertical padding, a 7%
+       hairline between rows, inside a 16px-radius group. The control comes
+       from the data type: a switch for on/off, a segmented control for 2-4
+       options, the dropdown for 5 or more (or where the frame draws one), a
+       mono path then Change… for a folder, a slider with a mono readout for
+       a number, and a keycap then Clear for a shortcut. */
+    :root {
+      color-scheme: dark;
+      --win: #0c0c0c;
+      --side: #0a0a0a;
+      --group: #151515;
+      --hair: rgba(255, 255, 255, .07);
+      /* Figma's label whites. Own names: tokens.css's --text is not redefined here. */
+      --ink: rgba(255, 255, 255, .92);
+      --text-strong: rgba(255, 255, 255, .95);
+      --ink-dim: rgba(255, 255, 255, .6);
+      --helper: rgba(255, 255, 255, .5);
+      --heading: rgba(255, 255, 255, .45);
+      --fill: rgba(255, 255, 255, .06);
+      --fill-on: rgba(255, 255, 255, .14);
+      --edge: rgba(255, 255, 255, .12);
+      --edge-strong: rgba(255, 255, 255, .14);
+      /* The switch and slider blue: tokens.css's dark --accent (data-surface="dark"). */
+      --on: var(--accent);
+      --off: rgba(255, 255, 255, .16);
+      --warn-text: #e8a65a;
+      --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+      --ui: 'Geist', -apple-system, system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body { background: var(--win); color: var(--ink); font: 400 13px/18px var(--ui); -webkit-font-smoothing: antialiased; }
+    button, select, input { font: inherit; color: inherit; }
+    :focus-visible { outline: 2px solid var(--on); outline-offset: 2px; }
+
+    /* ---- sidebar ------------------------------------------------------- */
+    #sidebar {
+      position: fixed; inset: 0 auto 0 0; width: 180px; background: var(--side);
+      border-right: 1px solid var(--hair); padding: 56px 12px 12px;
+      display: flex; flex-direction: column; gap: 2px;
+      -webkit-app-region: drag;
+    }
+    #sidebar button {
+      -webkit-app-region: no-drag; text-align: left; border: 0; background: transparent;
+      padding: 7px 10px; border-radius: 8px; color: var(--ink-dim); cursor: default;
+    }
+    #sidebar button[aria-current="page"] { background: rgba(255, 255, 255, .08); color: #fff; font-weight: 500; }
+
+    /* ---- title bar: STC-586's CSS glass ---------------------------------- */
+    #titlebar {
+      position: fixed; top: 0; left: 180px; right: 0; height: 64px; z-index: 2;
+      padding: 20px 24px 0; font-weight: 600; color: var(--text-strong);
+      background: linear-gradient(to bottom, rgb(12 12 12 / .88), rgb(12 12 12 / .6) 60%, rgb(12 12 12 / 0));
+      /* Figma's 24px background blur is CSS blur(12px). */
+      -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+      -webkit-app-region: drag; user-select: none;
+    }
+    /* Reduce Transparency: main says so (nativeTheme), or Chromium does. */
+    body.reduce-transparency #titlebar { background: var(--win); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom: 1px solid var(--hair); }
+    @media (prefers-reduced-transparency: reduce) {
+      #titlebar { background: var(--win); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom: 1px solid var(--hair); }
+    }
+
+    /* ---- panes ------------------------------------------------------------ */
+    #panes { position: fixed; top: 0; bottom: 0; left: 180px; right: 0; overflow-y: auto; }
+    .pane { padding: 64px 28px 32px; display: flex; flex-direction: column; gap: 24px; }
+    .pane[hidden] { display: none; }
+    /* A thin dark scrollbar where the OS draws one at all (macOS overlays it). */
+    #panes::-webkit-scrollbar { width: 8px; }
+    #panes::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: 4px; }
+    .section { display: flex; flex-direction: column; gap: 8px; }
+    .section > h2 {
+      margin: 0; font: 500 10px/12px var(--ui); letter-spacing: 1px; text-transform: uppercase; color: var(--heading);
+    }
+    .group { background: var(--group); border: 1px solid var(--hair); border-radius: 16px; padding: 0 16px; }
+    .group .row { display: flex; align-items: center; gap: 24px; padding: 12px 0; }
+    .group .row + .row { border-top: 1px solid var(--hair); }
+    .group .row > .label { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .helper, .note { font-size: 11px; line-height: 15px; letter-spacing: .22px; color: var(--helper); }
+    .note { color: var(--heading); }
+    .helper.warn { color: var(--warn-text); }
+    .variant .why:not(:empty) { margin-left: 6px; }
+    .control { flex: none; display: flex; align-items: center; gap: 8px; }
+
+    /* Dropdown: the record bar's menu (device-menu.css, settings-dropdown.ts)
+       on a trigger drawn as the frames draw it. Always dark, like the window. */
+    .dropdown {
+      display: inline-flex; align-items: center; justify-content: space-between; gap: 12px;
+      height: 32px; min-width: 168px; padding: 0 12px; text-align: left; white-space: nowrap;
+      background: var(--fill); border: 1px solid var(--edge); border-radius: 10px;
+      font: 400 13px/18px var(--mono); color: var(--text-strong);
+    }
+    .dropdown::after {
+      content: ""; flex: none; width: 10px; height: 6px;
+      background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='white' stroke-opacity='.7' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center;
+    }
+    .dropdown[aria-expanded="true"] { border-color: rgba(255, 255, 255, .24); }
+    .dropdown.narrow { min-width: 120px; }
+    /* The record bar's menu surface (tokens.css), with a hairline so it reads over a #151515 group. */
+    .settings-menu { --menu-surface: var(--surface-deep); --menu-on-surface: rgba(255, 255, 255, .92); z-index: 20; border: 1px solid var(--edge); }
+    .settings-menu .row { font: 400 13px/18px var(--mono); height: 36px; }
+    .settings-menu .row:focus-visible { outline: none; background: rgba(255, 255, 255, .08); }
+
+    /* Segmented control. */
+    .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--fill); }
+    .segmented button {
+      border: 0; background: transparent; padding: 6px 12px; border-radius: 8px;
+      font-size: 12px; line-height: 17px; color: var(--ink-dim);
+    }
+    .segmented button[aria-checked="true"] { background: var(--fill-on); color: #fff; font-weight: 500; }
+    .segmented button:disabled { opacity: .4; }
+
+    /* Switch: a real checkbox, so it keeps its keyboard and form behaviour. */
+    input.switch {
+      appearance: none; -webkit-appearance: none; margin: 0; width: 36px; height: 20px; border-radius: 10px;
+      background: var(--off); position: relative; transition: background .15s;
+    }
+    input.switch::after {
+      content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+      background: #fff; transition: transform .15s;
+    }
+    input.switch:checked { background: var(--on); }
+    input.switch:checked::after { transform: translateX(16px); }
+    @media (prefers-reduced-motion: reduce) { input.switch, input.switch::after { transition: none; } }
+
+    /* Slider with a mono readout. */
+    /* --fill-pct is set by the page as the value moves. */
+    input.slider {
+      -webkit-appearance: none; appearance: none; width: 140px; height: 14px; margin: 0; background: transparent;
+      --fill-pct: 0%;
+    }
+    input.slider::-webkit-slider-runnable-track {
+      height: 4px; border-radius: 2px;
+      background: linear-gradient(to right, var(--on) var(--fill-pct), rgba(255, 255, 255, .12) var(--fill-pct));
+    }
+    input.slider::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%;
+      background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    }
+    input.slider:disabled { opacity: .35; }
+    .readout { font: 400 12px/17px var(--mono); color: rgba(255, 255, 255, .7); min-width: 32px; text-align: right; }
+
+    /* Buttons and paths. */
+    .btn {
+      border: 1px solid var(--edge-strong); background: transparent; border-radius: 10px; padding: 8px 14px;
+      font-size: 12px; line-height: 17px; font-weight: 500; color: var(--ink); white-space: nowrap;
+    }
+    .btn:disabled { opacity: .4; }
+    .path { font: 400 12px/17px var(--mono); color: var(--ink-dim); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+    .keycap {
+      width: 112px; height: 32px; border-radius: 10px; border: 1px solid var(--edge-strong); background: rgba(255, 255, 255, .04);
+      font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text-strong);
+    }
+    .keycap.listening { border-color: var(--on); color: var(--on); }
+    .footer { display: flex; justify-content: flex-end; }
+
+    /* Camera preview: a sample screen with the default PiP drawn on it. */
+    #pipstage {
+      position: relative; height: 150px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .08);
+      background: rgba(255, 255, 255, .03);
+    }
+    /* 16:9, the output pipRect is given (MOCK_OUT), so a place set here is the
+       place a 1080p take records. */
+    #pipscreen {
+      position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%); aspect-ratio: 16 / 9; overflow: hidden;
+      background: linear-gradient(159deg, #1b2a4a 0%, #3a1f3d 71%);
+    }
+    #pipscreen .faux { position: absolute; left: 8%; top: 14%; width: 62%; height: 69%; border-radius: 6px; background: rgba(255, 255, 255, .07); }
+    #pipscreen .line { position: absolute; left: 14%; height: 4%; border-radius: 3px; background: rgba(255, 255, 255, .14); }
+    #pipbox { position: absolute; overflow: hidden; background: linear-gradient(#5f6f8a, #3b4658); cursor: grab; touch-action: none; }
+    #pipbox:active { cursor: grabbing; }
+    #pipbox .silhouette { position: absolute; inset: 0; }
+    #pipbox .silhouette::before { content: ""; position: absolute; left: 50%; top: 20%; width: 26%; aspect-ratio: 1; border-radius: 50%; background: rgba(255, 255, 255, .7); transform: translateX(-50%); }
+    #pipbox .silhouette::after { content: ""; position: absolute; left: 50%; bottom: -30%; width: 70%; aspect-ratio: 1.4; border-radius: 50% 50% 0 0; background: rgba(255, 255, 255, .55); transform: translateX(-50%); }
+  </style>
+</head>
+<body>
+  <nav id="sidebar" aria-label="Settings">
+    <button type="button" data-pane="capture">Capture</button>
+    <button type="button" data-pane="camera">Camera</button>
+    <button type="button" data-pane="shortcuts">Shortcuts</button>
+    <button type="button" data-pane="output">Output</button>
+    <button type="button" data-pane="advanced">Advanced</button>
+  </nav>
+  <div id="titlebar" aria-hidden="true"></div>
+
+  <main id="panes">
+    <!-- ---- Capture ---------------------------------------------------- -->
+    <section class="pane" id="pane-capture" aria-labelledby="h-capture" hidden>
+      <h1 id="h-capture" hidden>Capture</h1>
+      <div class="section">
+        <h2>App</h2>
+        <div class="group">
+          <div class="row">
+            <div class="label"><span id="l-iconplacement">Show icon in</span></div>
+            <div class="control"><button type="button" class="dropdown" id="iconplacement" aria-labelledby="l-iconplacement iconplacement"></button></div>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <h2>After a shot</h2>
+        <div class="group">
+          <div class="row">
+            <div class="label"><span id="l-aftershot">When a shot is taken</span></div>
+            <div class="control">
+              <!-- `thumbnail.skip`: the panel, or straight to the clipboard. -->
+              <div class="segmented" id="aftershot" role="radiogroup" aria-labelledby="l-aftershot">
+                <button type="button" role="radio" data-value="panel">Open panel</button>
+                <button type="button" role="radio" data-value="clipboard">Copy to clipboard</button>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="label"><span id="l-thumbcorner">Panel corner</span></div>
+            <div class="control">
+              <button type="button" class="dropdown" id="thumbcorner" aria-labelledby="l-thumbcorner thumbcorner"></button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="label"><label for="shuttersound">Shutter sound</label></div>
+            <div class="control"><input type="checkbox" class="switch" role="switch" id="shuttersound"></div>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Recording</h2>
+        <div class="group">
+          <div class="row">
+            <div class="label"><span id="l-countdown">Countdown</span>
+              <span class="helper">Applies to Record, and to Shot with Self-Timer.</span></div>
+            <!-- Built from countdown.ts's COUNTDOWN_OPTIONS, plus Off (0). -->
+            <div class="control"><div class="segmented" id="countdownms" role="radiogroup" aria-labelledby="l-countdown"></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---- Camera ----------------------------------------------------- -->
+    <section class="pane" id="pane-camera" aria-labelledby="h-camera" hidden>
+      <h1 id="h-camera" hidden>Camera</h1>
+      <div class="section">
+        <h2>Preview</h2>
+        <div id="pipstage" aria-hidden="true"><div id="pipscreen">
+          <div class="faux"></div>
+          <div class="line" style="top:25%;width:25%"></div>
+          <div class="line" style="top:37%;width:41%"></div>
+          <div class="line" style="top:49%;width:33%"></div>
+          <div class="line" style="top:61%;width:19%"></div>
+          <div id="pipbox"><div class="silhouette"></div></div>
+        </div></div>
+        <p class="note" style="margin:0">Shows how the camera will look in new recordings. Updates as you change the controls below.</p>
+      </div>
+      <div class="section">
+        <h2>Shape</h2>
+        <div class="group">
+          <div class="row">
+            <div class="label"><span id="l-pipshape">Shape</span>
+              <span class="helper">How the camera looks in new recordings. Each recording can still change it in the editor.</span></div>
+            <div class="control">
+              <div class="segmented" id="pipshape" role="radiogroup" aria-labelledby="l-pipshape">
+                <button type="button" role="radio" data-pip-shape="rect">Rect</button>
+                <button type="button" role="radio" data-pip-shape="square">Square</button>
+                <button type="button" role="radio" data-pip-shape="circle">Circle</button>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="label"><label for="pipradius">Corners</label></div>
+            <div class="control"><input type="range" class="slider" id="pipradius"><span class="readout" id="pipradius-out"></span></div>
+          </div>
+          <div class="row">
+            <div class="label"><label for="pipsize">Size</label></div>
+            <div class="control"><input type="range" class="slider" id="pipsize"><span class="readout" id="pipsize-out"></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Style</h2>
+        <div class="group">
+          <div class="row">
+            <div class="label"><label for="pipborder">Border</label></div>
+            <div class="control"><input type="checkbox" class="switch" role="switch" id="pipborder"></div>
+          </div>
+          <div class="row">
+            <div class="label"><label for="pipshadow">Shadow</label></div>
+            <div class="control"><input type="checkbox" class="switch" role="switch" id="pipshadow"></div>
+          </div>
+          <div class="row">
+            <div class="label"><label for="pipmirror">Mirror</label></div>
+            <div class="control"><input type="checkbox" class="switch" role="switch" id="pipmirror"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---- Shortcuts -------------------------------------------------- -->
+    <section class="pane" id="pane-shortcuts" aria-labelledby="h-shortcuts" hidden>
+      <h1 id="h-shortcuts" hidden>Shortcuts</h1>
+      <div class="section">
+        <h2>Shots</h2>
+        <div class="group" id="shortcuts-shots"></div>
+      </div>
+      <div class="section">
+        <h2>Recording</h2>
+        <div class="group" id="shortcuts-recording"></div>
+        <p class="note" style="margin:0">Registered means Capture holds the key. Another app can still share it.</p>
+      </div>
+      <div class="footer"><button type="button" class="btn" id="resetshortcuts">Restore defaults</button></div>
+    </section>
+
+    <!-- ---- Output ----------------------------------------------------- -->
+    <section class="pane" id="pane-output" aria-labelledby="h-output" hidden>
+      <h1 id="h-output" hidden>Output</h1>
+      <div class="section">
+        <h2>Locations</h2>
+        <div class="group">
+          <div class="row">
+            <div class="label">Recordings and shots save to</div>
+            <div class="control"><span class="path" id="stilldest">…</span><button type="button" class="btn" id="stillchoosedest">Change…</button></div>
+          </div>
+          <div class="row">
+            <div class="label">Shared demos publish to</div>
+            <div class="control"><span class="path" id="sitedest">…</span><button type="button" class="btn" id="sitechoosedest">Change…</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Storage</h2>
+        <div class="group">
+          <div class="row">
+            <!-- STC-435's targets, checked for STC-581: a working folder in
+                 raw/ whose finished capture is no longer in the save folder
+                 (temp-takes.ts's findOrphanedBundles). A Delete in the library
+                 removes both halves, and a take that never finished has no
+                 capture.json and is never offered, so the case this finds is
+                 a finished file removed outside Capture. -->
+            <div class="label">Clean up leftover files
+              <span class="helper">Finds working files whose finished capture is gone from this folder, such as one you deleted in Finder. You review the list before anything goes to the Trash. Your captures are never touched.</span></div>
+            <div class="control"><button type="button" class="btn" id="reclaimspace">Clean up…</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <h2>GIF</h2>
+        <div class="group">
+          <div class="row">
+            <div class="label"><span id="l-giffps">Frame rate</span></div>
+            <div class="control"><button type="button" class="dropdown narrow" id="giffps" aria-labelledby="l-giffps giffps"></button></div>
+          </div>
+          <div class="row">
+            <div class="label"><span id="l-gifwidth">Max width</span></div>
+            <div class="control"><button type="button" class="dropdown narrow" id="gifwidth" aria-labelledby="l-gifwidth gifwidth"></button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---- Advanced --------------------------------------------------- -->
+    <section class="pane" id="pane-advanced" aria-labelledby="h-advanced" hidden>
+      <h1 id="h-advanced" hidden>Advanced</h1>
+      <div class="section">
+        <h2>Diagnostics</h2>
+        <div class="group">
+          <div class="row">
+            <div class="label"><label for="showdiagnostics">Show diagnostics</label></div>
+            <div class="control"><input type="checkbox" class="switch" role="switch" id="showdiagnostics"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="../dist/settings-renderer.js"></script>
+</body>
+</html>
