@@ -115,18 +115,14 @@ export type MenuPick =
   | { kind: "choice"; menu: "mic" | "camera"; choice: DeviceChoice };
 
 /**
- * Whether a given pick closes the menu it was made in: a toggle (Include
- * System Audio) keeps it open, a choice closes it. This was decided TWICE
- * before this ticket's own fix round — `MenuRow.closesMenu` below, and a
- * second `ev.pick.kind !== "toggle-system-audio"` inline in
- * `overlay-session.ts`'s `onEvent` — the same "one value, two copies" defect
- * this codebase keeps finding (`thumbnail-preload.ts`'s own history, cited in
- * CLAUDE.md). One function, exported, used by both `micMenuRows`'s row
- * construction and the session's own menu-close decision.
+ * No pick closes the menu it was made in (STC-583, Patrick 2026-10-27): the
+ * selection should stay visible in the dropdown, so a menu closes only on an
+ * outside press, Escape, or its own trigger. (Before this, a device choice
+ * closed it and a toggle did not, decided in two places; `closesMenu` is gone
+ * rather than made constant, so nothing can ask the question again.) What
+ * stays is whether a row is a TOGGLE: it is drawn as a switch, not a radio.
  */
-export function closesMenu(pick: MenuPick): boolean {
-  return pick.kind !== "toggle-system-audio";
-}
+export const isToggle = (pick: MenuPick): boolean => pick.kind === "toggle-system-audio";
 
 export interface MenuRow {
   /** Stable and unique within one menu: what the DOM row carries as data-key. */
@@ -137,8 +133,8 @@ export interface MenuRow {
   secondary?: string;
   icon: MenuIcon;
   checked: boolean;
-  /** A toggle keeps the menu open; a choice closes it. `closesMenu(pick)`. */
-  closesMenu: boolean;
+  /** A switch (Include System Audio) rather than a radio choice. `isToggle(pick)`. */
+  toggle: boolean;
 }
 export interface DeviceSelection {
   /** `null` means NO mic — there is no automatic mic (STC-233): a stalled or
@@ -161,11 +157,11 @@ export function micMenuRows(mics: DeviceLike[], s: DeviceSelection): MenuRow[] {
   const systemAudioPick: MenuPick = { kind: "toggle-system-audio" };
   return [
     { key: "system-audio", pick: systemAudioPick, label: MENU_LABELS.systemAudio,
-      icon: "system-audio", checked: s.systemAudio, closesMenu: closesMenu(systemAudioPick) },
+      icon: "system-audio", checked: s.systemAudio, toggle: isToggle(systemAudioPick) },
     ...choices.map((r): MenuRow => {
       const pick: MenuPick = { kind: "choice", menu: "mic", choice: r.choice };
       return { key: keyOf(r.choice), pick, label: r.label,
-        icon: r.choice.kind === "off" ? "mic-off" : "mic", checked: r.selected, closesMenu: closesMenu(pick) };
+        icon: r.choice.kind === "off" ? "mic-off" : "mic", checked: r.selected, toggle: isToggle(pick) };
     }),
   ];
 }
@@ -181,7 +177,7 @@ export function cameraMenuRows(cameras: DeviceLike[], s: DeviceSelection): MenuR
     .map((r): MenuRow => {
       const pick: MenuPick = { kind: "choice", menu: "camera", choice: r.choice };
       return { key: keyOf(r.choice), pick, label: r.label, ...(r.secondary ? { secondary: r.secondary } : {}),
-        icon: r.choice.kind === "off" ? "camera-off" : "camera", checked: r.selected, closesMenu: closesMenu(pick) };
+        icon: r.choice.kind === "off" ? "camera-off" : "camera", checked: r.selected, toggle: isToggle(pick) };
     });
 }
 

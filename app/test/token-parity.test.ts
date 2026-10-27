@@ -49,6 +49,17 @@ describe("source: the three short-lived surfaces", () => {
   it("a muted mic on the options bar gets a 2px record-colour outline that yields to the focus ring (STC-583)", () => {
     expect(read("overlay.html")).toMatch(/#ctl-mic\[data-on="0"\]:not\(:focus-visible\) \{[^}]*outline: 2px solid color-mix\(in srgb, var\(--rec\)/);
   });
+  it("every device menu has one fixed width, and the mic and camera triggers share one (STC-583)", () => {
+    expect(read("device-menu.css")).toMatch(/\.device-menu \{[^}]*\bwidth: 280px;/);
+    expect(read("device-menu.css")).not.toMatch(/max-content/);
+    expect(read("index.html")).toMatch(/\.devicepicker-trigger \{[^}]*box-sizing: border-box; width: 240px;/);
+    expect(read("index.html")).toMatch(/\.devicepicker-trigger > span \{[^}]*text-overflow: ellipsis;/);
+  });
+  it("the muted glyph is the recording red and the pill reveals its label on hover (STC-583)", () => {
+    const html = read("pill.html");
+    expect(html).toMatch(/#pill-mic-off \{[^}]*color: #ff3b30;/);
+    expect(html).toMatch(/#pill\.mic-muted:hover #pill-mic-label \{ display: inline; \}/);
+  });
   it("the pill swaps its meter for a slashed-mic glyph on a take with no mic (STC-583)", () => {
     const html = read("pill.html");
     expect(html).toMatch(/id="pill-mic-off"/);

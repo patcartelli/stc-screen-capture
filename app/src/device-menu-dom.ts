@@ -28,11 +28,11 @@ export function buildMenuRow(r: MenuRow, onPick?: (row: MenuRow) => void): HTMLE
   row.dataset.key = r.key;
   // A toggle (Include System Audio) is a switch, not a pick: it flips in place
   // and keeps the menu open (STC-583). A choice is a radio you can also clear.
-  row.setAttribute("role", r.closesMenu ? "menuitemradio" : "switch");
+  row.setAttribute("role", r.toggle ? "switch" : "menuitemradio");
   row.setAttribute("aria-checked", String(r.checked));
-  const trailing = r.closesMenu ? iconSvg("check", "check") : `<span class="sw" aria-hidden="true"><i></i></span>`;
+  const trailing = r.toggle ? `<span class="sw" aria-hidden="true"><i></i></span>` : iconSvg("check", "check");
   row.innerHTML = `${iconSvg(r.icon)}<span class="label"></span>${trailing}`;
-  if (!r.closesMenu) row.classList.add("toggle");
+  if (r.toggle) row.classList.add("toggle");
   row.querySelector(".label")!.textContent = r.label;
   if (r.secondary) {
     const tag = document.createElement("span");
@@ -44,7 +44,7 @@ export function buildMenuRow(r: MenuRow, onPick?: (row: MenuRow) => void): HTMLE
     row.tabIndex = 0;
     // Stopped here, not left to bubble: the main window's popover closes on
     // any outside click (renderer.ts), and a row press is not an outside
-    // click — without this a toggle row (`closesMenu === false`, "Include
+    // click — without this a pick on any row (a toggle, "Include
     // System Audio") would flip and then be closed anyway by that listener.
     row.addEventListener("click", (e) => { e.stopPropagation(); onPick(r); });
     row.addEventListener("keydown", (e) => {
