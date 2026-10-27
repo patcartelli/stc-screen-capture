@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   pixelSizeLabel, formatChip, capturedLabel, countLabel, applySearch, searchPlaceholder,
-  looseFileItem, LIBRARY_FILTERS, NO_VALUE, type LibraryItem,
+  looseFileItem, gifItem, applyFilter, LIBRARY_FILTERS, NO_VALUE, type LibraryItem,
 } from "../src/library-items.js";
 
 /**
@@ -100,10 +100,41 @@ describe("search", () => {
   });
 });
 
-describe("the filter (STC-584)", () => {
-  test("is All, Recordings, Shots — no GIFs chip while the library cannot list one", () => {
-    // A saved GIF is untagged (STC-395) and outside the scan; a chip that is
-    // always empty would say there are none.
-    expect(LIBRARY_FILTERS.map((f) => f.label)).toEqual(["All", "Recordings", "Shots"]);
+describe("the filter (STC-584, STC-592)", () => {
+  test("is All, Recordings, Shots, GIFs — Capture SK 016's four chips", () => {
+    expect(LIBRARY_FILTERS.map((f) => f.label)).toEqual(["All", "Recordings", "Shots", "GIFs"]);
+  });
+});
+
+describe("a saved GIF's item (STC-592)", () => {
+  const g = gifItem({ file: "/s/login-bug.gif", id: "login-bug", createdAt: 1, bytes: 2_400_000,
+                      width: 960, height: 540, durationMs: 8_000 });
+
+  test("says GIF, and reads duration · size · bytes", () => {
+    expect(g).toMatchObject({ kind: "gif", badge: "GIF", chip: "GIF",
+      readout: "0:08  ·  960 × 540  ·  2.4 MB",
+      columns: { type: "GIF", length: "0:08", size: "960 × 540", file: "2.4 MB" } });
+  });
+
+  test("Share is the one visible action; nothing opens it; no Duplicate", () => {
+    expect(g.actions.map((a) => [a.id, a.place])).toEqual([
+      ["copy-file", "primary"], ["rename", "menu"], ["reveal", "menu"], ["delete", "menu"]]);
+    expect(g.actions.find((a) => a.id === "copy-file")!.label).toBe("Share");
+  });
+
+  test("its thumbnail is the file itself, animated", () => {
+    expect(g.thumbnail).toEqual({ source: "animated" });
+  });
+
+  test("with no facts it still says what it can", () => {
+    const bare = gifItem({ file: "/s/x.gif", id: "x", createdAt: 1, bytes: 1000 });
+    expect(bare.readout).toBe("1 KB");
+    expect(bare.columns).toMatchObject({ length: NO_VALUE, size: NO_VALUE });
+  });
+
+  test("applyFilter(\"gif\") keeps GIFs only", () => {
+    const rec = looseFileItem({ file: "/s/a.mp4", id: "a", createdAt: 1, bytes: 1, isVideo: true });
+    expect(applyFilter([g, rec], "gif")).toEqual([g]);
+    expect(applyFilter([g, rec], "recording")).toEqual([rec]);
   });
 });

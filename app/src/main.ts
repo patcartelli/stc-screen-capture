@@ -59,7 +59,7 @@ import {
 import { recordRefusalText, stillNoticeText } from "./refusals.js";
 import { reclaimPrompt, reclaimResult } from "./reclaim.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
-         recordingDurationMs, recordingScopeLabel } from "./library.js";
+         recordingDurationMs, recordingScopeLabel, GIF_EXTENSION, GIF_PROBE_MAX_BYTES } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen, HIDE_SETTLE_MS } from "./overlay-session.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
@@ -4280,6 +4280,49 @@ ipcMain.handle("share:reveal", async () => {
   if (!existsSync(lastPublishedFile)) return { ok: false, message: "Nothing published yet." };
   shell.showItemInFolder(lastPublishedFile);
   return { ok: true, file: lastPublishedFile };
+});
+
+/**
+ * A path the library may hand back as a saved GIF (STC-592): a regular file
+ * with the `.gif` extension directly in the save folder, which is the only
+ * place the scan (`library.ts`'s `scanGifs`) finds one. Anything else is
+ * refused, so these two channels cannot read or copy an arbitrary file.
+ */
+async function savedGifPath(file: unknown): Promise<string> {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof file !== "string" || !insideTakesRoot(process.env, saveFolder, file)
+      || dirname(file) !== takesRoot(process.env, saveFolder)
+      || !file.toLowerCase().endsWith(GIF_EXTENSION)) {
+    throw new Error("refusing a path that is not a saved GIF");
+  }
+  const st = await stat(file);
+  if (!st.isFile()) throw new Error("refusing a path that is not a saved GIF");
+  return file;
+}
+
+/** A saved GIF's bytes, for its library tile (STC-592). Capped like the scan's own read. */
+ipcMain.handle("library:gifBytes", async (_e, file: unknown) => {
+  const path = await savedGifPath(file);
+  if ((await stat(path)).size > GIF_PROBE_MAX_BYTES) throw new Error("this GIF is too large to preview");
+  return readFile(path);
+});
+
+/**
+ * A saved GIF's Share (STC-592): the file itself on the pasteboard, through
+ * the helper's `copy-file` (STC-488), exactly what the panel's GIF Copy puts
+ * there. Nothing is rendered: the GIF already is what gets shared.
+ */
+ipcMain.handle("library:copyFile", async (_e, file: unknown) => {
+  const path = await savedGifPath(file);
+  const helper = sup;
+  if (!helper) return { ok: false, detail: "the helper is not running" };
+  try {
+    // HelperClient.request REJECTS with a HelperError on an error reply.
+    await helper.copyFile(path);
+  } catch (err: any) {
+    return { ok: false, detail: String(err?.detail ?? err?.code ?? err?.message ?? err) };
+  }
+  return { ok: true };
 });
 
 ipcMain.handle("recorder:reveal", async (_e, dir: string) => {

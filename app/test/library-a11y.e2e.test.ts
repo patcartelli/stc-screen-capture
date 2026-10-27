@@ -99,9 +99,12 @@ describe("Library: focus and keyboard (STC-587)", () => {
     await win.waitForSelector("#liblist");
     await expect.poll(async () => (await focused(win))?.key).toBe("list");
     expect(await win.getAttribute('.libviewtoggle [data-view="list"]', "aria-checked")).toBe("true");
-    // The filter: End chooses Shots, the list narrows, and the focus stays on it.
+    // The filter: → twice chooses Recordings, then Shots. The list narrows at
+    // each, and the focus survives both redraws.
     await win.focus('.libfilters [data-filter="all"]');
-    await win.keyboard.press("End");
+    await win.keyboard.press("ArrowRight");
+    await expect.poll(async () => (await focused(win))?.key).toBe("recording");
+    await win.keyboard.press("ArrowRight");
     await expect.poll(() => win.locator("#liblist .librow[data-id]").count()).toBe(1);
     await expect.poll(async () => (await focused(win))?.key).toBe("still");
   }, 60_000);

@@ -54,7 +54,7 @@ for (const scheme of ["light", "dark"]) {
         items: [item("2026-10-27_14-30", "recording", "Recording", "0:42", [{ label: "Stopped early", detail: "Stopped at 0:42." }]),
                 item("2026-10-27_14-31", "still", "Shot", "PNG", [])],
         invalid: [], folder: { state: "ok" }, filter: "all",
-        filters: [{ id: "all", label: "All" }, { id: "recording", label: "Recordings" }, { id: "still", label: "Shots" }],
+        filters: [{ id: "all", label: "All" }, { id: "recording", label: "Recordings" }, { id: "still", label: "Shots" }, { id: "gif", label: "GIFs" }],
       };
       const lib = { library: async () => list, getSettings: async () => ({ libraryView: "grid" }) };
       const recorder = new Proxy({}, { get: (_t, k) => lib[k] ?? (() => Promise.resolve(stub())) });
