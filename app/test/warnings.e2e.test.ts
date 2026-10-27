@@ -9,6 +9,7 @@ import { MESSAGE_TOAST_MIN_MS } from "../src/toast.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { windowCount, pageWithUrl } from "./_windows.js";
+import { recorderState } from "./_library-window.js";
 
 /**
  * A warning the helper sends on its reliable channel reaches the user, and a
@@ -52,20 +53,20 @@ async function launchReady(env: Record<string, string>) {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
-  await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+  await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
   return { win, recordings };
 }
 
 async function launchAndPressRecord(env: Record<string, string>, door: "window" | "menu-bar" = "window") {
   const { win, recordings } = await launchReady(env);
-  // STC-388: `#record` opens the overlay; the bar's own Record starts the take.
+  // STC-388: Record opens the overlay; the bar's own Record starts the take.
   await startRecordFlow(app!, win, { door });
   return { win, recordings };
 }
 
 async function recordWithWarning(code: string, extraEnv: Record<string, string> = {}) {
   const { win } = await launchAndPressRecord({ STC_FAKE_WARNING: code, ...extraEnv });
-  await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
+  await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("recording");
   return win;
 }
 
@@ -163,9 +164,8 @@ describe("a start the helper refuses (STC-315)", () => {
     expect(alert).toMatch(/quit and reopen/i);
 
     // The app must NOT be in a recording state it cannot leave. Before this
-    // ticket the same code arrived as a warning after `started`, so the button
-    // said Stop and the state said recording — for a take that, from
-    // STC-315 on, does not exist.
+    // ticket the same code arrived as a warning after `started`, so the state
+    // said recording — for a take that, from STC-315 on, does not exist.
     //
     // Mutation-proven three ways, each failing exactly this test of the four:
     // drop START_FAULTS' entry (then renderer.ts's, now refusals.ts's), drop the stand-in's refusal, or
@@ -174,9 +174,7 @@ describe("a start the helper refuses (STC-315)", () => {
     // deliberately did NOT fail, and that is a fact about the app rather than
     // a gap here: the recording state comes from the `start` reply, and no
     // real helper can be in the state that mutation invented.
-    expect(await win.textContent("#record")).toBe("Record");
-    await expect.poll(() => win.textContent("#state"), { timeout: 10_000 }).toBe("idle");
-    expect(await win.isEnabled("#record")).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 10_000 }).toBe("idle");
 
     // "No take directory can exist without a cursor track" — the acceptance
     // criterion, read off the disk rather than off the UI. The real helper
@@ -213,11 +211,11 @@ describe("a refusal through the menu bar or a hotkey is shown too (STC-465 revie
       STC_FAKE_START_ERROR: "event-tap-unavailable",
     }, "menu-bar");
     await expect.poll(() => toastText(app!), { timeout: 15_000 }).toMatch(/Nothing was recorded/);
-    // The same sentence the window's own button gets — one mapping
+    // The same sentence the window's bridge gets — one mapping
     // (`refusals.ts`), so the door cannot change what the user is told.
     expect(await toastText(app!)).toMatch(/Input Monitoring/);
     // And no take, and no window left believing one is running.
-    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 10_000 }).toBe("idle");
     expect(readdirSync(recordings).filter((n) => !n.startsWith("."))).toEqual([]);
   }, 120_000);
 
@@ -228,8 +226,8 @@ describe("a refusal through the menu bar or a hotkey is shown too (STC-465 revie
     await app!.evaluate(() => (globalThis as any).__stcTrayOnSelect("action:display"));
     await expect.poll(() => toastText(app!), { timeout: 15_000 })
       .toMatch(/Screen Recording permission needed/);
-    // No shot claimed in the window that did not ask for one.
-    expect(await win.getAttribute("#stillstatus", "hidden")).not.toBeNull();
+    // No shot claimed in the window that did not ask for one: nothing listed.
+    expect(await win.locator("#libgrid .libtile[data-type=Still]").count()).toBe(0);
   }, 120_000);
 });
 
@@ -245,10 +243,9 @@ describe("helper warnings during a take", () => {
     // ends the take on its own; the assertions below then wait for the end.
     const win = await recordWithWarning("av-runtime-error", { STC_FAKE_STREAM_DEATH_MS: "2500" });
     // The helper stopped by itself: an unsolicited `stopped` with reason
-    // stream-stopped, which the supervisor reports as recording-ended. The
-    // button must not go on saying "Stop" for a take that has already ended.
-    await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
-    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    // stream-stopped, which the supervisor reports as recording-ended. Nothing
+    // may go on believing a take is running that has already ended.
+    await expect.poll(() => recorderState(win), { timeout: 15_000 }).toBe("idle");
     // STC-531: the words are the pill's and the panel's now, never a toast
     // (stop-copy.e2e.test.ts reads them). The av-runtime-error warning that
     // preceded the stop still toasts; the stop itself must not add one.
@@ -269,7 +266,7 @@ describe("helper warnings during a take", () => {
     const win = await recordWithWarning("display-refit");
     await new Promise((r) => setTimeout(r, 1_000));
     expect(await toastPage(app!)).toBeUndefined();
-    expect(await win.textContent("#state")).toBe("recording");
+    expect(await recorderState(win)).toBe("recording");
     // Not a toast, but not invisible either: the refit's payload is logged to
     // the main window's console. The fake helper sends it 60 ms after start,
     // before this test holds the window, so read the page's console HISTORY
@@ -287,9 +284,8 @@ describe("helper warnings during a take", () => {
       STC_FAKE_STREAM_DEATH_MS: "2500",
       STC_FAKE_STOP_REASON: "region-out-of-bounds",
     });
-    await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
-    await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("idle");
-    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("recording");
+    await expect.poll(() => recorderState(win), { timeout: 15_000 }).toBe("idle");
     // STC-531: the pill says "Area lost" and the panel says why; no toast.
     await expect.poll(() => windowCount(app!, "thumbnail.html"), { timeout: 15_000 }).toBe(1);
     const panel = await pageWithUrl(app!, "thumbnail.html");

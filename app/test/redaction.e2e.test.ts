@@ -79,7 +79,7 @@ async function launch(extraEnv: Record<string, string> = {}, extraSettings: Reco
   });
   await stubQuitDialog(app);
   const win = await app.firstWindow();
-  await win.waitForSelector("#capturestill");
+  await win.waitForSelector("#titlebar");
   return { win, destDir, recordings, temp };
 }
 

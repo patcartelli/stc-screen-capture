@@ -165,8 +165,8 @@ async function launch(opts: LaunchOpts = {}): Promise<PanelLaunch> {
   forwardProcessOutput(app);
   await stubQuitDialog(app);
   const win = await app.firstWindow();
-  await win.waitForSelector("#capturestill");
-  // NOT a click on the button: `#capturestill` opens the SELECTION overlay
+  await win.waitForSelector("#titlebar");
+  // NOT a press of Shot: it opens the SELECTION overlay
   // (region mode) and needs a driven drag to ever produce a capture — see
   // `still-overlay.e2e.test.ts`'s `STC_OVERLAY_SYNTHETIC_INPUT` dance. This
   // file is about the panel, not the overlay, so it reaches the same

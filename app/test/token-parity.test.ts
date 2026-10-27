@@ -49,11 +49,11 @@ describe("source: the three short-lived surfaces", () => {
   it("a muted mic on the options bar gets a 2px record-colour outline that yields to the focus ring (STC-583)", () => {
     expect(read("overlay.html")).toMatch(/#ctl-mic\[data-on="0"\]:not\(:focus-visible\) \{[^}]*outline: 2px solid color-mix\(in srgb, var\(--rec\)/);
   });
-  it("every device menu has one fixed width, and the mic and camera triggers share one (STC-583)", () => {
+  it("every device menu has one fixed width (STC-583)", () => {
+    // The main window's mic and camera triggers this also pinned left the
+    // library with STC-584; the record bar is the one place devices are picked.
     expect(read("device-menu.css")).toMatch(/\.device-menu \{[^}]*\bwidth: 280px;/);
     expect(read("device-menu.css")).not.toMatch(/max-content/);
-    expect(read("index.html")).toMatch(/\.devicepicker-trigger \{[^}]*box-sizing: border-box; width: 240px;/);
-    expect(read("index.html")).toMatch(/\.devicepicker-trigger > span \{[^}]*text-overflow: ellipsis;/);
   });
   it("the muted glyph is the recording red and the pill reveals its label on hover (STC-583)", () => {
     const html = read("pill.html");

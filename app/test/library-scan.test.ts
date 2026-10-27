@@ -405,9 +405,9 @@ describe("the scan walks past a large mdat to reach moov", () => {
     const { items } = await listLibrary(env, root);
     expect(items).toHaveLength(1);
     expect(items[0]!.file).toBe(join(root, "real-take.mp4"));
-    // width/height/duration land in the summary string — this scan has no
+    // width/height land in the size column (STC-584) — this scan has no
     // other place that surfaces them for a file with no bundle.
-    expect(items[0]!.summary).toMatch(/\d+×\d+/);
+    expect(items[0]!.columns.size).toMatch(/^\d+p$|^\d+ × \d+$/);
   });
 });
 
@@ -460,7 +460,7 @@ describe("the scan on a capture whose moov alone exceeds the read window", () =>
     await writeFile(join(root, "long-take.mp4"), bytes);
     const { items } = await listLibrary(env, root);
     expect(items).toHaveLength(1);
-    expect(items[0]!.summary, "facts read out of an oversized moov").toMatch(/1920×1080/);
+    expect(items[0]!.columns.size, "facts read out of an oversized moov").toBe("1080p");
 
     // The id is the half with the visible consequences: without it the bundle
     // below matches nothing and the capture lists TWICE.
@@ -610,7 +610,7 @@ describe("an EXPORT's layout — moov first, the tag a whole mdat away (STC-445)
     const bytes = tagMp4(exportLayoutMp4(BIG_MDAT), mintCaptureId());
     await writeFile(join(root, "clip.mp4"), bytes);
     const { items } = await listLibrary(env, root);
-    expect(items[0]!.summary).toMatch(/1920×1080/);
+    expect(items[0]!.columns.size).toBe("1080p");
   });
 
   test("an untagged export is still a foreign file, not a wrong match", async () => {

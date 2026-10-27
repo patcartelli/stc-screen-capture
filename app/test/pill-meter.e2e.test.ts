@@ -48,7 +48,7 @@ async function launch(extraEnv: Record<string, string>): Promise<Page> {
   });
   await stubQuitDialog(app);
   const win = await app.firstWindow();
-  await win.waitForSelector("#record");
+  await win.waitForSelector("#titlebar");
   await withoutCountdown(win);
   return win;
 }

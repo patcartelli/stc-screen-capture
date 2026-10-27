@@ -1,6 +1,6 @@
 import {
   app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage, clipboard,
-  powerMonitor, type IpcMainInvokeEvent,
+  powerMonitor, nativeTheme, type IpcMainInvokeEvent,
 } from "electron";
 import { readSettings, writeSettings, type Settings } from "./settings.js";
 import {
@@ -288,21 +288,12 @@ function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<str
 }
 
 /**
- * STC-432: with no `trafficLightPosition`, macOS draws the inset lights
- * roughly where `index.html`'s `body { padding: 20px }` also starts
- * `#title-row` — the two were never coordinated and landed on top of each
- * other. These numbers are the SAME ones `index.html`'s own
- * `--traffic-light-offset` uses to push the heading clear (cluster width +
- * a gap); a change to one is a change to both, and they're named here
- * rather than left as bare numbers in the BrowserWindow options.
- *
- * `X_PX` matches the body's own left padding, so the cluster's left edge is
- * flush with where every other row's content starts. `Y_PX` centres the
- * 12px dot cluster inside `#title-row`'s own ~20px height (the 15px/1.3
- * line-height of its `h1`), offset by that same 20px top padding.
+ * The library's traffic lights at Capture SK 016's place (STC-584): 20px in,
+ * 22px down, the same as the Settings window. `index.html`'s `--title-left`
+ * starts "Library" clear of the cluster; a change to one is a change to both.
  */
 const TRAFFIC_LIGHT_X_PX = 20;
-const TRAFFIC_LIGHT_Y_PX = 24;
+const TRAFFIC_LIGHT_Y_PX = 22;
 
 /** The display a window with no remembered place opens on: the one under the pointer. */
 function workAreaUnderPointer(): Rect {
@@ -329,13 +320,24 @@ function createWindow(): void {
     // collapse to a 26px pill. The pill has its own window since STC-550; the
     // chrome stays as STC-432 tuned it.
     titleBarStyle: "hidden",
-    // STC-432: aligned to `#title-row` rather than left at the OS default —
-    // see the constants above.
+    // Aligned to the title bar rather than left at the OS default — see the
+    // constants above.
     trafficLightPosition: { x: TRAFFIC_LIGHT_X_PX, y: TRAFFIC_LIGHT_Y_PX },
+    // Always dark (STC-584), so no white flash before the page paints.
+    backgroundColor: "#0c0c0c",
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
-  win.loadFile(join(here, "..", "renderer", "index.html"));
+  // The glass title bar turns opaque under Reduce Transparency, as Settings'
+  // does (`settings-window.ts`): read here, because Chromium may not report it.
+  win.loadFile(join(here, "..", "renderer", "index.html"), {
+    query: { reduceTransparency: nativeTheme.prefersReducedTransparency ? "1" : "0" },
+  });
   const w = win;
+  const pushReduce = () => {
+    if (!w.isDestroyed()) w.webContents.send("library:reduced-transparency", nativeTheme.prefersReducedTransparency);
+  };
+  nativeTheme.on("updated", pushReduce);
+  w.on("closed", () => nativeTheme.removeListener("updated", pushReduce));
   // STC-560: remember where the library was. Normal bounds, so a window closed
   // while full screen or zoomed reopens at the size it had before that.
   w.on("close", () => {
@@ -805,15 +807,9 @@ function startSupervisor(): void {
   sup.on("stats", reconcileTrayRecording);
   sup.on("recording-ended", reconcileTrayRecording);
   sup.on("recording-lost", reconcileTrayRecording);
-  // STC-388 review, Finding 2: the MAIN WINDOW has exactly the same problem
-  // the tray already had one door earlier — a take begun or ended by the
-  // hotkey or the tray never told it anything, because `recording`, the
-  // button label, `#state` and `lockSettings` were written only inside the
-  // window's OWN click handler. `reconcileWindowRecording` is that same fix,
-  // one surface over, off the same three events.
-  sup.on("stats", reconcileWindowRecording);
-  sup.on("recording-ended", reconcileWindowRecording);
-  sup.on("recording-lost", reconcileWindowRecording);
+  // The library window kept its own copy of this state for its Record button
+  // (STC-388 review, Finding 2). The button left with STC-584, and the copy
+  // with it: the tray and the pill are the only surfaces showing a take.
 }
 
 /**
@@ -827,35 +823,6 @@ function reconcileTrayRecording(): void {
   if (recording === trayKnownRecording) return;
   trayKnownRecording = recording;
   tray?.update({ shortcuts, busy: capturing, recording });
-}
-
-/**
- * The window's own half of the same fix (STC-388 review, Finding 2).
- *
- * `sup.state` is CLAUDE.md's own named authority ("anything holding recording
- * state must reconcile, or it sits there believing a recording is live"),
- * and this is that rule applied to the main window rather than to the tray:
- * `HelperSupervisor.stopRecording()` (a hotkey or tray-initiated stop) and
- * `runRecordFlow` (a hotkey or tray-initiated start) both change it with no
- * window listening at all today.
- *
- * Sent on EVERY stats tick, deliberately NOT gated on a transition tracked in
- * here the way `reconcileTrayRecording` gates on `trayKnownRecording` — a
- * MAIN-side "last known" tracker cannot stay correct, because a
- * self-initiated start or stop updates the RENDERER synchronously (the click
- * handler) without ever touching one. A window-initiated take that starts
- * and stops again faster than one stats tick apart (exactly what this fix's
- * own E2E test does, with no countdown in the way) would leave such a
- * tracker at its initial `false` through the whole cycle — "false, now
- * false" reads as no transition, and a real external stop right after would
- * be silently dropped, the same class of bug this finding exists to fix.
- * The renderer's own guard (`recorder:recording-state`'s listener) is what
- * dedupes a message that agrees with what it already believes; this is the
- * same cost `helper:stats` already pays every ~500ms.
- */
-function reconcileWindowRecording(): void {
-  const recording = sup?.state === "recording";
-  send("recorder:recording-state", { recording, dir: recording ? sup?.recordingDir : undefined });
 }
 
 /**
@@ -1876,14 +1843,11 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
  * written — `record-flow.e2e.test.ts`'s own documented contract is "Escape
  * at each step writes nothing."
  *
- * Sends `settings:changed` after the write (STC-456 fix round, Finding 2) —
- * before this it did not, so a camera or mic pick made on the BAR (or a
- * system-audio toggle) never reached an already-open main window: its
- * `#camera-state`/`#mic-state` labels and the popover's own checked rows kept
- * showing whatever was true before the overlay opened, until something else
- * happened to refresh them. The same channel `main.ts` already sends on a
- * mic-not-found correction below, and the same one `renderer.ts` already
- * listens for — this just makes the bar a second sender of it, not a second
+ * Sends `settings:changed` after the write (STC-456 fix round, Finding 2), so
+ * an open Settings window shows the bar's camera, mic or system-audio choice
+ * rather than whatever was true before the overlay opened. (The library's own
+ * device labels it was first written for left with STC-584.) The same channel
+ * `main.ts` already sends on a mic-not-found correction below, not a second
  * channel.
  */
 function writeBarOptions(options: OptionsState): void {
@@ -2108,11 +2072,22 @@ async function recordFlowBody(
 }
 
 /**
- * The window's Record button. Carries NO parameters — see `runRecordFlow`: what
- * the helper is pointed at is main's to decide, and the renderer supplying any
- * of it would be a second source of truth for what turns on a camera.
+ * Record, asked for over the library window's bridge. Carries NO parameters —
+ * see `runRecordFlow`: what the helper is pointed at is main's to decide, and
+ * the renderer supplying any of it would be a second source of truth for what
+ * turns on a camera.
+ *
+ * No button calls this since STC-584 took Record out of the library; the menu
+ * bar and the hotkey are the doors. It stays because it is the door the e2e
+ * suite drives (`app/test/_library-window.ts`), so its refusal is said HERE,
+ * as `recordAndAnnounce` says the other two's, with no window to say it.
  */
-ipcMain.handle("recorder:start", async () => runRecordFlow("window"));
+ipcMain.handle("recorder:start", async () => {
+  const r = await runRecordFlow("window");
+  if (!r.ok && !("cancelled" in r)) console.error(`[record] ${r.code}`, r.detail ?? "");
+  showNotice(recordRefusalText(r));
+  return r;
+});
 
 /**
  * The helper's raw `windows` reply, turned into what the overlay wants.
@@ -2445,8 +2420,7 @@ async function captureAndAnnounce(action: ShotAction, source: CaptureSource, aft
 
 /**
  * The Record answer for the doors with no renderer waiting on it — the
- * menu-bar item and ⌃⌥⇧⌘4. The window's button reads `runRecordFlow`'s
- * answer itself (`recorder:start`) and says it through `refusals.ts` too;
+ * menu-bar item and ⌃⌥⇧⌘4. `recorder:start` says its own the same way;
  * these two used to discard it (the menu bar) or only `console.error` it (the
  * hotkey), so a Record that counted down and was then refused — no grant,
  * say — showed nothing at all (STC-465 review).
@@ -2457,8 +2431,17 @@ async function recordAndAnnounce(source: Exclude<RecordSource, "window">): Promi
   showNotice(recordRefusalText(r));
 }
 
-ipcMain.handle("still:capture", async (_e, action?: ShotAction) =>
-  captureStill(action && SHOT_ACTIONS.includes(action) ? action : "region", "window"));
+/**
+ * A shot, asked for over the library window's bridge. Like `recorder:start`, no
+ * button calls it since STC-584; the e2e suite does. It is announced as the
+ * hotkey's and the menu bar's are, since the window no longer says it.
+ */
+ipcMain.handle("still:capture", async (_e, action?: ShotAction) => {
+  const r = await captureStill(action && SHOT_ACTIONS.includes(action) ? action : "region", "window");
+  showNotice(stillNoticeText(r));
+  send("still:captured", r);
+  return r;
+});
 
 /**
  * Register what preferences asked for, and report what actually took.

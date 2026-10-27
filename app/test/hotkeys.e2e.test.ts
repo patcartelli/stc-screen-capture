@@ -3,7 +3,7 @@ import { _electron as electron, type ElectronApplication, type Page } from "play
 import { mkdtempSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeTakeFolder } from "./_take-fixture.js";
+import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { DEFAULT_SHORTCUTS, OUTCOMES, outcomeAccelerator } from "../src/hotkeys.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
@@ -333,7 +333,11 @@ describe("a full-display capture", () => {
   test("the window is told about a capture it did not ask for", async () => {
     // A hotkey capture has no renderer waiting on a reply. An open window must
     // not be left showing a stale take list with no explanation.
-    const { library: win } = await launch();
+    const { library: win, recordings } = await launch();
+    await win.waitForSelector("#libgrid .libtile");
+    expect(await win.locator("#libgrid .libtile").count()).toBe(1);
+    // A shot lands on disk with nothing to tell the library but the announcement.
+    makeStillFolder("2026-09-08_12-00-00", { into: recordings });
     await win.evaluate(() => (window as any).recorder.on("still:captured", (r: any) => {
       (window as any).__announced = r;
     }));
@@ -346,8 +350,9 @@ describe("a full-display capture", () => {
     });
     await expect.poll(() => win.evaluate(() => (window as any).__announced?.source), { timeout: 10_000 })
       .toBe("hotkey");
-    await expect.poll(() => win.textContent("#stillstatus"), { timeout: 10_000 })
-      .toMatch(/^Shot full display/);
+    // The window re-lists on it, so the shot is there without a rescan of its
+    // own (STC-584: its status line left with the Shot button).
+    await expect.poll(() => win.locator("#libgrid .libtile").count(), { timeout: 10_000 }).toBe(2);
   }, 120_000);
 });
 

@@ -70,7 +70,7 @@ async function launch(env: Record<string, string> = {}): Promise<Launched> {
   });
   await stubQuitDialog(app);
   const win = await app.firstWindow();
-  await win.waitForSelector("#record");
+  await win.waitForSelector("#titlebar");
   await withoutCountdown(win);
   return { win, temp, copies, copyLog };
 }

@@ -48,8 +48,8 @@ export async function launchApp(dir: string, env: Record<string, string> = {},
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   // `opts.ready` (STC-435) is for a folder with nothing the library lists as
-  // a take — no "Preview" ever appears, so the default wait would time out.
-  await win.waitForSelector(opts.ready ?? "#takes >> text=Preview", { timeout: 20_000 });
+  // a take — no tile to open ever appears, so the default wait would time out.
+  await win.waitForSelector(opts.ready ?? "#takes [data-open=open]", { timeout: 20_000 });
   return { app, win };
 }
 
@@ -79,7 +79,7 @@ export async function openEditorFromLibrary(app: ElectronApplication, win: Page,
     timeout = 60_000): Promise<Page> {
   const [editorWin] = await Promise.all([
     app.waitForEvent("window", { predicate: (p) => EDITOR_URL.test(p.url()), timeout }),
-    win.click("#takes >> text=Preview"),
+    win.locator("#takes [data-open=open] .libthumb").first().click(),
   ]);
   await editorWin.waitForLoadState("domcontentloaded");
   return editorWin;

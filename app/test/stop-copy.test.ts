@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   panelReason, panelAction, isHelperDecidedStop, stopCause, libraryNote, silenceNote, stallNote, formatTakeTime, isStopActionId,
+  stopBadge,
   HELPER_STOP_REASONS, STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS, trackLossPillLabel,
   trackLossLine,
 } from "../src/stop-copy.js";
@@ -168,18 +169,31 @@ describe("stop copy (STC-530, STC-531)", () => {
     width: 10, height: 10, events: 0, bytes: 1,
   });
 
-  test("a recovered recording carries the library note", () => {
+  test("a recovered recording carries the library note, as a badge", () => {
     const item = recordingItem({ ...aTake(), stop: { t: 4_000_000_000, reason: "recorder-quit" } });
-    expect(item.notes).toContain("Recovered after the recorder quit. No cursor data.");
-    expect(recordingItem(aTake()).notes ?? []).not.toContain("Recovered after the recorder quit. No cursor data.");
+    expect(item.alerts).toEqual([{ label: "Recovered", detail: "Recovered after the recorder quit. No cursor data." }]);
+    expect(recordingItem(aTake()).alerts).toEqual([]);
   });
 
-  test("an early stop and a silent mic become notes on the item; a normal take adds none", () => {
+  test("an early stop and a silent mic become badges on the item; a normal take adds none", () => {
     const item = recordingItem({
       ...aTake(), stop: { t: 252e9, reason: "disk-full" }, silentSpans: [{ startNs: 70e9, endNs: 270e9 }],
     });
-    expect(item.notes).toEqual(["Stopped early: disk full at 4:12", "No mic signal from 1:10 to 4:30"]);
-    expect(recordingItem({ ...aTake(), stop: { t: 5e9, reason: "user" } }).notes).toEqual([]);
+    expect(item.alerts).toEqual([
+      { label: "Disk full", detail: "Stopped early: disk full at 4:12" },
+      { label: "No mic signal", detail: "No mic signal from 1:10 to 4:30" },
+    ]);
+    expect(recordingItem({ ...aTake(), stop: { t: 5e9, reason: "user" } }).alerts).toEqual([]);
+  });
+
+  test("the badge is the note's cause, capitalised, and exists exactly when the note does (STC-584)", () => {
+    expect(stopBadge({ t: 1e9, reason: "window-closed" })).toBe("Window closed");
+    expect(stopBadge({ t: 1e9, reason: "stream-stopped" })).toBe("Capture source lost");
+    for (const reason of [...HELPER_STOP_REASONS, "recorder-quit", "user", "quit"]) {
+      expect(stopBadge({ t: 1e9, reason }) === undefined, reason)
+        .toBe(libraryNote({ t: 1e9, reason }) === undefined);
+    }
+    expect(stopBadge(undefined)).toBeUndefined();
   });
 
   test("stall notes (STC-553): one span, two, and 'and N more', in silenceNote's shape", () => {
@@ -191,11 +205,14 @@ describe("stop copy (STC-530, STC-531)", () => {
       .toBe("Camera stalled from 1:10 to 1:25, 5:00 to 5:30, and 1 more");
   });
 
-  test("a stalled camera becomes a note on the item, after the silence note", () => {
+  test("a stalled camera becomes a badge on the item, after the silence one", () => {
     const item = recordingItem({
       ...aTake(), silentSpans: [span(10, 30)], stalledSpans: [span(70, 85)],
     });
-    expect(item.notes).toEqual(["No mic signal from 0:10 to 0:30", "Camera stalled from 1:10 to 1:25"]);
+    expect(item.alerts).toEqual([
+      { label: "No mic signal", detail: "No mic signal from 0:10 to 0:30" },
+      { label: "Camera stalled", detail: "Camera stalled from 1:10 to 1:25" },
+    ]);
   });
 });
 
