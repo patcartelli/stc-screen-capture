@@ -101,6 +101,10 @@ declare const recorder: {
   start():Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
+  /** STC-592: a saved GIF's bytes, for its tile. Main refuses anything but a top-level .gif. */
+  gifBytes(file: string): Promise<Uint8Array<ArrayBuffer>>;
+  /** STC-592: a saved GIF's Share — the file itself on the pasteboard. */
+  copyFile(file: string): Promise<{ ok: boolean; detail?: string }>;
   /** STC-584: a still's Share copies its image through the panel's own funnel. */
   exportStill(req: Record<string, unknown>): Promise<{ ok: boolean; code?: string; detail?: string }>;
   on(event: string, cb: (p: any) => void): () => void;
@@ -518,6 +522,57 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
   }
 }
 
+/**
+ * An animated thumbnail (STC-592, Patrick 2026-10-27): the first frame at
+ * rest, the animation while the pointer is over the item, and only the first
+ * frame under Reduce Motion.
+ *
+ * The bytes are fetched for the first frame and dropped; a hover fetches them
+ * again and leaving releases them. Holding every GIF's bytes for as long as
+ * its tile exists would cost a library of GIFs their total size in renderer
+ * memory, for animations nobody is pointing at.
+ */
+async function showAnimatedThumbnail(item: LibraryItem, img: HTMLImageElement): Promise<void> {
+  const file = item.file;
+  if (!file) throw new Error("an animated thumbnail is the item's own file");
+  const gif = async () => new Blob([await recorder.gifBytes(file)], { type: "image/gif" });
+  // createImageBitmap on a GIF decodes its first frame.
+  const first = await createImageBitmap(await gif());
+  let still: string;
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = first.width; canvas.height = first.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d context for a thumbnail");
+    ctx.drawImage(first, 0, 0);
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/png"));
+    if (!blob) throw new Error("could not encode a thumbnail");
+    still = URL.createObjectURL(blob);
+  } finally { first.close(); }
+  img.src = still;
+
+  const host = img.closest<HTMLElement>("[data-id]") ?? img;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let playing: string | undefined;
+  let hovered = false;
+  host.addEventListener("pointerenter", () => {
+    hovered = true;
+    if (reduce.matches || playing) return;
+    void gif().then((b) => {
+      if (!hovered || playing) return;
+      playing = URL.createObjectURL(b);
+      img.src = playing;
+    }).catch((e) => console.error(`[library] could not play ${item.id}:`, e));
+  });
+  host.addEventListener("pointerleave", () => {
+    hovered = false;
+    if (!playing) return;
+    img.src = still;
+    URL.revokeObjectURL(playing);
+    playing = undefined;
+  });
+}
+
 /** Show a cached thumbnail, decoding it in the main process's stead. */
 async function showCachedThumbnail(item: LibraryItem, img: HTMLImageElement,
                                    file: string): Promise<void> {
@@ -537,6 +592,14 @@ const libraryCallbacks: LibraryCallbacks = {
       // an id that cannot apply to this item never reaches here.
       if (id === "open") await openItem(item);
       else if (id === "copy-image") await copyStillImage(item);
+      else if (id === "copy-file") {
+        // A saved GIF's Share (STC-592): the file IS what gets shared.
+        const file = item.file;
+        if (!file) throw new Error("nothing to copy");
+        const r = await recorder.copyFile(file);
+        if (!r?.ok) throw new Error(`Could not copy the file: ${r?.detail ?? "unknown error"}`);
+        alertUser(`Copied “${item.label ?? item.id}” to the clipboard.`);
+      }
       else if (id === "share") {
         // A recording's Share: open the take editor and let IT run the Share
         // flow, rather than a second one here. A still's Share is
@@ -624,6 +687,8 @@ const libraryCallbacks: LibraryCallbacks = {
       await showCachedThumbnail(item, img, item.thumbnail.file);
     } else if (item.thumbnail.source === "render") {
       await renderThumbnail(item, img);
+    } else if (item.thumbnail.source === "animated") {
+      await showAnimatedThumbnail(item, img);
     }
   },
 };

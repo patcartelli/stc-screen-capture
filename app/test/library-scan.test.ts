@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { listLibrary, listTakes } from "../src/library.js";
 import { tagMp4 } from "@transform/media-tag.js";
 import { mintCaptureId } from "@transform/capture-id.js";
+import { buildPalette, GifWriter } from "@transform/gif-encode.js";
 
 const env = {} as NodeJS.ProcessEnv;
 let root: string;
@@ -662,3 +663,59 @@ test("500 files scan without going quadratic", async () => {
   expect(items).toHaveLength(500);
   expect(ms).toBeLessThan(SCAN_BACKSTOP_MS);
 }, 120_000);
+
+describe("saved GIFs (STC-592)", () => {
+  /** A real GIF from the app's own encoder: 3 frames of 7 cs, 32×18. */
+  function gifBytes(): Uint8Array {
+    const frame = (v: number) => new Uint8ClampedArray(32 * 18 * 4).fill(v);
+    const frames = [frame(0), frame(128), frame(255)];
+    const w = new GifWriter(32, 18, buildPalette(frames), [7, 7, 7]);
+    for (const f of frames) w.addFrame(f);
+    return w.finish();
+  }
+
+  test("a top-level .gif lists as its own kind, with facts read from the file", async () => {
+    await writeFile(join(root, "login-bug.gif"), gifBytes());
+    const { items } = await listLibrary(env, root);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "gif", badge: "GIF", id: "login-bug", file: join(root, "login-bug.gif"),
+      columns: { type: "GIF", length: "0:00", size: "32 × 18" },
+      thumbnail: { source: "animated" },
+    });
+    expect(items[0]!.dir).toBeUndefined();
+  });
+
+  test("a GIF beside its recording is a second item, never paired with the bundle", async () => {
+    const id = mintCaptureId();
+    const bundle = join(root, "raw", "2026-09-22_14-30-01");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, "anchors.json"), JSON.stringify({ version: 5 }));
+    await writeFile(join(bundle, "capture.json"), JSON.stringify({ version: 1, id }));
+    await writeFile(join(bundle, "display.mp4"), new Uint8Array([1, 2, 3, 4]));
+    await writeFile(join(root, "login-bug.mp4"), tagMp4(mp4Bytes(), id));
+    await writeFile(join(root, "login-bug.gif"), gifBytes());
+    const { items } = await listLibrary(env, root);
+    expect(items.map((i) => i.kind).sort()).toEqual(["gif", "recording"]);
+    expect(items.find((i) => i.kind === "recording")!.file).toBe(join(root, "login-bug.mp4"));
+  });
+
+  test("the GIFs filter shows GIFs only, and Recordings no longer shows them", async () => {
+    await writeFile(join(root, "a.gif"), gifBytes());
+    await writeFile(join(root, "b.mp4"), mp4Bytes());
+    expect((await listLibrary(env, root, "gif")).items.map((i) => i.id)).toEqual(["a"]);
+    expect((await listLibrary(env, root, "recording")).items.map((i) => i.id)).toEqual(["b"]);
+  });
+
+  test("a file named .gif that is not a GIF still lists, with no facts", async () => {
+    await writeFile(join(root, "odd.gif"), new Uint8Array([1, 2, 3]));
+    const { items } = await listLibrary(env, root);
+    expect(items[0]).toMatchObject({ kind: "gif", columns: { length: "–", size: "–" } });
+  });
+
+  test("a directory named like a GIF, or a dotfile, is not listed", async () => {
+    await mkdir(join(root, "folder.gif"));
+    await writeFile(join(root, ".hidden.gif"), gifBytes());
+    expect((await listLibrary(env, root)).items).toEqual([]);
+  });
+});

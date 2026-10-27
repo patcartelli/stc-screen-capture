@@ -212,15 +212,37 @@ describe("an untagged file blocks only bundles of its own kind", () => {
   });
 });
 
-describe("a saved GIF is invisible to Reclaim and the library (STC-395)", () => {
-  test("an untagged top-level .gif neither blocks an orphan nor becomes a library item", async () => {
+/**
+ * STC-395 kept a saved GIF out of Reclaim; STC-592 lists it in the library,
+ * and Reclaim must still never see it. The trap is in `findOrphanedBundles`'
+ * kind test: an untagged file that is not an `.mp4` counts as a still's
+ * export, so a GIF reaching that list would block every still bundle.
+ */
+describe("a saved GIF: listed by the library, invisible to Reclaim (STC-395, STC-592)", () => {
+  const GIF = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+
+  test("an untagged top-level .gif does not block a recording bundle, and lists as a GIF", async () => {
     await rm(join(root, "login-bug.mp4"));
-    await writeFile(join(root, "2026-09-01_10-05-00.gif"), new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]));
+    await writeFile(join(root, "2026-09-01_10-05-00.gif"), GIF);
     const { orphans, blocked } = await findOrphanedBundles(env, root);
     expect(blocked).toEqual([]);
     expect(orphans.map((o) => o.dir)).toEqual([bundle]);
-    const lib = await listLibrary(env, root);
-    expect(JSON.stringify(lib.items)).not.toContain(".gif");
-    expect(JSON.stringify(lib.items)).not.toContain("10-05-00");
+    const gifs = (await listLibrary(env, root)).items.filter((i) => i.file?.endsWith(".gif"));
+    expect(gifs.map((i) => [i.kind, i.id, i.dir])).toEqual([["gif", "2026-09-01_10-05-00", undefined]]);
+  });
+
+  test("an untagged top-level .gif does not block a STILL bundle", async () => {
+    const still = await makeBundle("2026-09-02_10-00-00", "shot.json");
+    await writeFile(join(root, "2026-09-02_10-05-00.gif"), GIF);
+    const { orphans, blocked } = await findOrphanedBundles(env, root);
+    expect(blocked).toEqual([]);
+    expect(orphans.map((o) => o.dir)).toEqual([still.dir]);
+  });
+
+  test("CONTROL: the same still bundle IS blocked by an untagged image", async () => {
+    const still = await makeBundle("2026-09-02_10-00-00", "shot.json");
+    await writeFile(join(root, "2026-09-02_10-05-00.png"), new Uint8Array([0x89, 0x50]));
+    const { blocked } = await findOrphanedBundles(env, root);
+    expect(blocked.map((b) => b.dir)).toEqual([still.dir]);
   });
 });

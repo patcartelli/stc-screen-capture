@@ -153,7 +153,7 @@ describe("the library grid", () => {
     await expect.poll(() => win.locator("#empty").count(), { timeout: 15_000 }).toBe(1);
     expect(await win.locator("#libgrid").count()).toBe(0);
     // The filter chips are still there — the library is empty, not absent.
-    expect(await win.locator(".libfilters button").count()).toBe(3);
+    expect(await win.locator(".libfilters button").count()).toBe(4);   // All, Recordings, Shots, GIFs (STC-592)
   }, 60_000);
 
   // STC-521: the three states a library with nothing to show can be in.
