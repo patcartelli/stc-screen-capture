@@ -49,6 +49,13 @@ export function openSettingsWindow(opts: SettingsWindowOptions): void {
   }
   const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const glass = process.platform === "darwin" ? glassSidebar() : null;
+  // STC-594 spike: say what the flag did, so a run that shows nothing can be
+  // told apart from a run where the flag never arrived.
+  if (process.env.STC_GLASS_SIDEBAR !== undefined) {
+    console.log(glass
+      ? `[settings] glass sidebar: ${glass} (vibrancy "sidebar"; Reduce Transparency ${nativeTheme.prefersReducedTransparency ? "ON, so the sidebar is painted solid" : "off"})`
+      : `[settings] glass sidebar: OFF (STC_GLASS_SIDEBAR="${process.env.STC_GLASS_SIDEBAR}"${process.platform === "darwin" ? ", want clear or tint" : ", macOS only"})`);
+  }
   const w = new BrowserWindow({
     ...settingsBounds(area),
     resizable: false, maximizable: false, fullscreenable: false,

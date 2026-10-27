@@ -63,8 +63,16 @@ npm ci
 STC_GLASS_SIDEBAR=tint npm run app:start     # then the same with =clear, then unset
 ```
 
-Open Settings from the library's gear. Put something colourful behind the
-window, and move the window over it.
+Open Settings from the library's gear. The terminal prints one line saying
+what the flag did: `[settings] glass sidebar: tint (vibrancy "sidebar";
+Reduce Transparency off)`. No line means the flag never reached the app (wrong
+branch, or the variable was not on the same command). `OFF` or `Reduce
+Transparency ON` says why there is no glass.
+
+Start with `clear`, over something bright and colourful (a photo, a white web
+page), and drag the window across it: in Dark mode the material is very dark
+already, so over a dark desktop, and with `tint`'s extra wash, it can be hard
+to tell from the solid sidebar.
 
 1. **The look.** In both `tint` and `clear`, the sidebar shows the desktop
    through it, blurred, and nothing else in the window does. Pick one, or
