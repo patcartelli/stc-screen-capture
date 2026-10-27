@@ -18,17 +18,6 @@ import { settingsBounds } from "./window-size.js";
 /** Traffic lights at Figma's place: 20px in, 22px down (Settings frames). */
 const TRAFFIC_LIGHTS = { x: 20, y: 22 };
 
-/**
- * STC-594 spike: `STC_GLASS_SIDEBAR=clear|tint` makes the sidebar native
- * glass (public `vibrancy: "sidebar"`, an NSVisualEffectView behind the page,
- * no transparent window). Off by default; docs/STC-594-SPIKE.md is the
- * runbook. Anything else, or unset, is the opaque window it always was.
- */
-function glassSidebar(): "clear" | "tint" | null {
-  const v = process.env.STC_GLASS_SIDEBAR;
-  return v === "clear" || v === "tint" ? v : null;
-}
-
 let win: BrowserWindow | undefined;
 
 export interface SettingsWindowOptions {
@@ -48,24 +37,13 @@ export function openSettingsWindow(opts: SettingsWindowOptions): void {
     return;
   }
   const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  const glass = process.platform === "darwin" ? glassSidebar() : null;
-  // STC-594 spike: say what the flag did, so a run that shows nothing can be
-  // told apart from a run where the flag never arrived.
-  if (process.env.STC_GLASS_SIDEBAR !== undefined) {
-    console.log(glass
-      ? `[settings] glass sidebar: ${glass} (vibrancy "sidebar"; Reduce Transparency ${nativeTheme.prefersReducedTransparency ? "ON, so the sidebar is painted solid" : "off"})`
-      : `[settings] glass sidebar: OFF (STC_GLASS_SIDEBAR="${process.env.STC_GLASS_SIDEBAR}"${process.platform === "darwin" ? ", want clear or tint" : ", macOS only"})`);
-  }
   const w = new BrowserWindow({
     ...settingsBounds(area),
     resizable: false, maximizable: false, fullscreenable: false,
     title: `${PRODUCT_NAME} Settings`,
     titleBarStyle: "hidden",
     trafficLightPosition: TRAFFIC_LIGHTS,
-    // A vibrancy window keeps a clear background, or the colour covers the glass.
-    ...(glass
-      ? { vibrancy: "sidebar" as const, visualEffectState: "followWindow" as const, backgroundColor: "#00000000" }
-      : { backgroundColor: "#0c0c0c" }),
+    backgroundColor: "#0c0c0c",
     show: false,
     webPreferences: {
       preload: join(opts.dist, "settings-preload.cjs"),
@@ -78,26 +56,13 @@ export function openSettingsWindow(opts: SettingsWindowOptions): void {
   };
   nativeTheme.on("updated", pushReduce);
   w.once("ready-to-show", () => w.show());
-  // STC-594 spike: what actually paints over the glass, read from the page.
-  if (glass) {
-    w.webContents.once("did-finish-load", () => {
-      void w.webContents.executeJavaScript(`(() => {
-        const bg = (el) => el ? getComputedStyle(el).backgroundColor : "missing";
-        return { html: bg(document.documentElement), body: bg(document.body),
-          sidebar: bg(document.getElementById("sidebar")), panes: bg(document.getElementById("panes")),
-          classes: document.body.className };
-      })()`).then((page) => {
-        console.log(`[settings] glass sidebar: window background ${w.getBackgroundColor()}, page ${JSON.stringify(page)}`);
-      }, () => {});
-    });
-  }
   w.on("closed", () => {
     nativeTheme.removeListener("updated", pushReduce);
     if (win === w) win = undefined;
     opts.onClosed();
   });
   void w.loadFile(join(opts.rendererDir, "settings.html"), {
-    query: { reduceTransparency: nativeTheme.prefersReducedTransparency ? "1" : "0", ...(glass ? { glass } : {}) },
+    query: { reduceTransparency: nativeTheme.prefersReducedTransparency ? "1" : "0" },
   });
 }
 
