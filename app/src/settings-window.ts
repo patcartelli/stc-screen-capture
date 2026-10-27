@@ -78,6 +78,19 @@ export function openSettingsWindow(opts: SettingsWindowOptions): void {
   };
   nativeTheme.on("updated", pushReduce);
   w.once("ready-to-show", () => w.show());
+  // STC-594 spike: what actually paints over the glass, read from the page.
+  if (glass) {
+    w.webContents.once("did-finish-load", () => {
+      void w.webContents.executeJavaScript(`(() => {
+        const bg = (el) => el ? getComputedStyle(el).backgroundColor : "missing";
+        return { html: bg(document.documentElement), body: bg(document.body),
+          sidebar: bg(document.getElementById("sidebar")), panes: bg(document.getElementById("panes")),
+          classes: document.body.className };
+      })()`).then((page) => {
+        console.log(`[settings] glass sidebar: window background ${w.getBackgroundColor()}, page ${JSON.stringify(page)}`);
+      }, () => {});
+    });
+  }
   w.on("closed", () => {
     nativeTheme.removeListener("updated", pushReduce);
     if (win === w) win = undefined;
