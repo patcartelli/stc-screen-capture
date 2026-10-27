@@ -101,8 +101,8 @@ describe("search", () => {
 });
 
 describe("the filter (STC-584, STC-592)", () => {
-  test("is All, Recordings, Stills, GIFs — Capture SK 016's four chips", () => {
-    expect(LIBRARY_FILTERS.map((f) => f.label)).toEqual(["All", "Recordings", "Stills", "GIFs"]);
+  test("is All, Recordings, Shots, GIFs — Capture SK 016's four chips", () => {
+    expect(LIBRARY_FILTERS.map((f) => f.label)).toEqual(["All", "Recordings", "Shots", "GIFs"]);
   });
 });
 
