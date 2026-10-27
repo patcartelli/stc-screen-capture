@@ -416,6 +416,9 @@ function keepHiddenLibraryHidden(atFlowStart: LibraryAtTakeStart): void {
   // opens; by `hideLibraryForTake` the app is no longer hidden.
   hideEditor();
   hideStillEditor();
+  // STC-581: Settings is a window of its own and would come back with them.
+  // It closes at take start anyway, and every change in it is already saved.
+  closeSettingsWindow();
 }
 
 /**
@@ -1709,8 +1712,7 @@ ipcMain.handle("recorder:setSettings", async (e, patch: Partial<Settings>): Prom
   // STC-581: the library and Settings are two windows now. The one that did
   // not write re-reads (the library's diagnostics table, Settings' PiP default
   // after the editor's "Use as default"). The writer already shows its own.
-  if (isSettingsWindow(e.sender)) send("settings:changed", undefined);
-  else notifySettingsWindow("settings:changed");
+  settingsWrittenBy(e.sender);
   return saved;
 });
 
@@ -2176,6 +2178,16 @@ ipcMain.handle("settings:open", () => { openSettings(); });
  * A preference changed outside the window showing it: tell the library and
  * the Settings window, which both re-read rather than edit from a stale copy.
  */
+/**
+ * A window wrote a preference: tell the other one (STC-581). The writer
+ * already shows its own value. The library re-lists when the save folder
+ * moved, and its empty-state hint names the shortcuts.
+ */
+function settingsWrittenBy(sender: Electron.WebContents): void {
+  if (isSettingsWindow(sender)) send("settings:changed", undefined);
+  else notifySettingsWindow("settings:changed");
+}
+
 function broadcastSettingsChanged(): void {
   send("settings:changed", undefined);
   notifySettingsWindow("settings:changed");
@@ -2539,7 +2551,7 @@ async function onRecordHotkey(): Promise<void> {
 
 ipcMain.handle("shortcuts:get", async () => ({ shortcuts, report: shortcutReport }));
 
-ipcMain.handle("shortcuts:set", async (_e, action: BindableAction, accelerator: string | null) => {
+ipcMain.handle("shortcuts:set", async (e, action: BindableAction, accelerator: string | null) => {
   if (!BINDABLE_ACTIONS.includes(action)) throw new Error(`unknown action: ${action}`);
   const plan = planShortcuts({ ...shortcuts, [action]: accelerator })
     .find((p) => p.action === action)!;
@@ -2559,11 +2571,13 @@ ipcMain.handle("shortcuts:set", async (_e, action: BindableAction, accelerator: 
   // user's choice — it is reported as unavailable, not reverted behind them.
   const saved = writeSettings(app.getPath("userData"),
                               { shortcuts: { ...shortcuts, [action]: plan.accelerator } });
+  settingsWrittenBy(e.sender);
   return { shortcuts: saved.shortcuts, report: applyShortcuts(saved.shortcuts) };
 });
 
-ipcMain.handle("shortcuts:reset", async () => {
+ipcMain.handle("shortcuts:reset", async (e) => {
   const saved = writeSettings(app.getPath("userData"), { shortcuts: { ...DEFAULT_SHORTCUTS } });
+  settingsWrittenBy(e.sender);
   return { shortcuts: saved.shortcuts, report: applyShortcuts(saved.shortcuts) };
 });
 
@@ -3392,6 +3406,7 @@ ipcMain.handle("still:chooseDestination", async (e) => {
   if (canceled || !filePaths[0]) return { saveFolder: current };
   const saveFolder = filePaths[0];
   writeSettings(app.getPath("userData"), { saveFolder });
+  settingsWrittenBy(e.sender);
   return { saveFolder };
 });
 
@@ -4117,6 +4132,7 @@ ipcMain.handle("share:chooseDestination", async (e) => {
   const destination = filePaths[0];
   const stored = readSettings(app.getPath("userData"));
   writeSettings(app.getPath("userData"), { share: { ...stored.share, destination } });
+  settingsWrittenBy(e.sender);
   return { destination };
 });
 

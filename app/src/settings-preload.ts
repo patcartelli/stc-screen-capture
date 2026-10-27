@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld("settingsBridge", {
     // settings:changed: another window wrote a preference (the editor's "Use
     // as default", the record bar). settings:reduced-transparency: the
     // macOS setting, read by main from nativeTheme.
-    const channels = ["settings:changed", "settings:reduced-transparency", "settings:show-pane"];
+    const channels = ["settings:changed", "settings:reduced-transparency"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);

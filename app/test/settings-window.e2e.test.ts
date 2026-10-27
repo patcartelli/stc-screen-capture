@@ -7,6 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { openSettings, pickDropdown } from "./_settings-window.js";
+import { formatAccelerator } from "../src/hotkeys.js";
 import { windowCount } from "./_windows.js";
 
 /**
@@ -212,5 +213,18 @@ describe("the Settings window", () => {
     });
     expect(inside).toEqual([]);
     expect(await win.isVisible("#pid")).toBe(false);
+  }, 60_000);
+
+  // shortcuts:set used to write without telling the library, so the empty
+  // library went on naming the old key until something else redrew it.
+  test("a key rebound in Settings reaches the library's empty hint", async () => {
+    const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: mkdtempSync(join(tmpdir(), "stc-empty-")) });
+    await expect.poll(() => win.locator("#empty").textContent(), { timeout: 10_000 })
+      .toContain("starts a recording");
+    const settings = await openSettings(app!, win, "shortcuts");
+    const key = "Alt+Shift+Command+9";
+    await settings.evaluate((k) => (window as any).settingsBridge.setShortcut("record", k), key);
+    await expect.poll(() => win.locator("#empty").textContent(), { timeout: 10_000 })
+      .toContain(`${formatAccelerator(key)} starts a recording`);
   }, 60_000);
 });

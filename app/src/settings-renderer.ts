@@ -54,6 +54,19 @@ const $ = (id: string) => document.getElementById(id)!;
 const bridge = settingsBridge;
 const alertUser = (message: string) => bridge.showToast(message);
 
+/**
+ * Write one preference. A control may already show the new value; if the write
+ * fails, say so and draw every control from what main actually holds again.
+ */
+async function save(what: string, write: () => Promise<unknown>): Promise<void> {
+  try {
+    await write();
+  } catch (e) {
+    alertUser(`Could not save ${what}: ${String(e)}`);
+    await loadSettings().catch(() => {});
+  }
+}
+
 // ---- panes ------------------------------------------------------------------
 
 const PANES = ["capture", "camera", "shortcuts", "output", "advanced"] as const;
@@ -78,9 +91,7 @@ for (const b of document.querySelectorAll<HTMLButtonElement>("#sidebar button"))
   b.addEventListener("click", () => { if (isPane(b.dataset.pane)) showPane(b.dataset.pane); });
 }
 const params = new URLSearchParams(location.search);
-const firstPane = params.get("pane");
-showPane(isPane(firstPane) ? firstPane : "capture");
-bridge.on("settings:show-pane", (p) => { if (isPane(p)) showPane(p); });
+showPane("capture");
 
 // Reduce Transparency (STC-586): main reads nativeTheme and says so.
 document.body.classList.toggle("reduce-transparency", params.get("reduceTransparency") === "1");
@@ -120,14 +131,14 @@ afterShot.addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (!b) return;
   markSegment(afterShot, b.dataset.value!);
-  void patchThumbnail({ skip: b.dataset.value === "clipboard" });
+  void save("what happens after a shot", () => patchThumbnail({ skip: b.dataset.value === "clipboard" }));
 });
 const CORNERS: readonly { value: SettingsView["thumbnail"]["corner"]; label: string }[] = [
   { value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" },
   { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" },
 ];
 const thumbCornerSel = buildDropdown($("thumbcorner") as HTMLButtonElement, CORNERS, (picked) => {
-  void patchThumbnail({ corner: picked as SettingsView["thumbnail"]["corner"] });
+  void save("the panel corner", () => patchThumbnail({ corner: picked as SettingsView["thumbnail"]["corner"] }));
 });
 
 /**
@@ -159,8 +170,9 @@ for (const { ms } of [{ ms: 0 }, ...COUNTDOWN_OPTIONS]) {
 countdownGroup.addEventListener("click", async (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (!b) return;
-  const saved = await bridge.setSettings({ countdownMs: Number(b.dataset.value) });
-  markSegment(countdownGroup, String(saved.countdownMs));
+  await save("the countdown", async () => {
+    markSegment(countdownGroup, String((await bridge.setSettings({ countdownMs: Number(b.dataset.value) })).countdownMs));
+  });
 });
 
 // ---- Output pane --------------------------------------------------------------
@@ -201,40 +213,38 @@ async function patchGif(patch: Partial<GifSettings>): Promise<void> {
 }
 const gifFpsSel = buildDropdown($("giffps") as HTMLButtonElement,
   GIF_FPS_OPTIONS.map((fps) => ({ value: String(fps), label: `${fps} fps` })),
-  (v) => void patchGif({ fps: Number(v) as GifSettings["fps"] }));
+  (v) => void save("the GIF frame rate", () => patchGif({ fps: Number(v) as GifSettings["fps"] })));
 const gifWidthSel = buildDropdown($("gifwidth") as HTMLButtonElement,
   GIF_WIDTH_OPTIONS.map((w) => ({ value: String(w), label: w === "original" ? "Original" : `${w} px` })),
-  (v) => void patchGif({ maxWidth: (v === "original" ? "original" : Number(v)) as GifSettings["maxWidth"] }));
+  (v) => void save("the GIF width", () => patchGif({ maxWidth: (v === "original" ? "original" : Number(v)) as GifSettings["maxWidth"] })));
 
 // ---- Advanced pane ------------------------------------------------------------
 
 const showDiagnosticsBox = $("showdiagnostics") as HTMLInputElement;
 showDiagnosticsBox.addEventListener("change", () => {
   // The library window shows or hides its table when main tells it this changed.
-  void bridge.setSettings({ showDiagnostics: showDiagnosticsBox.checked });
+  void save("Show diagnostics", () => bridge.setSettings({ showDiagnostics: showDiagnosticsBox.checked }));
 });
 
 // ---- Camera pane (STC-461's default PiP) --------------------------------------
 //
 // The preview is a sample screen with the stored default drawn on it, through
-// the same `pipRect` `render()` uses. Its output size has the stage's own
-// shape, so the PiP sits where it would in a recording of that shape. No
-// camera is opened to set a preference; framing is per take, so no Reframe.
+// the same `pipRect` `render()` uses. The sample screen is 16:9 at 1920 x
+// 1080, so a place or size set here is the one a 1080p take records. No camera
+// is opened to set a preference; framing is per take, so no Reframe.
 
 const MOCK_CAM = { width: 1280, height: 720 };
 let pipDefault: PipStyle | null = null;
-const stage = $("pipstage");
+const stage = $("pipscreen");
 const pipBox = $("pipbox");
 const radiusIn = $("pipradius") as HTMLInputElement;
 const sizeIn = $("pipsize") as HTMLInputElement;
 Object.assign(radiusIn, { min: "0", max: String(PIP_RADIUS_MAX), step: "0.01" });
 Object.assign(sizeIn, { min: String(PIP_WIDTH_MIN), max: String(PIP_WIDTH_MAX), step: "0.005" });
 
-/** The stage as an output size: 1920 wide, the stage's own aspect. */
-function mockOut(): { width: number; height: number } {
-  const r = stage.getBoundingClientRect();
-  return { width: 1920, height: r.width > 0 ? Math.round(1920 * r.height / r.width) : 550 };
-}
+/** The sample screen's output size. The screen is drawn at this aspect. */
+const MOCK_OUT = { width: 1920, height: 1080 };
+const mockOut = () => MOCK_OUT;
 
 function drawPip(): void {
   if (!pipDefault) return;

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-surface="dark">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
@@ -25,17 +25,18 @@
       --side: #0a0a0a;
       --group: #151515;
       --hair: rgba(255, 255, 255, .07);
-      --text: rgba(255, 255, 255, .92);
+      /* Figma's label whites. Own names: tokens.css's --text is not redefined here. */
+      --ink: rgba(255, 255, 255, .92);
       --text-strong: rgba(255, 255, 255, .95);
-      --text-dim: rgba(255, 255, 255, .6);
+      --ink-dim: rgba(255, 255, 255, .6);
       --helper: rgba(255, 255, 255, .5);
       --heading: rgba(255, 255, 255, .45);
       --fill: rgba(255, 255, 255, .06);
       --fill-on: rgba(255, 255, 255, .14);
       --edge: rgba(255, 255, 255, .12);
       --edge-strong: rgba(255, 255, 255, .14);
-      /* The switch and slider blue is tokens.css's dark --accent. */
-      --on: #7aa2ff;
+      /* The switch and slider blue: tokens.css's dark --accent (data-surface="dark"). */
+      --on: var(--accent);
       --off: rgba(255, 255, 255, .16);
       --warn-text: #e8a65a;
       --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
@@ -43,7 +44,7 @@
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; }
-    body { background: var(--win); color: var(--text); font: 400 13px/18px var(--ui); -webkit-font-smoothing: antialiased; }
+    body { background: var(--win); color: var(--ink); font: 400 13px/18px var(--ui); -webkit-font-smoothing: antialiased; }
     button, select, input { font: inherit; color: inherit; }
     :focus-visible { outline: 2px solid var(--on); outline-offset: 2px; }
 
@@ -56,7 +57,7 @@
     }
     #sidebar button {
       -webkit-app-region: no-drag; text-align: left; border: 0; background: transparent;
-      padding: 7px 10px; border-radius: 8px; color: var(--text-dim); cursor: default;
+      padding: 7px 10px; border-radius: 8px; color: var(--ink-dim); cursor: default;
     }
     #sidebar button[aria-current="page"] { background: rgba(255, 255, 255, .08); color: #fff; font-weight: 500; }
 
@@ -119,7 +120,7 @@
     .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--fill); }
     .segmented button {
       border: 0; background: transparent; padding: 6px 12px; border-radius: 8px;
-      font-size: 12px; line-height: 17px; color: var(--text-dim);
+      font-size: 12px; line-height: 17px; color: var(--ink-dim);
     }
     .segmented button[aria-checked="true"] { background: var(--fill-on); color: #fff; font-weight: 500; }
     .segmented button:disabled { opacity: .4; }
@@ -157,10 +158,10 @@
     /* Buttons and paths. */
     .btn {
       border: 1px solid var(--edge-strong); background: transparent; border-radius: 10px; padding: 8px 14px;
-      font-size: 12px; line-height: 17px; font-weight: 500; color: var(--text); white-space: nowrap;
+      font-size: 12px; line-height: 17px; font-weight: 500; color: var(--ink); white-space: nowrap;
     }
     .btn:disabled { opacity: .4; }
-    .path { font: 400 12px/17px var(--mono); color: var(--text-dim); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+    .path { font: 400 12px/17px var(--mono); color: var(--ink-dim); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
     .keycap {
       width: 112px; height: 32px; border-radius: 10px; border: 1px solid var(--edge-strong); background: rgba(255, 255, 255, .04);
       font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text-strong);
@@ -171,10 +172,16 @@
     /* Camera preview: a sample screen with the default PiP drawn on it. */
     #pipstage {
       position: relative; height: 150px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .08);
+      background: rgba(255, 255, 255, .03);
+    }
+    /* 16:9, the output pipRect is given (MOCK_OUT), so a place set here is the
+       place a 1080p take records. */
+    #pipscreen {
+      position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%); aspect-ratio: 16 / 9; overflow: hidden;
       background: linear-gradient(159deg, #1b2a4a 0%, #3a1f3d 71%);
     }
-    #pipstage .faux { position: absolute; left: 23px; top: 21px; width: 300px; height: 104px; border-radius: 8px; background: rgba(255, 255, 255, .07); }
-    #pipstage .line { position: absolute; left: 39px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .14); }
+    #pipscreen .faux { position: absolute; left: 8%; top: 14%; width: 62%; height: 69%; border-radius: 6px; background: rgba(255, 255, 255, .07); }
+    #pipscreen .line { position: absolute; left: 14%; height: 4%; border-radius: 3px; background: rgba(255, 255, 255, .14); }
     #pipbox { position: absolute; overflow: hidden; background: linear-gradient(#5f6f8a, #3b4658); cursor: grab; touch-action: none; }
     #pipbox:active { cursor: grabbing; }
     #pipbox .silhouette { position: absolute; inset: 0; }
@@ -248,14 +255,14 @@
       <h1 id="h-camera" hidden>Camera</h1>
       <div class="section">
         <h2>Preview</h2>
-        <div id="pipstage" aria-hidden="true">
+        <div id="pipstage" aria-hidden="true"><div id="pipscreen">
           <div class="faux"></div>
-          <div class="line" style="top:37px;width:120px"></div>
-          <div class="line" style="top:55px;width:200px"></div>
-          <div class="line" style="top:73px;width:160px"></div>
-          <div class="line" style="top:91px;width:90px"></div>
+          <div class="line" style="top:25%;width:25%"></div>
+          <div class="line" style="top:37%;width:41%"></div>
+          <div class="line" style="top:49%;width:33%"></div>
+          <div class="line" style="top:61%;width:19%"></div>
           <div id="pipbox"><div class="silhouette"></div></div>
-        </div>
+        </div></div>
         <p class="note" style="margin:0">Shows how the camera will look in new recordings. Updates as you change the controls below.</p>
       </div>
       <div class="section">

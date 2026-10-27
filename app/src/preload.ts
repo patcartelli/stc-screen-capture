@@ -32,9 +32,6 @@ contextBridge.exposeInMainWorld("recorder", {
   // capture mode, the button asks for none.
   captureStill: (action?: string) => ipcRenderer.invoke("still:capture", action),
   getShortcuts: () => ipcRenderer.invoke("shortcuts:get"),
-  setShortcut: (action: string, accelerator: string | null) =>
-    ipcRenderer.invoke("shortcuts:set", action, accelerator),
-  resetShortcuts: () => ipcRenderer.invoke("shortcuts:reset"),
   // The one way out (STC-293). Composited RGBA in, a file and/or the
   // pasteboard out — the renderer never names a format's encoder, a
   // destination folder or a filename. `copyFrame` used to sit here and is
@@ -42,18 +39,11 @@ contextBridge.exposeInMainWorld("recorder", {
   // frame grab goes through `still:export` like everything else now.
   exportStill: (req: Record<string, unknown>) => ipcRenderer.invoke("still:export", req),
   chooseStillDestination: () => ipcRenderer.invoke("still:chooseDestination"),
-  // The site folder (STC-444 slice 3, moved here from the editor window's
-  // own bridge) — same handler either way, `main.ts` does not care which
-  // window's sender asked.
-  chooseShareDestination: () => ipcRenderer.invoke("share:chooseDestination"),
   // Where recordings and shots actually land, resolved (STC-412 final
   // review, I1). Not derivable on this side: an unset `saveFolder` falls
   // through to `STC_RECORDINGS_DIR`/~/Desktop/stc inside `takes.ts`, and the
   // renderer has neither the env nor a home directory to name.
   resolvedSaveFolder: () => ipcRenderer.invoke("recorder:resolvedSaveFolder"),
-  // Reclaim space (STC-435). Takes nothing: main finds, asks and reports
-  // through its own dialog and toast, so the renderer never names a path.
-  reclaimSpace: () => ipcRenderer.invoke("recorder:reclaimSpace"),
   // The required-grants panel (STC-476). The renderer names a grant and an
   // action; main owns every URL and every call that follows.
   permissions: () => ipcRenderer.invoke("permissions:get"),

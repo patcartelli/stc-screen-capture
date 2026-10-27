@@ -4,8 +4,9 @@ import {
 } from "@transform/pip-style";
 
 /**
- * The PiP inspector (STC-461), shared by the editor's Camera popover and the
- * Settings sheet — the device-menu-dom.ts precedent: one DOM builder, two hosts.
+ * The PiP inspector (STC-461): the editor's Camera popover. It had a second
+ * host in the Settings sheet; the Settings window (STC-581) draws Capture SK
+ * 016's own Camera rows instead, so this is the editor's alone.
  * It reports input as `PipEdit`s and draws the style it is handed; what an edit
  * MEANS is pip-style.ts's `editPipStyle`, never decided here.
  *
@@ -13,15 +14,11 @@ import {
  * `change` is "commit" (persist).
  */
 export interface PipInspectorHost {
-  surface: "editor" | "settings";
   /** live = while dragging a slider (repaint only); commit = on change (persist). */
   onEdit(edit: PipEdit, phase: "live" | "commit"): void;
-  /** Editor only. */
-  onEnabled?(enabled: boolean): void;
-  /** Editor only. */
-  onReframe?(): void;
-  /** Editor only. */
-  onUseAsDefault?(): void;
+  onEnabled(enabled: boolean): void;
+  onReframe(): void;
+  onUseAsDefault(): void;
 }
 export interface PipInspector { render(style: PipStyle, enabled: boolean): void }
 
@@ -59,8 +56,8 @@ export function buildPipInspector(root: HTMLElement, host: PipInspectorHost): Pi
     presets.append(b);
   }
 
-  const enabled = host.surface === "editor" ? toggle("pipenabled", "Show camera") : null;
-  enabled?.input.addEventListener("change", () => host.onEnabled?.(enabled.input.checked));
+  const enabled = toggle("pipenabled", "Show camera");
+  enabled.input.addEventListener("change", () => host.onEnabled(enabled.input.checked));
 
   const shapes = el("div", { class: "pip-segmented", role: "radiogroup", "aria-label": "Shape" });
   for (const [shape, label] of [["rect", "Rect"], ["square", "Square"], ["circle", "Circle"]] as const) {
@@ -94,22 +91,19 @@ export function buildPipInspector(root: HTMLElement, host: PipInspectorHost): Pi
   borderRow.append(border.wrap, borderWidth.wrap, borderColor);
 
   root.append(presets);
-  if (enabled) root.append(enabled.wrap);
-  root.append(shapes, radius.wrap, size.wrap, borderRow, shadow.wrap, mirror.wrap);
+  root.append(enabled.wrap, shapes, radius.wrap, size.wrap, borderRow, shadow.wrap, mirror.wrap);
 
-  if (host.surface === "editor") {
-    const actions = el("div", { class: "pip-actions" });
-    const reframe = el("button", { type: "button", id: "pipreframe" }, "Reframe…");
-    const asDefault = el("button", { type: "button", id: "pipdefault" }, "Use as default");
-    reframe.addEventListener("click", () => host.onReframe?.());
-    asDefault.addEventListener("click", () => host.onUseAsDefault?.());
-    actions.append(reframe, asDefault);
-    root.append(actions);
-  }
+  const actions = el("div", { class: "pip-actions" });
+  const reframe = el("button", { type: "button", id: "pipreframe" }, "Reframe…");
+  const asDefault = el("button", { type: "button", id: "pipdefault" }, "Use as default");
+  reframe.addEventListener("click", () => host.onReframe());
+  asDefault.addEventListener("click", () => host.onUseAsDefault());
+  actions.append(reframe, asDefault);
+  root.append(actions);
 
   return {
     render(style, isEnabled) {
-      if (enabled) enabled.input.checked = isEnabled;
+      enabled.input.checked = isEnabled;
       for (const b of shapes.querySelectorAll<HTMLButtonElement>("[data-pip-shape]")) {
         b.setAttribute("aria-checked", String(b.dataset.pipShape === style.shape));
       }

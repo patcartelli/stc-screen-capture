@@ -89,17 +89,9 @@ declare const recorder: {
   openEditor(dir: string, name: string, autoShare?: boolean): Promise<boolean>;
   captureStill(action?: ShotAction): Promise<StillResult>;
   getShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
-  setShortcut(action: BindableAction, accelerator: string | null):
-    Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
-  resetShortcuts(): Promise<{ shortcuts: Shortcuts; report: ShortcutReport[] }>;
   chooseStillDestination(): Promise<{ saveFolder: string | null }>;
-  /** STC-444 slice 3: the site folder picker, moved here from the editor
-   *  window's own bridge — same handler, a person choosing either way. */
-  chooseShareDestination(): Promise<{ destination: string | null }>;
   /** The resolved save location — never null, never a phrase (STC-412 I1). */
   resolvedSaveFolder(): Promise<string>;
-  /** STC-435: find unused `raw/` bundles, ask, trash. Main shows every result itself. */
-  reclaimSpace(): Promise<{ moved: number; failed: number }>;
   /** STC-476: re-read the grants; main pushes the same shape on `permissions:changed`. */
   permissions(): Promise<PermissionsState>;
   permissionsAct(grant: Grant, action: RowAction): Promise<PermissionsState>;
@@ -694,13 +686,30 @@ recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The 
 recorder.on("settings:changed", () => {
   void (async () => {
     const s = await recorder.getSettings();
+    // STC-581: Settings writes here too, a slider at a time. A full device
+    // enumeration only when a device field actually moved.
+    const devicesMoved = storedMicUid !== s.micDeviceUid || storedSystemAudio !== s.systemAudio
+      || storedCamera !== s.camera || storedCameraUid !== s.cameraDeviceUid;
     storedMicUid = s.micDeviceUid;
     storedSystemAudio = s.systemAudio;
     storedCamera = s.camera;
     storedCameraUid = s.cameraDeviceUid;
-    await refreshDevices();
+    if (devicesMoved) await refreshDevices();
+    // The grid lists the save folder, and its empty state names the keys.
+    const listing = await listingInputs();
+    if (listing !== listedFor) await refreshTakes();
+    listedFor = listing;
   })();
 });
+/** The save folder and the shortcuts, which the grid and its empty state are drawn from. */
+async function listingInputs(): Promise<string> {
+  let shortcuts = "";
+  try { shortcuts = JSON.stringify((await recorder.getShortcuts()).shortcuts); } catch { /* unread: no re-list for it */ }
+  return JSON.stringify([(await recorder.getSettings()).saveFolder, shortcuts]);
+}
+/** What the grid was last drawn for, as `settings:changed` compares it. */
+let listedFor: string | undefined;
+void listingInputs().then((l) => { listedFor ??= l; }, () => {});
 
 /**
  * Camera failures the user must actually see. Every one of these was already

@@ -71,4 +71,29 @@ describe("the Settings window's Camera pane (STC-581)", () => {
     }
     expect(await settings.locator("#pipstage #pipbox").count()).toBe(1);
   });
+
+  // The preview is a 1080p screen, so where the PiP is dropped on it is where
+  // it is stored. It once had the stage's own ~3.8:1 shape, and a PiP snapped
+  // to its bottom landed well above the bottom of a real 16:9 take.
+  test("a PiP dropped on the 16:9 preview is stored where it was drawn", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+    const win = await launch({ userData, recordings: makeTakeFolder().dir });
+    const settings = await openSettings(app!, win, "camera");
+    const screen = (await settings.locator("#pipscreen").boundingBox())!;
+    expect(screen.width / screen.height).toBeCloseTo(16 / 9, 1);
+
+    const box = (await settings.locator("#pipbox").boundingBox())!;
+    await settings.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await settings.mouse.down();
+    await settings.mouse.move(screen.x + screen.width * 0.3, screen.y + screen.height * 0.4, { steps: 8 });
+    await settings.mouse.up();
+
+    await expect.poll(() =>
+      (readStoredSettings(userData).pipStyle as { center?: { x: number; y: number } } | undefined)?.center?.x,
+      { timeout: 10_000 }).toBeLessThan(0.5);
+    const center = (readStoredSettings(userData).pipStyle as { center: { x: number; y: number } }).center;
+    const drawn = (await settings.locator("#pipbox").boundingBox())!;
+    expect(center.x).toBeCloseTo((drawn.x + drawn.width / 2 - screen.x) / screen.width, 2);
+    expect(center.y).toBeCloseTo((drawn.y + drawn.height / 2 - screen.y) / screen.height, 2);
+  });
 });
