@@ -37,7 +37,7 @@ for (const scheme of ["light", "dark"]) {
     const page = await ctx.newPage();
     await page.addInitScript(() => {
       const stub = () => new Proxy(function () {}, { get: (_t, k) => (k === "then" ? undefined : stub()), apply: () => stub() });
-      for (const k of ["overlay", "countdown", "pill", "toast", "thumbnail", "editor", "stc", "recorder", "still", "copyRender", "stillEditor"]) {
+      for (const k of ["overlay", "countdown", "pill", "toast", "thumbnail", "editor", "stc", "recorder", "still", "copyRender", "stillEditor", "settingsBridge"]) {
         try { Object.defineProperty(window, k, { value: stub(), configurable: true, writable: true }); } catch { /* already defined */ }
       }
     });
@@ -45,14 +45,24 @@ for (const scheme of ["light", "dark"]) {
     await page.goto(new URL(name, `file://${dir}`).href);
     await page.waitForTimeout(400);
     await page.evaluate(axeSrc);
-    const r = await page.evaluate(() => axe.run(document, {
-      resultTypes: ["violations"], runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] },
-    }));
-    console.log(`${name} [${scheme}]: ${r.violations.length} violation(s)`);
-    for (const v of r.violations) {
-      failed += v.nodes.length;
-      console.log(`  - ${v.id} x${v.nodes.length}`);
-      for (const n of v.nodes.slice(0, 8)) console.log(`      ${n.target.join(" ")}  ${(n.any[0]?.message ?? "").slice(0, 150)}`);
+    // A window whose panes are `hidden` until picked (Settings, STC-587) is
+    // audited once per pane: axe skips hidden nodes, so one run would see
+    // only the first.
+    const panes = await page.$$eval("#sidebar button[data-pane]", (bs) => bs.map((b) => b.dataset.pane));
+    for (const pane of panes.length ? panes : [null]) {
+      if (pane) {
+        await page.click(`#sidebar button[data-pane="${pane}"]`);
+        await page.waitForTimeout(100);
+      }
+      const r = await page.evaluate(() => axe.run(document, {
+        resultTypes: ["violations"], runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] },
+      }));
+      console.log(`${name}${pane ? ` #${pane}` : ""} [${scheme}]: ${r.violations.length} violation(s)`);
+      for (const v of r.violations) {
+        failed += v.nodes.length;
+        console.log(`  - ${v.id} x${v.nodes.length}`);
+        for (const n of v.nodes.slice(0, 8)) console.log(`      ${n.target.join(" ")}  ${(n.any[0]?.message ?? "").slice(0, 150)}`);
+      }
     }
     await ctx.close();
   }

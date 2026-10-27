@@ -113,3 +113,25 @@ macOS, not by us.
 
 axe on each renderer HTML; any run of the app; hover/active cells for the native
 menu; the "Mac" cells above.
+
+## STC-587 — the rebuilt Settings window (2026-10-27)
+
+STC-581 replaced the profile sheet row above with its own window, so the sheet
+row is history. This is the Settings row for the window as it is now, AFTER the
+fix pass. The Library half of STC-587 waits for STC-584's rebuild.
+
+| Surface (file) | hover | focus-visible | active | disabled | loading | keyboard path | reduced motion |
+|---|---|---|---|---|---|---|---|
+| **Settings** (`settings.html`, `settings-renderer.ts`, `settings-dropdown.ts`) | ok — `--hover` on sidebar items, segmented options, dropdown triggers, buttons, keycaps (was none) | ok — one `:focus-visible` ring on `--focus`, inputs included (the switches, sliders and keycaps are inputs, which `tokens.css` leaves alone). Was `--accent`'s copy. Menu rows and the PiP draw it inset | ok — `--press` on the same controls, switches brighten (was none) | ok — segmented, sliders, buttons dim; Clear disables when empty | ok — Clean up is disabled and `aria-busy` for its round trip | ok — Tab through sidebar and pane. Segmented controls are radio groups (one Tab stop, arrows/Home/End choose; was one stop per option). Dropdowns open with ↓/Return, rows take ↑/↓, Escape refocuses the trigger. A keycap keeps the focus through listening and Escape (it was lost on every re-render). Keycaps are named by their action. The PiP takes arrow keys (1%, 10% with Shift), snapped, inside the frame, saved on release (was drag only) | ok — a switch's knob does not slide, its track crossfades over `--dur-quick` (120 ms; was `transition: none`). Same in `device-menu.css`'s menu switch, which the record bar shares. The title bar's blur is not motion; Reduce Transparency makes it solid (STC-586) |
+
+**axe** (`npm run axe:renderers`, which now stubs `settingsBridge` and audits
+Settings once per pane, since axe skips the hidden ones): zero violations on all
+five panes, light and dark. It found two things, both fixed: segmented options
+had no `aria-checked` until settings loaded, and `--heading` (10-11 px headings
+and notes) was 4.49:1, now `.48` alpha instead of Figma's `.45`.
+
+**e2e:** `app/test/settings-a11y.e2e.test.ts` (Linux, Xvfb): the ring on every
+control a Tab reaches in every pane, the radio keys, the keycap's focus, the
+PiP's arrow keys, the switch's reduced-motion crossfade. All five fail on the
+pre-fix files. What only a Mac can judge is `docs/STC-587-RUNBOOK.md`.
+
