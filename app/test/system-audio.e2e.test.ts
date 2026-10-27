@@ -8,6 +8,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
+import { recorderState } from "./_library-window.js";
 
 /**
  * The system-audio preference reaching the helper (STC-418 PR 2).
@@ -22,9 +23,9 @@ import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
  *
  * The helper stand-in records the start payload and captures nothing.
  *
- * STC-388: `#record` opens the overlay now, and only the options bar's own
+ * STC-388: Record opens the overlay now, and only the options bar's own
  * Record control starts a take, so every test here goes through
- * `startRecordFlow` — the real Record flow — rather than clicking `#record`
+ * `startRecordFlow` — the real Record flow — rather than pressing Record
  * and waiting. That makes this file the pin for `recordFlowBody`'s start-param
  * builder in `main.ts`: `systemAudio` is read from STORED settings there, never
  * from the bar (which has no system-audio control until STC-459).
@@ -70,7 +71,7 @@ describe("the system-audio preference", () => {
   test("off by default: a take sends no systemAudio field at all", async () => {
     const o = fresh();
     const win = await launch(o);
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(o.startLog);
     expect(cmd.cmd).toBe("start");
@@ -81,7 +82,7 @@ describe("the system-audio preference", () => {
     const o = fresh();
     const win = await launch(o);
     await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: true }));
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(o.startLog);
     expect(cmd.cmd).toBe("start");
@@ -98,7 +99,7 @@ describe("the system-audio preference", () => {
     const saved = await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: false }));
     expect(saved.systemAudio).toBe(false);
     expect((await win.evaluate(() => (window as any).recorder.getSettings())).systemAudio).toBe(false);
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(o.startLog);
     expect(cmd.cmd).toBe("start");

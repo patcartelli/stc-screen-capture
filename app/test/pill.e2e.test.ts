@@ -9,6 +9,7 @@ import { startRecordFlow } from "./_record-flow.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { waitForStart } from "./_start-log.js";
 import { pillPage, pillShowing, pillWindowState } from "./_pill.js";
+import { recorderState } from "./_library-window.js";
 
 /**
  * The pill's own window, wired through the real app (STC-550; the pill is
@@ -71,7 +72,7 @@ async function library(): Promise<{ visible: boolean; resizable: boolean; always
 describe("the pill's own window (STC-550)", () => {
   test("Record shows the pill in its own window; the library steps aside, untouched, and its Stop ends the take", async () => {
     const { win, startLog } = await launch();
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     expect(await library()).toEqual({ visible: true, resizable: true, alwaysOnTop: false });
     expect((await pillWindowState(app!)).exists).toBe(false);
 
@@ -107,7 +108,7 @@ describe("the pill's own window (STC-550)", () => {
     // Stop is the one control in the drag region, and it ends this take.
     await pill.click("#pill-stop");
     await expect.poll(() => pillWindowState(app!).then((s) => s.exists), { timeout: 20_000 }).toBe(false);
-    await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 20_000 }).toBe("idle");
     // Back, and as it was.
     await expect.poll(library, { timeout: 20_000 }).toEqual({ visible: true, resizable: true, alwaysOnTop: false });
   }, 210_000);
@@ -117,20 +118,20 @@ describe("the pill's own window (STC-550)", () => {
     // the same `recording-ended` path a user's own Stop produces. The pill
     // must not depend on which path got there — trap 3 in pill.ts's header.
     const { win } = await launch({ STC_FAKE_STREAM_DEATH_MS: "900" });
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
 
     await startRecordFlow(app!, win);
     await expect.poll(() => pillShowing(app!), { timeout: 20_000 }).toBe(true);
 
     // No further click: the stand-in ends the take on its own.
     await expect.poll(() => pillWindowState(app!).then((s) => s.exists), { timeout: 20_000 }).toBe(false);
-    await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 20_000 }).toBe("idle");
     await expect.poll(() => library().then((l) => l.visible), { timeout: 20_000 }).toBe(true);
   }, 180_000);
 
   test("every take gets a fresh pill: a second take's window is a new one, not the last take's", async () => {
     const { win } = await launch();
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     const idOf = () => app!.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes("pill.html"))?.id);
 
@@ -139,7 +140,7 @@ describe("the pill's own window (STC-550)", () => {
     const first = await idOf();
     await (await pillPage(app!)).click("#pill-stop");
     await expect.poll(() => pillWindowState(app!).then((s) => s.exists), { timeout: 20_000 }).toBe(false);
-    await expect.poll(() => win.textContent("#record"), { timeout: 20_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 20_000 }).toBe("idle");
 
     await startRecordFlow(app!, win);
     await expect.poll(() => pillShowing(app!), { timeout: 20_000 }).toBe(true);

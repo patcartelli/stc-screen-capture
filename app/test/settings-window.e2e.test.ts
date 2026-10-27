@@ -90,7 +90,7 @@ describe("the Settings window", () => {
       .toBe("Registered means Capture holds the key. Another app can still share it.");
   }, 60_000);
 
-  test("Show diagnostics in Settings shows the library's table", async () => {
+  test("Show diagnostics in Settings shows the library's diagnostics strip", async () => {
     const win = await launch(fresh());
     expect(await win.locator("#diagnostics").isHidden()).toBe(true);
     const settings = await openSettings(app!, win, "advanced");
@@ -202,17 +202,14 @@ describe("the Settings window", () => {
     expect(await region('#sidebar button[data-pane="camera"]')).toBe("no-drag");
   }, 60_000);
 
-  test("camera and mic state stay visible in the library with diagnostics off", async () => {
+  // STC-584: the camera and mic readouts this used to pin outside the table
+  // left the library (Patrick, 2026-10-27: the toast is enough). What is left
+  // to say is that the diagnostics are hidden by default and hold the pid.
+  test("the diagnostics strip is hidden by default and holds the helper's readout", async () => {
     const win = await launch(fresh());
     expect(await win.locator("#diagnostics").isHidden()).toBe(true);
-    expect(await win.isVisible("#camera-state")).toBe(true);
-    expect(await win.isVisible("#mic-state")).toBe(true);
-    const inside = await win.evaluate(() => {
-      const table = document.getElementById("diagnostics")!;
-      return ["camera-state", "mic-state"].filter((id) => table.contains(document.getElementById(id)));
-    });
-    expect(inside).toEqual([]);
-    expect(await win.isVisible("#pid")).toBe(false);
+    expect(await win.locator("#diagnostics #pid").count()).toBe(1);
+    expect(await win.locator("#camera-state, #mic-state, #devicestate").count()).toBe(0);
   }, 60_000);
 
   // shortcuts:set used to write without telling the library, so the empty

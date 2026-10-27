@@ -72,7 +72,7 @@ describe("Reclaim space, through the real app", () => {
   test("shows the orphan first, trashes it on confirm, and leaves the untagged image alone", async () => {
     const rec = bundle(RECORDING, "anchors.json");
     writeFileSync(join(root, "holiday.jpg"), JPEG);           // untagged, but a still's kind
-    ({ app, win: page } = await launchApp(root, {}, { ready: "#record" }));
+    ({ app, win: page } = await launchApp(root, {}, { ready: "#titlebar" }));
     await stubDialog(0);
 
     await pressReclaim();
@@ -88,7 +88,7 @@ describe("Reclaim space, through the real app", () => {
 
   test("Cancel moves nothing", async () => {
     const rec = bundle(RECORDING, "anchors.json");
-    ({ app, win: page } = await launchApp(root, {}, { ready: "#record" }));
+    ({ app, win: page } = await launchApp(root, {}, { ready: "#titlebar" }));
     await stubDialog(1);
 
     await pressReclaim();
@@ -100,7 +100,7 @@ describe("Reclaim space, through the real app", () => {
   test("the skip case is a visible toast naming the file in the way — no dialog, nothing moved", async () => {
     const still = bundle(STILL, "shot.json");
     writeFileSync(join(root, "holiday.jpg"), JPEG);           // blocks the still bundle
-    ({ app, win: page } = await launchApp(root, {}, { ready: "#record" }));
+    ({ app, win: page } = await launchApp(root, {}, { ready: "#titlebar" }));
     await stubDialog(0);
 
     await pressReclaim();

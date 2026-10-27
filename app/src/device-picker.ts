@@ -88,8 +88,8 @@ export type PopoverId = "mic" | "camera";
 /**
  * Which popover (if any) should be open after a trigger is clicked. Clicking
  * the one already open closes it; clicking the other switches — never two
- * open at once, since both anchor into the same `#devicestate` row and a
- * second popover would either overlap the first or have to move it.
+ * open at once, since the record bar's two triggers sit side by side and a
+ * second menu would either overlap the first or have to move it.
  *
  * Closing on a selection, Escape, or an outside click is not decided here:
  * each of those is unconditionally "close", which needs no function to get

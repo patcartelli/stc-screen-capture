@@ -10,6 +10,7 @@ import { TRASH_COMMIT_AT_QUIT_MS } from "../src/pending-trash.js";
 import { windowCount, pageWithUrl, pageMatching, clickThatCloses } from "./_windows.js";
 import { RAW_SUBDIR } from "../src/takes.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { recorderState } from "./_library-window.js";
 
 /**
  * Quitting the app mid-take ends the take before the helper goes.
@@ -49,10 +50,10 @@ describe("quitting while recording", () => {
     // countdown — which would otherwise put three seconds between the click
     // and the take, and a `start` in the log either way.
     await withoutCountdown(win);
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     try {
-      await expect.poll(() => win.textContent("#state"), { timeout: 30_000 }).toBe("recording");
+      await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("recording");
     } catch (e) {
       // STC-501: a take that ends before this poll sees it leaves nothing but
       // "expected idle". The command order says what ended it.
@@ -119,7 +120,7 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
       },
     });
     const win = await app.firstWindow();
-    await win.waitForSelector("#capturestill");
+    await win.waitForSelector("#titlebar");
     return { win, recordings, temp };
   }
 

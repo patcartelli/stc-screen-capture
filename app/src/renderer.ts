@@ -1,4 +1,7 @@
-/** UI: a record button, live telemetry, and anything that went wrong stated plainly. */
+/**
+ * The Library window (STC-584): the library, the Settings gear, the helper's
+ * diagnostics strip, and anything that went wrong stated plainly.
+ */
 interface DisplayInfo {
   id: number; main: boolean; name?: string;
   pointW: number; pointH: number; pixelW: number; pixelH: number;
@@ -98,6 +101,8 @@ declare const recorder: {
   start():Promise<{ ok: boolean; cancelled?: boolean; dir?: string; code?: string; detail?: string }>;
   stop(): Promise<{ ok: boolean; info?: any }>;
   reveal(dir: string): Promise<void>;
+  /** STC-584: a still's Share copies its image through the panel's own funnel. */
+  exportStill(req: Record<string, unknown>): Promise<{ ok: boolean; code?: string; detail?: string }>;
   on(event: string, cb: (p: any) => void): () => void;
   /** STC-412: show a warning via the toast. */
   showToast(message: ToastInput): void;
@@ -109,279 +114,44 @@ import type { IconPlacement } from "./icon-placement.js";
 import {
   formatAccelerator, type BindableAction, type ShotAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
-import { renderLibrary, renderPlaceholderOnly, showUpdating, type LibraryCallbacks } from "./library-view.js";
 import {
-  placeholderFor, LOADING_PLACEHOLDER, UPDATING_NOTE, UPDATING_SHOW_AFTER_MS,
+  renderLibrary, renderControls, renderPlaceholderOnly, showUpdating, installOverflowDismissal,
+  type LibraryCallbacks,
+} from "./library-view.js";
+import {
+  placeholderFor, searchPlaceholder, applySearch, countLabel, LOADING_PLACEHOLDER, UPDATING_NOTE,
+  UPDATING_SHOW_AFTER_MS,
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
 import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS } from "./stop-copy.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
-import { colorSpaceFor } from "@transform/still-export";
+import { colorSpaceFor, stillIsBlocked, type ExportOptions } from "@transform/still-export";
+import { composeStill, stillPixelBytes } from "./still-compose.js";
 import type { Shot } from "@transform/shot";
 import type { GifSettings } from "@transform/gif-options";
-import { MODEL_CODE } from "./product.js";
 import { PERMISSION_ACTION_LABELS, type Grant, type PermissionsState, type RowAction } from "./permissions.js";
-import { recordRefusalText, stillNoticeText } from "./refusals.js";
+import { iconSvg } from "./icons.js";
 import type { ToastInput } from "./toast-message.js";
-import { micDevices, type MicInfo } from "./mic-devices.js";
-import {
-  decidePopoverToggle, micMenuRows, cameraMenuRows, applyMenuPick,
-  type DeviceLike, type DeviceChoice, type PopoverId, type DeviceSelection, type MenuRow,
-} from "./device-picker.js";
-import { buildMenuRow } from "./device-menu-dom.js";
+import type { MicInfo } from "./mic-devices.js";
 import type { PipStyle } from "@transform/pip-style.js";
-import { TakeDeviceReports, type TakeDevice } from "./take-device-status.js";
 
 const $ = (id: string) => document.getElementById(id)!;
-const recordBtn = $("record") as HTMLButtonElement;
-const stillBtn = $("capturestill") as HTMLButtonElement;
-let recording = false;
 
-// STC-399: the strip's own model plate — the bare code, no version (that is
-// the About panel and the export stamp's job). Static, so no boot IIFE needed.
-$("modelcode").textContent = MODEL_CODE;
-
-// The pill (STC-375) lived in this page while it was this window collapsed.
-// It is its own window since STC-550: `pill-window.ts`, `pill-renderer.ts`.
-
-/**
- * Mic and camera device selection (STC-414), sharing one popover — see
- * device-picker.ts's header for why one implementation serves both.
- *
- * The mic keeps STC-233's own rule: "Off" is the only automatic choice,
- * because there is no safe default mic (auto-grabbing a Bluetooth mic once
- * wedged CoreAudio system-wide). The camera keeps its existing on/off
- * checkbox's behaviour as one of its rows, and ALSO offers "Automatic" —
- * `CameraCapture`'s own transportType ranking (STC-286), which is what
- * `camera: true` alone has always meant — alongside naming a device
- * explicitly. Both give a stored uid that is no longer connected its own
- * "(not connected)" row, the same treatment the display picker already
- * gives a missing display: `start` refuses that device rather than
- * silently recording another one, and the picker should not hide that
- * before Record is even pressed.
- */
-const cameraTrigger = $("camera-picker") as HTMLButtonElement;
-const micTrigger = $("mic-picker") as HTMLButtonElement;
-const devicePopover = $("devicepopover") as HTMLDivElement;
-
-let storedCamera = false;
-let storedCameraUid: string | null = null;
-let storedMicUid: string | null = null;
-// STC-456: the mic menu's own "Include System Audio" row, since the popover
-// is the shared device-menu component now (device-picker.ts's micMenuRows).
-let storedSystemAudio = false;
-let knownMics: DeviceLike[] = [];
-let knownCameras: DeviceLike[] = [];
-let openPopover: PopoverId | null = null;
-
-function cameraChoice(): DeviceChoice {
-  if (!storedCamera) return { kind: "off" };
-  return storedCameraUid != null ? { kind: "device", uid: storedCameraUid } : { kind: "auto" };
-}
-function micChoice(): DeviceChoice {
-  return storedMicUid != null ? { kind: "device", uid: storedMicUid } : { kind: "off" };
-}
-function currentSelection(): DeviceSelection {
-  return {
-    micDeviceUid: storedMicUid, systemAudio: storedSystemAudio,
-    camera: storedCamera, cameraDeviceUid: storedCameraUid,
-  };
-}
-
-/**
- * What the devices have said during the current take, so neither the
- * per-take "opening…" reset nor the idle label writes over a report that beat
- * it here (STC-526, take-device-status.ts).
- */
-const takeReports = new TakeDeviceReports();
-
-/**
- * The trigger's own label at rest — what is CONFIGURED, not what a take is
- * currently doing. `setCamera`/`setMic` (below) overwrite this with live
- * status the moment a take actually opens the device; this only runs again
- * once that take is over and something is picked anew, so it never fights
- * "opening…" or a fault text mid-recording.
- */
-function deviceStatusLabel(choice: DeviceChoice, devices: DeviceLike[]): string {
-  if (choice.kind === "off") return "off";
-  if (choice.kind === "auto") return "automatic";
-  return devices.find((d) => d.uid === choice.uid)?.name ?? "not connected";
-}
-function renderIdleStatus(): void {
-  if (recording) return;
-  // `recording` is set only when the start's reply arrives, and Record's own
-  // settings:changed lands here before that: a device that already reported
-  // for the starting take keeps its row (STC-526, take-device-status.ts rule 4).
-  if (takeReports.mayShowIdle("camera")) setCamera(deviceStatusLabel(cameraChoice(), knownCameras));
-  if (takeReports.mayShowIdle("mic")) setMic(deviceStatusLabel(micChoice(), knownMics));
-}
-
-async function refreshDevices(): Promise<void> {
-  try {
-    const r = await recorder.devices();
-    knownMics = Array.isArray(r.mics) ? micDevices(r.mics as MicInfo[]) : [];
-    knownCameras = Array.isArray(r.cameras) ? r.cameras : [];
-  } catch {
-    knownMics = [];
-    knownCameras = [];
-  }
-  renderIdleStatus();
-}
-
-function closePopover(): void {
-  if (openPopover == null) return;
-  openPopover = null;
-  devicePopover.hidden = true;
-  devicePopover.replaceChildren();
-}
-
-/**
- * STC-456: the popover draws `device-picker.ts`'s shared `MenuRow` model now
- * — same rows, same icons, same CSS class (`device-menu.css`) the Record
- * options bar's own menu uses — via `buildMenuRow` (`device-menu-dom.ts`),
- * the same builder `overlay.ts` draws its menu with. `micMenuRows` is the
- * mic popover's whole row list, "Include System Audio" included; unlike the
- * bar, this popover has no separate toggle for it.
- */
-function renderPopover(): void {
-  if (openPopover == null) { devicePopover.hidden = true; return; }
-  const isMic = openPopover === "mic";
-  const rows: MenuRow[] = isMic
-    ? micMenuRows(knownMics, currentSelection())
-    : cameraMenuRows(knownCameras, currentSelection());
-  devicePopover.replaceChildren(...rows.map((row) => buildMenuRow(row, (r) => void pickRow(isMic, r))));
-  const trigger = isMic ? micTrigger : cameraTrigger;
-  const r = trigger.getBoundingClientRect();
-  devicePopover.hidden = false;
-  devicePopover.style.left = `${Math.round(r.left)}px`;
-  devicePopover.style.top = `${Math.round(r.bottom + 4)}px`;
-}
-
-/**
- * `applyMenuPick` (device-picker.ts) is the one place that decides what a
- * row press does to the selection — this only carries the CHANGED fields to
- * the existing settings-write IPC (never the whole selection, so a picker
- * open in another window mid-edit is not clobbered by a value this one only
- * read, never touched) and re-renders. The popover stays open on every pick
- * (STC-583) and redraws its checked state in place; it closes on an outside
- * click, Escape or its own trigger.
- */
-async function pickRow(isMic: boolean, row: MenuRow): Promise<void> {
-  const next = applyMenuPick(currentSelection(), row.pick);
-  const patch: Partial<AppSettings> =
-    row.pick.kind === "toggle-system-audio" ? { systemAudio: next.systemAudio }
-    : row.pick.menu === "mic" ? { micDeviceUid: next.micDeviceUid }
-    : { camera: next.camera, cameraDeviceUid: next.cameraDeviceUid };
-  try {
-    const saved = await recorder.setSettings(patch);
-    storedMicUid = saved.micDeviceUid;
-    storedSystemAudio = saved.systemAudio;
-    storedCamera = saved.camera;
-    storedCameraUid = saved.cameraDeviceUid;
-  } catch (e) {
-    alertUser(`Could not save the ${isMic ? "mic" : "camera"} setting: ${String(e)}`);
-  }
-  renderPopover();
-  renderIdleStatus();
-}
-
-function toggleDevicePopover(id: PopoverId): void {
-  openPopover = decidePopoverToggle(openPopover, id);
-  renderPopover();
-}
-cameraTrigger.addEventListener("click", (e) => { e.stopPropagation(); toggleDevicePopover("camera"); });
-micTrigger.addEventListener("click", (e) => { e.stopPropagation(); toggleDevicePopover("mic"); });
-// Outside click closes it — the popover itself and its own triggers stop
-// propagation above, so this only ever sees a click elsewhere.
-document.addEventListener("click", () => closePopover());
-
-void (async () => {
-  try {
-    const s = await recorder.getSettings();
-    storedCamera = s.camera;
-    storedCameraUid = s.cameraDeviceUid;
-    storedMicUid = s.micDeviceUid;
-    storedSystemAudio = s.systemAudio;
-  } catch {
-    storedCamera = false; storedCameraUid = null; storedMicUid = null; storedSystemAudio = false;
-  }
-  await refreshDevices();
-})();
-
-/** The camera, display and mic are fixed at start and released at stop, so
- * none may look changeable mid-take. Scope is no longer among them (STC-388):
- * it is chosen fresh in the overlay on every take, so there is nothing here
- * to lock. */
-function lockSettings(locked: boolean): void {
-  cameraTrigger.disabled = locked;
-  micTrigger.disabled = locked;
-  // A disabled trigger cannot be the reason the popover stays open — close it
-  // outright rather than leaving it floating over a now-unclickable button.
-  if (locked) closePopover();
-}
-
-/**
- * The ONE place `recording`, the button's label, `#state` and `lockSettings`
- * are ever written (STC-388 review, Finding 2).
- *
- * Before this, each was set inline inside the Record button's OWN click
- * handler — sound while every take began and ended at that button, and wrong
- * the moment the hotkey and the tray item became two more doors to the same
- * state with no window listening. `recorder.on("recorder:recording-state",
- * …)` below is what calls this for a take THIS window did not itself start
- * or stop; the click handler calls it for one it did. Either way this is the
- * only function that writes any of these four things.
- */
-function applyRecordingState(recording_: boolean): void {
-  recording = recording_;
-  if (!recording) takeReports.newTake();
-  recordBtn.textContent = recording ? "Stop" : "Record";
-  setState(recording ? "recording" : "idle");
-  // The device is opened at start and closed at stop, so the setting must
-  // not appear changeable mid-take — it would misdescribe the recording.
-  lockSettings(recording);
-}
-
-/**
- * Finding 7 (folded into Finding 2's fix, same review): camera and mic are
- * ALSO settable from the options bar (STC-388), not only from this
- * window's own device pickers (STC-414) — so a take this window did not
- * itself start may be running with settings the DOM still disagrees with.
- * Re-reads the stored settings rather than trusting `storedCamera`/
- * `storedCameraUid`/`storedMicUid` as they stand, and is called for a self-initiated start too
- * (the overlay's bar can change either mid-flow, even from this window's own
- * button), not only an externally-reconciled one.
- */
-async function refreshCaptureSettingsForRecording(): Promise<void> {
-  try {
-    const s = await recorder.getSettings();
-    storedCamera = s.camera;
-    storedCameraUid = s.cameraDeviceUid;
-    storedMicUid = s.micDeviceUid;
-    storedSystemAudio = s.systemAudio;
-  } catch {
-    // Best-effort — the "opening…" labels below still reflect whatever this
-    // window already had, which is no worse than before this fix existed.
-  }
-  // Reset per take, and say "opening…" rather than "—": the camera opens
-  // off the critical path, so there IS a window where it is neither absent
-  // nor live, and that window is the whole complaint (STC-287). But never
-  // over a device that already reported for this take: a fast failure can
-  // arrive before this runs (STC-526, take-device-status.ts).
-  const camera = takeReports.placeholder("camera", storedCamera);
-  if (camera !== undefined) setCamera(camera);
-  const mic = takeReports.placeholder("mic", storedMicUid != null);
-  if (mic !== undefined) setMic(mic);
-}
-// ---- Settings (STC-581) ------------------------------------------------------
+// ---- the title bar (STC-584) ---------------------------------------------
 //
-// Its own window now, not a sheet over this one: the gear asks main to open it,
-// through the same function the menu bar and the record bar use.
-($("settings") as HTMLButtonElement).addEventListener("click", () => void recorder.openSettings());
-document.addEventListener("keydown", (e) => {
-  if (e.code === "Escape") closePopover();
-});
+// Settings is its own window (STC-581): the gear asks main to open it,
+// through the same function the menu bar and the record bar use. The glyph is
+// the record bar's own Settings icon.
+const settingsBtn = $("settings") as HTMLButtonElement;
+settingsBtn.innerHTML = iconSvg("settings");
+settingsBtn.addEventListener("click", () => void recorder.openSettings());
+
+// Reduce Transparency turns the glass bar opaque. Main reads macOS's own
+// setting (`nativeTheme`), because Chromium may not report the media query.
+const reduceTransparency = (on: boolean) => document.body.classList.toggle("reduce-transparency", on);
+reduceTransparency(new URLSearchParams(location.search).get("reduceTransparency") === "1");
+recorder.on("library:reduced-transparency", (on: boolean) => reduceTransparency(!!on));
 
 // ---- required grants (STC-476) ---------------------------------------------
 //
@@ -435,127 +205,16 @@ window.addEventListener("focus", () => {
 });
 void recorder.permissions().then(renderPermissions);
 
-let currentDir: string | undefined;
-
-function setState(text: string): void { $("state").textContent = text; }
 function alertUser(message: ToastInput): void { recorder.showToast(message); }
-function stillStatus(text?: string): void {
-  const el = $("stillstatus");
-  if (!text) { el.setAttribute("hidden", ""); el.textContent = ""; return; }
-  el.textContent = text;
-  el.removeAttribute("hidden");
-}
 
-const KIND_WORDS: Record<string, string> = {
-  region: "area", window: "window", display: "full display",
-};
-
-/**
- * Say what a capture did, wherever it came from.
- *
- * Shared by the button and by `still:captured`, which is how a hotkey or
- * menu-bar capture reaches an open window (STC-292). One function because the
- * two must not drift: a shot taken by hotkey is the same shot, and reporting it
- * differently would make the window's account of the take library depend on
- * which door the user came through.
- *
- * `speak` is false for `still:captured`: a hotkey or menu-bar shot's refusal
- * or warning is announced by MAIN (STC-465 review), because the door it came
- * through has no window to rely on. Saying it here as well would show the same
- * toast twice; the sentence itself is `refusals.ts`'s either way.
- */
-async function reportStill(r: StillResult, speak = true): Promise<void> {
-  const notice = stillNoticeText(r);
-  if (speak && notice) alertUser(notice);
-  if (!r.ok) return;
-  const px = r.shot?.frame ? `${r.shot.frame.width} × ${r.shot.frame.height}` : "";
-  stillStatus(`Shot ${KIND_WORDS[r.kind ?? ""] ?? ""} ${px} → ${r.dir?.split("/").pop() ?? ""}`.replace(/\s+/g, " "));
-  await refreshTakes();
-  // The floating thumbnail (STC-296) is presented from the MAIN process, not
-  // from here: a capture from the global hotkey or the menu bar has no window
-  // waiting on this function at all, and the panel has to appear either way.
-  // This function's job is only to keep an OPEN window's own account (the
-  // status line, the take list) truthful about a capture it did not ask for.
-}
-
-/**
- * Capture a still (STC-290). The overlay owns the whole interaction, so there
- * is nothing to do here but ask for it and say what came back.
- *
- * The button is disabled for the duration: the overlay is modal in effect —
- * it covers every display — and a second press behind it would queue a second
- * capture the user cannot see themselves asking for. Cancelling is a normal
- * outcome and says nothing, the way dismissing macOS's own crosshair does.
- */
-stillBtn.addEventListener("click", async () => {
-  stillBtn.disabled = true;
-  stillStatus();
-  try {
-    await reportStill(await recorder.captureStill("region"));
-  } catch (e: any) {
-    alertUser(`Could not take the shot: ${e?.message ?? e}`);
-  } finally {
-    stillBtn.disabled = false;
-  }
-});
-
-// A capture that started somewhere this window was not: a global hotkey or the
-// menu bar. The shot is on disk whether or not anyone is watching — this only
-// keeps an open window from showing a stale take list and no explanation.
-recorder.on("still:captured", (r: StillResult) => { void reportStill(r, false); });
-
-recordBtn.addEventListener("click", async () => {
-  recordBtn.disabled = true;
-  try {
-    if (!recording) {
-      // Before asking, so nothing reported before this take can protect a
-      // row from the take's own "opening…" (STC-526, rule 2).
-      takeReports.newTake();
-      const r = await recorder.start();
-      // STC-391: Escape (or Cancel) during the countdown. Not a failure and
-      // not an alert — the user asked for nothing to happen, and telling them
-      // so would be the app arguing with them. Same reasoning a cancelled
-      // still selection has never produced a message.
-      if (!r.ok && r.cancelled) {
-        setState("idle");
-      } else if (!r.ok) {
-        // `refusals.ts` — the SAME sentence the menu bar and the hotkey get.
-        const text = recordRefusalText(r);
-        if (text) alertUser(text);
-        setState("idle");
-      } else {
-        applyRecordingState(true);
-        await refreshCaptureSettingsForRecording();
-        currentDir = r.dir;
-      }
-    } else {
-      await recorder.stop();
-      applyRecordingState(false);
-      await refreshTakes();
-    }
-  } catch (e: any) {
-    alertUser(String(e?.message ?? e));
-  } finally {
-    recordBtn.disabled = false;
-  }
-});
+// A capture that started somewhere else (a global hotkey, the menu bar, a
+// panel): the shot is on disk whether or not anyone is watching, and this
+// keeps an open library from showing a stale list. Its refusals and warnings
+// are main's to announce (STC-465 review), so this says nothing itself.
+recorder.on("still:captured", (r: StillResult) => { if (r.ok) void refreshTakes(); });
 
 recorder.on("helper:ready", (l) => {
   $("pid").textContent = String(l.pid ?? "—");
-  // A (re)started helper can enumerate; a respawned one may see a different
-  // set of mics than the last one did.
-  void refreshDevices();
-  if (!recording) setState("idle");
-  // No precondition left to check (STC-388): Record opens the scope overlay
-  // itself, so there is nothing that can be unset when the button is
-  // pressed. It is disabled only while a REQUEST FROM THIS WINDOW is in
-  // flight (deferred minor #7, STC-388 review) — never merely because a take
-  // is running, which the click handler's own start/`finally` toggling
-  // already owns: `recording === true` shows "Stop" and stays pressable, or
-  // a take begun by the hotkey or the tray (Finding 2's reconciliation,
-  // `recorder:recording-state`) would leave this window with a disabled
-  // button it could never use to stop its own recording.
-  if (!recording) recordBtn.disabled = false;
 });
 
 recorder.on("helper:stats", (s) => {
@@ -574,128 +233,22 @@ recorder.on("helper:stats", (s) => {
   $("elapsed").textContent = s.elapsedMs != null ? `${(s.elapsedMs / 1000).toFixed(1)}s` : "—";
 });
 
-recorder.on("helper:recording-ended", () => {
-  // The helper stopped by itself — the source went away, or the disk filled.
-  // The file is valid; what would be wrong is leaving the button saying "Stop"
-  // (or, before Finding 2's fix, the pickers still locked).
-  //
-  // No toast (STC-531, Patrick 2026-10-14). The take's panel carries the WHY as its
-  // reason line (`stop-copy.ts`, the one copy table); the pill says nothing after a
-  // stop (STC-579). STC-505's rule:
-  // toasts are for events with no take to attach to. Main raises one only if the
-  // panel cannot go up (`onTakeEnded`).
-  applyRecordingState(false);
-});
-
 recorder.on("helper:recording-lost", (i) => {
-  applyRecordingState(false);
   // STC-530: a recovered take is up as its own panel, with the reason on it — no toast
   // (STC-505: toasts are for events with no take to attach to). One that could not be
   // recovered is still on disk, untouched, and the next launch offers it.
   if (!i.recovered) alertUser("The recorder quit while recording, and the take couldn't be recovered.");
 });
 
-/**
- * STC-388 review, Finding 2 (CRITICAL). A take begun or ended by the hotkey
- * or the tray never reached this window before — `stopRecording()` emits
- * nothing at all (`endRecording` is only for a stop the HELPER decided on),
- * and a hotkey-initiated `runRecordFlow` never touches this window either.
- * `main.ts`'s `reconcileWindowRecording` is what notices, off `sup.state` —
- * CLAUDE.md's own named authority — and this applies it.
- *
- * Guarded on an actual disagreement: a start or stop THIS window itself
- * asked for already applied `applyRecordingState` synchronously inside the
- * click handler, so by the time this fires (bounded by the next heartbeat,
- * same latency the tray already accepts) `s.recording === recording` and
- * there is nothing to do — this is only for the door that did NOT go through
- * that handler.
- */
-recorder.on("recorder:recording-state", (s: { recording: boolean; dir?: string }) => {
-  if (s.recording === recording) return;
-  applyRecordingState(s.recording);
-  if (s.recording) {
-    currentDir = s.dir;
-    void refreshCaptureSettingsForRecording();
-  }
-});
+recorder.on("helper:gave-up", () => { alertUser("The recorder keeps failing to start. Restart the app."); });
 
 /**
- * STC-287: the camera's whole lifecycle used to be invisible.
- *
- * It opens off the critical path (Capture.swift, deliberately — startRunning()
- * blocks and must not delay every `started` reply), so it goes live roughly a
- * second after recording begins. Measured across five real takes, the PiP is
- * absent for 1.26–1.39 s of playback.
- *
- * The helper has always announced this — `camera-started` with the device name,
- * and warnings for every failure. Nothing listened. So a user who ticked Camera
- * got no confirmation it worked, no notice when it did NOT, and a PiP that
- * appeared a beat late and read as a glitch. The gap is inherent; being unable
- * to tell a working camera from a broken one was not.
- *
- * `#camera-state` (and `#mic-state`) live OUTSIDE `#diagnostics` in
- * `index.html` for exactly that reason — STC-412 Task 4 put the debug table
- * behind a preference that is off by default, and these two rows were never
- * debug output: they are the persistent half of the pair described at
- * `helper:warning` below, and the only thing left on screen once the warning
- * toast has taken itself away.
- */
-function setCamera(text: string): void { $("camera-state").textContent = text; }
-
-/** A device's own report for this take: its row, and the record that it spoke. */
-function reportDevice(device: TakeDevice, text: string): void {
-  takeReports.report(device);
-  if (device === "camera") setCamera(text); else setMic(text);
-}
-
-/** The camera the helper actually opened (STC-237), for an automatic pick's unplug. */
-let liveCameraUid: string | null = null;
-
-recorder.on("helper:camera-started", (l) => {
-  liveCameraUid = typeof l.uid === "string" ? l.uid : null;
-  reportDevice("camera", String(l.device ?? "live"));
-});
-
-/** STC-233: the mic's own lifecycle readout, same reasoning as the camera's. */
-function setMic(text: string): void { $("mic-state").textContent = text; }
-
-recorder.on("helper:mic-started", (l) => {
-  reportDevice("mic", String(l.device ?? "live"));
-});
-
-
-recorder.on("helper:respawned", () => setState("recovered — helper restarted"));
-recorder.on("helper:gave-up", () => { recordBtn.disabled = true; alertUser("The recorder keeps failing to start. Restart the app."); });
-
-/**
- * STC-433: Record's own flow (`runRecordFlow` in main.ts) turned the mic off
- * on this window's behalf, when its overlay pick vanished before the take
- * actually started. The mic popover's `storedMicUid` is now stale too, and
- * nothing else would refresh it until the next `helper:ready` or a real
- * unplug. There is no display equivalent under STC-388's fresh, never-
- * persisted scope pick — a vanished display just refuses the take.
- *
- * STC-456 fix round (Finding 2): `writeBarOptions` (main.ts) now sends this
- * same channel after the Record options bar writes a choice back — a camera
- * pick, a mic pick, or a system-audio toggle made on the bar, not only the
- * mic-not-found correction above. All FOUR stored fields are re-read here now,
- * not just the mic uid — a bar choice this window did not make itself could
- * change any of them, and a stale `#camera-state`/`#mic-state` (or a popover
- * still checking the OLD row) is exactly Finding 2's bug.
+ * Another window wrote a preference: Settings, a slider at a time (STC-581),
+ * or the record bar. The grid lists the save folder, and its empty state
+ * names the keys, so it is re-listed only when one of those moved.
  */
 recorder.on("settings:changed", () => {
   void (async () => {
-    const s = await recorder.getSettings();
-    // STC-581: Settings writes here too, a slider at a time. A full device
-    // enumeration only when a device field actually moved.
-    const devicesMoved = storedMicUid !== s.micDeviceUid || storedSystemAudio !== s.systemAudio
-      || storedCamera !== s.camera || storedCameraUid !== s.cameraDeviceUid;
-    storedMicUid = s.micDeviceUid;
-    storedSystemAudio = s.systemAudio;
-    storedCamera = s.camera;
-    storedCameraUid = s.cameraDeviceUid;
-    if (devicesMoved) await refreshDevices();
-    // The grid lists the save folder, and its empty state names the keys.
     const listing = await listingInputs();
     if (listing !== listedFor) await refreshTakes();
     listedFor = listing;
@@ -801,21 +354,14 @@ recorder.on("helper:warning", (l) => {
   // STC-559: `device-disconnected` is no longer a warning. The helper tells a take's own
   // mic and camera by `mic-disconnected` / `camera-disconnected`; any other device
   // (headphones, a headset) is not news about the take.
-  // STC-553: a camera that stalled. The pill says it and the panel says it after; the row
-  // keeps its state, since the camera was not lost and may come back. No toast.
+  // STC-553: a camera that stalled. The pill says it and the panel says it after. No toast.
   if (TRACK_STALL_WARNINGS.has(code)) {
     console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }
-  // STC-237: a mic or camera lost while the take keeps recording. The row says it
-  // at a glance; the pill says it for a moment (pill-window.ts, from main) and the
-  // panel says it after. No toast: that was the third copy of the same news.
+  // STC-237: a mic or camera lost while the take keeps recording. The pill says it
+  // for a moment (pill-window.ts, from main) and the panel says it after. No toast.
   if (TRACK_LOSS_WARNINGS.has(code)) {
-    // System audio has no device row (STC-542): the pill and the panel are all it gets.
-    if (!code.startsWith("system")) {
-      const device = code.startsWith("camera") ? "camera" : "mic";
-      reportDevice(device, code.endsWith("-disconnected") ? "disconnected" : `failed — ${code}`);
-    }
     console.info(`[helper] ${code}`, JSON.stringify(l));
     return;
   }
@@ -842,23 +388,15 @@ recorder.on("helper:warning", (l) => {
   }
   const camera = CAMERA_FAULTS[code];
   if (camera) {
-    // Both: the row is the at-a-glance state, the alert is the thing that
-    // cannot be missed. A silent failure is what this whole change exists to
-    // remove. "no frames" is not the same as "failed to open", and the row
-    // said the device name right up until this fired. Name the state, not
-    // just the code.
-    //
-    // The two halves are now more different than they were, which is why the
-    // row has to be always-visible (STC-412 final review, I2): the alert is a
-    // toast that dismisses itself, so the row is the ONLY thing that still
-    // says "this take had no camera" a minute later.
-    reportDevice("camera", code === "camera-no-frames" ? "no frames" : `failed — ${code}`);
+    // A silent failure is what this whole table exists to remove. The camera
+    // and mic rows that also said it left this window with STC-584 (Patrick,
+    // 2026-10-27: the toast is enough); after the take, its panel and its
+    // library badge say it again.
     alertUser(l.detail ? `${camera}\n\n${l.detail}` : camera);
     return;
   }
   const mic = MIC_FAULTS[code];
   if (mic) {
-    reportDevice("mic", code === "mic-no-frames" ? "no frames" : `failed — ${code}`);
     alertUser(l.detail ? `${mic}\n\n${l.detail}` : mic);
     return;
   }
@@ -889,11 +427,15 @@ const fmtSize = (b: number) =>
 // it does not any more. Both are read through the same `recorder:getSettings`
 // / `recorder:setSettings` every other preference in this window uses.
 
-// The diagnostics table follows the Settings window's Show diagnostics. Main
+// The diagnostics strip follows the Settings window's Show diagnostics (STC-584
+// moved it from a table above the library to a strip pinned under it). Main
 // tells this window when another window wrote a preference.
-const diagnosticsTable = $("diagnostics") as HTMLTableElement;
+const diagnosticsStrip = $("diagnostics");
 async function refreshDiagnosticsVisibility(): Promise<void> {
-  diagnosticsTable.hidden = !(await recorder.getSettings()).showDiagnostics;
+  const on = (await recorder.getSettings()).showDiagnostics;
+  diagnosticsStrip.hidden = !on;
+  // Room under the last row, so the strip never covers it.
+  document.body.classList.toggle("diagnostics", on);
 }
 void refreshDiagnosticsVisibility().catch(() => {});
 recorder.on("settings:changed", () => { void refreshDiagnosticsVisibility().catch(() => {}); });
@@ -994,10 +536,11 @@ const libraryCallbacks: LibraryCallbacks = {
       // criterion. Which actions an item offers was decided by the adapter, so
       // an id that cannot apply to this item never reaches here.
       if (id === "open") await openItem(item);
+      else if (id === "copy-image") await copyStillImage(item);
       else if (id === "share") {
-        // Recording-only (the adapter never offers "share" for a still — the
-        // still editor has no publish surface yet, STC-429): open the take
-        // editor and let IT run the Share flow, rather than a second one here.
+        // A recording's Share: open the take editor and let IT run the Share
+        // flow, rather than a second one here. A still's Share is
+        // "copy-image", a different action with its own id.
         const dir = item.dir;
         if (!dir) throw new Error("share needs a bundle directory");
         try {
@@ -1070,9 +613,11 @@ const libraryCallbacks: LibraryCallbacks = {
   },
   async setFilter(id) { libraryFilter = id; await refreshTakes(); },
   async setView(mode) {
+    // Remembered (STC-584, Patrick 2026-10-27): the library opens in the
+    // last view used, Grid the first time (settings.ts's default).
     libraryViewMode = mode;
+    drawLibrary();
     await recorder.setSettings({ libraryView: mode });
-    await refreshTakes();
   },
   async paintThumbnail(item, img) {
     if (item.thumbnail.source === "file") {
@@ -1082,6 +627,46 @@ const libraryCallbacks: LibraryCallbacks = {
     }
   },
 };
+
+/**
+ * A still's Share (STC-584, Patrick 2026-10-27): put the decorated image on
+ * the clipboard, at export scale and in the shot's own colour space, exactly
+ * as the panel's Copy does. The same `composeStill` + `still:export` funnel,
+ * never a second render path; `target.file: false` is what keeps a copy from
+ * counting as a save.
+ */
+async function copyStillImage(item: LibraryItem): Promise<void> {
+  const dir = item.dir;
+  if (!dir) throw new Error("a still's image needs its bundle directory");
+  const shot = await recorder.getShot(dir);
+  const bytes = await recorder.getFrame(dir, shot.frame.file);
+  const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  try {
+    const decorated = { ...shot, decoration: decorationForMode(shot.decoration.mode, shot.decoration) };
+    let options: ExportOptions = { ...(await recorder.getSettings()).still } as ExportOptions;
+    let composed = composeStill(decorated, frame, options);
+    // A stored JPEG under a style with transparency: PNG, as the panel does.
+    if (stillIsBlocked(composed.plan)) {
+      options = { ...options, format: "png" };
+      composed = composeStill(decorated, frame, options);
+    }
+    const { canvas, plan } = composed;
+    const r = await recorder.exportStill({
+      bytes: stillPixelBytes(canvas), width: canvas.width, height: canvas.height, alpha: plan.alpha,
+      colorSpace: shot.display.colorSpace ?? "",
+      target: { file: false, clipboard: true },
+      options,
+      info: { ...(shot.window?.app ? { app: shot.window.app } : {}),
+              ...(shot.window?.title ? { title: shot.window.title } : {}),
+              mode: decorated.decoration.mode },
+      dir,
+    });
+    if (!r?.ok) throw new Error(`Could not copy the image: ${r?.detail ?? r?.code ?? "unknown error"}`);
+    alertUser(`Copied “${item.label ?? item.id}” to the clipboard.`);
+  } finally {
+    frame.close();
+  }
+}
 
 /**
  * Open whatever this item is.
@@ -1146,14 +731,47 @@ async function refreshTakes(): Promise<void> {
     clearTimeout(slow);
   }
   libraryFilter = list.filter;
+  lastList = list;
   const empty = !list.items.length && !list.invalid.length && !(list.folder && list.folder.state !== "ok");
-  const placeholder = placeholderFor(list, empty && list.filter === "all"
+  emptyContext = empty && list.filter === "all"
     ? await placeholderContext()
-    : { folder: "", shotKey: null, recordKey: null });
+    : { folder: "", shotKey: null, recordKey: null };
   libraryDrawn = true;
-  renderLibrary(host, list, libraryCallbacks, libraryViewMode, placeholder,
+  drawLibrary();
+}
+
+/** The last list main sent, so a search keystroke redraws without a rescan. */
+let lastList: LibraryList | undefined;
+let emptyContext: PlaceholderContext = { folder: "", shotKey: null, recordKey: null };
+
+/**
+ * Draw `lastList` through the search box (STC-584). A search narrows what is
+ * already listed; it never rescans the folder, so typing stays instant on a
+ * library of 500.
+ */
+function drawLibrary(): void {
+  const list = lastList;
+  if (!list) return;
+  const query = searchBox.value;
+  const items = applySearch(list.items, query);
+  const shown: LibraryList = { ...list, items };
+  const placeholder = items.length === 0 && list.items.length > 0
+    ? searchPlaceholder(query)
+    : placeholderFor(shown, emptyContext);
+  const folderLost = list.folder?.state === "missing" || list.folder?.state === "unreadable";
+  $("libcount").textContent = folderLost ? "" : countLabel(items.length, list.items.length);
+  renderControls($("libcontrols"), list, libraryViewMode, libraryCallbacks, folderLost);
+  searchBox.hidden = folderLost;
+  renderLibrary($("takes"), shown, libraryCallbacks, libraryViewMode, placeholder,
                 (a) => void onPlaceholderAction(a));
 }
+
+const searchBox = $("libsearch") as HTMLInputElement;
+searchBox.addEventListener("input", () => drawLibrary());
+searchBox.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && searchBox.value) { e.stopPropagation(); searchBox.value = ""; drawLibrary(); }
+});
+installOverflowDismissal($("scroller"));
 
 
 // STC-519: main promoted a take into the library (a panel's Save or Edit).
@@ -1161,25 +779,11 @@ recorder.on("library:changed", () => { void refreshTakes(); });
 
 recorder.status().then((s) => {
   if (s.pid) $("pid").textContent = String(s.pid);
-  // STC-388 review, Finding 2: a window opened (or reopened via "Open
-  // Library") WHILE a take started elsewhere is already running gets no
-  // transition to react to — `reconcileWindowRecording` only sends on a
-  // CHANGE, and this window has never seen one. Read the current state
-  // directly rather than waiting for the next one.
-  if (s.state === "recording") {
-    applyRecordingState(true);
-    void refreshCaptureSettingsForRecording();
-  } else {
-    setState(s.state);
-  }
   // A helper that could not be spawned at all fails in milliseconds — every
   // restart the supervisor allows has already been used up before this page
   // exists, so the gave-up event above was emitted to nobody. Read the state
   // instead of relying on having been there when it changed.
-  if (s.state === "failed") {
-    recordBtn.disabled = true;
-    alertUser("The recorder keeps failing to start. Restart the app.");
-  }
+  if (s.state === "failed") alertUser("The recorder keeps failing to start. Restart the app.");
 });
 // The layout preference (STC-429) has to be known before the first render —
 // a bare `refreshTakes()` here would draw the grid once, then again in

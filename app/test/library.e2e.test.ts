@@ -7,9 +7,10 @@ import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { THUMBNAIL_FILE } from "../src/library-items.js";
 import { RAW_SUBDIR } from "../src/takes.js";
 import { hasWindow } from "./_windows.js";
-import { keptFileRequests } from "./_still-log.js";
+import { keptFileRequests, exportRequests } from "./_still-log.js";
 import { toastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { itemActions, pressItemAction } from "./_library-window.js";
 
 /**
  * The library grid, end to end (STC-294).
@@ -74,7 +75,7 @@ async function launch(seed: (recordings: string) => void,
   const errors: string[] = [];
   win.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   win.on("pageerror", (e) => errors.push(String(e)));
-  await win.waitForSelector("#capturestill");
+  await win.waitForSelector("#titlebar");
   return { win, recordings, stillLog, errors };
 }
 
@@ -131,19 +132,19 @@ async function expectThumbnail(dir: string, errors: string[]): Promise<void> {
   }
 }
 
-/** The badges currently drawn, in grid order. */
+/**
+ * The kind of every tile, in grid order: its `data-type`, the word the adapter
+ * wrote ("Recording", "Shot"). The grid draws no kind badge since STC-584.
+ */
 const badges = (win: Page) => win.evaluate(() =>
-  [...document.querySelectorAll("#libgrid .libbadge")].map((n) => n.textContent));
+  [...document.querySelectorAll<HTMLElement>("#libgrid .libtile")].map((n) => n.dataset.type));
 
-/** The action buttons on the tile at `i`. */
-const actionsOf = (win: Page, i: number) => win.evaluate((n) => {
-  const tile = document.querySelectorAll("#libgrid .libtile")[n];
-  return [...(tile?.querySelectorAll("button") ?? [])].map((b) => b.dataset.action);
-}, i);
+/** Every action the tile at `i` offers: the tile's own, its button, then its menu. */
+const actionsOf = (win: Page, i: number) => itemActions(win, win.locator(`#libgrid .libtile >> nth=${i}`));
 
+/** Press an action on the tile at `i`, wherever it lives (STC-584). */
 async function clickAction(win: Page, i: number, action: string): Promise<void> {
-  await win.locator(`#libgrid .libtile >> nth=${i}`)
-           .locator(`button[data-action="${action}"]`).click();
+  await pressItemAction(win, win.locator(`#libgrid .libtile >> nth=${i}`), action);
 }
 
 describe("the library grid", () => {
@@ -152,11 +153,11 @@ describe("the library grid", () => {
     await expect.poll(() => win.locator("#empty").count(), { timeout: 15_000 }).toBe(1);
     expect(await win.locator("#libgrid").count()).toBe(0);
     // The filter chips are still there — the library is empty, not absent.
-    expect(await win.locator(".libfilters .chip").count()).toBe(3);
+    expect(await win.locator(".libfilters button").count()).toBe(3);
   }, 60_000);
 
   // STC-521: the three states a library with nothing to show can be in.
-  test("the empty state names the folder and the hotkeys, in light and dark", async () => {
+  test("the empty state names the folder and the hotkeys, dark whatever the OS says", async () => {
     const { win, recordings } = await launch(() => {});
     const card = win.locator("#empty.libplaceholder");
     await expect.poll(() => card.count(), { timeout: 15_000 }).toBe(1);
@@ -173,10 +174,10 @@ describe("the library grid", () => {
     const light = await look();
     await win.emulateMedia({ colorScheme: "dark" });
     const dark = await look();
-    // Both themes draw a real surface with legible text, and they differ.
+    // The library is dark only since STC-584 (Capture SK 016 draws it so, as
+    // Settings is): a real surface with legible text, the same in both.
     for (const l of [light, dark]) expect(l.bg).not.toBe("rgba(0, 0, 0, 0)");
-    expect(dark.bg).not.toBe(light.bg);
-    expect(dark.title).not.toBe(light.title);
+    expect(light).toEqual(dark);
   }, 60_000);
 
   test("while the first scan is still running the library says it is loading", async () => {
@@ -196,7 +197,7 @@ describe("the library grid", () => {
     expect(await state.innerText()).toContain(recordings);
     expect(await state.getAttribute("role")).toBe("alert");
     // Nothing to filter or lay out over a folder that is not there.
-    expect(await win.locator(".libfilters .chip").count()).toBe(0);
+    expect(await win.locator(".libfilters button").count()).toBe(0);
     mkdirSync(recordings, { recursive: true });
     await state.locator("button[data-placeholder='retry']").click();
     await expect.poll(() => win.locator("#empty").count(), { timeout: 15_000 }).toBe(1);
@@ -241,13 +242,13 @@ describe("the library grid", () => {
     });
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
-    await win.locator('.libfilters .chip[data-filter="still"]').click();
+    await win.locator('.libfilters button[data-filter="still"]').click();
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
-    await win.locator('.libfilters .chip[data-filter="recording"]').click();
+    await win.locator('.libfilters button[data-filter="recording"]').click();
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Recording"]);
 
-    await win.locator('.libfilters .chip[data-filter="all"]').click();
+    await win.locator('.libfilters button[data-filter="all"]').click();
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
   }, 90_000);
 
@@ -259,10 +260,10 @@ describe("the library grid", () => {
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
     // Duplicate is a still's, and it is the ADAPTER that says so — the view
-    // rendered whatever list it was handed. "share" (STC-429) is
-    // recording-only — the still editor has no publish surface yet.
+    // rendered whatever list it was handed. A still's Share copies its image
+    // (STC-584), a recording's publishes (STC-429): two ids.
     expect(await actionsOf(win, 0)).toEqual(
-      ["open", "rename", "duplicate", "reveal", "delete"]);
+      ["open", "copy-image", "rename", "duplicate", "reveal", "delete"]);
     expect(await actionsOf(win, 1)).toEqual(["open", "share", "rename", "reveal", "delete"]);
   }, 60_000);
 });
@@ -455,5 +456,128 @@ describe("a failed delete is reported, not swallowed (STC-392 review, I2)", () =
       .toContain("simulated Trash failure");
     // Nothing was actually moved — the failure is real, not just reported.
     expect(existsSync(original)).toBe(true);
+  }, 60_000);
+});
+
+/**
+ * STC-584: one visible action per item, the whole tile as the open door, the
+ * list view, and search — built to Capture SK 016's "Library" and
+ * "Library / List" frames.
+ */
+describe("the library redesign (STC-584)", () => {
+  const mixed = (dir: string) => {
+    makeTakeFolder("2026-09-08_12-00-00", { into: dir });
+    makeStillFolder("2026-09-08_12-00-01", { into: dir });
+  };
+
+  test("Share is the one visible button; Rename, Show and Delete are only in the overflow menu", async () => {
+    const { win } = await launch(mixed);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
+    for (const i of [0, 1]) {
+      const tile = win.locator(`#libgrid .libtile >> nth=${i}`);
+      expect(await tile.locator(".libactions > button[data-action]").evaluateAll(
+        (bs) => bs.map((b) => b.textContent))).toEqual(["Share"]);
+      for (const hidden of ["rename", "reveal", "delete"]) {
+        expect(await tile.locator(`button[data-action="${hidden}"]`).count(), hidden).toBe(0);
+      }
+    }
+    // The menu: Rename, Duplicate (a still's), Show in Finder, then Delete,
+    // set apart by a divider and drawn in red.
+    await win.locator("#libgrid .libtile >> nth=0").locator(".libmore").click();
+    const menu = win.locator(".liboverflow-menu");
+    expect(await menu.locator("button").evaluateAll((bs) => bs.map((b) => b.textContent)))
+      .toEqual(["Rename", "Duplicate", "Show in Finder", "Delete"]);
+    expect(await menu.locator(".libmenu-divider + button").getAttribute("data-action")).toBe("delete");
+    expect(await menu.locator("button.delete").count()).toBe(1);
+    // Escape closes it; a second menu never stacks on the first.
+    await win.keyboard.press("Escape");
+    expect(await menu.count()).toBe(0);
+    await win.locator("#libgrid .libtile >> nth=0").locator(".libmore").click();
+    await win.locator("#libgrid .libtile >> nth=1").locator(".libmore").click();
+    expect(await win.locator(".liboverflow-menu").count()).toBe(1);
+  }, 60_000);
+
+  test("a click anywhere on a tile opens it, and its buttons do not", async () => {
+    const { win } = await launch(mixed);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
+    // The still's name, not its picture: anywhere on the tile is the door.
+    await win.locator("#libgrid .libtile >> nth=0").locator(".libtitle").click();
+    await expect.poll(() => hasWindow(app!, "still-editor.html"), { timeout: 15_000 }).toBe(true);
+    // The overflow button is its own, not the tile's: no recording editor.
+    await win.locator("#libgrid .libtile >> nth=1").locator(".libmore").click();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await hasWindow(app!, "/editor.html")).toBe(false);
+  }, 60_000);
+
+  test("a still's Share copies its decorated image to the clipboard, and saves nothing", async () => {
+    const { win, stillLog } = await launch((dir) => makeStillFolder("2026-09-08_12-00-01", { into: dir }));
+    await win.locator("#libgrid .libtile .libshare").click();
+    await expect.poll(() => exportRequests(stillLog).length, { timeout: 15_000 }).toBe(1);
+    const [req] = exportRequests(stillLog);
+    expect(req.clipboard, JSON.stringify({ ...req, rgba: undefined })).toBe(true);
+    expect(keptFileRequests(stillLog)).toEqual([]);
+    await expect.poll(() => toastText(app!), { timeout: 10_000 }).toContain("to the clipboard");
+  }, 60_000);
+
+  test("List shows the frame's columns, and the choice is remembered", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
+    const recordings = mkdtempSync(join(tmpdir(), "stc-libe2e-"));
+    mixed(recordings);
+    const open = async () => {
+      app = await electron.launch({
+        args: [root, `--user-data-dir=${userData}`], cwd: root,
+        env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+               STC_HELPER_BIN: FAKE_HELPER },
+      });
+      const w = await app.firstWindow();
+      await w.waitForSelector("#takes .libtile, #takes .librow:not(.libhead)");
+      return w;
+    };
+    writeFileSync(join(userData, "settings.json"), JSON.stringify({ saveFolder: null }));
+    let win = await open();
+    // Grid the first time (Patrick, 2026-10-27).
+    expect(await win.locator("#libgrid").count()).toBe(1);
+    await win.click('.libviewtoggle button[data-view="list"]');
+    await win.waitForSelector("#liblist .librow:not(.libhead)");
+    expect(await win.locator("#liblist .libhead span").evaluateAll((s) => s.map((n) => n.textContent)))
+      .toEqual(["Name", "Type", "Length", "Size", "File", "Captured", ""]);
+    const still = win.locator("#liblist .librow[data-type=Shot]");
+    expect(await still.locator(".col-type").textContent()).toBe("Shot");
+    expect(await still.locator(".col-length").textContent()).toBe("–");
+    expect(await win.locator("#liblist .librow[data-type=Recording] .col-length").textContent()).toBe("0:05");
+    await expect.poll(() => JSON.parse(readFileSync(join(userData, "settings.json"), "utf8")).libraryView,
+                      { timeout: 10_000 }).toBe("list");
+    await closeApp(app); app = undefined;
+
+    win = await open();
+    expect(await win.locator("#liblist").count()).toBe(1);
+  }, 90_000);
+
+  test("search narrows by name as you type, and says so in the count", async () => {
+    const { win } = await launch((dir) => {
+      mixed(dir);
+      writeFileSync(join(dir, "2026-09-08_12-00-00", "take.json"), JSON.stringify({ label: "Settings bug repro" }));
+    });
+    await expect.poll(() => win.textContent("#libcount"), { timeout: 15_000 }).toBe("2 captures");
+    await win.fill("#libsearch", "bug");
+    await expect.poll(() => badges(win), { timeout: 5_000 }).toEqual(["Recording"]);
+    expect(await win.textContent("#libcount")).toBe("1 of 2");
+    await win.fill("#libsearch", "zebra");
+    await expect.poll(() => win.locator("#empty").textContent(), { timeout: 5_000 }).toContain("No captures match");
+    // Escape clears it.
+    await win.press("#libsearch", "Escape");
+    await expect.poll(() => badges(win), { timeout: 5_000 }).toEqual(["Shot", "Recording"]);
+  }, 60_000);
+
+  test("a take that stopped early wears an amber badge with the full sentence on hover", async () => {
+    const { win } = await launch((dir) => {
+      const { takeDir } = makeTakeFolder("2026-09-08_12-00-00", { into: dir });
+      const a = JSON.parse(readFileSync(join(takeDir, "anchors.json"), "utf8"));
+      a.stop = { t: 4_000_000_000, reason: "disk-full" };
+      writeFileSync(join(takeDir, "anchors.json"), JSON.stringify(a));
+    });
+    const badge = win.locator("#libgrid .libtile .libalert");
+    await expect.poll(() => badge.textContent(), { timeout: 15_000 }).toBe("Disk full");
+    expect(await badge.getAttribute("title")).toBe("Stopped early: disk full at 0:04");
   }, 60_000);
 });

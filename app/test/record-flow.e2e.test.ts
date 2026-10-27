@@ -11,6 +11,7 @@ import { toastPage } from "./_toast.js";
 import { windowCount } from "./_windows.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { hasWindow, pageWithUrl } from "./_windows.js";
+import { pressRecord, recorderState } from "./_library-window.js";
 
 /**
  * The whole Record flow, in a real app (STC-388).
@@ -54,7 +55,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   // app.close() waits on it until closeApp gives up.
   await stubQuitDialog(app);
   const win = await app.firstWindow();
-  await win.waitForSelector("#record");
+  await win.waitForSelector("#titlebar");
   return { win, startLog, tempTakes, ud };
 }
 
@@ -132,7 +133,7 @@ async function dragARegion(overlay: Page): Promise<void> {
 describe("the bar's appearance", () => {
   test("the bar appears as soon as a region selection ends, not while it is dragged", async () => {
     const { win } = await launch();
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
 
     // Nothing has been dragged yet.
@@ -206,7 +207,7 @@ describe("Escape writes nothing, at either phase", () => {
   test("Escape in the select phase", async () => {
     const { win, startLog, tempTakes } = await launch();
     const before = readdirSync(tempTakes).length;
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     // Escape during a drag, before release has selected a scope.
     const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
@@ -218,7 +219,7 @@ describe("Escape writes nothing, at either phase", () => {
                       { timeout: 10_000 }).toBe(0);
     expect(readdirSync(tempTakes).length).toBe(before);
     expect(readLines(startLog)).toEqual([]);
-    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 10_000 }).toBe("idle");
     expect(await toastPage(app!)).toBeUndefined();
   }, 120_000);
 
@@ -229,7 +230,7 @@ describe("Escape writes nothing, at either phase", () => {
     // is what guarantees settings.json exists on disk, so the systemAudio
     // read below is a real "still false" rather than a missing file.
     await withoutCountdown(win);
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     await dragARegion(overlay);
     await send(overlay, { t: "key", key: "Enter" });
@@ -251,7 +252,7 @@ describe("Escape writes nothing, at either phase", () => {
                       { timeout: 10_000 }).toBe(0);
     expect(readdirSync(tempTakes).length).toBe(before);
     expect(readLines(startLog)).toEqual([]);
-    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 10_000 }).toBe("idle");
     expect(await toastPage(app!)).toBeUndefined();
     // The toggle above must not have reached disk — unchanged from the
     // default `false`, not merely absent (settings.json may not exist at
@@ -264,7 +265,7 @@ describe("Escape writes nothing, at either phase", () => {
 describe("the marquee stays adjustable with the bar up", () => {
   test("dragging a handle changes #ctl-size", async () => {
     const { win } = await launch();
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
     const from = { x: b.x + 100, y: b.y + 80 };
@@ -303,7 +304,7 @@ describe("the marquee stays adjustable with the bar up", () => {
     // readout, so both symptoms named in the finding are checked directly.
     const { win, startLog } = await launch();
     await withoutCountdown(win);
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
     const scaleFactor: number = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().scaleFactor);
@@ -345,7 +346,7 @@ describe("expand", () => {
   test("selects the whole display, and #ctl-expand reads as on", async () => {
     const { win, startLog } = await launch();
     await withoutCountdown(win);
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     await dragARegion(overlay);
     await send(overlay, { t: "key", key: "Enter" });
@@ -367,7 +368,7 @@ describe("expand", () => {
 
   test("expanding a picked window visibly grows its marquee to the display", async () => {
     const { win } = await launch();
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
 
@@ -454,37 +455,20 @@ async function fireTrayRecord(): Promise<void> {
   await app!.evaluate(() => (globalThis as any).__stcTrayOnSelect("action:record"));
 }
 
-// STC-414 replaced the camera checkbox and mic <select> with the
-// #devicestate row's picker triggers. `lockSettings` (renderer.ts) disables
-// those instead, so they are what "locked" means now.
-const pickersLocked = (win: Page): Promise<boolean> =>
-  win.evaluate(() => {
-    const camera = document.getElementById("camera-picker") as HTMLButtonElement;
-    const mic = document.getElementById("mic-picker") as HTMLButtonElement;
-    return camera.disabled && mic.disabled;
-  });
-
-describe("the hotkey/tray toggles reach the main window (Finding 2, STC-388 review)", () => {
-  test("a tray-initiated STOP clears the window's Stop/recording/locked state", async () => {
-    // Started from the WINDOW's own button — this test is about the STOP
-    // direction, so how the take began does not matter. The finding's bug is
-    // that a stop from a DIFFERENT door than the one that started it left the
-    // window believing a recording was still live.
-    //
-    // `app/test/timeout-budget.test.ts` caught this test with ZERO clearance
-    // (8 x 15s inner bounds under a 120s outer one — exactly equal, the case
-    // that guard exists for). Fixed by REDUCING what the test waits on, not
-    // by picking a bigger round number: the pre- and post-stop checks were
-    // each three or four separate polls for facts that only matter TOGETHER
-    // (the button's text, `#state`, and the pickers' locked-ness are one
-    // claim about "what the window shows right now", not three), so each
-    // group is now ONE predicate. Composed here, not asserted as a round
-    // number, the same way the countdown test above does:
-    //   - `startRecordFlow` (`_record-flow.ts`) itself hides up to THREE
-    //     internal 15s bounds (the overlay appearing, a confirmable drag, the
-    //     options bar appearing) that this file's guard cannot see, the same
-    //     hidden cost the countdown test already accounts for by name.
-    //   - the three bounds still visible to the guard, below.
+/**
+ * Finding 2 (STC-388 review) was that a take started or stopped from the tray
+ * left the library window's Record button, `#state` and device pickers
+ * believing the opposite. STC-584 took all three out of the window, and with
+ * them the window's copy of the state; the supervisor is the one authority.
+ * What is left to pin is that the tray's own callback really starts and
+ * stops a take.
+ */
+describe("the tray's Record starts and stops a take (Finding 2, STC-388 review)", () => {
+  test("a tray-initiated STOP ends a take the window started", async () => {
+    // Composed rather than a round number, as the countdown test above does:
+    // `startRecordFlow` hides up to THREE internal 15s bounds (the overlay
+    // appearing, a confirmable drag, the options bar appearing), plus the
+    // three bounds visible to `timeout-budget.test.ts` below.
     const RECORD_FLOW_STEPS_MS = 3 * 15_000;
     const START_LOG_MS = 15_000;
     const PRE_STOP_MS = 15_000;
@@ -498,51 +482,21 @@ describe("the hotkey/tray toggles reach the main window (Finding 2, STC-388 revi
     await startRecordFlow(app!, win);
 
     await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
-
-    // The starting condition this test needs — recording, showing "Stop",
-    // pickers locked — as ONE predicate rather than three independent polls.
-    const uiNow = async () => {
-      const [state, label, locked] = await Promise.all([
-        status(win).then((s) => s.state), win.textContent("#record"), pickersLocked(win),
-      ]);
-      return { state, label, locked };
-    };
-    await expect.poll(uiNow, { timeout: 15_000 })
-      .toEqual({ state: "recording", label: "Stop", locked: true });
+    await expect.poll(() => recorderState(win), { timeout: 15_000 }).toBe("recording");
 
     // The tray's own callback, exactly as the menu bar or ⌃⌥⇧⌘4 would reach
-    // it — `onRecordHotkey` — not `recorder.stop()`/`sup.stopRecording()` one
-    // layer below it, which is what this test asserted before this fix and
-    // is exactly the gap Finding 2 named: the window has NOTHING wired to a
-    // stop that did not come through its own click handler.
+    // it (`onRecordHotkey`), not `recorder.stop()` one layer below it.
     await fireTrayRecord();
-
-    // The actual subject, as one predicate: before Finding 2's fix NONE of
-    // this ever changed — the button kept reading "Stop", `#state` stayed
-    // "recording", and the pickers stayed locked for the rest of the session
-    // — pressing "Stop" then requested `stop` on an already-idle helper and
-    // wedged the window.
-    const uiAfter = async () => {
-      const [state, label, stateText, locked] = await Promise.all([
-        status(win).then((s) => s.state), win.textContent("#record"),
-        win.textContent("#state"), pickersLocked(win),
-      ]);
-      return { state, label, stateText, locked };
-    };
-    await expect.poll(uiAfter, { timeout: 15_000 })
-      .toEqual({ state: "idle", label: "Record", stateText: "idle", locked: false });
+    await expect.poll(() => recorderState(win), { timeout: 15_000 }).toBe("idle");
   }, 120_000);
 
-  test("a tray-initiated START locks the window and shows Stop", async () => {
+  test("a tray-initiated START records", async () => {
     const { win, startLog } = await launch();
     await withoutCountdown(win);
-    expect(await win.textContent("#record")).toBe("Record");
-    expect(await pickersLocked(win)).toBe(false);
+    expect(await recorderState(win)).not.toBe("recording");
 
     // The tray's own callback with nothing recording opens the SAME overlay
-    // `runRecordFlow("menu-bar")` always has — the window never clicked
-    // anything. Driven the same way `_record-flow.ts` drives the window
-    // door, just starting from the tray instead of `win.click("#record")`.
+    // `runRecordFlow("menu-bar")` always has — the window never asked.
     await fireTrayRecord();
     const overlay = await overlayWindow();
     const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
@@ -557,16 +511,7 @@ describe("the hotkey/tray toggles reach the main window (Finding 2, STC-388 revi
     await send(overlay, { t: "control", id: "record" });
 
     await expect.poll(() => readLines(startLog).length, { timeout: 15_000 }).toBe(1);
-    await expect.poll(async () => (await status(win)).state, { timeout: 15_000 }).toBe("recording");
-    // Before Finding 2's fix: the window never learned any of this happened.
-    // The button kept reading "Record" and the pickers stayed editable
-    // mid-take — the comment above `lockSettings(true)` says that must never
-    // happen — and pressing Record then asked the helper to start a SECOND
-    // take, answered `already-recording`, a code with no `START_FAULTS`
-    // entry, surfacing a raw error string.
-    await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Stop");
-    await expect.poll(() => win.textContent("#state"), { timeout: 15_000 }).toBe("recording");
-    await expect.poll(() => pickersLocked(win), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 15_000 }).toBe("recording");
   }, 120_000);
 });
 
@@ -635,7 +580,7 @@ describe("Space after Enter must not let Record commit a mere hover (re-review r
   test("hovering a real window after Space does not commit it — the region is committed instead", async () => {
     const { win, startLog } = await launch();
     await withoutCountdown(win);
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     await dragARegion(overlay);
     await send(overlay, { t: "key", key: "Enter" });
@@ -659,7 +604,7 @@ describe("Space after Enter must not let Record commit a mere hover (re-review r
   test("hovering NOTHING after Space still commits the pending region, rather than a silent no-op", async () => {
     const { win, startLog } = await launch();
     await withoutCountdown(win);
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     await dragARegion(overlay);
     await send(overlay, { t: "key", key: "Enter" });
@@ -685,7 +630,7 @@ describe("switching a picked window back to an area keeps the bar honest", () =>
   test("the bar readout and Record both follow the new marquee", async () => {
     const { win, startLog } = await launch();
     await withoutCountdown(win);
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     const b = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().bounds);
     const scaleFactor: number = await app!.evaluate(({ screen }) => screen.getPrimaryDisplay().scaleFactor);
@@ -726,7 +671,7 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
   /** Drag a region and confirm it, up to the bar being live — the shared
    * prefix every test below needs before it can press a control of its own. */
   async function toOptionsPhase(win: Page): Promise<Page> {
-    await win.click("#record");
+    await pressRecord(win);
     const overlay = await overlayWindow();
     await dragARegion(overlay);
     await send(overlay, { t: "key", key: "Enter" });
@@ -893,19 +838,13 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     await expect.poll(() => hasWindow(app!, "settings.html"), { timeout: 10_000 }).toBe(true);
     await expect.poll(() => readWrittenSettings(ud).systemAudio, { timeout: 10_000 }).toBe(true);
     await expect.poll(() => readWrittenSettings(ud).micDeviceUid, { timeout: 10_000 }).toBe("fixture-mic-1");
-    // Finding 2's actual bug: `writeBarOptions` never told the main window
-    // its settings had changed, so `#mic-state` (and the popover's own
-    // checked row) kept showing whatever was true before the overlay opened.
-    // `settings:changed` (main.ts) -> the renderer's handler re-reading all
-    // four stored fields is what this proves.
-    await expect.poll(() => win.textContent("#mic-state"), { timeout: 10_000 }).toBe("Fixture USB Mic");
   }, 120_000);
 
   test("Settings from the bar, with NO main window open, opens the Settings window and not the library (STC-581)", async () => {
     // This used to prove the old sheet still opened in a freshly made library
     // window (a `ui:open-settings` sent before the page could hear it).
     // Reachable only when the main window is closed and Record starts from
-    // the tray or a hotkey — `win.click("#record")` always has a window already, so this
+    // the tray or a hotkey — the window's bridge always has a window already, so this
     // path needs the tray's own callback (`fireTrayRecord`, defined below)
     // against a window count of zero, the same starting condition
     // `hotkeys.e2e.test.ts`'s "with the last window closed" test uses.

@@ -7,6 +7,7 @@ import { withoutCountdown } from "./_countdown-fixture.js";
 import { PRODUCT_NAME } from "../src/product.js";
 import { toastPage, toastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { recorderState } from "./_library-window.js";
 import { startRecordFlow } from "./_record-flow.js";
 
 const root = join(__dirname, "..", "..");
@@ -42,8 +43,10 @@ describe("Electron shell", () => {
     const win = await launch();
     await expect.poll(() => win.textContent("#pid"), { timeout: 20_000 })
       .toMatch(/^\d+$/);                                  // a real helper pid
-    expect(await win.textContent("#state")).toBe("idle");
-    expect(await win.textContent("h1")).toBe(PRODUCT_NAME);
+    expect(await recorderState(win)).toBe("idle");
+    // The window is the product's; its heading is the library's (STC-584).
+    expect(await win.title()).toBe(PRODUCT_NAME);
+    expect(await win.textContent("h1")).toBe("Library");
   }, 60_000);
 
   test("live stats arrive from the lossy channel while idle", async () => {
@@ -54,15 +57,15 @@ describe("Electron shell", () => {
     await expect.poll(() => win.textContent("#alive"), { timeout: 15_000 }).toBe("idle");
   }, 60_000);
 
-  test("the record button reports a missing grant in actionable terms", async () => {
+  test("Record reports a missing grant in actionable terms", async () => {
     const win = await launch();
     await expect.poll(() => win.textContent("#pid"), { timeout: 20_000 }).toMatch(/^\d+$/);
-    // STC-388: `#record` opens the overlay; the bar's own Record starts the take.
+    // STC-388: Record opens the overlay; the bar's own Record starts the take.
     await startRecordFlow(app!, win);
     // Either it records (granted) or it explains itself (not granted) —
     // what it must never do is fail silently or hang the button.
     await expect.poll(async () =>
-      (await win.textContent("#state")) === "recording" ||
+      (await recorderState(win)) === "recording" ||
       ((await toastPage(app!)) !== undefined), { timeout: 30_000 }).toBe(true);
 
     const toast = await toastPage(app!);
@@ -71,9 +74,10 @@ describe("Electron shell", () => {
       // the message (`toastText` is "" until it has).
       await expect.poll(() => toastText(app!), { timeout: 10_000 })
         .toMatch(/Screen Recording permission|Couldn't start/);
-      expect(await win.locator("#record").isDisabled()).toBe(false);  // still usable
+      // Said by main since STC-584 (`recorder:start`), with no button left to say it.
+      expect(await recorderState(win)).not.toBe("recording");
     } else {
-      expect(await win.textContent("#record")).toBe("Stop");
+      expect(await recorderState(win)).toBe("recording");
     }
   }, 90_000);
 });

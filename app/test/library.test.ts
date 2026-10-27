@@ -219,21 +219,24 @@ describe("the presentation each kind owns", () => {
       },
     } });
     const [item] = (await listLibrary(env(), null)).items;
-    expect(item!.summary).toContain("720×480");
-    expect(item!.summary).toContain("Window + shadow");
-    expect(item!.summary).toContain("1 redaction");
+    // The size is the readout and the size column (STC-584); the mode and the
+    // redactions are the tooltip.
+    expect(item!.readout).toBe("720 × 480  ·  " + item!.columns.file);
+    expect(item!.columns).toMatchObject({ type: "Shot", length: "–", size: "720 × 480" });
+    expect(item!.notes.join(" ")).toContain("Window + shadow");
+    expect(item!.notes.join(" ")).toContain("1 redaction");
     // Singular, not "1 redactions" — the one thing about this line a person
     // would actually notice being wrong.
-    expect(item!.summary).not.toContain("1 redactions");
+    expect(item!.notes.join(" ")).not.toContain("1 redactions");
   });
 
   test("no redactions are not mentioned at all", async () => {
     makeStill("2026-09-08_10-00-00");
     const [item] = (await listLibrary(env(), null)).items;
-    expect(item!.summary).not.toMatch(/redaction/);
+    expect(item!.notes.join(" ")).not.toMatch(/redaction/);
   });
 
-  test("a still offers open and duplicate; a recording offers preview and neither", async () => {
+  test("a still offers open, copy and duplicate; a recording offers preview and share", async () => {
     makeStill("2026-09-08_10-00-01");
     makeRecording("2026-09-08_10-00-00");
     const [still, recording] = (await listLibrary(env(), null)).items;
@@ -242,14 +245,22 @@ describe("the presentation each kind owns", () => {
     // be duplicated and a recording cannot is expressed HERE, as a list, which
     // is what keeps it out of the view as a branch.
     expect(still!.actions.map((a) => a.id)).toEqual(
-      ["open", "rename", "duplicate", "reveal", "delete"]);
-    // "share" (STC-429) is recording-only — the still editor has no publish
-    // surface of its own yet.
+      ["open", "copy-image", "rename", "duplicate", "reveal", "delete"]);
+    // A recording's Share publishes through the editor (STC-429); a still's
+    // copies its image (STC-584). Both read "Share", as two different ids.
     expect(recording!.actions.map((a) => a.id)).toEqual(
       ["open", "share", "rename", "reveal", "delete"]);
     // Same action id, different word, decided by the adapter.
     expect(still!.actions.find((a) => a.id === "open")!.label).toBe("Edit");
     expect(recording!.actions.find((a) => a.id === "open")!.label).toBe("Preview");
+    // Where each is drawn (STC-584): the tile opens, Share is the one button,
+    // the rest is the overflow menu.
+    for (const item of [still!, recording!]) {
+      expect(item.actions.map((a) => a.place)).toEqual(
+        item.actions.map((a) => a.id === "open" ? "tile" : a.label === "Share" ? "primary" : "menu"));
+    }
+    expect(still!.actions.find((a) => a.id === "copy-image")!.label).toBe("Share");
+    expect(recording!.actions.find((a) => a.id === "reveal")!.label).toBe("Show in Finder");
   });
 
   test("every kind offers rename and delete — the shared UI has something to bind to", async () => {
@@ -278,13 +289,13 @@ describe("the presentation each kind owns", () => {
     expect(item!.thumbnail).toEqual({ source: "none" });
   });
 
-  test("a camera that recorded nothing is stated on the tile (STC-287)", async () => {
+  test("a camera that recorded nothing is an amber badge on the tile (STC-287, STC-584)", async () => {
     const dir = makeRecording("2026-09-08_10-00-00");
     const anchors = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
     anchors.camera = { present: false };
     writeFileSync(join(dir, "anchors.json"), JSON.stringify(anchors));
     const [item] = (await listLibrary(env(), null)).items;
-    expect(item!.notes.join(" ")).toMatch(/recorded no frames/);
+    expect(item!.alerts).toEqual([{ label: "No camera", detail: expect.stringMatching(/recorded no frames/) }]);
   });
 });
 

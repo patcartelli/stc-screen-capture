@@ -14,6 +14,7 @@ import { mintCaptureId } from "@transform/capture-id.js";
 import { captureDocForWrite, CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { renameCapture } from "../src/takes.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { chooseFromMenu, itemActions } from "./_library-window.js";
 
 /**
  * The library's two-object delete (STC-413 Task 11): a capture is now a
@@ -97,7 +98,7 @@ async function stableTileList(p: Page, timeoutMs = 10_000): Promise<void> {
  * "All" chip is the one user-reachable way to trigger it.
  */
 export async function refreshLibrary(p: Page): Promise<void> {
-  await p.click('.libfilters .chip[data-filter="all"]');
+  await p.click('.libfilters button[data-filter="all"]');
   await stableTileList(p);
 }
 
@@ -112,13 +113,10 @@ export async function itemCount(p: Page): Promise<number> {
  * `item.label ? item.label : item.id`, and only the rendered DOM shows
  * which of the two actually won.
  *
- * `titleFor` sets `.libtitle`'s `textContent` to the label/id FIRST, then
- * (when there is a label) appends a `.stamp` child span showing `item.id`
- * too — so `.innerText()` on the whole element would always contain the
- * bundle's stamp regardless of whether the label itself updated. Reading
- * only the element's own first text node (before that child is appended)
- * is what actually discriminates "the title still says the old stamp" from
- * "the title says the new name, with the stamp as a secondary annotation".
+ * `titleFor` sets `.libtitle`'s `textContent` to the label, or the id when
+ * there is none. It used to append a `.stamp` child with the id after a
+ * label, which is why this reads the first text node only; since STC-584
+ * the id is the tooltip instead, and the first text node is the whole title.
  */
 export async function tileTitle(p: Page): Promise<string> {
   return p.locator(".libtile:first-child .libtitle").first()
@@ -135,16 +133,17 @@ export async function deleteFirstItem(p: Page): Promise<void> {
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
   });
-  await p.click('.libtile:first-child button[data-action="delete"]');
+  await chooseFromMenu(p, p.locator(".libtile").first(), "delete");
   await stableTileList(p);
 }
 
+/** The whole tile is the open door (STC-584). */
 export async function openFirstItem(p: Page): Promise<void> {
-  await p.click('.libtile:first-child button[data-action="open"]');
+  await p.locator(".libtile").first().locator(".libthumb").click();
 }
 
 export async function renameFirstItem(p: Page, name: string): Promise<void> {
-  await p.click('.libtile:first-child button[data-action="rename"]');
+  await chooseFromMenu(p, p.locator(".libtile").first(), "rename");
   await p.fill(".labelinput", name);
   await p.press(".labelinput", "Enter");
   await stableTileList(p);
@@ -226,7 +225,7 @@ describe("a partial trash failure does not strand the other half (STC-413 review
   test("the survivor is trashed, the grid refreshes, and a retry finishes rather than throwing", async () => {
     if (!app) throw new Error("no app launched");
     await expect.poll(() => itemCount(page), { timeout: 20_000 }).toBe(1);
-    const actionCount = () => page.locator(".libtile:first-child .libactions button").count();
+    const actionCount = async () => (await itemActions(page, page.locator(".libtile").first())).length;
     expect(await actionCount()).toBe(5);   // open, share, rename, reveal, delete
 
     await app.evaluate(({ shell }) => {
@@ -241,7 +240,7 @@ describe("a partial trash failure does not strand the other half (STC-413 review
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
     });
 
-    await page.click('.libtile:first-child button[data-action="delete"]');
+    await chooseFromMenu(page, page.locator(".libtile").first(), "delete");
 
     // (a) the OTHER object still went — the failing first call must not
     // have skipped, or rolled back, the second.
@@ -266,7 +265,7 @@ describe("a partial trash failure does not strand the other half (STC-413 review
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
     });
-    await page.click('.libtile:first-child button[data-action="delete"]');
+    await chooseFromMenu(page, page.locator(".libtile").first(), "delete");
     await expect.poll(() => itemCount(page), { timeout: 20_000 }).toBe(0);
     expect(existsSync(join(root, "login-bug.mp4"))).toBe(false);
     // 60_000 here was BELOW the five bounds waiting inside this test
@@ -347,7 +346,7 @@ describe("a partial trash failure does not strand the other half (STC-413 review
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
     });
 
-    await page.click('.libtile:first-child button[data-action="delete"]');
+    await chooseFromMenu(page, page.locator(".libtile").first(), "delete");
 
     // The file really went, and the bundle really did not — independently
     // attempted, with no rollback pretending otherwise.
@@ -387,7 +386,7 @@ describe("a partial trash failure does not strand the other half (STC-413 review
     // that found the same one item is indistinguishable from no refresh.
     await writeFile(join(root, "holiday.mp4"), await readFile(join(root, "login-bug.mp4")));
 
-    await page.click('.libtile:first-child button[data-action="delete"]');
+    await chooseFromMenu(page, page.locator(".libtile").first(), "delete");
 
     // Nothing was trashed...
     expect(existsSync(join(root, "login-bug.mp4"))).toBe(true);

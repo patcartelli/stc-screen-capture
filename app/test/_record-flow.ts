@@ -1,16 +1,17 @@
 import type { ElectronApplication, Page } from "playwright";
+import { pressRecord } from "./_library-window.js";
 
 /**
  * The real Record flow, end to end through the overlay and its options bar
  * (STC-388, task 6b).
  *
- * Task 6 made scope a per-take choice: `#record` now opens the same selection
- * overlay `#capturestill` already uses, instead of starting a recording on
+ * Task 6 made scope a per-take choice: Record now opens the same selection
+ * overlay a shot already uses, instead of starting a recording on
  * the spot, and only the bar's own Record control — pressed after a scope is
  * released — ever calls `startRecording`. Four E2E files press Record only
  * to get a take RUNNING so they can test something else (the countdown panel,
  * the camera toggle, the display picker, quitting mid-take), and all four
- * hung the identical way once that landed: `win.click("#record")` then
+ * hung the identical way once that landed: a Record press then
  * nothing, because the countdown they were waiting for now sits behind an
  * overlay pick and a bar press nobody was making.
  *
@@ -158,8 +159,9 @@ export interface RecordFlowOptions {
    */
   stepTimeoutMs?: number;
   /**
-   * Which door to come in through. `"window"` (the default) clicks
-   * `#record`; `"menu-bar"` fires the REAL tray callback
+   * Which door to come in through. `"window"` (the default) is the library
+   * window's bridge, the `recorder:start` its Record button called before
+   * STC-584 removed it (`_library-window.ts`); `"menu-bar"` fires the REAL tray callback
    * (`__stcTrayOnSelect("action:record")`, tray.ts) — the same `onSelect` a
    * click on the menu-bar item calls, and the same `recordAndAnnounce` path
    * ⌃⌥⇧⌘4 takes (a global hotkey cannot be pressed from here; see
@@ -170,7 +172,7 @@ export interface RecordFlowOptions {
 }
 
 /**
- * Click the main window's Record button (or the menu-bar item — `door`) and drive the real overlay all the
+ * Press Record (through the window's bridge, or the menu-bar item — `door`) and drive the real overlay all the
  * way to the options bar's own Record control — the same path a real click
  * through `runRecordFlow` (main.ts) takes, up to (never past) any countdown
  * or the take actually starting.
@@ -182,7 +184,7 @@ export async function startRecordFlow(
   if (opts.door === "menu-bar") {
     await app.evaluate(() => (globalThis as any).__stcTrayOnSelect("action:record"));
   } else {
-    await win.click("#record");
+    await pressRecord(win);
   }
   const overlay = await overlayWindow(app, ms);
 

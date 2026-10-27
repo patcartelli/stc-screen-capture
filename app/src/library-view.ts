@@ -1,10 +1,11 @@
 import type {
-  LibraryActionId, LibraryItem, LibraryList, LibraryPlaceholder, PlaceholderAction,
+  LibraryAction, LibraryActionId, LibraryItem, LibraryList, LibraryPlaceholder, PlaceholderAction,
 } from "./library-items.js";
+import { capturedLabel } from "./library-items.js";
 
 /**
- * The library grid. Draws what the adapter hands it and decides nothing
- * (STC-294).
+ * The library's grid and list. Draws what the adapter hands it and decides
+ * nothing (STC-294).
  *
  * ## Why this is its own file
  *
@@ -16,40 +17,34 @@ import type {
  * guard someone turns off within a day. So the library's view is a module of
  * its own, which must never mention kind at all, and the grep is exact.
  *
- * That is not a trick to satisfy a test. It is the criterion's own logic: if
- * the view can be written without knowing what kinds exist, the seam really is
- * in one place, and the way to be sure is to put the view somewhere the word
- * cannot appear.
- *
  * ## What it therefore may not do
  *
- * No "if this is a still". The badge is text the adapter wrote, the summary is
- * a string it composed, the buttons are a list it chose, and the filter chips
- * are data it supplied. When something here needs a fact this module cannot
- * see, the instruction from the ticket is to widen `LibraryItem` deliberately —
- * never to reach for the kind at the call site.
+ * No "if this is a still". The type word is text the adapter wrote, the
+ * readout and the columns are strings it composed, the actions are a list it
+ * chose and placed, and the filter chips are data it supplied. When something
+ * here needs a fact this module cannot see, the instruction from the ticket is
+ * to widen `LibraryItem` deliberately — never to reach for the kind at the
+ * call site.
  *
- * ## STC-429 — grid, list, and the button hierarchy
+ * ## STC-584 — one visible action
  *
- * A second layout (`view: "list"`) reuses the exact same card-building code as
- * the grid; only the wrapper's class name differs (`.librow` vs `.libtile`),
- * and CSS alone turns the same DOM into a row. No second builder, no branch
- * on which layout is showing.
+ * Built to Capture SK 016's "Library" and "Library / List" frames. Each item
+ * draws its actions by PLACE (`LibraryAction.place`): the `tile` action is a
+ * click anywhere on the tile or row, the `primary` one is the only visible
+ * button (Share), and the `menu` ones live behind the overflow button. Delete
+ * is red and set apart by a divider, keyed off its id alone, never a kind.
  *
- * Actions are still one flat, always-visible row of buttons — never a
- * collapsed overflow menu — because several existing tests locate an action
- * by `button[data-action="…"]` and click it directly; hiding "rename" or
- * "reveal" behind a menu would need those to open it first. The visual
- * hierarchy the ticket asks for (Edit/Share primary, Delete de-emphasised,
- * Rename/Show/Duplicate quieter) is expressed as a CSS class keyed off the
- * action id alone (`primary` for "open"/"share", `delete` for "delete",
- * `tertiary` for everything else) — still data the adapter chose the shape
- * of, never a kind check.
+ * Grid and list share every builder (thumbnail, title, alerts, actions); only
+ * the arrangement differs, so there is still no second card builder.
+ *
+ * The title bar's controls (count, Grid/List, the kind filter, search, the
+ * gear) live in `index.html` and are filled by `renderControls`: the search
+ * box must survive a redraw, or typing into it would lose focus at every key.
  */
 
 /** Everything the view needs done for it. Each is the shared UI's one door. */
 export interface LibraryCallbacks {
-  /** A tile's button was pressed. Dispatched by action id — never by kind. */
+  /** An action was chosen. Dispatched by action id — never by kind. */
   act(id: LibraryActionId, item: LibraryItem): void | Promise<void>;
   /** A rename was committed with a non-empty, changed value. */
   rename(item: LibraryItem, label: string): void | Promise<void>;
@@ -93,19 +88,47 @@ const el = <K extends keyof HTMLElementTagNameMap>(
   return n;
 };
 
-function filterBar(list: LibraryList, cb: LibraryCallbacks): HTMLElement {
-  const bar = el("div", "libfilters");
-  for (const f of list.filters) {
-    const chip = el("button", "chip", f.label);
-    // `aria-pressed` rather than a class alone: the chips are a single-choice
-    // control and a screen reader has no other way to learn which one is on.
-    chip.setAttribute("aria-pressed", String(f.id === list.filter));
-    if (f.id === list.filter) chip.classList.add("on");
-    chip.dataset.filter = f.id;
-    chip.addEventListener("click", () => void cb.setFilter(f.id));
-    bar.append(chip);
+/**
+ * A segmented control (STC-584): the frames draw the view toggle and the
+ * kind filter the same way, a tinted track with the chosen segment lifted.
+ * `aria-pressed` rather than a class alone: a screen reader has no other way
+ * to learn which one is on.
+ */
+function segmented<T extends string>(
+  className: string, options: readonly { id: T; label: string }[], on: string,
+  pick: (id: T) => void, dataKey: string, repick = false,
+): HTMLElement {
+  const box = el("div", `libseg ${className}`);
+  box.setAttribute("role", "group");
+  for (const o of options) {
+    const b = el("button", undefined, o.label);
+    b.type = "button";
+    b.dataset[dataKey] = o.id;
+    b.setAttribute("aria-pressed", String(o.id === on));
+    if (o.id === on) b.classList.add("on");
+    b.addEventListener("click", () => { if (repick || o.id !== on) pick(o.id); });
+    box.append(b);
   }
-  return bar;
+  return box;
+}
+
+const VIEWS = [{ id: "grid", label: "Grid" }, { id: "list", label: "List" }] as const;
+
+/**
+ * The title bar's Grid/List toggle and kind filter, redrawn into `host` on
+ * every render. A folder that cannot be read has no kinds to filter and no
+ * layout to choose, so its controls would be decoration over a lost library.
+ */
+export function renderControls(host: HTMLElement, list: LibraryList, view: "grid" | "list",
+                               cb: LibraryCallbacks, folderLost: boolean): void {
+  host.textContent = "";
+  if (folderLost) return;
+  host.append(
+    segmented("libviewtoggle", VIEWS, view, (m) => void cb.setView(m), "view"),
+    // The chosen filter re-lists when pressed again: the library has no
+    // refresh control, and pressing "All" is the one a person reaches for.
+    segmented("libfilters", list.filters, list.filter, (f) => void cb.setFilter(f), "filter", true),
+  );
 }
 
 /**
@@ -142,6 +165,7 @@ const PLACEHOLDER_LABELS: Record<PlaceholderAction, string> = {
 
 /** Just a placeholder, before there is any list to draw around it. */
 export function renderPlaceholderOnly(host: HTMLElement, p: LibraryPlaceholder): void {
+  closeOverflow();
   host.textContent = "";
   host.setAttribute("aria-busy", String(p.state === "loading"));
   host.append(placeholderCard(p, () => {}));
@@ -159,40 +183,6 @@ export function showUpdating(host: HTMLElement, text: string): void {
   host.prepend(note);
 }
 
-/** The grid/list layout switch (STC-429), drawn beside the filter chips. */
-function viewSwitch(view: "grid" | "list", cb: LibraryCallbacks): HTMLElement {
-  const box = el("div", "libviewtoggle");
-  for (const mode of ["grid", "list"] as const) {
-    const btn = el("button", undefined, mode === "grid" ? "Grid" : "List");
-    btn.setAttribute("aria-pressed", String(mode === view));
-    if (mode === view) btn.classList.add("on");
-    btn.addEventListener("click", () => { if (mode !== view) void cb.setView(mode); });
-    box.append(btn);
-  }
-  return box;
-}
-
-/**
- * If this item can be opened, make its thumbnail a second door to the same
- * action (STC-429) — a large, obvious click target beside the explicit
- * button, the same affordance a photo grid already trains people to expect.
- * Driven entirely by whether an "open" action exists on THIS item, never by
- * kind, so a loose file that withholds "open" gets no click handler either.
- */
-function wireOpenOnThumb(box: HTMLElement, item: LibraryItem, cb: LibraryCallbacks): void {
-  const open = item.actions.find((a) => a.id === "open");
-  if (!open) return;
-  box.classList.add("clickable");
-  box.setAttribute("role", "button");
-  box.tabIndex = 0;
-  box.setAttribute("aria-label", `${open.label} ${item.label ?? item.id}`);
-  const fire = () => void cb.act("open", item);
-  box.addEventListener("click", fire);
-  box.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); }
-  });
-}
-
 /**
  * The picture, or the space where one would be.
  *
@@ -205,11 +195,6 @@ function thumb(item: LibraryItem, cb: LibraryCallbacks): HTMLElement {
   const box = el("div", "libthumb");
   if (item.thumbnail.source === "none") {
     box.classList.add("empty");
-    // A duration is a fact about the FILE, not about having a picture of it —
-    // shown here (STC-429) so a recording's placeholder box says more than
-    // "no thumbnail yet" without needing a poster frame to do it.
-    if (item.durationLabel) box.append(el("span", "libdur", item.durationLabel));
-    wireOpenOnThumb(box, item, cb);
     return box;
   }
   const img = el("img");
@@ -231,7 +216,6 @@ function thumb(item: LibraryItem, cb: LibraryCallbacks): HTMLElement {
     // than one that admits ignorance.
     console.error(`[library] could not draw a thumbnail for ${item.id}:`, e);
   }));
-  wireOpenOnThumb(box, item, cb);
   return box;
 }
 
@@ -271,14 +255,12 @@ function paintNow(box: HTMLElement): void {
 
 function titleFor(item: LibraryItem): HTMLElement {
   const title = el("div", "libtitle");
-  // Show the label when there is one, but keep the timestamp visible: it is
-  // how the take is identified on disk and in every path the app hands out.
+  // The label when there is one, else the timestamped name the take is found
+  // by on disk. The full id is the tooltip either way, with the path.
   title.textContent = item.label ? item.label : item.id;
   // A tooltip fallback, not a decision (STC-413): the bundle path when there
-  // is one, else the finished file's. Widening `LibraryItem.dir` to optional
-  // is what forces this line to change at all.
-  title.title = item.dir ?? item.file ?? "";
-  if (item.label) title.append(el("span", "stamp", ` ${item.id}`));
+  // is one, else the finished file's.
+  title.title = item.label ? `${item.id}\n${item.dir ?? item.file ?? ""}` : item.dir ?? item.file ?? "";
   return title;
 }
 
@@ -286,7 +268,7 @@ function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks)
   const input = el("input", "labelinput");
   input.type = "text";
   input.value = item.label ?? "";
-  input.placeholder = "Name this take";
+  input.placeholder = "Name this capture";
   input.maxLength = 120;
   let done = false;
   const commit = () => {
@@ -296,7 +278,10 @@ function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks)
     input.replaceWith(title);
     if (v && v !== item.label) void cb.rename(item, v);
   };
+  // A key or a click in the field is the field's, not the tile's Open.
+  input.addEventListener("click", (e) => e.stopPropagation());
   input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
     if (e.key === "Enter") commit();
     if (e.key === "Escape") { done = true; input.replaceWith(title); }
   });
@@ -307,63 +292,204 @@ function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks)
 }
 
 /**
- * Which visual weight an action gets, by id alone (STC-429) — never by kind.
- * "open"/"share" are the primary pair (the app's existing bold-border-plus-
- * soft-hover idiom, the same one Record/Shot already use); "delete" keeps its
- * own de-emphasised treatment; everything else (rename/reveal/duplicate) is
- * the quiet tertiary group. All in ONE row, never a collapsed menu — several
- * tests click an action by `data-action` directly, which a closed overflow
- * menu would break.
+ * The amber badges (STC-529, STC-584): "Stopped early"'s short cause, "No mic
+ * signal". The full sentence is the hover text, so a badge never has to be
+ * long enough to explain itself.
  */
-function actionClass(id: LibraryActionId): string {
-  if (id === "delete") return "delete";
-  if (id === "open" || id === "share") return "primary";
-  return "tertiary";
+function alerts(item: LibraryItem): HTMLElement | undefined {
+  if (!item.alerts.length) return undefined;
+  const box = el("div", "libalerts");
+  for (const a of item.alerts) {
+    const badge = el("span", "libalert", a.label);
+    badge.title = a.detail;
+    box.append(badge);
+  }
+  return box;
 }
 
-function tile(item: LibraryItem, cb: LibraryCallbacks, view: "grid" | "list"): HTMLElement {
-  const card = el("div", view === "list" ? "librow" : "libtile");
-  card.dataset.id = item.id;
-  // The badge is TEXT, so the tile is drawn the same way whatever it holds.
-  // A class derived from it lets CSS colour the two apart without this file
-  // knowing there are two.
-  const badge = el("span", "libbadge", item.badge);
-  badge.dataset.badge = item.badge;
-  const badgeRow = el("div", "libbadgerow");
-  badgeRow.append(badge);
-  // Stubbed data (STC-429): `edited` is always false today, so this never
-  // fires yet — the markup exists so real tracking has somewhere to land.
-  if (item.edited) {
-    const tag = el("span", "libedited");
-    tag.append(el("span", "dot"), document.createTextNode("Edited"));
-    badgeRow.append(tag);
+// ── the overflow menu ─────────────────────────────────────────────────────
+
+/** The one overflow menu on screen, and the button that opened it. */
+let openMenu: { menu: HTMLElement; trigger: HTMLButtonElement } | undefined;
+
+/** Close the overflow menu, if one is open. Safe to call at any time. */
+export function closeOverflow(focusTrigger = false): void {
+  if (!openMenu) return;
+  const { menu, trigger } = openMenu;
+  openMenu = undefined;
+  menu.remove();
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.classList.remove("on");
+  if (focusTrigger) trigger.focus();
+}
+
+/**
+ * Open `actions` as a menu under `trigger` (Capture SK 016's "Overflow
+ * menu"): one at a time, below the trigger's right edge, or above it when the
+ * window's bottom is too close. Closed by a pick, Escape, a press outside it,
+ * a scroll, or the window losing focus (`installOverflowDismissal`).
+ */
+function openOverflow(trigger: HTMLButtonElement, actions: LibraryAction[],
+                      choose: (a: LibraryAction) => void): void {
+  const wasThis = openMenu?.trigger === trigger;
+  closeOverflow();
+  if (wasThis) return;
+  const menu = el("div", "liboverflow-menu");
+  menu.setAttribute("role", "menu");
+  for (const a of actions) {
+    // The divider sets Delete apart: by its id, never by a kind.
+    if (a.id === "delete" && menu.childElementCount) menu.append(el("div", "libmenu-divider"));
+    const b = el("button", a.id === "delete" ? "delete" : undefined, a.label);
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    b.dataset.action = a.id;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeOverflow();
+      choose(a);
+    });
+    menu.append(b);
   }
+  menu.addEventListener("keydown", (e) => {
+    const items = [...menu.querySelectorAll<HTMLButtonElement>("button")];
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+    else if (e.key === "Escape") { e.preventDefault(); closeOverflow(true); }
+  });
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  document.body.append(menu);
+  const r = trigger.getBoundingClientRect();
+  const h = menu.offsetHeight;
+  const below = r.bottom + 6 + h <= window.innerHeight - 8;
+  menu.style.top = `${Math.max(8, below ? r.bottom + 6 : r.top - 6 - h)}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8))}px`;
+  trigger.setAttribute("aria-expanded", "true");
+  trigger.classList.add("on");
+  openMenu = { menu, trigger };
+  menu.querySelector<HTMLButtonElement>("button")?.focus();
+}
+
+/** The document-level ways an overflow menu closes. Installed once. */
+export function installOverflowDismissal(scroller: HTMLElement): void {
+  document.addEventListener("pointerdown", (e) => {
+    if (openMenu && !openMenu.menu.contains(e.target as Node) && e.target !== openMenu.trigger) closeOverflow();
+  }, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeOverflow(true); });
+  scroller.addEventListener("scroll", () => closeOverflow(), { passive: true });
+  window.addEventListener("blur", () => closeOverflow());
+}
+
+/**
+ * The visible action (Share) and the overflow button, as the frames draw them
+ * at a tile's or a row's trailing edge. A press on either is the button's,
+ * never the tile's Open.
+ */
+function actionButtons(item: LibraryItem, title: () => HTMLElement, cb: LibraryCallbacks): HTMLElement {
+  const box = el("div", "libactions");
+  const run = (a: LibraryAction) => {
+    // Rename is the one action the VIEW owns, because it is an edit in
+    // place: everything else is a message to the main process.
+    if (a.id === "rename") renameInto(title(), item, cb);
+    else void cb.act(a.id, item);
+  };
+  for (const a of item.actions.filter((x) => x.place === "primary")) {
+    const b = el("button", "libshare", a.label);
+    b.type = "button";
+    b.dataset.action = a.id;
+    b.addEventListener("click", (e) => { e.stopPropagation(); run(a); });
+    box.append(b);
+  }
+  const menu = item.actions.filter((x) => x.place === "menu");
+  if (menu.length) {
+    const more = el("button", "libmore");
+    more.type = "button";
+    more.setAttribute("aria-label", `More for ${item.label ?? item.id}`);
+    more.setAttribute("aria-haspopup", "menu");
+    more.setAttribute("aria-expanded", "false");
+    more.title = "More";
+    more.append(el("span", undefined, "•••"));
+    more.addEventListener("click", (e) => { e.stopPropagation(); openOverflow(more, menu, run); });
+    box.append(more);
+  }
+  return box;
+}
+
+/**
+ * Make the whole tile or row its `tile` action's door (STC-584): a click
+ * anywhere on it, and Enter or Space on its focusable thumbnail. Driven by
+ * whether THIS item has a tile action, never by kind, so a loose file that
+ * has none is not clickable at all.
+ */
+function wireTile(card: HTMLElement, focusable: HTMLElement, item: LibraryItem, cb: LibraryCallbacks): void {
+  const open = item.actions.find((a) => a.place === "tile");
+  if (!open) return;
+  card.classList.add("clickable");
+  focusable.setAttribute("role", "button");
+  focusable.tabIndex = 0;
+  focusable.setAttribute("aria-label", `${open.label} ${item.label ?? item.id}`);
+  card.dataset.open = open.id;
+  const fire = () => void cb.act(open.id, item);
+  card.addEventListener("click", fire);
+  focusable.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); }
+  });
+}
+
+/** One grid tile: the thumbnail with its chip and badges, then name, readout and actions. */
+function tile(item: LibraryItem, cb: LibraryCallbacks): HTMLElement {
+  const card = el("div", "libtile");
+  card.dataset.id = item.id;
+  card.dataset.type = item.badge;
+  if (item.notes.length) card.title = item.notes.join("\n");
+  const pic = thumb(item, cb);
+  if (item.chip) pic.append(el("span", "libchip", item.chip));
+  const badges = alerts(item);
+  if (badges) pic.append(badges);
 
   const title = titleFor(item);
-  // A second door to rename, alongside the button (STC-429) — Finder's own
-  // gesture. The button stays, both for discoverability and because it is
-  // what several existing tests drive directly.
-  if (item.actions.some((a) => a.id === "rename")) {
-    title.addEventListener("dblclick", () => renameInto(title, item, cb));
-  }
-  const body = el("div", "libbody");
-  body.append(badgeRow, title, el("div", "meta", item.summary));
-  for (const note of item.notes) body.append(el("div", "meta", note));
+  const text = el("div", "libtext");
+  text.append(title, el("div", "libreadout", item.readout));
+  const meta = el("div", "libmeta");
+  meta.append(text, actionButtons(item, () => title, cb));
+  card.append(pic, meta);
+  wireTile(card, pic, item, cb);
+  return card;
+}
 
-  const actions = el("div", "libactions");
-  for (const a of item.actions) {
-    const btn = el("button", actionClass(a.id), a.label);
-    btn.dataset.action = a.id;
-    btn.addEventListener("click", () => {
-      // Rename is the one action the VIEW owns, because it is an edit in
-      // place: everything else is a message to the main process.
-      if (a.id === "rename") renameInto(title, item, cb);
-      else void cb.act(a.id, item);
-    });
-    actions.append(btn);
-  }
+/** The list's column header (Capture SK 016, "Library / List"). */
+function listHeader(): HTMLElement {
+  const head = el("div", "librow libhead");
+  head.setAttribute("aria-hidden", "true");
+  head.append(el("span", "col-name", "Name"), el("span", "col-type", "Type"),
+              el("span", "col-length", "Length"), el("span", "col-size", "Size"),
+              el("span", "col-file", "File"), el("span", "col-captured", "Captured"),
+              el("span", "col-actions"));
+  return head;
+}
 
-  card.append(thumb(item, cb), body, actions);
+/** One list row: thumbnail and name (with badges under it), the columns, the actions. */
+function row(item: LibraryItem, cb: LibraryCallbacks, now: number): HTMLElement {
+  const card = el("div", "librow");
+  card.dataset.id = item.id;
+  card.dataset.type = item.badge;
+  if (item.notes.length) card.title = item.notes.join("\n");
+  const pic = thumb(item, cb);
+  const title = titleFor(item);
+  const text = el("div", "libtext");
+  text.append(title);
+  const badges = alerts(item);
+  if (badges) text.append(badges);
+  const name = el("div", "col-name");
+  name.append(pic, text);
+  const c = item.columns;
+  card.append(name, el("span", "col-type", c.type), el("span", "col-length", c.length),
+              el("span", "col-size", c.size), el("span", "col-file", c.file),
+              el("span", "col-captured", capturedLabel(item.createdAt, now)));
+  const actions = actionButtons(item, () => title, cb);
+  actions.classList.add("col-actions");
+  card.append(actions);
+  wireTile(card, pic, item, cb);
   return card;
 }
 
@@ -379,7 +505,9 @@ function tile(item: LibraryItem, cb: LibraryCallbacks, view: "grid" | "list"): H
 export function renderLibrary(host: HTMLElement, list: LibraryList,
                               cb: LibraryCallbacks, view: "grid" | "list" = "grid",
                               placeholder: LibraryPlaceholder | null = null,
-                              onPlaceholderAction: (a: PlaceholderAction) => void = () => {}): void {
+                              onPlaceholderAction: (a: PlaceholderAction) => void = () => {},
+                              now: number = Date.now()): void {
+  closeOverflow();
   painting?.disconnect();
   // `rootMargin` paints a screenful ahead, so a tile is ready by the time it
   // arrives rather than popping in after it. IntersectionObserver is absent
@@ -398,26 +526,19 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
 
   host.textContent = "";
   host.removeAttribute("aria-busy");
-  // A folder that cannot be read has no kinds to filter and no layout to
-  // choose, so its controls would be decoration over a lost library.
-  const folderLost = placeholder?.state === "missing" || placeholder?.state === "unreadable";
-  if (!folderLost) {
-    const header = el("div", "libheader");
-    header.append(filterBar(list, cb), viewSwitch(view, cb));
-    host.append(header);
-  }
+  host.dataset.view = view;
 
   if (placeholder) {
     host.append(placeholderCard(placeholder, onPlaceholderAction));
     return;
   }
 
-  // `view === "grid"` keeps the original `#libgrid`/`.libtile` shape byte for
-  // byte — several tests locate a tile that way — and "list" is new ground
-  // with no such constraint.
+  // `#libgrid`/`.libtile` and `#liblist`/`.librow` are the shapes the tests
+  // locate an item by.
   const container = el("div", view === "list" ? "liblist" : "libgrid");
   container.id = view === "list" ? "liblist" : "libgrid";
-  for (const item of list.items) container.append(tile(item, cb, view));
+  if (view === "list") container.append(listHeader());
+  for (const item of list.items) container.append(view === "list" ? row(item, cb, now) : tile(item, cb));
   host.append(container);
 
   // The first screenful, unconditionally — see EAGER_TILES. With no observer at

@@ -7,6 +7,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { windowCount, hasWindow } from "./_windows.js";
+import { pressShot } from "./_library-window.js";
 import { toastText } from "./_toast.js";
 
 /**
@@ -54,7 +55,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   });
   await stubQuitDialog(app);
   const win = await app.firstWindow();
-  await win.waitForSelector("#capturestill");
+  await win.waitForSelector("#titlebar");
   return { win, recordings, tempTakes, stillLog };
 }
 
@@ -100,7 +101,7 @@ describe("the selection overlay", () => {
   test("a region drag becomes a capture-still request and a shot on disk", async () => {
     const { win, tempTakes, stillLog } = await launch();
 
-    await win.click("#capturestill");
+    await pressShot(win);
     const overlay = await overlayWindow();
     const b = await primaryBounds();
 
@@ -111,8 +112,7 @@ describe("the selection overlay", () => {
     await send(overlay, { t: "pointermove", at: to });
     await send(overlay, { t: "pointerup", at: to });
 
-    await expect.poll(() => win.textContent("#stillstatus"), { timeout: 15_000 })
-      .toMatch(/^Shot area/);
+    await expect.poll(() => readRequests(stillLog).length, { timeout: 15_000 }).toBe(1);
 
     // The overlay is gone, not merely hidden behind the main window.
     await expect.poll(() => windowCount(app!, "overlay.html"),
@@ -143,7 +143,7 @@ describe("the selection overlay", () => {
     const { win, recordings, stillLog } = await launch();
     const before = readdirSync(recordings);
 
-    await win.click("#capturestill");
+    await pressShot(win);
     const overlay = await overlayWindow();
     const b = await primaryBounds();
     // Escape during the drag, before releasing the gesture that captures.
@@ -153,15 +153,14 @@ describe("the selection overlay", () => {
 
     await expect.poll(() => windowCount(app!, "overlay.html"),
                       { timeout: 10_000 }).toBe(0);
-    // Nothing captured, nothing written, and no status claimed.
+    // Nothing captured and nothing written.
     expect(readdirSync(recordings)).toEqual(before);
     expect(readRequests(stillLog)).toEqual([]);
-    expect(await win.getAttribute("#stillstatus", "hidden")).not.toBeNull();
   }, 120_000);
 
   test("window mode hands over a window id, not a crop", async () => {
     const { win, tempTakes, stillLog } = await launch();
-    await win.click("#capturestill");
+    await pressShot(win);
     const overlay = await overlayWindow();
 
     // The stand-in's Finder window sits at (100,100) 400x300 in global points.
@@ -169,8 +168,7 @@ describe("the selection overlay", () => {
     await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
     await send(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
 
-    await expect.poll(() => win.textContent("#stillstatus"), { timeout: 15_000 })
-      .toMatch(/^Shot window/);
+    await expect.poll(() => readRequests(stillLog).length, { timeout: 15_000 }).toBe(1);
 
     const [req] = readRequests(stillLog);
     expect(req.kind).toBe("window");
@@ -192,7 +190,7 @@ describe("the selection overlay", () => {
   test("a not-fully-visible window highlights on hover but a click does not capture it (STC-380)", async () => {
     const { win, recordings, stillLog } = await launch({ STC_FAKE_HIDDEN_WINDOW: "1" });
     const before = readdirSync(recordings).length;
-    await win.click("#capturestill");
+    await pressShot(win);
     const overlay = await overlayWindow();
 
     await send(overlay, { t: "key", key: " " });
@@ -216,24 +214,23 @@ describe("the selection overlay", () => {
     // The overlay stays usable: a fully-visible window still captures normally.
     await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
     await send(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
-    await expect.poll(() => win.textContent("#stillstatus"), { timeout: 15_000 })
-      .toMatch(/^Shot window/);
+    await expect.poll(() => readRequests(stillLog).length, { timeout: 15_000 }).toBe(1);
     const [req] = readRequests(stillLog);
     expect(req.windowId).toBe(4711);
   }, 120_000);
 
-  test("a helper that refuses the capture is reported, and no status is claimed", async () => {
+  test("a helper that refuses the capture is reported", async () => {
     const { win } = await launch({ STC_FAKE_STILL_ERROR: "still-unsupported" });
-    await win.click("#capturestill");
+    await pressShot(win);
     const overlay = await overlayWindow();
     const b = await primaryBounds();
     await send(overlay, { t: "pointerdown", at: { x: b.x + 10, y: b.y + 10 } });
     await send(overlay, { t: "pointermove", at: { x: b.x + 210, y: b.y + 110 } });
     await send(overlay, { t: "pointerup", at: { x: b.x + 210, y: b.y + 110 } });
 
+    // Said by main since STC-584 (`still:capture`), with no button left to say it.
     await expect.poll(() => toastText(app!), { timeout: 15_000 })
       .toContain("macOS 14");
-    expect(await win.getAttribute("#stillstatus", "hidden")).not.toBeNull();
   }, 120_000);
 
   test("the overlay still opens when the helper cannot list windows", async () => {
@@ -241,7 +238,7 @@ describe("the selection overlay", () => {
     // to open would deny the user the one mode that could still have worked —
     // and the capture below is where the real reason belongs.
     const { win } = await launch({ STC_FAKE_NO_DISPLAYS: "1" });
-    await win.click("#capturestill");
+    await pressShot(win);
     const overlay = await overlayWindow();
     await send(overlay, { t: "key", key: "Escape" });
     await expect.poll(() => windowCount(app!, "overlay.html"),

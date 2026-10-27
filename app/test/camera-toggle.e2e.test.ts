@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { makeTakeFolder, makePipTakeFolder } from "./_take-fixture.js";
 import { waitForStart } from "./_start-log.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
-import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { toastText } from "./_toast.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
 import { openEditorFromLibrary, waitForTakeLoaded } from "./_editor-fixture.js";
+import { recorderState } from "./_library-window.js";
 
 /**
  * The camera toggle, end to end through the real app.
@@ -59,39 +59,19 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
-  // STC-414: the camera picker lives on the always-visible #devicestate row
-  // now, not behind Settings — no sheet to open first.
   return win;
 }
 
-// STC-414: turns the camera on via the #devicestate popover, picking
-// "Automatic" — CameraCapture's own ranking (STC-286), which is what the old
-// checkbox's `camera: true` alone has always meant. The fake helper keys its
-// canned responses off STC_FAKE_CAMERA, not off which uid was actually sent,
-// so "Automatic" exercises exactly what these tests need: camera true, no
-// device named.
+// Turns the camera on at "Automatic", CameraCapture's own ranking (STC-286),
+// as the record bar's camera menu writes it: `camera: true`, no device named.
+// STC-584 took the main window's camera popover out, so this goes through the
+// stored setting the bar writes. The fake helper keys its canned responses off
+// STC_FAKE_CAMERA, not off which uid was sent.
 async function turnCameraOn(win: any): Promise<void> {
-  await win.click("#camera-picker");
-  await win.click('#devicepopover >> text="Automatic"');
+  await win.evaluate(() => (window as any).recorder.setSettings({ camera: true, cameraDeviceUid: null }));
 }
 
 describe("the camera toggle", () => {
-  test("defaults to off, and the setting survives a restart", async () => {
-    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-    const { dir: recordings } = makeTakeFolder();
-
-    let win = await launch({ userData, recordings });
-    // Opt-in: a camera must never be on because nobody said otherwise.
-    await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("off");
-    await turnCameraOn(win);
-    await expect.poll(() => win.textContent("#camera-state")).toBe("automatic");
-    await app!.close();
-    app = undefined;
-
-    win = await launch({ userData, recordings });
-    await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("automatic");
-  }, 180_000);
-
   // THE assertion for this increment. Everything else can be right while the
   // flag never reaches the process that opens the device, and nothing else in
   // the suite can see that.
@@ -101,26 +81,23 @@ describe("the camera toggle", () => {
     const startLog = join(mkdtempSync(join(tmpdir(), "stc-startlog-")), "start.jsonl");
 
     const win = await launch({ userData, recordings, startLog });
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await turnCameraOn(win);
-    await expect.poll(() => win.textContent("#camera-state")).toBe("automatic");
 
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
-    // While a take is running the setting must not look changeable: the device
-    // is opened at start and closed at stop.
-    await expect.poll(() => win.isDisabled("#camera-picker"), { timeout: 20_000 }).toBe(true);
   }, 180_000);
 
+  // Opt-in: a camera must never be on because nobody said otherwise.
   test("recording with the toggle off sends camera: false", async () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const { dir: recordings } = makeTakeFolder();
     const startLog = join(mkdtempSync(join(tmpdir(), "stc-startlog-")), "start.jsonl");
 
     const win = await launch({ userData, recordings, startLog });
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.camera).toBe(false);
@@ -142,7 +119,7 @@ describe("the camera toggle", () => {
     const win = await launch({ userData, recordings, startLog });
     await win.evaluate(() => (window as any).recorder.setSettings(
       { camera: true, cameraDeviceUid: "fixture-cam-1" }));
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.camera, `start payload was ${JSON.stringify(cmd)}`).toBe(true);
@@ -155,7 +132,7 @@ describe("the camera toggle", () => {
     const startLog = join(mkdtempSync(join(tmpdir(), "stc-startlog-")), "start.jsonl");
 
     const win = await launch({ userData, recordings, startLog });
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await turnCameraOn(win);
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
@@ -242,61 +219,25 @@ describe("the camera toggle", () => {
 /**
  * STC-287 — the camera used to be invisible from the moment you ticked the box.
  *
- * It opens off the critical path, so it goes live about a second after
- * recording starts; measured across five real takes the PiP is absent for
- * 1.26-1.39 s. The helper announced all of this from the beginning —
- * `camera-started` with the device name, warnings for every failure — and the
- * app subscribed to none of it. The renderer's warning handler matched exactly
- * one code and dropped the rest, so a camera that could not open looked
- * identical to one that worked.
+ * The helper announced every failure from the beginning, and the app
+ * subscribed to none of it, so a camera that could not open looked identical
+ * to one that worked. The toast is where a failure is said while the take
+ * runs; the camera row that also said it left the library with STC-584
+ * (Patrick, 2026-10-27: the toast is enough). After the take, the library's
+ * amber badge says it.
  */
-describe("the camera says what it is doing (STC-287)", () => {
+describe("the camera says when it fails (STC-287)", () => {
   const dirs = () => ({
     userData: mkdtempSync(join(tmpdir(), "stc-ud-")),
     recordings: makeTakeFolder().dir,
   });
 
-  test("a camera that opens is named, once it actually opens", async () => {
-    const win = await launch({ ...dirs(), camera: "FaceTime HD Camera" });
-    await win.waitForSelector("#camera-picker");
-    await turnCameraOn(win);
-    await startRecordFlow(app!, win);
-    await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
-      .toContain("FaceTime HD Camera");
-  }, 60_000);
-
   // THE case. Before this, a camera that failed produced nothing whatsoever in
   // the UI — the user's only clue was a take with no picture-in-picture.
-  // STC-526. "fail-now" sends the failure in the same tick as `started`, so
-  // it reaches this window BEFORE the start's own reply — the order a loaded
-  // machine produces at random. The per-take reset used to run after that
-  // reply and write "opening…" over the failure, for the rest of the take.
-  // Every value the row takes is recorded, because "failed" IS on screen
-  // for a moment before being overwritten: polling for it would pass.
-  test("a failure that arrives before the start's reply is not overwritten by \"opening…\"", async () => {
-    const win = await launch({ ...dirs(), camera: "fail-now" });
-    await win.waitForSelector("#camera-picker");
-    await turnCameraOn(win);
-    await observeTextSequence(win, "camera-state");
-    await startRecordFlow(app!, win);
-    await expect.poll(() => toastText(app!), { timeout: 20_000 }).toContain("picture-in-picture");
-    // The reset is one IPC round trip after the start's reply; give it far
-    // more than that to land if it is going to.
-    await new Promise((r) => setTimeout(r, 1_000));
-    const seen = await textSequence(win, "camera-state");
-    const failedAt = seen.findIndex((t) => t.includes("failed"));
-    expect(failedAt, `the failure was shown: ${JSON.stringify(seen)}`).toBeGreaterThanOrEqual(0);
-    expect(seen.slice(failedAt), "nothing overwrote it").not.toContain("opening…");
-    expect(seen.at(-1)).toContain("failed");
-  }, 60_000);
-
   test("a camera that fails to open says so instead of failing silently", async () => {
     const win = await launch({ ...dirs(), camera: "fail" });
-    await win.waitForSelector("#camera-picker");
     await turnCameraOn(win);
     await startRecordFlow(app!, win);
-    await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 })
-      .toContain("failed");
     await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("picture-in-picture");
   }, 60_000);
@@ -304,40 +245,12 @@ describe("the camera says what it is doing (STC-287)", () => {
   /**
    * STC-286, confirmed on real hardware 2026-08-31 in clamshell: the camera
    * opens, reports `camera-started` with "FaceTime HD Camera", writes a 0-byte
-   * camera.mp4 and delivers not one frame. Not a failed open — `pickCamera`
-   * chose correctly over a virtual device and a Continuity camera — and not a
-   * permission problem.
-   *
-   * Before this the app showed the device name for the whole take, which was
-   * accurate and actively misleading: it said the camera was working while it
-   * delivered nothing, and only admitted otherwise in the library afterwards.
+   * camera.mp4 and delivers not one frame.
    */
-  // STC-389: the device-name state and "no frames" are 80ms apart in the
-  // fake helper. Sampling `#camera-state` at two points in time raced that
-  // window on a loaded runner — the first poll could land after the state
-  // had already been replaced, reading "no frames" for a device name that
-  // really was shown. A MutationObserver installed BEFORE the click records
-  // every value the element takes, so the claim is proven by order rather
-  // than by out-running the runner's own scheduling jitter.
   test("a camera that opens and then sends nothing stops claiming it works", async () => {
     const win = await launch({ ...dirs(), camera: "noframes" });
-    await win.waitForSelector("#camera-picker");
     await turnCameraOn(win);
-    await observeTextSequence(win, "camera-state");
-
     await startRecordFlow(app!, win);
-
-    await expect.poll(
-      async () => (await textSequence(win, "camera-state")).some((s) => s.includes("no frames")),
-      { timeout: 20_000 },
-    ).toBe(true);
-
-    // It really does say the device name first — that is the window the user
-    // sees, and asserting the end state alone would not prove it was replaced.
-    const seq = await textSequence(win, "camera-state");
-    expect(occursBefore(seq, "FaceTime HD Camera", "no frames"), `states were ${JSON.stringify(seq)}`)
-      .toBe(true);
-
     await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("not sending any frames");
   }, 60_000);
@@ -352,14 +265,17 @@ describe("the camera says what it is doing (STC-287)", () => {
     a.camera = { present: false };
     writeFileSync(anchorsPath, JSON.stringify(a));
     const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: dir });
-    await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 })
-      .toContain("recorded no frames");
+    // An amber badge on the tile (STC-584), the full sentence its hover text.
+    const badge = win.locator("#libgrid .libtile .libalert");
+    await expect.poll(() => badge.textContent(), { timeout: 20_000 }).toBe("No camera");
+    expect(await badge.getAttribute("title")).toContain("recorded no frames");
   }, 60_000);
 
   test("a working camera take states when its picture-in-picture starts", async () => {
     const { dir } = makePipTakeFolder("2026-01-01_00-00-01-pip", { withProject: false });
     const win = await launch({ userData: mkdtempSync(join(tmpdir(), "stc-ud-")), recordings: dir });
-    await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 })
+    // Not a warning, so not a badge: the tile's tooltip (STC-584).
+    await expect.poll(() => win.locator("#libgrid .libtile").getAttribute("title"), { timeout: 20_000 })
       .toMatch(/picture-in-picture starts/);
   }, 60_000);
 });
