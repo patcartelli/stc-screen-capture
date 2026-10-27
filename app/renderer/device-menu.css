@@ -38,6 +38,8 @@
 }
 .device-menu .row[aria-checked="true"] .sw { background: var(--accent); }
 .device-menu .row[aria-checked="true"] .sw i { transform: translateX(14px); }
-@media (prefers-reduced-motion: reduce) { .device-menu .row .sw, .device-menu .row .sw i { transition: none; } }
+/* Reduced motion (STC-587, STC-506's rule): the knob is at its new end at once
+   and the track crossfades, rather than nothing changing gradually at all. */
+@media (prefers-reduced-motion: reduce) { .device-menu .row .sw i { transition: none; } }
 .device-menu .row .check { visibility: hidden; opacity: 1; }
 .device-menu .row[aria-checked="true"] .check { visibility: visible; }
