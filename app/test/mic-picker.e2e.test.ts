@@ -1,21 +1,25 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication } from "playwright";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { waitForStart } from "./_start-log.js";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
-import { observeTextSequence, textSequence, occursBefore } from "./_state-sequence.js";
 import { toastText } from "./_toast.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { closeApp, APP_CLOSE_MS, stubQuitDialog } from "./_quit-fixture.js";
+import { recorderState } from "./_library-window.js";
 
 /**
- * The mic picker, end to end through the real app (STC-233).
+ * The mic choice, end to end through the real app (STC-233): what reaches the
+ * helper, and what the user is told when the mic fails.
  *
- * Mirrors camera-toggle.e2e.test.ts's shape, with the one real difference
- * the ticket itself calls for: a mic is picked by DEVICE, never toggled on
+ * STC-584 took the main window's mic row and popover out (the record bar
+ * picks devices, and `record-flow.e2e.test.ts` drives its menu), so the
+ * choice is made here through the stored setting the bar writes. A mic is
+ * picked by DEVICE, the one real difference from the camera that the ticket
+ * calls for: a mic is picked by DEVICE, never toggled on
  * to whatever the helper thinks is best. The settled decision (phase 0) is
  * that this app must never take a mic without the user naming it explicitly
  * — auto-grabbing a Bluetooth mic once stalled capture and wedged CoreAudio
@@ -56,43 +60,15 @@ async function launch(opts: {
   // so it turns it off through the shipped preference rather than waiting
   // out three real seconds on every take.
   await withoutCountdown(win);
-  // STC-414: the mic picker lives on the always-visible #devicestate row
-  // now, not behind Settings — no sheet to open first.
   return win;
 }
 
-/**
- * Opens the popover and picks the row with this label — "Off", or a device
- * name from the fake helper's `mics` list. `refreshDevices()` populates the
- * row list from an async `devices()` round trip, so a click issued before it
- * lands would miss a row that does not exist yet — not a product bug, a race
- * in the test. Wait for the row itself rather than a fixed delay.
- */
-async function pickMic(win: Awaited<ReturnType<typeof launch>>, label: string): Promise<void> {
-  await win.click("#mic-picker");
-  const row = win.locator(`#devicepopover >> text="${label}"`);
-  await expect.poll(() => row.count(), { timeout: 20_000 }).toBeGreaterThan(0);
-  await row.click();
+/** The record bar's mic pick, as it lands: the stored setting (`writeBarOptions`). */
+async function pickMic(win: Awaited<ReturnType<typeof launch>>, uid: string): Promise<void> {
+  await win.evaluate((u) => (window as any).recorder.setSettings({ micDeviceUid: u }), uid);
 }
 
-describe("the mic picker", () => {
-  test("defaults to Off, and a picked mic survives a restart", async () => {
-    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-    const { dir: recordings } = makeTakeFolder();
-
-    let win = await launch({ userData, recordings });
-    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("off");
-    // The stand-in's default device list (_fake-helper.mjs) offers exactly
-    // one mic, "Fixture USB Mic" (uid "fixture-mic-1").
-    await pickMic(win, "Fixture USB Mic");
-    await expect.poll(() => win.textContent("#mic-state")).toBe("Fixture USB Mic");
-    await app!.close();
-    app = undefined;
-
-    win = await launch({ userData, recordings });
-    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("Fixture USB Mic");
-  }, 180_000);
-
+describe("the mic choice reaches the helper", () => {
   // THE assertion for this ticket. Everything else can be right while the
   // uid never reaches the process that opens the device, and nothing else in
   // the suite can see that.
@@ -102,17 +78,15 @@ describe("the mic picker", () => {
     const startLog = join(mkdtempSync(join(tmpdir(), "stc-startlog-")), "start.jsonl");
 
     const win = await launch({ userData, recordings, startLog });
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
-    await pickMic(win, "Fixture USB Mic");
-    await expect.poll(() => win.textContent("#mic-state")).toBe("Fixture USB Mic");
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
+    // The stand-in's default device list (_fake-helper.mjs) offers exactly
+    // one mic, "Fixture USB Mic" (uid "fixture-mic-1").
+    await pickMic(win, "fixture-mic-1");
 
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.cmd).toBe("start");
     expect(cmd.micDeviceUid, `start payload was ${JSON.stringify(cmd)}`).toBe("fixture-mic-1");
-    // While a take is running the setting must not look changeable: the
-    // device is opened at start and closed at stop, same as the camera.
-    await expect.poll(() => win.isDisabled("#mic-picker"), { timeout: 20_000 }).toBe(true);
   }, 180_000);
 
   test("recording with no mic picked sends no micDeviceUid at all", async () => {
@@ -121,138 +95,37 @@ describe("the mic picker", () => {
     const startLog = join(mkdtempSync(join(tmpdir(), "stc-startlog-")), "start.jsonl");
 
     const win = await launch({ userData, recordings, startLog });
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(startLog);
     expect(cmd.micDeviceUid).toBeUndefined();
-  }, 180_000);
-
-  test("a stored mic that is no longer connected is shown as such, not silently dropped", async () => {
-    // The same "(not connected)" treatment the display picker already gives
-    // a missing display (STC-247) — a picker must not have its choice
-    // silently swapped for another, and the picker should say so before
-    // Record is even pressed.
-    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-    const { dir: recordings } = makeTakeFolder();
-
-    let win = await launch({ userData, recordings });
-    await pickMic(win, "Fixture USB Mic");
-    await app!.close();
-    app = undefined;
-
-    // Relaunch with a device list that no longer includes the stored uid.
-    win = await launch({ userData, recordings, mics: [] });
-    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("not connected");
-    await win.click("#mic-picker");
-    // STC-456: the popover's rows are the shared device-menu component now
-    // (device-picker.ts's micMenuRows), whose stale-device label is the
-    // generic MENU_LABELS.stale ("(not connected)") — one label shared with
-    // the camera menu — rather than this window's old per-picker
-    // "Mic (not connected)" string. A row's selected state is aria-checked
-    // now too, not the old listbox option's aria-selected.
-    // The row, not its inner `.label` span — the span's own text is an exact
-    // match too, and `aria-checked` lives on the row, not the span.
-    const stale = win.locator("#devicepopover .row", { hasText: "(not connected)" });
-    await expect.poll(() => stale.count(), { timeout: 20_000 }).toBeGreaterThan(0);
-    expect(await stale.getAttribute("aria-checked")).toBe("true");
-  }, 180_000);
-
-  // STC-456: the main window's popover joins the shared dropdown component
-  // (Task 6's device-menu.css / device-picker.ts's MenuRow), which is what
-  // gives the mic menu an "Include System Audio" row — a toggle, not a
-  // device choice, so picking it must not close the menu the way choosing a
-  // device does.
-  test("the mic popover offers Include System Audio, and toggling it persists without closing (STC-456)", async () => {
-    const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
-    const { dir: recordings } = makeTakeFolder();
-
-    const win = await launch({ userData, recordings });
-    await win.click("#mic-picker");
-    const rows = win.locator("#devicepopover .row");
-    await expect.poll(() => rows.count(), { timeout: 20_000 }).toBeGreaterThan(0);
-    expect(await rows.first().textContent()).toContain("Include System Audio");
-    expect(await rows.first().getAttribute("aria-checked")).toBe("false");
-
-    await rows.first().click();
-
-    // Still open — a toggle keeps the menu up, unlike picking a device.
-    expect(await win.isHidden("#devicepopover")).toBe(false);
-    await expect.poll(() => rows.first().getAttribute("aria-checked")).toBe("true");
-
-    await expect.poll(() => {
-      const raw = JSON.parse(readFileSync(join(userData, "settings.json"), "utf8"));
-      return raw.systemAudio;
-    }, { timeout: 20_000 }).toBe(true);
   }, 180_000);
 });
 
 /**
  * STC-233's own device-lifecycle reporting, mirroring the camera's
- * (STC-287) exactly — the helper always announced mic-started/failure
- * events, and a stand-in with nothing listening cannot exercise the
- * complaint this class of bug is about.
+ * (STC-287): a mic that fails is said, never dropped. The toast is the one
+ * place it is said while the take runs since STC-584 removed the mic row
+ * (Patrick, 2026-10-27).
  */
-describe("the mic says what it is doing", () => {
+describe("the mic says when it fails", () => {
   const dirs = () => ({
     userData: mkdtempSync(join(tmpdir(), "stc-ud-")),
     recordings: makeTakeFolder().dir,
   });
 
-  test("a mic that opens is named, once it actually opens", async () => {
-    const win = await launch({ ...dirs(), mic: "Fixture USB Mic" });
-    await pickMic(win, "Fixture USB Mic");
-    await startRecordFlow(app!, win);
-    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
-      .toContain("Fixture USB Mic");
-  }, 180_000);
-
-  // STC-526: the camera's test of the same name, one device over — see
-  // camera-toggle.e2e.test.ts for why every value is recorded.
-  test("a failure that arrives before the start's reply is not overwritten by \"opening…\"", async () => {
-    const win = await launch({ ...dirs(), mic: "fail-now" });
-    await pickMic(win, "Fixture USB Mic");
-    await observeTextSequence(win, "mic-state");
-    await startRecordFlow(app!, win);
-    await expect.poll(() => toastText(app!), { timeout: 20_000 }).toContain("no longer available");
-    await new Promise((r) => setTimeout(r, 1_000));
-    const seen = await textSequence(win, "mic-state");
-    const failedAt = seen.findIndex((t) => t.includes("failed"));
-    expect(failedAt, `the failure was shown: ${JSON.stringify(seen)}`).toBeGreaterThanOrEqual(0);
-    expect(seen.slice(failedAt), "nothing overwrote it").not.toContain("opening…");
-    expect(seen.at(-1)).toContain("failed");
-  }, 180_000);
-
   test("a mic that cannot be found says so instead of failing silently", async () => {
     const win = await launch({ ...dirs(), mic: "fail" });
-    await pickMic(win, "Fixture USB Mic");
+    await pickMic(win, "fixture-mic-1");
     await startRecordFlow(app!, win);
-    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 })
-      .toContain("failed");
     await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no longer available");
   }, 180_000);
 
-  // STC-389: mirrors camera-toggle.e2e.test.ts's own fix exactly, one device
-  // over — "Fixture USB Mic" and "no frames" are 80ms apart in the fake
-  // helper, and sampling #mic-state at two points in time could land after
-  // that window closed. Recording the whole sequence and asserting order
-  // proves the same claim without racing the runner's scheduling.
   test("a mic that opens and then sends nothing stops claiming it works", async () => {
     const win = await launch({ ...dirs(), mic: "noframes" });
-    await pickMic(win, "Fixture USB Mic");
-    await observeTextSequence(win, "mic-state");
-
+    await pickMic(win, "fixture-mic-1");
     await startRecordFlow(app!, win);
-
-    await expect.poll(
-      async () => (await textSequence(win, "mic-state")).some((s) => s.includes("no frames")),
-      { timeout: 20_000 },
-    ).toBe(true);
-
-    const seq = await textSequence(win, "mic-state");
-    expect(occursBefore(seq, "Fixture USB Mic", "no frames"), `states were ${JSON.stringify(seq)}`)
-      .toBe(true);
-
     await expect.poll(() => toastText(app!), { timeout: 20_000 })
       .toContain("no microphone audio");
   }, 180_000);

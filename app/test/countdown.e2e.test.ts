@@ -9,6 +9,7 @@ import { startRecordFlow } from "./_record-flow.js";
 import { stubQuitDialog, closeApp, watchWindowLog, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { toastPage } from "./_toast.js";
 import { openSettings } from "./_settings-window.js";
+import { recorderState } from "./_library-window.js";
 
 /**
  * The countdown, wired through the real app (STC-391).
@@ -83,7 +84,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   });
   await stubQuitDialog(app);
   const win = await app.firstWindow();
-  await win.waitForSelector("#record");
+  await win.waitForSelector("#titlebar");
   return { win, startLog, stillLog, tempTakes };
 }
 
@@ -132,8 +133,9 @@ function hasCountdownWindow(): Promise<boolean> {
  * exit within 72 s (run 36163869597, re-run job 108173025132).
  *
  * This destroys every countdown panel, then waits until no overlay is left
- * and the flow has settled (`#record` back to "Record" and enabled), the
- * idle state every other e2e file quits from. What each test ASSERTS is
+ * and the helper is idle, the state every other e2e file quits from. (It
+ * also waited for the window's Record button to read "Record" again; the
+ * button left the library with STC-584.) What each test ASSERTS is
  * unchanged; this only runs after.
  */
 async function settleToIdle(win: Page): Promise<void> {
@@ -146,8 +148,7 @@ async function settleToIdle(win: Page): Promise<void> {
   await expect.poll(() => app!.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().some((w) => w.webContents.getURL().includes("overlay.html"))),
   { timeout: 10_000 }).toBe(false);
-  await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
-  await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
+  await expect.poll(() => recorderState(win), { timeout: 10_000 }).toBe("idle");
 }
 
 async function overlayPage(ms = 15_000): Promise<Page> {
@@ -204,7 +205,7 @@ describe("Record always counts down", () => {
     expect(lines(startLog)).toHaveLength(0);
     // The ticket's requirement 1 in full: "returns to idle". A cancellation is
     // not a failure, so no alert either.
-    await expect.poll(() => win.textContent("#record"), { timeout: 10_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 10_000 }).toBe("idle");
     expect(await toastPage(app!)).toBeUndefined();
     // Deliberately NOT a directory count: nothing on the recording path
     // creates a take directory before the helper does (`newTempTakeDir` only
@@ -287,7 +288,7 @@ describe("a countdown that loses its own window does not wedge the app", () => {
 
     // Cancelled, so nothing was recorded — the throw must not turn a cancel
     // into a take.
-    await expect.poll(() => win.textContent("#record"), { timeout: 15_000 }).toBe("Record");
+    await expect.poll(() => recorderState(win), { timeout: 15_000 }).toBe("idle");
     expect(lines(startLog)).toHaveLength(0);
 
     // The fault is the throw BEFORE `hide()`/`destroy()`, so this first panel
@@ -351,7 +352,7 @@ describe("a countdown that loses its own window does not wedge the app", () => {
     // The part that actually matters: the app is not wedged. A second Record
     // must reach the countdown again rather than being refused for a capture
     // that is no longer in flight.
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 10_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     await countdownPage();
     expect(await toastPage(app!)).toBeUndefined();
@@ -396,7 +397,7 @@ describe("the countdown duration is choosable (STC-391, from hardware)", () => {
       });
       await stubQuitDialog(app);
       const w = await app.firstWindow();
-      await w.waitForSelector("#record");
+      await w.waitForSelector("#titlebar");
       return openSettings(app, w);
     };
     const picked = (p: Page) => p.evaluate(() =>

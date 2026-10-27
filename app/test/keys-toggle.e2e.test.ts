@@ -8,6 +8,7 @@ import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { startRecordFlow } from "./_record-flow.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { recorderState } from "./_library-window.js";
 
 /**
  * The Record bar's Keys toggle reaching the helper (STC-419). Pins the one
@@ -50,7 +51,7 @@ describe("the Keys toggle (STC-419)", () => {
   test("off by default: a take sends no keys field", async () => {
     const o = fresh();
     const win = await launch(o);
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win);
     const cmd = await waitForStart(o.startLog);
     expect(cmd.keys, `start payload was ${JSON.stringify(cmd)}`).toBeUndefined();
@@ -59,7 +60,7 @@ describe("the Keys toggle (STC-419)", () => {
   test("pressed on the bar: the take sends keys: true, and the choice is sticky", async () => {
     const o = fresh();
     const win = await launch(o);
-    await expect.poll(() => win.isEnabled("#record"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => recorderState(win), { timeout: 30_000 }).toBe("idle");
     await startRecordFlow(app!, win, { keys: true });
     const cmd = await waitForStart(o.startLog);
     expect(cmd.keys, `start payload was ${JSON.stringify(cmd)}`).toBe(true);

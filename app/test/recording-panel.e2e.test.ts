@@ -23,7 +23,7 @@ import { RAW_SUBDIR } from "../src/takes.js";
  * real take's first frames — this file runs against `_fake-helper.mjs`, which
  * captures nothing.
  *
- * Takes are started through `startRecordFlow`, never a bare `#record` click
+ * Takes are started through `startRecordFlow`, never a bare Record press
  * (STC-388), and windows are counted through `_windows.ts`, never
  * `app.windows()` (STC-416).
  */
@@ -55,7 +55,7 @@ async function launch(settings: Record<string, unknown> = {}): Promise<Launched>
   });
   await stubQuitDialog(app);
   const win = await app.firstWindow();
-  await win.waitForSelector("#record");
+  await win.waitForSelector("#titlebar");
   await withoutCountdown(win);
   return { win, recordings, temp };
 }

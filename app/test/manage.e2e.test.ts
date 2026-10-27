@@ -3,6 +3,7 @@ import { _electron as electron, type ElectronApplication } from "playwright";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chooseFromMenu } from "./_library-window.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { openEditorFromLibrary } from "./_editor-fixture.js";
 
@@ -45,7 +46,7 @@ describe("take management", () => {
     const win = await launch(dir);
     await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 }).toContain("2026-08-24");
 
-    await win.click("#takes >> text=Rename");
+    await chooseFromMenu(win, win.locator("#libgrid .libtile").first(), "rename");
     await win.fill(".labelinput", "Bug repro");
     await win.press(".labelinput", "Enter");
 
@@ -53,8 +54,9 @@ describe("take management", () => {
     // Identity on disk is untouched — the label is a sidecar, not a path.
     expect(existsSync(takeDir), "the directory was renamed").toBe(true);
     expect(JSON.parse(readFileSync(join(takeDir, "take.json"), "utf8")).label).toBe("Bug repro");
-    // And the timestamp stays visible, because that is what paths use.
-    expect(await win.textContent("#takes")).toContain("2026-08-24_10-00-00");
+    // And the timestamp is still there to read, because that is what paths
+    // use: the title's tooltip since STC-584, whose frames show the name alone.
+    expect(await win.locator("#libgrid .libtile .libtitle").getAttribute("title")).toContain("2026-08-24_10-00-00");
   }, 120_000);
 
   test("deleting moves the take to the Trash rather than destroying it", async () => {
@@ -68,9 +70,8 @@ describe("take management", () => {
     await app!.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
     });
-    // `#libgrid .libtile` since STC-294 — the library is a grid of tiles, and
-    // `#takes`'s first child is now the filter bar rather than a take.
-    await win.click("#libgrid .libtile:first-child >> text=Delete");
+    // Delete is in the tile's overflow menu since STC-584.
+    await chooseFromMenu(win, win.locator("#libgrid .libtile").first(), "delete");
 
     await expect.poll(() => win.textContent("#takes"), { timeout: 30_000 })
       .not.toContain("2026-08-24_11-00-00");
@@ -114,7 +115,7 @@ describe("take management", () => {
     await app!.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });  // Cancel
     });
-    await win.click("#takes >> text=Delete");
+    await chooseFromMenu(win, win.locator("#libgrid .libtile").first(), "delete");
     await new Promise((r) => setTimeout(r, 800));
 
     expect(existsSync(join(dir, "2026-08-24_10-00-00")), "cancel deleted it anyway").toBe(true);
@@ -144,6 +145,6 @@ describe("opening a take that cannot be read", () => {
 
     // The main window (and its library) must stay usable regardless.
     await editorWin.close();
-    expect(await win.locator("#takes >> text=Preview").isEnabled()).toBe(true);
+    expect(await win.locator("#takes [data-open=open]").isEnabled()).toBe(true);
   }, 120_000);
 });

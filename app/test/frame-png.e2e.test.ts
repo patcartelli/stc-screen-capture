@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { launchWithTakeInEditor, waitForTakeLoaded } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
+import { chooseFromMenu } from "./_library-window.js";
 
 /**
  * STC-298: the frame the playhead is on, as a PNG, copied or saved.
@@ -159,7 +160,8 @@ describe("the current preview frame as a PNG, from the editor window (STC-373)",
     expect(framesInBundle(takeDir)).toHaveLength(0);
     // Inside a text field the shortcut belongs to the field. The label input
     // is the main window's library, not the editor's.
-    await mainWin.click("#takes >> text=Rename");
+    // Rename is in the tile's overflow menu since STC-584.
+    await chooseFromMenu(mainWin, mainWin.locator("#libgrid .libtile").first(), "rename");
     await mainWin.focus(".labelinput");
     await mainWin.keyboard.press("Control+Shift+S");
     await new Promise((r) => setTimeout(r, 500));

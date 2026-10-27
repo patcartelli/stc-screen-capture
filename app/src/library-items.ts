@@ -25,7 +25,7 @@
  * ════════════════════════════════════════════════════════════════════════
  *
  * **1. No view branches on kind — that is the interface, not a convention
- * kept by discipline.** The badge is TEXT this module wrote, the summary is a
+ * kept by discipline.** The badge is TEXT this module wrote, the readout is a
  * STRING it composed, and the actions are a LIST it chose; a view renders
  * what it is handed and dispatches by action id. When a kind needs something
  * the interface cannot express, the instruction is to WIDEN `LibraryItem`
@@ -108,17 +108,47 @@
  */
 
 import type { DecorationMode } from "@transform/shot.js";
-import { libraryNote, silenceNote, stallNote } from "./stop-copy.js";
+import { libraryNote, silenceNote, stallNote, stopBadge } from "./stop-copy.js";
 
 export type LibraryKind = "recording" | "still";
 
 /** What a tile can be told to do. The view dispatches on this, never on kind. */
-export type LibraryActionId = "open" | "share" | "rename" | "duplicate" | "reveal" | "delete";
+export type LibraryActionId = "open" | "share" | "copy-image" | "rename" | "duplicate" | "reveal" | "delete";
+
+/**
+ * Where an action is drawn (STC-584). `tile` is the whole tile or row, which
+ * has no label of its own; `primary` is the one visible button; `menu` is the
+ * overflow. Chosen here, so the view draws every item the same way.
+ */
+export type ActionPlace = "tile" | "primary" | "menu";
 
 export interface LibraryAction {
   id: LibraryActionId;
   /** The button's text. Chosen here so "Preview" vs "Open" is not a view's branch. */
   label: string;
+  place: ActionPlace;
+}
+
+/**
+ * Something about this capture the user should know before opening it
+ * (STC-529, drawn as STC-584's amber badge). `label` is the badge, a few
+ * words; `detail` is the full sentence, shown on hover.
+ */
+export interface LibraryAlert { label: string; detail: string }
+
+/**
+ * The list view's columns (STC-584), already formatted. "–" where a kind has
+ * nothing to say (a still's length), so no column is ever blank.
+ */
+export interface LibraryColumns {
+  /** "Recording" or "Shot". */
+  type: string;
+  /** "0:42", or "–". */
+  length: string;
+  /** Pixels: "1080p", or "2560 × 1440". "–" when unknown. */
+  size: string;
+  /** Bytes on disk: "2.4 MB". */
+  file: string;
 }
 
 /**
@@ -157,7 +187,10 @@ export interface LibraryItem {
    */
   id: string;
   kind: LibraryKind;
-  /** Shown on the tile. Data, not a branch. */
+  /**
+   * The kind, as a word ("Recording", "Shot"). The list's Type column, and
+   * `data-type` on every tile. Data, not a branch.
+   */
   badge: string;
   /** Its source bundle in `raw/`. Absent for a foreign file with none. */
   dir?: string;
@@ -166,31 +199,26 @@ export interface LibraryItem {
   createdAt: number;
   bytes: number;
   label?: string;
-  /** The one line under the title, already composed for this kind. */
-  summary: string;
   /**
-   * Extra lines this item wants stated. STC-287's camera notes live here — a
-   * camera that recorded nothing has to say so, and that is a fact about one
-   * recording rather than a shape every kind has.
+   * The readout line under a grid tile's name, in the readout face:
+   * "1080p  ·  2.4 MB" (STC-584).
+   */
+  readout: string;
+  columns: LibraryColumns;
+  /**
+   * The chip on the thumbnail's corner: a recording's duration, a still's
+   * format ("PNG"). Undefined when there is nothing true to put there.
+   */
+  chip?: string;
+  /** Amber badges (STC-529, STC-584): on the tile, and under the name in a row. */
+  alerts: LibraryAlert[];
+  /**
+   * Facts worth stating that are not warnings (the camera a take used), shown
+   * as the tile's tooltip. STC-287's camera notes live here.
    */
   notes: string[];
   thumbnail: LibraryThumbnail;
   actions: LibraryAction[];
-  /**
-   * Whether this capture has already been edited (STC-429) — a still
-   * re-decorated, a recording trimmed, and so on. Always `false` today: no
-   * sidecar or schema field tracks this yet, despite STC-413 naming it as
-   * the one library-only signal worth carrying. Widened here so the view can
-   * draw the indicator once real tracking lands, rather than the view
-   * inventing its own notion of "edited" the day it does.
-   */
-  edited: boolean;
-  /**
-   * A video's duration, pre-formatted, for the thumbnail's own overlay chip —
-   * distinct from `summary`, which already states it in prose. Undefined for
-   * a still, which has no duration to show.
-   */
-  durationLabel?: string;
 }
 
 /** A directory that looks like a take but is not usable, and why. */
@@ -235,6 +263,8 @@ export interface LibraryFilter { id: string; label: string }
 export const LIBRARY_FILTERS: readonly LibraryFilter[] = [
   { id: "all", label: "All" },
   { id: "recording", label: "Recordings" },
+  // "Shots", STC-398's word for the artefact. STC-584's frames say "Stills";
+  // the library keeps "Shot" like the rest of the app (Patrick, 2026-10-27).
   { id: "still", label: "Shots" },
 ];
 
@@ -335,6 +365,90 @@ export const fmtDuration = (ms: number): string => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
+/** What a column with nothing to say holds, so no cell is ever blank. */
+export const NO_VALUE = "–";
+
+/** The heights a video's size is named by ("1080p"), as the frames name them. */
+const NAMED_VIDEO_HEIGHTS: ReadonlySet<number> = new Set([480, 720, 1080, 1440, 2160]);
+
+/**
+ * A capture's pixel size, the way the frames write it (STC-584): a recording
+ * at a standard 16:9 height is "1080p"; anything else, and every still, is
+ * "2560 × 1440". An area take is rarely 16:9, so "567p" would describe
+ * nothing a person recognises.
+ */
+export function pixelSizeLabel(width: number | undefined, height: number | undefined, video: boolean): string {
+  if (!width || !height) return NO_VALUE;
+  if (video && NAMED_VIDEO_HEIGHTS.has(height) && width * 9 === height * 16) return `${height}p`;
+  return `${width} × ${height}`;
+}
+
+/** A file's format for the thumbnail chip: "PNG", from its extension. */
+export function formatChip(file: string | undefined): string | undefined {
+  const ext = file?.match(/\.([A-Za-z0-9]+)$/)?.[1];
+  return ext ? ext.toUpperCase() : undefined;
+}
+
+/** The grid tile's readout line: its pixel size and its bytes. */
+const readoutLine = (size: string, bytes: number): string =>
+  size === NO_VALUE ? fmtBytes(bytes) : `${size}  ·  ${fmtBytes(bytes)}`;
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * The list's Captured column (STC-584): "Today 1:12 PM", "Yesterday",
+ * "Oct 22", and the year once it is not this one. Local time, from the same
+ * clock the user reads. `now` is passed in so the rule can be tested.
+ */
+export function capturedLabel(at: number, now: number): string {
+  const d = new Date(at);
+  const today = new Date(now);
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOf(today) - startOf(d)) / 86_400_000);
+  if (days === 0) {
+    const h = d.getHours();
+    return `Today ${h % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  }
+  if (days === 1) return "Yesterday";
+  const md = `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  return d.getFullYear() === today.getFullYear() ? md : `${md}, ${d.getFullYear()}`;
+}
+
+/**
+ * The title bar's count (STC-584): "42 captures", or "3 of 42" while a search
+ * narrows the list.
+ */
+export function countLabel(shown: number, total: number): string {
+  if (shown !== total) return `${shown} of ${total}`;
+  return `${total} capture${total === 1 ? "" : "s"}`;
+}
+
+/**
+ * The search box (STC-584): every word must appear in the name, the label or
+ * the id, ignoring case. An empty query is everything. Pure, and over what
+ * the adapter already wrote, so the view does not decide what matches.
+ */
+export function applySearch(items: readonly LibraryItem[], query: string): LibraryItem[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [...items];
+  return items.filter((i) => {
+    const hay = `${i.label ?? ""} ${i.id}`.toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+}
+
+/**
+ * The overflow menu every item with a bundle or a file shares (STC-584):
+ * Rename, Show in Finder, then Delete. `duplicate` is a still's only, so it
+ * goes in where the caller says.
+ */
+const menuActions = (withDuplicate: boolean): LibraryAction[] => [
+  { id: "rename", label: "Rename", place: "menu" },
+  ...(withDuplicate ? [{ id: "duplicate", label: "Duplicate", place: "menu" } as const] : []),
+  { id: "reveal", label: "Show in Finder", place: "menu" },
+  { id: "delete", label: "Delete", place: "menu" },
+];
+
 /**
  * A recording's length in ms, from its `anchors.json` (`stop.t` is session
  * nanoseconds). The ONE derivation: the library's scan and the recording
@@ -379,9 +493,11 @@ const MODE_LABELS: Readonly<Record<DecorationMode, string>> = {
  */
 export function recordingItem(t: TakeInfo): LibraryItem {
   const notes: string[] = [];
+  const alerts: LibraryAlert[] = [];
   if (t.camera) {
     if (!t.camera.present) {
-      notes.push("Camera: recorded no frames — this take has no picture-in-picture");
+      alerts.push({ label: "No camera",
+                    detail: "Camera: recorded no frames — this take has no picture-in-picture" });
     } else {
       const who = t.camera.device ?? "camera";
       notes.push(t.camera.pipStartsAfterMs > 0
@@ -390,11 +506,14 @@ export function recordingItem(t: TakeInfo): LibraryItem {
     }
   }
   const stopNote = libraryNote(t.stop);
-  if (stopNote) notes.push(stopNote);
+  const stopLabel = stopBadge(t.stop);
+  if (stopNote && stopLabel) alerts.push({ label: stopLabel, detail: stopNote });
   const silence = silenceNote(t.silentSpans);
-  if (silence) notes.push(silence);
+  if (silence) alerts.push({ label: "No mic signal", detail: silence });
   const stall = stallNote(t.stalledSpans);
-  if (stall) notes.push(stall);
+  if (stall) alerts.push({ label: "Camera stalled", detail: stall });
+  const size = pixelSizeLabel(t.width, t.height, true);
+  const length = fmtDuration(t.durationMs);
   return {
     id: t.name,
     kind: "recording",
@@ -404,20 +523,17 @@ export function recordingItem(t: TakeInfo): LibraryItem {
     createdAt: t.recordedAt,
     bytes: t.bytes,
     label: t.label,
-    summary: `${fmtDuration(t.durationMs)} · ${t.width}×${t.height} · `
-           + `${t.events} events · ${fmtBytes(t.bytes)}`,
+    readout: readoutLine(size, t.bytes),
+    columns: { type: "Recording", length, size, file: fmtBytes(t.bytes) },
+    chip: length,
+    alerts,
     notes,
     thumbnail: { source: "none" },
-    edited: false,
-    durationLabel: fmtDuration(t.durationMs),
     actions: [
-      { id: "open", label: "Preview" },
-      // The take editor's own Share button (STC-242) is what this reaches —
-      // a still has none yet, so it is a recording-only action (STC-429).
-      { id: "share", label: "Share" },
-      { id: "rename", label: "Rename" },
-      { id: "reveal", label: "Show" },
-      { id: "delete", label: "Delete" },
+      { id: "open", label: "Preview", place: "tile" },
+      // The take editor's own Share button (STC-242) is what this reaches.
+      { id: "share", label: "Share", place: "primary" },
+      ...menuActions(false),
     ],
   };
 }
@@ -431,10 +547,9 @@ export function recordingItem(t: TakeInfo): LibraryItem {
  * recording, and the view learns that from this list rather than from the kind.
  */
 export function stillItem(s: StillInfo): LibraryItem {
-  const bits = [`${s.width}×${s.height}`, MODE_LABELS[s.mode], fmtBytes(s.bytes)];
-  if (s.redactions > 0) {
-    bits.splice(2, 0, `${s.redactions} redaction${s.redactions === 1 ? "" : "s"}`);
-  }
+  const notes = [MODE_LABELS[s.mode]];
+  if (s.redactions > 0) notes.push(`${s.redactions} redaction${s.redactions === 1 ? "" : "s"}`);
+  const size = pixelSizeLabel(s.width, s.height, false);
   return {
     id: s.name,
     kind: "still",
@@ -444,21 +559,23 @@ export function stillItem(s: StillInfo): LibraryItem {
     createdAt: s.capturedAt,
     bytes: s.bytes,
     label: s.label,
-    summary: bits.join(" · "),
-    notes: [],
+    readout: readoutLine(size, s.bytes),
+    columns: { type: "Shot", length: NO_VALUE, size, file: fmtBytes(s.bytes) },
+    chip: formatChip(s.file),
+    alerts: [],
+    notes: [notes.join(" · ")],
     // A cached file is named; otherwise the renderer is asked to make one. The
     // cache lives in the take directory precisely so that deleting the take
     // deletes it too — an orphan is impossible rather than merely unlikely.
     thumbnail: s.cached ? { source: "file", file: THUMBNAIL_FILE } : { source: "render" },
-    edited: false,
     actions: [
-      // "Edit", not "Open" (STC-429) — same action id, a clearer word for
-      // what it actually does.
-      { id: "open", label: "Edit" },
-      { id: "rename", label: "Rename" },
-      { id: "duplicate", label: "Duplicate" },
-      { id: "reveal", label: "Show" },
-      { id: "delete", label: "Delete" },
+      // The still editor, the tile's own door (STC-300, STC-584).
+      { id: "open", label: "Edit", place: "tile" },
+      // A still's Share copies the decorated image (Patrick, 2026-10-27): the
+      // same render the panel's Copy makes. A different id from a
+      // recording's "share", because it is a different action.
+      { id: "copy-image", label: "Share", place: "primary" },
+      ...menuActions(true),
     ],
   };
 }
@@ -534,36 +651,31 @@ export interface FinishedFileInfo {
  */
 export function looseFileItem(f: FinishedFileInfo): LibraryItem {
   const kind: LibraryKind = f.isVideo ? "recording" : "still";
-  const bits: string[] = [];
-  if (f.isVideo && f.durationMs !== undefined) bits.push(fmtDuration(f.durationMs));
-  if (f.width !== undefined && f.height !== undefined) bits.push(`${f.width}×${f.height}`);
-  bits.push(fmtBytes(f.bytes));
+  const size = pixelSizeLabel(f.width, f.height, f.isVideo);
+  const length = f.isVideo && f.durationMs !== undefined ? fmtDuration(f.durationMs) : undefined;
   return {
     id: f.id,
     kind,
     // "Shot", not "Still" — STC-398 renamed the artefact and STC-407 cleaned
-    // up the residue. This line was written on a branch cut BEFORE that
-    // cleanup landed, so it merged without a textual conflict and quietly
-    // reintroduced the old word on a new code path.
+    // up the residue (and STC-584 kept it, see LIBRARY_FILTERS).
     badge: kind === "recording" ? "Recording" : "Shot",
     dir: f.dir,
     file: f.file,
     createdAt: f.createdAt,
     bytes: f.bytes,
-    summary: bits.join(" · "),
+    readout: readoutLine(size, f.bytes),
+    columns: { type: kind === "recording" ? "Recording" : "Shot", length: length ?? NO_VALUE,
+               size, file: fmtBytes(f.bytes) },
+    chip: length ?? formatChip(f.file),
+    alerts: [],
     notes: f.note ? [f.note] : [],
     // Nothing here has a picture to show: a foreign file was never decorated
     // by this app, and a bundle too broken to parse has nothing
     // `renderThumbnail` could read (that needs `shot.json` and `frame.file`,
     // exactly what "did not parse" means).
     thumbnail: { source: "none" },
-    edited: false,
-    durationLabel: f.isVideo && f.durationMs !== undefined ? fmtDuration(f.durationMs) : undefined,
-    actions: [
-      { id: "rename", label: "Rename" },
-      { id: "reveal", label: "Show" },
-      { id: "delete", label: "Delete" },
-    ],
+    // No tile action and no Share: both need a bundle that read (rule above).
+    actions: menuActions(false),
   };
 }
 
@@ -591,6 +703,12 @@ export interface PlaceholderContext {
   /** Already formatted for display ("⌃⌥⇧⌘3"); null when the action is unbound. */
   shotKey: string | null;
   recordKey: string | null;
+}
+
+/** A search that matches nothing (STC-584), over a library that is not empty. */
+export function searchPlaceholder(query: string): LibraryPlaceholder {
+  return { state: "filtered", title: `No captures match “${query.trim()}”`,
+           body: "Try another name, or clear the search.", actions: [] };
 }
 
 /** The first paint, before any list has come back. */

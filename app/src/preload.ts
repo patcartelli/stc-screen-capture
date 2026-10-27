@@ -87,24 +87,14 @@ contextBridge.exposeInMainWorld("recorder", {
                       "library:changed",
                       // The pill's channels left with the pill (STC-550):
                       // `pill-preload.ts` is its own bridge now.
-                      // STC-433: `recorder:start` resolved a stale mic on
-                      // this window's behalf (turned it off) — the mic
-                      // popover's own stored state is now stale too, and
-                      // nothing else would refresh it until the next
-                      // `helper:ready` or a real unplug. There is no
-                      // display-picker equivalent under STC-388's fresh,
-                      // never-persisted scope pick: a vanished display just
-                      // refuses the take, and Record is pressed again.
+                      // Another window wrote a preference (Settings, the
+                      // record bar): the save folder or the keys may have moved.
                       "settings:changed",
-                      // STC-388 review, Finding 2: a take started or stopped
-                      // by the hotkey or the tray, reaching the window that
-                      // did not ask for it. `main.ts`'s `reconcileWindowRecording`
-                      // is the one place this is ever sent, off the same
-                      // `sup.state` authority the tray already reconciles from.
-                      "recorder:recording-state",
                       // STC-476: the grants changed, or a capture was
                       // refused for them and the panel must come back.
-                      "permissions:changed"];
+                      "permissions:changed",
+                      // STC-584: Reduce Transparency changed; the glass bar follows.
+                      "library:reduced-transparency"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);

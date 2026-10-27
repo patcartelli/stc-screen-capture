@@ -246,6 +246,17 @@ export function libraryNote(stop: StopBlock): string | undefined {
 }
 
 /**
+ * The library's amber badge for how a take stopped (STC-584): the note's
+ * cause, capitalised ("Disk full"), with `libraryNote` as its hover text.
+ * Undefined exactly when `libraryNote` is.
+ */
+export function stopBadge(stop: StopBlock): string | undefined {
+  if (stop?.reason === "recorder-quit") return "Recovered";
+  const row = rowFor(stop);
+  return row && row.lib.charAt(0).toUpperCase() + row.lib.slice(1);
+}
+
+/**
  * "1:10 to 4:30", several spans listing the first two, then "and N more". Spans arrive in
  * order (anchors-13, anchors-16), so "first" is the earliest. Undefined for none.
  */

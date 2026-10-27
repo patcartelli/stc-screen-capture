@@ -3,8 +3,7 @@
  * Settings trigger. "5 or more options: dropdown, the record bar component"
  * (Capture SK 016, Row pattern spec), so the menu is `device-menu.css`'s
  * `.device-menu` and its rows come from `device-menu-dom.ts`'s
- * `buildMenuRow`, the same builder the record bar and the library's device
- * popover use. A row here has no icon: an option like "Bottom right" has none.
+ * `buildMenuRow`, the same builder the record bar uses. A row here has no icon: an option like "Bottom right" has none.
  *
  * One menu element serves every dropdown in the window, so two can never be
  * open at once. It closes on a pick, Escape, a press outside it, a scroll of

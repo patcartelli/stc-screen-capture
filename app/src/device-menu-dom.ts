@@ -1,9 +1,11 @@
 /**
  * The device menu's row markup (STC-456) — one DOM builder for every surface
  * that draws `device-picker.ts`'s `MenuRow`: the Record options bar's overlay
- * menu (`overlay.ts`) and the main window's `#devicestate` popover
- * (`renderer.ts`). Node-free, so both renderer windows can import it — the
- * same reason `device-picker.ts` itself has no DOM in it.
+ * menu (`overlay.ts`) and the Settings window's dropdowns
+ * (`settings-dropdown.ts`). The library window's `#devicestate` popover used
+ * it too, until STC-584 took the device pickers out of the library. Node-free,
+ * so any renderer window can import it — the same reason `device-picker.ts`
+ * itself has no DOM in it.
  *
  * Before this, `overlay.ts`'s `renderMenu` built this exact markup inline;
  * a second copy for the main window's popover is the drift this repo keeps
@@ -12,8 +14,8 @@
  * kept as a second implementation.
  *
  * `onPick`, when given, wires the row for direct interaction — a click, and
- * Enter/Space while it holds keyboard focus (`tabIndex = 0`) — mirroring the
- * old `#devicepopover button` rows' own keyboard reachability. The overlay's
+ * Enter/Space while it holds keyboard focus (`tabIndex = 0`) — what the
+ * Settings dropdowns use. The overlay's
  * menu does NOT pass it: its rows are pressed through one delegated
  * `pointerdown` handler on `window` instead, ahead of `barPress`'s own
  * ordering rules (STC-456 Review Focus 1) — wiring a second, per-row listener

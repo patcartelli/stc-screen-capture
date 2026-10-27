@@ -41,9 +41,8 @@ describe("take library in the app", () => {
     await expect.poll(() => win.textContent("#takes"), { timeout: 20_000 })
       .toContain("2026-08-24_10-00-00");
     const text = (await win.textContent("#takes"))!;
-    expect(text).toMatch(/\d+:\d\d/);            // duration
-    expect(text).toMatch(/\d+×\d+/);             // resolution
-    expect(text).toMatch(/\d+ events/);
+    expect(text).toMatch(/\d+:\d\d/);            // duration, the thumbnail's chip
+    expect(text).toMatch(/\d+ × \d+|\d+p/);       // pixel size, the readout (STC-584)
     // KB admitted since STC-294. The old formatter was `Math.round(b / 1e6) MB`
     // unconditionally, so this 84 KB fixture displayed as "0 MB" and matched
     // this regex by luck; the adapter's formatter has a KB step.

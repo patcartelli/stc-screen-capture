@@ -109,7 +109,7 @@ async function launch(opts: { withExport?: boolean; slug?: string | null } = {})
   });
   const mainWin = await app.firstWindow();
   await mainWin.waitForLoadState("domcontentloaded");
-  await mainWin.waitForSelector("#takes >> text=Preview", { timeout: 20_000 });
+  await mainWin.waitForSelector("#takes [data-open=open]", { timeout: 20_000 });
   // Publishing acts on the take the EDITOR has open (STC-373) — opening it is
   // what makes there be one.
   const editorWin = await openEditorFromLibrary(app, mainWin);
