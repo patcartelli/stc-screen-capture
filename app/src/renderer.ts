@@ -271,9 +271,9 @@ function renderPopover(): void {
  * row press does to the selection — this only carries the CHANGED fields to
  * the existing settings-write IPC (never the whole selection, so a picker
  * open in another window mid-edit is not clobbered by a value this one only
- * read, never touched) and re-renders: a toggle (`row.closesMenu === false`)
- * stays open and redraws its own checked state in place; a device choice
- * closes, exactly as before.
+ * read, never touched) and re-renders. The popover stays open on every pick
+ * (STC-583) and redraws its checked state in place; it closes on an outside
+ * click, Escape or its own trigger.
  */
 async function pickRow(isMic: boolean, row: MenuRow): Promise<void> {
   const next = applyMenuPick(currentSelection(), row.pick);
@@ -290,8 +290,7 @@ async function pickRow(isMic: boolean, row: MenuRow): Promise<void> {
   } catch (e) {
     alertUser(`Could not save the ${isMic ? "mic" : "camera"} setting: ${String(e)}`);
   }
-  if (row.closesMenu) closePopover();
-  else renderPopover();
+  renderPopover();
   renderIdleStatus();
 }
 

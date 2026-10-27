@@ -6,7 +6,9 @@
    take `fill: currentColor` and never a stroke. */
 .device-menu {
   position: fixed; box-sizing: border-box; z-index: 10;
-  width: max-content; min-width: 200px; max-width: 320px;
+  /* STC-583: one fixed width for every device menu (the bar's and the main window's,
+     mic and camera), so the menus never differ or jump; a long name is cut with an ellipsis. */
+  width: 280px;
   padding: 4px 0; border-radius: 16px;
   background: var(--menu-surface); color: var(--menu-on-surface);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .45);

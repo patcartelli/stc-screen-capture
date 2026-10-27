@@ -1,4 +1,4 @@
-import { formatElapsedTimer, meterView, MIC_OFF_TOOLTIP, NO_SIGNAL_TOOLTIP, parseLevel, type LevelReading } from "./pill.js";
+import { formatElapsedTimer, meterView, MIC_OFF_LABEL, MIC_OFF_TOOLTIP, NO_SIGNAL_TOOLTIP, parseLevel, type LevelReading } from "./pill.js";
 import { iconSvg } from "./icons.js";
 
 /**
@@ -101,7 +101,7 @@ window.pill.on("pill:level", (l) => {
   drawMeter();
 });
 window.pill.on("pill:micLost", () => { micLost = true; drawMeter(); });
-micOff.innerHTML = iconSvg("mic-off");
+micOff.innerHTML = `${iconSvg("mic-off")}<span id="pill-mic-label">${MIC_OFF_LABEL}</span>`;
 micOff.title = MIC_OFF_TOOLTIP;
 micOff.setAttribute("aria-label", MIC_OFF_TOOLTIP);
 window.pill.on("pill:mic", (p) => {

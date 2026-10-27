@@ -112,7 +112,7 @@ export function buildDropdown(
     if (openFor === trigger) { closeMenu(true); return; }
     closeMenu(false);
     const rows: (MenuRowView & { value: string })[] = options.map((o) => ({
-      key: o.value, value: o.value, label: o.label, checked: o.value === value, closesMenu: true,
+      key: o.value, value: o.value, label: o.label, checked: o.value === value, toggle: false,
     }));
     m.replaceChildren(...rows.map((r) => buildMenuRow(r, (row) => {
       closeMenu(true);

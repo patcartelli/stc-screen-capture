@@ -760,11 +760,14 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     await send(overlay, { t: "control", id: "mic" });
     await send(overlay, { t: "menuPick", pick: pickMic });
     await expect.poll(() => overlay.getAttribute("#ctl-mic", "data-on"), { timeout: 15_000 }).toBe("1");
+    // The menu stays open on a pick, so the selection is visible in it.
+    expect(await overlay.getAttribute("#menu", "hidden")).toBeNull();
+    await expect.poll(() => overlay.locator("#menu .row").nth(2).getAttribute("aria-checked"), { timeout: 15_000 }).toBe("true");
 
     // The same row again: a second press on the selected device clears it.
-    await send(overlay, { t: "control", id: "mic" });
     await send(overlay, { t: "menuPick", pick: pickMic });
     await expect.poll(() => overlay.getAttribute("#ctl-mic", "data-on"), { timeout: 15_000 }).toBe("0");
+    expect(await overlay.getAttribute("#menu", "hidden"), "still open after a clear").toBeNull();
 
     // Settings writes the bar's options back without starting a take (the
     // start path itself is pinned by "no mic picked → no micDeviceUid").
@@ -786,8 +789,7 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
 
     await send(overlay, { t: "control", id: "mic" });
     await send(overlay, { t: "menuPick", pick: pick("mic-a") });
-    await send(overlay, { t: "control", id: "mic" });
-    await send(overlay, { t: "menuPick", pick: pick("mic-b") });
+    await send(overlay, { t: "menuPick", pick: pick("mic-b") });   // same open menu
     await expect.poll(() => overlay.getAttribute("#ctl-mic", "data-on"), { timeout: 15_000 }).toBe("1");
 
     await send(overlay, { t: "control", id: "settings" });
@@ -877,7 +879,7 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
     // Also pick the one mic the fake helper offers (STC-456 fix round,
     // Finding 2's own regression): this is a SECOND bar choice, a device
-    // pick rather than a toggle, and it closes the bar's own menu.
+    // pick rather than a toggle, and it leaves the bar's own menu open (STC-583).
     await send(overlay, {
       t: "menuPick",
       pick: { kind: "choice", menu: "mic", choice: { kind: "device", uid: "fixture-mic-1" } },

@@ -77,10 +77,17 @@
     }
     /* STC-583: a take with no mic. The slashed-mic glyph stands in for the meter
        (renderer: `.mic-muted`, set by pill:mic); PILL_THEME.micOff is its color. */
-    #pill-mic-off { display: none; flex: none; width: 14px; height: 14px; color: #a1a1a6; }
-    #pill-mic-off svg { display: block; width: 14px; height: 14px; fill: currentColor; }
+    #pill-mic-off { display: none; flex: none; align-items: center; gap: 4px; height: 14px;
+                    padding: 4px 2px; margin: -4px -2px; color: #ff3b30; }
+    #pill-mic-off svg { display: block; flex: none; width: 14px; height: 14px; fill: currentColor; }
+    /* Native tooltips do not show on this panel, so the label is the hover state. It
+       follows hovering the PILL, not just the glyph: the window grows about its centre
+       to fit the label, which would slide a glyph-only target out from under the pointer
+       and flicker; the pill only ever widens around the pointer, so it stays hovered. */
+    #pill-mic-label { display: none; font: 500 11px/1 -apple-system, system-ui, sans-serif; white-space: nowrap; }
+    #pill.mic-muted:hover #pill-mic-label { display: inline; }
     #pill.mic-muted #pill-meter { display: none; }
-    #pill.mic-muted #pill-mic-off { display: block; }
+    #pill.mic-muted #pill-mic-off { display: flex; }
     /* Stop: the universal stop glyph (QuickTime/Zoom/OBS). Its own button
        now, the one place a press does not start a drag, with the hover fill
        (PILL_THEME's .hover) that used to sit on the whole pill. */

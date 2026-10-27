@@ -11,7 +11,7 @@ import {
   type ControlId, type MenuAnchor, type MenuId, type OptionsState,
 } from "./record-options.js";
 import {
-  decidePopoverToggle, applyMenuPick, closesMenu, micMenuRows, cameraMenuRows,
+  decidePopoverToggle, applyMenuPick, micMenuRows, cameraMenuRows,
   type MenuPick, type MenuRow,
 } from "./device-picker.js";
 import { micDevices } from "./mic-devices.js";
@@ -553,8 +553,8 @@ class OverlaySession {
     if (ev.t === "control") return this.onControl(ev.id);
     if (ev.t === "menuPick") {
       const next = applyMenuPick(this.options, ev.pick);
-      const closes = closesMenu(ev.pick);
-      this.options = { ...this.options, ...next, openMenu: closes ? null : this.options.openMenu };
+      // The menu stays open on every pick (STC-583): the selection stays visible.
+      this.options = { ...this.options, ...next };
       return this.broadcast();
     }
     if (ev.t === "menuClose") {
