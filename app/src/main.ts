@@ -815,7 +815,16 @@ function startSupervisor(): void {
   });
   // STC-233: same reasoning, one device over — the mic also opens off the
   // critical path (MicCapture.swift) and reports separately once it resolves.
-  sup.on("helper:mic-started", (l) => send("helper:mic-started", l));
+  sup.on("helper:mic-started", (l) => {
+    console.log(`[mic] started: ${JSON.stringify((l as any).timings ?? {})}`);   // STC-590
+    send("helper:mic-started", l);
+  });
+  // STC-590: each audio track's first sample against the screen's first frame (ms from t0).
+  sup.on("helper:audio-first-sample", (l) => {
+    const e = l as any;
+    const lag = typeof e.displayFirstFrameMs === "number" ? e.firstSampleMs - e.displayFirstFrameMs : "?";
+    console.log(`[${e.track}] first sample at ${e.firstSampleMs} ms, screen first frame at ${e.displayFirstFrameMs ?? "?"} ms, lag ${lag} ms, ${JSON.stringify(e.timings ?? {})}`);
+  });
   // STC-528's `helper:level` goes to the pill's own window (`pill-window.ts`), not here.
   // STC-388: the tray's Record item reads as Stop while a take is live, and
   // its own state can change with no window open to notice — reuse the same

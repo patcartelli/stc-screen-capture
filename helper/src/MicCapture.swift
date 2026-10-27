@@ -91,6 +91,22 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     /// the moment this track's start time exists for `anchors.partial.json`. Set before
     /// `start()`; never changed after.
     var onFirstAppend: (() -> Void)?
+    /// STC-590: where `start()`'s time went, in ms, and when the first buffer ARRIVED
+    /// (relative to t0, stamped before any gate). Reported with `mic-started` and the
+    /// first-sample log line so a late mic can be read as "slow open" or "slow first sample".
+    private var openTimings: [String: Int] = [:]
+    private var firstArrivalRelNs: Int64 = -1
+    func timings() -> [String: Int] {
+        lock.lock(); defer { lock.unlock() }
+        var t = openTimings
+        if firstArrivalRelNs >= 0 { t["firstArrivalRelMs"] = Int(firstArrivalRelNs / 1_000_000) }
+        return t
+    }
+    /// The first appended sample's time relative to t0, or -1. Same value as `firstFramePtsNs`.
+    func firstSampleRelNs() -> Int64 {
+        lock.lock(); defer { lock.unlock() }
+        return firstPtsNs
+    }
     /// STC-528: called, off the lock, when a silent stretch reaches 10 s (a span now
     /// exists) and when it ends, so `anchors.partial.json` carries it if the helper dies.
     /// Set before `start()`; never changed after.
@@ -125,6 +141,7 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     }
 
     func start() -> Result<String, Error> {
+        let openT0 = Clock.nowNs()
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         guard status == .authorized else { return .failure(MicError.notAuthorized(status)) }
 
@@ -151,6 +168,7 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         formatGuard = MicFormatGuard(expected: Self.expectedFormat(sampleRate: asbd.mSampleRate,
                                                                    channels: Int(asbd.mChannelsPerFrame)))
 
+        let discoveredNs = Clock.nowNs()
         let s = AVCaptureSession()
         s.beginConfiguration()
         let input: AVCaptureDeviceInput
@@ -192,7 +210,14 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         do { try setupWriter() } catch { return .failure(error) }
 
         session = s
+        let configuredNs = Clock.nowNs()
         s.startRunning()
+        let ran = Clock.nowNs()
+        lock.lock()
+        openTimings = ["discoverMs": Int((discoveredNs - openT0) / 1_000_000),
+                       "configureMs": Int((configuredNs - discoveredNs) / 1_000_000),
+                       "startRunningMs": Int((ran - configuredNs) / 1_000_000)]
+        lock.unlock()
         armNoSamplesWatchdog()
         return .success(deviceName)
     }
@@ -382,6 +407,7 @@ final class MicCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
             guard rel >= 0 else { return }          // arrived before the session began
 
             lock.lock()
+            if firstArrivalRelNs < 0 { firstArrivalRelNs = rel }   // STC-590
             if monotonicGuardPtsNs >= 0, rel <= monotonicGuardPtsNs {
                 lock.unlock(); return               // non-monotonic: drop, never offered to the gate
             }
