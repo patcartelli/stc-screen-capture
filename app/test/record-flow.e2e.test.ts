@@ -749,6 +749,76 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     await expect.poll(() => readWrittenSettings(ud).systemAudio, { timeout: 10_000 }).toBe(true);
   }, 120_000);
 
+  // STC-583: the bar's menus share the click-to-clear rule and the switch row
+  // with the main window's popover (device-picker.ts / device-menu-dom.ts).
+  test("pressing the selected mic on the bar clears it: the trigger goes muted and no mic is written back (STC-583)", async () => {
+    const { win, ud } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+    const pickMic = { kind: "choice", menu: "mic", choice: { kind: "device", uid: "fixture-mic-1" } };
+
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: pickMic });
+    await expect.poll(() => overlay.getAttribute("#ctl-mic", "data-on"), { timeout: 15_000 }).toBe("1");
+
+    // The same row again: a second press on the selected device clears it.
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: pickMic });
+    await expect.poll(() => overlay.getAttribute("#ctl-mic", "data-on"), { timeout: 15_000 }).toBe("0");
+
+    // Settings writes the bar's options back without starting a take (the
+    // start path itself is pinned by "no mic picked → no micDeviceUid").
+    await send(overlay, { t: "control", id: "settings" });
+    await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
+    await expect.poll(() => readWrittenSettings(ud).micDeviceUid ?? null, { timeout: 10_000 }).toBeNull();
+  }, 120_000);
+
+  test("on the bar, a mic press on a DIFFERENT device switches to it, not a clear (STC-583)", async () => {
+    const { win, ud } = await launch({
+      STC_FAKE_MICS: JSON.stringify([
+        { name: "Mic A", uid: "mic-a", bluetooth: false },
+        { name: "Mic B", uid: "mic-b", bluetooth: false },
+      ]),
+    });
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+    const pick = (uid: string) => ({ kind: "choice", menu: "mic", choice: { kind: "device", uid } });
+
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: pick("mic-a") });
+    await send(overlay, { t: "control", id: "mic" });
+    await send(overlay, { t: "menuPick", pick: pick("mic-b") });
+    await expect.poll(() => overlay.getAttribute("#ctl-mic", "data-on"), { timeout: 15_000 }).toBe("1");
+
+    await send(overlay, { t: "control", id: "settings" });
+    await expect.poll(() => hasWindow(app!, "overlay.html"), { timeout: 15_000 }).toBe(false);
+    await expect.poll(() => readWrittenSettings(ud).micDeviceUid, { timeout: 10_000 }).toBe("mic-b");
+  }, 120_000);
+
+  test("on the bar, Include System Audio is a switch row that flips in place and keeps the menu open (STC-583)", async () => {
+    const { win } = await launch();
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "control", id: "mic" });
+    const first = overlay.locator("#menu .row").first();
+    await expect.poll(() => first.count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    expect(await first.textContent()).toContain("Include System Audio");
+    expect(await first.getAttribute("role")).toBe("switch");
+    expect(await first.locator(".sw").count(), "a switch row draws a switch").toBe(1);
+    expect(await first.locator(".check").count(), "and no check mark").toBe(0);
+    expect(await first.getAttribute("aria-checked")).toBe("false");
+
+    await send(overlay, { t: "menuPick", pick: { kind: "toggle-system-audio" } });
+    await expect.poll(() => overlay.locator("#menu .row").first().getAttribute("aria-checked"), { timeout: 15_000 }).toBe("true");
+    // Still open: a toggle never closes the menu, a choice does.
+    expect(await overlay.locator("#menu .row").count()).toBeGreaterThan(0);
+    // A device row, by contrast, is a radio with a check, not a switch.
+    const device = overlay.locator("#menu .row").nth(1);
+    expect(await device.getAttribute("role")).toBe("menuitemradio");
+    expect(await device.locator(".check").count()).toBe(1);
+  }, 120_000);
+
   test("off → the key is ABSENT, not false (the existing pin)", async () => {
     const { win, startLog, ud } = await launch();
     await withoutCountdown(win);
