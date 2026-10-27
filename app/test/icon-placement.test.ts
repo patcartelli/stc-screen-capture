@@ -27,13 +27,25 @@ describe("decideIcons", () => {
     expect(decideIcons("menubar", 2)).toEqual({ tray: true, dock: true });
   });
 
+  test("Menu bar only has no Dock icon while a take records, a hidden library or not", () => {
+    // Rule 5: the library hidden for the take still counts as open, and a
+    // reconcile mid-take must not bring the icon back over the pill.
+    expect(decideIcons("menubar", 1, true)).toEqual({ tray: true, dock: false });
+    expect(decideIcons("menubar", 0, true)).toEqual({ tray: true, dock: false });
+    // The other two follow the setting, take or not (rule 2).
+    expect(decideIcons("both", 1, true)).toEqual({ tray: true, dock: true });
+    expect(decideIcons("dock", 0, true)).toEqual({ tray: false, dock: true });
+  });
+
   test("no setting leaves the user with neither icon", () => {
     // Rule 1: hiding both would leave the hotkey as the only way back in.
     for (const placement of ICON_PLACEMENTS) {
       for (const windows of [0, 1, 2]) {
-        const { tray, dock } = decideIcons(placement, windows);
-        // With no window open, at least one of the two must be there to click.
-        if (windows === 0) expect(tray || dock).toBe(true);
+        for (const recording of [false, true]) {
+          const { tray, dock } = decideIcons(placement, windows, recording);
+          // With no window open, or a take recording, one of the two must be there to click.
+          if (windows === 0 || recording) expect(tray || dock).toBe(true);
+        }
       }
     }
   });

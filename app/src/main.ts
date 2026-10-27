@@ -78,7 +78,7 @@ import { quitDecision } from "./quit-guard.js";
 import { editorIsOpen, fitEditorToContent, hideEditor, openEditor } from "./editor-window.js";
 import { hideStillEditor, openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
-import { discardPill, pillStarted, preparePill } from "./pill-window.js";
+import { discardPill, pillIsUp, pillStarted, preparePill } from "./pill-window.js";
 import { libraryAroundTake, type LibraryAtTakeStart } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
@@ -569,7 +569,7 @@ function documentWindowCount(): number {
  */
 function reconcileIcons(): void {
   if (quitting) return;
-  const want = decideIcons(readSettings(app.getPath("userData")).iconPlacement, documentWindowCount());
+  const want = decideIcons(readSettings(app.getPath("userData")).iconPlacement, documentWindowCount(), pillIsUp());
   setDockVisible(want.dock);
   if (want.tray && !tray) tray = mountTray();
   else if (!want.tray && tray) { tray.destroy(); tray = undefined; }
