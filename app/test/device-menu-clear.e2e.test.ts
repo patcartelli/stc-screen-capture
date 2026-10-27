@@ -67,7 +67,7 @@ const rowLabelled = (win: Page, label: string) =>
   win.locator("#devicepopover .row").filter({ has: win.locator(".label", { hasText: new RegExp(`^${label}$`) }) });
 
 describe("click-to-clear in the device popovers (STC-583)", () => {
-  test("pressing the selected mic clears it: muted, closed, written back; system audio is untouched", async () => {
+  test("pressing the selected mic clears it: muted, written back, menu stays open; system audio is untouched", async () => {
     const { win, userData } = await launch();
     await win.evaluate(() => (window as any).recorder.setSettings({ systemAudio: true }));
 
@@ -75,20 +75,18 @@ describe("click-to-clear in the device popovers (STC-583)", () => {
     await rowLabelled(win, "Mic A").click();
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("Mic A");
     await expect.poll(() => settingsOf(userData).micDeviceUid, { timeout: 20_000 }).toBe("mic-a");
-
-    // The popover closed on the pick. Open it again: Mic A carries the check.
-    await openMenu(win, "#mic-picker", 4);
-    expect(await rowLabelled(win, "Mic A").getAttribute("aria-checked")).toBe("true");
+    // The menu stays open on a pick, so the selection is visible in it.
+    expect(await win.isHidden("#devicepopover")).toBe(false);
+    await expect.poll(() => rowLabelled(win, "Mic A").getAttribute("aria-checked"), { timeout: 20_000 }).toBe("true");
 
     await rowLabelled(win, "Mic A").click();   // press the SELECTED row
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("off");
     await expect.poll(() => settingsOf(userData).micDeviceUid, { timeout: 20_000 }).toBeNull();
-    expect(await win.isHidden("#devicepopover"), "a choice closes the menu, a clear included").toBe(true);
+    expect(await win.isHidden("#devicepopover"), "still open after a clear").toBe(false);
     expect(settingsOf(userData).systemAudio, "clearing the mic leaves system audio alone").toBe(true);
 
-    // And the cleared state is what the menu now shows: Mute External holds the check.
-    await openMenu(win, "#mic-picker", 4);
-    expect(await rowLabelled(win, "Mute External").getAttribute("aria-checked")).toBe("true");
+    // And the cleared state is what the open menu now shows: Mute External holds the check.
+    await expect.poll(() => rowLabelled(win, "Mute External").getAttribute("aria-checked"), { timeout: 20_000 }).toBe("true");
     expect(await rowLabelled(win, "Mic A").getAttribute("aria-checked")).toBe("false");
   }, 180_000);
 
@@ -98,12 +96,11 @@ describe("click-to-clear in the device popovers (STC-583)", () => {
     await rowLabelled(win, "Mic A").click();
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("Mic A");
 
-    await openMenu(win, "#mic-picker", 4);
     await rowLabelled(win, "Mic B").click();
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("Mic B");
     await expect.poll(() => settingsOf(userData).micDeviceUid, { timeout: 20_000 }).toBe("mic-b");
+    await expect.poll(() => rowLabelled(win, "Mic A").getAttribute("aria-checked"), { timeout: 20_000 }).toBe("false");
 
-    await openMenu(win, "#mic-picker", 4);
     await rowLabelled(win, "Mic B").click();
     await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("off");
   }, 180_000);
@@ -124,9 +121,8 @@ describe("click-to-clear in the device popovers (STC-583)", () => {
     await rowLabelled(win, "Cam A").click();
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("Cam A");
     expect(settingsOf(userData)).toMatchObject({ camera: true, cameraDeviceUid: "cam-a" });
+    await expect.poll(() => rowLabelled(win, "Cam A").getAttribute("aria-checked"), { timeout: 20_000 }).toBe("true");
 
-    await openMenu(win, "#camera-picker", 4);
-    expect(await rowLabelled(win, "Cam A").getAttribute("aria-checked")).toBe("true");
     await rowLabelled(win, "Cam A").click();   // press the SELECTED row
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("off");
     await expect.poll(() => settingsOf(userData), { timeout: 20_000 }).toMatchObject({ camera: false, cameraDeviceUid: "cam-a" });
@@ -138,7 +134,6 @@ describe("click-to-clear in the device popovers (STC-583)", () => {
     await rowLabelled(win, "Automatic").click();
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("automatic");
 
-    await openMenu(win, "#camera-picker", 4);
     await rowLabelled(win, "Automatic").click();
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("off");
     await expect.poll(() => settingsOf(userData).camera, { timeout: 20_000 }).toBe(false);
@@ -152,6 +147,55 @@ describe("click-to-clear in the device popovers (STC-583)", () => {
     await rowLabelled(win, "Cam B").click();
     await expect.poll(() => win.textContent("#camera-state"), { timeout: 20_000 }).toBe("Cam B");
     expect(settingsOf(userData)).toMatchObject({ camera: true, cameraDeviceUid: "cam-b" });
+  }, 180_000);
+});
+
+describe("the menu stays open on a pick and closes on its own terms (STC-583)", () => {
+  test("a pick keeps it open; Escape, an outside click and its own trigger close it", async () => {
+    const { win } = await launch();
+    await openMenu(win, "#mic-picker", 4);
+    await rowLabelled(win, "Mic A").click();
+    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("Mic A");
+    expect(await win.isHidden("#devicepopover")).toBe(false);
+
+    await win.keyboard.press("Escape");
+    await expect.poll(() => win.isHidden("#devicepopover"), { timeout: 10_000 }).toBe(true);
+
+    await openMenu(win, "#mic-picker", 4);
+    await win.mouse.click(4, 4);   // outside the menu and its trigger
+    await expect.poll(() => win.isHidden("#devicepopover"), { timeout: 10_000 }).toBe(true);
+
+    await openMenu(win, "#mic-picker", 4);
+    await win.click("#mic-picker");   // its own trigger toggles it closed
+    await expect.poll(() => win.isHidden("#devicepopover"), { timeout: 10_000 }).toBe(true);
+  }, 180_000);
+});
+
+describe("one width for the device row and its menus (STC-583)", () => {
+  const width = (win: Page, sel: string) => win.evaluate((s) => document.querySelector(s)!.getBoundingClientRect().width, sel);
+
+  test("the mic and camera triggers share a width, and a selection never changes it", async () => {
+    const { win } = await launch();
+    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("off");
+    const [mic0, cam0] = [await width(win, "#mic-picker"), await width(win, "#camera-picker")];
+    expect(mic0).toBe(cam0);
+
+    await openMenu(win, "#mic-picker", 4);
+    await rowLabelled(win, "Mic A").click();
+    await expect.poll(() => win.textContent("#mic-state"), { timeout: 20_000 }).toBe("Mic A");
+    await win.keyboard.press("Escape");
+    expect(await width(win, "#mic-picker"), "a longer label does not widen it").toBe(mic0);
+    expect(await width(win, "#camera-picker")).toBe(cam0);
+  }, 180_000);
+
+  test("the mic and camera menus are the same width", async () => {
+    const { win } = await launch();
+    await openMenu(win, "#mic-picker", 4);
+    const mic = await width(win, "#devicepopover");
+    await win.keyboard.press("Escape");
+    await openMenu(win, "#camera-picker", 4);
+    expect(await width(win, "#devicepopover")).toBe(mic);
+    expect(mic).toBe(280);
   }, 180_000);
 });
 

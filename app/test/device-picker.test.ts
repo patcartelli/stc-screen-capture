@@ -123,10 +123,10 @@ describe("micMenuRows (STC-456)", () => {
   test("no mic chosen checks Mute External", () => {
     expect(micMenuRows(micsTest, sel()).find((r) => r.checked)?.label).toBe(MENU_LABELS.muteExternal);
   });
-  test("toggling system audio keeps the menu open; picking a mic closes it", () => {
+  test("only the system-audio row is a toggle (drawn as a switch); the mic rows are choices", () => {
     const rows = micMenuRows(micsTest, sel());
-    expect(rows[0]!.closesMenu).toBe(false);
-    expect(rows.slice(1).every((r) => r.closesMenu)).toBe(true);
+    expect(rows[0]!.toggle).toBe(true);
+    expect(rows.slice(1).every((r) => !r.toggle)).toBe(true);
   });
   test("icons: laptop for system audio, mic-off for mute, mic for devices", () => {
     expect(micMenuRows(micsTest, sel()).map((r) => r.icon)).toEqual(["system-audio", "mic-off", "mic", "mic"]);
@@ -181,8 +181,8 @@ describe("cameraMenuRows (STC-456)", () => {
     const rows = cameraMenuRows([{ name: "OBS", uid: "obs", virtual: true }], sel({ camera: true, cameraDeviceUid: "obs" }));
     expect(rows.find((r) => r.checked)).toMatchObject({ label: "OBS", key: "device:obs" });
   });
-  test("every camera row closes the menu", () => {
-    expect(cameraMenuRows(camsTest, sel()).every((r) => r.closesMenu)).toBe(true);
+  test("every camera row is a choice, not a toggle", () => {
+    expect(cameraMenuRows(camsTest, sel()).every((r) => !r.toggle)).toBe(true);
   });
 });
 

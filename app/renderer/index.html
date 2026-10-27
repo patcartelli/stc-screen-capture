@@ -109,9 +109,14 @@
        also now where a device is picked, instead of a trip to Settings. */
     .devicepicker-trigger {
       display: inline-flex; align-items: center; gap: 4px;
+      /* STC-583: one fixed width for the mic and camera triggers, so a longer or
+         shorter selection never moves the row; a long name is cut with an ellipsis. */
+      box-sizing: border-box; width: 240px; justify-content: space-between;
       padding: 1px 6px; margin: -1px -6px; border: 1px solid transparent; border-radius: 4px;
       background: none; color: var(--text); font: inherit; cursor: pointer;
     }
+    .devicepicker-trigger > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                                   white-space: nowrap; text-align: left; }
     .devicepicker-trigger:hover:not([disabled]) { background: var(--surface-hover); border-color: var(--border); }
     .devicepicker-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .devicepicker-trigger[disabled] { opacity: .4; cursor: default; }

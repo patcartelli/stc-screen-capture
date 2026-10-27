@@ -277,6 +277,9 @@ export const NO_SIGNAL_TOOLTIP = "No mic signal for 10 s";
 /** The tooltip and accessible name of the slashed-mic glyph on a take with no mic (STC-583). */
 export const MIC_OFF_TOOLTIP = "Microphone off";
 
+/** The short label the muted glyph reveals on hover (STC-583); native tooltips do not show on the pill's panel. */
+export const MIC_OFF_LABEL = "Mic off";
+
 /**
  * A peak on a dB scale from `METER_FLOOR_DB` (empty) to 0 dBFS (full). Linear
  * would leave ordinary speech (-30 to -12 dBFS) as a sliver.
@@ -338,8 +341,8 @@ export const PILL_THEME = {
   meterTrack: "#2c2c2e",
   meterBaseline: "#636366",
   meterNoSignal: "#ff9f0a",
-  /** STC-583: the slashed-mic glyph on a take with no mic. Dimmer than the text, brighter than the hatch. */
-  micOff: "#a1a1a6",
+  /** STC-583: the slashed-mic glyph on a take with no mic: the recording red (Patrick, 2026-10-27). */
+  micOff: "#ff3b30",
   /**
    * STC-447, answering the STC-375 runbook's open question: "is the whole
    * pill legible against whatever is likely to be behind it". A dark pill had
