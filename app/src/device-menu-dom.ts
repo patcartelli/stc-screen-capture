@@ -20,9 +20,23 @@
  * there would be a second path to the same pick, and the two could disagree.
  */
 import { iconSvg } from "./icons.js";
-import type { MenuRow } from "./device-picker.js";
+import type { MenuIcon } from "./device-picker.js";
 
-export function buildMenuRow(r: MenuRow, onPick?: (row: MenuRow) => void): HTMLElement {
+/**
+ * What a row needs to be drawn. `device-picker.ts`'s `MenuRow` is one; the
+ * Settings window's dropdown (STC-581, `settings-dropdown.ts`) builds its own,
+ * with no icon: an option like "Bottom right" has none to show.
+ */
+export interface MenuRowView {
+  key: string;
+  label: string;
+  secondary?: string;
+  icon?: MenuIcon;
+  checked: boolean;
+  closesMenu: boolean;
+}
+
+export function buildMenuRow<R extends MenuRowView>(r: R, onPick?: (row: R) => void): HTMLElement {
   const row = document.createElement("div");
   row.className = "row";
   row.dataset.key = r.key;
@@ -31,7 +45,7 @@ export function buildMenuRow(r: MenuRow, onPick?: (row: MenuRow) => void): HTMLE
   row.setAttribute("role", r.closesMenu ? "menuitemradio" : "switch");
   row.setAttribute("aria-checked", String(r.checked));
   const trailing = r.closesMenu ? iconSvg("check", "check") : `<span class="sw" aria-hidden="true"><i></i></span>`;
-  row.innerHTML = `${iconSvg(r.icon)}<span class="label"></span>${trailing}`;
+  row.innerHTML = `${r.icon ? iconSvg(r.icon) : ""}<span class="label"></span>${trailing}`;
   if (!r.closesMenu) row.classList.add("toggle");
   row.querySelector(".label")!.textContent = r.label;
   if (r.secondary) {

@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
   <title>Capture Settings</title>
   <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="device-menu.css">
   <style>
     /* STC-581: the Settings window, built to Capture SK 016's five Settings
        frames and its "Row pattern spec". Always dark, whatever the OS
@@ -86,23 +87,33 @@
       margin: 0; font: 500 10px/12px var(--ui); letter-spacing: 1px; text-transform: uppercase; color: var(--heading);
     }
     .group { background: var(--group); border: 1px solid var(--hair); border-radius: 16px; padding: 0 16px; }
-    .row { display: flex; align-items: center; gap: 24px; padding: 12px 0; }
-    .row + .row { border-top: 1px solid var(--hair); }
-    .row > .label { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .group .row { display: flex; align-items: center; gap: 24px; padding: 12px 0; }
+    .group .row + .row { border-top: 1px solid var(--hair); }
+    .group .row > .label { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
     .helper, .note { font-size: 11px; line-height: 15px; letter-spacing: .22px; color: var(--helper); }
     .note { color: var(--heading); }
     .helper.warn { color: var(--warn-text); }
     .variant .why:not(:empty) { margin-left: 6px; }
     .control { flex: none; display: flex; align-items: center; gap: 8px; }
 
-    /* Dropdown: the record bar's look, on a native <select>. */
+    /* Dropdown: the record bar's menu (device-menu.css, settings-dropdown.ts)
+       on a trigger drawn as the frames draw it. Always dark, like the window. */
     .dropdown {
-      appearance: none; -webkit-appearance: none; height: 32px; min-width: 168px; padding: 0 30px 0 12px;
-      background: var(--fill) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='white' stroke-opacity='.7' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 12px center;
-      border: 1px solid var(--edge); border-radius: 10px; font: 400 13px/18px var(--mono); color: var(--text-strong);
+      display: inline-flex; align-items: center; justify-content: space-between; gap: 12px;
+      height: 32px; min-width: 168px; padding: 0 12px; text-align: left; white-space: nowrap;
+      background: var(--fill); border: 1px solid var(--edge); border-radius: 10px;
+      font: 400 13px/18px var(--mono); color: var(--text-strong);
     }
+    .dropdown::after {
+      content: ""; flex: none; width: 10px; height: 6px;
+      background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='white' stroke-opacity='.7' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center;
+    }
+    .dropdown[aria-expanded="true"] { border-color: rgba(255, 255, 255, .24); }
     .dropdown.narrow { min-width: 120px; }
-    .dropdown option { background: #1c1c1c; }
+    /* The record bar's menu surface (tokens.css), with a hairline so it reads over a #151515 group. */
+    .settings-menu { --menu-surface: var(--surface-deep); --menu-on-surface: rgba(255, 255, 255, .92); z-index: 20; border: 1px solid var(--edge); }
+    .settings-menu .row { font: 400 13px/18px var(--mono); height: 36px; }
+    .settings-menu .row:focus-visible { outline: none; background: rgba(255, 255, 255, .08); }
 
     /* Segmented control. */
     .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--fill); }
@@ -189,8 +200,8 @@
         <h2>App</h2>
         <div class="group">
           <div class="row">
-            <div class="label"><label for="iconplacement">Show icon in</label></div>
-            <div class="control"><select class="dropdown" id="iconplacement"></select></div>
+            <div class="label"><span id="l-iconplacement">Show icon in</span></div>
+            <div class="control"><button type="button" class="dropdown" id="iconplacement" aria-labelledby="l-iconplacement iconplacement"></button></div>
           </div>
         </div>
       </div>
@@ -208,14 +219,9 @@
             </div>
           </div>
           <div class="row">
-            <div class="label"><label for="thumbcorner">Panel corner</label></div>
+            <div class="label"><span id="l-thumbcorner">Panel corner</span></div>
             <div class="control">
-              <select class="dropdown" id="thumbcorner">
-                <option value="bottom-right">Bottom right</option>
-                <option value="bottom-left">Bottom left</option>
-                <option value="top-right">Top right</option>
-                <option value="top-left">Top left</option>
-              </select>
+              <button type="button" class="dropdown" id="thumbcorner" aria-labelledby="l-thumbcorner thumbcorner"></button>
             </div>
           </div>
           <div class="row">
@@ -346,12 +352,12 @@
         <h2>GIF</h2>
         <div class="group">
           <div class="row">
-            <div class="label"><label for="giffps">Frame rate</label></div>
-            <div class="control"><select class="dropdown narrow" id="giffps"></select></div>
+            <div class="label"><span id="l-giffps">Frame rate</span></div>
+            <div class="control"><button type="button" class="dropdown narrow" id="giffps" aria-labelledby="l-giffps giffps"></button></div>
           </div>
           <div class="row">
-            <div class="label"><label for="gifwidth">Max width</label></div>
-            <div class="control"><select class="dropdown narrow" id="gifwidth"></select></div>
+            <div class="label"><span id="l-gifwidth">Max width</span></div>
+            <div class="control"><button type="button" class="dropdown narrow" id="gifwidth" aria-labelledby="l-gifwidth gifwidth"></button></div>
           </div>
         </div>
       </div>

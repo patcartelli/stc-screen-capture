@@ -13,3 +13,9 @@ export async function openSettings(app: ElectronApplication, library: Page, pane
   if (pane) await page.click(`#sidebar button[data-pane="${pane}"]`);
   return page;
 }
+
+/** Pick `value` from a Settings dropdown the way a person does: open it, click the row. */
+export async function pickDropdown(page: Page, id: string, value: string): Promise<void> {
+  await page.click(`#${id}`);
+  await page.click(`#settings-menu .row[data-key="${value}"]`);
+}

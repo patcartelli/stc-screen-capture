@@ -22,6 +22,7 @@ import {
   PIP_RADIUS_MAX, PIP_WIDTH_MIN, PIP_WIDTH_MAX, type PipEdit, type PipStyle,
 } from "@transform/pip-style.js";
 import type { ToastInput } from "./toast-message.js";
+import { buildDropdown } from "./settings-dropdown.js";
 
 interface SettingsView {
   shutterSound: boolean;
@@ -98,18 +99,16 @@ function markSegment(group: HTMLElement, value: string): void {
 
 // ---- Capture pane -------------------------------------------------------------
 
-const iconPlacementSel = $("iconplacement") as HTMLSelectElement;
-for (const value of ICON_PLACEMENTS) iconPlacementSel.add(new Option(ICON_PLACEMENT_LABELS[value], value));
-iconPlacementSel.addEventListener("change", async () => {
-  try {
-    // Show what was stored, not what was picked. Main applies it at once.
-    iconPlacementSel.value = (await bridge.setSettings({
-      iconPlacement: cleanIconPlacement(iconPlacementSel.value),
-    })).iconPlacement;
-  } catch (e) {
-    alertUser(`Could not save where the icon shows: ${String(e)}`);
-  }
-});
+const iconPlacementSel = buildDropdown($("iconplacement") as HTMLButtonElement,
+  ICON_PLACEMENTS.map((value) => ({ value, label: ICON_PLACEMENT_LABELS[value] })),
+  async (picked) => {
+    try {
+      // Show what was stored, not what was picked. Main applies it at once.
+      iconPlacementSel.set((await bridge.setSettings({ iconPlacement: cleanIconPlacement(picked) })).iconPlacement);
+    } catch (e) {
+      alertUser(`Could not save where the icon shows: ${String(e)}`);
+    }
+  });
 
 /** Every control here changes ONE field; the rest of `thumbnail` is read fresh and kept. */
 async function patchThumbnail(patch: Partial<SettingsView["thumbnail"]>): Promise<void> {
@@ -123,9 +122,12 @@ afterShot.addEventListener("click", (e) => {
   markSegment(afterShot, b.dataset.value!);
   void patchThumbnail({ skip: b.dataset.value === "clipboard" });
 });
-const thumbCornerSel = $("thumbcorner") as HTMLSelectElement;
-thumbCornerSel.addEventListener("change", () => {
-  void patchThumbnail({ corner: thumbCornerSel.value as SettingsView["thumbnail"]["corner"] });
+const CORNERS: readonly { value: SettingsView["thumbnail"]["corner"]; label: string }[] = [
+  { value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" },
+  { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" },
+];
+const thumbCornerSel = buildDropdown($("thumbcorner") as HTMLButtonElement, CORNERS, (picked) => {
+  void patchThumbnail({ corner: picked as SettingsView["thumbnail"]["corner"] });
 });
 
 /**
@@ -193,19 +195,16 @@ $("reclaimspace").addEventListener("click", async () => {
   try { await bridge.reclaimSpace(); } finally { btn.disabled = false; }
 });
 
-const gifFpsSel = $("giffps") as HTMLSelectElement;
-const gifWidthSel = $("gifwidth") as HTMLSelectElement;
-for (const fps of GIF_FPS_OPTIONS) gifFpsSel.add(new Option(`${fps} fps`, String(fps)));
-for (const w of GIF_WIDTH_OPTIONS) gifWidthSel.add(new Option(w === "original" ? "Original" : `${w} px`, String(w)));
 async function patchGif(patch: Partial<GifSettings>): Promise<void> {
   const current = (await bridge.getSettings()).gif;
   await bridge.setSettings({ gif: { ...current, ...patch } });
 }
-gifFpsSel.addEventListener("change", () => void patchGif({ fps: Number(gifFpsSel.value) as GifSettings["fps"] }));
-gifWidthSel.addEventListener("change", () => {
-  const v = gifWidthSel.value;
-  void patchGif({ maxWidth: (v === "original" ? "original" : Number(v)) as GifSettings["maxWidth"] });
-});
+const gifFpsSel = buildDropdown($("giffps") as HTMLButtonElement,
+  GIF_FPS_OPTIONS.map((fps) => ({ value: String(fps), label: `${fps} fps` })),
+  (v) => void patchGif({ fps: Number(v) as GifSettings["fps"] }));
+const gifWidthSel = buildDropdown($("gifwidth") as HTMLButtonElement,
+  GIF_WIDTH_OPTIONS.map((w) => ({ value: String(w), label: w === "original" ? "Original" : `${w} px` })),
+  (v) => void patchGif({ maxWidth: (v === "original" ? "original" : Number(v)) as GifSettings["maxWidth"] }));
 
 // ---- Advanced pane ------------------------------------------------------------
 
@@ -469,15 +468,15 @@ document.addEventListener("keydown", (e) => {
 
 async function loadSettings(): Promise<void> {
   const s = await bridge.getSettings();
-  iconPlacementSel.value = s.iconPlacement;
+  iconPlacementSel.set(s.iconPlacement);
   markSegment(afterShot, s.thumbnail.skip ? "clipboard" : "panel");
-  thumbCornerSel.value = s.thumbnail.corner;
+  thumbCornerSel.set(s.thumbnail.corner);
   shutterBox.checked = s.shutterSound;
   // A stored value that is not offered (a number typed into the file) leaves
   // nothing selected rather than misreporting itself.
   markSegment(countdownGroup, String(s.countdownMs));
-  gifFpsSel.value = String(s.gif.fps);
-  gifWidthSel.value = String(s.gif.maxWidth);
+  gifFpsSel.set(String(s.gif.fps));
+  gifWidthSel.set(String(s.gif.maxWidth));
   showDiagnosticsBox.checked = s.showDiagnostics;
   pipDefault = s.pipStyle;
   drawPip();

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { withoutCountdown } from "./_countdown-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
-import { openSettings } from "./_settings-window.js";
+import { openSettings, pickDropdown } from "./_settings-window.js";
 import { windowCount } from "./_windows.js";
 
 /**
@@ -113,10 +113,69 @@ describe("the Settings window", () => {
     const opts = fresh();
     const win = await launch(opts);
     const settings = await openSettings(app!, win, "output");
-    await settings.selectOption("#giffps", "30");
-    await settings.selectOption("#gifwidth", "original");
+    await pickDropdown(settings, "giffps", "30");
+    await pickDropdown(settings, "gifwidth", "original");
     await expect.poll(() => settingsJson(opts.userData).gif, { timeout: 15_000 })
       .toEqual({ fps: 30, maxWidth: "original" });
+  }, 60_000);
+
+  // "5 or more options: dropdown, the record bar component" (Row pattern spec):
+  // the record bar's own menu and row builder, never a native <select>.
+  test("the dropdowns are the record bar's menu, not native selects", async () => {
+    const opts = fresh();
+    const win = await launch(opts);
+    const settings = await openSettings(app!, win);
+    expect(await settings.locator("select").count()).toBe(0);
+    await expect.poll(() => settings.textContent("#thumbcorner"), { timeout: 10_000 }).toBe("Bottom right");
+    await settings.click("#thumbcorner");
+    const menu = settings.locator("#settings-menu");
+    expect(await menu.getAttribute("class")).toContain("device-menu");
+    expect(await settings.getAttribute("#thumbcorner", "aria-expanded")).toBe("true");
+    expect(await menu.locator(".row").allTextContents())
+      .toEqual(["Bottom right", "Bottom left", "Top right", "Top left"]);
+    // The chosen row is checked, and the menu's rows carry no icon.
+    expect(await menu.locator('.row[aria-checked="true"]').getAttribute("data-key")).toBe("bottom-right");
+    expect(await menu.locator(".row svg:not(.check)").count()).toBe(0);
+    await settings.click('#settings-menu .row[data-key="top-left"]');
+    expect(await menu.isHidden()).toBe(true);
+    expect(await settings.textContent("#thumbcorner")).toBe("Top left");
+    await expect.poll(() => settingsJson(opts.userData).thumbnail?.corner, { timeout: 15_000 }).toBe("top-left");
+  }, 60_000);
+
+  test("a dropdown works from the keyboard, and Escape closes it without a change", async () => {
+    const opts = fresh();
+    const win = await launch(opts);
+    const settings = await openSettings(app!, win, "output");
+    await expect.poll(() => settings.getAttribute("#giffps", "data-value"), { timeout: 10_000 }).not.toBe("");
+    const before = await settings.getAttribute("#giffps", "data-value");
+    await settings.focus("#giffps");
+    await settings.keyboard.press("ArrowDown");
+    expect(await settings.isVisible("#settings-menu")).toBe(true);
+    await settings.keyboard.press("Escape");
+    expect(await settings.isHidden("#settings-menu")).toBe(true);
+    expect(await settings.getAttribute("#giffps", "data-value")).toBe(before);
+    // Focus is back on the trigger, so Enter opens it again; a down-arrow and
+    // Enter pick the next option.
+    expect(await settings.evaluate(() => document.activeElement?.id)).toBe("giffps");
+    await settings.keyboard.press("Enter");
+    await settings.keyboard.press("ArrowDown");
+    const next = await settings.evaluate(() => (document.activeElement as HTMLElement).dataset.key);
+    await settings.keyboard.press("Enter");
+    expect(await settings.isHidden("#settings-menu")).toBe(true);
+    expect(await settings.getAttribute("#giffps", "data-value")).toBe(next);
+    await expect.poll(() => String(settingsJson(opts.userData).gif?.fps), { timeout: 15_000 }).toBe(next);
+  }, 60_000);
+
+  test("a press outside closes the menu, and only one is ever open", async () => {
+    const win = await launch(fresh());
+    const settings = await openSettings(app!, win, "output");
+    await settings.click("#giffps");
+    await settings.click("#gifwidth");
+    expect(await settings.getAttribute("#giffps", "aria-expanded")).toBe("false");
+    expect(await settings.getAttribute("#gifwidth", "aria-expanded")).toBe("true");
+    await settings.mouse.click(400, 40);
+    expect(await settings.isHidden("#settings-menu")).toBe(true);
+    expect(await settings.getAttribute("#gifwidth", "aria-expanded")).toBe("false");
   }, 60_000);
 
   test("When a shot is taken writes the panel's skip preference", async () => {

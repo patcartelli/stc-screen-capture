@@ -45,9 +45,11 @@ Put the window next to each frame and look at row heights, the 16 px group
 radius, the hairlines, heading spacing, the JetBrains Mono values and the
 switch blue.
 
-- **Capture:** the dropdowns open native macOS menus. The frame draws the
-  record bar's own dropdown. That component is a follow-up; the closed state
-  matches the frame.
+- **Dropdowns** (Show icon in, Panel corner, GIF frame rate and max width):
+  each opens the record bar's own menu, below the trigger or above it near
+  the window's bottom, with a check on the current value. Open one with a
+  click or the down arrow, move with the arrows, pick with Return, close with
+  Escape or a click outside. Compare the menu with the record bar's mic menu.
 - **Camera:** dragging Corners and Size moves the preview live. Each switch
   changes the preview, and so does dragging the PiP on the preview (it snaps
   to the edges). Close and reopen Settings: everything you set is still set.

@@ -39,6 +39,8 @@
               // which are themselves excluded above. `document.createElement`
               // makes it a TS2584 here otherwise.
               "app/src/device-menu-dom.ts",
+              // STC-581: the Settings dropdown, the same position (settings-renderer.ts).
+              "app/src/settings-dropdown.ts",
               "app/src/pip-inspector.ts",
               // Same position (STC-477): the still composite shared by the
               // panel and the still editor, both excluded above.
