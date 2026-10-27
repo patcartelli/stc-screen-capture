@@ -642,12 +642,20 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         do {
             try setupWriter()
             armStartPausedFault()
+            // STC-590: the mic and system audio opens take ~170 ms each and used to begin only
+            // after the display stream was up (~250 ms in), so both tracks started ~150 ms after
+            // the screen (measured 2026-10-27: mic 432 ms, system 416 ms, screen 271 ms). They are
+            // started HERE, beside the display stream, so the opens overlap it and land at or just
+            // before the screen's first frame. Still off the critical path: neither is waited on.
+            // A start that fails from here on stops them again (`abandonAudioTracks`).
+            startAudioTracks(system: wantSystemAudio ? target.audioDisplay : nil)
             try startStream(filter: target.filter, sourceRect: target.sourceRect) { [weak self] err in
                 guard let self else { return }
                 if let err {
                     // The tap outlives nothing: this start is over and no
                     // thread has been given the port yet.
                     CFMachPortInvalidate(tap)
+                    self.abandonAudioTracks()
                     self.finishStart(.failure(CaptureError.streamFailed(err)))
                 } else {
                     self.runEventTap(tap)
@@ -670,17 +678,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                         // switched off between the countdown and Record) must not stay lit.
                         WarmCamera.shared.release()
                     }
-                    // STC-233: same off-critical-path reasoning as the camera
-                    // just above — AVCaptureSession.startRunning() blocks, so
-                    // a slow mic must not delay `started`.
-                    if let uid = self.wantMicUid {
-                        self.startMicAsync(deviceUid: uid)
-                    }
-                    // STC-418: not on the critical path either — its own
-                    // stream's start is callback-driven and never waited on.
-                    if wantSystemAudio {
-                        self.startSystemAudio(display: target.audioDisplay)
-                    }
+                    // STC-233 / STC-418: the mic and system audio were started before this
+                    // stream (STC-590, `startAudioTracks` above).
                     // STC-370: a window-scope take polls its own window, since
                     // SCK has no delegate for "this window resized/closed" the
                     // way it has one for the stream dying.
@@ -708,8 +707,37 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         } catch {
             CFMachPortInvalidate(tap)
+            abandonAudioTracks()
             finishStart(.failure(error))
         }
+    }
+
+    /// STC-233 / STC-418 / STC-590: opens the mic and, when asked, the system-audio stream.
+    /// Both are asynchronous (`startMicAsync` hops to a background queue because
+    /// `AVCaptureSession.startRunning()` blocks; the system stream's start is callback-driven), so
+    /// this returns at once. Called before the display stream starts, so their opens overlap it.
+    private func startAudioTracks(system display: SCDisplay?) {
+        if let uid = wantMicUid { startMicAsync(deviceUid: uid) }
+        if let display { startSystemAudio(display: display) }
+    }
+
+    /// STC-590: a start that fails AFTER `startAudioTracks` has nothing else to stop them: the
+    /// caller reports the error and `stop()` is never run on a session that never started. Marks
+    /// the session as stopping, so an open still in flight closes itself on arrival
+    /// (`decideCameraOpen`) instead of being stored, then stops whatever is already open. Their
+    /// files are zero-byte or tiny and the failed take's directory is removed by the caller.
+    private func abandonAudioTracks() {
+        lock.lock()
+        stoppingBegan = true
+        let m = mic
+        let a = systemAudio
+        mic = nil
+        systemAudio = nil
+        lock.unlock()
+        if let m {
+            DispatchQueue.global(qos: .userInitiated).async { m.stop { _ in } }
+        }
+        a?.stop { _ in }
     }
 
     /// The display track's first accepted frame, session-relative; -1 before it.

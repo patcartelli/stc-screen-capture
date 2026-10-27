@@ -34,3 +34,31 @@ Reading them:
 ## Then
 
 Only after the numbers are read: pre-open both during the countdown the way `camera-warm` does, release on cancel / failed start / track off, and re-measure. Not built yet.
+
+## Measured (2026-10-27, Patrick's Mac, started from the menu bar)
+
+| | first sample | screen first frame | lag | open cost |
+|---|---|---|---|---|
+| mic | 432 ms | 271 ms | +161 ms | 176 ms (`discoverMs` 27 + `configureMs` 19 + `startRunningMs` 130) |
+| system | 416 ms | 271 ms | +145 ms | 166 ms (`startCaptureMs`) |
+
+First arrival minus open cost is ~250 ms for both, which is when the display stream came up. Both tracks deliver as soon as they finish opening, so the lag is the **open time**, not first-sample latency (the camera's cause was the opposite). Both opens began only after the display stream was up.
+
+## The fix: start them beside the display stream, not after it
+
+`Capture.begin` calls `startAudioTracks` right before `startStream`, so the opens overlap the display's ~250 ms start. Each takes ~170 ms, so both should now land slightly BEFORE the screen's first frame (~70-90 ms ahead). Patrick accepted "ahead" (2026-10-27): the export starts at the screen's first frame (STC-578) and clips the audio to the same start. No pre-Record indicators, unlike warming at the countdown (not built).
+
+A start that fails after the audio opened (`startStream` error or throw) calls `abandonAudioTracks`, which marks the session stopping, so an open still in flight closes itself on arrival, and stops what is already open. Nothing else would: `stop()` is never run for a session that never started.
+
+## Run on the Mac (from `accounts/stc-590-parallel-audio-start` until it merges)
+
+```
+git fetch origin accounts/stc-590-parallel-audio-start
+git switch --detach origin/accounts/stc-590-parallel-audio-start
+helper/build.sh && npm run app:start
+```
+
+1. **The acceptance.** One 10 s take, mic and system audio on. The `[mic]` and `[system]` lines should show `lag` about -70 to -90 ms (negative = ahead of the screen), not +145/+161.
+2. **Two streams starting together** (system audio's SCStream and the display's). Nothing in this repo has ever overlapped them. Do three takes back to back with system audio on; every one must start, with both `[system]` and the display present. A start error or a take with no system audio is the finding.
+3. **A failed start.** Record with a display that vanishes, or deny a grant, then check the mic's orange dot goes out at once and `Activity Monitor` shows no leftover helper streams.
+4. **The export still opens on the desktop, with audio in sync** (clap or click against the picture).
