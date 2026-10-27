@@ -63,6 +63,9 @@ contextBridge.exposeInMainWorld("recorder", {
   getShot: (dir: string) => ipcRenderer.invoke("library:shot", dir),
   reopenStill: (dir: string) => ipcRenderer.invoke("still:reopen", dir),
   duplicateStill: (dir: string) => ipcRenderer.invoke("still:duplicate", dir),
+  // STC-592: a saved GIF's bytes (its tile) and its Share (the file on the pasteboard).
+  gifBytes: (file: string) => ipcRenderer.invoke("library:gifBytes", file),
+  copyFile: (file: string) => ipcRenderer.invoke("library:copyFile", file),
   start: () => ipcRenderer.invoke("recorder:start"),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),
