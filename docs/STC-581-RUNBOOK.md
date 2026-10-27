@@ -53,20 +53,31 @@ switch blue.
 - **Camera:** dragging Corners and Size moves the preview live. Each switch
   changes the preview, and so does dragging the PiP on the preview (it snaps
   to the edges). Close and reopen Settings: everything you set is still set.
+  The preview's sample screen is 16:9, centred in the stage. Snap the PiP to
+  the bottom-right corner, record a short camera take on a 16:9 display, and
+  open it in the editor: the PiP sits in the same corner at the same size as
+  on the preview.
 - **Shortcuts:** click a keycap, press a chord, and it binds. Clear empties
   it. Restore defaults puts every key back. A key another app already owns
-  shows its reason in amber under the label.
+  shows its reason in amber under the label. A key that bound shows nothing,
+  as the frame draws it. With an empty save folder and the library open
+  beside Settings, rebind Record: the library's empty-state line names the
+  new key without being touched.
 - **Output:** both Change… buttons open the folder picker as a sheet on the
   Settings window, including with the library closed. Clean up… shows its
-  sheet on the Settings window.
+  sheet on the Settings window. With the library open, choose a different
+  save folder: the library's grid switches to that folder's captures.
 - **Advanced:** Show diagnostics shows and hides the table in the library
   window, live.
 
 ## §4 — Settings and a take
 
-Open Settings, then start a recording from the menu bar. The Settings window
-closes before the take starts, so it is not in the recording. Every change
-was already saved.
+1. Open Settings, then start a recording from the menu bar. The Settings
+   window closes before the take starts, so it is not in the recording.
+   Every change was already saved.
+2. Open Settings, press ⌘H to hide the app, then start a recording from the
+   menu bar or a hotkey. Settings does not come back over the overlay or the
+   countdown, and is not in the recording.
 
 ## Known differences from the frames
 
