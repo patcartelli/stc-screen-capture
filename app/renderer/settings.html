@@ -50,6 +50,19 @@
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; }
     body { background: var(--win); color: var(--ink); font: 400 13px/18px var(--ui); -webkit-font-smoothing: antialiased; }
+
+    /* STC-594 spike, behind STC_GLASS_SIDEBAR: the window is vibrancy:
+       "sidebar" (settings-window.ts), so the page leaves the sidebar
+       unpainted and paints everything else opaque. "tint" lays a dark wash
+       over the glass, since the native material follows the system's
+       Light/Dark appearance and this window is dark-always. Under Reduce
+       Transparency the sidebar is painted as it is without the flag. */
+    body.glass-sidebar { background: transparent; }
+    body.glass-sidebar #panes { background: var(--win); }
+    body.glass-sidebar #sidebar { background: transparent; }
+    body.glass-sidebar.glass-tint #sidebar { background: rgb(10 10 10 / .55); }
+    body.glass-sidebar.reduce-transparency #sidebar { background: var(--side); }
+    @media (prefers-reduced-transparency: reduce) { body.glass-sidebar #sidebar { background: var(--side); } }
     button, select, input { font: inherit; color: inherit; }
     /* The shared ring (tokens.css's --focus), inputs included: tokens.css
        leaves inputs alone, and the switch, slider and keycap are inputs here. */

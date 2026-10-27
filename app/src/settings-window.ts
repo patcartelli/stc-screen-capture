@@ -18,6 +18,17 @@ import { settingsBounds } from "./window-size.js";
 /** Traffic lights at Figma's place: 20px in, 22px down (Settings frames). */
 const TRAFFIC_LIGHTS = { x: 20, y: 22 };
 
+/**
+ * STC-594 spike: `STC_GLASS_SIDEBAR=clear|tint` makes the sidebar native
+ * glass (public `vibrancy: "sidebar"`, an NSVisualEffectView behind the page,
+ * no transparent window). Off by default; docs/STC-594-SPIKE.md is the
+ * runbook. Anything else, or unset, is the opaque window it always was.
+ */
+function glassSidebar(): "clear" | "tint" | null {
+  const v = process.env.STC_GLASS_SIDEBAR;
+  return v === "clear" || v === "tint" ? v : null;
+}
+
 let win: BrowserWindow | undefined;
 
 export interface SettingsWindowOptions {
@@ -37,13 +48,17 @@ export function openSettingsWindow(opts: SettingsWindowOptions): void {
     return;
   }
   const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const glass = process.platform === "darwin" ? glassSidebar() : null;
   const w = new BrowserWindow({
     ...settingsBounds(area),
     resizable: false, maximizable: false, fullscreenable: false,
     title: `${PRODUCT_NAME} Settings`,
     titleBarStyle: "hidden",
     trafficLightPosition: TRAFFIC_LIGHTS,
-    backgroundColor: "#0c0c0c",
+    // A vibrancy window keeps a clear background, or the colour covers the glass.
+    ...(glass
+      ? { vibrancy: "sidebar" as const, visualEffectState: "followWindow" as const, backgroundColor: "#00000000" }
+      : { backgroundColor: "#0c0c0c" }),
     show: false,
     webPreferences: {
       preload: join(opts.dist, "settings-preload.cjs"),
@@ -62,7 +77,7 @@ export function openSettingsWindow(opts: SettingsWindowOptions): void {
     opts.onClosed();
   });
   void w.loadFile(join(opts.rendererDir, "settings.html"), {
-    query: { reduceTransparency: nativeTheme.prefersReducedTransparency ? "1" : "0" },
+    query: { reduceTransparency: nativeTheme.prefersReducedTransparency ? "1" : "0", ...(glass ? { glass } : {}) },
   });
 }
 

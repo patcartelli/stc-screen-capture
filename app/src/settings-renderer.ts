@@ -95,6 +95,10 @@ showPane("capture");
 
 // Reduce Transparency (STC-586): main reads nativeTheme and says so.
 document.body.classList.toggle("reduce-transparency", params.get("reduceTransparency") === "1");
+// STC-594 spike: main says whether the window is a glass-sidebar window.
+const glass = params.get("glass");
+document.body.classList.toggle("glass-sidebar", glass === "clear" || glass === "tint");
+document.body.classList.toggle("glass-tint", glass === "tint");
 bridge.on("settings:reduced-transparency", (on: boolean) => {
   document.body.classList.toggle("reduce-transparency", on === true);
 });
