@@ -87,7 +87,7 @@ describe("listLibrary — one index, both kinds", () => {
     const { items, invalid } = await listLibrary(env(), null);
     expect(invalid, JSON.stringify(invalid)).toEqual([]);
     expect(items.map((i) => i.kind)).toEqual(["still", "still"]);
-    expect(items.map((i) => i.badge)).toEqual(["Still", "Still"]);
+    expect(items.map((i) => i.badge)).toEqual(["Shot", "Shot"]);
   });
 
   test("a mixed library interleaves by time, not by kind", async () => {
@@ -222,7 +222,7 @@ describe("the presentation each kind owns", () => {
     // The size is the readout and the size column (STC-584); the mode and the
     // redactions are the tooltip.
     expect(item!.readout).toBe("720 × 480  ·  " + item!.columns.file);
-    expect(item!.columns).toMatchObject({ type: "Still", length: "–", size: "720 × 480" });
+    expect(item!.columns).toMatchObject({ type: "Shot", length: "–", size: "720 × 480" });
     expect(item!.notes.join(" ")).toContain("Window + shadow");
     expect(item!.notes.join(" ")).toContain("1 redaction");
     // Singular, not "1 redactions" — the one thing about this line a person

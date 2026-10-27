@@ -141,7 +141,7 @@ export interface LibraryAlert { label: string; detail: string }
  * nothing to say (a still's length), so no column is ever blank.
  */
 export interface LibraryColumns {
-  /** "Recording" or "Still". */
+  /** "Recording" or "Shot". */
   type: string;
   /** "0:42", or "–". */
   length: string;
@@ -188,7 +188,7 @@ export interface LibraryItem {
   id: string;
   kind: LibraryKind;
   /**
-   * The kind, as a word ("Recording", "Still"). The list's Type column, and
+   * The kind, as a word ("Recording", "Shot"). The list's Type column, and
    * `data-type` on every tile. Data, not a branch.
    */
   badge: string;
@@ -263,10 +263,9 @@ export interface LibraryFilter { id: string; label: string }
 export const LIBRARY_FILTERS: readonly LibraryFilter[] = [
   { id: "all", label: "All" },
   { id: "recording", label: "Recordings" },
-  // "Stills", the ticket's own word (STC-584), where STC-398 had "Shots". The
-  // library names the KIND; the hotkeys and the menu bar name the ACTION, and
-  // keep "Shot".
-  { id: "still", label: "Stills" },
+  // "Shots", STC-398's word for the artefact. STC-584's frames say "Stills";
+  // the library keeps "Shot" like the rest of the app (Patrick, 2026-10-27).
+  { id: "still", label: "Shots" },
 ];
 
 export const DEFAULT_LIBRARY_FILTER = "all";
@@ -554,14 +553,14 @@ export function stillItem(s: StillInfo): LibraryItem {
   return {
     id: s.name,
     kind: "still",
-    badge: "Still",
+    badge: "Shot",
     dir: s.dir,
     file: s.file,
     createdAt: s.capturedAt,
     bytes: s.bytes,
     label: s.label,
     readout: readoutLine(size, s.bytes),
-    columns: { type: "Still", length: NO_VALUE, size, file: fmtBytes(s.bytes) },
+    columns: { type: "Shot", length: NO_VALUE, size, file: fmtBytes(s.bytes) },
     chip: formatChip(s.file),
     alerts: [],
     notes: [notes.join(" · ")],
@@ -657,14 +656,15 @@ export function looseFileItem(f: FinishedFileInfo): LibraryItem {
   return {
     id: f.id,
     kind,
-    // STC-584 names the kind "Still" in the library (see LIBRARY_FILTERS).
-    badge: kind === "recording" ? "Recording" : "Still",
+    // "Shot", not "Still" — STC-398 renamed the artefact and STC-407 cleaned
+    // up the residue (and STC-584 kept it, see LIBRARY_FILTERS).
+    badge: kind === "recording" ? "Recording" : "Shot",
     dir: f.dir,
     file: f.file,
     createdAt: f.createdAt,
     bytes: f.bytes,
     readout: readoutLine(size, f.bytes),
-    columns: { type: kind === "recording" ? "Recording" : "Still", length: length ?? NO_VALUE,
+    columns: { type: kind === "recording" ? "Recording" : "Shot", length: length ?? NO_VALUE,
                size, file: fmtBytes(f.bytes) },
     chip: length ?? formatChip(f.file),
     alerts: [],

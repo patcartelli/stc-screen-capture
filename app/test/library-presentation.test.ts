@@ -101,9 +101,9 @@ describe("search", () => {
 });
 
 describe("the filter (STC-584)", () => {
-  test("is All, Recordings, Stills — no GIFs chip while the library cannot list one", () => {
+  test("is All, Recordings, Shots — no GIFs chip while the library cannot list one", () => {
     // A saved GIF is untagged (STC-395) and outside the scan; a chip that is
     // always empty would say there are none.
-    expect(LIBRARY_FILTERS.map((f) => f.label)).toEqual(["All", "Recordings", "Stills"]);
+    expect(LIBRARY_FILTERS.map((f) => f.label)).toEqual(["All", "Recordings", "Shots"]);
   });
 });
