@@ -21,6 +21,7 @@ changed.
 - **Dead-simple UI**: press Record, say what you want to say, press Stop
 - **Precise cursor**: real macOS pointer art (arrow, I-beam, hand, crosshair) with smooth motion and click highlights
 - **Picture-in-picture camera**: seamlessly composite your face on the video at any corner
+- **Audio**: record your microphone and system audio, set a level for each, mute either, and clean up your narration
 - **Smart trimming**: frame-accurate scrubber with rubber-band clamping, no off-by-one surprises
 - **Auto-zoom**: intelligently zoom to regions where you clicked, or manually set zoom windows
 - **Export dialogs**: choose output resolution and format (MP4 H.264)
@@ -175,7 +176,6 @@ Why? Because:
   approaches the practical ceiling
 - **Auto-zoom stage 1**: Currently responds to clicks and drags only; keystroke-based changes are
   recorded but not auto-zoomed (see auto-zoom stage 2, not yet implemented)
-- **No audio**: Microphone capture is not implemented (phase 4 consideration)
 - **No published release yet**: `npm run app:package` builds a real, signed `.app` locally, but
   nothing is published for download — see "Name and identity" below
 
@@ -492,6 +492,7 @@ picture-in-picture, all verified on hardware.
 - ✅ Auto-zoom stage 1 (clicks/drags trigger zoom)
 - ✅ Manual zoom override (per-window geometry and easing)
 - ✅ Picture-in-picture camera
+- ✅ Audio: microphone and system audio capture, mixing with per-track levels and mutes, and narration cleanup
 - ✅ Screenshot stills with decoration (effects, redaction, annotation)
 - ✅ Library with search and organize
 - ✅ Real macOS cursor art (arrow, I-beam, hand, crosshair)
@@ -501,7 +502,6 @@ picture-in-picture, all verified on hardware.
 ### In progress / planned (phase 4+)
 
 - ⏳ Auto-zoom stage 2 (change detection decides WHERE to zoom)
-- ⏳ Audio capture and mixing
 - ⏳ HDR support
 - ⏳ Multi-monitor recording
 - 🔄 Keyboard input recording (privacy consideration — scope TBD)
