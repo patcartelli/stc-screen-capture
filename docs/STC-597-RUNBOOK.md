@@ -4,9 +4,14 @@ Run from the branch `accounts/stc-597-menu-bar-item-icons-assess-libraries-then-
 (not on `master` until the PR merges).
 
 ```
-git fetch origin && git checkout accounts/stc-597-menu-bar-item-icons-assess-libraries-then-add-to-the-tray
+git fetch origin && git checkout --detach origin/accounts/stc-597-menu-bar-item-icons-assess-libraries-then-add-to-the-tray
 npm ci && npm run app:start
 ```
+
+`--detach`, because the branch is checked out in the session's worktree
+(`.claude/worktrees/stc-597-menu-icons`) and git refuses a second checkout of
+it. That worktree already has `node_modules`, so running `npm run app:start`
+from inside it works too.
 
 ## What was and was not checked
 
