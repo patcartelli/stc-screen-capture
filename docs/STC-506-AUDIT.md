@@ -135,3 +135,25 @@ control a Tab reaches in every pane, the radio keys, the keycap's focus, the
 PiP's arrow keys, the switch's reduced-motion crossfade. All five fail on the
 pre-fix files. What only a Mac can judge is `docs/STC-587-RUNBOOK.md`.
 
+
+## STC-587 — the rebuilt Library window (2026-10-27)
+
+STC-584 rebuilt the Library to Capture SK 016's frames, which is what the
+Library half of STC-587 was waiting for. This row is the window as it is now,
+AFTER the fix pass.
+
+| Surface (file) | hover | focus-visible | active | disabled | loading | keyboard path | reduced motion |
+|---|---|---|---|---|---|---|---|
+| **Library** (`index.html`, `library-view.ts`) | ok — segments, Share, •••, the gear, menu rows, a tile's picture border, a row's background, the empty state's buttons (those had none) | ok — tokens.css's ring on every button and the tile's picture. Menu rows draw it inset (was `outline: none`, a background only). The rename field gets the search field's ring (it had none) | ok — a press state on every control above (was none) | ok — the grants panel's buttons dim; nothing else in the window disables | ok — the list is `aria-busy` while it loads or catches up, with a spinner or an "Updating" note (STC-521) | ok — Grid/List and the kind filter are radio groups (one Tab stop, arrows/Home/End choose; were one stop per option), and a keyboard pick keeps the focus through the bar's redraw (it fell to the page). Return/Space on a picture opens it. The overflow menu adds Home/End, and Tab closes it like Escape (it stayed open behind the focus). Every list redraw keeps the focus on the same item's control, or on the item that took its place after a delete (it fell to the page on every rename, delete and filter). A rename returns the focus to •••, and its Enter no longer reopens the menu | ok — nothing in the Library animates but the loading spinner, which stops under Reduce motion. The title bar's blur is not motion; Reduce Transparency makes it solid (STC-586) |
+
+**axe** (`npm run axe:renderers`, which now hands the Library a stubbed list of
+a recording and a shot, so axe sees tiles, rows and their controls rather than
+the empty state; it audits the grants panel, the grid, an open overflow menu
+and the list): zero violations, light and dark. It found `--ink-5` at 4.49:1
+(the list's column headers, the count, the grants panel's note), now `.48`
+alpha instead of the frames' `.45`, as Settings' `--heading` was.
+
+**e2e:** `app/test/library-a11y.e2e.test.ts` (Linux, Xvfb): the ring on every
+control a Tab reaches, the radio groups and their focus through a redraw, the
+overflow menu's keys, and a rename's focus round trip. All four fail on the
+pre-fix files. What only a Mac can judge is `docs/STC-587-RUNBOOK.md` §5-§7.

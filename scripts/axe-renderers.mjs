@@ -40,6 +40,25 @@ for (const scheme of ["light", "dark"]) {
       for (const k of ["overlay", "countdown", "pill", "toast", "thumbnail", "editor", "stc", "recorder", "still", "copyRender", "stillEditor", "settingsBridge"]) {
         try { Object.defineProperty(window, k, { value: stub(), configurable: true, writable: true }); } catch { /* already defined */ }
       }
+      // The Library (STC-587) lists two captures, so axe sees tiles, rows and
+      // their controls rather than the empty state a stub list would draw.
+      const action = (id, label, place) => ({ id, label, place });
+      const item = (id, kind, badge, chip, alerts) => ({
+        id, kind, badge, chip, alerts, createdAt: 0, bytes: 2_400_000, readout: "1080p  ·  2.4 MB", notes: [],
+        columns: { type: badge, length: chip.includes(":") ? chip : "–", size: "1080p", file: "2.4 MB" },
+        thumbnail: { source: "none" },
+        actions: [action("open", "Open", "tile"), action("share", "Share", "primary"),
+                  action("rename", "Rename", "menu"), action("reveal", "Show in Finder", "menu"), action("delete", "Delete", "menu")],
+      });
+      const list = {
+        items: [item("2026-10-27_14-30", "recording", "Recording", "0:42", [{ label: "Stopped early", detail: "Stopped at 0:42." }]),
+                item("2026-10-27_14-31", "still", "Shot", "PNG", [])],
+        invalid: [], folder: { state: "ok" }, filter: "all",
+        filters: [{ id: "all", label: "All" }, { id: "recording", label: "Recordings" }, { id: "still", label: "Shots" }, { id: "gif", label: "GIFs" }],
+      };
+      const lib = { library: async () => list, getSettings: async () => ({ libraryView: "grid" }) };
+      const recorder = new Proxy({}, { get: (_t, k) => lib[k] ?? (() => Promise.resolve(stub())) });
+      Object.defineProperty(window, "recorder", { value: recorder, configurable: true, writable: true });
     });
     page.on("pageerror", () => {});
     await page.goto(new URL(name, `file://${dir}`).href);
@@ -48,12 +67,17 @@ for (const scheme of ["light", "dark"]) {
     // A window whose panes are `hidden` until picked (Settings, STC-587) is
     // audited once per pane: axe skips hidden nodes, so one run would see
     // only the first.
+    // The Library is audited with the required-grants panel up (the stub has
+    // no grants), then with it down in both views and with an overflow menu
+    // open, for the same reason.
     const panes = await page.$$eval("#sidebar button[data-pane]", (bs) => bs.map((b) => b.dataset.pane));
-    for (const pane of panes.length ? panes : [null]) {
-      if (pane) {
-        await page.click(`#sidebar button[data-pane="${pane}"]`);
-        await page.waitForTimeout(100);
-      }
+    const libraryStates = name === "index.html" ? ["permissions", "grid", "menu", "list"] : [];
+    for (const pane of panes.length ? panes : libraryStates.length ? libraryStates : [null]) {
+      if (pane === "list") await page.click('[data-view="list"]');
+      else if (pane === "menu") await page.click(".libmore");
+      else if (pane === "grid") await page.evaluate(() => document.getElementById("permissionsheet")?.classList.remove("open"));
+      else if (pane && pane !== "permissions") await page.click(`#sidebar button[data-pane="${pane}"]`);
+      if (pane) await page.waitForTimeout(100);
       const r = await page.evaluate(() => axe.run(document, {
         resultTypes: ["violations"], runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] },
       }));

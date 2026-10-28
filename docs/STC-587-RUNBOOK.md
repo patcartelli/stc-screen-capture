@@ -1,9 +1,11 @@
-# STC-587 — Settings focus and reduced motion: what only a Mac can settle
+# STC-587 — focus and reduced motion in Settings and the Library: what only a Mac can settle
 
-The Settings half of STC-587, on STC-506's rules. The audit row is the last
-section of `docs/STC-506-AUDIT.md`. The Library half waits for STC-584.
+STC-587 on STC-506's rules, in two halves: Settings (§1-§4, on `master`) and
+the Library (§5-§7, after STC-584's rebuild). The audit rows are the last two
+sections of `docs/STC-506-AUDIT.md`.
 
-Run it from `claude/brave-brown-z2zjmb` until the PR merges, then from `master`:
+The Settings half is on `master`. Run the Library half from
+`claude/brave-brown-z2zjmb` until its PR merges, then from `master`:
 
 ```
 git fetch origin claude/brave-brown-z2zjmb && git checkout claude/brave-brown-z2zjmb
@@ -54,3 +56,40 @@ System Settings › Accessibility › Display › Reduce motion, on.
   more on press. Judge whether they are too strong for the frames.
 - Section headings and notes are slightly brighter (`.48` white instead of
   Figma's `.45`), the smallest change that clears AA contrast.
+
+## §5 — the Library, keyboard only
+
+Open the Library with a few recordings and shots in it, and put the mouse away.
+
+1. Tab from the window's start: Grid/List, the kind filter, Search, the
+   gear, then each item's picture, Share and •••, in order. Every stop shows
+   the blue ring. The ring on a picture sits clear of its rounded corners.
+2. Grid/List and the kind filter each take ONE Tab stop. ←/→ move and
+   choose; Home/End go to the ends. After a pick the ring stays on the chosen
+   segment (it used to fall off when the bar redrew).
+3. Return or Space on a picture opens it, as a click does.
+4. Return on ••• opens the menu on its first row. ↑/↓ move, Home/End go to
+   the ends, and each row shows the ring drawn INSIDE the row. Escape or Tab
+   closes it with the ring back on •••.
+5. Rename from that menu: the name field shows the ring. Escape leaves the
+   name alone and puts the ring back on •••. Rename again, type, Return: the
+   new name shows and the ring is still on that item's •••.
+6. Delete an item from its menu and confirm: the ring lands on the item that
+   took its place (the next one, or the last if it was the last).
+
+## §6 — the Library, VoiceOver
+
+Grid/List reads as "View, radio group" and the filter as "Show, radio
+group", each option as a radio button with its state. A picture reads as its
+action and its name ("Open login bug, button").
+
+## §7 — the Library, what changed visually
+
+- Press states, which the Library had none of: Grid/List and the filter,
+  Share, •••, the gear, menu rows, a tile's picture border and a row's
+  background, the empty state's buttons. Judge whether they are too strong.
+- The list's column headers, the item count and the grants panel's note are
+  slightly brighter (`.48` white instead of the frames' `.45`), the smallest
+  change that clears AA, as in Settings.
+- Nothing in the Library moves, so Reduce motion changes nothing there except
+  the loading spinner, which stops (already true before this).
