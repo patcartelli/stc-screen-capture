@@ -20,7 +20,24 @@
     /* --bookmark (STC-444 slice 4): a marker's own color, distinct from the
        played bar / selection's --accent (blue) and the Zoom lane's --zoom
        (orange) so a bookmark reads as its own kind of mark on the ruler. */
-    :root { --clip: #6a8fd8; --zoom: #d88a3b; --zoom-fill: #4f7fe0; --bookmark: #e0c14f; --wave: #5fb38a; --wave-clip: var(--rec); --audio-lane-h: 56px; --lane-pad: 12px; }
+    /* STC-601 (Slate + Brass, chosen from the STC-600 explorations): ONE
+       primary, teal, draws the waveform and the Clip lane's activity; every
+       other color is an accent with one job. Brass is the Zoom lane (fill,
+       outline, selection). Red is audio PEAKS only (--wave-clip), not the
+       shared --rec, so a recording red elsewhere never reads as "clipping".
+       Slate is the lane labels. The bookmark is clay: it was yellow, which
+       sat 1.15:1 from brass and read as part of the zoom lane. Contrast on
+       --bg-deep / --surface: teal 7.0 / 6.0, brass 9.8 / 8.4, red 5.0 / 4.3,
+       slate 9.4 / 8.1, clay 6.2 / 5.3 — all above the 3:1 a graphic needs.
+       Red and teal are within 1.4:1 of each other in luminance, so a peak
+       also carries a non-color cue (a tick at the lane's top edge,
+       drawAudioLane). */
+    :root { --clip: #6fa3a0; --zoom: #d6b25e; --zoom-fill: var(--zoom); --bookmark: #c97b6a; --wave: var(--clip); --wave-clip: #e5483f; --lane-label: #a9b4c2; --audio-lane-h: 56px; --lane-pad: 12px; }
+    /* The editor's own accent (STC-601): the played bar, focus rings and the
+       pressed states follow the primary instead of the app's blue. tokens.css's
+       --accent is untouched, so Library, Settings and the still editor keep
+       theirs; this sheet loads later at the same specificity. */
+    :root[data-surface="dark"] { --accent: var(--clip); --accent-soft: color-mix(in srgb, var(--clip) 18%, transparent); }
     /* STC-444 (Figma pass, 2026-09-24): the editor is ALWAYS dark, per
        Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
        "follow the OS" default (the still editor was moved OFF forced dark
@@ -518,7 +535,7 @@
        ratio leaves it a pixel off; smoothing would blur the dither's edges. */
     #zoom-curve { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
     .lanelabel { position: absolute; left: 4px; top: 2px; font-size: var(--type-label);
-                 text-transform: uppercase; letter-spacing: var(--type-label-tracking); opacity: .5;
+                 text-transform: uppercase; letter-spacing: var(--type-label-tracking); color: var(--lane-label); opacity: .9;
                  pointer-events: none; z-index: 4; }
 
     .trimbar { display: flex; align-items: center; gap: 8px; font-size: var(--type-body); }
