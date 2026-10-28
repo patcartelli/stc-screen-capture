@@ -86,6 +86,30 @@ describe("Settings: focus and reduced motion (STC-587)", () => {
     expect(seen.some((k) => k.startsWith("shortcuts:shortcut-"))).toBe(true);
   }, 120_000);
 
+  test("the sidebar is one Tab stop, and ↑/↓/Home/End show each pane (STC-595)", async () => {
+    const win = await launch(mkdtempSync(join(tmpdir(), "stc-ud-")));
+    const settings = await openSettings(app!, win);
+    const stops = () => settings.$$eval("#sidebar button", (bs) => bs.map((b) => (b as HTMLButtonElement).tabIndex));
+    const shown = () => settings.$$eval(".pane", (ps) => ps.filter((p) => !(p as HTMLElement).hidden).map((p) => p.id));
+    expect(await stops()).toEqual([0, -1, -1, -1, -1]);
+    await settings.focus('#sidebar button[data-pane="capture"]');
+    await settings.keyboard.press("ArrowDown");
+    expect(await shown()).toEqual(["pane-camera"]);
+    expect(await settings.evaluate(() => (document.activeElement as HTMLElement).dataset.pane)).toBe("camera");
+    expect(await stops()).toEqual([-1, 0, -1, -1, -1]);
+    await settings.keyboard.press("End");
+    expect(await shown()).toEqual(["pane-advanced"]);
+    // No wrap at the ends.
+    await settings.keyboard.press("ArrowDown");
+    expect(await shown()).toEqual(["pane-advanced"]);
+    await settings.keyboard.press("Home");
+    await settings.keyboard.press("ArrowUp");
+    expect(await shown()).toEqual(["pane-capture"]);
+    // Tab leaves the sidebar for the pane in one stop.
+    await settings.keyboard.press("Tab");
+    expect((await focused(settings))?.pane).toBe("pane-capture");
+  }, 60_000);
+
   test("a segmented control is one Tab stop, and the arrow keys choose", async () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const win = await launch(userData);

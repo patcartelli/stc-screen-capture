@@ -36,8 +36,11 @@
       --fill: rgba(255, 255, 255, .06);
       --fill-on: rgba(255, 255, 255, .14);
       /* Pointer states (STC-587): a hover lifts a control, a press lifts it more. */
-      --hover: rgba(255, 255, 255, .06);
-      --press: rgba(255, 255, 255, .11);
+      /* The Library's steps (STC-595, Patrick 2026-10-28: "match the
+         Library"): its --fill-2 for a hover and its --press for a press. At
+         .06/.11 the hovers here barely read on the Mac. */
+      --hover: rgba(255, 255, 255, .08);
+      --press: rgba(255, 255, 255, .16);
       --edge: rgba(255, 255, 255, .12);
       --edge-strong: rgba(255, 255, 255, .14);
       /* The switch and slider blue: tokens.css's dark --accent (data-surface="dark"). */
@@ -66,7 +69,7 @@
       -webkit-app-region: no-drag; text-align: left; border: 0; background: transparent;
       padding: 7px 10px; border-radius: 8px; color: var(--ink-dim); cursor: default;
     }
-    #sidebar button:hover { background: var(--hover); }
+    #sidebar button:not([aria-current]):hover { background: var(--hover); }
     #sidebar button:active { background: var(--press); }
     #sidebar button[aria-current="page"] { background: rgba(255, 255, 255, .08); color: #fff; font-weight: 500; }
 
