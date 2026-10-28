@@ -4,11 +4,12 @@ STC-587 on STC-506's rules, in two halves: Settings (§1-§4, on `master`) and
 the Library (§5-§7, after STC-584's rebuild). The audit rows are the last two
 sections of `docs/STC-506-AUDIT.md`.
 
-The Settings half is on `master`. Run the Library half from
-`claude/brave-brown-z2zjmb` until its PR merges, then from `master`:
+Both halves are on `master` (the Library half merged as #395). STC-593's
+GIF check (§7) is on `claude/wonderful-babbage-fbqb2g` until its PR merges,
+then on `master`:
 
 ```
-git fetch origin claude/brave-brown-z2zjmb && git checkout claude/brave-brown-z2zjmb
+git fetch origin claude/wonderful-babbage-fbqb2g && git checkout claude/wonderful-babbage-fbqb2g
 npm ci && npm run app:start
 ```
 
@@ -91,5 +92,10 @@ action and its name ("Open login bug, button").
 - The list's column headers, the item count and the grants panel's note are
   slightly brighter (`.48` white instead of the frames' `.45`), the smallest
   change that clears AA, as in Settings.
-- Nothing in the Library moves, so Reduce motion changes nothing there except
-  the loading spinner, which stops (already true before this).
+- Two things move in the Library: the loading spinner, and a saved GIF's
+  thumbnail while the pointer is over its tile (STC-592). Under Reduce
+  motion the spinner stops and the GIF keeps its first frame (STC-593). To
+  check the GIF: save one from a recording's panel (Video/GIF switch, then
+  Save), point at its tile with Reduce motion off (it plays) and on (it does
+  not), and move away (it goes back to the first frame). It plays on pointer
+  hover only, never on keyboard focus (Patrick, 2026-10-28).
