@@ -230,9 +230,12 @@
        same as #audiopanel (STC-483, Patrick 2026-10-16: the earlier over-the-
        stage placement collided with the timeline lanes). It can cover the PiP
        while open; a press on the PiP's overlay closes it and a drag re-opens it. */
-    #pippanel { position-anchor: --pipbtn; position-area: top span-left; margin: 0 0 6px;
-                position-try-fallbacks: flip-block; inset: auto; overflow: auto; box-sizing: border-box;
-                width: 340px; max-height: calc(100vh - 80px);
+    /* STC-603: the buttons live in the pane now, so the popovers are pinned
+       inside the pane's own column (right edge, under the title bar) instead
+       of opening leftward from their button, which put them over the preview
+       stage and the PiP the Camera panel is there to adjust. */
+    #pippanel { position: fixed; inset: 112px 8px auto auto; margin: 0; overflow: auto; box-sizing: border-box;
+                width: 340px; max-height: calc(100vh - 128px);
                 padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                 background: var(--surface, var(--bg)); color: var(--text);
                 box-shadow: var(--shadow-card); }
@@ -253,8 +256,7 @@
        shows what is HEARD (after cleanup, level and mute) with a clip mark for
        the mix's hard limit. The thumb is styled (not native) so the tick's
        position is arithmetic: 6px + (100% - 12px) * --unity. */
-    #audiopanel { position-anchor: --audiobtn; position-area: top span-left; margin: 0 0 6px;
-                  position-try-fallbacks: flip-block; inset: auto;
+    #audiopanel { position: fixed; inset: 112px 8px auto auto; margin: 0;
                   padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
                   background: var(--surface, var(--bg)); color: var(--text);
                   box-shadow: var(--shadow-card);
