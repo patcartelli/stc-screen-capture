@@ -10,6 +10,7 @@ import {
 import type { MenuRow } from "./device-picker.js";
 import { iconSvg, type Glyph } from "./icons.js";
 import { buildMenuRow } from "./device-menu-dom.js";
+import { legendItems } from "./legend.js";
 
 /**
  * The overlay's view (STC-290). It draws state and reports input; it decides
@@ -161,21 +162,20 @@ function hide(...els: HTMLElement[]): void {
 }
 
 function renderLegend(mode: string, phase: OverlayPayload["phase"]): void {
-  if (phase === "options") {
-    // "Click", not "Return": in the options phase Return re-confirms the
-    // selection (selection.ts `confirm` → nextPhase "options"), it does not
-    // start the take. The ↵ on the button is decorative (STC-456).
-    legend.innerHTML = `Adjust selection <span class="sep">·</span>` +
-      `Click <b>Capture Video</b> <span class="sep">·</span><kbd>Esc</kbd> cancel`;
-  } else {
-    legend.innerHTML = mode === "window"
-      ? `<kbd>Click</kbd> select window <span class="sep">·</span>` +
-        `<kbd>Space</kbd> region <span class="sep">·</span><kbd>Esc</kbd> cancel`
-      : `<kbd>Drag</kbd> region <span class="sep">·</span>` +
-        `<kbd>Space</kbd> window <span class="sep">·</span><kbd>Esc</kbd> cancel`;
-  }
+  // The words are legend.ts's; this only draws them.
+  legend.replaceChildren(...legendItems(mode, phase).map((item) => {
+    const el = document.createElement("span");
+    el.className = "item";
+    for (const key of item.keys) {
+      const cap = document.createElement("kbd");
+      cap.textContent = key;
+      el.append(cap);
+    }
+    el.append(item.label);
+    return el;
+  }));
   legend.style.bottom = "48px";
-  legend.style.display = "block";
+  legend.style.display = "flex";
 }
 
 function placeAt(el: HTMLElement, r: Rect): void {
