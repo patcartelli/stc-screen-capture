@@ -13,6 +13,13 @@ npm ci && npm run app:start
 it. That worktree already has `node_modules`, so running `npm run app:start`
 from inside it works too.
 
+## Result (Patrick, 2026-10-28)
+
+§1 CONFIRMED: the template icons follow light and dark. §2 CONFIRMED: Patrick
+reviewed the open menu in both appearances and signed off. The sections below
+are kept as the procedure, and the note under "What was and was not checked"
+about nothing having been seen is as of the build session, before this.
+
 ## What was and was not checked
 
 Checked in code (`app/test/tray-menu.test.ts`): which items carry a glyph and
