@@ -3,6 +3,7 @@ import {
   TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, STOP_RECORDING_LABEL, SETTINGS_ACCELERATOR,
   bgraFromMask, marqueeMask, trayTemplate,
 } from "../src/tray-menu.js";
+import { TRAY_GLYPHS, trayGlyphMask } from "../src/tray-icons.js";
 import {
   BINDABLE_ACTIONS, SHOT_ACTIONS, DEFAULT_SHORTCUTS,
 } from "../src/hotkeys.js";
@@ -109,6 +110,68 @@ describe("the menu", () => {
       expect(item.label, item.id).toBeTruthy();
     }
   });
+});
+
+describe("menu item icons (STC-597)", () => {
+  const rest = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS });
+
+  test("every item has an icon except About and Quit", () => {
+    const bare = rest.filter((i) => i.type !== "separator" && !i.icon).map((i) => i.id);
+    expect(bare).toEqual(["about", "quit"]);
+  });
+
+  test("every icon an item names is one the generated set holds", () => {
+    for (const item of rest) if (item.icon) expect(TRAY_GLYPHS, item.id).toContain(item.icon);
+  });
+
+  test("no two items draw the same glyph, except Record against its own stop state", () => {
+    const glyphs = rest.flatMap((i) => (i.icon ? [i.icon] : []));
+    expect(new Set(glyphs).size).toBe(glyphs.length);
+  });
+
+  test("mid-take Record draws a stop glyph, not the record dot", () => {
+    const at = (recording: boolean) =>
+      trayTemplate({ shortcuts: DEFAULT_SHORTCUTS, recording }).find((i) => i.id === "action:record")!;
+    expect(at(false).icon).toBe("record");
+    expect(at(true).icon).toBe("record-stop");
+  });
+
+  for (const glyph of TRAY_GLYPHS) {
+    describe(glyph, () => {
+      const sizes = [16, 32] as const;
+      const ink = (m: Uint8Array) => m.reduce((n, a) => n + a, 0) / 255;
+
+      for (const size of sizes) {
+        test(`${size}px is ${size * size} bytes of real, anti-aliased alpha`, () => {
+          const mask = trayGlyphMask(glyph, size);
+          expect(mask.length).toBe(size * size);
+          // Some ink, and some partial alpha: a 0/255-only mask would be a
+          // thresholded drawing, not a rasterised one.
+          expect(ink(mask)).toBeGreaterThan(size * size * 0.05);
+          expect(mask.some((a) => a > 0 && a < 255)).toBe(true);
+        });
+
+        test(`${size}px never has a stroke cut off by the edge of its box`, () => {
+          // Not "empty": Material's timer draws its top bar to within a
+          // fraction of a pixel of the box, so the outer ring may carry a faint
+          // anti-aliased edge (measured 48/255 at 16px). A cut stroke would be
+          // solid there.
+          const mask = trayGlyphMask(glyph, size);
+          for (let i = 0; i < size; i++) {
+            for (const [x, y] of [[i, 0], [i, size - 1], [0, i], [size - 1, i]] as const) {
+              expect(mask[y * size + x], `${x},${y}`).toBeLessThan(96);
+            }
+          }
+        });
+      }
+
+      test("2x is the same drawing as 1x: ink share within 20%", () => {
+        const a = ink(trayGlyphMask(glyph, 16)) / 256;
+        const b = ink(trayGlyphMask(glyph, 32)) / 1024;
+        expect(Math.abs(a - b) / b).toBeLessThan(0.2);
+      });
+    });
+  }
 });
 
 describe("the icon", () => {

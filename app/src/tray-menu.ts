@@ -15,13 +15,41 @@ import {
   ACTION_LABELS, BINDABLE_ACTIONS,
   type BindableAction, type Shortcuts,
 } from "./hotkeys.js";
+import type { TrayGlyph } from "./tray-icons.js";
 
 export type TrayItemId = `action:${BindableAction}` | "library" | "editor" | "settings" | "about" | "quit" | "separator";
+
+/**
+ * Which glyph each action's menu item draws (STC-597). Keyed by
+ * `BindableAction`, so a new action fails the typecheck here until it is given
+ * a glyph or an explicit decision not to.
+ *
+ * The glyphs are Material Symbols w300, the app's own set, rasterised for a
+ * native menu by `scripts/vendor-icons.mjs` — which is also where the reasons
+ * that set was kept over Lucide, Phosphor and Tabler are written down.
+ *
+ * Record is the one item whose glyph changes with its label: mid-take it is
+ * the Stop control, and a record dot beside "Stop Recording" would say the
+ * opposite.
+ */
+const ACTION_GLYPHS: Record<BindableAction, TrayGlyph> = {
+  region: "area",
+  window: "window",
+  display: "display",
+  record: "record",
+  "self-timer": "timer",
+};
 
 export interface TrayItem {
   id: TrayItemId;
   type?: "separator";
   label?: string;
+  /**
+   * A template image drawn left of the label. Not every item has one: About
+   * and Quit carry none, since a glyph beside them would add weight without
+   * helping anyone find them (STC-597).
+   */
+  icon?: TrayGlyph;
   /**
    * The Electron accelerator, VERBATIM — not the ⌃⌥⇧⌘ rendering.
    *
@@ -78,6 +106,7 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
     return {
       id: `action:${action}` as TrayItemId,
       label: stopping ? STOP_RECORDING_LABEL : ACTION_LABELS[action],
+      icon: stopping ? "record-stop" : ACTION_GLYPHS[action],
       // Mid-take Record is the STOP control, so `busy` must not grey it out —
       // that would leave the menu bar as the one entry point that can start a
       // recording and not end it.
@@ -88,13 +117,13 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
     };
   });
   items.push({ id: "separator", type: "separator" });
-  items.push({ id: "library", label: "Open Library" });
+  items.push({ id: "library", label: "Open Library", icon: "library" });
   // STC-582: the editor has no default hotkey, so the menu is one of its doors.
-  items.push({ id: "editor", label: "Open Latest in Editor" });
+  items.push({ id: "editor", label: "Open Latest in Editor", icon: "editor" });
   items.push({ id: "separator", type: "separator" });
   // The app items (STC-551). No "Check for Updates…": the app has no updater
   // and this ticket does not build one.
-  items.push({ id: "settings", label: "Settings…", accelerator: SETTINGS_ACCELERATOR, fires: true });
+  items.push({ id: "settings", label: "Settings…", icon: "settings", accelerator: SETTINGS_ACCELERATOR, fires: true });
   items.push({ id: "about", label: `About ${PRODUCT_NAME}` });
   items.push({ id: "separator", type: "separator" });
   items.push({ id: "quit", label: `Quit ${PRODUCT_NAME}` });
