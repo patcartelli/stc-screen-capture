@@ -4,6 +4,7 @@ import {
   TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, TRAY_TOOLTIP,
   type TrayContext, type TrayItemId,
 } from "./tray-menu.js";
+import { trayGlyphMask, type TrayGlyph } from "./tray-icons.js";
 
 /**
  * The menu-bar item (STC-292) — Electron only, decisions elsewhere.
@@ -34,6 +35,30 @@ function icon(): Electron.NativeImage {
   return image;
 }
 
+const menuIcons = new Map<TrayGlyph, Electron.NativeImage>();
+
+/**
+ * A menu item's icon (STC-597): the glyph's 16 pt mask at 1x and 2x as one
+ * template image, so the menu paints it black or white to match its own
+ * appearance — the same arrangement as the menu-bar glyph above. Built once per
+ * glyph: the menu is rebuilt on every state change and the bitmaps never move.
+ */
+function menuIcon(glyph: TrayGlyph): Electron.NativeImage {
+  let image = menuIcons.get(glyph);
+  if (!image) {
+    image = nativeImage.createEmpty();
+    for (const [size, scaleFactor] of [[16, 1], [32, 2]] as const) {
+      image.addRepresentation({
+        scaleFactor, width: size, height: size,
+        buffer: Buffer.from(bgraFromMask(trayGlyphMask(glyph, size))),
+      });
+    }
+    image.setTemplateImage(true);
+    menuIcons.set(glyph, image);
+  }
+  return image;
+}
+
 /**
  * Puts the item on the menu bar. `onSelect` is called with the id of whatever
  * was chosen; ids are the pure module's, so a renamed label cannot silently
@@ -53,6 +78,7 @@ export function installTray(
         : {
             label: item.label ?? "",
             enabled: item.enabled !== false,
+            ...(item.icon ? { icon: menuIcon(item.icon) } : {}),
             // Drawn, not bound: `registerAccelerator: false` keeps Electron
             // from claiming a second, app-menu copy of a key the global
             // shortcut already holds — which would make the same keystroke
