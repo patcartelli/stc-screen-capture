@@ -13,11 +13,10 @@ record bar start a capture; the record bar picks devices. The diagnostics
 table is now a strip pinned under the library, shown by Settings › Advanced ›
 Show diagnostics.
 
-Run it from `claude/wonderful-babbage-fbqb2g` until the PR merges, then from
-`master`:
+Merged; run it from `master`:
 
 ```
-git fetch origin claude/wonderful-babbage-fbqb2g && git checkout claude/wonderful-babbage-fbqb2g
+git fetch origin master && git checkout master
 npm ci && npm run app:start
 ```
 
