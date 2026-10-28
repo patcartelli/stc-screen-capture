@@ -704,8 +704,8 @@ function drawRulerActivity(): void {
   const spanW = Math.max(1, vis.end - vis.start);
   const barW = (w * (player.durationNs / activity.length)) / spanW;
   const x0 = -(vis.start / spanW) * w;
-  const style = getComputedStyle(document.documentElement).getPropertyValue("--clip").trim() || "#6a8fd8";
-  ctx.fillStyle = style || "#6a8fd8";
+  const style = getComputedStyle(document.documentElement).getPropertyValue("--clip").trim() || "#6fa3a0";
+  ctx.fillStyle = style || "#6fa3a0";
   const bw = Math.max(1, barW - 1);
   const rowStride = LED_ROW_SEG_PX + LED_ROW_GAP_PX;
   for (let i = 0; i < activity.length; i++) {
@@ -801,8 +801,8 @@ function drawAudioLane(): void {
   const peaks = wavePeaks;
   if (!peaks) return;
   const css = getComputedStyle(document.documentElement);
-  const normal = css.getPropertyValue("--wave").trim() || "#5fb38a";
-  const hot = css.getPropertyValue("--wave-clip").trim() || "#ff6b6b";
+  const normal = css.getPropertyValue("--wave").trim() || "#6fa3a0";
+  const hot = css.getPropertyValue("--wave-clip").trim() || "#e5483f";
   const n = peaks.length;
   const mid = h / 2;
   const half = mid - 1;
@@ -820,8 +820,12 @@ function drawAudioLane(): void {
     for (let b = b0; b < b1 && b < n; b++) peak = Math.max(peak, peaks[b]!);
     if (!(peak > 0)) continue;
     const a = Math.max(0.5, peak * half);
-    ctx.fillStyle = isClipped(peak) ? hot : normal;
-    ctx.fillRect(x, mid - a, 1, 2 * a);
+    const clipped = isClipped(peak);
+    ctx.fillStyle = clipped ? hot : normal;
+    if (!clipped) { ctx.fillRect(x, mid - a, 1, 2 * a); continue; }
+    // STC-601: red and teal sit within 1.4:1 in luminance, so a peak is
+    // marked by texture too, not by color alone: 2 px dashes with 1 px gaps.
+    for (let y = mid - a; y < mid + a; y += 3) ctx.fillRect(x, y, 1, Math.min(2, mid + a - y));
   }
 }
 
@@ -927,7 +931,7 @@ function drawZoomLane(): void {
   // curve's peak, fading toward the lane's floor), not STC-444's checkerboard
   // dither. --zoom-fill still owns only this fill; --zoom keeps the
   // override-selection accents (see editor.html's --zoom-fill comment).
-  const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#4f7fe0";
+  const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#d6b25e";
   const gradient = ctx.createLinearGradient(0, 0, 0, h);
   gradient.addColorStop(0, withAlpha(fillColor, 0.9));
   gradient.addColorStop(1, withAlpha(fillColor, 0.15));
