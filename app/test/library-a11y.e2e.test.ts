@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder, makeStillFolder } from "./_take-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { LIBRARY_READY } from "./_library-window.js";
+import { buildPalette, GifWriter } from "@transform/gif-encode.js";
 
 /**
  * The Library window's focus pass (STC-587, the Library half; the Settings
@@ -24,11 +25,21 @@ const FOCUS_RING = "rgb(122, 162, 255)";
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
-/** A recording and a still, so both kinds' controls are on screen. */
-async function launch(): Promise<Page> {
+/** A real GIF from the app's own encoder: three frames of 7 cs, 32×18. */
+function gifBytes(): Uint8Array {
+  const frame = (v: number) => new Uint8ClampedArray(32 * 18 * 4).fill(v);
+  const frames = [frame(0), frame(128), frame(255)];
+  const w = new GifWriter(32, 18, buildPalette(frames), [7, 7, 7]);
+  for (const f of frames) w.addFrame(f);
+  return w.finish();
+}
+
+/** A recording and a still, so both kinds' controls are on screen; and a saved GIF on request. */
+async function launch(opts: { gif?: boolean } = {}): Promise<Page> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-liba11y-"));
   makeTakeFolder("2026-08-24_10-00-00", { into: recordings });
   makeStillFolder("2026-09-08_12-00-00", { into: recordings });
+  if (opts.gif) writeFileSync(join(recordings, "login-bug.gif"), gifBytes());
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   writeFileSync(join(userData, "settings.json"), JSON.stringify({ saveFolder: null }));
   app = await electron.launch({
@@ -155,5 +166,39 @@ describe("Library: focus and keyboard (STC-587)", () => {
     await win.keyboard.press("Enter");
     await expect.poll(() => win.locator(`.libtile[data-id="${id}"] .libtitle`).textContent()).toBe("Login bug");
     await expect.poll(() => focused(win)).toMatchObject({ key: "more", item: id });
+  }, 60_000);
+});
+
+describe("Library: reduced motion (STC-593)", () => {
+  const tile = '.libtile[data-id="login-bug"]';
+  const src = (win: Page) => win.getAttribute(`${tile} .libthumb img`, "src");
+
+  /** The GIF tile, drawn with its first frame, and that frame's URL. */
+  async function gifAtRest(win: Page): Promise<string> {
+    await win.waitForSelector(`${tile} .libthumb img[src^="blob:"]`);
+    return (await src(win))!;
+  }
+
+  // The control for the test after it: without Reduce Motion the same hover
+  // does swap the picture, so a still picture there is the preference's doing.
+  test("a GIF plays while the pointer is over its tile, and rests on its first frame after", async () => {
+    const win = await launch({ gif: true });
+    await win.emulateMedia({ reducedMotion: "no-preference" });
+    const still = await gifAtRest(win);
+    await win.hover(tile);
+    await expect.poll(() => src(win)).not.toBe(still);
+    await win.mouse.move(1, 1);
+    await expect.poll(() => src(win)).toBe(still);
+  }, 60_000);
+
+  test("under Reduce Motion a GIF never plays: the hover leaves its first frame", async () => {
+    const win = await launch({ gif: true });
+    await win.emulateMedia({ reducedMotion: "reduce" });
+    const still = await gifAtRest(win);
+    await win.hover(tile);
+    // Long enough for the bytes to have come back and been swapped in, had
+    // they been asked for (the control above sees the swap well inside this).
+    await win.waitForTimeout(1_000);
+    expect(await src(win)).toBe(still);
   }, 60_000);
 });
