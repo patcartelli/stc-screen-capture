@@ -298,6 +298,12 @@ function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks,
   input.placeholder = "Name this capture";
   input.maxLength = 120;
   let done = false;
+  // The item's •••, looked up in the page as it is NOW (STC-595): the one
+  // held from when the rename started is gone if the list redrew meanwhile,
+  // and focusing a detached button leaves the focus nowhere (on the Mac,
+  // Escape then left Tab starting from the name, before Share).
+  const backNow = (): HTMLElement | undefined => (back?.isConnected ? back : undefined)
+    ?? document.querySelector<HTMLElement>(`[data-id="${CSS.escape(item.id)}"] .libmore`) ?? undefined;
   const commit = (refocus: boolean) => {
     if (done) return;                 // blur fires again after Enter replaces it
     done = true;
@@ -305,7 +311,7 @@ function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks,
     input.replaceWith(title);
     // From the keyboard, back where the rename was asked for (STC-587), not
     // on the page. A blur commit leaves the focus wherever it went.
-    if (refocus) back?.focus();
+    if (refocus) backNow()?.focus();
     if (v && v !== item.label) void cb.rename(item, v);
   };
   // A key or a click in the field is the field's, not the tile's Open.
@@ -316,7 +322,7 @@ function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks,
     // activate something, and it would reopen the menu.
     if (e.key === "Enter" || e.key === "Escape") e.preventDefault();
     if (e.key === "Enter") commit(true);
-    if (e.key === "Escape") { done = true; input.replaceWith(title); back?.focus(); }
+    if (e.key === "Escape") { done = true; input.replaceWith(title); backNow()?.focus(); }
   });
   input.addEventListener("blur", () => commit(false));
   title.replaceWith(input);
@@ -378,7 +384,11 @@ function openOverflow(trigger: HTMLButtonElement, actions: LibraryAction[],
     b.dataset.action = a.id;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      closeOverflow();
+      // The focus goes back to ••• BEFORE the action runs (STC-595). Removing
+      // the menu while its row had the focus dropped it to the page, so a
+      // Delete's confirm sheet came back to nothing and the redraw after it
+      // had no item to keep the focus on (the ring landed on the title bar).
+      closeOverflow(true);
       choose(a);
     });
     menu.append(b);
@@ -435,7 +445,10 @@ function actionButtons(item: LibraryItem, title: () => HTMLElement, cb: LibraryC
     const b = el("button", "libshare", a.label);
     b.type = "button";
     b.dataset.action = a.id;
-    b.dataset.focus = a.id;
+    // "primary", not the action's id: a recording's Share and a shot's are
+    // different actions in the same place, and the arrow keys (STC-595) and
+    // a redraw keep the focus by place.
+    b.dataset.focus = "primary";
     b.addEventListener("click", (e) => { e.stopPropagation(); run(a); });
     box.append(b);
   }
@@ -581,6 +594,7 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
   container.id = view === "list" ? "liblist" : "libgrid";
   if (view === "list") container.append(listHeader());
   for (const item of list.items) container.append(view === "list" ? row(item, cb, now) : tile(item, cb));
+  container.addEventListener("keydown", (e) => arrowBetweenItems(e, container, view));
   host.append(container);
 
   // The first screenful, unconditionally — see EAGER_TILES. With no observer at
@@ -593,6 +607,34 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
     host.append(el("div", "broken", `${b.name} — ${b.reason}`));
   }
   if (keep) restoreFocus(container, keep);
+}
+
+/**
+ * The arrow keys move between items (STC-595, Patrick 2026-10-28), on top of
+ * Tab, which still walks every control. In the list ↑/↓ go to the item above
+ * or below; in the grid ←/→ go to the previous or next item and ↑/↓ to the
+ * one a row away, the row being however many columns the window fits now.
+ * The focus lands on the same control of the new item (its picture, Share or
+ * •••), or its first when it has no such control. At either end nothing
+ * happens: no wrap, so holding a key stops at the last item.
+ */
+function arrowBetweenItems(e: KeyboardEvent, container: HTMLElement, view: "grid" | "list"): void {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const from = e.target as HTMLElement;
+  const part = from.closest<HTMLElement>("[data-focus]")?.dataset.focus;
+  const card = from.closest<HTMLElement>("[data-id]");
+  if (!part || !card) return;                       // not on an item's control (the rename field stops its own keys)
+  const cards = [...container.querySelectorAll<HTMLElement>("[data-id]")];
+  const at = cards.indexOf(card);
+  const columns = view === "list" ? 1 : cards.filter((c) => c.offsetTop === cards[0]!.offsetTop).length;
+  const step = view === "list"
+    ? { ArrowUp: -1, ArrowDown: 1 }[e.key]
+    : { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns }[e.key];
+  if (step === undefined) return;
+  e.preventDefault();                               // the arrows would scroll the window otherwise
+  const next = cards[at + step];
+  if (!next) return;
+  (next.querySelector<HTMLElement>(`[data-focus="${part}"]`) ?? next.querySelector<HTMLElement>("[data-focus]"))?.focus();
 }
 
 /**

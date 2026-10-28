@@ -34,11 +34,15 @@ function gifBytes(): Uint8Array {
   return w.finish();
 }
 
-/** A recording and a still, so both kinds' controls are on screen; and a saved GIF on request. */
-async function launch(opts: { gif?: boolean } = {}): Promise<Page> {
+/**
+ * A recording and a still, so both kinds' controls are on screen; a saved GIF
+ * on request; and `more` further recordings, so the grid has a second row.
+ */
+async function launch(opts: { gif?: boolean; more?: number } = {}): Promise<Page> {
   const recordings = mkdtempSync(join(tmpdir(), "stc-liba11y-"));
   makeTakeFolder("2026-08-24_10-00-00", { into: recordings });
   makeStillFolder("2026-09-08_12-00-00", { into: recordings });
+  for (let i = 0; i < (opts.more ?? 0); i++) makeTakeFolder(`2026-08-2${i}_09-00-00`, { into: recordings });
   if (opts.gif) writeFileSync(join(recordings, "login-bug.gif"), gifBytes());
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   writeFileSync(join(userData, "settings.json"), JSON.stringify({ saveFolder: null }));
@@ -166,6 +170,67 @@ describe("Library: focus and keyboard (STC-587)", () => {
     await win.keyboard.press("Enter");
     await expect.poll(() => win.locator(`.libtile[data-id="${id}"] .libtitle`).textContent()).toBe("Login bug");
     await expect.poll(() => focused(win)).toMatchObject({ key: "more", item: id });
+  }, 60_000);
+});
+
+describe("Library: the Mac pass's follow-ups (STC-595)", () => {
+  /** The items' ids in the order the page draws them. */
+  const order = (win: Page, sel: string) => win.$$eval(sel, (cs) => cs.map((c) => (c as HTMLElement).dataset.id!));
+
+  test("a menu row hands the focus back to ••• before it acts, so a cancelled Delete keeps it there", async () => {
+    // On the Mac a confirmed Delete left the ring on the title bar: picking
+    // the row removed the menu while it had the focus, so the focus fell to
+    // the page before the sheet opened. A cancelled Delete is the same path
+    // without needing a Trash, which Linux has none of.
+    const win = await launch();
+    const id = "2026-08-24_10-00-00";
+    await app!.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });  // Cancel
+    });
+    await win.focus(`.libtile[data-id="${id}"] .libmore`);
+    await win.keyboard.press("Enter");
+    await win.waitForSelector(".liboverflow-menu");
+    await win.keyboard.press("End");                         // Delete, the last row
+    expect((await focused(win))?.key).toBe("delete");
+    await win.keyboard.press("Enter");
+    await expect.poll(() => win.locator(".liboverflow-menu").count()).toBe(0);
+    await expect.poll(() => focused(win)).toMatchObject({ key: "more", item: id });
+  }, 60_000);
+
+  test("in the grid ←/→ go to the previous and next item and ↑/↓ a row away, keeping the control", async () => {
+    const win = await launch({ more: 3 });                  // five items: a row of three, then two
+    await win.waitForSelector(".libtile:nth-child(5)");
+    const ids = await order(win, "#libgrid .libtile");
+    expect(ids).toHaveLength(5);
+    await win.focus(`.libtile[data-id="${ids[0]}"] .libthumb`);
+    await win.keyboard.press("ArrowRight");
+    expect(await focused(win)).toMatchObject({ key: "open", item: ids[1] });
+    await win.keyboard.press("ArrowDown");                   // the row is three wide
+    expect(await focused(win)).toMatchObject({ key: "open", item: ids[4] });
+    await win.keyboard.press("ArrowDown");                   // no row below: stays
+    expect(await focused(win)).toMatchObject({ key: "open", item: ids[4] });
+    await win.keyboard.press("ArrowUp");
+    expect(await focused(win)).toMatchObject({ key: "open", item: ids[1] });
+    // From •••, the same control on the next item; nothing before the first.
+    await win.focus(`.libtile[data-id="${ids[0]}"] .libmore`);
+    await win.keyboard.press("ArrowLeft");
+    expect(await focused(win)).toMatchObject({ key: "more", item: ids[0] });
+    await win.keyboard.press("ArrowRight");
+    expect(await focused(win)).toMatchObject({ key: "more", item: ids[1] });
+  }, 60_000);
+
+  test("in the list ↑/↓ move between items; ←/→ leave the focus where it is", async () => {
+    const win = await launch();
+    await win.click('.libviewtoggle [data-view="list"]');
+    await win.waitForSelector("#liblist .librow[data-id]");
+    const ids = await order(win, "#liblist .librow[data-id]");
+    await win.focus(`.librow[data-id="${ids[0]}"] .libthumb`);
+    await win.keyboard.press("ArrowDown");
+    expect(await focused(win)).toMatchObject({ key: "open", item: ids[1] });
+    await win.keyboard.press("ArrowRight");
+    expect(await focused(win)).toMatchObject({ key: "open", item: ids[1] });
+    await win.keyboard.press("ArrowUp");
+    expect(await focused(win)).toMatchObject({ key: "open", item: ids[0] });
   }, 60_000);
 });
 

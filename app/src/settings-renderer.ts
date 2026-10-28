@@ -79,8 +79,11 @@ const isPane = (v: unknown): v is Pane => typeof v === "string" && (PANES as rea
 function showPane(pane: Pane): void {
   for (const p of PANES) $(`pane-${p}`).hidden = p !== pane;
   for (const b of document.querySelectorAll<HTMLButtonElement>("#sidebar button")) {
-    if (b.dataset.pane === pane) b.setAttribute("aria-current", "page");
+    const current = b.dataset.pane === pane;
+    if (current) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
+    // One Tab stop, on the pane being shown (STC-595); the arrows do the rest.
+    b.tabIndex = current ? 0 : -1;
   }
   $("titlebar").textContent = PANE_TITLES[pane];
   document.title = `${PANE_TITLES[pane]} – Settings`;
@@ -90,6 +93,24 @@ function showPane(pane: Pane): void {
 for (const b of document.querySelectorAll<HTMLButtonElement>("#sidebar button")) {
   b.addEventListener("click", () => { if (isPane(b.dataset.pane)) showPane(b.dataset.pane); });
 }
+/**
+ * ↑/↓ move through the sidebar and show each pane as they reach it, as a
+ * macOS sidebar does (STC-595, Patrick 2026-10-28); Home and End go to the
+ * first and last. It stops at either end rather than wrapping.
+ */
+$("sidebar").addEventListener("keydown", (e) => {
+  const buttons = [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")];
+  const i = buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if (i < 0 || e.altKey || e.ctrlKey || e.metaKey) return;
+  const to = e.key === "ArrowDown" ? Math.min(i + 1, buttons.length - 1)
+    : e.key === "ArrowUp" ? Math.max(i - 1, 0)
+      : e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : -1;
+  if (to < 0) return;
+  e.preventDefault();
+  const b = buttons[to]!;
+  if (isPane(b.dataset.pane)) showPane(b.dataset.pane);
+  b.focus();
+});
 const params = new URLSearchParams(location.search);
 showPane("capture");
 
