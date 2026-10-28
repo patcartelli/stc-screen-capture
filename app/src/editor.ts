@@ -136,6 +136,34 @@ const takeName = params.get("name") ?? "";
 // share.ts's plumbing in the grid.
 const autoShare = params.get("autoShare") === "1";
 
+// ---- the window shell (STC-603) ----------------------------------------------
+
+// The glass title bar turns opaque under Reduce Transparency; main reads it
+// (Chromium may not report the media query) and passes it in the URL.
+document.body.classList.toggle("reduce-transparency", params.get("reduceTransparency") === "1");
+$("titlename").textContent = takeName;
+
+// The stage panel letterboxes the picture at its own aspect. The player sets
+// the canvas's width/height attributes (on open, and again when the export size
+// changes), so watching them is all it takes to keep --stage-ar true without a
+// call from every place that resizes the canvas.
+{
+  const canvas = $("stage") as HTMLCanvasElement;
+  const syncAspect = () => {
+    if (canvas.width > 0 && canvas.height > 0) {
+      canvas.parentElement!.style.setProperty("--stage-ar", `${canvas.width} / ${canvas.height}`);
+    }
+  };
+  new MutationObserver(syncAspect).observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+  syncAspect();
+}
+
+/** The title bar's right-hand readout: what the export is made at. */
+function updateTitleMeta(): void {
+  const o = openProject?.output;
+  $("titlemeta").textContent = o ? `${o.width}×${o.height} · ${o.fps} fps` : "";
+}
+
 // ---- state ------------------------------------------------------------------
 
 let player: PreviewPlayer | undefined;
@@ -1526,6 +1554,7 @@ async function setOutputSize(opt: OutputOption): Promise<void> {
   }
 
   updateOutputSizeUI();
+  updateTitleMeta();
   if (player.viewSize) await player.setViewSize(viewSizeForEmbed());
   else await player.outputResized();
   updateLegibilityUI();
@@ -1704,6 +1733,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 
   openSession = session;
   openProject = project;
+  updateTitleMeta();
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
   openDisplay = { pointWidth: effectivePointWidth(anchors) };
   player = new PreviewPlayer($("stage") as HTMLCanvasElement, session, project);
@@ -1785,6 +1815,7 @@ async function closeTake(): Promise<void> {
   openSession = undefined;
   openVideoSources = undefined;
   openProject = undefined;
+  updateTitleMeta();
   openCapture = undefined;
   openDisplay = undefined;
   updateSystemAudioUI();

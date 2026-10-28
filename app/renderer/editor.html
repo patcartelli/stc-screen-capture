@@ -53,15 +53,69 @@
     /* Same specificity as tokens.css's data-surface block; this sheet loads later. */
     :root[data-surface="dark"] { --bg: var(--bg-deep); }
     * { box-sizing: border-box; }
-    /* Full-bleed video (STC-444 Figma pass): no body padding, no gap between
-       the video and the panel below it. `.editorbody` carries the padding
-       everything BELOW the video needs instead. */
-    body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
-           display: flex; flex-direction: column; }
-    #alert { margin: 12px 16px 0; }
+    /* ── the window shell (STC-603), from Figma "B3 / 4 · Slate + brass" ──────
+       Two columns: the work column (preview stage over the timeline group)
+       and a fixed 376px inspector pane. The glass title bar floats over
+       both, as the Library's does. The pane's contents are STC-604 (the
+       take's switches sit in it for now), the timeline's look STC-605, the
+       overlays STC-606: this block is the frame only.
+       Values are the frame's own: 23/16px gutters, 59px under the title bar,
+       12px between the stage and the group, 12px and 16px radii. */
+    :root { --shell-bg: #0b0c0d; --stage-bg: #090b0d; --card-bg-editor: #151719;
+            --hairline: rgba(255, 255, 255, .07); --pane-w: 376px; --titlebar-h: 56px;
+            --title-left: 80px; }
+    html { background: var(--shell-bg); }
+    body { margin: 0; padding: 0; background: var(--shell-bg); color: var(--text); }
+    .shell { display: grid; grid-template-columns: minmax(0, 1fr) var(--pane-w); min-height: 100vh; }
+    .workcol { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 100vh;
+               padding: 59px 16px 33px 23px; }
+    #alert { margin: 0; }
+    /* The stage panel takes whatever height the group leaves (never under
+       220px); the picture is letterboxed inside it at its own aspect, which
+       editor.ts publishes as --stage-ar. #stagewrap is that picture's box and
+       nothing else: every overlay below is `inset: 0` of it and so still
+       tracks the canvas exactly. */
+    .stagebox { flex: 1 1 0; min-height: 220px; container-type: size; display: grid;
+                place-items: center; background: var(--stage-bg); border-radius: 12px; overflow: hidden; }
+    /* The timeline group: the Figma's card. The header row runs full-bleed
+       inside it, over a hairline. */
     .editorbody { container-type: inline-size; display: flex; flex-direction: column;
-                  gap: 10px; padding: 16px; }
+                  padding: 0 16px 16px; background: var(--card-bg-editor);
+                  border: 1px solid var(--hairline); border-radius: 16px; }
+    .headerwrap { margin: 0 -16px; padding: 0 16px; height: 56px; display: flex; align-items: center; }
+    .headerwrap .header { flex: 1; }
+    .editorbody > .divider { margin: 0 -16px 12px; border-top-color: var(--hairline); }
+    .editorbody > .trimbar, .editorbody > .overridebar { margin-top: 10px; }
     .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
+    /* The inspector pane: slate, a hairline on its left edge, its content
+       starting under the title bar. */
+    #pane { position: relative; background: var(--shell-bg); border-left: 1px solid var(--hairline);
+            padding: 63px 24px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; }
+    #pane .panelabel { margin: 0 0 8px; font-size: var(--type-label); font-weight: 500;
+                       color: rgba(255, 255, 255, .45); }
+    #pane .panebuttons { display: flex; flex-wrap: wrap; gap: 8px; }
+    /* The glass title bar (STC-584's, as the Library has it): over the whole
+       window, the take's name centred, its output on the right. Opaque under
+       Reduce Transparency; editor.ts sets body.reduce-transparency from the
+       URL, since Chromium may not report the media query. */
+    #titlebar { position: fixed; top: 0; left: 0; right: 0; height: var(--titlebar-h); z-index: 3;
+                display: grid; grid-template-columns: 1fr auto 1fr; align-items: start;
+                padding: 0 12px 0 var(--title-left);
+                background: linear-gradient(to bottom, rgb(11 12 13 / .95), rgb(11 12 13 / 0));
+                -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+                -webkit-app-region: drag; user-select: none; }
+    body.reduce-transparency #titlebar { background: var(--shell-bg); -webkit-backdrop-filter: none;
+                                         backdrop-filter: none; border-bottom: 1px solid var(--hairline); }
+    @media (prefers-reduced-transparency: reduce) {
+      #titlebar { background: var(--shell-bg); -webkit-backdrop-filter: none; backdrop-filter: none;
+                  border-bottom: 1px solid var(--hairline); }
+    }
+    #titlename { grid-column: 2; margin: 19px 0 0; font: 600 13px/18px var(--font-sans);
+                 color: rgba(255, 255, 255, .95); white-space: nowrap; max-width: 46vw;
+                 overflow: hidden; text-overflow: ellipsis; }
+    .titleright { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 8px;
+                  margin-top: 8px; -webkit-app-region: no-drag; }
+    #titlemeta { font-size: var(--type-meta); color: rgba(255, 255, 255, .45); white-space: nowrap; }
     button { font: inherit; padding: 6px 14px; border-radius: 7px;
              border: 1px solid var(--border); background: transparent; color: inherit;
              cursor: pointer; }
@@ -76,9 +130,14 @@
 
     /* Full-bleed (STC-444 Figma pass): no rounded corners — the video runs
        edge to edge against the window's own top/left/right. */
-    #stage { width: 100%; height: auto; background: var(--black); border-radius: 0; display: block; }
-    #stage[data-vieweye] { width: var(--vieweye-w); max-width: none; }
-    #stagewrap { overflow-x: auto; position: relative; }
+    #stage { width: 100%; height: 100%; background: var(--black); border-radius: 6px; display: block; }
+    #stage[data-vieweye] { width: var(--vieweye-w); height: auto; max-width: none; border-radius: 0; }
+    #stagewrap { position: relative; aspect-ratio: var(--stage-ar, 16 / 9);
+                 width: min(100cqw, calc(100cqh * var(--stage-ar, 16 / 9))); }
+    /* Viewer's eye draws the picture 1:1 at the embed width, so the panel
+       scrolls instead of fitting. */
+    .stagebox:has(#stage[data-vieweye]) { display: block; overflow: auto; }
+    .stagebox:has(#stage[data-vieweye]) #stagewrap { width: max-content; aspect-ratio: auto; }
 
     /* The manual-override rect tool (STC-330): drawn over #stage while a
        zoom block is selected, in the same box #stage occupies — #stage
@@ -115,14 +174,24 @@
        ancestor, never the element it is written on — moving the timecode
        out of `.headerwrap` is exactly why this container moved up a level
        with it. */
-    .header { display: flex; align-items: center; justify-content: space-between;
-              gap: 12px; padding: 2px 0; }
-    .header .transport { display: flex; align-items: center; gap: 8px; }
-    .header .right { display: flex; align-items: center; gap: 8px; }
-    /* Above the ruler now, not in the header. */
-    .timecoderow { display: flex; align-items: baseline; gap: 10px; padding: 2px 0 4px; }
-    #clock { font-size: var(--type-value); color: var(--text-dim); }
-    #clock-cur { color: var(--text); }
+    .header { display: flex; align-items: center; gap: 12px; }
+    .header .transport { display: flex; align-items: center; gap: 4px; }
+    .header .icon { width: 32px; height: 32px; }
+    .header .icon svg { width: 18px; height: 18px; }
+    .header .right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    /* STC-603: the timecode is back in the group's transport row, after the
+       transport, as the frame has it (it had been above the ruler since
+       STC-444's Figma pass; the v2 frames win). 22px current over a 12px
+       dim duration, on one baseline. */
+    .header .readout { display: flex; align-items: baseline; gap: 8px; margin-left: 16px; }
+    #clock { font-size: 12px; color: var(--text-dim); }
+    #clock-cur { font-size: 22px; color: var(--text); }
+    /* Export is the one labelled button in the row (the frame has it so). */
+    #openexport.labelled { width: auto; height: 28px; padding: 0 12px; gap: 6px; border-radius: 8px;
+                           display: inline-flex; align-items: center; color: var(--text);
+                           background: rgba(255, 255, 255, .08); font-size: 12px; font-weight: 500; }
+    #openexport.labelled svg { width: 14px; height: 14px; }
+    #openexport.labelled:hover:not([disabled]) { background: rgba(255, 255, 255, .14); }
     #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
     /* STC-454 part 2: the take's audio controls live in ONE popover behind an
        "Audio" button at the far end of the timecode row — mic level, system
@@ -131,7 +200,7 @@
        found stacked lanes cluttered for the same reason. Native popover:
        Escape and a click outside close it. Anchored above the button, and
        flipped below it if there is no room. */
-    .audiobtn { margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+    .audiobtn { display: inline-flex; align-items: center; gap: 5px;
                 padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px;
                 background: none; color: var(--text-dim); font: inherit; font-size: var(--type-label);
                 cursor: pointer; anchor-name: --audiobtn; }
@@ -141,7 +210,7 @@
     /* STC-419: the Keys switch shares .audiobtn's look. It sits beside the
        Audio button (which owns the auto margin), or takes it when Audio is
        hidden; aria-pressed="false" reads as off. */
-    #keycastbtn { margin-left: 8px; anchor-name: none; }
+    #keycastbtn { anchor-name: none; }
     #keycastbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
                                        box-shadow: inset 0 0 0 1px var(--accent); }
     #keycastbtn[aria-pressed="false"] { opacity: .6; }
@@ -151,8 +220,6 @@
        apart. */
     #pipbtn { anchor-name: --pipbtn; }
     #clicksbtn { anchor-name: none; }
-    #pipbtn:not([hidden]) ~ #clicksbtn { margin-left: 8px; }
-    #audiobtn { margin-left: 8px; }
     /* On is drawn with a thicker line (2px accent: the 1px border plus a 1px
        inset ring, so nothing shifts) so on and off differ by weight, not only
        by colour and opacity. */
@@ -590,8 +657,24 @@
   </style>
 </head>
 <body>
+  <!-- STC-603: the glass title bar. #closepreview moved here from the header
+       row: the frame has no close icon in the group, and the e2e suite closes
+       the editor through this id. -->
+  <header id="titlebar">
+    <h1 id="titlename"></h1>
+    <div class="titleright">
+      <span id="titlemeta" class="mono"></span>
+      <button type="button" class="icon" id="closepreview" aria-label="Close" title="Close">
+        <svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="shell">
+  <main class="workcol">
   <div id="alert"></div>
 
+  <div class="stagebox">
   <div id="stagewrap">
     <canvas id="stage"></canvas>
     <!-- STC-330: shown only while a zoom block is selected; drawing a new
@@ -607,6 +690,7 @@
     <div id="pipframing" hidden><div id="pipframewindow"></div></div>
     <svg id="stageplay" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2 12.6 8 5 12.8Z" fill="currentColor"/></svg>
   </div>
+  </div><!-- /.stagebox -->
 
   <div class="editorbody">
   <!--
@@ -637,6 +721,13 @@
           <svg viewBox="0 0 16 16"><path d="M4.5 4l4 4-4 4M12.5 3.5v9"/></svg>
         </button>
       </div>
+      <!-- STC-603: the timecode, in the group's transport row. textContent
+           stays "current / duration": every test that reads #clock reads the
+           whole string, and only the CSS hides the tail. -->
+      <div class="readout">
+        <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
+        <span id="shuttle" class="mono"></span>
+      </div>
       <div class="right">
         <span id="framestatus" role="status" hidden></span>
         <!-- STC-454: the preview plays the export's own mix at 1x. Muting is
@@ -653,11 +744,9 @@
                 title="Copy frame (⌘⇧C) · right-click to copy or save (⌘⇧S)">
           <svg viewBox="0 0 16 16"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3"/><circle cx="8" cy="8" r="1.6"/></svg>
         </button>
-        <button type="button" class="icon" id="openexport" aria-label="Export" title="Export…">
+        <button type="button" class="icon labelled" id="openexport" aria-label="Export" title="Export…">
           <svg viewBox="0 0 16 16"><path d="M8 2.5v7.5M4.8 6.8 8 10l3.2-3.2M3 13.5h10"/></svg>
-        </button>
-        <button type="button" class="icon" id="closepreview" aria-label="Close" title="Close">
-          <svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>
+          <span>Export</span>
         </button>
       </div>
     </div>
@@ -689,89 +778,6 @@
          above the ruler. textContent stays "current / duration": every
          test that reads #clock reads the whole string, and only the CSS
          hides the tail. -->
-    <div class="timecoderow">
-      <span id="clock" class="mono"><span id="clock-cur">0:00:00</span><span class="clock-dur"> / 0:00:00</span></span>
-      <span id="shuttle" class="mono"></span>
-      <!-- STC-461: the camera PiP's look and place, in one popover — the
-           shared inspector (pip-inspector.ts) is built into #pippanel.
-           Present only for a take with a camera. Saved to the project
-           (project-16's pip.style). -->
-      <button type="button" id="pipbtn" class="audiobtn" popovertarget="pippanel" hidden
-              aria-label="Camera" title="Camera picture-in-picture: shape, size, border, position">
-        <span>Camera</span>
-      </button>
-      <div id="pippanel" popover="auto" aria-label="Camera"></div>
-      <!-- STC-492: show/hide the click highlight. Saved to the project
-           (project-13's showClicks; absent = on). Beside Keys and Audio, the
-           other per-take switches, because it changes the picture and not
-           the sound. -->
-      <button type="button" id="clicksbtn" class="audiobtn" aria-pressed="true"
-              title="Hide the click highlight in the preview and export">
-        <span>Clicks</span>
-      </button>
-      <!-- STC-454 part 2: every audio control for the take, in one popover.
-           All of it is saved to the project and heard in the preview at 1x
-           and in the export; nothing here is ever baked in at capture. -->
-      <button type="button" id="audiobtn" class="audiobtn" popovertarget="audiopanel" hidden
-              title="Mic and system audio: level, mute, and voice cleanup">
-        <svg viewBox="0 0 16 16"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path d="M10.6 5.8a3 3 0 0 1 0 4.4"/></svg>
-        <span>Audio</span>
-      </button>
-      <div id="audiopanel" popover="auto" aria-label="Audio">
-        <div class="audiorows">
-          <!-- STC-454 part 2: the mic's level. 75% is as recorded (0 dB);
-               above it boosts, up to +12 dB. project-11's micLevel. Part 3:
-               the speaker mutes the track and keeps the level (project-12's
-               micMuted); a muted track is left out of the export. -->
-          <div id="micaudio" class="audiorow" hidden
-               title="Your voice's level: the tick is as recorded (0 dB); above it boosts up to +12 dB. Double-click to reset; Shift+arrow nudges 0.1 dB">
-            <button type="button" id="micmute" class="trackmute" aria-pressed="false"
-                    aria-label="Mute mic" title="Mute mic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4"/><path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/></svg></button>
-            <label class="name" for="miclevel">Mic</label>
-            <div class="fader" style="--unity:0.75">
-              <input id="miclevel" type="range" min="0" max="100" step="1" value="75" aria-label="Mic level">
-              <span class="unity" aria-hidden="true"></span><div class="meterrow" aria-hidden="true"><div class="meter"><i id="micmeter"></i></div><span id="micclip" class="clip" title="Clipping: the mix hit its hard limit"></span></div>
-            </div>
-            <span id="miclevelvalue" class="value mono" data-resets="miclevel">0 dB</span>
-          </div>
-          <!-- STC-418 PR 3: the recorded system audio's level (project-9's
-               systemAudioLevel), a decibel fader, attenuate only. -->
-          <div id="sysaudio" class="audiorow" hidden
-               title="System audio level, in the preview at 1x and in the export">
-            <button type="button" id="sysmute" class="trackmute" aria-pressed="false"
-                    aria-label="Mute system audio" title="Mute system audio"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4"/><path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/></svg></button>
-            <label class="name" for="sysaudiolevel">System audio</label>
-            <div class="fader" style="--unity:1">
-              <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
-                   aria-label="System audio level">
-              <span class="unity" aria-hidden="true"></span><div class="meterrow" aria-hidden="true"><div class="meter"><i id="sysmeter"></i></div><span id="sysclip" class="clip" title="Clipping: the mix hit its hard limit"></span></div>
-            </div>
-            <span id="sysaudiovalue" class="value mono" data-resets="sysaudiolevel">0 dB</span>
-          </div>
-          <!-- STC-455: narration cleanup — steady background noise and harsh
-               "s" sounds, on the mic only. Off by default; the strength is
-               kept while it is off. project-10's narrationCleanup. -->
-          <div id="voiceclean" class="audiorow" hidden
-               title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
-            <span aria-hidden="true"></span>
-            <label class="name"><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
-            <div class="fader">
-              <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
-                   aria-label="Voice cleanup strength" disabled>
-              
-            </div>
-            <span id="voicecleanvalue" class="value mono" data-resets="voicecleanstrength">50%</span>
-          </div>
-        </div>
-      </div>
-      <!-- STC-419: show/hide the keycast. Present only for a take that recorded
-           keys. Saved to the project (project-14's keycast.show); never edits
-           events.json. -->
-      <button type="button" id="keycastbtn" class="audiobtn" hidden aria-pressed="true"
-              title="Show keystrokes in the preview and export">
-        <span>Keys</span>
-      </button>
-    </div>
     <!-- STC-484: the zoom bar. #overview is the whole take and #overview-window
          the visible part of it; the buttons are the same three verbs the
          wheel, a pinch and the keys (⌘= ⌘− ⌘0) reach. #zoomreadout is hidden
@@ -903,6 +909,100 @@
   </div>
 
   </div><!-- /.editorbody -->
+
+  </main>
+
+  <!-- STC-603: the inspector pane, fixed at 376px. Its contents are STC-604's
+       (settings rows and the section switch). Until then it holds the take's
+       own switches, moved here from the old timecode row with their popovers
+       and ids untouched, so nothing they do changes. -->
+  <aside id="pane" aria-label="Inspector">
+    <section>
+      <p class="panelabel">Take</p>
+      <div class="panebuttons">
+      <!-- STC-461: the camera PiP's look and place, in one popover — the
+           shared inspector (pip-inspector.ts) is built into #pippanel.
+           Present only for a take with a camera. Saved to the project
+           (project-16's pip.style). -->
+      <button type="button" id="pipbtn" class="audiobtn" popovertarget="pippanel" hidden
+              aria-label="Camera" title="Camera picture-in-picture: shape, size, border, position">
+        <span>Camera</span>
+      </button>
+      <div id="pippanel" popover="auto" aria-label="Camera"></div>
+      <!-- STC-492: show/hide the click highlight. Saved to the project
+           (project-13's showClicks; absent = on). Beside Keys and Audio, the
+           other per-take switches, because it changes the picture and not
+           the sound. -->
+      <button type="button" id="clicksbtn" class="audiobtn" aria-pressed="true"
+              title="Hide the click highlight in the preview and export">
+        <span>Clicks</span>
+      </button>
+      <!-- STC-454 part 2: every audio control for the take, in one popover.
+           All of it is saved to the project and heard in the preview at 1x
+           and in the export; nothing here is ever baked in at capture. -->
+      <button type="button" id="audiobtn" class="audiobtn" popovertarget="audiopanel" hidden
+              title="Mic and system audio: level, mute, and voice cleanup">
+        <svg viewBox="0 0 16 16"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path d="M10.6 5.8a3 3 0 0 1 0 4.4"/></svg>
+        <span>Audio</span>
+      </button>
+      <div id="audiopanel" popover="auto" aria-label="Audio">
+        <div class="audiorows">
+          <!-- STC-454 part 2: the mic's level. 75% is as recorded (0 dB);
+               above it boosts, up to +12 dB. project-11's micLevel. Part 3:
+               the speaker mutes the track and keeps the level (project-12's
+               micMuted); a muted track is left out of the export. -->
+          <div id="micaudio" class="audiorow" hidden
+               title="Your voice's level: the tick is as recorded (0 dB); above it boosts up to +12 dB. Double-click to reset; Shift+arrow nudges 0.1 dB">
+            <button type="button" id="micmute" class="trackmute" aria-pressed="false"
+                    aria-label="Mute mic" title="Mute mic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4"/><path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/></svg></button>
+            <label class="name" for="miclevel">Mic</label>
+            <div class="fader" style="--unity:0.75">
+              <input id="miclevel" type="range" min="0" max="100" step="1" value="75" aria-label="Mic level">
+              <span class="unity" aria-hidden="true"></span><div class="meterrow" aria-hidden="true"><div class="meter"><i id="micmeter"></i></div><span id="micclip" class="clip" title="Clipping: the mix hit its hard limit"></span></div>
+            </div>
+            <span id="miclevelvalue" class="value mono" data-resets="miclevel">0 dB</span>
+          </div>
+          <!-- STC-418 PR 3: the recorded system audio's level (project-9's
+               systemAudioLevel), a decibel fader, attenuate only. -->
+          <div id="sysaudio" class="audiorow" hidden
+               title="System audio level, in the preview at 1x and in the export">
+            <button type="button" id="sysmute" class="trackmute" aria-pressed="false"
+                    aria-label="Mute system audio" title="Mute system audio"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6.2v3.6h2.4l3.6 3V3.2L4.9 6.2Z"/><path class="when-sound" d="M10.6 5.8a3 3 0 0 1 0 4.4"/><path class="when-muted" d="M10.8 6.2l3 3.6M13.8 6.2l-3 3.6"/></svg></button>
+            <label class="name" for="sysaudiolevel">System audio</label>
+            <div class="fader" style="--unity:1">
+              <input id="sysaudiolevel" type="range" min="0" max="100" step="1" value="100"
+                   aria-label="System audio level">
+              <span class="unity" aria-hidden="true"></span><div class="meterrow" aria-hidden="true"><div class="meter"><i id="sysmeter"></i></div><span id="sysclip" class="clip" title="Clipping: the mix hit its hard limit"></span></div>
+            </div>
+            <span id="sysaudiovalue" class="value mono" data-resets="sysaudiolevel">0 dB</span>
+          </div>
+          <!-- STC-455: narration cleanup — steady background noise and harsh
+               "s" sounds, on the mic only. Off by default; the strength is
+               kept while it is off. project-10's narrationCleanup. -->
+          <div id="voiceclean" class="audiorow" hidden
+               title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
+            <span aria-hidden="true"></span>
+            <label class="name"><input id="voicecleanon" type="checkbox" aria-label="Clean up voice"><span>Clean up voice</span></label>
+            <div class="fader">
+              <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
+                   aria-label="Voice cleanup strength" disabled>
+              
+            </div>
+            <span id="voicecleanvalue" class="value mono" data-resets="voicecleanstrength">50%</span>
+          </div>
+        </div>
+      </div>
+      <!-- STC-419: show/hide the keycast. Present only for a take that recorded
+           keys. Saved to the project (project-14's keycast.show); never edits
+           events.json. -->
+      <button type="button" id="keycastbtn" class="audiobtn" hidden aria-pressed="true"
+              title="Show keystrokes in the preview and export">
+        <span>Keys</span>
+      </button>
+      </div>
+    </section>
+  </aside>
+  </div><!-- /.shell -->
 
   <dialog id="exportdialog">
     <div class="dialogrow">

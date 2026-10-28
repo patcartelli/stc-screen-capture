@@ -1,7 +1,8 @@
-import { BrowserWindow, screen, type WebContents } from "electron";
+import { BrowserWindow, nativeTheme, screen, type WebContents } from "electron";
 import { join } from "node:path";
 import { PRODUCT_NAME } from "./product.js";
 import { setBoundsUnlessClosing } from "./window-geometry.js";
+import { centredIn, clampSize } from "./window-size.js";
 import { timelineZoomKeyIntent } from "./timeline-zoom.js";
 
 /**
@@ -39,13 +40,28 @@ export interface EditorOptions {
   autoShare?: boolean;
 }
 
+/**
+ * The size of the Figma frame (STC-603): the 376px pane plus the preview and
+ * timeline column. The minimum keeps the column wide enough for the transport
+ * row. Both are clamped to the display, which a laptop's work area is under.
+ */
+export const EDITOR_SIZE = { width: 1280, height: 856 };
+export const EDITOR_MIN_SIZE = { width: 960, height: 640 };
+
+/** Where the traffic lights sit in the glass title bar: as the Library and Settings have them. */
+const TRAFFIC_LIGHTS = { x: 20, y: 22 };
+
 let win: BrowserWindow | undefined;
 
 function load(opts: EditorOptions): void {
   win!.loadFile(join(opts.rendererDir, "editor.html"), {
-    query: opts.autoShare
-      ? { dir: opts.dir, name: opts.name, autoShare: "1" }
-      : { dir: opts.dir, name: opts.name },
+    query: {
+      dir: opts.dir, name: opts.name,
+      // The glass title bar turns opaque under Reduce Transparency; read here
+      // because Chromium may not report it (as the Library and Settings do).
+      reduceTransparency: nativeTheme.prefersReducedTransparency ? "1" : "0",
+      ...(opts.autoShare ? { autoShare: "1" } : {}),
+    },
   });
 }
 
@@ -57,9 +73,17 @@ export function openEditor(opts: EditorOptions): void {
     win.focus();
     return;
   }
+  const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const bounds = centredIn(clampSize(EDITOR_SIZE, area), area);
+  const min = clampSize(EDITOR_MIN_SIZE, area);
   win = new BrowserWindow({
-    width: 1000, height: 760, minWidth: 640, minHeight: 480,
+    ...bounds, minWidth: min.width, minHeight: min.height,
     title: PRODUCT_NAME,
+    // The Library's chrome (STC-584): the page draws the title bar.
+    titleBarStyle: "hidden",
+    trafficLightPosition: TRAFFIC_LIGHTS,
+    // Always dark, so no white flash before the page paints.
+    backgroundColor: "#0b0c0d",
     webPreferences: {
       preload: join(opts.dist, "editor-preload.cjs"),
       contextIsolation: true, nodeIntegration: false,
