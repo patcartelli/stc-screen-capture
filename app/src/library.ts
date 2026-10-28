@@ -1,15 +1,16 @@
 import { readdir, stat, readFile, open as openFile } from "node:fs/promises";
-import { join, extname, basename } from "node:path";
+import { join, extname, basename, dirname } from "node:path";
 import { takesRoot, RAW_SUBDIR } from "./takes.js";
 import { parseShot, type Shot } from "@transform/shot.js";
 import { probePng, probeMp4, MP4_TAIL_PROBE_BYTES, type MediaFacts } from "@transform/media-probe.js";
 import { readPngCaptureId, readMp4CaptureId, readMp4CaptureIdInTail, readHeicCaptureId, readBe32 }
   from "@transform/media-tag.js";
 import { readBundleId } from "./capture-identity.js";
+import { probeGif } from "@transform/gif-probe.js";
 import {
-  recordingItem, stillItem, looseFileItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
+  recordingItem, stillItem, looseFileItem, gifItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
   THUMBNAIL_FILE, SUPPORTED_ANCHORS_VERSIONS, recordingDurationMs,
-  type FinishedFileInfo, type FolderStatus, type InvalidItem, type LibraryList, type StillInfo, type TakeInfo, type TakeList,
+  type FinishedFileInfo, type GifInfo, type FolderStatus, type InvalidItem, type LibraryList, type StillInfo, type TakeInfo, type TakeList,
 } from "./library-items.js";
 
 // Re-exported so callers have one import for the library, not two.
@@ -98,6 +99,79 @@ export * from "./library-items.js";
  * listed and id-matched but not probed — see `probeFinishedFile`.
  */
 const MEDIA_EXTENSIONS = new Set([".mp4", ".png", ".heic", ".jpg", ".jpeg"]);
+
+/**
+ * A saved GIF's extension (STC-592). Deliberately NOT in `MEDIA_EXTENSIONS`:
+ * a GIF is untagged and is never a bundle's finished file (STC-395 spec §3),
+ * so it must not reach the id match, the editor's Export destination or
+ * Reclaim's proof (`scanFinishedFilesAt`). `scanGifs` is its own path, and
+ * `gif-untagged.test.ts` still pins the list above.
+ */
+export const GIF_EXTENSION = ".gif";
+
+/**
+ * The largest GIF read whole for its duration. A GIF has no index, so its
+ * duration is a walk of every block (`probeGif`) — the one exception to this
+ * file's "never read a whole media file" rule, and why the answer is cached.
+ * Past this, only the 13-byte header is read: size, but no duration.
+ */
+export const GIF_PROBE_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * What each GIF probed to, keyed by path and valid while its size and mtime
+ * hold, so a library refresh reads a GIF once rather than every time. In
+ * memory: a restart probes again.
+ */
+const gifFacts = new Map<string, { bytes: number; mtimeMs: number; facts: ReturnType<typeof probeGif> }>();
+
+async function probeGifFile(file: string, bytes: number, mtimeMs: number): Promise<ReturnType<typeof probeGif>> {
+  const hit = gifFacts.get(file);
+  if (hit && hit.bytes === bytes && hit.mtimeMs === mtimeMs) return hit.facts;
+  let facts: ReturnType<typeof probeGif>;
+  try {
+    if (bytes <= GIF_PROBE_MAX_BYTES) {
+      facts = probeGif(new Uint8Array(await readFile(file)));
+    } else {
+      const h = await openFile(file, "r");
+      try {
+        const buf = new Uint8Array(13);
+        await h.read(buf, 0, 13, 0);
+        const head = probeGif(buf);
+        facts = head && { width: head.width, height: head.height, frames: 0 };
+      } finally { await h.close(); }
+    }
+  } catch { facts = undefined; }                       // unreadable: listed with no facts
+  gifFacts.set(file, { bytes, mtimeMs, facts });
+  return facts;
+}
+
+/**
+ * Every top-level saved GIF (STC-592). Same rules as `scanFinishedFiles`:
+ * dotfiles skipped (a `.partial` is never a `.gif` anyway), directories
+ * skipped, a file that vanished mid-scan skipped, and an unreadable one
+ * listed with no facts rather than dropped.
+ */
+async function scanGifs(root: string, entries: string[]): Promise<GifInfo[]> {
+  const out: GifInfo[] = [];
+  const seen = new Set<string>();
+  for (const name of entries) {
+    if (name.startsWith(".")) continue;
+    const ext = extname(name);
+    if (ext.toLowerCase() !== GIF_EXTENSION) continue;
+    const file = join(root, name);
+    let st;
+    try { st = await stat(file); } catch { continue; }
+    if (!st.isFile()) continue;
+    seen.add(file);
+    const facts = await probeGifFile(file, st.size, st.mtimeMs);
+    out.push({
+      file, id: basename(name, ext), createdAt: st.mtimeMs, bytes: st.size,
+      width: facts?.width, height: facts?.height, durationMs: facts?.durationMs,
+    });
+  }
+  for (const k of gifFacts.keys()) if (dirname(k) === root && !seen.has(k)) gifFacts.delete(k);
+  return out;
+}
 
 /**
  * Undefined when no camera was asked for; otherwise what it did.
@@ -375,6 +449,8 @@ interface Scan {
    * recording/still. See `library-items.ts`'s `FinishedFileInfo`.
    */
   loose: FinishedFileInfo[];
+  /** Saved GIFs (STC-592), found by extension on their own path. */
+  gifs: GifInfo[];
   invalid: InvalidItem[];
   /** Whether the folder itself could be read (STC-521). */
   folder: FolderStatus;
@@ -584,7 +660,7 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
   try {
     entries = await readdir(root);
   } catch (e: any) {
-    return { takes: [], stills: [], loose: [], invalid: [], folder: folderStatusOf(env, saveFolder, root, e?.code) };
+    return { takes: [], stills: [], loose: [], gifs: [], invalid: [], folder: folderStatusOf(env, saveFolder, root, e?.code) };
   }
 
   const finished = await scanFinishedFiles(root, entries);
@@ -749,7 +825,8 @@ async function scanRoot(env: NodeJS.ProcessEnv, saveFolder: string | null): Prom
   // what a renamed FILE needs; a bundle is never renamed by the user.
   takes.sort((a, b) => b.name.localeCompare(a.name));
   stills.sort((a, b) => b.name.localeCompare(a.name));
-  return { takes, stills, loose, invalid, folder: { state: "ok" } };
+  const gifs = await scanGifs(root, entries);
+  return { takes, stills, loose, gifs, invalid, folder: { state: "ok" } };
 }
 
 async function readRecording(dir: string, name: string, names: string[],
@@ -867,8 +944,9 @@ async function readStill(dir: string, name: string, names: string[],
  */
 export async function listLibrary(env: NodeJS.ProcessEnv, saveFolder: string | null,
                                   filter: string = DEFAULT_LIBRARY_FILTER): Promise<LibraryList> {
-  const { takes, stills, loose, invalid, folder } = await scanRoot(env, saveFolder);
-  const all = [...takes.map(recordingItem), ...stills.map(stillItem), ...loose.map(looseFileItem)];
+  const { takes, stills, loose, gifs, invalid, folder } = await scanRoot(env, saveFolder);
+  const all = [...takes.map(recordingItem), ...stills.map(stillItem), ...loose.map(looseFileItem),
+               ...gifs.map(gifItem)];
   all.sort((a, b) => b.createdAt - a.createdAt);
   const chosen = LIBRARY_FILTERS.some((f) => f.id === filter) ? filter : DEFAULT_LIBRARY_FILTER;
   return { items: applyFilter(all, chosen), invalid, filters: LIBRARY_FILTERS, filter: chosen, folder };

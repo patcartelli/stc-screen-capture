@@ -113,3 +113,50 @@ macOS, not by us.
 
 axe on each renderer HTML; any run of the app; hover/active cells for the native
 menu; the "Mac" cells above.
+
+## STC-587 — the rebuilt Settings window (2026-10-27)
+
+STC-581 replaced the profile sheet row above with its own window, so the sheet
+row is history. This is the Settings row for the window as it is now, AFTER the
+fix pass. The Library half of STC-587 waits for STC-584's rebuild.
+
+| Surface (file) | hover | focus-visible | active | disabled | loading | keyboard path | reduced motion |
+|---|---|---|---|---|---|---|---|
+| **Settings** (`settings.html`, `settings-renderer.ts`, `settings-dropdown.ts`) | ok — `--hover` on sidebar items, segmented options, dropdown triggers, buttons, keycaps (was none); STC-595 raised it to the Library's steps (.08 hover, .16 press; .06/.11 did not read on the Mac) | ok — one `:focus-visible` ring on `--focus`, inputs included (the switches, sliders and keycaps are inputs, which `tokens.css` leaves alone). Was `--accent`'s copy. Menu rows and the PiP draw it inset | ok — `--press` on the same controls, switches brighten (was none) | ok — segmented, sliders, buttons dim; Clear disables when empty | ok — Clean up is disabled and `aria-busy` for its round trip | ok — Tab through sidebar and pane. STC-595: the sidebar is one Tab stop on the shown pane, and ↑/↓/Home/End move through it and show each pane. Segmented controls are radio groups (one Tab stop, arrows/Home/End choose; was one stop per option). Dropdowns open with ↓/Return, rows take ↑/↓, Escape refocuses the trigger. A keycap keeps the focus through listening and Escape (it was lost on every re-render). Keycaps are named by their action. The PiP takes arrow keys (1%, 10% with Shift), snapped, inside the frame, saved on release (was drag only) | ok — a switch's knob does not slide, its track crossfades over `--dur-quick` (120 ms; was `transition: none`). Same in `device-menu.css`'s menu switch, which the record bar shares. The title bar's blur is not motion; Reduce Transparency makes it solid (STC-586) |
+
+**axe** (`npm run axe:renderers`, which now stubs `settingsBridge` and audits
+Settings once per pane, since axe skips the hidden ones): zero violations on all
+five panes, light and dark. It found two things, both fixed: segmented options
+had no `aria-checked` until settings loaded, and `--heading` (10-11 px headings
+and notes) was 4.49:1, now `.48` alpha instead of Figma's `.45`.
+
+**e2e:** `app/test/settings-a11y.e2e.test.ts` (Linux, Xvfb): the ring on every
+control a Tab reaches in every pane, the radio keys, the keycap's focus, the
+PiP's arrow keys, the switch's reduced-motion crossfade. All five fail on the
+pre-fix files. What only a Mac can judge is `docs/STC-587-RUNBOOK.md`.
+
+
+## STC-587 — the rebuilt Library window (2026-10-27)
+
+STC-584 rebuilt the Library to Capture SK 016's frames, which is what the
+Library half of STC-587 was waiting for. This row is the window as it is now,
+AFTER the fix pass.
+
+| Surface (file) | hover | focus-visible | active | disabled | loading | keyboard path | reduced motion |
+|---|---|---|---|---|---|---|---|
+| **Library** (`index.html`, `library-view.ts`) | ok — segments, Share, •••, the gear, menu rows, a tile's picture border, a row's background, the empty state's buttons (those had none) | ok — tokens.css's ring on every button and the tile's picture. Menu rows draw it inset (was `outline: none`, a background only). The rename field gets the search field's ring (it had none) | ok — a press state on every control above (was none) | ok — the grants panel's buttons dim; nothing else in the window disables | ok — the list is `aria-busy` while it loads or catches up, with a spinner or an "Updating" note (STC-521) | ok — Grid/List and the kind filter are radio groups (one Tab stop, arrows/Home/End choose; were one stop per option), and a keyboard pick keeps the focus through the bar's redraw (it fell to the page). Return/Space on a picture opens it. The overflow menu adds Home/End, and Tab closes it like Escape (it stayed open behind the focus). Every list redraw keeps the focus on the same item's control, or on the item that took its place after a delete (it fell to the page on every rename, delete and filter). A rename returns the focus to •••, and its Enter no longer reopens the menu. STC-595 (the first Mac pass): the arrow keys move between items onto the same control (↑/↓ in the list; ←/→ and ↑/↓ by row in the grid), a menu row puts the focus back on ••• before it acts (a Delete's confirm sheet used to return to the title bar), and a rename's Escape/Return find the item's ••• in the live page | ok — two things move: the loading spinner, which stops under Reduce motion, and a saved GIF's thumbnail, which plays while the pointer is over its tile (STC-592) and never under Reduce motion, where it keeps its first frame (STC-593; this row said only the spinner moved, written before STC-592's GIFs). The title bar's blur is not motion; Reduce Transparency makes it solid (STC-586) |
+
+**axe** (`npm run axe:renderers`, which now hands the Library a stubbed list of
+a recording and a shot, so axe sees tiles, rows and their controls rather than
+the empty state; it audits the grants panel, the grid, an open overflow menu
+and the list): zero violations, light and dark. It found `--ink-5` at 4.49:1
+(the list's column headers, the count, the grants panel's note), now `.48`
+alpha instead of the frames' `.45`, as Settings' `--heading` was.
+
+**e2e:** `app/test/library-a11y.e2e.test.ts` (Linux, Xvfb): the ring on every
+control a Tab reaches, the radio groups and their focus through a redraw, the
+overflow menu's keys, and a rename's focus round trip. All four fail on the
+pre-fix files. STC-593 added the GIF thumbnail under Reduce motion: a hover
+plays it with no preference set (the control) and leaves its first frame under
+`reduce`, which fails with `renderer.ts`'s `reduce.matches` guard removed. What
+only a Mac can judge is `docs/STC-587-RUNBOOK.md` §5-§7.

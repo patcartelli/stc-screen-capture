@@ -227,7 +227,7 @@ describe("a refusal through the menu bar or a hotkey is shown too (STC-465 revie
     await expect.poll(() => toastText(app!), { timeout: 15_000 })
       .toMatch(/Screen Recording permission needed/);
     // No shot claimed in the window that did not ask for one: nothing listed.
-    expect(await win.locator("#libgrid .libtile[data-type=Still]").count()).toBe(0);
+    expect(await win.locator("#libgrid .libtile[data-type=Shot]").count()).toBe(0);
   }, 120_000);
 });
 

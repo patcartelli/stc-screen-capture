@@ -8,7 +8,9 @@ import { join } from "node:path";
  * Export (which overwrites a bundle's ONE finished file) could write MP4 bytes
  * into a `.gif`, and Reclaim would start reading GIFs as export proof. Making
  * the GIF a finished file is a design change (spec §3's alternative), not a
- * one-line edit — this test is what says so.
+ * one-line edit — this test is what says so. STC-592 lists GIFs in the
+ * library through their own scan path (`scanGifs`), which leaves this list
+ * alone: Reclaim's kind rule would read an untagged `.gif` here as a still's.
  */
 describe("a saved GIF stays outside the library model", () => {
   const src = readFileSync(join(__dirname, "..", "src", "library.ts"), "utf8");

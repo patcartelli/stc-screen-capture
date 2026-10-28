@@ -134,7 +134,7 @@ async function expectThumbnail(dir: string, errors: string[]): Promise<void> {
 
 /**
  * The kind of every tile, in grid order: its `data-type`, the word the adapter
- * wrote ("Recording", "Still"). The grid draws no kind badge since STC-584.
+ * wrote ("Recording", "Shot"). The grid draws no kind badge since STC-584.
  */
 const badges = (win: Page) => win.evaluate(() =>
   [...document.querySelectorAll<HTMLElement>("#libgrid .libtile")].map((n) => n.dataset.type));
@@ -153,7 +153,7 @@ describe("the library grid", () => {
     await expect.poll(() => win.locator("#empty").count(), { timeout: 15_000 }).toBe(1);
     expect(await win.locator("#libgrid").count()).toBe(0);
     // The filter chips are still there — the library is empty, not absent.
-    expect(await win.locator(".libfilters button").count()).toBe(3);
+    expect(await win.locator(".libfilters button").count()).toBe(4);   // All, Recordings, Shots, GIFs (STC-592)
   }, 60_000);
 
   // STC-521: the three states a library with nothing to show can be in.
@@ -216,7 +216,7 @@ describe("the library grid", () => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Shot"]);
     expect(await win.locator(".broken").count()).toBe(0);
   }, 60_000);
 
@@ -231,7 +231,7 @@ describe("the library grid", () => {
     // sort key for both, which is what makes one index over two formats
     // possible at all.
     await expect.poll(() => badges(win), { timeout: 15_000 })
-      .toEqual(["Still", "Recording", "Still", "Recording"]);
+      .toEqual(["Shot", "Recording", "Shot", "Recording"]);
     expect(await win.locator(".broken").count()).toBe(0);
   }, 60_000);
 
@@ -240,16 +240,16 @@ describe("the library grid", () => {
       makeTakeFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
     await win.locator('.libfilters button[data-filter="still"]').click();
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await win.locator('.libfilters button[data-filter="recording"]').click();
     await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Recording"]);
 
     await win.locator('.libfilters button[data-filter="all"]').click();
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
   }, 90_000);
 
   test("each kind offers its own actions, and both offer rename and delete", async () => {
@@ -257,7 +257,7 @@ describe("the library grid", () => {
       makeTakeFolder("2026-09-08_12-00-00", { into: dir });
       makeStillFolder("2026-09-08_12-00-01", { into: dir });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
 
     // Duplicate is a still's, and it is the ADAPTER that says so — the view
     // rendered whatever list it was handed. A still's Share copies its image
@@ -309,10 +309,10 @@ describe("duplicate", () => {
         into: dir, redactions: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.1 }],
       });
     });
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await clickAction(win, 0, "duplicate");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Shot"]);
 
     // The original is a LEGACY top-level bundle (`makeStillFolder` writes it
     // that way, still-supported per Task 8's migration rule) and stays put;
@@ -350,7 +350,7 @@ describe("duplicate", () => {
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
     const original = join(recordings, "2026-09-08_12-00-00");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
     await expectThumbnail(original, errors);
     // A sentinel the real renderer would never produce: a 1x1 PNG.
     const SENTINEL = Buffer.from(
@@ -384,7 +384,7 @@ describe("duplicate", () => {
     });
     const original = join(recordings, "2026-09-08_12-00-00");
     const before = readFileSync(join(original, "shot.json"), "utf8");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await clickAction(win, 0, "open");
     const editor = await stillEditorWindow();
@@ -436,7 +436,7 @@ describe("a failed delete is reported, not swallowed (STC-392 review, I2)", () =
       makeStillFolder("2026-09-08_12-00-00", { into: dir });
     });
     const original = join(recordings, "2026-09-08_12-00-00");
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot"]);
 
     await app!.evaluate(({ dialog, shell }) => {
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); // Move to Trash
@@ -472,7 +472,7 @@ describe("the library redesign (STC-584)", () => {
 
   test("Share is the one visible button; Rename, Show and Delete are only in the overflow menu", async () => {
     const { win } = await launch(mixed);
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
     for (const i of [0, 1]) {
       const tile = win.locator(`#libgrid .libtile >> nth=${i}`);
       expect(await tile.locator(".libactions > button[data-action]").evaluateAll(
@@ -499,7 +499,7 @@ describe("the library redesign (STC-584)", () => {
 
   test("a click anywhere on a tile opens it, and its buttons do not", async () => {
     const { win } = await launch(mixed);
-    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 15_000 }).toEqual(["Shot", "Recording"]);
     // The still's name, not its picture: anywhere on the tile is the door.
     await win.locator("#libgrid .libtile >> nth=0").locator(".libtitle").click();
     await expect.poll(() => hasWindow(app!, "still-editor.html"), { timeout: 15_000 }).toBe(true);
@@ -541,8 +541,8 @@ describe("the library redesign (STC-584)", () => {
     await win.waitForSelector("#liblist .librow:not(.libhead)");
     expect(await win.locator("#liblist .libhead span").evaluateAll((s) => s.map((n) => n.textContent)))
       .toEqual(["Name", "Type", "Length", "Size", "File", "Captured", ""]);
-    const still = win.locator("#liblist .librow[data-type=Still]");
-    expect(await still.locator(".col-type").textContent()).toBe("Still");
+    const still = win.locator("#liblist .librow[data-type=Shot]");
+    expect(await still.locator(".col-type").textContent()).toBe("Shot");
     expect(await still.locator(".col-length").textContent()).toBe("–");
     expect(await win.locator("#liblist .librow[data-type=Recording] .col-length").textContent()).toBe("0:05");
     await expect.poll(() => JSON.parse(readFileSync(join(userData, "settings.json"), "utf8")).libraryView,
@@ -566,7 +566,7 @@ describe("the library redesign (STC-584)", () => {
     await expect.poll(() => win.locator("#empty").textContent(), { timeout: 5_000 }).toContain("No captures match");
     // Escape clears it.
     await win.press("#libsearch", "Escape");
-    await expect.poll(() => badges(win), { timeout: 5_000 }).toEqual(["Still", "Recording"]);
+    await expect.poll(() => badges(win), { timeout: 5_000 }).toEqual(["Shot", "Recording"]);
   }, 60_000);
 
   test("a take that stopped early wears an amber badge with the full sentence on hover", async () => {

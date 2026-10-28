@@ -91,24 +91,44 @@ const el = <K extends keyof HTMLElementTagNameMap>(
 /**
  * A segmented control (STC-584): the frames draw the view toggle and the
  * kind filter the same way, a tinted track with the chosen segment lifted.
- * `aria-pressed` rather than a class alone: a screen reader has no other way
- * to learn which one is on.
+ *
+ * A radio group (STC-587, as Settings' segmented controls are): one Tab stop,
+ * on the chosen segment, and the arrow keys, Home and End move AND choose, as
+ * native radios do. Choosing is the button's own click, so the keyboard and
+ * the pointer take one path.
  */
 function segmented<T extends string>(
-  className: string, options: readonly { id: T; label: string }[], on: string,
+  className: string, name: string, options: readonly { id: T; label: string }[], on: string,
   pick: (id: T) => void, dataKey: string, repick = false,
 ): HTMLElement {
   const box = el("div", `libseg ${className}`);
-  box.setAttribute("role", "group");
+  box.setAttribute("role", "radiogroup");
+  box.setAttribute("aria-label", name);
+  const chosen = options.some((o) => o.id === on) ? on : options[0]?.id;
   for (const o of options) {
     const b = el("button", undefined, o.label);
     b.type = "button";
     b.dataset[dataKey] = o.id;
-    b.setAttribute("aria-pressed", String(o.id === on));
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(o.id === on));
+    b.tabIndex = o.id === chosen ? 0 : -1;
     if (o.id === on) b.classList.add("on");
     b.addEventListener("click", () => { if (repick || o.id !== on) pick(o.id); });
     box.append(b);
   }
+  box.addEventListener("keydown", (e) => {
+    const buttons = [...box.querySelectorAll<HTMLButtonElement>("button")];
+    const i = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (i < 0) return;
+    const next = e.key === "ArrowRight" || e.key === "ArrowDown" ? (i + 1) % buttons.length
+      : e.key === "ArrowLeft" || e.key === "ArrowUp" ? (i - 1 + buttons.length) % buttons.length
+        : e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : -1;
+    const to = buttons[next];
+    if (!to || to === buttons[i]) return;
+    e.preventDefault();
+    to.focus();
+    to.click();
+  });
   return box;
 }
 
@@ -121,14 +141,20 @@ const VIEWS = [{ id: "grid", label: "Grid" }, { id: "list", label: "List" }] as 
  */
 export function renderControls(host: HTMLElement, list: LibraryList, view: "grid" | "list",
                                cb: LibraryCallbacks, folderLost: boolean): void {
+  // Every pick redraws these controls, so a keyboard pick would drop the
+  // focus to the page each time (STC-587). Whichever group had it gets it
+  // back, on its chosen segment.
+  const had = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".libseg");
+  const group = had && host.contains(had) ? [...had.classList].find((c) => c !== "libseg") : undefined;
   host.textContent = "";
   if (folderLost) return;
   host.append(
-    segmented("libviewtoggle", VIEWS, view, (m) => void cb.setView(m), "view"),
+    segmented("libviewtoggle", "View", VIEWS, view, (m) => void cb.setView(m), "view"),
     // The chosen filter re-lists when pressed again: the library has no
     // refresh control, and pressing "All" is the one a person reaches for.
-    segmented("libfilters", list.filters, list.filter, (f) => void cb.setFilter(f), "filter", true),
+    segmented("libfilters", "Show", list.filters, list.filter, (f) => void cb.setFilter(f), "filter", true),
   );
+  if (group) host.querySelector<HTMLButtonElement>(`.${group} button[tabindex="0"]`)?.focus();
 }
 
 /**
@@ -264,28 +290,41 @@ function titleFor(item: LibraryItem): HTMLElement {
   return title;
 }
 
-function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks): void {
+function renameInto(title: HTMLElement, item: LibraryItem, cb: LibraryCallbacks,
+                    back?: HTMLElement): void {
   const input = el("input", "labelinput");
   input.type = "text";
   input.value = item.label ?? "";
   input.placeholder = "Name this capture";
   input.maxLength = 120;
   let done = false;
-  const commit = () => {
+  // The item's •••, looked up in the page as it is NOW (STC-595): the one
+  // held from when the rename started is gone if the list redrew meanwhile,
+  // and focusing a detached button leaves the focus nowhere (on the Mac,
+  // Escape then left Tab starting from the name, before Share).
+  const backNow = (): HTMLElement | undefined => (back?.isConnected ? back : undefined)
+    ?? document.querySelector<HTMLElement>(`[data-id="${CSS.escape(item.id)}"] .libmore`) ?? undefined;
+  const commit = (refocus: boolean) => {
     if (done) return;                 // blur fires again after Enter replaces it
     done = true;
     const v = input.value.trim();
     input.replaceWith(title);
+    // From the keyboard, back where the rename was asked for (STC-587), not
+    // on the page. A blur commit leaves the focus wherever it went.
+    if (refocus) backNow()?.focus();
     if (v && v !== item.label) void cb.rename(item, v);
   };
   // A key or a click in the field is the field's, not the tile's Open.
   input.addEventListener("click", (e) => e.stopPropagation());
   input.addEventListener("keydown", (e) => {
     e.stopPropagation();
-    if (e.key === "Enter") commit();
-    if (e.key === "Escape") { done = true; input.replaceWith(title); }
+    // The key ends here: focus has moved on to More by the time Enter would
+    // activate something, and it would reopen the menu.
+    if (e.key === "Enter" || e.key === "Escape") e.preventDefault();
+    if (e.key === "Enter") commit(true);
+    if (e.key === "Escape") { done = true; input.replaceWith(title); backNow()?.focus(); }
   });
-  input.addEventListener("blur", commit);
+  input.addEventListener("blur", () => commit(false));
   title.replaceWith(input);
   input.focus();
   input.select();
@@ -345,7 +384,11 @@ function openOverflow(trigger: HTMLButtonElement, actions: LibraryAction[],
     b.dataset.action = a.id;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      closeOverflow();
+      // The focus goes back to ••• BEFORE the action runs (STC-595). Removing
+      // the menu while its row had the focus dropped it to the page, so a
+      // Delete's confirm sheet came back to nothing and the redraw after it
+      // had no item to keep the focus on (the ring landed on the title bar).
+      closeOverflow(true);
       choose(a);
     });
     menu.append(b);
@@ -355,7 +398,12 @@ function openOverflow(trigger: HTMLButtonElement, actions: LibraryAction[],
     const i = items.indexOf(document.activeElement as HTMLButtonElement);
     if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+    else if (e.key === "Home") { e.preventDefault(); items[0]?.focus(); }
+    else if (e.key === "End") { e.preventDefault(); items[items.length - 1]?.focus(); }
     else if (e.key === "Escape") { e.preventDefault(); closeOverflow(true); }
+    // Tab closes the menu too, with the focus back on the button that
+    // opened it, rather than walking out of a menu left open behind it.
+    else if (e.key === "Tab") { e.preventDefault(); closeOverflow(true); }
   });
   menu.addEventListener("click", (e) => e.stopPropagation());
   document.body.append(menu);
@@ -390,13 +438,17 @@ function actionButtons(item: LibraryItem, title: () => HTMLElement, cb: LibraryC
   const run = (a: LibraryAction) => {
     // Rename is the one action the VIEW owns, because it is an edit in
     // place: everything else is a message to the main process.
-    if (a.id === "rename") renameInto(title(), item, cb);
+    if (a.id === "rename") renameInto(title(), item, cb, box.querySelector<HTMLElement>(".libmore") ?? undefined);
     else void cb.act(a.id, item);
   };
   for (const a of item.actions.filter((x) => x.place === "primary")) {
     const b = el("button", "libshare", a.label);
     b.type = "button";
     b.dataset.action = a.id;
+    // "primary", not the action's id: a recording's Share and a shot's are
+    // different actions in the same place, and the arrow keys (STC-595) and
+    // a redraw keep the focus by place.
+    b.dataset.focus = "primary";
     b.addEventListener("click", (e) => { e.stopPropagation(); run(a); });
     box.append(b);
   }
@@ -408,6 +460,7 @@ function actionButtons(item: LibraryItem, title: () => HTMLElement, cb: LibraryC
     more.setAttribute("aria-haspopup", "menu");
     more.setAttribute("aria-expanded", "false");
     more.title = "More";
+    more.dataset.focus = "more";
     more.append(el("span", undefined, "•••"));
     more.addEventListener("click", (e) => { e.stopPropagation(); openOverflow(more, menu, run); });
     box.append(more);
@@ -427,6 +480,7 @@ function wireTile(card: HTMLElement, focusable: HTMLElement, item: LibraryItem, 
   card.classList.add("clickable");
   focusable.setAttribute("role", "button");
   focusable.tabIndex = 0;
+  focusable.dataset.focus = "open";
   focusable.setAttribute("aria-label", `${open.label} ${item.label ?? item.id}`);
   card.dataset.open = open.id;
   const fire = () => void cb.act(open.id, item);
@@ -507,6 +561,7 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
                               placeholder: LibraryPlaceholder | null = null,
                               onPlaceholderAction: (a: PlaceholderAction) => void = () => {},
                               now: number = Date.now()): void {
+  const keep = focusAnchor(host);
   closeOverflow();
   painting?.disconnect();
   // `rootMargin` paints a screenful ahead, so a tile is ready by the time it
@@ -539,6 +594,7 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
   container.id = view === "list" ? "liblist" : "libgrid";
   if (view === "list") container.append(listHeader());
   for (const item of list.items) container.append(view === "list" ? row(item, cb, now) : tile(item, cb));
+  container.addEventListener("keydown", (e) => arrowBetweenItems(e, container, view));
   host.append(container);
 
   // The first screenful, unconditionally — see EAGER_TILES. With no observer at
@@ -550,4 +606,64 @@ export function renderLibrary(host: HTMLElement, list: LibraryList,
   for (const b of list.invalid) {
     host.append(el("div", "broken", `${b.name} — ${b.reason}`));
   }
+  if (keep) restoreFocus(container, keep);
+}
+
+/**
+ * The arrow keys move between items (STC-595, Patrick 2026-10-28), on top of
+ * Tab, which still walks every control. In the list ↑/↓ go to the item above
+ * or below; in the grid ←/→ go to the previous or next item and ↑/↓ to the
+ * one a row away, the row being however many columns the window fits now.
+ * The focus lands on the same control of the new item (its picture, Share or
+ * •••), or its first when it has no such control. At either end nothing
+ * happens: no wrap, so holding a key stops at the last item.
+ */
+function arrowBetweenItems(e: KeyboardEvent, container: HTMLElement, view: "grid" | "list"): void {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const from = e.target as HTMLElement;
+  const part = from.closest<HTMLElement>("[data-focus]")?.dataset.focus;
+  const card = from.closest<HTMLElement>("[data-id]");
+  if (!part || !card) return;                       // not on an item's control (the rename field stops its own keys)
+  const cards = [...container.querySelectorAll<HTMLElement>("[data-id]")];
+  const at = cards.indexOf(card);
+  const columns = view === "list" ? 1 : cards.filter((c) => c.offsetTop === cards[0]!.offsetTop).length;
+  const step = view === "list"
+    ? { ArrowUp: -1, ArrowDown: 1 }[e.key]
+    : { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns }[e.key];
+  if (step === undefined) return;
+  e.preventDefault();                               // the arrows would scroll the window otherwise
+  const next = cards[at + step];
+  if (!next) return;
+  (next.querySelector<HTMLElement>(`[data-focus="${part}"]`) ?? next.querySelector<HTMLElement>("[data-focus]"))?.focus();
+}
+
+/**
+ * Which item's control had the keyboard before a redraw (STC-587), and where
+ * it sat. Every refresh (a rename, a delete, a filter, Show in Finder's
+ * return) rebuilds every tile, and without this the focus fell to the page.
+ */
+interface FocusAnchor { id: string; part: string; index: number }
+
+function focusAnchor(host: HTMLElement): FocusAnchor | undefined {
+  const active = document.activeElement as HTMLElement | null;
+  if (!active || !host.contains(active)) return undefined;
+  const card = active.closest<HTMLElement>("[data-id]");
+  const part = active.closest<HTMLElement>("[data-focus]")?.dataset.focus;
+  if (!card?.dataset.id || !part) return undefined;
+  const cards = [...host.querySelectorAll<HTMLElement>("[data-id]")];
+  return { id: card.dataset.id, part, index: cards.indexOf(card) };
+}
+
+/**
+ * The same control on the same item, or, when the item has gone (a delete,
+ * a filter that drops it), the one now in its place: the next, else the last.
+ */
+function restoreFocus(container: HTMLElement, keep: FocusAnchor): void {
+  const cards = [...container.querySelectorAll<HTMLElement>("[data-id]")];
+  const same = cards.find((c) => c.dataset.id === keep.id);
+  const card = same ?? cards[Math.min(keep.index, cards.length - 1)];
+  if (!card) return;
+  const target = (same && card.querySelector<HTMLElement>(`[data-focus="${keep.part}"]`))
+    ?? card.querySelector<HTMLElement>("[data-focus]");
+  target?.focus();
 }

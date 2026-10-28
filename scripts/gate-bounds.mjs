@@ -153,10 +153,18 @@ export const GATE_DECODER_PREFERENCE = "prefer-software";
  * from 2026-10-12 to 2026-10-14 the step took 1045-1599 s, and the suite itself
  * reached 1620 s. 35 min is ~1.3x that, the same rule as before.
  *
+ * RE-MEASURED 2026-10-27 (STC-594's PR run 40563123051 and master's c9aca18
+ * push), because it did again. Neither hung: in the PR run every file ran
+ * ~20% slower than the green run before it on the same day (suite 1744 s ->
+ * ~2103 s, the whole e2e project slower, no single outlier), and the bound
+ * fired with 11 files and ~36 s of work left. Green Test steps that day took
+ * 1509-1746 s. A healthy run on a slow runner is the run to calibrate on, so
+ * 45 min is ~1.3x that ~2103 s, the same rule as before.
+ *
  * The Test step's `timeout-minutes` in ci.yml must equal this, and
  * gate-bounds.test.ts asserts it.
  */
-export const TEST_STEP_MS = 35 * 60_000;
+export const TEST_STEP_MS = 45 * 60_000;
 
 /**
  * Everything from the job's start to the start of `Test`: checkout,

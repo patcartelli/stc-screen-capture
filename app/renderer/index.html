@@ -30,12 +30,16 @@
       --ink-2: rgba(255, 255, 255, .7);
       --ink-3: rgba(255, 255, 255, .6);
       --ink-4: rgba(255, 255, 255, .5);
-      --ink-5: rgba(255, 255, 255, .45);
+      /* .48, not the frames' .45 (STC-587): .45 is 4.49:1 on --win, under AA
+         for the 10-11 px headers and notes it draws. */
+      --ink-5: rgba(255, 255, 255, .48);
       --ink-6: rgba(255, 255, 255, .4);
       --fill: rgba(255, 255, 255, .05);
       --fill-2: rgba(255, 255, 255, .08);
       --fill-3: rgba(255, 255, 255, .1);
       --fill-4: rgba(255, 255, 255, .12);
+      /* A press (STC-587): one step past each control's hover. */
+      --press: rgba(255, 255, 255, .16);
       --menu: #1b1b1b;
       --menu-edge: rgba(255, 255, 255, .1);
       --danger: #ff7a70;
@@ -81,6 +85,7 @@
                      font: 500 12px/16px var(--ui); color: var(--ink-3); white-space: nowrap; }
     .libseg button:hover:not(.on) { color: var(--ink); }
     .libseg button.on { background: var(--fill-3); color: #fff; }
+    .libseg button:active { background: var(--fill-4); color: #fff; }
     #libsearch { width: 120px; height: 30px; padding: 7px 12px; border: 0; border-radius: 10px; outline: none;
                  background: var(--fill); color: var(--ink); font: 400 12px/16px var(--ui); }
     #libsearch::placeholder { color: var(--ink-6); }
@@ -89,6 +94,7 @@
     #settings { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px;
                 padding: 0; border: 0; border-radius: 10px; background: var(--fill); color: var(--ink-2); }
     #settings:hover { background: var(--fill-2); color: var(--ink); }
+    #settings:active { background: var(--fill-4); }
     #settings svg { width: 18px; height: 18px; fill: currentColor; }
 
     /* ── the scroller the grid lives in, under the bar ───────────────────── */
@@ -127,6 +133,7 @@
       border-left: 16px solid rgba(255, 255, 255, .22);
     }
     .libtile.clickable:hover .libthumb { border-color: rgba(255, 255, 255, .2); }
+    .libtile.clickable:active .libthumb { border-color: rgba(255, 255, 255, .32); }
     .libthumb:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     /* The duration or format chip, bottom right. */
     .libchip { position: absolute; right: 18px; bottom: 15px; padding: 3px 6px; border-radius: 6px;
@@ -143,9 +150,11 @@
     .libshare { border: 0; padding: 5px 10px; border-radius: 8px; background: var(--fill-2);
                 font: 500 12px/16px var(--ui); color: var(--ink); }
     .libshare:hover { background: var(--fill-4); }
+    .libshare:active { background: var(--press); }
     .libmore { border: 0; padding: 5px 6px; border-radius: 8px; background: transparent;
                font: 500 11px/16px var(--ui); color: var(--ink-2); }
     .libmore:hover, .libmore.on { background: var(--fill-4); }
+    .libmore:active { background: var(--press); }
 
     /* ── the overflow menu (Capture SK 016, "Overflow menu") ─────────────── */
     .liboverflow-menu { position: fixed; z-index: 10; display: flex; flex-direction: column; min-width: 120px;
@@ -153,7 +162,11 @@
                         background: var(--menu); box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
     .liboverflow-menu button { border: 0; background: transparent; text-align: left; white-space: nowrap;
                                padding: 7px 10px; border-radius: 8px; font: 400 13px/18px var(--ui); color: rgba(255, 255, 255, .9); }
-    .liboverflow-menu button:hover, .liboverflow-menu button:focus-visible { background: var(--fill-2); outline: none; }
+    .liboverflow-menu button:hover, .liboverflow-menu button:focus-visible { background: var(--fill-2); }
+    /* The shared ring, drawn inside the row (STC-587), as Settings' menu rows
+       draw it: outside, the menu's own padding would clip it. */
+    .liboverflow-menu button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+    .liboverflow-menu button:active { background: var(--fill-4); }
     .liboverflow-menu button.delete { color: var(--danger); }
     .libmenu-divider { height: 1px; margin: 0; background: var(--fill-2); }
 
@@ -161,6 +174,7 @@
     .liblist { display: flex; flex-direction: column; }
     .librow { display: flex; align-items: center; gap: 16px; padding: 8px; border-radius: 10px; min-width: 0; }
     .librow.clickable:hover { background: var(--fill); }
+    .librow.clickable:active { background: var(--fill-2); }
     .librow.libhead { padding-top: 8px; padding-bottom: 8px; border-radius: 0; border-bottom: 1px solid var(--hair); margin-bottom: 0; }
     .libhead span { font: 500 10px/12px var(--ui); letter-spacing: 1px; text-transform: uppercase; color: var(--ink-5); }
     .librow .col-name { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 10px; }
@@ -183,6 +197,8 @@
 
     .labelinput { font: 500 13px/18px var(--ui); padding: 0 6px; margin: 0 -6px; border-radius: 6px; width: 100%;
                   border: 1px solid rgba(255, 255, 255, .26); background: rgba(255, 255, 255, .06); color: var(--ink); outline: none; }
+    /* The one ring, inputs included (STC-587), as the search field draws it. */
+    .labelinput:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
 
     /* ── what the library says with nothing to draw (STC-521) ────────────── */
     .libplaceholder { display: flex; flex-direction: column; align-items: center; text-align: center;
@@ -198,6 +214,10 @@
     .libplaceactions { display: flex; gap: 8px; margin-top: 6px; }
     .libplaceactions button { border: 0; padding: 5px 10px; border-radius: 8px; background: var(--fill-2); font: 500 12px/16px var(--ui); }
     .libplaceactions button.primary { background: var(--accent); color: #0c0c0c; }
+    .libplaceactions button:not(.primary):hover { background: var(--fill-4); }
+    .libplaceactions button:not(.primary):active { background: var(--press); }
+    .libplaceactions button.primary:hover { filter: brightness(1.1); }
+    .libplaceactions button.primary:active { filter: brightness(.9); }
     .libspinner { width: 18px; height: 18px; border-radius: 999px; border: 2px solid rgba(255, 255, 255, .2);
                   border-top-color: var(--accent); animation: libspin .8s linear infinite; }
     @keyframes libspin { to { transform: rotate(360deg); } }
@@ -240,6 +260,7 @@
     .permactions button { border: 0; padding: 5px 10px; border-radius: 8px; background: var(--fill-2);
                           font: 500 12px/16px var(--ui); color: var(--ink); }
     .permactions button:hover:not([disabled]) { background: var(--fill-4); }
+    .permactions button:active:not([disabled]) { background: var(--press); }
     .permactions button[disabled] { opacity: .4; }
   </style>
 </head>

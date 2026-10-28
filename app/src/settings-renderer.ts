@@ -79,8 +79,11 @@ const isPane = (v: unknown): v is Pane => typeof v === "string" && (PANES as rea
 function showPane(pane: Pane): void {
   for (const p of PANES) $(`pane-${p}`).hidden = p !== pane;
   for (const b of document.querySelectorAll<HTMLButtonElement>("#sidebar button")) {
-    if (b.dataset.pane === pane) b.setAttribute("aria-current", "page");
+    const current = b.dataset.pane === pane;
+    if (current) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
+    // One Tab stop, on the pane being shown (STC-595); the arrows do the rest.
+    b.tabIndex = current ? 0 : -1;
   }
   $("titlebar").textContent = PANE_TITLES[pane];
   document.title = `${PANE_TITLES[pane]} – Settings`;
@@ -90,6 +93,24 @@ function showPane(pane: Pane): void {
 for (const b of document.querySelectorAll<HTMLButtonElement>("#sidebar button")) {
   b.addEventListener("click", () => { if (isPane(b.dataset.pane)) showPane(b.dataset.pane); });
 }
+/**
+ * ↑/↓ move through the sidebar and show each pane as they reach it, as a
+ * macOS sidebar does (STC-595, Patrick 2026-10-28); Home and End go to the
+ * first and last. It stops at either end rather than wrapping.
+ */
+$("sidebar").addEventListener("keydown", (e) => {
+  const buttons = [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")];
+  const i = buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if (i < 0 || e.altKey || e.ctrlKey || e.metaKey) return;
+  const to = e.key === "ArrowDown" ? Math.min(i + 1, buttons.length - 1)
+    : e.key === "ArrowUp" ? Math.max(i - 1, 0)
+      : e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : -1;
+  if (to < 0) return;
+  e.preventDefault();
+  const b = buttons[to]!;
+  if (isPane(b.dataset.pane)) showPane(b.dataset.pane);
+  b.focus();
+});
 const params = new URLSearchParams(location.search);
 showPane("capture");
 
@@ -101,11 +122,39 @@ bridge.on("settings:reduced-transparency", (on: boolean) => {
 
 // ---- small controls -----------------------------------------------------------
 
-/** A segmented control's buttons, `data-value` keyed. Draws the selection only. */
+/**
+ * A segmented control's buttons, `data-value` keyed. Draws the selection, and
+ * makes the group one Tab stop on the chosen button (the radio pattern,
+ * STC-587); with nothing chosen the first takes the stop.
+ */
 function markSegment(group: HTMLElement, value: string): void {
-  for (const b of group.querySelectorAll<HTMLButtonElement>("button")) {
+  const buttons = [...group.querySelectorAll<HTMLButtonElement>("button")];
+  for (const b of buttons) {
     b.setAttribute("aria-checked", String((b.dataset.value ?? b.dataset.pipShape) === value));
   }
+  const stop = buttons.find((b) => b.getAttribute("aria-checked") === "true") ?? buttons[0];
+  for (const b of buttons) b.tabIndex = b === stop ? 0 : -1;
+}
+
+/**
+ * Arrow keys move through a segmented control and choose as they go, as
+ * native radios do; Home and End go to either end. Choosing is the button's
+ * own click, so the keyboard and the pointer take one path.
+ */
+function wireSegmentKeys(group: HTMLElement): void {
+  group.addEventListener("keydown", (e) => {
+    const buttons = [...group.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    const i = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (i < 0) return;
+    const next = e.key === "ArrowRight" || e.key === "ArrowDown" ? (i + 1) % buttons.length
+      : e.key === "ArrowLeft" || e.key === "ArrowUp" ? (i - 1 + buttons.length) % buttons.length
+        : e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : -1;
+    const to = buttons[next];
+    if (!to) return;
+    e.preventDefault();
+    to.focus();
+    to.click();
+  });
 }
 
 // ---- Capture pane -------------------------------------------------------------
@@ -133,6 +182,8 @@ afterShot.addEventListener("click", (e) => {
   markSegment(afterShot, b.dataset.value!);
   void save("what happens after a shot", () => patchThumbnail({ skip: b.dataset.value === "clipboard" }));
 });
+markSegment(afterShot, "");
+wireSegmentKeys(afterShot);
 const CORNERS: readonly { value: SettingsView["thumbnail"]["corner"]; label: string }[] = [
   { value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" },
   { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" },
@@ -174,6 +225,8 @@ countdownGroup.addEventListener("click", async (e) => {
     markSegment(countdownGroup, String((await bridge.setSettings({ countdownMs: Number(b.dataset.value) })).countdownMs));
   });
 });
+markSegment(countdownGroup, "");
+wireSegmentKeys(countdownGroup);
 
 // ---- Output pane --------------------------------------------------------------
 
@@ -204,7 +257,8 @@ $("reclaimspace").addEventListener("click", async () => {
   // and a second press would be swallowed by main's guard with no feedback.
   const btn = $("reclaimspace") as HTMLButtonElement;
   btn.disabled = true;
-  try { await bridge.reclaimSpace(); } finally { btn.disabled = false; }
+  btn.setAttribute("aria-busy", "true");
+  try { await bridge.reclaimSpace(); } finally { btn.disabled = false; btn.removeAttribute("aria-busy"); }
 });
 
 async function patchGif(patch: Partial<GifSettings>): Promise<void> {
@@ -297,6 +351,8 @@ $("pipshape").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-pip-shape]");
   if (b) void editPip({ kind: "shape", shape: b.dataset.pipShape as PipStyle["shape"] }, "commit");
 });
+markSegment($("pipshape"), "");
+wireSegmentKeys($("pipshape"));
 for (const [input, make] of [
   [radiusIn, (value: number): PipEdit => ({ kind: "radius", value })],
   [sizeIn, (value: number): PipEdit => ({ kind: "size", value })],
@@ -340,6 +396,35 @@ pipBox.addEventListener("pointerup", () => {
   void editPip({ kind: "move", center: pipDefault.center }, "commit");
 });
 
+/**
+ * The keyboard's way to place it (STC-587): arrow keys move it 1% of the
+ * frame, 10% with Shift, kept wholly inside the frame, and snapped to the same
+ * guides a drag snaps to. Each press repaints; the key's release saves, as a
+ * drag's release does.
+ */
+const PIP_NUDGE = 0.01;
+const PIP_NUDGE_SHIFT = 0.1;
+pipBox.addEventListener("keydown", (e) => {
+  const dir = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, [number, number]>)[e.key];
+  if (!dir || !pipDefault) return;
+  e.preventDefault();
+  const out = mockOut();
+  const size = pipSize(pipDefault, out, MOCK_CAM);
+  const step = e.shiftKey ? PIP_NUDGE_SHIFT : PIP_NUDGE;
+  const halfX = size.width / 2 / out.width, halfY = size.height / 2 / out.height;
+  const within = (v: number, half: number) => Math.min(1 - half, Math.max(half, v));
+  const raw = {
+    x: within(pipDefault.center.x + dir[0] * step, halfX),
+    y: within(pipDefault.center.y + dir[1] * step, halfY),
+  };
+  const k = stage.getBoundingClientRect().width / out.width || 1;
+  void editPip({ kind: "move", center: snapCenter(raw, size, out, PIP_SNAP_THRESHOLD_SCREEN_PX / k) }, "live");
+});
+pipBox.addEventListener("keyup", (e) => {
+  if (!e.key.startsWith("Arrow") || !pipDefault) return;
+  void editPip({ kind: "move", center: pipDefault.center }, "commit");
+});
+
 // ---- Shortcuts pane (STC-292) -------------------------------------------------
 //
 // A shortcut that did not bind must SAY so. The grammar, the reserved list and
@@ -356,6 +441,7 @@ function shortcutRow(action: BindableAction): HTMLElement {
   label.className = "label";
   const name = document.createElement("span");
   name.className = "name";
+  name.id = `shortcutname-${action}`;
   name.textContent = ACTION_LABELS[action];
   label.append(name);
 
@@ -399,6 +485,9 @@ function shortcutRow(action: BindableAction): HTMLElement {
   const bound = shortcutState?.shortcuts[action] ?? null;
   keys.textContent = listening === action ? "Press keys…" : formatAccelerator(bound);
   keys.classList.toggle("listening", listening === action);
+  // Named by its action as well as its keys (STC-587): "Shot Area ⌥⌘1".
+  keys.setAttribute("aria-labelledby", `${name.id} ${keys.id}`);
+  keys.setAttribute("aria-pressed", String(listening === action));
   keys.addEventListener("click", () => {
     listening = listening === action ? undefined : action;
     renderShortcuts();
@@ -416,9 +505,17 @@ function shortcutRow(action: BindableAction): HTMLElement {
 }
 
 function renderShortcuts(): void {
+  // The rows are rebuilt, so the focused control goes with them. Put the
+  // keyboard back on the same one (STC-587), or a Return on a keycap would
+  // leave focus on the page and the next Tab would start from the top.
+  const focused = document.activeElement?.closest("#pane-shortcuts") ? document.activeElement.id : "";
   // Shots, then Recording: Record is the one motion action (STC-581).
   $("shortcuts-shots").replaceChildren(...BINDABLE_ACTIONS.filter((a) => a !== "record").map(shortcutRow));
   $("shortcuts-recording").replaceChildren(shortcutRow("record"));
+  if (!focused) return;
+  const again = document.getElementById(focused) as HTMLButtonElement | null;
+  // A Clear that just emptied its row is disabled now; its keycap takes the focus.
+  (again && !again.disabled ? again : again?.parentElement?.querySelector<HTMLElement>(".keycap"))?.focus();
 }
 
 async function applyShortcut(action: BindableAction, accelerator: string | null): Promise<void> {

@@ -110,10 +110,16 @@
 import type { DecorationMode } from "@transform/shot.js";
 import { libraryNote, silenceNote, stallNote, stopBadge } from "./stop-copy.js";
 
-export type LibraryKind = "recording" | "still";
+/**
+ * `gif` is a saved GIF (STC-592): a plain top-level file, untagged and with no
+ * bundle (STC-395), found by its extension alone. Its own kind rather than a
+ * recording's derivative, because nothing links it back to one.
+ */
+export type LibraryKind = "recording" | "still" | "gif";
 
 /** What a tile can be told to do. The view dispatches on this, never on kind. */
-export type LibraryActionId = "open" | "share" | "copy-image" | "rename" | "duplicate" | "reveal" | "delete";
+export type LibraryActionId =
+  "open" | "share" | "copy-image" | "copy-file" | "rename" | "duplicate" | "reveal" | "delete";
 
 /**
  * Where an action is drawn (STC-584). `tile` is the whole tile or row, which
@@ -141,7 +147,7 @@ export interface LibraryAlert { label: string; detail: string }
  * nothing to say (a still's length), so no column is ever blank.
  */
 export interface LibraryColumns {
-  /** "Recording" or "Still". */
+  /** "Recording" or "Shot". */
   type: string;
   /** "0:42", or "–". */
   length: string;
@@ -169,7 +175,13 @@ export interface LibraryColumns {
 export type LibraryThumbnail =
   | { source: "file"; file: string }
   | { source: "render" }
-  | { source: "none" };
+  | { source: "none" }
+  /**
+   * The item's own file is an animation (STC-592): its first frame at rest,
+   * the animation while the pointer is over the item, and never the animation
+   * under Reduce Motion. The file is the item's `file`; nothing is cached.
+   */
+  | { source: "animated" };
 
 /**
  * The narrow interface the ticket asks for: id, kind, created, label,
@@ -188,7 +200,7 @@ export interface LibraryItem {
   id: string;
   kind: LibraryKind;
   /**
-   * The kind, as a word ("Recording", "Still"). The list's Type column, and
+   * The kind, as a word ("Recording", "Shot"). The list's Type column, and
    * `data-type` on every tile. Data, not a branch.
    */
   badge: string;
@@ -263,17 +275,18 @@ export interface LibraryFilter { id: string; label: string }
 export const LIBRARY_FILTERS: readonly LibraryFilter[] = [
   { id: "all", label: "All" },
   { id: "recording", label: "Recordings" },
-  // "Stills", the ticket's own word (STC-584), where STC-398 had "Shots". The
-  // library names the KIND; the hotkeys and the menu bar name the ACTION, and
-  // keep "Shot".
-  { id: "still", label: "Stills" },
+  // "Shots", STC-398's word for the artefact. STC-584's frames say "Stills";
+  // the library keeps "Shot" like the rest of the app (Patrick, 2026-10-27).
+  { id: "still", label: "Shots" },
+  // Listed since STC-592: a saved GIF is found by its extension.
+  { id: "gif", label: "GIFs" },
 ];
 
 export const DEFAULT_LIBRARY_FILTER = "all";
 
 /** An unknown filter id shows everything rather than nothing — a stale preference must not empty the library. */
 export function applyFilter(items: readonly LibraryItem[], id: string): LibraryItem[] {
-  if (id === "recording" || id === "still") return items.filter((i) => i.kind === id);
+  if (id === "recording" || id === "still" || id === "gif") return items.filter((i) => i.kind === id);
   return [...items];
 }
 
@@ -554,14 +567,14 @@ export function stillItem(s: StillInfo): LibraryItem {
   return {
     id: s.name,
     kind: "still",
-    badge: "Still",
+    badge: "Shot",
     dir: s.dir,
     file: s.file,
     createdAt: s.capturedAt,
     bytes: s.bytes,
     label: s.label,
     readout: readoutLine(size, s.bytes),
-    columns: { type: "Still", length: NO_VALUE, size, file: fmtBytes(s.bytes) },
+    columns: { type: "Shot", length: NO_VALUE, size, file: fmtBytes(s.bytes) },
     chip: formatChip(s.file),
     alerts: [],
     notes: [notes.join(" · ")],
@@ -657,14 +670,15 @@ export function looseFileItem(f: FinishedFileInfo): LibraryItem {
   return {
     id: f.id,
     kind,
-    // STC-584 names the kind "Still" in the library (see LIBRARY_FILTERS).
-    badge: kind === "recording" ? "Recording" : "Still",
+    // "Shot", not "Still" — STC-398 renamed the artefact and STC-407 cleaned
+    // up the residue (and STC-584 kept it, see LIBRARY_FILTERS).
+    badge: kind === "recording" ? "Recording" : "Shot",
     dir: f.dir,
     file: f.file,
     createdAt: f.createdAt,
     bytes: f.bytes,
     readout: readoutLine(size, f.bytes),
-    columns: { type: kind === "recording" ? "Recording" : "Still", length: length ?? NO_VALUE,
+    columns: { type: kind === "recording" ? "Recording" : "Shot", length: length ?? NO_VALUE,
                size, file: fmtBytes(f.bytes) },
     chip: length ?? formatChip(f.file),
     alerts: [],
@@ -676,6 +690,55 @@ export function looseFileItem(f: FinishedFileInfo): LibraryItem {
     thumbnail: { source: "none" },
     // No tile action and no Share: both need a bundle that read (rule above).
     actions: menuActions(false),
+  };
+}
+
+/**
+ * A saved GIF, as the scan found it (STC-592): a top-level `.gif` and what
+ * `gif-probe.ts` could read from it. No `dir`, ever: a GIF has no bundle.
+ */
+export interface GifInfo {
+  file: string;
+  /** The file's stem — the export name, as for any loose file. */
+  id: string;
+  createdAt: number;
+  bytes: number;
+  /** From the file's own header; absent when it is not a readable GIF. */
+  width?: number;
+  height?: number;
+  /** Absent when the file ends before its trailer (`probeGif`). */
+  durationMs?: number;
+}
+
+/**
+ * One saved GIF, as a library item (STC-592, decided with Patrick 2026-10-27).
+ *
+ * Share puts the file itself on the clipboard (`copy-file`): a GIF is already
+ * what gets shared, so there is nothing to render. There is no tile action —
+ * no editor opens a GIF — and no Duplicate. Rename, Show in Finder and Delete
+ * need only the file, which a GIF always has.
+ */
+export function gifItem(g: GifInfo): LibraryItem {
+  const size = pixelSizeLabel(g.width, g.height, false);
+  const length = g.durationMs !== undefined ? fmtDuration(g.durationMs) : undefined;
+  const bits = [length, size === NO_VALUE ? undefined : size, fmtBytes(g.bytes)].filter(Boolean);
+  return {
+    id: g.id,
+    kind: "gif",
+    badge: "GIF",
+    file: g.file,
+    createdAt: g.createdAt,
+    bytes: g.bytes,
+    readout: bits.join("  ·  "),
+    columns: { type: "GIF", length: length ?? NO_VALUE, size, file: fmtBytes(g.bytes) },
+    chip: "GIF",
+    alerts: [],
+    notes: [],
+    thumbnail: { source: "animated" },
+    actions: [
+      { id: "copy-file", label: "Share", place: "primary" },
+      ...menuActions(false),
+    ],
   };
 }
 

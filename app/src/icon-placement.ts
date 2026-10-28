@@ -25,6 +25,12 @@
  *    still editor. A capture's overlay, countdown, floating panel, toast and
  *    pill come and go with a capture; counting them would flash the Dock icon
  *    during every shot.
+ * 5. While a take records (the pill is up), `menubar` has no Dock icon, even
+ *    with the library still open but hidden for the take. The pill's window
+ *    hides the icon so it can float over a fullscreen app, and a reconcile
+ *    mid-take (a window made or closed then, the pill's own included) used to
+ *    count that hidden library and put the icon back. The take's end
+ *    reconciles again, with the pill gone, so the icon returns then.
  */
 
 export type IconPlacement = "both" | "menubar" | "dock";
@@ -54,11 +60,11 @@ export interface IconState {
   dock: boolean;
 }
 
-/** The icons for a setting and a count of open document windows (rules 2-4). */
-export function decideIcons(placement: IconPlacement, documentWindows: number): IconState {
+/** The icons for a setting, a count of open document windows and whether a take is recording (rules 2-5). */
+export function decideIcons(placement: IconPlacement, documentWindows: number, recording = false): IconState {
   switch (placement) {
     case "both": return { tray: true, dock: true };
-    case "menubar": return { tray: true, dock: documentWindows > 0 };
+    case "menubar": return { tray: true, dock: !recording && documentWindows > 0 };
     case "dock": return { tray: false, dock: true };
   }
 }
