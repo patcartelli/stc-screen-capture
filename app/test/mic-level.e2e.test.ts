@@ -31,7 +31,7 @@ async function openEditor(dir: string): Promise<Page> {
   return editorWin;
 }
 
-const panelOpen = (win: Page) => win.evaluate(() => document.getElementById("audiopanel")!.matches(":popover-open"));
+const panelOpen = (win: Page) => win.evaluate(() => !document.getElementById("audiopanel")!.hidden);
 
 async function setMic(win: Page, pct: number): Promise<void> {
   await win.evaluate((v) => {
@@ -53,7 +53,7 @@ describe("the Audio popover", () => {
     expect(await win.getAttribute("#audiobtn", "hidden")).not.toBeNull();
   }, 120_000);
 
-  test("a mic take: the button opens the panel with Mic and Clean up voice, not System audio; Escape closes it", async () => {
+  test("a mic take: the Audio tab shows the section with Mic and Clean up voice, not System audio; the Frame tab hides it", async () => {
     const win = await openEditor(makeMicTakeFolder().dir);
     await expect.poll(() => win.getAttribute("#audiobtn", "hidden"), { timeout: 20_000 }).toBeNull();
     expect(await panelOpen(win)).toBe(false);
@@ -62,7 +62,7 @@ describe("the Audio popover", () => {
     expect(await win.isVisible("#miclevel")).toBe(true);
     expect(await win.isVisible("#voicecleanon")).toBe(true);
     expect(await win.getAttribute("#sysaudio", "hidden")).not.toBeNull();
-    await win.keyboard.press("Escape");
+    await win.click("#tab-frame");
     await expect.poll(() => panelOpen(win)).toBe(false);
   }, 120_000);
 
@@ -211,7 +211,7 @@ describe("per-track mute (STC-454 part 3)", () => {
     await expect.poll(() => panelOpen(win)).toBe(true);
     await win.click("#micmute");
     await expect.poll(() => pressed(win, "micmute")).toBe("true");
-    await win.keyboard.press("Escape");
+    await win.click("#tab-frame");
     await expect.poll(() => panelOpen(win)).toBe(false);
 
     await openExportDialog(win);

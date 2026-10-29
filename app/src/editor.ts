@@ -1358,6 +1358,7 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   openProject.overrides = overridesWithoutWindow(openProject.overrides, id);
   setAsideFraming();
   openOverrideEditorUI();
+  selectSection("zoom");
   const mid = Math.min(player.durationNs, Math.round((w.startNs + w.endNs) / 2));
   await player.seek(mid);
 }
@@ -1379,6 +1380,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
   setAsideFraming();
   openOverrideEditorUI();
+  selectSection("zoom");
   const mid = Math.min(player.durationNs, Math.round((o.startNs + o.endNs) / 2));
   await player.seek(mid);
 }
@@ -1968,7 +1970,7 @@ function updateAudioButton(): void {
   updateKeycastUI();
   updateClicksUI();
   updateFramingUI();
-  if (!has) (document.getElementById("audiopanel") as HTMLElement & { hidePopover?: () => void }).hidePopover?.();
+  if (!has && !$("audiopanel").hasAttribute("hidden")) selectSection("frame");
 }
 
 function updateMicUI(): void {
@@ -2608,6 +2610,13 @@ function faderIsDefault(id: string): boolean {
 }
 
 function syncResetHints(): void {
+  // The slider's filled part: native ranges have no fill, so the track's
+  // gradient stops at --fill-pct.
+  for (const r of $("audiopanel").querySelectorAll<HTMLInputElement>('input[type="range"]')) {
+    const min = Number(r.min) || 0;
+    const max = Number(r.max) || 100;
+    r.style.setProperty("--fill-pct", `${((Number(r.value) - min) / (max - min)) * 100}%`);
+  }
   for (const span of $("audiopanel").querySelectorAll<HTMLElement>("[data-resets]")) {
     const id = span.dataset.resets!;
     const dirty = !faderIsDefault(id);
@@ -2631,7 +2640,6 @@ $("audiopanel").addEventListener("click", (e) => {
 // written the project by the time this runs.
 $("audiopanel").addEventListener("input", syncResetHints);
 $("audiopanel").addEventListener("change", syncResetHints);
-$("audiopanel").addEventListener("toggle", syncResetHints);
 
 let nudgePersist: ReturnType<typeof setTimeout> | null = null;
 $("audiopanel").addEventListener("keydown", (e) => {
@@ -2694,8 +2702,7 @@ function meterFrame(nowMs: number): void {
   meterRaf = requestAnimationFrame(meterFrame);
 }
 
-$("audiopanel").addEventListener("toggle", (e) => {
-  const open = (e as ToggleEvent).newState === "open";
+function setMetersRunning(open: boolean): void {
   if (open && !meterRaf) { meterLastMs = 0; meterRaf = requestAnimationFrame(meterFrame); }
   if (!open && meterRaf) {
     cancelAnimationFrame(meterRaf);
@@ -2703,6 +2710,49 @@ $("audiopanel").addEventListener("toggle", (e) => {
     micMeter = METER_IDLE; sysMeter = METER_IDLE;
     paintMeter("mic", micMeter, 0); paintMeter("sys", sysMeter, 0);
   }
+}
+
+// ---- the pane's section switch (STC-604) ---------------------------------
+//
+// Frame, Audio, Camera, Zoom, Export. Audio is the first section built; the
+// other four show #panetake (the take's own switches and the Camera popover)
+// until theirs lands. The pane follows selection: choosing a zoom block calls
+// selectSection("zoom"). The meters run only while Audio is the active
+// section, for the same reason they ran only while its popover was open.
+
+type PaneSection = "frame" | "audio" | "camera" | "zoom" | "export";
+let paneSection: PaneSection = "frame";
+
+function selectSection(s: PaneSection): void {
+  // A tab that is not offered (Audio for a take with no sound) cannot be chosen.
+  if (s === "audio" && $("audiobtn").hasAttribute("hidden")) s = "frame";
+  paneSection = s;
+  for (const tab of $("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")) {
+    const on = tab.dataset.section === s;
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;
+  }
+  $("audiopanel").toggleAttribute("hidden", s !== "audio");
+  $("panetake").toggleAttribute("hidden", s === "audio");
+  setMetersRunning(s === "audio");
+  if (s === "audio") syncResetHints();
+}
+
+$("sectionswitch").addEventListener("click", (e) => {
+  const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-section]");
+  if (tab) selectSection(tab.dataset.section as PaneSection);
+});
+$("sectionswitch").addEventListener("keydown", (e) => {
+  const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+  const tabs = [...$("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")].filter((t) => !t.hidden);
+  if (!dir && e.key !== "Home" && e.key !== "End") return;
+  e.preventDefault();
+  const at = tabs.indexOf(document.activeElement as HTMLElement);
+  const next = e.key === "Home" ? tabs[0] : e.key === "End" ? tabs[tabs.length - 1]
+    : tabs[(at + dir + tabs.length) % tabs.length];
+  if (!next) return;
+  selectSection(next.dataset.section as PaneSection);
+  next.focus();
 });
 
 // ---- preview sound (STC-454) ---------------------------------------------
@@ -2745,6 +2795,11 @@ function setPreviewAudioState(state: PreviewAudioState, detail = ""): void {
 function updatePreviewAudioButton(detail = ""): void {
   const btn = $("previewaudio") as HTMLButtonElement;
   btn.setAttribute("aria-pressed", String(previewMuted));
+  // The Audio section's "Mute while editing" is the same setting.
+  const sw = $("previewmuteswitch") as HTMLInputElement;
+  sw.checked = previewMuted;
+  sw.disabled = btn.disabled;
+  $("previewgroup").toggleAttribute("hidden", btn.hasAttribute("hidden"));
   const label = previewMuted ? "Unmute preview sound" : "Mute preview sound";
   btn.setAttribute("aria-label", label);
   const state = btn.dataset.state;
@@ -2922,12 +2977,14 @@ function pumpClean(): void {
   worker.postMessage({ id, strength, audio: micSource });
 }
 
-$("previewaudio").addEventListener("click", () => {
+function togglePreviewMuted(): void {
   previewMuted = !previewMuted;
   previewAudio?.setMuted(previewMuted);
   updatePreviewAudioButton();
   void editor.setPreviewMuted(previewMuted).catch(() => {});
-});
+}
+$("previewaudio").addEventListener("click", togglePreviewMuted);
+$("previewmuteswitch").addEventListener("change", togglePreviewMuted);
 
 void editor.getSettings().then((s) => {
   previewMuted = s.previewMuted === true;
@@ -2967,6 +3024,10 @@ window.addEventListener("keydown", (e) => {
   // And for every control in the Camera popover (STC-461): its sliders' arrow
   // keys move the slider, its buttons and switches take Space/Enter.
   if ($("pippanel").contains(e.target as Node)
+      && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
+  // The Audio section (STC-604): its sliders take the arrow keys, its
+  // switches and the section tabs take Space/Enter.
+  if (($("audiopanel").contains(e.target as Node) || $("sectionswitch").contains(e.target as Node))
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
