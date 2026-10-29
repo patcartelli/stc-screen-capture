@@ -36,9 +36,9 @@ async function setStrength(win: Page, pct: number): Promise<void> {
   }, pct);
 }
 
-/** The controls live in the Audio popover (STC-454 part 2): open it before clicking or focusing one. */
+/** The controls live in the Audio section (STC-454 part 2, STC-604): open it before clicking or focusing one. */
 async function openAudio(win: Page): Promise<void> {
-  const open = () => win.evaluate(() => document.getElementById("audiopanel")!.matches(":popover-open"));
+  const open = () => win.evaluate(() => !document.getElementById("audiopanel")!.hidden);
   if (await open()) return;
   await win.click("#audiobtn");
   await expect.poll(open).toBe(true);

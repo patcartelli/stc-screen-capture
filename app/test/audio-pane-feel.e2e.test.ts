@@ -99,7 +99,7 @@ describe("the Audio pane's feel", () => {
     await win.click("#audiobtn");
     await expect.poll(() => win.getAttribute("#micmeter", "data-db")).toBe("-60.0");
     expect(await win.getAttribute("#micclip", "data-lit")).toBeNull();
-    await win.keyboard.press("Escape");
-    expect(await win.evaluate(() => document.getElementById("audiopanel")!.matches(":popover-open"))).toBe(false);
+    await win.click("#tab-frame");
+    expect(await win.evaluate(() => !document.getElementById("audiopanel")!.hidden)).toBe(false);
   }, 120_000);
 });
