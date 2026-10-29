@@ -35,7 +35,10 @@ describe("the Frame section's Style control (STC-396)", () => {
     await expect.poll(() => readProject(takeDir)?.framing, { timeout: 10_000 }).toEqual({ preset: "clean" });
     expect(readProject(takeDir).version).toBe(15);
     await expect.poll(() => editorWin.textContent("#legibility"), { timeout: 10_000 }).toMatch(/inside the frame/);
-    expect(await editorWin.isHidden("#framecolor")).toBe(true);
+    // STC-604: the Colour swatch shows for every style; for Clean it is the
+    // gradient's first colour.
+    await expect.poll(() => editorWin.isVisible("#framecolor"), { timeout: 10_000 }).toBe(true);
+    expect(await editorWin.inputValue("#framecolor")).toBe("#e9edf2");
 
     await editorWin.click(`#framepreset [data-frame-preset="solid"]`);
     await expect.poll(() => readProject(takeDir)?.framing?.preset, { timeout: 10_000 }).toBe("solid");
@@ -77,5 +80,34 @@ describe("the Frame section's Style control (STC-396)", () => {
     await editorWin.click(`#framepreset [data-frame-preset="dark"]`);
     await expect.poll(() => readProject(takeDir)?.framing?.preset, { timeout: 10_000 }).toBe("dark");
     expect(readProject(takeDir).framing.paddingPct).toBeCloseTo(0.1, 5);
+  }, 120_000);
+
+  test("the Colour swatch edits a gradient's first colour, and a new style starts on its own colours (STC-604)", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    // Nothing to colour with no frame.
+    expect(await editorWin.isHidden("#framecolor")).toBe(true);
+
+    await editorWin.click(`#framepreset [data-frame-preset="clean"]`);
+    await expect.poll(() => editorWin.isVisible("#framecolor"), { timeout: 10_000 }).toBe(true);
+    await editorWin.evaluate(() => {
+      const el = document.getElementById("framecolor") as HTMLInputElement;
+      el.value = "#112233";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    // The first colour is the user's; the second colour and angle are the preset's, kept.
+    await expect.poll(() => readProject(takeDir)?.framing?.background?.colors?.[0], { timeout: 10_000 }).toBe("#112233");
+    const bg = readProject(takeDir).framing.background;
+    expect(bg).toMatchObject({ kind: "linear", colors: ["#112233", "#cfd6e0"], angleDeg: 135 });
+    expect(readProject(takeDir).framing.preset).toBe("clean");
+    expect(await editorWin.textContent("#framecolorvalue")).toBe("#112233");
+
+    // Dark does not inherit Clean's edited gradient.
+    await editorWin.click(`#framepreset [data-frame-preset="dark"]`);
+    await expect.poll(() => readProject(takeDir)?.framing?.preset, { timeout: 10_000 }).toBe("dark");
+    expect(readProject(takeDir).framing.background).toBeUndefined();
+    await expect.poll(() => editorWin.inputValue("#framecolor"), { timeout: 10_000 }).toBe("#2a3040");
   }, 120_000);
 });

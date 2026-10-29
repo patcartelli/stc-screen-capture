@@ -112,6 +112,7 @@ import {
 import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-inspector.js";
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
+  framingColor, withColor,
 } from "./framing-edit.js";
 import { homeRelative } from "./path-label.js";
 
@@ -2588,10 +2589,12 @@ function setFramePresetDisabled(disabled: boolean): void {
 function updateFramingUI(): void {
   const f = chosenFraming(openProject, heldFraming);
   setFramePresetUI(f?.preset ?? "none");
+  // One swatch for every style (STC-604): the fill for Solid, the gradient's
+  // first colour for Clean and Dark. Nothing to colour with no frame.
   const color = $("framecolor") as HTMLInputElement;
-  color.hidden = f?.preset !== "solid";
-  $("framecolorrow").hidden = f?.preset !== "solid";
-  color.value = f?.color ?? DEFAULT_SOLID_COLOR;
+  color.hidden = !f;
+  $("framecolorrow").hidden = !f;
+  color.value = f ? framingColor(f) : DEFAULT_SOLID_COLOR;
   $("framecolorvalue").textContent = color.value.toUpperCase();
   // Padding, corners and shadow adjust a frame, so they wait for one.
   const short = openProject ? Math.min(openProject.output.width, openProject.output.height) : 0;
@@ -2658,21 +2661,32 @@ function framingFromControls(): Framing | undefined {
   const v = framePresetValue();
   if (v === "none") return undefined;
   const preset = v as FramingPreset;
+  const was = chosenFraming(openProject, heldFraming);
+  // A new style starts on its OWN colours: a colour edit belongs to the style
+  // it was made on, so it is not carried across (a custom Clean gradient must
+  // not turn Dark into Clean). Solid keeps a colour the user already gave it.
   const next: Framing = preset === "solid"
-    ? { preset, color: ($("framecolor") as HTMLInputElement).value }
+    ? { preset, color: was?.preset === "solid" ? framingColor(was) : DEFAULT_SOLID_COLOR }
     : { preset };
   // The numbers set in the Frame section (padding, corners, shadow) are the
   // user's own, so a new style keeps them (STC-604).
-  const was = chosenFraming(openProject, heldFraming);
   if (was?.paddingPct !== undefined) next.paddingPct = was.paddingPct;
   if (was?.radiusPct !== undefined) next.radiusPct = was.radiusPct;
   if (was?.shadow !== undefined) next.shadow = was.shadow;
   return next;
 }
 
-$("framecolor").addEventListener("change", () => {
-  void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
-});
+// The Colour swatch edits the chosen framing (framing-edit.ts's withColor):
+// the picture repaints while the picker moves, and the write is on its commit.
+function editFramingColor(persist: boolean): void {
+  const f = chosenFraming(openProject, heldFraming);
+  if (!f) return;
+  const hex = ($("framecolor") as HTMLInputElement).value;
+  void setFraming(withColor(f, hex), persist).catch((e: any) => alertUser(String(e?.message ?? e)));
+  $("framecolorvalue").textContent = hex.toUpperCase();
+}
+$("framecolor").addEventListener("input", () => editFramingColor(false));
+$("framecolor").addEventListener("change", () => editFramingColor(true));
 // The Style segments: a click picks one (a rollback on a failed write redraws it).
 $("framepreset").addEventListener("click", (e) => {
   const seg = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-frame-preset]");
