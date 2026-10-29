@@ -1,48 +1,49 @@
-/* The PiP inspector (STC-461) — pip-inspector.ts's DOM, shared by the
-   editor's Camera popover and the Settings sheet (the device-menu.css
-   precedent: one component, the host decides where it sits). tokens.css
-   tokens only; no colour of its own. */
-.pip-inspector { display: grid; gap: 8px; min-width: 240px; font-size: var(--type-body); color: var(--text); }
-.pip-inspector button { font: inherit; font-size: var(--type-label); color: var(--text-dim);
-                        background: none; border: 1px solid var(--border); cursor: pointer; }
-.pip-inspector button:hover { color: var(--text); background: var(--surface-hover); }
+/* The PiP inspector (STC-461) — pip-inspector.ts's DOM, the editor's Camera
+   section since STC-604. Its rows ride the pane's shared pattern (#pane .group,
+   .row, .label, .value, .switch, the slider, in editor.html); this file holds
+   only what is the camera's own. tokens.css tokens only; the accent is the
+   section's (--section-accent). */
 .pip-inspector button:focus-visible,
+.pip-inspector select:focus-visible,
 .pip-inspector input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-.pip-presets { display: flex; flex-wrap: wrap; gap: 6px; }
-.pip-chip { padding: 3px 10px; border-radius: 999px; }
+.pip-presetrow { padding: 12px 0; }
+.pip-presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; flex: 1; }
+.pip-chip { padding: 5px 10px; border-radius: 999px; font: inherit; font-size: var(--type-label); text-align: center;
+            color: var(--text-dim); background: none; border: 1px solid var(--border); cursor: pointer; }
+.pip-chip:hover { color: var(--text); background: var(--surface-hover); }
 
-.pip-segmented { display: grid; grid-template-columns: repeat(3, 1fr); }
-.pip-segmented button { padding: 3px 0; border-radius: 0; }
-.pip-segmented button + button { border-left: none; }
-.pip-segmented button:first-child { border-radius: 6px 0 0 6px; }
-.pip-segmented button:last-child { border-radius: 0 6px 6px 0; }
-.pip-segmented button[aria-checked="true"] { color: var(--accent); background: var(--accent-soft);
-                                             border-color: var(--accent); }
+/* The Shape row's segmented control: the section switch's look, smaller. */
+.pip-segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px; background: rgba(255, 255, 255, .06); }
+.pip-segmented button { border: 0; background: transparent; padding: 4px 10px; border-radius: 8px; cursor: pointer;
+                        color: var(--text-dim); font: 400 11px/16px "Geist Mono", ui-monospace, monospace; }
+.pip-segmented button:hover:not([aria-checked="true"]) { background: rgba(255, 255, 255, .06); }
+.pip-segmented button[aria-checked="true"] { background: rgba(255, 255, 255, .12); color: var(--text); font-weight: 500; }
 
-.pip-row { display: flex; align-items: center; gap: 8px; justify-content: space-between;
-           min-height: 22px; color: var(--text-dim); }
-.pip-row input[type="range"] { flex: 1; min-width: 0; max-width: 160px; accent-color: var(--accent); }
-.pip-row input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
-.pip-toggle { justify-content: flex-start; cursor: pointer; }
-.pip-border > .pip-toggle { flex: none; }
-.pip-border > .pip-row { flex: 1; min-width: 0; }
-.pip-border input[type="color"] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border);
-                                  border-radius: 4px; background: none; flex: none; }
+/* The Anchor row's select is the pane's (editor.html, `#pane select`). */
+.pip-inspector input[type="color"] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border);
+                                     border-radius: 4px; background: none; flex: none; }
 .pip-inspector input:disabled { opacity: .4; cursor: default; }
 
-.pip-actions { display: flex; gap: 8px; justify-content: flex-end; padding-top: 4px; }
-.pip-actions button { padding: 3px 10px; border-radius: 6px; }
+.pip-actions { justify-content: flex-end; gap: 8px; }
+.pip-action { padding: 4px 12px; border-radius: 8px; font: inherit; font-size: var(--type-label); cursor: pointer;
+              color: var(--text-dim); background: none; border: 1px solid var(--border); }
+.pip-action:hover { color: var(--text); background: var(--surface-hover); }
+.pip-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 /* The PiP on the preview stage (editor only): sits exactly over #stage the
    way #rectoverlay does — #stage fills #stagewrap at its natural size, so
    `inset: 0` tracks it. Only the box itself takes the pointer. */
 #pipoverlay { position: absolute; inset: 0; pointer-events: none; }
 #pipoverlay[hidden] { display: none; }
-#pipoverlay .pipbox { position: absolute; pointer-events: auto; cursor: move; outline: 1px solid var(--accent);
+#pipoverlay .pipbox { position: absolute; pointer-events: auto; cursor: move; outline: 2px solid var(--camera, var(--accent));
                       touch-action: none; }
 #piphandle { position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; border-radius: 50%;
-             background: var(--accent); cursor: nwse-resize; }
+             background: #fff; cursor: nwse-resize; }
+/* What the PiP is right now, above its box: shape · width · anchor (Figma's Camera frame). */
+#piplabel { position: absolute; left: 0; bottom: 100%; margin-bottom: 6px; padding: 3px 8px; border-radius: 4px;
+            white-space: nowrap; pointer-events: none; background: rgba(0, 0, 0, .7); color: var(--camera, var(--accent));
+            font: 400 11px/14px "Geist Mono", ui-monospace, monospace; }
 
 /* Reframe (editor only): the same box as #pipoverlay. The window's huge
    spread shadow dims everything outside the crop; overflow keeps that dim

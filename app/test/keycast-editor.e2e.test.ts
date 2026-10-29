@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication } from "playwright";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchWithTakeInEditor, inkiness } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, inkiness, openMore } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
@@ -25,6 +25,7 @@ describe("the editor's Keys switch (STC-419)", () => {
     const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ source: "fixtures/keycast" });
     app = a;
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await openMore(editorWin, "framepanel");
     expect(await editorWin.getAttribute("#keycastbtn", "aria-pressed")).toBe("true");
     await editorWin.click("#keycastbtn");
     expect(await editorWin.getAttribute("#keycastbtn", "aria-pressed")).toBe("false");

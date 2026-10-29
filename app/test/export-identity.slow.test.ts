@@ -106,7 +106,7 @@ async function launchWithTake() {
   // The take player is the editor's own window now (STC-373).
   const win = await openEditorFromLibrary(app, mainWin);
   await win.click("#openexport");
-  await win.waitForSelector("#exportdialog[open]", { timeout: 10_000 });
+  await win.waitForSelector("#exportpanel:not([hidden])", { timeout: 10_000 });
   return { win, takeDir };
 }
 

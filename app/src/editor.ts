@@ -103,13 +103,16 @@ import {
   grabOffset, isFit, isMinSpan, overviewBox, overviewSpanFor, panBy, timelineZoomKeyIntent,
   wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
-import { clipActivity, zoomCurve, laneBitmap } from "./timeline-activity.js";
+import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel } from "./timeline-activity.js";
 import {
-  editPipStyle, pipRect, pipSize, snapCenter, resizeFromCorner, styleFromFixedCorner,
-  PIP_SNAP_THRESHOLD_SCREEN_PX, type PipEdit, type PipStyle,
+  editPipStyle, pipRect, pipSize, dragCenter, resizeFromCorner, styleFromFixedCorner,
+  anchorCenter, anchorOf, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
   panFraming, zoomFraming, framingSource,
 } from "@transform/pip-style";
-import { buildPipInspector } from "./pip-inspector.js";
+import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-inspector.js";
+import {
+  framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
+} from "./framing-edit.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -1127,6 +1130,7 @@ document.addEventListener("pointerover", (e) => {
 });
 
 function drawOverrideBox(rect: Rect | null): void {
+  $("zoomamount").textContent = zoomAmountLabel(rect);
   const box = $("overridebox") as HTMLElement;
   if (!rect) { box.setAttribute("hidden", ""); return; }
   box.removeAttribute("hidden");
@@ -1249,6 +1253,8 @@ function updateManualDraftBlock(): void {
     return;
   }
   el.removeAttribute("hidden");
+  $("zoomstarts").textContent = formatBlockTime(draftManualStart);
+  $("zoomends").textContent = formatBlockTime(draftManualEnd);
   el.className = editingManualId ? "zoomblock manual selected" : "zoomblock selected";
   const d = player.durationNs || 1;
   el.style.left = `${(draftManualStart / d) * 100}%`;
@@ -1272,6 +1278,8 @@ function openOverrideEditorUI(): void {
     "Drag a rect on the preview to zoom into it · drag the block's edges to change its timing";
   ($("overridebar") as HTMLElement).removeAttribute("hidden");
   ($("rectoverlay") as HTMLElement).removeAttribute("hidden");
+  // The pane follows selection (STC-604): the block's controls live in Zoom.
+  selectSection("zoom");
   drawOverrideBox(draftRect);
   layoutOverrideBlocks();
   updateManualDraftBlock();
@@ -1358,7 +1366,6 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   openProject.overrides = overridesWithoutWindow(openProject.overrides, id);
   setAsideFraming();
   openOverrideEditorUI();
-  selectSection("zoom");
   const mid = Math.min(player.durationNs, Math.round((w.startNs + w.endNs) / 2));
   await player.seek(mid);
 }
@@ -1380,7 +1387,6 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
   setAsideFraming();
   openOverrideEditorUI();
-  selectSection("zoom");
   const mid = Math.min(player.durationNs, Math.round((o.startNs + o.endNs) / 2));
   await player.seek(mid);
 }
@@ -1662,18 +1668,19 @@ $("vieweye").addEventListener("change", () => {
     .catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 
-// ---- the export dialog -------------------------------------------------
+// ---- the Export section (was the export dialog; STC-604) -----------------
 
-const exportDialog = $("exportdialog") as HTMLDialogElement;
-$("openexport").addEventListener("click", () => void (async () => {
-  // STC-461/STC-500: the dialog never opens over a reframe or an open zoom-
+/** Show the Export section, with the share row filled in. */
+async function showExportSection(): Promise<void> {
+  // STC-461/STC-500: the section never opens over a reframe or an open zoom-
   // override edit — every output it leads to reads the live project, which
   // holds the temporary display PiP / the stripped override meanwhile.
   await finishOpenEdits();
-  if (!exportDialog.open) exportDialog.showModal();
+  selectSection("export");
   await refreshShareRow();
-})().catch((e: any) => alertUser(String(e?.message ?? e))));
-$("closeexport").addEventListener("click", () => exportDialog.close());
+}
+$("openexport").addEventListener("click", () => void showExportSection()
+  .catch((e: any) => alertUser(String(e?.message ?? e))));
 
 // ---- opening and closing the take -------------------------------------
 
@@ -2019,6 +2026,7 @@ function updateKeycastUI(): void {
   const btn = $("keycastbtn") as HTMLButtonElement;
   const has = !!openSession?.keys?.length;
   btn.hidden = !has;
+  $("keycastrow").hidden = !has;
   const shown = openProject?.keycast?.show !== false;
   btn.setAttribute("aria-pressed", shown ? "true" : "false");
   btn.title = shown ? "Hide keystrokes in the preview and export" : "Show keystrokes in the preview and export";
@@ -2053,18 +2061,16 @@ $("clicksbtn").addEventListener("click", () => {
 
 // ---- PiP (STC-461) ----------------------------------------------------------
 //
-// The Camera popover hosts pip-inspector.ts; #pipoverlay lets the PiP be
-// dragged (snapping, pip-style.ts's snapCenter) and resized from its corner.
-// Every decision is pip-style.ts's. The player shares `openProject`, so an edit
-// is a mutation plus a repaint; a COMMIT also persists.
+// The pane's Camera section hosts pip-inspector.ts (STC-604: it was a popover);
+// #pipoverlay lets the PiP be dragged (snapping, pip-style.ts's snapCenter,
+// unless the Snap to edges row is off) and resized from its corner. Every
+// decision is pip-style.ts's. The player shares `openProject`, so an edit is a
+// mutation plus a repaint; a COMMIT also persists.
 //
-// #pippanel is `popover="auto"`, and a press on #pipoverlay is OUTSIDE it, so
-// the browser's light dismiss closes the inspector on a drag. The overlay is never
-// hidden while a drag is in flight (layoutPipOverlay checks `pipDrag`), so the
-// gesture survives that; the panel itself stays closed afterwards (STC-483: a
-// temporary surface, opened from the Camera button and closed again).
-// The panel is anchored to its button like the Audio popover (STC-483, Patrick
-// 2026-10-16: the over-the-stage placement collided with the timeline lanes).
+// The overlay shows while the Camera section is the active one, and stays up
+// for a drag in flight (layoutPipOverlay checks `pipDrag`). Unlike the popover
+// it replaced, the section does not close on a drag: the Anchor row follows
+// the PiP to wherever it was dropped.
 
 function pipCamera(): Size | null {
   const cam = openSession?.anchors.camera;
@@ -2108,7 +2114,7 @@ function persistPip(): void {
 function setPipStyle(style: PipStyle, persist: boolean): void {
   if (!openProject?.pip || !player) return;
   openProject.pip.style = style;
-  pipInspector.render(style, openProject.pip.enabled);
+  renderPipInspector(style, openProject.pip.enabled);
   layoutPipOverlay();
   void player.seek(player.currentNs);
   if (persist) persistPip();
@@ -2128,6 +2134,15 @@ const pipInspector = buildPipInspector($("pippanel"), {
     void player.seek(player.currentNs);
     persistPip();
   },
+  onAnchor(anchor: PipAnchor) {
+    const style = currentPipStyle();
+    const cam = pipCamera();
+    const frame = pipFrame();
+    if (!style || !cam || !frame) return;
+    const center = anchorCenter(anchor, pipSize(style, sizeOf(frame), cam), sizeOf(frame));
+    setPipStyle(editPipStyle(style, { kind: "move", center }, cam), true);
+  },
+  onSnap(on) { pipSnap = on; },
   onReframe: () => enterReframe(),
   onUseAsDefault() {
     const style = currentPipStyle();
@@ -2135,15 +2150,31 @@ const pipInspector = buildPipInspector($("pippanel"), {
   },
 });
 
-const pipPanel = $("pippanel") as HTMLElement & { hidePopover?: () => void; showPopover?: () => void };
-const pipPanelOpen = (): boolean => pipPanel.matches(":popover-open");
+/** Whether a drag snaps to the nine places (the Snap to edges row). A session setting, never saved; on = as before. */
+let pipSnap = true;
+
+/** The Camera section is the pane's active one (the overlay shows then, as it did while the popover was open). */
+const pipPanelOpen = (): boolean => !$("pippanel").hasAttribute("hidden");
+
+function pipContext(style: PipStyle): PipInspectorContext {
+  const cam = pipCamera();
+  const frame = pipFrame();
+  return {
+    frameWidthPx: frame?.width ?? 0,
+    anchor: cam && frame ? anchorOf(style.center, pipSize(style, sizeOf(frame), cam), sizeOf(frame)) : null,
+  };
+}
+
+function renderPipInspector(style: PipStyle, enabled: boolean): void {
+  pipInspector.render(style, enabled, pipContext(style));
+}
 
 function updatePipButton(): void {
   const has = !!openProject?.pip && !!pipCamera();
   $("pipbtn").toggleAttribute("hidden", !has);
-  if (!has) pipPanel.hidePopover?.();
+  if (!has && pipPanelOpen()) selectSection("frame");
   const style = currentPipStyle();
-  if (style && openProject?.pip) pipInspector.render(style, openProject.pip.enabled);
+  if (style && openProject?.pip) renderPipInspector(style, openProject.pip.enabled);
   layoutPipOverlay();
 }
 
@@ -2164,20 +2195,13 @@ function layoutPipOverlay(): void {
   if (!shown || !style || !cam || !openProject || !frame) return;
   const r = pipRect(style, sizeOf(frame), cam);
   const { k } = stageScale();
+  $("piplabel").textContent = pipSummary(style, pipContext(style));
   const box = overlay.querySelector<HTMLElement>(".pipbox")!;
   Object.assign(box.style, {
     left: `${(frame.x + r.x) * k}px`, top: `${(frame.y + r.y) * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
     borderRadius: style.shape === "circle" ? "50%" : `${style.cornerRadius * Math.min(r.width, r.height) * k}px`,
   });
 }
-
-pipPanel.addEventListener("beforetoggle", (e) => {
-  if ((e as ToggleEvent).newState !== "open") return;
-  // The Camera button pressed mid-reframe: finish the reframe first, so the
-  // inspector edits the real style and never the temporary display one.
-  commitReframe();
-});
-pipPanel.addEventListener("toggle", () => layoutPipOverlay());
 
 let pipDrag: { kind: "move" | "resize"; dx: number; dy: number } | null = null;
 
@@ -2212,7 +2236,7 @@ $("pipoverlay").addEventListener("pointermove", (e) => {
     return;
   }
   const raw = { x: (px - pipDrag.dx) / out.width, y: (py - pipDrag.dy) / out.height };
-  const snapped = snapCenter(raw, pipSize(style, out, cam), out, PIP_SNAP_THRESHOLD_SCREEN_PX / k);
+  const snapped = dragCenter(raw, pipSize(style, out, cam), out, PIP_SNAP_THRESHOLD_SCREEN_PX / k, pipSnap);
   setPipStyle(editPipStyle(style, { kind: "move", center: snapped }, cam), false);
 });
 
@@ -2220,9 +2244,10 @@ function endPipDrag(): void {
   if (!pipDrag) return;
   pipDrag = null;
   persistPip();
-  // The panel is temporary (STC-483): light dismiss closes it on the drag and it
-  // stays closed. Re-read the overlay once that has run.
-  setTimeout(layoutPipOverlay, 0);
+  // The Anchor row names where the drop landed.
+  const style = currentPipStyle();
+  if (style && openProject?.pip) renderPipInspector(style, openProject.pip.enabled);
+  layoutPipOverlay();
 }
 $("pipoverlay").addEventListener("pointerup", endPipDrag);
 $("pipoverlay").addEventListener("pointercancel", endPipDrag);
@@ -2292,7 +2317,7 @@ function enterReframe(): void {
   const real = currentPipStyle();
   if (!real) return;
   reframing = { real, before: openProject.pip.style };
-  pipPanel.hidePopover?.();
+  if (pipPanelOpen()) selectSection("frame");
   openProject.pip.style = displayStyleFor(real); // LIVE project only — persistProject writes reframedProject meanwhile
   $("pipoverlay").hidden = true;
   $("pipframing").hidden = false;
@@ -2441,15 +2466,59 @@ window.addEventListener("keydown", (e) => {
 // ---- framing (STC-396) -------------------------------------------------
 // A preset (or none) saved to the project. Preview and export both go through
 // render(), so what is previewed is what exports.
-function updateFramingUI(): void {
-  const f = chosenFraming(openProject, heldFraming);
-  ($("framepreset") as HTMLSelectElement).value = f?.preset ?? "none";
-  const color = $("framecolor") as HTMLInputElement;
-  color.hidden = f?.preset !== "solid";
-  color.value = f?.color ?? DEFAULT_SOLID_COLOR;
+const framePresetButtons = (): HTMLButtonElement[] =>
+  [...$("framepreset").querySelectorAll<HTMLButtonElement>("[data-frame-preset]")];
+/** The Style control's value: the checked segment ("none" = no frame). */
+const framePresetValue = (): string =>
+  framePresetButtons().find((b) => b.getAttribute("aria-checked") === "true")?.dataset.framePreset ?? "none";
+function setFramePresetUI(value: string): void {
+  for (const b of framePresetButtons()) b.setAttribute("aria-checked", String(b.dataset.framePreset === value));
+}
+function setFramePresetDisabled(disabled: boolean): void {
+  for (const b of framePresetButtons()) b.disabled = disabled;
 }
 
-async function setFraming(next: Framing | undefined): Promise<void> {
+function updateFramingUI(): void {
+  const f = chosenFraming(openProject, heldFraming);
+  setFramePresetUI(f?.preset ?? "none");
+  const color = $("framecolor") as HTMLInputElement;
+  color.hidden = f?.preset !== "solid";
+  $("framecolorrow").hidden = f?.preset !== "solid";
+  color.value = f?.color ?? DEFAULT_SOLID_COLOR;
+  $("framecolorvalue").textContent = color.value.toUpperCase();
+  // Padding, corners and shadow adjust a frame, so they wait for one.
+  const short = openProject ? Math.min(openProject.output.width, openProject.output.height) : 0;
+  const pad = $("framepadding") as HTMLInputElement;
+  const radius = $("frameradius") as HTMLInputElement;
+  const shadow = $("frameshadow") as HTMLInputElement;
+  const base: Framing = f ?? { preset: "clean" };
+  pad.value = String(Math.round(framingPadding(base) * 1000) / 10);
+  radius.value = String(Math.round(framingRadius(base) * 1000) / 10);
+  shadow.checked = framingShadowOn(base);
+  pad.disabled = radius.disabled = shadow.disabled = !f;
+  $("framepadding-out").textContent = f ? `${pad.value}%` : "–";
+  $("frameradius-out").textContent = f ? `${radiusPx(base, short)} px` : "–";
+  for (const r of [pad, radius]) {
+    r.style.setProperty("--fill-pct", `${(Number(r.value) / Number(r.max)) * 100}%`);
+  }
+}
+
+/** The Padding and Corners readouts (and the sliders' fill) for a framing mid-drag. */
+function updateFramingReadouts(f: Framing | undefined): void {
+  if (!f || !openProject) return;
+  const short = Math.min(openProject.output.width, openProject.output.height);
+  const pad = $("framepadding") as HTMLInputElement;
+  const radius = $("frameradius") as HTMLInputElement;
+  $("framepadding-out").textContent = `${Math.round(framingPadding(f) * 1000) / 10}%`;
+  $("frameradius-out").textContent = `${radiusPx(f, short)} px`;
+  for (const r of [pad, radius]) r.style.setProperty("--fill-pct", `${(Number(r.value) / Number(r.max)) * 100}%`);
+}
+
+/**
+ * Apply a framing. `persist` false is a LIVE edit (a slider mid-drag): the
+ * picture repaints, nothing is written; the commit on release writes it.
+ */
+async function setFraming(next: Framing | undefined, persist = true): Promise<void> {
   if (!openProject || !player) return;
   // While an override editor has the frame set aside, a change replaces the
   // held value and the live project stays unframed until editing ends.
@@ -2460,33 +2529,72 @@ async function setFraming(next: Framing | undefined): Promise<void> {
     } else if (f) openProject!.framing = f; else delete openProject!.framing;
   };
   apply(next);
-  try {
-    await persistProject();
-  } catch (e) {
-    apply(previous);
+  if (persist) {
+    try {
+      await persistProject();
+    } catch (e) {
+      apply(previous);
+      updateFramingUI();
+      throw e;
+    }
     updateFramingUI();
-    throw e;
+  } else {
+    // The control being dragged keeps its own value; only the readouts follow.
+    updateFramingReadouts(next);
   }
-  updateFramingUI();
   updateLegibilityUI();
   layoutPipOverlay();                    // the PiP lives in the content rect, which just moved
   await player.seek(player.currentNs);   // repaint this frame with the new choice
 }
 
 function framingFromControls(): Framing | undefined {
-  const v = ($("framepreset") as HTMLSelectElement).value;
+  const v = framePresetValue();
   if (v === "none") return undefined;
   const preset = v as FramingPreset;
-  return preset === "solid"
+  const next: Framing = preset === "solid"
     ? { preset, color: ($("framecolor") as HTMLInputElement).value }
     : { preset };
+  // The numbers set in the Frame section (padding, corners, shadow) are the
+  // user's own, so a new style keeps them (STC-604).
+  const was = chosenFraming(openProject, heldFraming);
+  if (was?.paddingPct !== undefined) next.paddingPct = was.paddingPct;
+  if (was?.radiusPct !== undefined) next.radiusPct = was.radiusPct;
+  if (was?.shadow !== undefined) next.shadow = was.shadow;
+  return next;
 }
 
-for (const id of ["framepreset", "framecolor"]) {
-  $(id).addEventListener("change", () => {
-    void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
-  });
+$("framecolor").addEventListener("change", () => {
+  void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+// The Style segments: a click picks one (a rollback on a failed write redraws it).
+$("framepreset").addEventListener("click", (e) => {
+  const seg = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-frame-preset]");
+  if (!seg || seg.disabled || seg.getAttribute("aria-checked") === "true") return;
+  setFramePresetUI(seg.dataset.framePreset!);
+  void setFraming(framingFromControls()).catch((err: any) => alertUser(String(err?.message ?? err)));
+});
+
+// Padding, corners and shadow edit the chosen framing (framing-edit.ts). The
+// sliders follow the editor's input/change split: `input` repaints, `change`
+// writes. A preset change keeps the explicit numbers, as framing.ts says an
+// explicit field wins.
+function editFraming(edit: (f: Framing) => Framing, persist: boolean): void {
+  const f = chosenFraming(openProject, heldFraming);
+  if (!f) return;
+  void setFraming(edit(f), persist).catch((e: any) => alertUser(String(e?.message ?? e)));
 }
+for (const [id, make] of [
+  ["framepadding", (f: Framing, v: number) => withPadding(f, v / 100)],
+  ["frameradius", (f: Framing, v: number) => withRadius(f, v / 100)],
+] as const) {
+  const input = $(id) as HTMLInputElement;
+  input.addEventListener("input", () => editFraming((f) => make(f, Number(input.value)), false));
+  input.addEventListener("change", () => editFraming((f) => make(f, Number(input.value)), true));
+}
+$("frameshadow").addEventListener("change", () => {
+  const on = ($("frameshadow") as HTMLInputElement).checked;
+  editFraming((f) => withShadow(f, on), true);
+});
 
 $("micmute").addEventListener("click", () => {
   if (!openProject) return;
@@ -2714,9 +2822,8 @@ function setMetersRunning(open: boolean): void {
 
 // ---- the pane's section switch (STC-604) ---------------------------------
 //
-// Frame, Audio, Camera, Zoom, Export. Audio is the first section built; the
-// other four show #panetake (the take's own switches and the Camera popover)
-// until theirs lands. The pane follows selection: choosing a zoom block calls
+// Frame, Audio, Camera, Zoom, Export: one section shown at a time, Frame by
+// default. The pane follows selection: choosing a zoom block calls
 // selectSection("zoom"). The meters run only while Audio is the active
 // section, for the same reason they ran only while its popover was open.
 
@@ -2724,8 +2831,10 @@ type PaneSection = "frame" | "audio" | "camera" | "zoom" | "export";
 let paneSection: PaneSection = "frame";
 
 function selectSection(s: PaneSection): void {
-  // A tab that is not offered (Audio for a take with no sound) cannot be chosen.
-  if (s === "audio" && $("audiobtn").hasAttribute("hidden")) s = "frame";
+  // A tab that is not offered (Audio for a take with no sound, Camera for one
+  // with no camera) cannot be chosen.
+  if ($("sectionswitch").querySelector(`[data-section="${s}"]`)?.hasAttribute("hidden")) s = "frame";
+  const was = paneSection;
   paneSection = s;
   for (const tab of $("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")) {
     const on = tab.dataset.section === s;
@@ -2733,9 +2842,21 @@ function selectSection(s: PaneSection): void {
     tab.tabIndex = on ? 0 : -1;
   }
   $("audiopanel").toggleAttribute("hidden", s !== "audio");
-  $("panetake").toggleAttribute("hidden", s === "audio");
+  $("pippanel").toggleAttribute("hidden", s !== "camera");
+  $("zoompanel").toggleAttribute("hidden", s !== "zoom");
+  $("exportpanel").toggleAttribute("hidden", s !== "export");
+  $("framepanel").toggleAttribute("hidden", s !== "frame");
   setMetersRunning(s === "audio");
   if (s === "audio") syncResetHints();
+  // Camera chosen mid-reframe: finish the reframe first, so the inspector
+  // edits the real style and never the temporary display one.
+  if (s === "camera" && was !== "camera") commitReframe();
+  // Leaving Zoom mid-edit: the block's controls go with the section, so the
+  // edit is committed and closed, as Done would.
+  if (was === "zoom" && s !== "zoom" && (editingWindowId || editingManualId)) {
+    void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
+  }
+  layoutPipOverlay();
 }
 
 $("sectionswitch").addEventListener("click", (e) => {
@@ -3021,13 +3142,15 @@ window.addEventListener("keydown", (e) => {
   // this the timeline takes it as play/pause and the switch never toggles —
   // measured: the e2e's mutation check fails on exactly that.
   if (e.target === $("voicecleanon") && (e.key === " " || e.key === "Enter")) return;
-  // And for every control in the Camera popover (STC-461): its sliders' arrow
+  // And for every control in the Camera section (STC-461): its sliders' arrow
   // keys move the slider, its buttons and switches take Space/Enter.
   if ($("pippanel").contains(e.target as Node)
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The Audio section (STC-604): its sliders take the arrow keys, its
   // switches and the section tabs take Space/Enter.
-  if (($("audiopanel").contains(e.target as Node) || $("sectionswitch").contains(e.target as Node))
+  if (($("audiopanel").contains(e.target as Node) || $("sectionswitch").contains(e.target as Node)
+        || $("exportpanel").contains(e.target as Node) || $("zoompanel").contains(e.target as Node)
+        || $("framepanel").contains(e.target as Node))
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
@@ -3188,8 +3311,9 @@ async function runExport(): Promise<void> {
   bar.removeAttribute("hidden");
   ($("export") as HTMLButtonElement).disabled = true;
   ($("outsize") as HTMLSelectElement).disabled = true;
-  ($("framepreset") as HTMLSelectElement).disabled = true;
+  setFramePresetDisabled(true);
   ($("framecolor") as HTMLInputElement).disabled = true;
+  for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = true;
   progress.value = 0;
   status.textContent = "Exporting…";
   clearAlert();
@@ -3252,8 +3376,9 @@ async function runExport(): Promise<void> {
     exportAbort = undefined;
     ($("export") as HTMLButtonElement).disabled = false;
     ($("outsize") as HTMLSelectElement).disabled = false;
-    ($("framepreset") as HTMLSelectElement).disabled = false;
+    setFramePresetDisabled(false);
     ($("framecolor") as HTMLInputElement).disabled = false;
+    updateFramingUI();   // padding, corners and shadow wait for a frame again
   }
 }
 
@@ -3443,13 +3568,12 @@ void (async () => {
   }
   try {
     await openTakeOrThrow(takeDir);
-    // Share now lives inside the export dialog (STC-444 slice 3) — open it
-    // the same way `#openexport`'s own click does, so the slug field and
-    // site-folder note are populated before `publish()` reads them, and so
-    // the person can actually see the status line while it runs.
+    // Share lives in the Export section (STC-444 slice 3) — show it the same
+    // way `#openexport`'s own click does, so the slug field and site-folder
+    // note are populated before `publish()` reads them, and so the person can
+    // actually see the status line while it runs.
     if (autoShare) {
-      if (!exportDialog.open) exportDialog.showModal();
-      await refreshShareRow();
+      await showExportSection();
       void publish();
     }
   } catch (e: any) {

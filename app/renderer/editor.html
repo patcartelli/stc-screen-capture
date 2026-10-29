@@ -43,9 +43,9 @@
        the editor's --accent, and --accent itself stays unchanged. */
     :root { --section-accent: var(--accent); }
     #audiopanel { --section-accent: var(--clip); }
-    #overridebar { --section-accent: var(--zoom); }
+    #zoompanel { --section-accent: var(--zoom); }
     #overridebar select:focus-visible, #overridebar button:focus-visible { outline: 2px solid var(--section-accent); outline-offset: 1px; }
-    #overridebar #overridedone { border-color: var(--section-accent); color: var(--section-accent); }
+    #overridebar #overridedone { color: var(--section-accent); font-weight: 500; }
     /* STC-444 (Figma pass, 2026-09-24): the editor is ALWAYS dark, per
        Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
        "follow the OS" default (the still editor was moved OFF forced dark
@@ -101,7 +101,6 @@
             padding: 63px 24px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; }
     #pane .panelabel { margin: 0 0 8px; font-size: var(--type-label); font-weight: 500;
                        color: rgba(255, 255, 255, .45); }
-    #pane .panebuttons { display: flex; flex-wrap: wrap; gap: 8px; }
     /* The glass title bar (STC-584's, as the Library has it): over the whole
        window, the take's name centred, its output on the right. Opaque under
        Reduce Transparency; editor.ts sets body.reduce-transparency from the
@@ -201,61 +200,12 @@
     #openexport.labelled svg { width: 14px; height: 14px; }
     #openexport.labelled:hover:not([disabled]) { background: rgba(255, 255, 255, .14); }
     #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
-    /* STC-454 part 2: the take's audio controls live in ONE popover behind an
-       "Audio" button at the far end of the timecode row — mic level, system
-       level, narration cleanup (and part 3's mutes). The row had filled up
-       with three inline controls; the 2026-09-24 hardware pass had already
-       found stacked lanes cluttered for the same reason. Native popover:
-       Escape and a click outside close it. Anchored above the button, and
-       flipped below it if there is no room. */
-    .audiobtn { display: inline-flex; align-items: center; gap: 5px;
-                padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px;
-                background: none; color: var(--text-dim); font: inherit; font-size: var(--type-label);
-                cursor: pointer; anchor-name: --audiobtn; }
-    .audiobtn[hidden] { display: none; }
-    .audiobtn:hover { color: var(--text); background: var(--surface-hover); }
-    .audiobtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-    /* STC-419: the Keys switch shares .audiobtn's look. It sits beside the
-       Audio button (which owns the auto margin), or takes it when Audio is
-       hidden; aria-pressed="false" reads as off. */
-    #keycastbtn { anchor-name: none; }
-    #keycastbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
-                                       box-shadow: inset 0 0 0 1px var(--accent); }
-    #keycastbtn[aria-pressed="false"] { opacity: .6; }
-    /* STC-461 / STC-492: the first VISIBLE button of the row takes the auto
-       margin. Camera comes first when the take has one; Clicks is always
-       present, so it takes the margin otherwise. Audio and Keys follow, 8px
-       apart. */
-    #pipbtn { anchor-name: --pipbtn; }
-    #clicksbtn { anchor-name: none; }
-    /* On is drawn with a thicker line (2px accent: the 1px border plus a 1px
-       inset ring, so nothing shifts) so on and off differ by weight, not only
-       by colour and opacity. */
-    #clicksbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
-                                      box-shadow: inset 0 0 0 1px var(--accent); }
-    #clicksbtn[aria-pressed="false"] { opacity: .6; }
-    /* The Camera popover is anchored to its button above the timecode row, the
-       same as #audiopanel (STC-483, Patrick 2026-10-16: the earlier over-the-
-       stage placement collided with the timeline lanes). It can cover the PiP
-       while open; a press on the PiP's overlay closes it and a drag re-opens it. */
-    /* STC-603: the buttons live in the pane now, so the popovers are pinned
-       inside the pane's own column (right edge, under the title bar) instead
-       of opening leftward from their button, which put them over the preview
-       stage and the PiP the Camera panel is there to adjust. */
-    #pippanel { position: fixed; inset: 112px 8px auto auto; margin: 0; overflow: auto; box-sizing: border-box;
-                width: 340px; max-height: calc(100vh - 128px);
-                padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
-                background: var(--surface, var(--bg)); color: var(--text);
-                box-shadow: var(--shadow-card); }
-    /* pip-inspector.css puts `display: grid` on the host (the class lands on #pippanel
-       itself), which beats the UA's display:none for a closed popover: the panel was
-       always visible. Hide it unless open. */
-    #pippanel:not(:popover-open) { display: none; }
-    /* The Camera button reads as on while its panel is open, drawn like Clicks/Keys on. */
-    #pipbtn:has(+ #pippanel:popover-open) { color: var(--accent); border-color: var(--accent);
-                                           box-shadow: inset 0 0 0 1px var(--accent); }
-    .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
-                    stroke-linecap: round; stroke-linejoin: round; }
+    /* STC-604: the Camera section (#pippanel) is a pane section; its rows are
+       drawn by pip-inspector.css on the shared row pattern below. The camera's
+       section accent is the coral of Figma's Camera frame (the bookmark's
+       colour; STC-609 defined accents for Audio and Zoom only). */
+    :root { --camera: var(--bookmark); }
+    #pippanel { --section-accent: var(--camera); font-size: var(--type-body); }
     /* STC-604: the pane's section switch and the Settings row pattern
        (STC-581): a group is a rounded card, a row is 12px above and below
        with a hairline between rows, the label on the left and ONE control on
@@ -273,6 +223,26 @@
     #sectionswitch button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #pane [role="tabpanel"][hidden] { display: none; }
     #pane [role="tabpanel"] { display: flex; flex-direction: column; gap: 24px; }
+    /* STC-604: the Zoom section. The block's controls show while one is being
+       edited; until then the section only says how to pick one. */
+    #zoompanel { font-size: var(--type-body); }
+    #overridebar { display: flex; flex-direction: column; gap: 24px; }
+    #overridebar[hidden] { display: none; }
+    #overridebar:not([hidden]) ~ #zoomempty { display: none; }
+    #pane .panehint { margin: 0; font-size: var(--type-label); line-height: 1.5; color: rgba(255, 255, 255, .45); }
+    #pane .paneaction { display: block; width: 100%; padding: 12px 0; border: 0; background: none; text-align: left;
+                        font: inherit; color: var(--text); cursor: pointer; }
+    #pane .paneaction[hidden] { display: none; }
+    #pane .paneaction:hover:not(:disabled) { text-decoration: underline; }
+    #pane .paneaction:disabled { opacity: .4; cursor: default; }
+    #pane .paneaction:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+    #pane .paneaction.danger { color: var(--rec); }
+    /* A native select, drawn flat with a chevron (the Camera section's Anchor, the Zoom section's Ease). */
+    #pane select { appearance: none; -webkit-appearance: none; font: 400 12px/18px "Geist Mono", ui-monospace, monospace;
+                   color: var(--text); background: rgba(255, 255, 255, .06) no-repeat right 8px center / 10px;
+                   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23999' stroke-width='1.4'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+                   border: 0; border-radius: 8px; padding: 5px 26px 5px 10px; cursor: pointer; }
+    #pane select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #audiopanel { --section-accent: var(--clip); font-size: var(--type-body); }
     #audiopanel > div[hidden] { display: none; }
     #audiopanel .panelabel { margin: 0 0 8px; }
@@ -282,32 +252,53 @@
     #pane .audiorow[hidden] { display: none; }
     #pane .audiorow > .row + .row { border-top: 1px solid var(--hairline); }
     #pane .row { display: flex; align-items: center; gap: 16px; padding: 12px 0; min-height: 22px; }
+    /* display:flex above beats the UA's display:none for [hidden]. */
+    #pane .row[hidden] { display: none; }
+    /* "More": what the Figma frame does not draw, one click away. A native
+       <details>, so the keyboard and the accessibility tree come with it. */
+    #pane details.more > summary { display: flex; align-items: center; gap: 8px; padding: 6px 2px; cursor: pointer;
+                                   list-style: none; user-select: none; color: var(--text-dim);
+                                   font: 400 12px/17px "Geist Mono", ui-monospace, monospace; }
+    #pane details.more > summary::-webkit-details-marker { display: none; }
+    #pane details.more > summary::before { content: ""; width: 6px; height: 6px; flex: none;
+                                           border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
+                                           transform: rotate(-45deg); transition: transform .15s; }
+    #pane details.more[open] > summary::before { transform: rotate(45deg); }
+    #pane details.more > summary:hover { color: var(--text); }
+    #pane details.more > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+    #pane details.more > .morebody { display: flex; flex-direction: column; gap: 24px; margin-top: 12px; }
+    @media (prefers-reduced-motion: reduce) { #pane details.more > summary::before { transition: none; } }
     #pane .row > .label { flex: 1 1 0; min-width: 0; color: var(--text); font-size: var(--type-body);
                           cursor: pointer; }
     #pane .row > .label { white-space: nowrap; }
     #pane .row > .fader { flex: 0 0 100px; }
+    #pane .row > input[type="color"] { width: 22px; height: 22px; padding: 0; border: 1px solid var(--border);
+                                       border-radius: 6px; background: none; flex: none; margin-left: auto; }
+    #pane .row > input[type="color"] + .value { min-width: 0; }
     #pane .value { flex: none; min-width: 6ch; text-align: right; color: var(--text);
                    font-size: var(--type-value-sm); line-height: 22px; }
     /* The value is also the reset: clickable only while the level differs from
        its default (data-dirty), so it doubles as "this has been changed". */
     #pane .value[data-dirty] { cursor: pointer; border-radius: 4px; color: var(--section-accent); }
     #pane .value[data-dirty]:hover { background: var(--surface-hover); text-decoration: underline; }
-    /* The switch: a checkbox for cleanup and preview, a button for a track's
-       mute. On is the section's accent. A mute reads inverted (heard = on). */
-    #pane input.switch, #pane .trackswitch {
+    /* The switch: a checkbox for cleanup, preview and shadow; a button for a
+       track's mute (.trackswitch, which reads inverted: heard = on) and for an
+       overlay (.pressswitch: pressed = on). On is the section's accent. */
+    #pane input.switch, #pane .trackswitch, #pane .pressswitch {
       appearance: none; -webkit-appearance: none; margin: 0; padding: 0; border: 0; flex: none;
       width: 36px; height: 20px; border-radius: 10px; position: relative; cursor: pointer;
       background: rgba(255, 255, 255, .16); transition: background .15s; }
-    #pane input.switch::after, #pane .trackswitch::after {
+    #pane input.switch::after, #pane .trackswitch::after, #pane .pressswitch::after {
       content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
       background: #fff; transition: transform .15s; }
-    #pane input.switch:checked, #pane .trackswitch[aria-pressed="false"] { background: var(--section-accent); }
-    #pane input.switch:checked::after, #pane .trackswitch[aria-pressed="false"]::after { transform: translateX(16px); }
+    #pane .pressswitch[hidden] { display: none; }
+    #pane input.switch:checked, #pane .trackswitch[aria-pressed="false"], #pane .pressswitch[aria-pressed="true"] { background: var(--section-accent); }
+    #pane input.switch:checked::after, #pane .trackswitch[aria-pressed="false"]::after, #pane .pressswitch[aria-pressed="true"]::after { transform: translateX(16px); }
     #pane input.switch:disabled { opacity: .4; cursor: default; }
-    #pane input.switch:focus-visible, #pane .trackswitch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    #pane input.switch:focus-visible, #pane .trackswitch:focus-visible, #pane .pressswitch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     @media (prefers-reduced-motion: reduce) {
-      #pane input.switch, #pane .trackswitch { transition: background var(--dur-quick, .1s); }
-      #pane input.switch::after, #pane .trackswitch::after { transition: none; }
+      #pane input.switch, #pane .trackswitch, #pane .pressswitch { transition: background var(--dur-quick, .1s); }
+      #pane input.switch::after, #pane .trackswitch::after, #pane .pressswitch::after { transition: none; }
     }
     /* A real fader per track: a 12px thumb on a 4px track, a tick where the
        level is AS RECORDED (0 dB, which is 75% on the mic and the far end on
@@ -315,17 +306,20 @@
        cleanup, level and mute) with a clip mark for the mix's hard limit. The
        thumb is styled (not native) so the tick's position is arithmetic:
        6px + (100% - 12px) * --unity. */
-    #audiopanel .fader { position: relative; min-width: 0; }
-    #audiopanel .fader input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
-                                             margin: 0; background: transparent; cursor: pointer; }
-    #audiopanel input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
+    #pane .fader { position: relative; min-width: 0; }
+    #pane .fader input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
+                                             margin: 0; background: transparent; cursor: pointer;
+                                             /* The editor's global `input` rule gives every input a 1px border and
+                                                rounded corners; a slider is its track and thumb alone. */
+                                             border: 0; border-radius: 0; padding: 0; }
+    #pane input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
                                              background: linear-gradient(to right, var(--section-accent) var(--fill-pct, 0%), rgba(255, 255, 255, .14) var(--fill-pct, 0%)); }
-    #audiopanel input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+    #pane input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
                                              width: 12px; height: 12px; margin-top: -4px; border-radius: 50%;
                                              background: #fff; border: 0; }
-    #audiopanel input[type="range"]:focus-visible { outline: none; }
-    #audiopanel input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--focus); }
-    #audiopanel input[type="range"]:disabled { opacity: 0.4; cursor: default; }
+    #pane input[type="range"]:focus-visible { outline: none; }
+    #pane input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--focus); }
+    #pane input[type="range"]:disabled { opacity: 0.4; cursor: default; }
     /* The as-recorded tick: on the track's centre line, above the meter. */
     #audiopanel .unity { position: absolute; top: 3px; width: 1px; height: 16px; background: var(--text-dim);
                          left: calc(6px + (100% - 12px) * var(--unity, 1)); pointer-events: none; opacity: 0.7; }
@@ -647,35 +641,39 @@
     .overridebar[hidden] { display: none; }
     #overridehint { opacity: .7; }
 
-    /* ── the export dialog: legibility + the viewer's eye, one place ────── */
-    dialog#exportdialog { border: 1px solid var(--border); border-radius: 10px;
-                          padding: 16px; background: var(--surface); color: inherit;
-                          width: min(420px, 90vw); }
-    dialog#exportdialog::backdrop { background: var(--scrim); }
-    .dialogrow { display: flex; align-items: center; gap: 8px; font-size: var(--type-body);
-                margin-top: 8px; flex-wrap: wrap; }
-    .dialogrow:first-child { margin-top: 0; }
-    #embedwidth { width: 5.5em; }
-    #textpt { width: 4em; }
+    /* ── the Export section: legibility + the viewer's eye, one place (STC-604
+       folded the export dialog into the pane) ─────────────────────────────── */
+    #pane input[type="number"], #pane input[type="text"] {
+      font: 400 12px/18px "Geist Mono", ui-monospace, monospace; color: var(--text); text-align: right;
+      background: rgba(255, 255, 255, .06); border: 0; border-radius: 8px; padding: 5px 10px; min-width: 0; }
+    #pane input[type="number"]:focus-visible, #pane input[type="text"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    #embedwidth { width: 6em; }
+    #textpt { width: 5em; }
+    #shareslug { width: 11em; }
+    #pane .group > p.panehint { padding: 8px 0; }
+    #pane .group > p.panehint:empty { display: none; }
+    #pane .panelabel + .group + .panehint { margin-top: 8px; }
     #legibility { opacity: .8; }
     #legibility.warn { opacity: 1; color: var(--warn); font-weight: 600; }
-    /* STC-399: a model plate, not a control — quiet, never competing with
-       the legibility warning it sits beside. */
-    #modelstamp { opacity: .45; font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
-                  margin-left: auto; }
+    #sitedestnote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #sharestatus { flex: 1; min-width: 0; opacity: .75; text-align: right; }
+    #pane #share, #pane #sharereveal { width: auto; padding: 12px 0; }
     #exportbar { display: flex; align-items: center; gap: 10px; }
     #exportbar[hidden] { display: none; }
     #exportprogress { flex: 1; }
-    #exportstatus { font-size: var(--type-value); opacity: .75; min-width: 130px; }
-    .dialogfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-
-    /* Share (STC-444 slice 3), folded into this dialog from its own former
-       row — see the markup's own comment for what moved and why. */
-    .dialogdivider { border: none; border-top: 1px solid var(--border); margin: 14px 0 0; }
-    #shareslug { width: 10em; }
-    #sitedestnote { opacity: .6; font-size: var(--type-meta); overflow: hidden;
-                    text-overflow: ellipsis; white-space: nowrap; }
-    #sharestatus { opacity: .75; }
+    #exportstatus { font-size: var(--type-value); opacity: .75; min-width: 90px; }
+    /* The Export button: the pane's one primary action, in the brass of the
+       Figma frame, full width. */
+    #pane .primarybtn { width: 100%; padding: 14px; border: 0; border-radius: 12px; cursor: pointer;
+                        background: var(--zoom); color: #1a1405; font: inherit; font-weight: 600;
+                        font-size: 14px; line-height: 20px; }
+    #pane .primarybtn:hover:not(:disabled) { filter: brightness(1.06); }
+    #pane .primarybtn:active:not(:disabled) { filter: brightness(.94); }
+    #pane .primarybtn:disabled { opacity: .5; cursor: default; }
+    #pane .primarybtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    /* STC-399: a model plate, not a control — quiet, never competing with
+       the legibility warning above it. */
+    #modelstamp { opacity: .45; letter-spacing: var(--type-label-tracking); text-align: center; }
     /* Reduced motion (STC-506): a movement becomes a short fade, never an
        instant pop. These are the opacity transitions that were unguarded or
        dropped entirely, plus the overview window's transform. */
@@ -714,7 +712,7 @@
     <div id="rectoverlay" hidden><div id="overridebox" hidden></div></div>
     <!-- STC-461: the PiP, draggable (with snapping) and resizable from its
          corner, shown only while the Camera popover is open. -->
-    <div id="pipoverlay" hidden><div class="pipbox"><div id="piphandle"></div></div></div>
+    <div id="pipoverlay" hidden><div class="pipbox"><span id="piplabel"></span><div id="piphandle"></div></div></div>
     <!-- STC-461: Reframe. The live project shows the whole camera frame large
          and centred; #pipframewindow is the crop, in the PiP's shape, with the
          rest dimmed. The surface STC-497's guides draw inside. -->
@@ -912,26 +910,6 @@
     <span id="triminfo" class="mono"></span>
   </div>
 
-  <!-- STC-330: appears only while a Zoom block is selected. -->
-  <div class="overridebar" id="overridebar" hidden>
-    <span id="overridehint">Drag a rect on the preview to zoom into it</span>
-    <label for="overridepreset">Ease</label>
-    <select id="overridepreset">
-      <option value="">Project default</option>
-      <option value="calm">Calm</option>
-      <option value="standard">Standard</option>
-      <option value="snappy">Snappy</option>
-    </select>
-    <button id="overrideclear" disabled>Remove override</button>
-    <!-- STC-329: a DERIVED window's own delete — drops it outright (it never
-         plays), distinct from #overrideclear's "reset its crop but keep it
-         playing". Hidden while editing a manual window, whose own single
-         Delete action is #overrideclear (a manual window's rect IS its
-         existence, so there is nothing to reset it back to). -->
-    <button id="overridedelete" hidden>Delete window</button>
-    <button id="overridedone">Done</button>
-  </div>
-
   <!-- STC-461: appears only while reframing the camera inside the PiP. -->
   <div class="overridebar" id="pipframebar" hidden>
     <span>Drag to reframe</span>
@@ -956,37 +934,83 @@
       <!-- Present only for a take with audio (updateAudioButton). -->
       <button type="button" role="tab" id="audiobtn" data-section="audio" aria-selected="false"
               aria-controls="audiopanel" tabindex="-1" hidden>Audio</button>
-      <button type="button" role="tab" id="tab-camera" data-section="camera" aria-selected="false" tabindex="-1">Camera</button>
+      <!-- Present only for a take with a camera (updatePipButton). -->
+      <button type="button" role="tab" id="pipbtn" data-section="camera" aria-selected="false"
+              aria-controls="pippanel" tabindex="-1" hidden>Camera</button>
       <button type="button" role="tab" id="tab-zoom" data-section="zoom" aria-selected="false" tabindex="-1">Zoom</button>
       <button type="button" role="tab" id="tab-export" data-section="export" aria-selected="false" tabindex="-1">Export</button>
     </div>
 
-    <section id="panetake" role="tabpanel" aria-label="Take">
-      <p class="panelabel">Take</p>
-      <div class="panebuttons">
-      <!-- STC-461: the camera PiP's look and place, in one popover — the
-           shared inspector (pip-inspector.ts) is built into #pippanel.
-           Present only for a take with a camera. Saved to the project
-           (project-16's pip.style). -->
-      <button type="button" id="pipbtn" class="audiobtn" popovertarget="pippanel" hidden
-              aria-label="Camera" title="Camera picture-in-picture: shape, size, border, position">
-        <span>Camera</span>
-      </button>
-      <div id="pippanel" popover="auto" aria-label="Camera"></div>
-      <!-- STC-492: show/hide the click highlight. Saved to the project
-           (project-13's showClicks; absent = on). -->
-      <button type="button" id="clicksbtn" class="audiobtn" aria-pressed="true"
-              title="Hide the click highlight in the preview and export">
-        <span>Clicks</span>
-      </button>
-      <!-- STC-419: show/hide the keycast. Present only for a take that recorded
-           keys. Saved to the project (project-14's keycast.show); never edits
-           events.json. -->
-      <button type="button" id="keycastbtn" class="audiobtn" hidden aria-pressed="true"
-              title="Show keystrokes in the preview and export">
-        <span>Keys</span>
-      </button>
+    <!-- STC-396, STC-604: the picture's frame (the dialog's Frame control and
+         the framing numbers), and what is drawn over it. Saved to the project;
+         preview and export both go through render(), so what is previewed is
+         what exports. The default section. -->
+    <section id="framepanel" role="tabpanel" aria-label="Frame">
+      <div>
+        <p class="panelabel">Background</p>
+        <div class="group">
+          <div class="row">
+            <span class="label" id="framepreset-label">Style</span>
+            <!-- The camera section's segmented look (pip-inspector.css). None is
+                 a fourth segment: the frame has no off switch of its own. -->
+            <div id="framepreset" class="pip-segmented" role="radiogroup" aria-labelledby="framepreset-label">
+              <button type="button" role="radio" aria-checked="true" data-frame-preset="none">None</button>
+              <button type="button" role="radio" aria-checked="false" data-frame-preset="clean">Clean</button>
+              <button type="button" role="radio" aria-checked="false" data-frame-preset="dark">Dark</button>
+              <button type="button" role="radio" aria-checked="false" data-frame-preset="solid">Solid</button>
+            </div>
+          </div>
+          <div class="row" id="framecolorrow" hidden>
+            <label class="label" for="framecolor">Colour</label>
+            <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
+            <span id="framecolorvalue" class="value mono"></span>
+          </div>
+        </div>
       </div>
+      <div>
+        <p class="panelabel">Frame</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="framepadding">Padding</label>
+            <div class="fader"><input id="framepadding" type="range" min="0" max="25" step="0.5" aria-label="Padding"></div>
+            <span id="framepadding-out" class="value mono"></span>
+          </div>
+          <div class="row">
+            <label class="label" for="frameradius">Corners</label>
+            <div class="fader"><input id="frameradius" type="range" min="0" max="10" step="0.1" aria-label="Corners"></div>
+            <span id="frameradius-out" class="value mono"></span>
+          </div>
+          <div class="row">
+            <label class="label" for="frameshadow">Shadow</label>
+            <input id="frameshadow" type="checkbox" class="switch" role="switch">
+          </div>
+        </div>
+      </div>
+      <details class="more" id="framemore">
+        <summary>More</summary>
+        <div class="morebody">
+          <div>
+            <p class="panelabel">Overlays</p>
+            <div class="group">
+              <!-- STC-492: show/hide the click highlight. Saved to the project
+                   (project-13's showClicks; absent = on). -->
+              <div class="row">
+                <label class="label" for="clicksbtn">Show clicks</label>
+                <button type="button" id="clicksbtn" class="pressswitch" aria-pressed="true"
+                        title="Hide the click highlight in the preview and export"></button>
+              </div>
+              <!-- STC-419: show/hide the keycast. Present only for a take that
+                   recorded keys. Saved to the project (project-14's
+                   keycast.show); never edits events.json. -->
+              <div class="row" id="keycastrow" hidden>
+                <label class="label" for="keycastbtn">Show keystrokes</label>
+                <button type="button" id="keycastbtn" class="pressswitch" hidden aria-pressed="true"
+                        title="Show keystrokes in the preview and export"></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
     </section>
 
     <!-- STC-454 part 2, STC-604: every audio control for the take. All of it is
@@ -1073,71 +1097,148 @@
         </div>
       </div>
     </section>
+
+    <!-- STC-461, STC-604: the camera PiP's look and place. pip-inspector.ts
+         builds the rows into #pippanel. Present only for a take with a camera;
+         saved to the project (project-16's pip.style). -->
+    <section id="pippanel" role="tabpanel" aria-label="Camera" hidden></section>
+
+    <!-- STC-330, STC-604: the Zoom block being edited. Appears (#overridebar)
+         only while a block is selected; until then the section says how to
+         pick one. The controls and their ids are the old bar's. -->
+    <section id="zoompanel" role="tabpanel" aria-label="Zoom" hidden>
+      <div id="overridebar" hidden>
+        <div>
+          <p class="panelabel">Zoom block</p>
+          <div class="group">
+            <div class="row">
+              <span class="label">Amount</span>
+              <span id="zoomamount" class="value mono" title="How far the block zooms in: the frame divided by the drawn region">Auto</span>
+            </div>
+            <div class="row">
+              <label class="label" for="overridepreset">Ease</label>
+              <select id="overridepreset">
+                <option value="">Project default</option>
+                <option value="calm">Calm</option>
+                <option value="standard">Standard</option>
+                <option value="snappy">Snappy</option>
+              </select>
+            </div>
+            <div class="row">
+              <span class="label">Starts</span>
+              <span id="zoomstarts" class="value mono"></span>
+            </div>
+            <div class="row">
+              <span class="label">Ends</span>
+              <span id="zoomends" class="value mono"></span>
+            </div>
+          </div>
+        </div>
+        <p id="overridehint" class="panehint">Drag a rect on the preview to zoom into it</p>
+        <div class="group">
+          <button type="button" id="overridedone" class="paneaction">Done</button>
+        </div>
+        <div>
+          <p class="panelabel">Danger</p>
+          <div class="group">
+            <button type="button" id="overrideclear" class="paneaction danger" disabled>Remove override</button>
+            <!-- STC-329: a DERIVED window's own delete — drops it outright (it
+                 never plays), distinct from #overrideclear's "reset its crop
+                 but keep it playing". Hidden while editing a manual window,
+                 whose own single Delete action is #overrideclear (a manual
+                 window's rect IS its existence, so there is nothing to reset
+                 it back to). -->
+            <button type="button" id="overridedelete" class="paneaction danger" hidden>Delete window</button>
+          </div>
+        </div>
+      </div>
+      <p id="zoomempty" class="panehint">Select a zoom block on the Zoom lane to adjust it, or drag in an empty part of the lane to add one.</p>
+    </section>
+
+    <!-- STC-373, STC-604: the export dialog, folded into the pane. Output size,
+         the embed size and legibility (warns below 9pt; never blocks), the
+         viewer's eye, and share. The Frame rows are here until the Frame
+         section takes them. The Export button and its progress are at the
+         foot; #openexport (the timeline's Export) switches to this section. -->
+    <section id="exportpanel" role="tabpanel" aria-label="Export" hidden>
+      <div>
+        <p class="panelabel">Format</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="outsize">Size</label>
+            <select id="outsize"></select>
+          </div>
+          <p id="outsizenote" class="panehint mono"></p>
+        </div>
+        <!-- The legibility sentence stays on show: it warns below 9pt, and a
+             warning behind a closed group would not warn. Its inputs are under
+             "More". -->
+        <p id="legibility" class="panehint mono"></p>
+      </div>
+
+
+      <!-- Share, folded in from its own former row (STC-444 slice 3). The site
+           folder itself is chosen from the main window's Preferences — the
+           note is a read-only reminder of it, not a second picker — and the
+           slug is per-take (Project.slug), prefilled from the take's own name
+           until something is actually published under a specific one. -->
+      <div>
+        <p class="panelabel">Destination</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="shareslug">Publish as</label>
+            <input id="shareslug" type="text" pattern="[a-z0-9][a-z0-9-]*" aria-label="Publish slug">
+          </div>
+          <p id="sitedestnote" class="panehint mono"></p>
+          <div class="row">
+            <button type="button" id="share" class="paneaction" title="Copy this take's export into the site folder">Share to site</button>
+            <span id="sharestatus" class="value"></span>
+            <button type="button" id="sharereveal" class="paneaction" hidden>Show in Finder</button>
+          </div>
+        </div>
+      </div>
+
+      <details class="more" id="exportmore">
+        <summary>More</summary>
+        <div class="morebody">
+          <div>
+            <p class="panelabel">Legibility</p>
+            <div class="group">
+              <div class="row">
+                <label class="label" for="embedtarget">Shown at</label>
+                <select id="embedtarget"></select>
+              </div>
+              <div class="row">
+                <label class="label" for="embedwidth">Embed width</label>
+                <input id="embedwidth" type="number" min="80" max="4096" step="1"
+                       aria-label="Embed width in CSS pixels">
+              </div>
+              <div class="row">
+                <label class="label" for="textpt">Text size</label>
+                <input id="textpt" type="number" min="1" max="144" step="0.5"
+                       aria-label="Base text size in points">
+              </div>
+              <div class="row">
+                <label class="label" for="vieweye"
+                       title="Draw the preview at the embed width, 1:1 — what the viewer actually sees">Viewer's eye</label>
+                <input id="vieweye" type="checkbox" class="switch" role="switch">
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <div id="exportbar" hidden>
+        <progress id="exportprogress" max="1000" value="0"></progress>
+        <span id="exportstatus" class="mono"></span>
+        <button type="button" id="cancelexport" class="paneaction">Cancel</button>
+      </div>
+      <button type="button" id="export" class="primarybtn">Export</button>
+      <p id="modelstamp" class="panehint mono"></p>
+    </section>
   </aside>
   </div><!-- /.shell -->
 
-  <dialog id="exportdialog">
-    <div class="dialogrow">
-      <label for="outsize">Export size</label>
-      <select id="outsize"></select>
-      <span id="outsizenote" class="mono"></span>
-    </div>
-    <div class="dialogrow">
-      <label for="framepreset">Frame</label>
-      <select id="framepreset">
-        <option value="none">None</option>
-        <option value="clean">Clean</option>
-        <option value="dark">Dark</option>
-        <option value="solid">Solid</option>
-      </select>
-      <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
-    </div>
-    <div class="dialogrow">
-      <label for="embedtarget">Shown at</label>
-      <select id="embedtarget"></select>
-      <input id="embedwidth" type="number" min="80" max="4096" step="1"
-             aria-label="Embed width in CSS pixels">
-      <label for="textpt">Text</label>
-      <input id="textpt" type="number" min="1" max="144" step="0.5"
-             aria-label="Base text size in points">
-    </div>
-    <div class="dialogrow">
-      <label title="Draw the preview at the embed width, 1:1 — what the viewer actually sees">
-        <input id="vieweye" type="checkbox"> Viewer's eye
-      </label>
-      <!-- Warns below 9pt; never blocks (STC-373's own scope line). -->
-      <span id="legibility" class="mono"></span>
-      <span id="modelstamp" class="mono"></span>
-    </div>
-    <div class="dialogrow" id="exportbar" hidden>
-      <progress id="exportprogress" max="1000" value="0"></progress>
-      <span id="exportstatus" class="mono"></span>
-      <button id="cancelexport">Cancel</button>
-    </div>
-    <hr class="dialogdivider">
-    <!--
-      Share, folded in from its own former row (STC-444 slice 3). The site
-      folder itself is chosen from the main window's Preferences now — this
-      is a read-only reminder of it, not a second picker — and the slug is
-      per-take (Project.slug), prefilled from the take's own name until
-      something is actually published under a specific one.
-    -->
-    <div class="dialogrow">
-      <label for="shareslug">Publish as</label>
-      <input id="shareslug" type="text" pattern="[a-z0-9][a-z0-9-]*"
-             aria-label="Publish slug">
-      <span id="sitedestnote" class="mono"></span>
-    </div>
-    <div class="dialogrow">
-      <button id="share" title="Copy this take's export into the site folder">Share to site</button>
-      <span id="sharestatus"></span>
-      <button id="sharereveal" hidden>Show in Finder</button>
-    </div>
-    <div class="dialogfoot">
-      <button id="export">Export</button>
-      <button id="closeexport">Close</button>
-    </div>
-  </dialog>
 
   <script src="../dist/editor.js"></script>
 </body>
