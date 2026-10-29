@@ -71,8 +71,14 @@ const readManifest = (takeDir: string) =>
 
 describe("export size (STC-335), inside the editor's export dialog (STC-373)", () => {
   test("a take offers its capture size and the presets, refusing the one that upscales", async () => {
-    const { dir } = takeWithCapture(1920, 1080);
+    const { dir, takeDir } = takeWithCapture(1920, 1080);
     const win = await openTake(dir);
+
+    // STC-604: the section's Length is the export window's clock, and Folder is
+    // the take's own folder (an export never lands anywhere else).
+    await expect.poll(() => win.textContent("#exportlength"), { timeout: 10_000 }).toMatch(/^\d+:\d\d/);
+    // (Compared by the folder's own name: a temp dir may be reached through a symlink.)
+    expect(await win.getAttribute("#exportfolder", "title")).toMatch(new RegExp(`${takeDir.split("/").pop()}$`));
 
     const opts = await options(win);
     expect(opts.map((o) => o.id)).toEqual(["capture", "embed-1x", "embed-2x"]);
