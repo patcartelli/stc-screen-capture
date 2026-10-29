@@ -1934,6 +1934,61 @@ $("scrub").addEventListener("input", () => {
   void player.seek(frameToNs(Number(($("scrub") as HTMLInputElement).value), player.durationNs));
 });
 
+// STC-605 (Patrick, 2026-10-29): the playhead can be grabbed anywhere along
+// its full height, not only on the Clip lane. #playhead itself stays
+// pointer-events:none, so a press is caught on .timelinewrap in the CAPTURE
+// phase when it lands within PLAYHEAD_GRAB_PX of the line. A trim bracket, a
+// bookmark pennant or a zoom block under the pointer still wins: those are
+// controls of their own, the playhead sits on the in-point bracket whenever it
+// is at frame 0, and selecting a zoom block seeks to its MIDDLE, so the line
+// lands on the block the user just clicked and a second click must still
+// reach it. The drag is the same seek #scrub's input makes (rule 3: a drag is
+// direct).
+const PLAYHEAD_GRAB_PX = 6;
+const NOT_THE_PLAYHEAD = ".handle, .rulerbookmark, .zoomblock, #manualdraft, #audio-resize, .zoomctl";
+let draggingPlayhead = false;
+
+function nearPlayhead(e: PointerEvent): boolean {
+  const ph = $("playhead") as HTMLElement;
+  if (ph.hidden || !player) return false;
+  const r = ph.getBoundingClientRect();
+  return Math.abs(e.clientX - (r.left + r.width / 2)) <= PLAYHEAD_GRAB_PX
+    && !(e.target as HTMLElement).closest(NOT_THE_PLAYHEAD);
+}
+
+function seekToClientX(clientX: number): void {
+  if (!player) return;
+  const frame = frameAtClientX(clientX);
+  ($("scrub") as HTMLInputElement).value = String(frame);
+  void player.seek(frameToNs(frame, player.durationNs));
+}
+
+(() => {
+  const wrap = document.querySelector(".timelinewrap") as HTMLElement;
+  wrap.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !nearPlayhead(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    draggingPlayhead = true;
+    scrubbing = true;
+    wrap.setAttribute("data-playhead-drag", "");
+    wrap.setPointerCapture(e.pointerId);
+  }, { capture: true });
+  wrap.addEventListener("pointermove", (e) => {
+    if (draggingPlayhead) { seekToClientX(e.clientX); return; }
+    wrap.toggleAttribute("data-near-playhead", nearPlayhead(e));
+  });
+  const end = (): void => {
+    if (!draggingPlayhead) return;
+    draggingPlayhead = false;
+    scrubbing = false;
+    wrap.removeAttribute("data-playhead-drag");
+  };
+  wrap.addEventListener("pointerup", end);
+  wrap.addEventListener("pointercancel", end);
+  wrap.addEventListener("pointerleave", () => { if (!draggingPlayhead) wrap.removeAttribute("data-near-playhead"); });
+})();
+
 // ---- system-audio level (STC-418 PR 3) --------------------------------
 //
 // Shown only for a take that recorded system audio. The level lives on the

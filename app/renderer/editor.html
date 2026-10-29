@@ -471,6 +471,10 @@
     #playhead::before { content: ""; position: absolute; top: 0; left: -4px; width: 10px; height: 6px;
                         border-radius: 2px; background: var(--bone); }
     #playhead[hidden] { display: none; }
+    /* Grabbable along its whole height (editor.ts's PLAYHEAD_GRAB_PX): the
+       wrap says when the pointer is near it, and while it is being dragged. */
+    .timelinewrap[data-near-playhead], .timelinewrap[data-near-playhead] * { cursor: ew-resize; }
+    .timelinewrap[data-playhead-drag], .timelinewrap[data-playhead-drag] * { cursor: ew-resize; }
     /* Trim dimming, shared by both lanes (STC-444 slice 2): a plain dim so a
        cut reads as ONE cut through the whole timeline. #cut-head/#cut-tail
        (Clip) and #zoom-cut-head/#zoom-cut-tail (Zoom) all place one of these;
