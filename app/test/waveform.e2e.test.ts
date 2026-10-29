@@ -42,8 +42,10 @@ describe("the audio lane", () => {
     const win = await openEditor(makeMicTakeFolder().dir);
     await expect.poll(() => win.isVisible("#audio-lane"), { timeout: 20_000 }).toBe(true);
     await expect.poll(() => state(win), { timeout: 20_000 }).toBe("ready");
-    // The ruler is time only now: Clip activity's canvas is the one left on it.
-    expect(await win.locator("#ruler canvas").count()).toBe(1);
+    // The ruler is time only: no lane draws onto it. Since STC-605 Clip
+    // activity is back on its own lane.
+    expect(await win.locator("#ruler canvas").count()).toBe(0);
+    expect(await win.locator(".laneviewport.clip #clip-activity").count()).toBe(1);
   }, 120_000);
 
   test("muting the mic recomputes the peaks from what the export would now contain", async () => {
