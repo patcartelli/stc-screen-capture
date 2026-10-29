@@ -254,6 +254,20 @@
     #pane .row { display: flex; align-items: center; gap: 16px; padding: 12px 0; min-height: 22px; }
     /* display:flex above beats the UA's display:none for [hidden]. */
     #pane .row[hidden] { display: none; }
+    /* "More": what the Figma frame does not draw, one click away. A native
+       <details>, so the keyboard and the accessibility tree come with it. */
+    #pane details.more > summary { display: flex; align-items: center; gap: 8px; padding: 6px 2px; cursor: pointer;
+                                   list-style: none; user-select: none; color: var(--text-dim);
+                                   font: 400 12px/17px "Geist Mono", ui-monospace, monospace; }
+    #pane details.more > summary::-webkit-details-marker { display: none; }
+    #pane details.more > summary::before { content: ""; width: 6px; height: 6px; flex: none;
+                                           border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
+                                           transform: rotate(-45deg); transition: transform .15s; }
+    #pane details.more[open] > summary::before { transform: rotate(45deg); }
+    #pane details.more > summary:hover { color: var(--text); }
+    #pane details.more > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+    #pane details.more > .morebody { display: flex; flex-direction: column; gap: 24px; margin-top: 12px; }
+    @media (prefers-reduced-motion: reduce) { #pane details.more > summary::before { transition: none; } }
     #pane .row > .label { flex: 1 1 0; min-width: 0; color: var(--text); font-size: var(--type-body);
                           cursor: pointer; }
     #pane .row > .label { white-space: nowrap; }
@@ -972,26 +986,31 @@
           </div>
         </div>
       </div>
-      <div>
-        <p class="panelabel">Overlays</p>
-        <div class="group">
-          <!-- STC-492: show/hide the click highlight. Saved to the project
-               (project-13's showClicks; absent = on). -->
-          <div class="row">
-            <label class="label" for="clicksbtn">Show clicks</label>
-            <button type="button" id="clicksbtn" class="pressswitch" aria-pressed="true"
-                    title="Hide the click highlight in the preview and export"></button>
-          </div>
-          <!-- STC-419: show/hide the keycast. Present only for a take that
-               recorded keys. Saved to the project (project-14's keycast.show);
-               never edits events.json. -->
-          <div class="row" id="keycastrow" hidden>
-            <label class="label" for="keycastbtn">Show keystrokes</label>
-            <button type="button" id="keycastbtn" class="pressswitch" hidden aria-pressed="true"
-                    title="Show keystrokes in the preview and export"></button>
+      <details class="more" id="framemore">
+        <summary>More</summary>
+        <div class="morebody">
+          <div>
+            <p class="panelabel">Overlays</p>
+            <div class="group">
+              <!-- STC-492: show/hide the click highlight. Saved to the project
+                   (project-13's showClicks; absent = on). -->
+              <div class="row">
+                <label class="label" for="clicksbtn">Show clicks</label>
+                <button type="button" id="clicksbtn" class="pressswitch" aria-pressed="true"
+                        title="Hide the click highlight in the preview and export"></button>
+              </div>
+              <!-- STC-419: show/hide the keycast. Present only for a take that
+                   recorded keys. Saved to the project (project-14's
+                   keycast.show); never edits events.json. -->
+              <div class="row" id="keycastrow" hidden>
+                <label class="label" for="keycastbtn">Show keystrokes</label>
+                <button type="button" id="keycastbtn" class="pressswitch" hidden aria-pressed="true"
+                        title="Show keystrokes in the preview and export"></button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </details>
     </section>
 
     <!-- STC-454 part 2, STC-604: every audio control for the take. All of it is
@@ -1151,33 +1170,12 @@
           </div>
           <p id="outsizenote" class="panehint mono"></p>
         </div>
-      </div>
-
-      <div>
-        <p class="panelabel">Legibility</p>
-        <div class="group">
-          <div class="row">
-            <label class="label" for="embedtarget">Shown at</label>
-            <select id="embedtarget"></select>
-          </div>
-          <div class="row">
-            <label class="label" for="embedwidth">Embed width</label>
-            <input id="embedwidth" type="number" min="80" max="4096" step="1"
-                   aria-label="Embed width in CSS pixels">
-          </div>
-          <div class="row">
-            <label class="label" for="textpt">Text size</label>
-            <input id="textpt" type="number" min="1" max="144" step="0.5"
-                   aria-label="Base text size in points">
-          </div>
-          <div class="row">
-            <label class="label" for="vieweye"
-                   title="Draw the preview at the embed width, 1:1 — what the viewer actually sees">Viewer's eye</label>
-            <input id="vieweye" type="checkbox" class="switch" role="switch">
-          </div>
-        </div>
+        <!-- The legibility sentence stays on show: it warns below 9pt, and a
+             warning behind a closed group would not warn. Its inputs are under
+             "More". -->
         <p id="legibility" class="panehint mono"></p>
       </div>
+
 
       <!-- Share, folded in from its own former row (STC-444 slice 3). The site
            folder itself is chosen from the main window's Preferences — the
@@ -1199,6 +1197,36 @@
           </div>
         </div>
       </div>
+
+      <details class="more" id="exportmore">
+        <summary>More</summary>
+        <div class="morebody">
+          <div>
+            <p class="panelabel">Legibility</p>
+            <div class="group">
+              <div class="row">
+                <label class="label" for="embedtarget">Shown at</label>
+                <select id="embedtarget"></select>
+              </div>
+              <div class="row">
+                <label class="label" for="embedwidth">Embed width</label>
+                <input id="embedwidth" type="number" min="80" max="4096" step="1"
+                       aria-label="Embed width in CSS pixels">
+              </div>
+              <div class="row">
+                <label class="label" for="textpt">Text size</label>
+                <input id="textpt" type="number" min="1" max="144" step="0.5"
+                       aria-label="Base text size in points">
+              </div>
+              <div class="row">
+                <label class="label" for="vieweye"
+                       title="Draw the preview at the embed width, 1:1 — what the viewer actually sees">Viewer's eye</label>
+                <input id="vieweye" type="checkbox" class="switch" role="switch">
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
 
       <div id="exportbar" hidden>
         <progress id="exportprogress" max="1000" value="0"></progress>

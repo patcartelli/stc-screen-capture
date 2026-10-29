@@ -156,6 +156,21 @@ export function closeEditorWindow(page: Page, timeout = 15_000): Promise<void> {
 export async function openExportDialog(page: Page): Promise<void> {
   await page.click("#openexport");
   await page.waitForSelector("#exportpanel:not([hidden])", { timeout: 10_000 });
+  // The embed size, text size and viewer's eye sit behind the section's "More".
+  await openMore(page, "exportpanel");
+}
+
+/**
+ * Open a pane section's "More" group (STC-604): what the Figma frame does not
+ * draw is behind it, and a control inside a closed one cannot be clicked.
+ * Clicks the real summary, and does nothing when it is already open.
+ */
+export async function openMore(page: Page, panelId: string): Promise<void> {
+  const isOpen = () => page.evaluate(
+    (id) => (document.querySelector(`#${id} details.more`) as HTMLDetailsElement | null)?.open ?? false, panelId);
+  if (await isOpen()) return;
+  await page.click(`#${panelId} details.more > summary`);
+  await expect.poll(isOpen, { timeout: 10_000 }).toBe(true);
 }
 
 /**

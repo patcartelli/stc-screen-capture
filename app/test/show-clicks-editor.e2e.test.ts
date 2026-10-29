@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication } from "playwright";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchWithTakeInEditor, inkiness } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, inkiness, openMore } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 /**
@@ -20,6 +20,7 @@ describe("the editor's Clicks switch (STC-492)", () => {
     const saved = () => {
       try { return JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8")).showClicks; } catch { return undefined; }
     };
+    await openMore(editorWin, "framepanel");
     expect(await editorWin.getAttribute("#clicksbtn", "aria-pressed")).toBe("true");
     await editorWin.click("#clicksbtn");
     expect(await editorWin.getAttribute("#clicksbtn", "aria-pressed")).toBe("false");

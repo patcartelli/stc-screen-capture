@@ -145,20 +145,28 @@ export function buildPipInspector(root: HTMLElement, host: PipInspectorHost): Pi
   const actions = el("div", { class: "row pip-actions" });
   actions.append(reframe, asDefault);
 
-  root.append(
+  // What the Figma frame draws is on show; everything the popover also had
+  // (presets, corners, border width and colour, shadow, mirror, show camera,
+  // reframe, use as default) is one click away behind "More".
+  const more = el("details", { class: "more", id: "pipmore" });
+  const moreBody = el("div", { class: "morebody" });
+  moreBody.append(
     group("Look", presetRow),
-    group("Picture",
+    group("Details",
       enabled.row,
-      row("Shape", null, shapes),
       row("Corners", "pipradius", radius.fader, radius.out),
-      row("Size", "pipsize", size.fader, size.out),
-      border.row,
       row("Border width", "pipborderwidth", borderWidth.fader, borderWidth.out),
       row("Border colour", "pipbordercolor", borderColor),
       shadow.row,
       mirror.row),
-    group("Position", row("Anchor", "pipanchor", anchor), snap.row),
     group("Framing", actions),
+  );
+  more.append(el("summary", {}, "More"), moreBody);
+
+  root.append(
+    group("Picture", row("Shape", null, shapes), row("Size", "pipsize", size.fader, size.out), border.row),
+    group("Position", row("Anchor", "pipanchor", anchor), snap.row),
+    more,
   );
 
   return {

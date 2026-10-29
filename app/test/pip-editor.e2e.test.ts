@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication } from "playwright";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchWithTakeInEditor, inkiness } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, inkiness, openMore } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 import { pipRect, PIP_SNAP_MARGIN_PX } from "../../transform/src/pip-style.js";
 
@@ -35,6 +35,7 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
     app = a;
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
     await editorWin.click("#pipbtn");
+    await openMore(editorWin, "pippanel");
     await editorWin.click('[data-pip-preset="circle"]');
     await expect.poll(() => savedPip(takeDir)?.style?.shape, { timeout: 10_000 }).toBe("circle");
     expect(savedProject(takeDir).version).toBe(16);
@@ -108,6 +109,7 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
     app = a;
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
     await editorWin.click("#pipbtn");
+    await openMore(editorWin, "pippanel");
     await editorWin.click('[data-pip-preset="circle"]');
     await editorWin.click("#pipreframe");
     await editorWin.fill("#pipzoom", "2");
@@ -129,6 +131,7 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
     app = a;
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
     await editorWin.click("#pipbtn");
+    await openMore(editorWin, "pippanel");
     await editorWin.click('[data-pip-preset="circle"]');
     await expect.poll(() => savedPip(takeDir)?.style?.shape, { timeout: 10_000 }).toBe("circle");
     await editorWin.click("#pipreframe");

@@ -80,6 +80,17 @@ brass Zoom and the Export button), and real fonts. The snapshots had **no fonts*
 - Choosing a new style keeps the numbers you set.
 - Clicks and Keys switches still change the preview and the export.
 
+## 6b. "More" groups
+
+Each section's default view is what its Figma frame draws; what the frame omits
+sits behind a collapsed **More** (a native `<details>`, open state kept while the
+editor window lives): Camera's Look, Show camera, Corners, Border width and
+colour, Shadow, Mirror, Reframe and Use as default; Frame's Overlays (Show clicks
+and keystrokes); Export's Legibility inputs. The legibility *sentence* stays on
+show under Format, because it warns below 9 pt. Check that nothing you use daily
+is now too hidden (Show camera, Show clicks are the likeliest), and say if any
+should come out of More.
+
 ## 7. Decisions for Patrick
 
 Left out of the build because nothing in the project backs them (the ticket keeps
