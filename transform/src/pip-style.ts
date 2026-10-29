@@ -303,6 +303,14 @@ export function snapCenter(center: Point, size: Size, output: Size, thresholdPx:
   return { x: (sx ?? px) / output.width, y: (sy ?? py) / output.height };
 }
 
+/**
+ * Where a drag puts the PiP's centre: the pointer's own place (`raw`), pulled
+ * onto a nearby anchor unless the Snap to edges row is off (STC-604).
+ */
+export function dragCenter(raw: Point, size: Size, output: Size, thresholdPx: number, snap: boolean): Point {
+  return snap ? snapCenter(raw, size, output, thresholdPx) : raw;
+}
+
 /** The nine anchors (STC-604's Anchor row), row by row. Each is `snapCenter`'s per-axis stop. */
 export const PIP_ANCHORS = Object.freeze([
   "top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right",
