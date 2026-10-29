@@ -1960,7 +1960,7 @@ $("scrub").addEventListener("input", () => {
 // reach it. The drag is the same seek #scrub's input makes (rule 3: a drag is
 // direct).
 const PLAYHEAD_GRAB_PX = 6;
-const NOT_THE_PLAYHEAD = ".handle, .rulerbookmark, .zoomblock, #manualdraft, #audio-resize, .zoomctl";
+const NOT_THE_PLAYHEAD = ".handle, .rulerbookmark, .zoomblock, #manualdraft, #audio-resize, .zoomctl, .overlayctl";
 let draggingPlayhead = false;
 
 function nearPlayhead(e: PointerEvent): boolean {
@@ -2943,6 +2943,9 @@ function selectSection(s: PaneSection): void {
   if ($("sectionswitch").querySelector(`[data-section="${s}"]`)?.hasAttribute("hidden")) s = "frame";
   const was = paneSection;
   paneSection = s;
+  // STC-606: the section overlays show only while their section is active,
+  // keyed off this attribute in CSS (body[data-section="zoom"] ...).
+  document.body.dataset.section = s;
   for (const tab of $("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")) {
     const on = tab.dataset.section === s;
     tab.setAttribute("aria-selected", String(on));

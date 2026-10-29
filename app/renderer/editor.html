@@ -31,7 +31,7 @@
        Red and teal are within 1.4:1 of each other in luminance, so a peak
        also carries a non-color cue: it is drawn hatched (2 px dashes, 1 px
        gaps) where the rest of the waveform is solid (drawAudioLane). */
-    :root { --clip: #6fa3a0; --zoom: #d6b25e; --zoom-fill: var(--zoom); --bookmark: #c97b6a; --wave: var(--clip); --wave-clip: #e5483f; --lane-label: #a9b4c2; --audio-lane-h: 44px; --lane-pad: 6px; }
+    :root { --clip: #6fa3a0; --zoom: #d6b25e; --zoom-fill: var(--zoom); --bookmark: #c97b6a; --wave: var(--clip); --wave-clip: #e5483f; --lane-label: #a9b4c2; --audio-lane-h: 44px; --lane-pad: 6px; --strip-h: 36px; }
     /* The editor's own accent (STC-601): the played bar, focus rings and the
        pressed states follow the primary instead of the app's blue. tokens.css's
        --accent is untouched, so Library, Settings and the still editor keep
@@ -420,7 +420,7 @@
     .tlrow { display: grid; grid-template-columns: var(--label-col) minmax(0, 1fr); align-items: center; }
     .tlrow > :last-child { grid-column: 2; }
     .rulerrow { height: 22px; }
-    .striprow { height: 36px; }
+    .striprow { height: var(--strip-h); }
     .lanerow + .lanerow { margin-top: 8px; }
     .lanerow:has(> #audio-lane[hidden]) { display: none; }
     .lanelabel { font: 10px/13px var(--font-readout); text-transform: uppercase; letter-spacing: .6px;
@@ -477,6 +477,14 @@
     #strip-content { position: absolute; top: 0; height: 100%; left: calc(var(--lane-pad) - 1px);
                      width: calc(100% - 2 * var(--lane-pad) + 2px); transform-origin: 0 0; pointer-events: none; }
     #strip-bookmarks { position: absolute; inset: 0; }
+    /* STC-606: the section overlays' layer in the strip. Unlike #strip-content
+       it is NOT under the pan/zoom transform, so a chip keeps its own size;
+       editor.ts places each overlay in the strip's px. The layer passes
+       presses through; an overlay control opts back in with .overlayctl, which
+       is also what keeps the playhead grab (NOT_THE_PLAYHEAD) off it. Which
+       overlays show is keyed off body[data-section], set by selectSection. */
+    #strip-overlays { position: absolute; inset: 0; pointer-events: none; }
+    .overlayctl { pointer-events: auto; }
     .stripbookmark { position: absolute; top: 0; bottom: 0; width: calc(1px * var(--inv, 1));
                      margin-left: calc(-.5px * var(--inv, 1));
                      background: color-mix(in srgb, var(--bookmark) 55%, transparent); }
@@ -680,7 +688,7 @@
     }
   </style>
 </head>
-<body>
+<body data-section="frame">
   <!-- STC-603: the glass title bar. #closepreview moved here from the header
        row: the frame has no close icon in the group, and the e2e suite closes
        the editor through this id. -->
@@ -825,10 +833,12 @@
       </div>
     </div>
     <!-- STC-605: reserved for overlays (STC-606's zoom chip), so nothing ever
-         covers the Clip lane. Empty here except for each bookmark's line. -->
+         covers the Clip lane. #strip-content carries each bookmark's line;
+         #strip-overlays holds STC-606's section overlays. -->
     <div class="tlrow striprow">
       <div id="overlay-strip">
         <div id="strip-content"><div id="strip-bookmarks"></div></div>
+        <div id="strip-overlays"></div>
       </div>
     </div>
     <div class="tlrow lanerow">
