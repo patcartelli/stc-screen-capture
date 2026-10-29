@@ -955,9 +955,10 @@ function drawZoomLane(): void {
   // reads as one trapezoid per derived window (ease-in ramp, flat top,
   // ease-out ramp), with #override-blocks laying the click targets over it.
   // Nothing about the sampling changed; only how it is drawn.
-  // STC-566: the fill is a vertical gradient of --zoom-fill now (solid at the
-  // curve's peak, fading toward the lane's floor), not STC-444's checkerboard
-  // dither. --zoom-fill still owns only this fill; --zoom keeps the
+  // STC-566/STC-609: the fill is a smooth vertical gradient of --zoom-fill
+  // (brass, 0.9 alpha at the curve's peak fading to 0.15 at the lane's floor).
+  // The silhouette is the sampled curve's own: ease-in ramp, flat top,
+  // ease-out ramp. --zoom-fill owns only this fill; --zoom keeps the
   // override-selection accents (see editor.html's --zoom-fill comment).
   const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#d6b25e";
   const gradient = ctx.createLinearGradient(0, 0, 0, h);
