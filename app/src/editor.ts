@@ -136,6 +136,34 @@ const takeName = params.get("name") ?? "";
 // share.ts's plumbing in the grid.
 const autoShare = params.get("autoShare") === "1";
 
+// ---- the window shell (STC-603) ----------------------------------------------
+
+// The glass title bar turns opaque under Reduce Transparency; main reads it
+// (Chromium may not report the media query) and passes it in the URL.
+document.body.classList.toggle("reduce-transparency", params.get("reduceTransparency") === "1");
+$("titlename").textContent = takeName;
+
+// The stage panel letterboxes the picture at its own aspect. The player sets
+// the canvas's width/height attributes (on open, and again when the export size
+// changes), so watching them is all it takes to keep --stage-ar true without a
+// call from every place that resizes the canvas.
+{
+  const canvas = $("stage") as HTMLCanvasElement;
+  const syncAspect = () => {
+    if (canvas.width > 0 && canvas.height > 0) {
+      canvas.parentElement!.style.setProperty("--stage-ar", `${canvas.width} / ${canvas.height}`);
+    }
+  };
+  new MutationObserver(syncAspect).observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+  syncAspect();
+}
+
+/** The title bar's right-hand readout: what the export is made at. */
+function updateTitleMeta(): void {
+  const o = openProject?.output;
+  $("titlemeta").textContent = o ? `${o.width}×${o.height} · ${o.fps} fps` : "";
+}
+
 // ---- state ------------------------------------------------------------------
 
 let player: PreviewPlayer | undefined;
@@ -1527,6 +1555,7 @@ async function setOutputSize(opt: OutputOption): Promise<void> {
   }
 
   updateOutputSizeUI();
+  updateTitleMeta();
   if (player.viewSize) await player.setViewSize(viewSizeForEmbed());
   else await player.outputResized();
   updateLegibilityUI();
@@ -1705,6 +1734,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 
   openSession = session;
   openProject = project;
+  updateTitleMeta();
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
   openDisplay = { pointWidth: effectivePointWidth(anchors) };
   player = new PreviewPlayer($("stage") as HTMLCanvasElement, session, project);
@@ -1786,6 +1816,7 @@ async function closeTake(): Promise<void> {
   openSession = undefined;
   openVideoSources = undefined;
   openProject = undefined;
+  updateTitleMeta();
   openCapture = undefined;
   openDisplay = undefined;
   updateSystemAudioUI();
@@ -1907,8 +1938,25 @@ let fitTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleFitWindow(): void {
   clearTimeout(fitTimer);
   fitTimer = setTimeout(() => {
-    requestAnimationFrame(() => void editor.fitWindow(document.documentElement.scrollHeight + FIT_MARGIN_PX));
+    requestAnimationFrame(() => void editor.fitWindow(naturalContentHeight() + FIT_MARGIN_PX));
   }, 150);
+}
+
+/**
+ * What the window needs to show everything at the stage's minimum height
+ * (STC-603). Not `documentElement.scrollHeight`: the shell fills the viewport,
+ * so that is always the viewport's own height, and asking for it plus a margin
+ * grew the window by the margin on every call. The stage panel absorbs spare
+ * height, so only the stage's minimum, the group and the gutters count.
+ */
+function naturalContentHeight(): number {
+  const col = document.querySelector<HTMLElement>(".workcol")!;
+  const cs = getComputedStyle(col);
+  const gap = parseFloat(cs.rowGap) || 0;
+  const stageMin = parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".stagebox")!).minHeight) || 0;
+  const alert = $("alert").offsetHeight;
+  return parseFloat(cs.paddingTop) + (alert ? alert + gap : 0) + stageMin + gap
+    + col.querySelector<HTMLElement>(".editorbody")!.offsetHeight + parseFloat(cs.paddingBottom);
 }
 /** Room beyond the measured content, so a rounding error never leaves a scrollbar. */
 const FIT_MARGIN_PX = 24;

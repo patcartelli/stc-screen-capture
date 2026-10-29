@@ -448,8 +448,9 @@ describe("the header row's icon transport (STC-444)", () => {
       })));
     for (const b of buttons) {
       expect(b.label, b.id).toBeTruthy();
-      // Icons only in the main chrome — the ticket's first acceptance line.
-      expect(b.text, b.id).toBe("");
+      // Icons only in the main chrome — the ticket's first acceptance line —
+      // except Export, which the v2 frame labels (STC-603).
+      expect(b.text, b.id).toBe(b.id === "openexport" ? "Export" : "");
     }
     const title = (id: string) => buttons.find((b) => b.id === id)!.title!;
     expect(title("playpause")).toMatch(/Space/);
