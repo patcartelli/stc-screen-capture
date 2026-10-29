@@ -101,7 +101,6 @@
             padding: 63px 24px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; }
     #pane .panelabel { margin: 0 0 8px; font-size: var(--type-label); font-weight: 500;
                        color: rgba(255, 255, 255, .45); }
-    #pane .panebuttons { display: flex; flex-wrap: wrap; gap: 8px; }
     /* The glass title bar (STC-584's, as the Library has it): over the whole
        window, the take's name centred, its output on the right. Opaque under
        Reduce Transparency; editor.ts sets body.reduce-transparency from the
@@ -201,46 +200,12 @@
     #openexport.labelled svg { width: 14px; height: 14px; }
     #openexport.labelled:hover:not([disabled]) { background: rgba(255, 255, 255, .14); }
     #shuttle { min-width: 32px; font-size: var(--type-value); font-weight: 500; color: var(--accent); }
-    /* STC-454 part 2: the take's audio controls live in ONE popover behind an
-       "Audio" button at the far end of the timecode row — mic level, system
-       level, narration cleanup (and part 3's mutes). The row had filled up
-       with three inline controls; the 2026-09-24 hardware pass had already
-       found stacked lanes cluttered for the same reason. Native popover:
-       Escape and a click outside close it. Anchored above the button, and
-       flipped below it if there is no room. */
-    .audiobtn { display: inline-flex; align-items: center; gap: 5px;
-                padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px;
-                background: none; color: var(--text-dim); font: inherit; font-size: var(--type-label);
-                cursor: pointer; anchor-name: --audiobtn; }
-    .audiobtn[hidden] { display: none; }
-    .audiobtn:hover { color: var(--text); background: var(--surface-hover); }
-    .audiobtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-    /* STC-419: the Keys switch shares .audiobtn's look. It sits beside the
-       Audio button (which owns the auto margin), or takes it when Audio is
-       hidden; aria-pressed="false" reads as off. */
-    #keycastbtn { anchor-name: none; }
-    #keycastbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
-                                       box-shadow: inset 0 0 0 1px var(--accent); }
-    #keycastbtn[aria-pressed="false"] { opacity: .6; }
-    /* STC-461 / STC-492: the first VISIBLE button of the row takes the auto
-       margin. Camera comes first when the take has one; Clicks is always
-       present, so it takes the margin otherwise. Audio and Keys follow, 8px
-       apart. */
-    #clicksbtn { anchor-name: none; }
-    /* On is drawn with a thicker line (2px accent: the 1px border plus a 1px
-       inset ring, so nothing shifts) so on and off differ by weight, not only
-       by colour and opacity. */
-    #clicksbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
-                                      box-shadow: inset 0 0 0 1px var(--accent); }
-    #clicksbtn[aria-pressed="false"] { opacity: .6; }
     /* STC-604: the Camera section (#pippanel) is a pane section; its rows are
        drawn by pip-inspector.css on the shared row pattern below. The camera's
        section accent is the coral of Figma's Camera frame (the bookmark's
        colour; STC-609 defined accents for Audio and Zoom only). */
     :root { --camera: var(--bookmark); }
     #pippanel { --section-accent: var(--camera); font-size: var(--type-body); }
-    .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
-                    stroke-linecap: round; stroke-linejoin: round; }
     /* STC-604: the pane's section switch and the Settings row pattern
        (STC-581): a group is a rounded card, a row is 12px above and below
        with a hairline between rows, the label on the left and ONE control on
@@ -291,28 +256,33 @@
                           cursor: pointer; }
     #pane .row > .label { white-space: nowrap; }
     #pane .row > .fader { flex: 0 0 100px; }
+    #pane .row > input[type="color"] { width: 22px; height: 22px; padding: 0; border: 1px solid var(--border);
+                                       border-radius: 6px; background: none; flex: none; margin-left: auto; }
+    #pane .row > input[type="color"] + .value { min-width: 0; }
     #pane .value { flex: none; min-width: 6ch; text-align: right; color: var(--text);
                    font-size: var(--type-value-sm); line-height: 22px; }
     /* The value is also the reset: clickable only while the level differs from
        its default (data-dirty), so it doubles as "this has been changed". */
     #pane .value[data-dirty] { cursor: pointer; border-radius: 4px; color: var(--section-accent); }
     #pane .value[data-dirty]:hover { background: var(--surface-hover); text-decoration: underline; }
-    /* The switch: a checkbox for cleanup and preview, a button for a track's
-       mute. On is the section's accent. A mute reads inverted (heard = on). */
-    #pane input.switch, #pane .trackswitch {
+    /* The switch: a checkbox for cleanup, preview and shadow; a button for a
+       track's mute (.trackswitch, which reads inverted: heard = on) and for an
+       overlay (.pressswitch: pressed = on). On is the section's accent. */
+    #pane input.switch, #pane .trackswitch, #pane .pressswitch {
       appearance: none; -webkit-appearance: none; margin: 0; padding: 0; border: 0; flex: none;
       width: 36px; height: 20px; border-radius: 10px; position: relative; cursor: pointer;
       background: rgba(255, 255, 255, .16); transition: background .15s; }
-    #pane input.switch::after, #pane .trackswitch::after {
+    #pane input.switch::after, #pane .trackswitch::after, #pane .pressswitch::after {
       content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
       background: #fff; transition: transform .15s; }
-    #pane input.switch:checked, #pane .trackswitch[aria-pressed="false"] { background: var(--section-accent); }
-    #pane input.switch:checked::after, #pane .trackswitch[aria-pressed="false"]::after { transform: translateX(16px); }
+    #pane .pressswitch[hidden] { display: none; }
+    #pane input.switch:checked, #pane .trackswitch[aria-pressed="false"], #pane .pressswitch[aria-pressed="true"] { background: var(--section-accent); }
+    #pane input.switch:checked::after, #pane .trackswitch[aria-pressed="false"]::after, #pane .pressswitch[aria-pressed="true"]::after { transform: translateX(16px); }
     #pane input.switch:disabled { opacity: .4; cursor: default; }
-    #pane input.switch:focus-visible, #pane .trackswitch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    #pane input.switch:focus-visible, #pane .trackswitch:focus-visible, #pane .pressswitch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     @media (prefers-reduced-motion: reduce) {
-      #pane input.switch, #pane .trackswitch { transition: background var(--dur-quick, .1s); }
-      #pane input.switch::after, #pane .trackswitch::after { transition: none; }
+      #pane input.switch, #pane .trackswitch, #pane .pressswitch { transition: background var(--dur-quick, .1s); }
+      #pane input.switch::after, #pane .trackswitch::after, #pane .pressswitch::after { transition: none; }
     }
     /* A real fader per track: a 12px thumb on a 4px track, a tick where the
        level is AS RECORDED (0 dB, which is 75% on the mic and the far end on
@@ -952,22 +922,68 @@
       <button type="button" role="tab" id="tab-export" data-section="export" aria-selected="false" tabindex="-1">Export</button>
     </div>
 
-    <section id="panetake" role="tabpanel" aria-label="Take">
-      <p class="panelabel">Take</p>
-      <div class="panebuttons">
-      <!-- STC-492: show/hide the click highlight. Saved to the project
-           (project-13's showClicks; absent = on). -->
-      <button type="button" id="clicksbtn" class="audiobtn" aria-pressed="true"
-              title="Hide the click highlight in the preview and export">
-        <span>Clicks</span>
-      </button>
-      <!-- STC-419: show/hide the keycast. Present only for a take that recorded
-           keys. Saved to the project (project-14's keycast.show); never edits
-           events.json. -->
-      <button type="button" id="keycastbtn" class="audiobtn" hidden aria-pressed="true"
-              title="Show keystrokes in the preview and export">
-        <span>Keys</span>
-      </button>
+    <!-- STC-396, STC-604: the picture's frame (the dialog's Frame control and
+         the framing numbers), and what is drawn over it. Saved to the project;
+         preview and export both go through render(), so what is previewed is
+         what exports. The default section. -->
+    <section id="framepanel" role="tabpanel" aria-label="Frame">
+      <div>
+        <p class="panelabel">Background</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="framepreset">Style</label>
+            <select id="framepreset">
+              <option value="none">None</option>
+              <option value="clean">Clean</option>
+              <option value="dark">Dark</option>
+              <option value="solid">Solid</option>
+            </select>
+          </div>
+          <div class="row" id="framecolorrow" hidden>
+            <label class="label" for="framecolor">Colour</label>
+            <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
+            <span id="framecolorvalue" class="value mono"></span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="panelabel">Frame</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="framepadding">Padding</label>
+            <div class="fader"><input id="framepadding" type="range" min="0" max="25" step="0.5" aria-label="Padding"></div>
+            <span id="framepadding-out" class="value mono"></span>
+          </div>
+          <div class="row">
+            <label class="label" for="frameradius">Corners</label>
+            <div class="fader"><input id="frameradius" type="range" min="0" max="10" step="0.1" aria-label="Corners"></div>
+            <span id="frameradius-out" class="value mono"></span>
+          </div>
+          <div class="row">
+            <label class="label" for="frameshadow">Shadow</label>
+            <input id="frameshadow" type="checkbox" class="switch" role="switch">
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="panelabel">Overlays</p>
+        <div class="group">
+          <!-- STC-492: show/hide the click highlight. Saved to the project
+               (project-13's showClicks; absent = on). -->
+          <div class="row">
+            <label class="label" for="clicksbtn">Show clicks</label>
+            <button type="button" id="clicksbtn" class="pressswitch" aria-pressed="true"
+                    title="Hide the click highlight in the preview and export"></button>
+          </div>
+          <!-- STC-419: show/hide the keycast. Present only for a take that
+               recorded keys. Saved to the project (project-14's keycast.show);
+               never edits events.json. -->
+          <div class="row" id="keycastrow" hidden>
+            <label class="label" for="keycastbtn">Show keystrokes</label>
+            <button type="button" id="keycastbtn" class="pressswitch" hidden aria-pressed="true"
+                    title="Show keystrokes in the preview and export"></button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1127,22 +1143,6 @@
             <select id="outsize"></select>
           </div>
           <p id="outsizenote" class="panehint mono"></p>
-        </div>
-      </div>
-
-      <div>
-        <p class="panelabel">Frame</p>
-        <div class="group">
-          <div class="row">
-            <label class="label" for="framepreset">Frame</label>
-            <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
-            <select id="framepreset">
-              <option value="none">None</option>
-              <option value="clean">Clean</option>
-              <option value="dark">Dark</option>
-              <option value="solid">Solid</option>
-            </select>
-          </div>
         </div>
       </div>
 

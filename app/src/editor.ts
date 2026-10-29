@@ -110,6 +110,9 @@ import {
   panFraming, zoomFraming, framingSource,
 } from "@transform/pip-style";
 import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-inspector.js";
+import {
+  framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
+} from "./framing-edit.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -2023,6 +2026,7 @@ function updateKeycastUI(): void {
   const btn = $("keycastbtn") as HTMLButtonElement;
   const has = !!openSession?.keys?.length;
   btn.hidden = !has;
+  $("keycastrow").hidden = !has;
   const shown = openProject?.keycast?.show !== false;
   btn.setAttribute("aria-pressed", shown ? "true" : "false");
   btn.title = shown ? "Hide keystrokes in the preview and export" : "Show keystrokes in the preview and export";
@@ -2467,10 +2471,42 @@ function updateFramingUI(): void {
   ($("framepreset") as HTMLSelectElement).value = f?.preset ?? "none";
   const color = $("framecolor") as HTMLInputElement;
   color.hidden = f?.preset !== "solid";
+  $("framecolorrow").hidden = f?.preset !== "solid";
   color.value = f?.color ?? DEFAULT_SOLID_COLOR;
+  $("framecolorvalue").textContent = color.value.toUpperCase();
+  // Padding, corners and shadow adjust a frame, so they wait for one.
+  const short = openProject ? Math.min(openProject.output.width, openProject.output.height) : 0;
+  const pad = $("framepadding") as HTMLInputElement;
+  const radius = $("frameradius") as HTMLInputElement;
+  const shadow = $("frameshadow") as HTMLInputElement;
+  const base: Framing = f ?? { preset: "clean" };
+  pad.value = String(Math.round(framingPadding(base) * 1000) / 10);
+  radius.value = String(Math.round(framingRadius(base) * 1000) / 10);
+  shadow.checked = framingShadowOn(base);
+  pad.disabled = radius.disabled = shadow.disabled = !f;
+  $("framepadding-out").textContent = f ? `${pad.value}%` : "–";
+  $("frameradius-out").textContent = f ? `${radiusPx(base, short)} px` : "–";
+  for (const r of [pad, radius]) {
+    r.style.setProperty("--fill-pct", `${(Number(r.value) / Number(r.max)) * 100}%`);
+  }
 }
 
-async function setFraming(next: Framing | undefined): Promise<void> {
+/** The Padding and Corners readouts (and the sliders' fill) for a framing mid-drag. */
+function updateFramingReadouts(f: Framing | undefined): void {
+  if (!f || !openProject) return;
+  const short = Math.min(openProject.output.width, openProject.output.height);
+  const pad = $("framepadding") as HTMLInputElement;
+  const radius = $("frameradius") as HTMLInputElement;
+  $("framepadding-out").textContent = `${Math.round(framingPadding(f) * 1000) / 10}%`;
+  $("frameradius-out").textContent = `${radiusPx(f, short)} px`;
+  for (const r of [pad, radius]) r.style.setProperty("--fill-pct", `${(Number(r.value) / Number(r.max)) * 100}%`);
+}
+
+/**
+ * Apply a framing. `persist` false is a LIVE edit (a slider mid-drag): the
+ * picture repaints, nothing is written; the commit on release writes it.
+ */
+async function setFraming(next: Framing | undefined, persist = true): Promise<void> {
   if (!openProject || !player) return;
   // While an override editor has the frame set aside, a change replaces the
   // held value and the live project stays unframed until editing ends.
@@ -2481,14 +2517,19 @@ async function setFraming(next: Framing | undefined): Promise<void> {
     } else if (f) openProject!.framing = f; else delete openProject!.framing;
   };
   apply(next);
-  try {
-    await persistProject();
-  } catch (e) {
-    apply(previous);
+  if (persist) {
+    try {
+      await persistProject();
+    } catch (e) {
+      apply(previous);
+      updateFramingUI();
+      throw e;
+    }
     updateFramingUI();
-    throw e;
+  } else {
+    // The control being dragged keeps its own value; only the readouts follow.
+    updateFramingReadouts(next);
   }
-  updateFramingUI();
   updateLegibilityUI();
   layoutPipOverlay();                    // the PiP lives in the content rect, which just moved
   await player.seek(player.currentNs);   // repaint this frame with the new choice
@@ -2498,9 +2539,16 @@ function framingFromControls(): Framing | undefined {
   const v = ($("framepreset") as HTMLSelectElement).value;
   if (v === "none") return undefined;
   const preset = v as FramingPreset;
-  return preset === "solid"
+  const next: Framing = preset === "solid"
     ? { preset, color: ($("framecolor") as HTMLInputElement).value }
     : { preset };
+  // The numbers set in the Frame section (padding, corners, shadow) are the
+  // user's own, so a new style keeps them (STC-604).
+  const was = chosenFraming(openProject, heldFraming);
+  if (was?.paddingPct !== undefined) next.paddingPct = was.paddingPct;
+  if (was?.radiusPct !== undefined) next.radiusPct = was.radiusPct;
+  if (was?.shadow !== undefined) next.shadow = was.shadow;
+  return next;
 }
 
 for (const id of ["framepreset", "framecolor"]) {
@@ -2508,6 +2556,28 @@ for (const id of ["framepreset", "framecolor"]) {
     void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
   });
 }
+
+// Padding, corners and shadow edit the chosen framing (framing-edit.ts). The
+// sliders follow the editor's input/change split: `input` repaints, `change`
+// writes. A preset change keeps the explicit numbers, as framing.ts says an
+// explicit field wins.
+function editFraming(edit: (f: Framing) => Framing, persist: boolean): void {
+  const f = chosenFraming(openProject, heldFraming);
+  if (!f) return;
+  void setFraming(edit(f), persist).catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+for (const [id, make] of [
+  ["framepadding", (f: Framing, v: number) => withPadding(f, v / 100)],
+  ["frameradius", (f: Framing, v: number) => withRadius(f, v / 100)],
+] as const) {
+  const input = $(id) as HTMLInputElement;
+  input.addEventListener("input", () => editFraming((f) => make(f, Number(input.value)), false));
+  input.addEventListener("change", () => editFraming((f) => make(f, Number(input.value)), true));
+}
+$("frameshadow").addEventListener("change", () => {
+  const on = ($("frameshadow") as HTMLInputElement).checked;
+  editFraming((f) => withShadow(f, on), true);
+});
 
 $("micmute").addEventListener("click", () => {
   if (!openProject) return;
@@ -2735,8 +2805,8 @@ function setMetersRunning(open: boolean): void {
 
 // ---- the pane's section switch (STC-604) ---------------------------------
 //
-// Frame, Audio, Camera, Zoom, Export. Audio, Camera and Zoom are built; the
-// other two show #panetake (the take's own switches) until theirs lands. The pane follows selection: choosing a zoom block calls
+// Frame, Audio, Camera, Zoom, Export: one section shown at a time, Frame by
+// default. The pane follows selection: choosing a zoom block calls
 // selectSection("zoom"). The meters run only while Audio is the active
 // section, for the same reason they ran only while its popover was open.
 
@@ -2758,7 +2828,7 @@ function selectSection(s: PaneSection): void {
   $("pippanel").toggleAttribute("hidden", s !== "camera");
   $("zoompanel").toggleAttribute("hidden", s !== "zoom");
   $("exportpanel").toggleAttribute("hidden", s !== "export");
-  $("panetake").toggleAttribute("hidden", s !== "frame");
+  $("framepanel").toggleAttribute("hidden", s !== "frame");
   setMetersRunning(s === "audio");
   if (s === "audio") syncResetHints();
   // Camera chosen mid-reframe: finish the reframe first, so the inspector
@@ -3062,7 +3132,8 @@ window.addEventListener("keydown", (e) => {
   // The Audio section (STC-604): its sliders take the arrow keys, its
   // switches and the section tabs take Space/Enter.
   if (($("audiopanel").contains(e.target as Node) || $("sectionswitch").contains(e.target as Node)
-        || $("exportpanel").contains(e.target as Node) || $("zoompanel").contains(e.target as Node))
+        || $("exportpanel").contains(e.target as Node) || $("zoompanel").contains(e.target as Node)
+        || $("framepanel").contains(e.target as Node))
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
@@ -3225,6 +3296,7 @@ async function runExport(): Promise<void> {
   ($("outsize") as HTMLSelectElement).disabled = true;
   ($("framepreset") as HTMLSelectElement).disabled = true;
   ($("framecolor") as HTMLInputElement).disabled = true;
+  for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = true;
   progress.value = 0;
   status.textContent = "Exporting…";
   clearAlert();
@@ -3289,6 +3361,7 @@ async function runExport(): Promise<void> {
     ($("outsize") as HTMLSelectElement).disabled = false;
     ($("framepreset") as HTMLSelectElement).disabled = false;
     ($("framecolor") as HTMLInputElement).disabled = false;
+    updateFramingUI();   // padding, corners and shadow wait for a frame again
   }
 }
 
