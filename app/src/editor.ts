@@ -113,6 +113,7 @@ import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-i
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
 } from "./framing-edit.js";
+import { homeRelative } from "./path-label.js";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -145,6 +146,9 @@ const autoShare = params.get("autoShare") === "1";
 // (Chromium may not report the media query) and passes it in the URL.
 document.body.classList.toggle("reduce-transparency", params.get("reduceTransparency") === "1");
 $("titlename").textContent = takeName;
+// Where an export lands: always the take's own folder (STC-604's Folder row).
+$("exportfolder").textContent = homeRelative(takeDir);
+$("exportfolder").title = takeDir;
 
 // The stage panel letterboxes the picture at its own aspect. The player sets
 // the canvas's width/height attributes (on open, and again when the export size
@@ -552,6 +556,8 @@ function updateTrimUI(): void {
   $("triminfo").textContent = isFullTake(openProject, player.durationNs)
     ? `Full take · ${fmtClock(player.durationNs)} · ${est}`
     : `${fmtClock(w.startNs)}–${fmtClock(w.endNs)} · ${fmtClock(w.endNs - w.startNs)} · ${est}`;
+  // The Export section's Length (STC-604): the window the export renders.
+  $("exportlength").textContent = fmtClock(w.endNs - w.startNs);
 }
 
 /**

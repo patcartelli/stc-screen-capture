@@ -649,6 +649,9 @@
     #legibility { opacity: .8; }
     #legibility.warn { opacity: 1; color: var(--warn); font-weight: 600; }
     #sitedestnote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* A folder path: takes the row and clips with an ellipsis; the full path is its tooltip. */
+    #pane .pathvalue { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                       text-align: right; }
     #sharestatus { flex: 1; min-width: 0; opacity: .75; text-align: right; }
     #pane #share, #pane #sharereveal { width: auto; padding: 12px 0; }
     #exportbar { display: flex; align-items: center; gap: 10px; }
@@ -1179,6 +1182,12 @@
       <div>
         <p class="panelabel">Destination</p>
         <div class="group">
+          <!-- Where an export lands: always the take's own folder (export:write
+               never writes anywhere else), so this is a readout, not a picker. -->
+          <div class="row">
+            <span class="label">Folder</span>
+            <span id="exportfolder" class="value mono pathvalue"></span>
+          </div>
           <div class="row">
             <label class="label" for="shareslug">Publish as</label>
             <input id="shareslug" type="text" pattern="[a-z0-9][a-z0-9-]*" aria-label="Publish slug">
@@ -1188,6 +1197,18 @@
             <button type="button" id="share" class="paneaction" title="Copy this take's export into the site folder">Share to site</button>
             <span id="sharestatus" class="value"></span>
             <button type="button" id="sharereveal" class="paneaction" hidden>Show in Finder</button>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <p class="panelabel">Estimate</p>
+        <div class="group">
+          <!-- The export's length: the trimmed window the export will render
+               (exportWindow), so it follows the trim handles. -->
+          <div class="row">
+            <span class="label">Length</span>
+            <span id="exportlength" class="value mono"></span>
           </div>
         </div>
       </div>
