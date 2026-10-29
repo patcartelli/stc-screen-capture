@@ -605,3 +605,47 @@ describe("bookmarks (STC-444 slice 4)", () => {
     expect(await markerCount(win)).toBe(0);
   }, 60_000);
 });
+
+describe("the playhead is grabbable along its full height (STC-605)", () => {
+  /** The bone line's centre, and a y inside the overlay strip, away from #scrub. */
+  const grabPoint = (win: any) => win.evaluate(() => {
+    const ph = document.getElementById("playhead")!.getBoundingClientRect();
+    const strip = document.getElementById("overlay-strip")!.getBoundingClientRect();
+    return { x: ph.left + ph.width / 2, y: strip.top + strip.height / 2, hidden: document.getElementById("playhead")!.hidden };
+  });
+
+  test("dragging the line in the overlay strip moves the playhead", async () => {
+    const { win } = await openPreview();
+    await seekTo(win, 100);
+    const p = await grabPoint(win);
+    expect(p.hidden).toBe(false);
+    const track = (await win.locator("#timeline").boundingBox())!;
+    await win.mouse.move(p.x, p.y);
+    await win.mouse.down();
+    await win.mouse.move(track.x + track.width * 0.75, p.y, { steps: 6 });
+    await win.mouse.up();
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBeGreaterThan(200);
+  }, 60_000);
+
+  test("a zoom block under the line still takes the click", async () => {
+    const { win } = await openPreview();
+    // Selecting a block seeks to its middle, so the line now sits on it.
+    await win.click(".zoomblock");
+    await expect.poll(() => win.isVisible("#overridebar"), { timeout: 10_000 }).toBe(true);
+    await win.click("#overridedone");
+    await win.click(".zoomblock");
+    await expect.poll(() => win.isVisible("#overridebar"), { timeout: 10_000 }).toBe(true);
+  }, 60_000);
+
+  test("a trim bracket under the line still takes the press", async () => {
+    const { win } = await openPreview();
+    await seekTo(win, 0);
+    const handle = (await win.locator("#trim-in").boundingBox())!;
+    await win.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await win.mouse.down();
+    await win.mouse.move(handle.x + 120, handle.y + handle.height / 2, { steps: 6 });
+    await win.mouse.up();
+    const project = await win.evaluate(() => (document.getElementById("cut-head") as HTMLElement).style.width);
+    expect(parseFloat(project)).toBeGreaterThan(0);
+  }, 60_000);
+});

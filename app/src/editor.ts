@@ -102,7 +102,7 @@ import {
 } from "./scrubber.js";
 import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
 import {
-  grabOffset, isFit, isMinSpan, overviewBox, overviewSpanFor, panBy, timelineZoomKeyIntent,
+  isFit, isMinSpan, overviewBox, panBy, timelineZoomKeyIntent,
   wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
 import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel } from "./timeline-activity.js";
@@ -218,7 +218,12 @@ function applySpanTransform(): void {
   // thumb counter-scale by (editor.html's `scale: var(--inv)`), so they stay
   // the same width however far in the lane is zoomed.
   ($("timeline") as HTMLElement).style.setProperty("--inv", String(1 / scale));
-  ($("ruler-content") as HTMLElement).style.transform = transform;
+  // STC-605: the ruler's labels and pennants and the strip's bookmark lines
+  // undo it the same way.
+  for (const id of ["ruler-content", "strip-content"]) {
+    ($(id) as HTMLElement).style.transform = transform;
+    ($(id) as HTMLElement).style.setProperty("--inv", String(1 / scale));
+  }
   // The three canvases are NOT transformed any more: stretching a bitmap is
   // what made a zoomed lane blocky. They are redrawn for the visible span.
   scheduleLaneRedraw();
@@ -238,6 +243,7 @@ function applySpanTransform(): void {
   renderRulerTicks();
   renderBookmarks();
   updateZoomBar();
+  updateRulerPlayhead(player?.currentNs ?? 0);
 }
 
 // ---- the ruler's adaptive ticks + played line (STC-444 slice 2) ------------
@@ -331,31 +337,55 @@ function renderRulerTicks(): void {
     }
   }
 
-  // Render major ticks (these are always drawn)
-  for (let t = 0; t <= durationS + 1e-6; t += majorInterval) {
+  // Render major ticks (these are always drawn). STC-605: a major tick also
+  // carries its time, as the frame does, but only every Nth one when they
+  // are closer than a label is wide, so labels never touch.
+  const labelEvery = Math.max(1, Math.ceil(MIN_RULER_LABEL_SPACING_PX / (majorInterval * pxPerSecond)));
+  let k = 0;
+  for (let t = 0; t <= durationS + 1e-6; t += majorInterval, k++) {
+    const left = `${Math.min(100, (t / durationS) * 100)}%`;
     const div = document.createElement("div");
     div.className = "ruler-tick";
-    div.style.left = `${Math.min(100, (t / durationS) * 100)}%`;
+    div.style.left = left;
     div.style.width = `${tickWidthPx}px`;
     frag.appendChild(div);
+    if (k % labelEvery !== 0) continue;
+    const label = document.createElement("span");
+    label.className = "ruler-label";
+    label.style.left = left;
+    label.textContent = fmtRulerTime(t);
+    frag.appendChild(label);
   }
 
   ticksEl.appendChild(frag);
-  // The playhead mark is the same kind of fixed-width thing a tick is.
-  ($("ruler-playhead") as HTMLElement).style.width = `${tickWidthPx}px`;
 }
 
-/** The blue played bar and its bright boundary mark — updated every
- *  onTime tick, unlike renderRulerTicks (span/resize-driven only), since
- *  this is cheap (two style writes) and needs the current position. */
+/** A ruler label needs about this much room: "1:00:00" at 9px mono, plus air. */
+const MIN_RULER_LABEL_SPACING_PX = 48;
+
+/** m:ss, or h:mm:ss from an hour: the ruler's whole seconds, not a frame timecode. */
+function fmtRulerTime(s: number): string {
+  const whole = Math.round(s);
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const ss = String(whole % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+/** The one playhead over the ruler and every lane (STC-605). Updated every
+ *  onTime tick and on any span change; placed in .timelinewrap's own px from
+ *  #timeline's transformed box, and hidden when the span has panned past it. */
 function updateRulerPlayhead(tNs: number): void {
-  if (!player) return;
-  const durationNs = player.durationNs;
-  if (!(durationNs > 0)) return;
-  const pct = Math.max(0, Math.min(100, (tNs / durationNs) * 100));
-  ($("ruler-played") as HTMLElement).style.width = `${pct}%`;
-  ($("ruler-playhead") as HTMLElement).style.left = `${pct}%`;
-  ($("overview-playhead") as HTMLElement).style.left = `${pct}%`;
+  const el = $("playhead") as HTMLElement;
+  const durationNs = player?.durationNs ?? 0;
+  if (!(durationNs > 0)) { el.hidden = true; return; }
+  const frac = Math.max(0, Math.min(1, tNs / durationNs));
+  const track = $("timeline").getBoundingClientRect();
+  const lane = (document.querySelector(".laneviewport.clip") as HTMLElement).getBoundingClientRect();
+  const wrap = (document.querySelector(".timelinewrap") as HTMLElement).getBoundingClientRect();
+  const x = track.left + frac * track.width;
+  el.hidden = track.width <= 0 || x < lane.left || x > lane.right;
+  el.style.left = `${x - wrap.left}px`;
 }
 
 /** Pan by a fraction of the CURRENT span (positive moves later in the take). */
@@ -392,7 +422,12 @@ function zoomIntent(intent: ZoomIntent): void {
   setSpan(zoomByIntent({ startNs: spanStart, endNs: spanEnd }, durationNs, intent, player?.currentNs ?? 0));
 }
 
-// ---- the zoom bar: overview strip, buttons, readout (STC-484) ---------------
+// ---- the zoom controls: buttons, readout, the ruler as a slider (STC-484) ----
+//
+// STC-605 took out the overview strip (the v2 frames have none). #ruler is
+// the pan handle by itself: drag it, scroll it, or focus it and use the arrow
+// keys. It reports the visible part of the take as a slider the way the strip
+// did, and carries the same left/width percentages as data attributes.
 
 let zoomReadoutTimer: ReturnType<typeof setTimeout> | undefined;
 const ZOOM_READOUT_MS = 1500;
@@ -408,12 +443,11 @@ function updateZoomBar(): void {
   const durationNs = player?.durationNs ?? 0;
   const span = { startNs: spanStart, endNs: spanEnd };
   const box = overviewBox(span, durationNs);
-  const win = $("overview-window") as HTMLElement;
-  win.style.left = `${box.leftPct}%`;
-  win.style.width = `${box.widthPct}%`;
-  const strip = $("overview") as HTMLElement;
-  strip.setAttribute("aria-valuenow", String(Math.round(box.leftPct)));
-  strip.setAttribute("aria-valuetext", zoomReadout(span, durationNs));
+  const ruler = $("ruler") as HTMLElement;
+  ruler.dataset.spanLeft = String(box.leftPct);
+  ruler.dataset.spanWidth = String(box.widthPct);
+  ruler.setAttribute("aria-valuenow", String(Math.round(box.leftPct)));
+  ruler.setAttribute("aria-valuetext", zoomReadout(span, durationNs));
   $("zoomreadout").textContent = zoomReadout(span, durationNs);
   const open = durationNs > 0;
   ($("zoomin") as HTMLButtonElement).disabled = !open || isMinSpan(span, durationNs);
@@ -425,34 +459,7 @@ $("zoomin").addEventListener("click", () => zoomIntent("in"));
 $("zoomout").addEventListener("click", () => zoomIntent("out"));
 $("zoomfit").addEventListener("click", () => zoomIntent("fit"));
 
-let overviewGrab: number | null = null;
-function overviewFraction(e: PointerEvent): number {
-  const r = $("overview").getBoundingClientRect();
-  return r.width > 0 ? (e.clientX - r.left) / r.width : 0;
-}
-function overviewMoveTo(e: PointerEvent): void {
-  const durationNs = player?.durationNs ?? 0;
-  if (durationNs <= 0 || overviewGrab === null) return;
-  setSpan(overviewSpanFor({ startNs: spanStart, endNs: spanEnd }, durationNs, overviewFraction(e), overviewGrab));
-}
-$("overview").addEventListener("pointerdown", (e) => {
-  const durationNs = player?.durationNs ?? 0;
-  if (durationNs <= 0) return;
-  const pe = e as PointerEvent;
-  const box = overviewBox({ startNs: spanStart, endNs: spanEnd }, durationNs);
-  overviewGrab = grabOffset(box, overviewFraction(pe)) ?? 0.5;
-  $("overview-window").classList.add("dragging");
-  $("overview").setPointerCapture(pe.pointerId);
-  overviewMoveTo(pe);
-});
-$("overview").addEventListener("pointermove", (e) => overviewMoveTo(e as PointerEvent));
-const endOverviewDrag = () => {
-  overviewGrab = null;
-  $("overview-window").classList.remove("dragging");
-};
-$("overview").addEventListener("pointerup", endOverviewDrag);
-$("overview").addEventListener("pointercancel", endOverviewDrag);
-$("overview").addEventListener("keydown", (e) => {
+$("ruler").addEventListener("keydown", (e) => {
   const k = (e as KeyboardEvent).key;
   if (k !== "ArrowLeft" && k !== "ArrowRight") return;
   e.preventDefault();
@@ -463,11 +470,8 @@ $("overview").addEventListener("keydown", (e) => {
 let panning = false;
 let panLastX = 0;
 $("ruler").addEventListener("pointerdown", (e) => {
-  // The activity toggle sits INSIDE #ruler (2026-09-24 declutter pass), and
-  // without this guard #ruler's own setPointerCapture below steals the
-  // button's pointer events on the very first pointerdown — a click that
-  // never reaches the button, watched failing before this was added.
-  if ((e.target as HTMLElement).closest(".rulertoggle")) return;
+  // A pennant takes its own click (seek) — without this guard #ruler's
+  // setPointerCapture below would steal it on the first pointerdown.
   if ((e.target as HTMLElement).closest(".rulerbookmark")) return;
   panning = true;
   panLastX = (e as PointerEvent).clientX;
@@ -497,7 +501,7 @@ function onTimelineWheel(e: WheelEvent): void {
     panSpan(intent.deltaPx / r.width);
   }
 }
-for (const el of [$("ruler"), $("overview"), ...Array.from(document.querySelectorAll<HTMLElement>(".laneviewport"))]) {
+for (const el of [$("ruler"), $("overlay-strip"), ...Array.from(document.querySelectorAll<HTMLElement>(".laneviewport"))]) {
   el.addEventListener("wheel", (e) => onTimelineWheel(e as WheelEvent), { passive: false });
 }
 
@@ -662,31 +666,37 @@ function toggleBookmarkAtPlayhead(): void {
 /**
  * Rebuilds #ruler-bookmarks the same way renderRulerTicks rebuilds
  * #ruler-ticks: authored as a fraction of FULL duration (left: %) so the
- * shared pan/zoom transform on #ruler-content carries it for free, with the
- * marker's own WIDTH corrected by 1/scale so it stays a constant on-screen
- * px — the same fight ticks and the playhead already have with scaleX().
+ * shared pan/zoom transform on #ruler-content carries it for free. STC-605:
+ * each bookmark is a clay pennant on the ruler plus a line down through the
+ * overlay strip (#strip-bookmarks, under the same transform); both keep a
+ * constant on-screen size through CSS's --inv, which applySpanTransform sets.
  */
 function renderBookmarks(): void {
   const el = $("ruler-bookmarks") as HTMLElement;
+  const lines = $("strip-bookmarks") as HTMLElement;
   el.innerHTML = "";
+  lines.innerHTML = "";
   if (!player || !openProject || !(player.durationNs > 0)) return;
   const durationNs = player.durationNs;
-  const span = Math.max(1, spanEnd - spanStart);
-  const scale = durationNs / span;
-  const widthPx = Math.max(0.05, 3 / scale);
   const frag = document.createDocumentFragment();
+  const lineFrag = document.createDocumentFragment();
   for (const ns of openProject.bookmarks ?? []) {
+    const left = `${Math.max(0, Math.min(100, (ns / durationNs) * 100))}%`;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "rulerbookmark";
-    btn.style.left = `${Math.max(0, Math.min(100, (ns / durationNs) * 100))}%`;
-    btn.style.width = `${widthPx}px`;
+    btn.style.left = left;
     btn.dataset.ns = String(ns);
     btn.setAttribute("aria-label", `Bookmark at ${fmtClock(ns)}`);
     btn.title = `${fmtClock(ns)} — right-click to remove`;
     frag.appendChild(btn);
+    const line = document.createElement("div");
+    line.className = "stripbookmark";
+    line.style.left = left;
+    lineFrag.appendChild(line);
   }
   el.appendChild(frag);
+  lines.appendChild(lineFrag);
 }
 
 ($("ruler-bookmarks") as HTMLElement).addEventListener("click", (e) => {
@@ -706,64 +716,71 @@ $("togglebookmark").addEventListener("click", toggleBookmarkAtPlayhead);
 // ---- the Clip and Zoom lanes (STC-373) --------------------------------------
 
 const LANE_BUCKETS = 480;
-/** The Clip activity's bars are lit from the bottom in LED-style rows
- *  (STC-444 slice 2, "LED/LCD screen" HTML variant comparison) rather than
- *  a solid fill — SEG the filled height of each row, GAP the dark space
- *  after it. */
-const LED_ROW_SEG_PX = 2;
-const LED_ROW_GAP_PX = 1;
 
 /**
- * Clip activity, drawn onto the RULER now, not its own lane (2026-09-24
- * declutter pass, real-hardware feedback: three stacked lanes read as
- * cluttered, and activity is a judgment aid for where to trim, not a
- * control — it does not need a lane's worth of space to earn its keep).
- * `#ruler[data-activity]`'s CSS opacity is what actually shows or hides
- * it; this always redraws the canvas regardless, the same way the Zoom
- * lane's canvas is kept current whether or not anything is selected on it.
+ * The bars of the Clip and Audio lanes, in CSS px (STC-605, from the v2
+ * frame): Clip draws 3px bars on a 5px pitch from the lane's floor, Audio 2px
+ * bars on a 4px pitch about its middle. A peak is a column of 3px squares on
+ * a 5px pitch, one px wider each side than the bar it marks.
  */
-function drawRulerActivity(): void {
-  const canvas = $("ruler-activity") as HTMLCanvasElement;
-  const wrap = $("ruler-activity-wrap") as HTMLElement;
-  const w = Math.max(1, Math.round(wrap.getBoundingClientRect().width)) || LANE_BUCKETS;
-  const h = 18;
+const CLIP_BAR_PX = 3;
+const CLIP_PITCH_PX = 5;
+const CLIP_PAD_PX = 4;
+const WAVE_BAR_PX = 2;
+const WAVE_PITCH_PX = 4;
+const PEAK_DOT_PX = 3;
+const PEAK_PITCH_PX = 5;
+
+/** The largest of `values` over the part of the take one column covers, so a
+ *  zoomed-out lane cannot step over a burst between two columns. */
+function columnMax(values: ArrayLike<number>, f0: number, f1: number): number {
+  const n = values.length;
+  const b0 = Math.max(0, Math.floor(f0 * n));
+  const b1 = Math.max(b0 + 1, Math.ceil(f1 * n));
+  let m = 0;
+  for (let b = b0; b < b1 && b < n; b++) m = Math.max(m, values[b]!);
+  return m;
+}
+
+/** Fills a rect with its corners rounded by `r` (the frame's bars are 1px). */
+function fillBar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, Math.min(r, w / 2, h / 2));
+  ctx.fill();
+}
+
+/**
+ * Clip activity (STC-373), its own lane again since STC-605: the 2026-09-24
+ * declutter pass had moved it onto the ruler behind a toggle, and the v2
+ * frames give it the Clip lane, under the trim track. Drawn for the VISIBLE
+ * span at device resolution, as the other two lanes are.
+ */
+function drawClipLane(): void {
+  const canvas = $("clip-activity") as HTMLCanvasElement;
+  const wrap = $("clip-canvas-wrap") as HTMLElement;
+  const box = wrap.getBoundingClientRect();
+  const cssW = box.width || LANE_BUCKETS;
+  const cssH = box.height || 56;
+  const { width: w, height: h, scale } = laneBitmap(cssW, cssH, window.devicePixelRatio);
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
   if (!player || !openSession) return;
   const activity = clipActivity(openSession.events, player.durationNs, LANE_BUCKETS);
-  // STC-484: drawn for the visible span, not stretched (see drawAudioLane).
+  const dur = player.durationNs;
   const vis = visibleSpan();
-  const spanW = Math.max(1, vis.end - vis.start);
-  const barW = (w * (player.durationNs / activity.length)) / spanW;
-  const x0 = -(vis.start / spanW) * w;
-  const style = getComputedStyle(document.documentElement).getPropertyValue("--clip").trim() || "#6fa3a0";
-  ctx.fillStyle = style || "#6fa3a0";
-  const bw = Math.max(1, barW - 1);
-  const rowStride = LED_ROW_SEG_PX + LED_ROW_GAP_PX;
-  for (let i = 0; i < activity.length; i++) {
-    const bh = Math.max(1, activity[i]! * (h - 2));
-    const x = x0 + i * barW;
-    if (x + bw < 0 || x > w) continue;
-    const top = h - bh;
-    for (let y = h; y > top; y -= rowStride) {
-      const segH = Math.min(LED_ROW_SEG_PX, y - top);
-      ctx.fillRect(x, y - segH, bw, segH);
-    }
+  const f0 = dur > 0 ? vis.start / dur : 0;
+  const f1 = dur > 0 ? vis.end / dur : 1;
+  const clip = getComputedStyle(document.documentElement).getPropertyValue("--clip").trim() || "#6fa3a0";
+  ctx.fillStyle = withAlpha(clip, 0.85);
+  const floor = (cssH - CLIP_PAD_PX) * scale;
+  const room = cssH - 2 * CLIP_PAD_PX;
+  for (let x = 0; x + CLIP_BAR_PX <= cssW; x += CLIP_PITCH_PX) {
+    const a = columnMax(activity, f0 + (x / cssW) * (f1 - f0), f0 + ((x + CLIP_PITCH_PX) / cssW) * (f1 - f0));
+    const bh = Math.max(1.5, a * room) * scale;
+    fillBar(ctx, x * scale, floor - bh, CLIP_BAR_PX * scale, bh, scale);
   }
 }
-
-/** #ruleractivitytoggle's own state — never persisted: a view preference
- *  for THIS look, not an edit decision, so it resets to off (declutter by
- *  default) each time the editor opens, the same way "Viewer's eye" does. */
-function toggleRulerActivity(): void {
-  const btn = $("ruleractivitytoggle") as HTMLButtonElement;
-  const ruler = $("ruler") as HTMLElement;
-  const on = btn.getAttribute("aria-pressed") !== "true";
-  btn.setAttribute("aria-pressed", String(on));
-  ruler.toggleAttribute("data-activity", on);
-}
-$("ruleractivitytoggle").addEventListener("click", toggleRulerActivity);
 
 // ---- the waveform on the ruler (STC-454 part 4) -------------------------
 //
@@ -820,45 +837,49 @@ function scheduleWaveform(): void {
 }
 
 /** Mirrored about the lane's middle, linear: full height is full scale. A
- *  clipped bucket (waveform.ts's `isClipped`) is drawn in --wave-clip. */
+ *  clipped bucket (waveform.ts's `isClipped`) is drawn in --wave-clip. STC-605:
+ *  2px bars on a 4px pitch, as the v2 frame draws them. */
 function drawAudioLane(): void {
   const canvas = $("audio-waveform") as HTMLCanvasElement;
   const wrap = $("audio-canvas-wrap") as HTMLElement;
   const lane = $("audio-lane") as HTMLElement;
-  const { width: w, height: h } = laneBitmap(
-    wrap.getBoundingClientRect().width || LANE_BUCKETS, lane.clientHeight || audioLaneHeight,
-    window.devicePixelRatio);
+  const cssW = wrap.getBoundingClientRect().width || LANE_BUCKETS;
+  const cssH = lane.clientHeight || audioLaneHeight;
+  const { width: w, height: h, scale } = laneBitmap(cssW, cssH, window.devicePixelRatio);
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
   const peaks = wavePeaks;
   if (!peaks) return;
   const css = getComputedStyle(document.documentElement);
-  const normal = css.getPropertyValue("--wave").trim() || "#6fa3a0";
+  const normal = withAlpha(css.getPropertyValue("--wave").trim() || "#6fa3a0", 0.8);
   const hot = css.getPropertyValue("--wave-clip").trim() || "#e5483f";
-  const n = peaks.length;
-  const mid = h / 2;
-  const half = mid - 1;
+  const mid = cssH / 2;
+  const half = mid - PEAK_DOT_PX;
   // STC-484: the canvas shows the VISIBLE span only, redrawn on every zoom or
   // pan rather than CSS-stretched, so a zoomed lane stays sharp.
   const dur = player?.durationNs ?? 0;
   const vis = visibleSpan();
   const f0 = dur > 0 ? vis.start / dur : 0;
   const f1 = dur > 0 ? vis.end / dur : 1;
-  for (let x = 0; x < w; x++) {
-    // Every bucket that falls in this column, so a narrow window cannot skip a peak.
-    const b0 = Math.max(0, Math.floor((f0 + (x / w) * (f1 - f0)) * n));
-    const b1 = Math.max(b0 + 1, Math.floor((f0 + ((x + 1) / w) * (f1 - f0)) * n));
-    let peak = 0;
-    for (let b = b0; b < b1 && b < n; b++) peak = Math.max(peak, peaks[b]!);
+  for (let x = 0; x + WAVE_BAR_PX <= cssW; x += WAVE_PITCH_PX) {
+    // Every bucket the column covers, so a narrow window cannot skip a peak.
+    const peak = columnMax(peaks, f0 + (x / cssW) * (f1 - f0), f0 + ((x + WAVE_PITCH_PX) / cssW) * (f1 - f0));
     if (!(peak > 0)) continue;
-    const a = Math.max(0.5, peak * half);
-    const clipped = isClipped(peak);
-    ctx.fillStyle = clipped ? hot : normal;
-    if (!clipped) { ctx.fillRect(x, mid - a, 1, 2 * a); continue; }
+    const a = Math.max(1, peak * half);
+    if (!isClipped(peak)) {
+      ctx.fillStyle = normal;
+      fillBar(ctx, x * scale, (mid - a) * scale, WAVE_BAR_PX * scale, 2 * a * scale, scale);
+      continue;
+    }
     // STC-601: red and teal sit within 1.4:1 in luminance, so a peak is
-    // marked by texture too, not by color alone: 2 px dashes with 1 px gaps.
-    for (let y = mid - a; y < mid + a; y += 3) ctx.fillRect(x, y, 1, Math.min(2, mid + a - y));
+    // marked by texture too, not by color alone: a column of squares where
+    // the rest of the waveform is a solid bar.
+    ctx.fillStyle = hot;
+    const dx = (x - (PEAK_DOT_PX - WAVE_BAR_PX) / 2) * scale;
+    for (let y = mid - a; y < mid + a; y += PEAK_PITCH_PX) {
+      ctx.fillRect(dx, y * scale, PEAK_DOT_PX * scale, Math.min(PEAK_DOT_PX, mid + a - y) * scale);
+    }
   }
 }
 
@@ -874,11 +895,12 @@ function updateAudioLane(): void {
 //
 // Resizable by dragging its bottom edge (Patrick, 2026-10-16). Defaults, the
 // minimum and the remembered size are this ticket's own calls, still open with
-// him: 56 px default, 32 px minimum (peaks readable), 160 px maximum, remembered
-// per viewer in localStorage (a view preference, not an edit decision).
+// him: 32 px minimum (peaks readable), 160 px maximum, remembered per viewer in
+// localStorage (a view preference, not an edit decision). The default is the
+// v2 frame's 44 px since STC-605 (it was 56).
 const AUDIO_LANE_MIN = 32;
 const AUDIO_LANE_MAX = 160;
-const AUDIO_LANE_DEFAULT = 56;
+const AUDIO_LANE_DEFAULT = 44;
 const AUDIO_LANE_KEY = "stc.editor.audioLaneHeight";
 
 function clampAudioLane(px: number): number {
@@ -943,8 +965,9 @@ function drawZoomLane(): void {
   // STC-451: a bitmap at DEVICE resolution, drawn in device pixels (no
   // ctx.scale) so the curve's edge stays crisp on a 2x display; CSS still
   // sizes the canvas to the lane (#zoom-curve is 100% x 100%).
+  const box = wrap.getBoundingClientRect();
   const { width: w, height: h, scale } = laneBitmap(
-    wrap.getBoundingClientRect().width || LANE_BUCKETS, 22, window.devicePixelRatio);
+    box.width || LANE_BUCKETS, box.height || 64, window.devicePixelRatio);
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
@@ -956,36 +979,59 @@ function drawZoomLane(): void {
     visibleSpan().start,
     visibleSpan().end,
   );
-  // STC-330: a FILLED area, not a stroked line — the same sampled curve now
-  // reads as one trapezoid per derived window (ease-in ramp, flat top,
-  // ease-out ramp), with #override-blocks laying the click targets over it.
-  // Nothing about the sampling changed; only how it is drawn.
-  // STC-566/STC-609: the fill is a smooth vertical gradient of --zoom-fill
-  // (brass, 0.9 alpha at the curve's peak fading to 0.15 at the lane's floor).
-  // The silhouette is the sampled curve's own: ease-in ramp, flat top,
-  // ease-out ramp. --zoom-fill owns only this fill; --zoom keeps the
-  // override-selection accents (see editor.html's --zoom-fill comment).
+  // STC-330: a FILLED area, not a stroked line — the same sampled curve
+  // reads as one silhouette per window (ease-in ramp, flat top, ease-out
+  // ramp), with #override-blocks laying the click targets over it.
+  // STC-605, from the v2 frame: each block is filled with its OWN smooth
+  // brass gradient, 0.5 alpha at its top edge fading to 0.04 at the floor,
+  // and outlined along its top in brass at 0.85. --zoom-fill owns the fill;
+  // --zoom keeps the override-selection accents. The dither STC-566 tried is
+  // retired. amount is not clamped to [0, 1] (zoom.ts's own note): it is
+  // clipped to the lane's height rather than pretending it cannot exceed 1.
   const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#d6b25e";
-  const gradient = ctx.createLinearGradient(0, 0, 0, h);
-  gradient.addColorStop(0, withAlpha(fillColor, 0.9));
-  gradient.addColorStop(1, withAlpha(fillColor, 0.15));
-  ctx.fillStyle = gradient;
-  ctx.beginPath();
-  ctx.moveTo(0, h);
-  for (let i = 0; i < curve.length; i++) {
-    const x = (i / (curve.length - 1)) * w;
-    // amount is not clamped to [0, 1] (zoom.ts's own note) — draw whatever
-    // comes back, clipped to the lane's own height rather than pretending it
-    // cannot exceed 1.
-    const y = h - Math.max(0, Math.min(1, curve[i]!)) * (h - 2 * scale) - scale;
-    ctx.lineTo(x, y);
+  const top = 2 * scale;
+  const yAt = (v: number): number => h - Math.max(0, Math.min(1, v)) * (h - top);
+  const xAt = (i: number): number => (i / (curve.length - 1)) * w;
+  ctx.lineWidth = 2 * scale;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  for (let i = 0; i < curve.length;) {
+    if (!(curve[i]! > ZOOM_LANE_FLOOR)) { i++; continue; }
+    // One block: the run of samples above the floor, with the samples either
+    // side of it so its ramps start and end on the floor.
+    const a = Math.max(0, i - 1);
+    let b = i;
+    while (b < curve.length - 1 && curve[b + 1]! > ZOOM_LANE_FLOOR) b++;
+    b = Math.min(curve.length - 1, b + 1);
+    let peak = h;
+    for (let j = a; j <= b; j++) peak = Math.min(peak, yAt(curve[j]!));
+    const gradient = ctx.createLinearGradient(0, peak, 0, h);
+    gradient.addColorStop(0, withAlpha(fillColor, 0.5));
+    gradient.addColorStop(1, withAlpha(fillColor, 0.04));
+    ctx.beginPath();
+    ctx.moveTo(xAt(a), h);
+    for (let j = a; j <= b; j++) ctx.lineTo(xAt(j), yAt(curve[j]!));
+    ctx.lineTo(xAt(b), h);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(xAt(a), yAt(curve[a]!));
+    for (let j = a + 1; j <= b; j++) ctx.lineTo(xAt(j), yAt(curve[j]!));
+    ctx.strokeStyle = withAlpha(fillColor, 0.85);
+    ctx.stroke();
+    i = b + 1;
   }
-  ctx.lineTo(w, h);
-  ctx.closePath();
-  ctx.fill();
 }
 
-function redrawLanes(): void { drawRulerActivity(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks(); }
+/** Below this the zoom is at rest: no block is drawn, so the lane's floor
+ *  stays empty between windows instead of carrying a hairline. */
+const ZOOM_LANE_FLOOR = 0.002;
+
+function redrawLanes(): void {
+  drawClipLane(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks();
+  updateRulerPlayhead(player?.currentNs ?? 0);
+}
 
 /** A zoom or pan redraws the three canvases; a drag fires many per frame, so
  *  they are coalesced to one per animation frame. */
@@ -995,7 +1041,7 @@ function scheduleLaneRedraw(): void {
   laneRedrawQueued = true;
   requestAnimationFrame(() => {
     laneRedrawQueued = false;
-    drawRulerActivity(); drawAudioLane(); drawZoomLane();
+    drawClipLane(); drawAudioLane(); drawZoomLane();
   });
 }
 window.addEventListener("resize", redrawLanes);
@@ -1904,6 +1950,61 @@ $("scrub").addEventListener("input", () => {
   if (!player) return;
   void player.seek(frameToNs(Number(($("scrub") as HTMLInputElement).value), player.durationNs));
 });
+
+// STC-605 (Patrick, 2026-10-29): the playhead can be grabbed anywhere along
+// its full height, not only on the Clip lane. #playhead itself stays
+// pointer-events:none, so a press is caught on .timelinewrap in the CAPTURE
+// phase when it lands within PLAYHEAD_GRAB_PX of the line. A trim bracket, a
+// bookmark pennant or a zoom block under the pointer still wins: those are
+// controls of their own, the playhead sits on the in-point bracket whenever it
+// is at frame 0, and selecting a zoom block seeks to its MIDDLE, so the line
+// lands on the block the user just clicked and a second click must still
+// reach it. The drag is the same seek #scrub's input makes (rule 3: a drag is
+// direct).
+const PLAYHEAD_GRAB_PX = 6;
+const NOT_THE_PLAYHEAD = ".handle, .rulerbookmark, .zoomblock, #manualdraft, #audio-resize, .zoomctl";
+let draggingPlayhead = false;
+
+function nearPlayhead(e: PointerEvent): boolean {
+  const ph = $("playhead") as HTMLElement;
+  if (ph.hidden || !player) return false;
+  const r = ph.getBoundingClientRect();
+  return Math.abs(e.clientX - (r.left + r.width / 2)) <= PLAYHEAD_GRAB_PX
+    && !(e.target as HTMLElement).closest(NOT_THE_PLAYHEAD);
+}
+
+function seekToClientX(clientX: number): void {
+  if (!player) return;
+  const frame = frameAtClientX(clientX);
+  ($("scrub") as HTMLInputElement).value = String(frame);
+  void player.seek(frameToNs(frame, player.durationNs));
+}
+
+(() => {
+  const wrap = document.querySelector(".timelinewrap") as HTMLElement;
+  wrap.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !nearPlayhead(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    draggingPlayhead = true;
+    scrubbing = true;
+    wrap.setAttribute("data-playhead-drag", "");
+    wrap.setPointerCapture(e.pointerId);
+  }, { capture: true });
+  wrap.addEventListener("pointermove", (e) => {
+    if (draggingPlayhead) { seekToClientX(e.clientX); return; }
+    wrap.toggleAttribute("data-near-playhead", nearPlayhead(e));
+  });
+  const end = (): void => {
+    if (!draggingPlayhead) return;
+    draggingPlayhead = false;
+    scrubbing = false;
+    wrap.removeAttribute("data-playhead-drag");
+  };
+  wrap.addEventListener("pointerup", end);
+  wrap.addEventListener("pointercancel", end);
+  wrap.addEventListener("pointerleave", () => { if (!draggingPlayhead) wrap.removeAttribute("data-near-playhead"); });
+})();
 
 // ---- system-audio level (STC-418 PR 3) --------------------------------
 //
@@ -3162,9 +3263,6 @@ window.addEventListener("keydown", (e) => {
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
-  // And for the ruler's toggles (STC-454 part 4): Space on a focused one
-  // flips the overlay, not playback.
-  if ((e.target as HTMLElement | null)?.classList?.contains("rulertoggle") && (e.key === " " || e.key === "Enter")) return;
   const action = decideKey(
     {
       key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey,

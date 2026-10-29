@@ -44,8 +44,9 @@ export interface EditorOptions {
  * The size of the Figma frame (STC-603): the 376px pane plus the preview and
  * timeline column. The minimum keeps the column wide enough for the transport
  * row. Both are clamped to the display, which a laptop's work area is under.
+ * STC-605 added the timeline's 36px overlay strip, and the window grew by it.
  */
-export const EDITOR_SIZE = { width: 1280, height: 856 };
+export const EDITOR_SIZE = { width: 1280, height: 892 };
 export const EDITOR_MIN_SIZE = { width: 960, height: 640 };
 
 /** Where the traffic lights sit in the glass title bar: as the Library and Settings have them. */
