@@ -105,7 +105,7 @@ import {
 } from "./timeline-zoom.js";
 import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel } from "./timeline-activity.js";
 import {
-  editPipStyle, pipRect, pipSize, snapCenter, resizeFromCorner, styleFromFixedCorner,
+  editPipStyle, pipRect, pipSize, dragCenter, resizeFromCorner, styleFromFixedCorner,
   anchorCenter, anchorOf, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
   panFraming, zoomFraming, framingSource,
 } from "@transform/pip-style";
@@ -2236,7 +2236,7 @@ $("pipoverlay").addEventListener("pointermove", (e) => {
     return;
   }
   const raw = { x: (px - pipDrag.dx) / out.width, y: (py - pipDrag.dy) / out.height };
-  const snapped = pipSnap ? snapCenter(raw, pipSize(style, out, cam), out, PIP_SNAP_THRESHOLD_SCREEN_PX / k) : raw;
+  const snapped = dragCenter(raw, pipSize(style, out, cam), out, PIP_SNAP_THRESHOLD_SCREEN_PX / k, pipSnap);
   setPipStyle(editPipStyle(style, { kind: "move", center: snapped }, cam), false);
 });
 
