@@ -3,8 +3,9 @@
  *
  * `timeline-zoom.test.ts` proves the pure decisions; this drives the real
  * editor: the buttons, the keys the page still receives, a synthetic
- * ⌘-wheel, the overview strip, the hidden readout, and the override box that
- * is drawn only on hover. (⌘= in the packaged app is claimed by main's
+ * ⌘-wheel, panning the ruler, the hidden readout, and the override box that
+ * is drawn only on hover. STC-605 took the overview strip out; the ruler
+ * carries the visible span's left/width percentages as data attributes. (⌘= in the packaged app is claimed by main's
  * before-input-event; that half needs a Mac and is in the runbook.)
  */
 import { describe, test, expect, afterEach } from "vitest";
@@ -20,16 +21,14 @@ async function open() {
   app = a;
   await waitForTakeLoaded(editorWin);
   // The zoom bar is drawn once the opening span is set, a beat after #scrub.
-  await expect.poll(() => editorWin.evaluate(
-    () => parseFloat((document.getElementById("overview-window") as HTMLElement).style.width),
-  ), { timeout: 10_000 }).toBeCloseTo(100, 3);
+  await expect.poll(() => windowWidthPct(editorWin), { timeout: 10_000 }).toBeCloseTo(100, 3);
   return editorWin;
 }
 
 const windowWidthPct = (win: any): Promise<number> =>
-  win.evaluate(() => parseFloat((document.getElementById("overview-window") as HTMLElement).style.width));
+  win.evaluate(() => parseFloat((document.getElementById("ruler") as HTMLElement).dataset.spanWidth ?? "NaN"));
 const windowLeftPct = (win: any): Promise<number> =>
-  win.evaluate(() => parseFloat((document.getElementById("overview-window") as HTMLElement).style.left));
+  win.evaluate(() => parseFloat((document.getElementById("ruler") as HTMLElement).dataset.spanLeft ?? "NaN"));
 
 describe("zoom bar", () => {
   test("starts at Fit with the readout hidden", async () => {
@@ -40,7 +39,7 @@ describe("zoom bar", () => {
     expect(await win.evaluate(() => document.getElementById("zoomreadout")!.hasAttribute("data-live"))).toBe(false);
   }, 60_000);
 
-  test("+ narrows the overview window and shows the readout; Fit restores", async () => {
+  test("+ narrows the visible span and shows the readout; Fit restores", async () => {
     const win = await open();
     await win.click("#zoomin");
     expect(await windowWidthPct(win)).toBeLessThan(100);
@@ -74,21 +73,31 @@ describe("zoom bar", () => {
     expect(await windowLeftPct(win)).toBeGreaterThan(before);
   }, 60_000);
 
-  test("dragging the overview window pans", async () => {
+  test("dragging the ruler pans", async () => {
     const win = await open();
     await win.click("#zoomin");
     await win.click("#zoomin");
-    const box = await win.locator("#overview").boundingBox();
-    const w = await win.locator("#overview-window").boundingBox();
-    expect(box && w).toBeTruthy();
-    const startX = w!.x + w!.width / 2;
-    const y = box!.y + box!.height / 2;
+    const box = (await win.locator("#ruler").boundingBox())!;
+    const y = box.y + box.height / 2;
     const before = await windowLeftPct(win);
-    await win.mouse.move(startX, y);
+    // Dragging the ruler LEFT brings later time into view.
+    await win.mouse.move(box.x + box.width * 0.8, y);
     await win.mouse.down();
-    await win.mouse.move(startX + (box!.width - w!.width) / 2, y, { steps: 5 });
+    await win.mouse.move(box.x + box.width * 0.4, y, { steps: 5 });
     await win.mouse.up();
     expect(await windowLeftPct(win)).toBeGreaterThan(before);
+  }, 60_000);
+
+  test("the arrow keys pan the focused ruler, not the playhead", async () => {
+    const win = await open();
+    await win.click("#zoomin");
+    await win.click("#zoomin");
+    const frame = await win.getAttribute("#scrub", "value");
+    const before = await windowLeftPct(win);
+    await win.focus("#ruler");
+    await win.keyboard.press("ArrowRight");
+    expect(await windowLeftPct(win)).toBeGreaterThan(before);
+    expect(await win.getAttribute("#scrub", "value")).toBe(frame);
   }, 60_000);
 });
 
