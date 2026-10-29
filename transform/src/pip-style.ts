@@ -303,6 +303,40 @@ export function snapCenter(center: Point, size: Size, output: Size, thresholdPx:
   return { x: (sx ?? px) / output.width, y: (sy ?? py) / output.height };
 }
 
+/** The nine anchors (STC-604's Anchor row), row by row. Each is `snapCenter`'s per-axis stop. */
+export const PIP_ANCHORS = Object.freeze([
+  "top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right",
+] as const);
+export type PipAnchor = (typeof PIP_ANCHORS)[number];
+
+/** A centre within this many OUTPUT pixels of an anchor reads as sitting on it. */
+export const PIP_ANCHOR_TOLERANCE_PX = 1;
+
+function anchorStops(size: Size, output: Size): { xs: number[]; ys: number[] } {
+  const m = PIP_SNAP_MARGIN_PX;
+  return {
+    xs: [m + size.width / 2, output.width / 2, output.width - m - size.width / 2],
+    ys: [m + size.height / 2, output.height / 2, output.height - m - size.height / 2],
+  };
+}
+
+/** Where a PiP of `size` sits, as a UV centre, when pinned to `anchor`: the same stops a drag snaps to. */
+export function anchorCenter(anchor: PipAnchor, size: Size, output: Size): Point {
+  const { xs, ys } = anchorStops(size, output);
+  const i = PIP_ANCHORS.indexOf(anchor);
+  return { x: xs[i % 3]! / output.width, y: ys[Math.floor(i / 3)]! / output.height };
+}
+
+/** The anchor a centre sits on, or null (a "custom" place: dragged somewhere between). */
+export function anchorOf(center: Point, size: Size, output: Size): PipAnchor | null {
+  const { xs, ys } = anchorStops(size, output);
+  const px = center.x * output.width;
+  const py = center.y * output.height;
+  const col = xs.findIndex((x) => Math.abs(x - px) <= PIP_ANCHOR_TOLERANCE_PX);
+  const row = ys.findIndex((y) => Math.abs(y - py) <= PIP_ANCHOR_TOLERANCE_PX);
+  return col < 0 || row < 0 ? null : PIP_ANCHORS[row * 3 + col]!;
+}
+
 /** A corner handle: aspect locked, centre fixed; the larger of the two axes wins. */
 export function resizeFromCorner(style: PipStyle, pointer: Point, output: Size, camera: Size): PipStyle {
   const cx = style.center.x * output.width;

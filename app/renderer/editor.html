@@ -226,7 +226,6 @@
        margin. Camera comes first when the take has one; Clicks is always
        present, so it takes the margin otherwise. Audio and Keys follow, 8px
        apart. */
-    #pipbtn { anchor-name: --pipbtn; }
     #clicksbtn { anchor-name: none; }
     /* On is drawn with a thicker line (2px accent: the 1px border plus a 1px
        inset ring, so nothing shifts) so on and off differ by weight, not only
@@ -234,26 +233,12 @@
     #clicksbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
                                       box-shadow: inset 0 0 0 1px var(--accent); }
     #clicksbtn[aria-pressed="false"] { opacity: .6; }
-    /* The Camera popover is anchored to its button above the timecode row, the
-       same as #audiopanel (STC-483, Patrick 2026-10-16: the earlier over-the-
-       stage placement collided with the timeline lanes). It can cover the PiP
-       while open; a press on the PiP's overlay closes it and a drag re-opens it. */
-    /* STC-603: the buttons live in the pane now, so the popovers are pinned
-       inside the pane's own column (right edge, under the title bar) instead
-       of opening leftward from their button, which put them over the preview
-       stage and the PiP the Camera panel is there to adjust. */
-    #pippanel { position: fixed; inset: 112px 8px auto auto; margin: 0; overflow: auto; box-sizing: border-box;
-                width: 340px; max-height: calc(100vh - 128px);
-                padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
-                background: var(--surface, var(--bg)); color: var(--text);
-                box-shadow: var(--shadow-card); }
-    /* pip-inspector.css puts `display: grid` on the host (the class lands on #pippanel
-       itself), which beats the UA's display:none for a closed popover: the panel was
-       always visible. Hide it unless open. */
-    #pippanel:not(:popover-open) { display: none; }
-    /* The Camera button reads as on while its panel is open, drawn like Clicks/Keys on. */
-    #pipbtn:has(+ #pippanel:popover-open) { color: var(--accent); border-color: var(--accent);
-                                           box-shadow: inset 0 0 0 1px var(--accent); }
+    /* STC-604: the Camera section (#pippanel) is a pane section; its rows are
+       drawn by pip-inspector.css on the shared row pattern below. The camera's
+       section accent is the coral of Figma's Camera frame (the bookmark's
+       colour; STC-609 defined accents for Audio and Zoom only). */
+    :root { --camera: var(--bookmark); }
+    #pippanel { --section-accent: var(--camera); font-size: var(--type-body); }
     .audiobtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4;
                     stroke-linecap: round; stroke-linejoin: round; }
     /* STC-604: the pane's section switch and the Settings row pattern
@@ -315,17 +300,17 @@
        cleanup, level and mute) with a clip mark for the mix's hard limit. The
        thumb is styled (not native) so the tick's position is arithmetic:
        6px + (100% - 12px) * --unity. */
-    #audiopanel .fader { position: relative; min-width: 0; }
-    #audiopanel .fader input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
+    #pane .fader { position: relative; min-width: 0; }
+    #pane .fader input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
                                              margin: 0; background: transparent; cursor: pointer; }
-    #audiopanel input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
+    #pane input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
                                              background: linear-gradient(to right, var(--section-accent) var(--fill-pct, 0%), rgba(255, 255, 255, .14) var(--fill-pct, 0%)); }
-    #audiopanel input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+    #pane input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
                                              width: 12px; height: 12px; margin-top: -4px; border-radius: 50%;
                                              background: #fff; border: 0; }
-    #audiopanel input[type="range"]:focus-visible { outline: none; }
-    #audiopanel input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--focus); }
-    #audiopanel input[type="range"]:disabled { opacity: 0.4; cursor: default; }
+    #pane input[type="range"]:focus-visible { outline: none; }
+    #pane input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--focus); }
+    #pane input[type="range"]:disabled { opacity: 0.4; cursor: default; }
     /* The as-recorded tick: on the track's centre line, above the meter. */
     #audiopanel .unity { position: absolute; top: 3px; width: 1px; height: 16px; background: var(--text-dim);
                          left: calc(6px + (100% - 12px) * var(--unity, 1)); pointer-events: none; opacity: 0.7; }
@@ -714,7 +699,7 @@
     <div id="rectoverlay" hidden><div id="overridebox" hidden></div></div>
     <!-- STC-461: the PiP, draggable (with snapping) and resizable from its
          corner, shown only while the Camera popover is open. -->
-    <div id="pipoverlay" hidden><div class="pipbox"><div id="piphandle"></div></div></div>
+    <div id="pipoverlay" hidden><div class="pipbox"><span id="piplabel"></span><div id="piphandle"></div></div></div>
     <!-- STC-461: Reframe. The live project shows the whole camera frame large
          and centred; #pipframewindow is the crop, in the PiP's shape, with the
          rest dimmed. The surface STC-497's guides draw inside. -->
@@ -956,7 +941,9 @@
       <!-- Present only for a take with audio (updateAudioButton). -->
       <button type="button" role="tab" id="audiobtn" data-section="audio" aria-selected="false"
               aria-controls="audiopanel" tabindex="-1" hidden>Audio</button>
-      <button type="button" role="tab" id="tab-camera" data-section="camera" aria-selected="false" tabindex="-1">Camera</button>
+      <!-- Present only for a take with a camera (updatePipButton). -->
+      <button type="button" role="tab" id="pipbtn" data-section="camera" aria-selected="false"
+              aria-controls="pippanel" tabindex="-1" hidden>Camera</button>
       <button type="button" role="tab" id="tab-zoom" data-section="zoom" aria-selected="false" tabindex="-1">Zoom</button>
       <button type="button" role="tab" id="tab-export" data-section="export" aria-selected="false" tabindex="-1">Export</button>
     </div>
@@ -964,15 +951,6 @@
     <section id="panetake" role="tabpanel" aria-label="Take">
       <p class="panelabel">Take</p>
       <div class="panebuttons">
-      <!-- STC-461: the camera PiP's look and place, in one popover — the
-           shared inspector (pip-inspector.ts) is built into #pippanel.
-           Present only for a take with a camera. Saved to the project
-           (project-16's pip.style). -->
-      <button type="button" id="pipbtn" class="audiobtn" popovertarget="pippanel" hidden
-              aria-label="Camera" title="Camera picture-in-picture: shape, size, border, position">
-        <span>Camera</span>
-      </button>
-      <div id="pippanel" popover="auto" aria-label="Camera"></div>
       <!-- STC-492: show/hide the click highlight. Saved to the project
            (project-13's showClicks; absent = on). -->
       <button type="button" id="clicksbtn" class="audiobtn" aria-pressed="true"
@@ -1073,6 +1051,11 @@
         </div>
       </div>
     </section>
+
+    <!-- STC-461, STC-604: the camera PiP's look and place. pip-inspector.ts
+         builds the rows into #pippanel. Present only for a take with a camera;
+         saved to the project (project-16's pip.style). -->
+    <section id="pippanel" role="tabpanel" aria-label="Camera" hidden></section>
   </aside>
   </div><!-- /.shell -->
 

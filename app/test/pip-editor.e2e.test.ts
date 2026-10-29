@@ -22,7 +22,7 @@ const savedProject = (dir: string) => {
 };
 const savedPip = (dir: string) => savedProject(dir)?.pip;
 
-describe("the editor's Camera popover (STC-461)", () => {
+describe("the editor's Camera section (STC-461, STC-604)", () => {
   test("hidden for a take with no camera", async () => {
     const { app: a, editorWin } = await launchWithTakeInEditor();
     app = a;
@@ -47,7 +47,7 @@ describe("the editor's Camera popover (STC-461)", () => {
     const output = readJson(takeDir, "project.json").output as { width: number; height: number };
     const cam = readJson(takeDir, "anchors.json").camera as { width: number; height: number };
     await editorWin.click("#pipbtn");
-    // The overlay is unhidden by the popover's (async) toggle handler.
+    // The overlay shows once the Camera section is active.
     await editorWin.locator("#pipoverlay .pipbox").waitFor({ state: "visible", timeout: 10_000 });
     const box = (await editorWin.locator("#pipoverlay .pipbox").boundingBox())!;
     const stage = (await editorWin.locator("#stage").boundingBox())!;
@@ -62,9 +62,36 @@ describe("the editor's Camera popover (STC-461)", () => {
     const style = savedPip(takeDir).style;
     const r = pipRect(style, { width: output.width, height: output.height }, { width: cam.width, height: cam.height });
     expect([r.x, r.y]).toEqual([PIP_SNAP_MARGIN_PX, PIP_SNAP_MARGIN_PX]);
-    // The panel is temporary (STC-483): the drag closes it and it stays closed.
-    await expect.poll(() => editorWin.evaluate(() => document.getElementById("pippanel")!.matches(":popover-open")),
-      { timeout: 5_000 }).toBe(false);
+    // STC-604: the Camera section is a pane section, not a popover. The drag
+    // leaves it open and the Anchor row names the place the snap landed on.
+    expect(await editorWin.evaluate(() => !document.getElementById("pippanel")!.hidden)).toBe(true);
+    await expect.poll(() => editorWin.inputValue("#pipanchor"), { timeout: 5_000 }).toBe("top-left");
+  }, 120_000);
+
+  test("the Anchor row pins the PiP to a place; Snap to edges off lets a drag land between places", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ pip: true });
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    const output = readJson(takeDir, "project.json").output as { width: number; height: number };
+    const cam = readJson(takeDir, "anchors.json").camera as { width: number; height: number };
+    await editorWin.click("#pipbtn");
+    await editorWin.selectOption("#pipanchor", "top-left");
+    await expect.poll(() => savedPip(takeDir)?.style, { timeout: 10_000 }).toBeDefined();
+    const at = () => pipRect(savedPip(takeDir).style, { width: output.width, height: output.height },
+      { width: cam.width, height: cam.height });
+    await expect.poll(() => [at().x, at().y], { timeout: 10_000 }).toEqual([PIP_SNAP_MARGIN_PX, PIP_SNAP_MARGIN_PX]);
+
+    // Snap off: a drag a few pixels off the margin stays where it was dropped.
+    await editorWin.uncheck("#pipsnap");
+    const box = (await editorWin.locator("#pipoverlay .pipbox").boundingBox())!;
+    const stage = (await editorWin.locator("#stage").boundingBox())!;
+    const scale = stage.width / output.width;
+    await editorWin.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await editorWin.mouse.down();
+    await editorWin.mouse.move(box.x + box.width / 2 + 4 * scale, box.y + box.height / 2 + 3 * scale, { steps: 4 });
+    await editorWin.mouse.up();
+    await expect.poll(() => at().x, { timeout: 10_000 }).not.toBe(PIP_SNAP_MARGIN_PX);
+    expect(await editorWin.inputValue("#pipanchor")).toBe("");
   }, 120_000);
 
   test("reframe: dragging the window right moves framing.x right, and Done saves it", async () => {
