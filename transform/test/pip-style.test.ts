@@ -5,7 +5,7 @@ import {
   PIP_WIDTH_MAX, PIP_FRAMING_ZOOM_MAX, type PipStyle,
   PIP_PRESETS, editPipStyle, snapCenter, resizeFromCorner, panFraming, zoomFraming,
   PIP_SNAP_MARGIN_PX, PIP_WIDTH_MIN, DEFAULT_BORDER, inspectorSide, inspectorLeftPx,
-  PIP_ANCHORS, anchorCenter, anchorOf,
+  PIP_ANCHORS, anchorCenter, anchorOf, dragCenter,
 } from "../src/pip-style.js";
 import { fixedCornerPipUv, uvRectToPixels, outputRect, roundRect } from "../src/spaces.js";
 import { DEFAULT_PIP } from "../src/trim.js";
@@ -273,6 +273,16 @@ describe("anchors — the Anchor row's nine places (STC-604)", () => {
     expect(anchorOf({ x: 0.3, y: 0.3 }, size, out)).toBeNull();
     const c = anchorCenter("bottom", size, out);
     expect(anchorOf({ x: 0.3, y: c.y }, size, out)).toBeNull();
+  });
+  test("a drag near an anchor snaps onto it, unless Snap to edges is off", () => {
+    const near = anchorCenter("top-left", size, out);
+    const raw = { x: near.x + 6 / out.width, y: near.y + 5 / out.height };
+    expect(anchorOf(dragCenter(raw, size, out, 12, true), size, out)).toBe("top-left");
+    expect(dragCenter(raw, size, out, 12, false)).toEqual(raw);
+    // Far from any anchor, snapping changes nothing either way.
+    const far = { x: 0.3, y: 0.3 };
+    expect(dragCenter(far, size, out, 12, true)).toEqual(far);
+    expect(dragCenter(far, size, out, 12, false)).toEqual(far);
   });
   test("a resize moves the stops: the same centre stops being an anchor", () => {
     const c = anchorCenter("bottom-right", size, out);
