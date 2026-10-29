@@ -31,7 +31,7 @@ describe("the model code (STC-399)", () => {
 
     const version = await app.evaluate(({ app: electronApp }) => electronApp.getVersion());
     await editorWin.click("#openexport");
-    await editorWin.waitForSelector("#exportdialog[open]", { timeout: 10_000 });
+    await editorWin.waitForSelector("#exportpanel:not([hidden])", { timeout: 10_000 });
     await expect.poll(() => editorWin.textContent("#modelstamp"), { timeout: 10_000 })
       .toBe(productStamp(version));
   }, 60_000);

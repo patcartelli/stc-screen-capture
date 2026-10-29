@@ -652,35 +652,39 @@
     .overridebar[hidden] { display: none; }
     #overridehint { opacity: .7; }
 
-    /* ── the export dialog: legibility + the viewer's eye, one place ────── */
-    dialog#exportdialog { border: 1px solid var(--border); border-radius: 10px;
-                          padding: 16px; background: var(--surface); color: inherit;
-                          width: min(420px, 90vw); }
-    dialog#exportdialog::backdrop { background: var(--scrim); }
-    .dialogrow { display: flex; align-items: center; gap: 8px; font-size: var(--type-body);
-                margin-top: 8px; flex-wrap: wrap; }
-    .dialogrow:first-child { margin-top: 0; }
-    #embedwidth { width: 5.5em; }
-    #textpt { width: 4em; }
+    /* ── the Export section: legibility + the viewer's eye, one place (STC-604
+       folded the export dialog into the pane) ─────────────────────────────── */
+    #pane input[type="number"], #pane input[type="text"] {
+      font: 400 12px/18px "Geist Mono", ui-monospace, monospace; color: var(--text); text-align: right;
+      background: rgba(255, 255, 255, .06); border: 0; border-radius: 8px; padding: 5px 10px; min-width: 0; }
+    #pane input[type="number"]:focus-visible, #pane input[type="text"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    #embedwidth { width: 6em; }
+    #textpt { width: 5em; }
+    #shareslug { width: 11em; }
+    #pane .group > p.panehint { padding: 8px 0; }
+    #pane .group > p.panehint:empty { display: none; }
+    #pane .panelabel + .group + .panehint { margin-top: 8px; }
     #legibility { opacity: .8; }
     #legibility.warn { opacity: 1; color: var(--warn); font-weight: 600; }
-    /* STC-399: a model plate, not a control — quiet, never competing with
-       the legibility warning it sits beside. */
-    #modelstamp { opacity: .45; font-size: var(--type-label); letter-spacing: var(--type-label-tracking);
-                  margin-left: auto; }
+    #sitedestnote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #sharestatus { flex: 1; min-width: 0; opacity: .75; text-align: right; }
+    #pane #share, #pane #sharereveal { width: auto; padding: 12px 0; }
     #exportbar { display: flex; align-items: center; gap: 10px; }
     #exportbar[hidden] { display: none; }
     #exportprogress { flex: 1; }
-    #exportstatus { font-size: var(--type-value); opacity: .75; min-width: 130px; }
-    .dialogfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-
-    /* Share (STC-444 slice 3), folded into this dialog from its own former
-       row — see the markup's own comment for what moved and why. */
-    .dialogdivider { border: none; border-top: 1px solid var(--border); margin: 14px 0 0; }
-    #shareslug { width: 10em; }
-    #sitedestnote { opacity: .6; font-size: var(--type-meta); overflow: hidden;
-                    text-overflow: ellipsis; white-space: nowrap; }
-    #sharestatus { opacity: .75; }
+    #exportstatus { font-size: var(--type-value); opacity: .75; min-width: 90px; }
+    /* The Export button: the pane's one primary action, in the brass of the
+       Figma frame, full width. */
+    #pane .primarybtn { width: 100%; padding: 14px; border: 0; border-radius: 12px; cursor: pointer;
+                        background: var(--zoom); color: #1a1405; font: inherit; font-weight: 600;
+                        font-size: 14px; line-height: 20px; }
+    #pane .primarybtn:hover:not(:disabled) { filter: brightness(1.06); }
+    #pane .primarybtn:active:not(:disabled) { filter: brightness(.94); }
+    #pane .primarybtn:disabled { opacity: .5; cursor: default; }
+    #pane .primarybtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    /* STC-399: a model plate, not a control — quiet, never competing with
+       the legibility warning above it. */
+    #modelstamp { opacity: .45; letter-spacing: var(--type-label-tracking); text-align: center; }
     /* Reduced motion (STC-506): a movement becomes a short fade, never an
        instant pop. These are the opacity transitions that were unguarded or
        dropped entirely, plus the overview window's transform. */
@@ -1108,71 +1112,98 @@
       </div>
       <p id="zoomempty" class="panehint">Select a zoom block on the Zoom lane to adjust it, or drag in an empty part of the lane to add one.</p>
     </section>
+
+    <!-- STC-373, STC-604: the export dialog, folded into the pane. Output size,
+         the embed size and legibility (warns below 9pt; never blocks), the
+         viewer's eye, and share. The Frame rows are here until the Frame
+         section takes them. The Export button and its progress are at the
+         foot; #openexport (the timeline's Export) switches to this section. -->
+    <section id="exportpanel" role="tabpanel" aria-label="Export" hidden>
+      <div>
+        <p class="panelabel">Format</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="outsize">Size</label>
+            <select id="outsize"></select>
+          </div>
+          <p id="outsizenote" class="panehint mono"></p>
+        </div>
+      </div>
+
+      <div>
+        <p class="panelabel">Frame</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="framepreset">Frame</label>
+            <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
+            <select id="framepreset">
+              <option value="none">None</option>
+              <option value="clean">Clean</option>
+              <option value="dark">Dark</option>
+              <option value="solid">Solid</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <p class="panelabel">Legibility</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="embedtarget">Shown at</label>
+            <select id="embedtarget"></select>
+          </div>
+          <div class="row">
+            <label class="label" for="embedwidth">Embed width</label>
+            <input id="embedwidth" type="number" min="80" max="4096" step="1"
+                   aria-label="Embed width in CSS pixels">
+          </div>
+          <div class="row">
+            <label class="label" for="textpt">Text size</label>
+            <input id="textpt" type="number" min="1" max="144" step="0.5"
+                   aria-label="Base text size in points">
+          </div>
+          <div class="row">
+            <label class="label" for="vieweye"
+                   title="Draw the preview at the embed width, 1:1 — what the viewer actually sees">Viewer's eye</label>
+            <input id="vieweye" type="checkbox" class="switch" role="switch">
+          </div>
+        </div>
+        <p id="legibility" class="panehint mono"></p>
+      </div>
+
+      <!-- Share, folded in from its own former row (STC-444 slice 3). The site
+           folder itself is chosen from the main window's Preferences — the
+           note is a read-only reminder of it, not a second picker — and the
+           slug is per-take (Project.slug), prefilled from the take's own name
+           until something is actually published under a specific one. -->
+      <div>
+        <p class="panelabel">Destination</p>
+        <div class="group">
+          <div class="row">
+            <label class="label" for="shareslug">Publish as</label>
+            <input id="shareslug" type="text" pattern="[a-z0-9][a-z0-9-]*" aria-label="Publish slug">
+          </div>
+          <p id="sitedestnote" class="panehint mono"></p>
+          <div class="row">
+            <button type="button" id="share" class="paneaction" title="Copy this take's export into the site folder">Share to site</button>
+            <span id="sharestatus" class="value"></span>
+            <button type="button" id="sharereveal" class="paneaction" hidden>Show in Finder</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="exportbar" hidden>
+        <progress id="exportprogress" max="1000" value="0"></progress>
+        <span id="exportstatus" class="mono"></span>
+        <button type="button" id="cancelexport" class="paneaction">Cancel</button>
+      </div>
+      <button type="button" id="export" class="primarybtn">Export</button>
+      <p id="modelstamp" class="panehint mono"></p>
+    </section>
   </aside>
   </div><!-- /.shell -->
 
-  <dialog id="exportdialog">
-    <div class="dialogrow">
-      <label for="outsize">Export size</label>
-      <select id="outsize"></select>
-      <span id="outsizenote" class="mono"></span>
-    </div>
-    <div class="dialogrow">
-      <label for="framepreset">Frame</label>
-      <select id="framepreset">
-        <option value="none">None</option>
-        <option value="clean">Clean</option>
-        <option value="dark">Dark</option>
-        <option value="solid">Solid</option>
-      </select>
-      <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
-    </div>
-    <div class="dialogrow">
-      <label for="embedtarget">Shown at</label>
-      <select id="embedtarget"></select>
-      <input id="embedwidth" type="number" min="80" max="4096" step="1"
-             aria-label="Embed width in CSS pixels">
-      <label for="textpt">Text</label>
-      <input id="textpt" type="number" min="1" max="144" step="0.5"
-             aria-label="Base text size in points">
-    </div>
-    <div class="dialogrow">
-      <label title="Draw the preview at the embed width, 1:1 — what the viewer actually sees">
-        <input id="vieweye" type="checkbox"> Viewer's eye
-      </label>
-      <!-- Warns below 9pt; never blocks (STC-373's own scope line). -->
-      <span id="legibility" class="mono"></span>
-      <span id="modelstamp" class="mono"></span>
-    </div>
-    <div class="dialogrow" id="exportbar" hidden>
-      <progress id="exportprogress" max="1000" value="0"></progress>
-      <span id="exportstatus" class="mono"></span>
-      <button id="cancelexport">Cancel</button>
-    </div>
-    <hr class="dialogdivider">
-    <!--
-      Share, folded in from its own former row (STC-444 slice 3). The site
-      folder itself is chosen from the main window's Preferences now — this
-      is a read-only reminder of it, not a second picker — and the slug is
-      per-take (Project.slug), prefilled from the take's own name until
-      something is actually published under a specific one.
-    -->
-    <div class="dialogrow">
-      <label for="shareslug">Publish as</label>
-      <input id="shareslug" type="text" pattern="[a-z0-9][a-z0-9-]*"
-             aria-label="Publish slug">
-      <span id="sitedestnote" class="mono"></span>
-    </div>
-    <div class="dialogrow">
-      <button id="share" title="Copy this take's export into the site folder">Share to site</button>
-      <span id="sharestatus"></span>
-      <button id="sharereveal" hidden>Show in Finder</button>
-    </div>
-    <div class="dialogfoot">
-      <button id="export">Export</button>
-      <button id="closeexport">Close</button>
-    </div>
-  </dialog>
 
   <script src="../dist/editor.js"></script>
 </body>

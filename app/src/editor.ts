@@ -1665,18 +1665,19 @@ $("vieweye").addEventListener("change", () => {
     .catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 
-// ---- the export dialog -------------------------------------------------
+// ---- the Export section (was the export dialog; STC-604) -----------------
 
-const exportDialog = $("exportdialog") as HTMLDialogElement;
-$("openexport").addEventListener("click", () => void (async () => {
-  // STC-461/STC-500: the dialog never opens over a reframe or an open zoom-
+/** Show the Export section, with the share row filled in. */
+async function showExportSection(): Promise<void> {
+  // STC-461/STC-500: the section never opens over a reframe or an open zoom-
   // override edit — every output it leads to reads the live project, which
   // holds the temporary display PiP / the stripped override meanwhile.
   await finishOpenEdits();
-  if (!exportDialog.open) exportDialog.showModal();
+  selectSection("export");
   await refreshShareRow();
-})().catch((e: any) => alertUser(String(e?.message ?? e))));
-$("closeexport").addEventListener("click", () => exportDialog.close());
+}
+$("openexport").addEventListener("click", () => void showExportSection()
+  .catch((e: any) => alertUser(String(e?.message ?? e))));
 
 // ---- opening and closing the take -------------------------------------
 
@@ -2756,7 +2757,8 @@ function selectSection(s: PaneSection): void {
   $("audiopanel").toggleAttribute("hidden", s !== "audio");
   $("pippanel").toggleAttribute("hidden", s !== "camera");
   $("zoompanel").toggleAttribute("hidden", s !== "zoom");
-  $("panetake").toggleAttribute("hidden", s === "audio" || s === "camera" || s === "zoom");
+  $("exportpanel").toggleAttribute("hidden", s !== "export");
+  $("panetake").toggleAttribute("hidden", s !== "frame");
   setMetersRunning(s === "audio");
   if (s === "audio") syncResetHints();
   // Camera chosen mid-reframe: finish the reframe first, so the inspector
@@ -3059,7 +3061,8 @@ window.addEventListener("keydown", (e) => {
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The Audio section (STC-604): its sliders take the arrow keys, its
   // switches and the section tabs take Space/Enter.
-  if (($("audiopanel").contains(e.target as Node) || $("sectionswitch").contains(e.target as Node))
+  if (($("audiopanel").contains(e.target as Node) || $("sectionswitch").contains(e.target as Node)
+        || $("exportpanel").contains(e.target as Node) || $("zoompanel").contains(e.target as Node))
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
@@ -3475,13 +3478,12 @@ void (async () => {
   }
   try {
     await openTakeOrThrow(takeDir);
-    // Share now lives inside the export dialog (STC-444 slice 3) — open it
-    // the same way `#openexport`'s own click does, so the slug field and
-    // site-folder note are populated before `publish()` reads them, and so
-    // the person can actually see the status line while it runs.
+    // Share lives in the Export section (STC-444 slice 3) — show it the same
+    // way `#openexport`'s own click does, so the slug field and site-folder
+    // note are populated before `publish()` reads them, and so the person can
+    // actually see the status line while it runs.
     if (autoShare) {
-      if (!exportDialog.open) exportDialog.showModal();
-      await refreshShareRow();
+      await showExportSection();
       void publish();
     }
   } catch (e: any) {

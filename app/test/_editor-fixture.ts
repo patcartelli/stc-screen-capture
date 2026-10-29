@@ -152,10 +152,10 @@ export function closeEditorWindow(page: Page, timeout = 15_000): Promise<void> {
   return clickThatCloses(page, "#closepreview", timeout);
 }
 
-/** Open the export dialog (STC-373) — legibility, output size and share all live in it now. */
+/** Show the Export section (STC-373, STC-604: it was a dialog) — legibility, output size and share all live in it. */
 export async function openExportDialog(page: Page): Promise<void> {
   await page.click("#openexport");
-  await page.waitForSelector("#exportdialog[open]", { timeout: 10_000 });
+  await page.waitForSelector("#exportpanel:not([hidden])", { timeout: 10_000 });
 }
 
 /**

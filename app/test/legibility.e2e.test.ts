@@ -199,7 +199,7 @@ describe("legibility at embed width (STC-318), inside the editor's export dialog
       .toEqual({ width: 1232, height: 694 });
 
     // Save frame is a header-row action (right-click the frame icon, Save frame), outside the export dialog.
-    await win.click("#closeexport");
+    await win.click("#tab-frame");
     await win.click("#framegrab", { button: "right" });
     await win.click("#saveframe");
     await expect.poll(() => existsSync(log) ? readFileSync(log, "utf8") : "",
@@ -241,7 +241,7 @@ describe("legibility at embed width (STC-318), inside the editor's export dialog
     // Closed with the toggle ON, which is the whole point — closing it with
     // the toggle off passes with no fix at all. `#closepreview` is outside
     // the (modal) export dialog, so the dialog has to close first.
-    await editorWin.click("#closeexport");
+    await editorWin.click("#tab-frame");
     await closeEditorWindow(editorWin);
     editorWin = await openEditorFromLibrary(app, launched.win);
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);

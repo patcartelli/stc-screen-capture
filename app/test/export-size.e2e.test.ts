@@ -129,7 +129,7 @@ describe("export size (STC-335), inside the editor's export dialog (STC-373)", (
     await win.selectOption("#outsize", "embed-1x");
     await expect.poll(() => readProject(takeDir).output.width, { timeout: 20_000 }).toBe(1232);
 
-    await win.click("#closeexport");
+    await win.click("#tab-frame");
     await closeEditorWindow(win);
     win = await openEditorFromLibrary(a, mainWin);
     await expect.poll(() => inkiness(win), { timeout: 30_000 }).toBeGreaterThan(0.2);
