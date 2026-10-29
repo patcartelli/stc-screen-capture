@@ -1365,6 +1365,10 @@ function resetEditingState(): void {
   ($("overridebar") as HTMLElement).setAttribute("hidden", "");
   ($("rectoverlay") as HTMLElement).setAttribute("hidden", "");
   drawOverrideBox(null);
+  // The Zoom lane's curve samples render(), so a committed easing, retime or
+  // removal changes it; the lane is otherwise redrawn only on open, zoom, pan
+  // and resize, so without this it stayed stale until one of those (STC-619).
+  scheduleLaneRedraw();
 }
 
 async function closeOverrideEditor(): Promise<void> {
