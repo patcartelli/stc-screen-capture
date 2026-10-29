@@ -81,16 +81,19 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
       { width: cam.width, height: cam.height });
     await expect.poll(() => [at().x, at().y], { timeout: 10_000 }).toEqual([PIP_SNAP_MARGIN_PX, PIP_SNAP_MARGIN_PX]);
 
-    // Snap off: a drag a few pixels off the margin stays where it was dropped.
+    // Snap off: a drag a few SCREEN pixels off the margin stays where it was
+    // dropped. 6 x 5 screen px is inside the snap threshold (12), so with
+    // snap on it would be pulled back onto the anchor, and big enough that the
+    // stage's scale cannot round it to nothing.
     await editorWin.uncheck("#pipsnap");
+    expect(await editorWin.isChecked("#pipsnap")).toBe(false);
     const box = (await editorWin.locator("#pipoverlay .pipbox").boundingBox())!;
-    const stage = (await editorWin.locator("#stage").boundingBox())!;
-    const scale = stage.width / output.width;
     await editorWin.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await editorWin.mouse.down();
-    await editorWin.mouse.move(box.x + box.width / 2 + 4 * scale, box.y + box.height / 2 + 3 * scale, { steps: 4 });
+    await editorWin.mouse.move(box.x + box.width / 2 + 6, box.y + box.height / 2 + 5, { steps: 6 });
     await editorWin.mouse.up();
-    await expect.poll(() => at().x, { timeout: 10_000 }).not.toBe(PIP_SNAP_MARGIN_PX);
+    await expect.poll(() => at().x, { timeout: 10_000 }).toBeGreaterThan(PIP_SNAP_MARGIN_PX);
+    expect(at().y).toBeGreaterThan(PIP_SNAP_MARGIN_PX);
     expect(await editorWin.inputValue("#pipanchor")).toBe("");
   }, 120_000);
 
