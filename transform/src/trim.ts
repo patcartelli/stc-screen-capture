@@ -1,5 +1,8 @@
 import type { NarrationCleanup, Pip, Project, Trim, Zoom, ZoomOverride } from "./types.js";
 import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
+import {
+  isCompleteEasing, isEasingSpec, isPairEasing, normalizeEasing, speedsOf, type CompleteEasing,
+} from "./zoom-easing.js";
 import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
 import { TRANSFORM_VERSION } from "./transform-version.js";
@@ -378,7 +381,14 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
       if (!rect) continue;
       if (typeof d.windowId !== "string" || !d.windowId) continue;
       const entry: ZoomOverride = { kind: "geometry", windowId: d.windowId, rect };
-      if (ZOOM_PRESET_NAMES.includes(d.easing as never)) entry.easing = d.easing as Zoom["preset"];
+      // A name, or (project-17, STC-619) separate in/out speeds; anything else
+      // drops the easing alone, never the entry. Rewritten in its smallest
+      // form (equal sides are the preset's name), so a hand-edited pair of
+      // equals does not keep a document on a newer version than it needs.
+      if (isEasingSpec(d.easing)) {
+        const e = normalizeEasing(speedsOf(d.easing));
+        if (e !== undefined) entry.easing = e;
+      }
       out.push(entry);
     } else if (d.kind === "manual") {
       const rect = cleanOverrideRect(d.rect);
@@ -386,10 +396,12 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
       if (typeof d.id !== "string" || !d.id) continue;
       if (!Number.isInteger(d.startNs) || (d.startNs as number) < 0) continue;
       if (!Number.isInteger(d.endNs) || (d.endNs as number) < 0) continue;
-      if (!ZOOM_PRESET_NAMES.includes(d.easing as never)) continue;
+      // Complete: a name, or both sides (STC-619). A manual window has no
+      // project default to fill a missing side from, so a half pair drops it.
+      if (!isCompleteEasing(d.easing)) continue;
       out.push({
         kind: "manual", id: d.id, startNs: d.startNs as number, endNs: d.endNs as number,
-        rect, easing: d.easing as Zoom["preset"],
+        rect, easing: normalizeEasing(speedsOf(d.easing)) as CompleteEasing,
       });
     } else if (d.kind === "removed") {
       if (typeof d.windowId !== "string" || !d.windowId) continue;
@@ -409,10 +421,17 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
   return out;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 {
-  // Highest first: a document needing v16 needs it whatever its framing,
-  // keycast, showClicks, mutes, mic level, cleanup, levels, bookmarks, slug,
-  // overrides, zoom or textPt say.
+/** An override naming separate in/out speeds (the object form of `easing`): the one thing v17 expresses. */
+function hasSpeedPair(project: Project): boolean {
+  return !!project.overrides?.some((o) => (o.kind === "geometry" || o.kind === "manual") && isPairEasing(o.easing));
+}
+
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 {
+  // Highest first: a document needing v17 needs it whatever its pip style,
+  // framing, keycast, showClicks, mutes, mic level, cleanup, levels, bookmarks,
+  // slug, overrides, zoom or textPt say. v17 (STC-619) is a block's separate
+  // in/out speeds; a plain preset name stays at v6.
+  if (hasSpeedPair(project)) return 17;
   if (project.pip?.style) return 16;
   if (project.framing) return 15;
   if (project.keycast?.show === false) return 14;

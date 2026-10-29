@@ -91,7 +91,9 @@ import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
 import { windowId, overrideFor, resolvedWindows, rectFromGesture } from "@transform/zoom-override";
-import { committedOverrides, overridesWithoutWindow, overridesWithoutManual, type OverrideEdit } from "./override-edit.js";
+import {
+  committedOverrides, overridesWithoutWindow, overridesWithoutManual, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft,
+} from "./override-edit.js";
 import type { Rect } from "@transform/spaces";
 import {
   clampTrimFrame, decideKey, formatReadout, formatShuttle, frameAtFraction, frameToNs,
@@ -1030,7 +1032,7 @@ let editingWindowId: string | null = null;
 let heldFraming: FramingHold | null = null;
 let editingManualId: string | null = null;
 let draftRect: Rect | null = null;
-let draftEasing: ZoomPreset | "" = "";
+let draftEasing: SpeedDraft = { ...NO_SPEEDS };
 let draftManualStart = 0;
 let draftManualEnd = 0;
 let dragAnchorUv: { x: number; y: number } | null = null;
@@ -1265,7 +1267,8 @@ function updateManualDraftBlock(): void {
  *  override bar, seeds the preset picker and Remove/Delete button, and
  *  refreshes both block layers. */
 function openOverrideEditorUI(): void {
-  ($("overridepreset") as HTMLSelectElement).value = draftEasing;
+  ($("overridein") as HTMLSelectElement).value = draftEasing.in;
+  ($("overrideout") as HTMLSelectElement).value = draftEasing.out;
   const clear = $("overrideclear") as HTMLButtonElement;
   clear.disabled = !draftRect;
   clear.textContent = editingManualId ? "Delete window" : "Remove override";
@@ -1308,7 +1311,7 @@ function resetEditingState(): void {
   editingWindowId = null;
   editingManualId = null;
   draftRect = null;
-  draftEasing = "";
+  draftEasing = { ...NO_SPEEDS };
   draftManualStart = 0;
   draftManualEnd = 0;
   dragAnchorUv = null;
@@ -1357,7 +1360,7 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   editingWindowId = id;
   const existing = overrideFor(openProject.overrides, w);
   draftRect = existing?.rect ?? null;
-  draftEasing = existing?.easing ?? "";
+  draftEasing = draftOf(existing?.easing);
   // Seeded from `w`'s own (already RESOLVED, possibly already-retimed)
   // bounds — re-opening a retimed window edits from where it currently
   // plays, not from the original derivation.
@@ -1383,7 +1386,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   draftManualStart = o.startNs;
   draftManualEnd = o.endNs;
   draftRect = o.rect;
-  draftEasing = o.easing;
+  draftEasing = draftOf(o.easing);
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
   setAsideFraming();
   openOverrideEditorUI();
@@ -1411,7 +1414,7 @@ async function createManualWindow(clickNs: number): Promise<void> {
   draftManualStart = startNs;
   draftManualEnd = endNs;
   draftRect = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
-  draftEasing = "";
+  draftEasing = { ...NO_SPEEDS };
   setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((startNs + endNs) / 2));
@@ -1493,8 +1496,13 @@ $("rectoverlay").addEventListener("pointerleave", () => {
 $("rectoverlay").addEventListener("pointerup", endOverrideDrag);
 $("rectoverlay").addEventListener("pointercancel", endOverrideDrag);
 
-$("overridepreset").addEventListener("change", () => {
-  draftEasing = ($("overridepreset") as HTMLSelectElement).value as ZoomPreset | "";
+// The two Ease rows (STC-619): Slow / Medium / Fast for the push in and the
+// release out, each on its own, "" = the project default for that side.
+$("overridein").addEventListener("change", () => {
+  draftEasing = { ...draftEasing, in: ($("overridein") as HTMLSelectElement).value as SpeedDraft["in"] };
+});
+$("overrideout").addEventListener("change", () => {
+  draftEasing = { ...draftEasing, out: ($("overrideout") as HTMLSelectElement).value as SpeedDraft["out"] };
 });
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
@@ -1804,7 +1812,7 @@ async function closeTake(): Promise<void> {
   editingManualId = null;
   heldFraming = null; // the project is discarded below; nothing to restore into
   draftRect = null;
-  draftEasing = "";
+  draftEasing = { ...NO_SPEEDS };
   dragAnchorUv = null;
   // STC-454: detach and drop the sound first, and bump the generation so a
   // decode or a cleanup still in flight for THIS take lands nowhere.
