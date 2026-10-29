@@ -2308,6 +2308,11 @@ function layoutPipOverlay(): void {
     left: `${(frame.x + r.x) * k}px`, top: `${(frame.y + r.y) * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
     borderRadius: style.shape === "circle" ? "50%" : `${style.cornerRadius * Math.min(r.width, r.height) * k}px`,
   });
+  // STC-606: the readout hugs the box's side nearest the stage edge, and goes
+  // under the box when the box is too near the top for it to fit above.
+  const LABEL_ROOM_PX = 26;
+  box.classList.toggle("right", r.x + r.width / 2 > frame.width / 2);
+  box.classList.toggle("below", (frame.y + r.y) * k < LABEL_ROOM_PX);
 }
 
 let pipDrag: { kind: "move" | "resize"; dx: number; dy: number } | null = null;

@@ -38,12 +38,19 @@
 #pipoverlay[hidden] { display: none; }
 #pipoverlay .pipbox { position: absolute; pointer-events: auto; cursor: move; outline: 2px solid var(--camera, var(--accent));
                       touch-action: none; }
-#piphandle { position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; border-radius: 50%;
-             background: #fff; cursor: nwse-resize; }
-/* What the PiP is right now, above its box: shape · width · anchor (Figma's Camera frame). */
+/* STC-606 (Figma Camera frame 171:1066): a square white handle on the
+   bottom-right corner, the resize grip. */
+#piphandle { position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; border-radius: 2px;
+             background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); cursor: nwse-resize; }
+/* What the PiP is right now, above its box: shape · width · anchor, in the
+   readout face. It sits on the box's side nearest the stage edge (.right) and
+   drops below the box when there is no room above (.below), so it never runs
+   off the preview. editor.ts's layoutPipOverlay sets both. */
 #piplabel { position: absolute; left: 0; bottom: 100%; margin-bottom: 6px; padding: 3px 8px; border-radius: 4px;
-            white-space: nowrap; pointer-events: none; background: rgba(0, 0, 0, .7); color: var(--camera, var(--accent));
-            font: 400 11px/14px "Geist Mono", ui-monospace, monospace; }
+            white-space: nowrap; pointer-events: none; background: rgba(10, 10, 12, .88); color: var(--camera, var(--accent));
+            font: 400 11px/14px var(--font-readout); }
+#pipoverlay .pipbox.right #piplabel { left: auto; right: 0; }
+#pipoverlay .pipbox.below #piplabel { bottom: auto; top: 100%; margin: 6px 0 0; }
 
 /* Reframe (editor only): the same box as #pipoverlay. The window's huge
    spread shadow dims everything outside the crop; overflow keeps that dim

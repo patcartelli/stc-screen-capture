@@ -3,12 +3,15 @@
  * is active. This file covers the plumbing they all share; each overlay adds
  * its own describe block as it lands.
  *
- * The fixture is `fixtures/basic` (no camera, no audio), so the Camera and
- * Audio tabs are not offered and choosing them falls back to Frame.
+ * The plumbing runs on `fixtures/basic` (no camera, no audio), so the Camera
+ * and Audio tabs are not offered there and choosing them falls back to Frame.
+ * Each overlay's block names its own fixture.
  */
 import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication, type Page } from "playwright";
-import { launchWithTakeInEditor, waitForTakeLoaded } from "./_editor-fixture.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { launchWithTakeInEditor, waitForTakeLoaded, inkiness } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 let app: ElectronApplication | undefined;
@@ -72,4 +75,78 @@ describe("the shared overlay plumbing", () => {
     expect(geo.layer.top).toBeLessThanOrEqual(1);
     expect(geo.layer.h).toBeGreaterThanOrEqual(geo.strip.h - 2);
   }, 60_000);
+});
+
+/**
+ * Camera (Figma 171:1066). The behaviour (drag, snap, resize, the readout's
+ * text) landed in STC-604 and is covered by pip-editor.e2e.test.ts; this is
+ * the overlay's placement and the section gating. `fixtures/pip` has a camera.
+ */
+describe("the Camera overlay", () => {
+  async function openPip() {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ pip: true });
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    return { win: editorWin, takeDir };
+  }
+  const geometry = (win: Page) => win.evaluate(() => {
+    const rect = (id: string) => {
+      const r = document.querySelector(id)!.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width };
+    };
+    return {
+      stage: rect("#stage"), box: rect("#pipoverlay .pipbox"), label: rect("#piplabel"), handle: rect("#piphandle"),
+      handleRadius: getComputedStyle(document.getElementById("piphandle")!).borderRadius,
+      labelFont: getComputedStyle(document.getElementById("piplabel")!).fontFamily,
+    };
+  });
+
+  test("shows only while Camera is the active section", async () => {
+    const { win } = await openPip();
+    expect(await win.isHidden("#pipoverlay")).toBe(true);
+    await win.click("#pipbtn");
+    await win.locator("#pipoverlay .pipbox").waitFor({ state: "visible", timeout: 10_000 });
+    await win.click("#tab-zoom");
+    await expect.poll(() => win.isHidden("#pipoverlay"), { timeout: 5_000 }).toBe(true);
+  }, 120_000);
+
+  test("a square handle, and a readout in the readout face on the box's outer side", async () => {
+    const { win, takeDir } = await openPip();
+    await win.click("#pipbtn");
+    await win.locator("#pipoverlay .pipbox").waitFor({ state: "visible", timeout: 10_000 });
+    let g = await geometry(win);
+    expect(g.handleRadius).toBe("2px");
+    expect(g.labelFont).toMatch(/JetBrains Mono/);
+    // The handle sits on the box's bottom-right corner.
+    expect(Math.abs((g.handle.left + g.handle.right) / 2 - g.box.right)).toBeLessThanOrEqual(1);
+    expect(Math.abs((g.handle.top + g.handle.bottom) / 2 - g.box.bottom)).toBeLessThanOrEqual(1);
+
+    // Drag the box to the far top-left: the readout must move to the box's
+    // left edge and drop BELOW it, since there is no room above.
+    const stageMid = { x: (g.stage.left + g.stage.right) / 2, y: (g.stage.top + g.stage.bottom) / 2 };
+    const boxMid = { x: (g.box.left + g.box.right) / 2, y: (g.box.top + g.box.bottom) / 2 };
+    const startRight = boxMid.x > stageMid.x;
+    if (startRight) expect(Math.abs(g.label.right - g.box.right)).toBeLessThanOrEqual(1);
+    else expect(Math.abs(g.label.left - g.box.left)).toBeLessThanOrEqual(1);
+
+    await win.mouse.move(boxMid.x, boxMid.y);
+    await win.mouse.down();
+    await win.mouse.move(g.stage.left + g.box.width / 2 + 2, g.stage.top + (g.box.bottom - g.box.top) / 2 + 2, { steps: 8 });
+    await win.mouse.up();
+    await expect.poll(async () => (await geometry(win)).box.left - (await geometry(win)).stage.left,
+      { timeout: 5_000 }).toBeLessThan(stageMid.x - g.stage.left);
+    g = await geometry(win);
+    expect(Math.abs(g.label.left - g.box.left)).toBeLessThanOrEqual(1);
+    expect(g.label.top).toBeGreaterThanOrEqual(g.box.bottom);
+    // The readout stays inside the stage, which is the point of both rules.
+    expect(g.label.left).toBeGreaterThanOrEqual(g.stage.left - 1);
+    expect(g.label.bottom).toBeLessThanOrEqual(g.stage.bottom + 1);
+
+    // And it still says what the saved PiP is.
+    await expect.poll(() => {
+      try { return JSON.parse(readFileSync(join(takeDir, "project.json"), "utf8")).pip?.style?.width; }
+      catch { return undefined; }
+    }, { timeout: 10_000 }).toBeDefined();
+    expect(await win.textContent("#piplabel")).toMatch(/ · Top left$/);
+  }, 120_000);
 });
