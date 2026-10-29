@@ -345,13 +345,29 @@ export function anchorOf(center: Point, size: Size, output: Size): PipAnchor | n
   return col < 0 || row < 0 ? null : PIP_ANCHORS[row * 3 + col]!;
 }
 
-/** A corner handle: aspect locked, centre fixed; the larger of the two axes wins. */
+/**
+ * Where a circle's resize handle sits, as a fraction of its bounding box along
+ * each axis: the lower-right point ON the circle (centre plus radius at 45°),
+ * not the box's corner, which is off the circle by ~41% of its radius.
+ */
+export const PIP_CIRCLE_HANDLE_FRACTION = 0.5 + Math.SQRT1_2 / 2;
+
+/**
+ * A corner handle: aspect locked, centre fixed. A rectangle's handle is its
+ * corner, and the larger of the two axes wins. A CIRCLE's handle is on its
+ * edge (`PIP_CIRCLE_HANDLE_FRACTION`), so its size is the pointer's DISTANCE
+ * from the centre: grabbing the handle where it sits then leaves the size
+ * unchanged (the larger-axis rule would read 0.707 of the radius there and
+ * shrink it by 29% on the first move).
+ */
 export function resizeFromCorner(style: PipStyle, pointer: Point, output: Size, camera: Size): PipStyle {
   const cx = style.center.x * output.width;
   const cy = style.center.y * output.height;
   const now = pipSize(style, output, camera);
   const aspect = now.width / now.height;
-  const halfW = Math.max(Math.abs(pointer.x - cx), Math.abs(pointer.y - cy) * aspect);
+  const halfW = style.shape === "circle"
+    ? Math.hypot(pointer.x - cx, pointer.y - cy)
+    : Math.max(Math.abs(pointer.x - cx), Math.abs(pointer.y - cy) * aspect);
   return { ...style, center: { ...style.center }, width: clamp((2 * halfW) / output.width, PIP_WIDTH_MIN, PIP_WIDTH_MAX) };
 }
 
