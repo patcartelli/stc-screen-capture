@@ -43,9 +43,9 @@
        the editor's --accent, and --accent itself stays unchanged. */
     :root { --section-accent: var(--accent); }
     #audiopanel { --section-accent: var(--clip); }
-    #overridebar { --section-accent: var(--zoom); }
+    #zoompanel { --section-accent: var(--zoom); }
     #overridebar select:focus-visible, #overridebar button:focus-visible { outline: 2px solid var(--section-accent); outline-offset: 1px; }
-    #overridebar #overridedone { border-color: var(--section-accent); color: var(--section-accent); }
+    #overridebar #overridedone { color: var(--section-accent); font-weight: 500; }
     /* STC-444 (Figma pass, 2026-09-24): the editor is ALWAYS dark, per
        Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
        "follow the OS" default (the still editor was moved OFF forced dark
@@ -258,6 +258,25 @@
     #sectionswitch button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #pane [role="tabpanel"][hidden] { display: none; }
     #pane [role="tabpanel"] { display: flex; flex-direction: column; gap: 24px; }
+    /* STC-604: the Zoom section. The block's controls show while one is being
+       edited; until then the section only says how to pick one. */
+    #zoompanel { font-size: var(--type-body); }
+    #overridebar { display: flex; flex-direction: column; gap: 24px; }
+    #overridebar[hidden] { display: none; }
+    #overridebar:not([hidden]) ~ #zoomempty { display: none; }
+    #pane .panehint { margin: 0; font-size: var(--type-label); line-height: 1.5; color: rgba(255, 255, 255, .45); }
+    #pane .paneaction { display: block; width: 100%; padding: 12px 0; border: 0; background: none; text-align: left;
+                        font: inherit; color: var(--text); cursor: pointer; }
+    #pane .paneaction:hover:not(:disabled) { text-decoration: underline; }
+    #pane .paneaction:disabled { opacity: .4; cursor: default; }
+    #pane .paneaction:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+    #pane .paneaction.danger { color: var(--rec); }
+    /* A native select, drawn flat with a chevron (the Camera section's Anchor, the Zoom section's Ease). */
+    #pane select { appearance: none; -webkit-appearance: none; font: 400 12px/18px "Geist Mono", ui-monospace, monospace;
+                   color: var(--text); background: rgba(255, 255, 255, .06) no-repeat right 8px center / 10px;
+                   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23999' stroke-width='1.4'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+                   border: 0; border-radius: 8px; padding: 5px 26px 5px 10px; cursor: pointer; }
+    #pane select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #audiopanel { --section-accent: var(--clip); font-size: var(--type-body); }
     #audiopanel > div[hidden] { display: none; }
     #audiopanel .panelabel { margin: 0 0 8px; }
@@ -897,26 +916,6 @@
     <span id="triminfo" class="mono"></span>
   </div>
 
-  <!-- STC-330: appears only while a Zoom block is selected. -->
-  <div class="overridebar" id="overridebar" hidden>
-    <span id="overridehint">Drag a rect on the preview to zoom into it</span>
-    <label for="overridepreset">Ease</label>
-    <select id="overridepreset">
-      <option value="">Project default</option>
-      <option value="calm">Calm</option>
-      <option value="standard">Standard</option>
-      <option value="snappy">Snappy</option>
-    </select>
-    <button id="overrideclear" disabled>Remove override</button>
-    <!-- STC-329: a DERIVED window's own delete — drops it outright (it never
-         plays), distinct from #overrideclear's "reset its crop but keep it
-         playing". Hidden while editing a manual window, whose own single
-         Delete action is #overrideclear (a manual window's rect IS its
-         existence, so there is nothing to reset it back to). -->
-    <button id="overridedelete" hidden>Delete window</button>
-    <button id="overridedone">Done</button>
-  </div>
-
   <!-- STC-461: appears only while reframing the camera inside the PiP. -->
   <div class="overridebar" id="pipframebar" hidden>
     <span>Drag to reframe</span>
@@ -1056,6 +1055,58 @@
          builds the rows into #pippanel. Present only for a take with a camera;
          saved to the project (project-16's pip.style). -->
     <section id="pippanel" role="tabpanel" aria-label="Camera" hidden></section>
+
+    <!-- STC-330, STC-604: the Zoom block being edited. Appears (#overridebar)
+         only while a block is selected; until then the section says how to
+         pick one. The controls and their ids are the old bar's. -->
+    <section id="zoompanel" role="tabpanel" aria-label="Zoom" hidden>
+      <div id="overridebar" hidden>
+        <div>
+          <p class="panelabel">Zoom block</p>
+          <div class="group">
+            <div class="row">
+              <span class="label">Amount</span>
+              <span id="zoomamount" class="value mono" title="How far the block zooms in: the frame divided by the drawn region">Auto</span>
+            </div>
+            <div class="row">
+              <label class="label" for="overridepreset">Ease</label>
+              <select id="overridepreset">
+                <option value="">Project default</option>
+                <option value="calm">Calm</option>
+                <option value="standard">Standard</option>
+                <option value="snappy">Snappy</option>
+              </select>
+            </div>
+            <div class="row">
+              <span class="label">Starts</span>
+              <span id="zoomstarts" class="value mono"></span>
+            </div>
+            <div class="row">
+              <span class="label">Ends</span>
+              <span id="zoomends" class="value mono"></span>
+            </div>
+          </div>
+        </div>
+        <p id="overridehint" class="panehint">Drag a rect on the preview to zoom into it</p>
+        <div class="group">
+          <button type="button" id="overridedone" class="paneaction">Done</button>
+        </div>
+        <div>
+          <p class="panelabel">Danger</p>
+          <div class="group">
+            <button type="button" id="overrideclear" class="paneaction danger" disabled>Remove override</button>
+            <!-- STC-329: a DERIVED window's own delete — drops it outright (it
+                 never plays), distinct from #overrideclear's "reset its crop
+                 but keep it playing". Hidden while editing a manual window,
+                 whose own single Delete action is #overrideclear (a manual
+                 window's rect IS its existence, so there is nothing to reset
+                 it back to). -->
+            <button type="button" id="overridedelete" class="paneaction danger" hidden>Delete window</button>
+          </div>
+        </div>
+      </div>
+      <p id="zoomempty" class="panehint">Select a zoom block on the Zoom lane to adjust it, or drag in an empty part of the lane to add one.</p>
+    </section>
   </aside>
   </div><!-- /.shell -->
 

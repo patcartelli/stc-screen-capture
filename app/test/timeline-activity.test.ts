@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { clipActivity, zoomCurve, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT } from "../src/timeline-activity.js";
+import {
+  clipActivity, zoomCurve, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT, formatBlockTime, zoomAmountLabel,
+} from "../src/timeline-activity.js";
 import type { SessionEvent } from "@transform/types.js";
 
 const S = 1_000_000_000;
@@ -93,5 +95,24 @@ describe("laneBitmap", () => {
 
   test("an unlaid-out lane is still a 1-pixel bitmap, not zero", () => {
     expect(laneBitmap(0, 22, 2)).toEqual({ width: 1, height: 44, scale: 2 });
+  });
+});
+
+describe("the Zoom section's readouts (STC-604)", () => {
+  test("a block time is m:ss.t with the tenth floored, never rounded up", () => {
+    expect(formatBlockTime(0)).toBe("0:00.0");
+    expect(formatBlockTime(19.4 * S)).toBe("0:19.4");
+    expect(formatBlockTime(19.46 * S)).toBe("0:19.4");
+    expect(formatBlockTime(59.99 * S)).toBe("0:59.9");
+    expect(formatBlockTime(60 * S)).toBe("1:00.0");
+    expect(formatBlockTime(26.0 * S)).toBe("0:26.0");
+    expect(formatBlockTime(-5)).toBe("0:00.0");
+  });
+  test("the amount is the frame over the region's longer side, Auto with no region", () => {
+    expect(zoomAmountLabel({ width: 0.5, height: 0.3 })).toBe("2.0×");
+    expect(zoomAmountLabel({ width: 0.3, height: 0.5 })).toBe("2.0×");
+    expect(zoomAmountLabel({ width: 0.4545, height: 0.4 })).toBe("2.2×");
+    expect(zoomAmountLabel(null)).toBe("Auto");
+    expect(zoomAmountLabel({ width: 0, height: 0 })).toBe("Auto");
   });
 });

@@ -103,7 +103,7 @@ import {
   grabOffset, isFit, isMinSpan, overviewBox, overviewSpanFor, panBy, timelineZoomKeyIntent,
   wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
-import { clipActivity, zoomCurve, laneBitmap } from "./timeline-activity.js";
+import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel } from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, snapCenter, resizeFromCorner, styleFromFixedCorner,
   anchorCenter, anchorOf, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
@@ -1127,6 +1127,7 @@ document.addEventListener("pointerover", (e) => {
 });
 
 function drawOverrideBox(rect: Rect | null): void {
+  $("zoomamount").textContent = zoomAmountLabel(rect);
   const box = $("overridebox") as HTMLElement;
   if (!rect) { box.setAttribute("hidden", ""); return; }
   box.removeAttribute("hidden");
@@ -1249,6 +1250,8 @@ function updateManualDraftBlock(): void {
     return;
   }
   el.removeAttribute("hidden");
+  $("zoomstarts").textContent = formatBlockTime(draftManualStart);
+  $("zoomends").textContent = formatBlockTime(draftManualEnd);
   el.className = editingManualId ? "zoomblock manual selected" : "zoomblock selected";
   const d = player.durationNs || 1;
   el.style.left = `${(draftManualStart / d) * 100}%`;
@@ -1272,6 +1275,8 @@ function openOverrideEditorUI(): void {
     "Drag a rect on the preview to zoom into it · drag the block's edges to change its timing";
   ($("overridebar") as HTMLElement).removeAttribute("hidden");
   ($("rectoverlay") as HTMLElement).removeAttribute("hidden");
+  // The pane follows selection (STC-604): the block's controls live in Zoom.
+  selectSection("zoom");
   drawOverrideBox(draftRect);
   layoutOverrideBlocks();
   updateManualDraftBlock();
@@ -1358,7 +1363,6 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   openProject.overrides = overridesWithoutWindow(openProject.overrides, id);
   setAsideFraming();
   openOverrideEditorUI();
-  selectSection("zoom");
   const mid = Math.min(player.durationNs, Math.round((w.startNs + w.endNs) / 2));
   await player.seek(mid);
 }
@@ -1380,7 +1384,6 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
   setAsideFraming();
   openOverrideEditorUI();
-  selectSection("zoom");
   const mid = Math.min(player.durationNs, Math.round((o.startNs + o.endNs) / 2));
   await player.seek(mid);
 }
@@ -2731,8 +2734,8 @@ function setMetersRunning(open: boolean): void {
 
 // ---- the pane's section switch (STC-604) ---------------------------------
 //
-// Frame, Audio, Camera, Zoom, Export. Audio and Camera are built; the other
-// three show #panetake (the take's own switches) until theirs lands. The pane follows selection: choosing a zoom block calls
+// Frame, Audio, Camera, Zoom, Export. Audio, Camera and Zoom are built; the
+// other two show #panetake (the take's own switches) until theirs lands. The pane follows selection: choosing a zoom block calls
 // selectSection("zoom"). The meters run only while Audio is the active
 // section, for the same reason they ran only while its popover was open.
 
@@ -2752,12 +2755,18 @@ function selectSection(s: PaneSection): void {
   }
   $("audiopanel").toggleAttribute("hidden", s !== "audio");
   $("pippanel").toggleAttribute("hidden", s !== "camera");
-  $("panetake").toggleAttribute("hidden", s === "audio" || s === "camera");
+  $("zoompanel").toggleAttribute("hidden", s !== "zoom");
+  $("panetake").toggleAttribute("hidden", s === "audio" || s === "camera" || s === "zoom");
   setMetersRunning(s === "audio");
   if (s === "audio") syncResetHints();
   // Camera chosen mid-reframe: finish the reframe first, so the inspector
   // edits the real style and never the temporary display one.
   if (s === "camera" && was !== "camera") commitReframe();
+  // Leaving Zoom mid-edit: the block's controls go with the section, so the
+  // edit is committed and closed, as Done would.
+  if (was === "zoom" && s !== "zoom" && (editingWindowId || editingManualId)) {
+    void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
+  }
   layoutPipOverlay();
 }
 

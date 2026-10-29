@@ -20,11 +20,7 @@
 .pip-segmented button:hover:not([aria-checked="true"]) { background: rgba(255, 255, 255, .06); }
 .pip-segmented button[aria-checked="true"] { background: rgba(255, 255, 255, .12); color: var(--text); font-weight: 500; }
 
-/* The Anchor row's select: a native control, drawn flat with a chevron. */
-.pip-inspector select { appearance: none; -webkit-appearance: none; font: 400 12px/18px "Geist Mono", ui-monospace, monospace;
-                        color: var(--text); background: rgba(255, 255, 255, .06) no-repeat right 8px center / 10px;
-                        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23999' stroke-width='1.4'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
-                        border: 0; border-radius: 8px; padding: 5px 26px 5px 10px; cursor: pointer; }
+/* The Anchor row's select is the pane's (editor.html, `#pane select`). */
 .pip-inspector input[type="color"] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border);
                                      border-radius: 4px; background: none; flex: none; }
 .pip-inspector input:disabled { opacity: .4; cursor: default; }

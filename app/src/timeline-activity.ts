@@ -95,3 +95,26 @@ export function laneBitmap(
     scale,
   };
 }
+
+/**
+ * A Zoom block's start or end as the pane shows it (STC-604): m:ss.t, the tenth
+ * FLOORED so a time never reads later than it is (0:19.46 is 0:19.4, as the
+ * seconds of a clock are).
+ */
+export function formatBlockTime(ns: number): string {
+  const tenths = Math.floor(Math.max(0, ns) / 100_000_000);
+  const minutes = Math.floor(tenths / 600);
+  const seconds = Math.floor((tenths % 600) / 10);
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${tenths % 10}`;
+}
+
+/**
+ * How far a block zooms in, from its drawn region (UV of the frame): the frame
+ * over the region's longer side, to one decimal ("2.0×"). A block with no drawn
+ * region zooms where stage 2 decides, so it reads "Auto".
+ */
+export function zoomAmountLabel(rect: { width: number; height: number } | null): string {
+  if (!rect) return "Auto";
+  const longer = Math.max(rect.width, rect.height);
+  return longer > 0 ? `${(1 / longer).toFixed(1)}×` : "Auto";
+}
