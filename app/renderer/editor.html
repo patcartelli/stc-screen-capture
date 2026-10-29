@@ -12,11 +12,10 @@
        ONE thing the shared base has no opinion on, so they extend it here
        rather than redefining anything tokens.css already declares. Constant
        across light/dark, same as before this ticket. */
-    /* --zoom-fill (STC-444 slice 2): the Zoom lane's own dithered CURVE fill
-       only — picked blue in an HTML variant comparison to match Patrick's
-       Figma reference. --zoom itself (orange) is untouched and still owns
-       every other zoom-related accent (selection outline, the manual-window
-       dashed border) — only the fill changed, deliberately scoped there. */
+    /* --zoom-fill (STC-444 slice 2, STC-566, STC-609): the Zoom lane's own
+       CURVE fill only — a smooth vertical gradient of this color (drawZoomLane),
+       following --zoom (brass). --zoom also owns the other zoom-related accents
+       (selection outline, the manual-window dashed border). */
     /* --bookmark (STC-444 slice 4): a marker's own color, distinct from the
        played bar / selection's --accent (blue) and the Zoom lane's --zoom
        (orange) so a bookmark reads as its own kind of mark on the ruler. */
@@ -30,14 +29,23 @@
        --bg-deep / --surface: teal 7.0 / 6.0, brass 9.8 / 8.4, red 5.0 / 4.3,
        slate 9.4 / 8.1, clay 6.2 / 5.3 — all above the 3:1 a graphic needs.
        Red and teal are within 1.4:1 of each other in luminance, so a peak
-       also carries a non-color cue (a tick at the lane's top edge,
-       drawAudioLane). */
+       also carries a non-color cue: it is drawn hatched (2 px dashes, 1 px
+       gaps) where the rest of the waveform is solid (drawAudioLane). */
     :root { --clip: #6fa3a0; --zoom: #d6b25e; --zoom-fill: var(--zoom); --bookmark: #c97b6a; --wave: var(--clip); --wave-clip: #e5483f; --lane-label: #a9b4c2; --audio-lane-h: 56px; --lane-pad: 12px; }
     /* The editor's own accent (STC-601): the played bar, focus rings and the
        pressed states follow the primary instead of the app's blue. tokens.css's
        --accent is untouched, so Library, Settings and the still editor keep
        theirs; this sheet loads later at the same specificity. */
     :root[data-surface="dark"] { --accent: var(--clip); --accent-soft: color-mix(in srgb, var(--clip) 18%, transparent); }
+    /* STC-609: --section-accent is the accent a toggle, slider or focus state
+       takes INSIDE one section, so each section carries its own: teal in the
+       Audio popover, brass in the Zoom controls. Anywhere that sets none it is
+       the editor's --accent, and --accent itself stays unchanged. */
+    :root { --section-accent: var(--accent); }
+    #audiopanel { --section-accent: var(--clip); }
+    #overridebar { --section-accent: var(--zoom); }
+    #overridebar select:focus-visible, #overridebar button:focus-visible { outline: 2px solid var(--section-accent); outline-offset: 1px; }
+    #overridebar #overridedone { border-color: var(--section-accent); color: var(--section-accent); }
     /* STC-444 (Figma pass, 2026-09-24): the editor is ALWAYS dark, per
        Patrick's mockup — a deliberate, ticket-scoped exception to STC-443's
        "follow the OS" default (the still editor was moved OFF forced dark
@@ -199,12 +207,12 @@
     #audiopanel .audiorow > * { min-height: 22px; }
     #audiopanel label.name { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
                              white-space: nowrap; color: var(--text); font-weight: 500; }
-    #audiopanel input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+    #audiopanel input[type="checkbox"] { margin: 0; accent-color: var(--section-accent); }
     #audiopanel .value { text-align: right; color: var(--text); font-size: var(--type-value-sm);
                          min-height: 22px; line-height: 22px; }
     /* The value is also the reset: clickable only while the level differs from
        its default (data-dirty), so it doubles as "this has been changed". */
-    #audiopanel .value[data-dirty] { cursor: pointer; border-radius: 4px; color: var(--accent); }
+    #audiopanel .value[data-dirty] { cursor: pointer; border-radius: 4px; color: var(--section-accent); }
     #audiopanel .value[data-dirty]:hover { background: var(--surface-hover); text-decoration: underline; }
     #audiopanel .fader { position: relative; display: grid; gap: 4px; min-width: 0; }
     #audiopanel .fader input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
@@ -213,8 +221,8 @@
                                              background: var(--border-strong); }
     #audiopanel input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
                                              width: 12px; height: 12px; margin-top: -4px; border-radius: 50%;
-                                             background: var(--accent); border: 2px solid var(--surface, var(--bg));
-                                             box-shadow: 0 0 0 1px var(--accent); }
+                                             background: var(--section-accent); border: 2px solid var(--surface, var(--bg));
+                                             box-shadow: 0 0 0 1px var(--section-accent); }
     #audiopanel input[type="range"]:focus-visible { outline: none; }
     #audiopanel input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--focus); }
     #audiopanel input[type="range"]:disabled { opacity: 0.4; cursor: default; }
@@ -225,7 +233,7 @@
     #audiopanel .meter { position: relative; flex: 1; height: 4px; border-radius: 2px; overflow: hidden;
                          background: var(--surface-hover); }
     #audiopanel .meter > i { position: absolute; inset: 0; transform-origin: left center; transform: scaleX(0);
-                             background: var(--accent); will-change: transform; }
+                             background: var(--section-accent); will-change: transform; }
     #audiopanel .meter > i[data-hot] { background: var(--warn); }
     #audiopanel .clip { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); flex: none; }
     #audiopanel .clip[data-lit] { background: var(--rec); box-shadow: 0 0 0 2px var(--rec-soft); }
@@ -384,8 +392,7 @@
        played bar's WIDTH is deliberately left alone: like .kept, it is a
        time RANGE and is supposed to stretch with zoom. Ticks: kept at "keep
        A" (thin off-white lines) from the STC-444 HTML variant comparison —
-       dots and glow were tried and dropped. (The Zoom lane's dithered fill was
-       the one place that texture survived, until STC-566 made it a gradient.) */
+       dots and glow were tried and dropped. */
     #ruler-ticks { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; pointer-events: none; }
     .ruler-tick { position: absolute; bottom: 0; height: 8px; background: color-mix(in srgb, var(--text) 55%, transparent); }
     .ruler-tick.minor { height: 4px; background: color-mix(in srgb, var(--text) 25%, transparent); }
@@ -530,10 +537,9 @@
                        background: currentColor; }
     .timeline #scrub:active::-webkit-slider-thumb { height: 24px; margin-top: -10px; }
     .timeline #scrub:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    /* STC-451: pixelated is the backstop — the bitmap is drawn at device
-       resolution (editor.ts's laneBitmap), so this only matters if a fractional
-       ratio leaves it a pixel off; smoothing would blur the dither's edges. */
-    #zoom-curve { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+    /* STC-451: the bitmap is drawn at device resolution (editor.ts's
+       laneBitmap), so CSS only sizes it to the lane. */
+    #zoom-curve { display: block; width: 100%; height: 100%; }
     .lanelabel { position: absolute; left: 4px; top: 2px; font-size: var(--type-label);
                  text-transform: uppercase; letter-spacing: var(--type-label-tracking); color: var(--lane-label); opacity: .9;
                  pointer-events: none; z-index: 4; }
