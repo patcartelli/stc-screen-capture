@@ -28,23 +28,23 @@ describe("the Frame section's Style control (STC-396)", () => {
     app = a;
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
 
-    expect(await editorWin.inputValue("#framepreset")).toBe("none");
+    expect(await editorWin.getAttribute("#framepreset [aria-checked=\"true\"]", "data-frame-preset")).toBe("none");
     expect(await editorWin.textContent("#legibility")).not.toMatch(/inside the frame/);
 
-    await editorWin.selectOption("#framepreset", "clean");
+    await editorWin.click(`#framepreset [data-frame-preset="clean"]`);
     await expect.poll(() => readProject(takeDir)?.framing, { timeout: 10_000 }).toEqual({ preset: "clean" });
     expect(readProject(takeDir).version).toBe(15);
     await expect.poll(() => editorWin.textContent("#legibility"), { timeout: 10_000 }).toMatch(/inside the frame/);
     expect(await editorWin.isHidden("#framecolor")).toBe(true);
 
-    await editorWin.selectOption("#framepreset", "solid");
+    await editorWin.click(`#framepreset [data-frame-preset="solid"]`);
     await expect.poll(() => readProject(takeDir)?.framing?.preset, { timeout: 10_000 }).toBe("solid");
     // STC-514: setFraming writes project.json BEFORE updateFramingUI() shows or
     // hides #framecolor, so the disk poll above can return while the DOM is
     // still one step behind. Poll the DOM itself; a one-shot read races it.
     await expect.poll(() => editorWin.isVisible("#framecolor"), { timeout: 10_000 }).toBe(true);
 
-    await editorWin.selectOption("#framepreset", "none");
+    await editorWin.click(`#framepreset [data-frame-preset="none"]`);
     await expect.poll(() => readProject(takeDir)?.framing, { timeout: 10_000 }).toBeUndefined();
     await expect.poll(() => editorWin.isHidden("#framecolor"), { timeout: 10_000 }).toBe(true);
   }, 120_000);
@@ -55,7 +55,7 @@ describe("the Frame section's Style control (STC-396)", () => {
     await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
     for (const id of ["#framepadding", "#frameradius", "#frameshadow"]) expect(await editorWin.isDisabled(id)).toBe(true);
 
-    await editorWin.selectOption("#framepreset", "clean");
+    await editorWin.click(`#framepreset [data-frame-preset="clean"]`);
     await expect.poll(() => editorWin.isEnabled("#framepadding"), { timeout: 10_000 }).toBe(true);
     const setRange = (id: string, v: number) => editorWin.evaluate(([i, val]) => {
       const el = document.getElementById(i as string) as HTMLInputElement;
@@ -74,7 +74,7 @@ describe("the Frame section's Style control (STC-396)", () => {
     await editorWin.check("#frameshadow");
     await expect.poll(() => readProject(takeDir)?.framing?.shadow, { timeout: 10_000 }).toBeUndefined();
     // The numbers are the user's; a preset change keeps them.
-    await editorWin.selectOption("#framepreset", "dark");
+    await editorWin.click(`#framepreset [data-frame-preset="dark"]`);
     await expect.poll(() => readProject(takeDir)?.framing?.preset, { timeout: 10_000 }).toBe("dark");
     expect(readProject(takeDir).framing.paddingPct).toBeCloseTo(0.1, 5);
   }, 120_000);

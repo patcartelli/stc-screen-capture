@@ -252,6 +252,8 @@
     #pane .audiorow[hidden] { display: none; }
     #pane .audiorow > .row + .row { border-top: 1px solid var(--hairline); }
     #pane .row { display: flex; align-items: center; gap: 16px; padding: 12px 0; min-height: 22px; }
+    /* display:flex above beats the UA's display:none for [hidden]. */
+    #pane .row[hidden] { display: none; }
     #pane .row > .label { flex: 1 1 0; min-width: 0; color: var(--text); font-size: var(--type-body);
                           cursor: pointer; }
     #pane .row > .label { white-space: nowrap; }
@@ -292,7 +294,10 @@
        6px + (100% - 12px) * --unity. */
     #pane .fader { position: relative; min-width: 0; }
     #pane .fader input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
-                                             margin: 0; background: transparent; cursor: pointer; }
+                                             margin: 0; background: transparent; cursor: pointer;
+                                             /* The editor's global `input` rule gives every input a 1px border and
+                                                rounded corners; a slider is its track and thumb alone. */
+                                             border: 0; border-radius: 0; padding: 0; }
     #pane input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
                                              background: linear-gradient(to right, var(--section-accent) var(--fill-pct, 0%), rgba(255, 255, 255, .14) var(--fill-pct, 0%)); }
     #pane input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
@@ -931,13 +936,15 @@
         <p class="panelabel">Background</p>
         <div class="group">
           <div class="row">
-            <label class="label" for="framepreset">Style</label>
-            <select id="framepreset">
-              <option value="none">None</option>
-              <option value="clean">Clean</option>
-              <option value="dark">Dark</option>
-              <option value="solid">Solid</option>
-            </select>
+            <span class="label" id="framepreset-label">Style</span>
+            <!-- The camera section's segmented look (pip-inspector.css). None is
+                 a fourth segment: the frame has no off switch of its own. -->
+            <div id="framepreset" class="pip-segmented" role="radiogroup" aria-labelledby="framepreset-label">
+              <button type="button" role="radio" aria-checked="true" data-frame-preset="none">None</button>
+              <button type="button" role="radio" aria-checked="false" data-frame-preset="clean">Clean</button>
+              <button type="button" role="radio" aria-checked="false" data-frame-preset="dark">Dark</button>
+              <button type="button" role="radio" aria-checked="false" data-frame-preset="solid">Solid</button>
+            </div>
           </div>
           <div class="row" id="framecolorrow" hidden>
             <label class="label" for="framecolor">Colour</label>

@@ -95,8 +95,9 @@ saved fields as they are). Each is a new field or a new feature if wanted:
 
 Also his call:
 
-- Style (Frame) and Anchor (Camera) and Ease (Zoom) are **flat native selects**.
-  Settings draws its own dropdown menu; the editor's could.
+- Anchor (Camera) and Ease (Zoom) are **flat native selects**. Settings draws its
+  own dropdown menu; the editor's could. (Frame's Style is segmented, as in Figma,
+  with None as a fourth segment.)
 - `--camera` is a new token, set equal to `--bookmark`, because Figma's Camera
   frame is coral and STC-609 defined accents for Audio and Zoom only.
 - Size on Camera reads in output pixels; Amount on Zoom reads the frame over the

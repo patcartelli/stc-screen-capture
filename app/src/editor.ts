@@ -2466,9 +2466,21 @@ window.addEventListener("keydown", (e) => {
 // ---- framing (STC-396) -------------------------------------------------
 // A preset (or none) saved to the project. Preview and export both go through
 // render(), so what is previewed is what exports.
+const framePresetButtons = (): HTMLButtonElement[] =>
+  [...$("framepreset").querySelectorAll<HTMLButtonElement>("[data-frame-preset]")];
+/** The Style control's value: the checked segment ("none" = no frame). */
+const framePresetValue = (): string =>
+  framePresetButtons().find((b) => b.getAttribute("aria-checked") === "true")?.dataset.framePreset ?? "none";
+function setFramePresetUI(value: string): void {
+  for (const b of framePresetButtons()) b.setAttribute("aria-checked", String(b.dataset.framePreset === value));
+}
+function setFramePresetDisabled(disabled: boolean): void {
+  for (const b of framePresetButtons()) b.disabled = disabled;
+}
+
 function updateFramingUI(): void {
   const f = chosenFraming(openProject, heldFraming);
-  ($("framepreset") as HTMLSelectElement).value = f?.preset ?? "none";
+  setFramePresetUI(f?.preset ?? "none");
   const color = $("framecolor") as HTMLInputElement;
   color.hidden = f?.preset !== "solid";
   $("framecolorrow").hidden = f?.preset !== "solid";
@@ -2536,7 +2548,7 @@ async function setFraming(next: Framing | undefined, persist = true): Promise<vo
 }
 
 function framingFromControls(): Framing | undefined {
-  const v = ($("framepreset") as HTMLSelectElement).value;
+  const v = framePresetValue();
   if (v === "none") return undefined;
   const preset = v as FramingPreset;
   const next: Framing = preset === "solid"
@@ -2551,11 +2563,16 @@ function framingFromControls(): Framing | undefined {
   return next;
 }
 
-for (const id of ["framepreset", "framecolor"]) {
-  $(id).addEventListener("change", () => {
-    void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
-  });
-}
+$("framecolor").addEventListener("change", () => {
+  void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+// The Style segments: a click picks one (a rollback on a failed write redraws it).
+$("framepreset").addEventListener("click", (e) => {
+  const seg = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-frame-preset]");
+  if (!seg || seg.disabled || seg.getAttribute("aria-checked") === "true") return;
+  setFramePresetUI(seg.dataset.framePreset!);
+  void setFraming(framingFromControls()).catch((err: any) => alertUser(String(err?.message ?? err)));
+});
 
 // Padding, corners and shadow edit the chosen framing (framing-edit.ts). The
 // sliders follow the editor's input/change split: `input` repaints, `change`
@@ -3294,7 +3311,7 @@ async function runExport(): Promise<void> {
   bar.removeAttribute("hidden");
   ($("export") as HTMLButtonElement).disabled = true;
   ($("outsize") as HTMLSelectElement).disabled = true;
-  ($("framepreset") as HTMLSelectElement).disabled = true;
+  setFramePresetDisabled(true);
   ($("framecolor") as HTMLInputElement).disabled = true;
   for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = true;
   progress.value = 0;
@@ -3359,7 +3376,7 @@ async function runExport(): Promise<void> {
     exportAbort = undefined;
     ($("export") as HTMLButtonElement).disabled = false;
     ($("outsize") as HTMLSelectElement).disabled = false;
-    ($("framepreset") as HTMLSelectElement).disabled = false;
+    setFramePresetDisabled(false);
     ($("framecolor") as HTMLInputElement).disabled = false;
     updateFramingUI();   // padding, corners and shadow wait for a frame again
   }
