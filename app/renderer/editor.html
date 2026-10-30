@@ -713,8 +713,8 @@
     .timeline #scrub::-webkit-slider-thumb { scale: var(--inv, 1) 1; }
     .timeline .handle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     /* STC-607: Export hides the brackets (the bars stand in for them), but a
-       bracket the keyboard is on must be seen: opacity would hide its ring too. */
-    body[data-section="export"] .timeline .handle:focus-visible { opacity: 1; }
+       bracket the keyboard is on must be seen: opacity would hide its ring too, and the bar sits over it. */
+    body[data-section="export"] .timeline .handle:focus-visible { opacity: 1; z-index: 7; /* above the bar (6) */ }
     /* The range covers the whole lane, so a press anywhere on it seeks
        (rule 3). Its thumb is now a transparent grab area: #playhead draws. */
     .timeline #scrub { position: absolute; left: 0; right: 0; width: 100%; top: 0;

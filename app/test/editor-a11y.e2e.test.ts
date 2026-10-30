@@ -36,7 +36,7 @@ async function tabTo(win: Page, sel: string): Promise<void> {
 const ringOf = (win: Page, sel: string) => win.evaluate((s) => {
   const el = document.querySelector<HTMLElement>(s)!;
   const cs = getComputedStyle(el);
-  return { visible: el.matches(":focus-visible"), outline: `${cs.outlineStyle} ${cs.outlineColor}`, opacity: cs.opacity };
+  return { visible: el.matches(":focus-visible"), outline: `${cs.outlineStyle} ${cs.outlineColor}`, opacity: cs.opacity, z: Number(cs.zIndex) };
 }, sel);
 
 describe("the editor: focus and reduced motion (STC-607)", () => {
@@ -58,6 +58,9 @@ describe("the editor: focus and reduced motion (STC-607)", () => {
     const ring = await ringOf(win, "#trim-in");
     expect(ring.visible).toBe(true);
     expect(ring.opacity).toBe("1");
+    // Above the brass bar that stands on the same point, or the bracket is
+    // drawn but covered (Patrick's Mac pass).
+    expect(ring.z).toBeGreaterThan((await ringOf(win, "#exportbar-in")).z);
     expect(ring.outline).toBe(`solid ${FOCUS_RING}`);
     await win.evaluate(() => (document.activeElement as HTMLElement).blur());
     expect((await ringOf(win, "#trim-in")).opacity).toBe("0");
