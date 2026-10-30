@@ -231,6 +231,12 @@ export function mixBlock(opts: {
   systemLevel: number;
   /** The mic's gain (STC-454 part 2): 0..MIC_LEVEL_MAX, absent = 1 (as recorded). */
   micLevel?: number;
+  /**
+   * STC-606: where the hard limit sits, linear 0..1 (peak-limit.ts's
+   * `mixLimit`). Absent is full scale, so every caller that predates the
+   * ceiling mixes exactly as before. Peaks are measured before the limit.
+   */
+  ceiling?: number;
   originNs: number;
   from: number;
   frames: number;
@@ -240,6 +246,8 @@ export function mixBlock(opts: {
   // system audio. Clamped to +12 dB; the hard limit below catches peaks.
   const rawMic = opts.micLevel ?? 1;
   const micGain = Math.min(MIC_LEVEL_MAX, Math.max(0, Number.isFinite(rawMic) ? rawMic : 1));
+  const rawCeiling = opts.ceiling ?? 1;
+  const lim = Number.isFinite(rawCeiling) && rawCeiling > 0 ? Math.min(1, rawCeiling) : 1;
   const out = Array.from({ length: MIX_CHANNELS }, () => new Float32Array(opts.frames));
   const peaks = opts.peaks;
   const blockFrames = peaks ? Math.max(1, Math.floor(peaks.blockFrames)) : 0;
@@ -255,7 +263,7 @@ export function mixBlock(opts: {
       let m = 0, s = 0;
       if (opts.mic && micGain > 0) { m = micGain * sampleAt(opts.mic, ch, i, opts.originNs); v += m; }
       if (opts.system && level > 0) { s = level * sampleAt(opts.system, ch, i, opts.originNs); v += s; }
-      dst[j] = v > 1 ? 1 : v < -1 ? -1 : v;
+      dst[j] = v > lim ? lim : v < -lim ? -lim : v;
       if (peaks) {
         const b = Math.floor(j / blockFrames);
         const am = Math.abs(m), as = Math.abs(s), av = Math.abs(v);
@@ -365,13 +373,15 @@ export function exportAudioPlan(opts: {
   /** STC-454 part 3: a muted track is left out of the export. */
   micMuted?: boolean;
   systemMuted?: boolean;
+  /** STC-606: Limit peaks on needs the mixer, which is where the limit is applied. */
+  limit?: boolean;
 }): { path: "mix" | "mic" | "none"; cleanMic: boolean; mic: boolean; system: boolean } {
   const mic = opts.encode && opts.hasMic && !opts.micMuted;
   const system = opts.encode && opts.hasSystem && !opts.systemMuted;
   if (!mic && !system) return { path: "none", cleanMic: false, mic: false, system: false };
   const cleanMic = mic && !!opts.cleanup?.enabled && opts.cleanup.strength > 0;
   const levelMic = mic && opts.micLevel !== undefined && opts.micLevel !== 1;
-  if (system || cleanMic || levelMic) return { path: "mix", cleanMic, mic, system };
+  if (system || cleanMic || levelMic || opts.limit) return { path: "mix", cleanMic, mic, system };
   return { path: "mic", cleanMic: false, mic, system };
 }
 

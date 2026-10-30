@@ -18,6 +18,13 @@ Written 2026-10-29 by a scheduled prep run, after both blockers were Done in Lin
 - **Saves to the project:** yes, through `committedOverrides`, with no new field. The easing uses STC-619's fields (project-17 only when the sides differ). Delete uses the existing paths: a manual block is deleted, and an auto block is marked removed.
 - **Tests:** unit tests for the side and speed rule and for resizing to an amount. The e2e tests cover: the chip shows only in Zoom with a block open, above the block and never over the Clip lane; speeds and the amount are saved; the arrow keys stay with the chip; delete removes the block; a press on the chip never grabs the playhead.
 
+**Audio note (Patrick, 2026-10-30).** Limit peaks and Ceiling.
+- **Edits:** a new setting, `peakLimit` (`{ enabled, ceilingDb }`), off at −1 dB by default, ranging from −12 to 0 dB. With Limit peaks on, the mix is hard-limited at the ceiling instead of at full scale. This is STC-418's rule, just lower, and it applies in the preview, the export and the waveform alike. Either way, the ceiling is the lane's guide.
+- **Peaks over:** counted per burst. Consecutive waveform buckets at or over the ceiling make one peak, with one marker.
+- **Saves to the project:** yes, as project-18, but only when the setting is not the default. An untouched take mixes and saves exactly as before. A mic-only take goes through the mixer when Limit peaks is on.
+- **Where it shows:** the ceiling line and its drag handle sit on the Audio lane, with red markers in the gap above it. The readout ("Ceiling −1 dB · N peaks over ●") is in the transport row. All of it shows only in Audio. Limit peaks and Ceiling sit under Cleanup, which now shows for any take with audio; the voice rows stay mic-only.
+- **Tests:** unit tests for the setting, the mix limit, the burst count, project-18 and the schema. The e2e tests cover gating, the readout's placement, the slider, the handle and keys, and saving.
+
 ## Summary
 
 STC-606 adds one set of overlays per inspector section, each shown only while its section is active:

@@ -262,6 +262,89 @@ describe("the Zoom chip", () => {
 });
 
 /**
+ * Audio (Figma 171:1546; Patrick 2026-10-30). The ceiling: a red line with a
+ * handle on the Audio lane, markers for the peaks over it, a readout in the
+ * transport row, and Limit peaks + Ceiling under Cleanup. project-18's
+ * peakLimit, written only when not the default. A mic take. The burst count
+ * and the limit itself are unit-tested (transform/test/peak-limit.test.ts).
+ */
+describe("the Audio ceiling", () => {
+  const project = (dir: string): any => {
+    try { return JSON.parse(readFileSync(join(dir, "project.json"), "utf8")); } catch { return undefined; }
+  };
+  const box = (win: Page, sel: string) => win.evaluate((s) => {
+    const el = document.querySelector<HTMLElement>(s)!;
+    const r = el.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, shown: getComputedStyle(el).display !== "none" && r.width > 0 };
+  }, sel);
+  async function openAudio() {
+    const { dir, takeDir } = makeMicTakeFolder();
+    const launched = await launchApp(dir);
+    app = launched.app;
+    const win = await openEditorFromLibrary(app, launched.win);
+    await waitForTakeLoaded(win);
+    await win.waitForSelector("#audio-lane:not([hidden])", { timeout: 20_000 });
+    await win.click("#audiobtn");
+    return { win, takeDir };
+  }
+
+  test("line and readout only in Audio; the readout sits in the transport row, not on the lane", async () => {
+    const { win } = await openAudio();
+    expect((await box(win, "#ceilingline")).shown).toBe(true);
+    expect((await box(win, "#peakreadout")).shown).toBe(true);
+    expect(await win.textContent("#peakreadoutceiling")).toBe("Ceiling −1 dB");
+    await expect.poll(() => win.textContent("#peakreadoutcount"), { timeout: 20_000 }).toMatch(/^\d+ peaks? over$/);
+    const [readout, lane, line] = await Promise.all([box(win, "#peakreadout"), box(win, "#audio-lane"), box(win, "#ceilingline")]);
+    expect(readout.bottom).toBeLessThan(lane.top);
+    // The line is on the lane, in its top half.
+    expect(line.top).toBeGreaterThan(lane.top);
+    expect(line.top).toBeLessThan((lane.top + lane.bottom) / 2);
+    await win.click("#tab-frame");
+    expect((await box(win, "#ceilingline")).shown).toBe(false);
+    expect((await box(win, "#peakreadout")).shown).toBe(false);
+  }, 90_000);
+
+  test("the Ceiling slider moves the line and the readout and saves project-18; the default writes nothing", async () => {
+    const { win, takeDir } = await openAudio();
+    const before = await box(win, "#ceilingline");
+    await win.fill("#peakceiling", "-6");
+    await win.dispatchEvent("#peakceiling", "input");
+    await win.dispatchEvent("#peakceiling", "change");
+    expect(await win.textContent("#peakreadoutceiling")).toBe("Ceiling −6 dB");
+    expect(await win.textContent("#peakceilingvalue")).toBe("−6 dB");
+    expect((await box(win, "#ceilingline")).top).toBeGreaterThan(before.top);
+    await expect.poll(() => project(takeDir)?.peakLimit, { timeout: 10_000 }).toEqual({ enabled: false, ceilingDb: -6 });
+    expect(project(takeDir).version).toBe(18);
+    // Back to the default: the block goes from the document.
+    await win.fill("#peakceiling", "-1");
+    await win.dispatchEvent("#peakceiling", "input");
+    await win.dispatchEvent("#peakceiling", "change");
+    await expect.poll(() => project(takeDir) && "peakLimit" in project(takeDir), { timeout: 10_000 }).toBe(false);
+  }, 90_000);
+
+  test("Limit peaks saves; dragging the handle up raises the ceiling; the keys nudge it", async () => {
+    const { win, takeDir } = await openAudio();
+    await win.click("#peaklimiton");
+    await expect.poll(() => project(takeDir)?.peakLimit?.enabled, { timeout: 10_000 }).toBe(true);
+    await win.fill("#peakceiling", "-6");
+    await win.dispatchEvent("#peakceiling", "input");
+    await win.dispatchEvent("#peakceiling", "change");
+    await expect.poll(() => project(takeDir)?.peakLimit?.ceilingDb, { timeout: 10_000 }).toBe(-6);
+    const h = await box(win, "#ceilinghandle");
+    await win.mouse.move((h.left + h.right) / 2, (h.top + h.bottom) / 2);
+    await win.mouse.down();
+    await win.mouse.move((h.left + h.right) / 2, (h.top + h.bottom) / 2 - 6, { steps: 4 });
+    await win.mouse.up();
+    await expect.poll(() => project(takeDir)?.peakLimit?.ceilingDb, { timeout: 10_000 }).toBeGreaterThan(-6);
+    const dragged = project(takeDir).peakLimit.ceilingDb;
+    await win.focus("#ceilinghandle");
+    await win.keyboard.press("ArrowDown");
+    await expect.poll(() => project(takeDir)?.peakLimit?.ceilingDb, { timeout: 10_000 }).toBe(dragged - 0.5);
+    expect(project(takeDir).peakLimit.enabled).toBe(true);
+  }, 90_000);
+});
+
+/**
  * Frame (Figma 171:78). Hovering the lanes in Frame draws a hairline and a
  * tooltip: the time, then the clicks and keys of the Clip bar under the
  * pointer. `fixtures/basic` has one click, at 2.005 s.

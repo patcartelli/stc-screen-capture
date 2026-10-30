@@ -269,6 +269,8 @@
     #pane .audiorow[hidden] { display: none; }
     #pane .audiorow > .row + .row { border-top: 1px solid var(--hairline); }
     #pane .row { display: flex; align-items: center; gap: 16px; padding: 12px 0; min-height: 22px; }
+    /* STC-606: the Cleanup group's voice rows hide for a take with no mic. */
+    #pane .row[hidden] { display: none; }
     /* display:flex above beats the UA's display:none for [hidden]. */
     #pane .row[hidden] { display: none; }
     /* "More": what the Figma frame does not draw, one click away. A native
@@ -538,6 +540,28 @@
     #zoomchip .chipdelete:hover { color: var(--rec); background: color-mix(in srgb, var(--rec) 16%, transparent); }
     #zoomchip .chipdelete svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3;
                                 stroke-linecap: round; stroke-linejoin: round; }
+    /* STC-606, Audio (Figma 171:1546): a red ceiling line across the Audio
+       lane with a round handle at its right end, red diamonds in the gap above
+       the lane, one per peak over the ceiling, and a readout in the transport
+       row. Only while Audio is the active section. */
+    body:not([data-section="audio"]) .audioonly { display: none !important; }
+    #ceilingline { position: absolute; left: 0; right: 0; top: 0; height: 0; z-index: 5; pointer-events: none;
+                   border-top: 1.5px solid var(--wave-clip); }
+    #ceilingline[hidden] { display: none; }
+    #ceilinghandle { position: absolute; right: 4px; top: -7px; width: 12px; height: 12px; padding: 0;
+                     border: 2px solid var(--wave-clip); border-radius: 50%; background: #fff;
+                     cursor: ns-resize; pointer-events: auto; touch-action: none; }
+    #ceilinghandle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    #peakmarkers { position: absolute; left: 0; right: 0; top: 0; height: 0; pointer-events: none; z-index: 5; }
+    .peakmarker { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; transform: rotate(45deg);
+                  background: var(--wave-clip); border-radius: 1px; }
+    #peakreadout { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px;
+                   border: 1px solid rgba(255, 255, 255, .08); border-radius: 6px; background: rgba(10, 10, 12, .6);
+                   font-size: 10px; color: var(--text); white-space: nowrap; }
+    #peakreadout[hidden] { display: none; }
+    #peakreadoutcount { color: var(--text-dim); }
+    #peakreadoutdot { width: 6px; height: 6px; border-radius: 50%; background: var(--wave-clip); }
+    #peakreadoutdot[hidden] { display: none; }
     /* STC-606, Frame (Figma 171:78): hovering the lanes while Frame is the
        active section draws a hairline through every lane and a tooltip beside
        it: the time, then the clicks and keys the Clip bar there stands for.
@@ -834,6 +858,10 @@
         <span id="shuttle" class="mono"></span>
       </div>
       <div class="right">
+        <!-- STC-606: the ceiling and the peaks over it, in the transport row
+             (not on the lane), while Audio is the active section. -->
+        <span id="peakreadout" class="mono audioonly" hidden><span id="peakreadoutceiling"></span><span
+              id="peakreadoutcount"></span><i id="peakreadoutdot" aria-hidden="true"></i></span>
         <span id="framestatus" role="status" hidden></span>
         <!-- STC-454: the preview plays the export's own mix at 1x. Muting is
              an app setting, never part of the take or its export. -->
@@ -885,6 +913,8 @@
     <!-- STC-606: the Export section's full-height in/out bars. -->
     <div class="exportbar exportonly overlayctl" id="exportbar-in" aria-hidden="true"></div>
     <div class="exportbar exportonly overlayctl" id="exportbar-out" aria-hidden="true"></div>
+    <!-- STC-606: the Audio section's peak markers, in the gap above the lane. -->
+    <div id="peakmarkers" class="audioonly" aria-hidden="true"></div>
     <!-- STC-606: the Frame section's hover hairline and tooltip. -->
     <div id="hoverline" class="frameonly" hidden></div>
     <div id="hovertip" class="frameonly" hidden><div id="hovertime"></div><div id="hovercount"></div></div>
@@ -992,6 +1022,10 @@
       <span class="lanelabel">Audio</span>
       <div class="laneviewport audio" id="audio-lane" hidden>
         <div id="audio-canvas-wrap"><canvas id="audio-waveform"></canvas></div>
+        <div id="ceilingline" class="audioonly" hidden>
+          <button type="button" id="ceilinghandle" class="overlayctl" aria-label="Ceiling"
+                  title="Drag up or down to set the ceiling (Up/Down keys nudge it)"></button>
+        </div>
         <div id="audio-dims">
           <div class="lanedim" id="audio-cut-head"></div>
           <div class="lanedim" id="audio-cut-tail"></div>
@@ -1175,21 +1209,35 @@
       <!-- STC-455: narration cleanup — steady background noise and harsh
            "s" sounds, on the mic only. Off by default; the strength is kept
            while it is off. project-10's narrationCleanup. -->
-      <div id="voiceclean" hidden
-           title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
+      <div id="voiceclean" hidden>
         <p class="panelabel">Cleanup</p>
         <div class="group">
-          <div class="row">
+          <div class="row voicerow"
+               title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
             <label class="label" for="voicecleanon">Clean up voice</label>
             <input id="voicecleanon" type="checkbox" class="switch" role="switch" aria-label="Clean up voice">
           </div>
-          <div class="row">
+          <div class="row voicerow">
             <label class="label" for="voicecleanstrength">Strength</label>
             <div class="fader">
               <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
                      aria-label="Voice cleanup strength" disabled>
             </div>
             <span id="voicecleanvalue" class="value mono" data-resets="voicecleanstrength">50%</span>
+          </div>
+          <!-- STC-606 (Figma 171:1546; Patrick 2026-10-30): Limit peaks hard-limits
+               the mix at the ceiling; either way the ceiling is the Audio lane's
+               guide. Any take with audio. project-18's peakLimit. -->
+          <div class="row" title="Holds the mix at the ceiling: anything louder is cut there, in the preview and the export">
+            <label class="label" for="peaklimiton">Limit peaks</label>
+            <input id="peaklimiton" type="checkbox" class="switch" role="switch" aria-label="Limit peaks">
+          </div>
+          <div class="row">
+            <label class="label" for="peakceiling">Ceiling</label>
+            <div class="fader">
+              <input id="peakceiling" type="range" min="-12" max="0" step="0.5" value="-1" aria-label="Ceiling">
+            </div>
+            <span id="peakceilingvalue" class="value mono">−1 dB</span>
           </div>
         </div>
       </div>

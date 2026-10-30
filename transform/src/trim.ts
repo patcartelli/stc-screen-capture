@@ -1,3 +1,4 @@
+import { cleanPeakLimit, isDefaultPeakLimit } from "./peak-limit.js";
 import type { NarrationCleanup, Pip, Project, Trim, Zoom, ZoomOverride } from "./types.js";
 import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
 import {
@@ -253,6 +254,10 @@ export function parseProject(
   // this parser follows.
   const framing = cleanFraming(doc.framing);
   if (framing) project.framing = framing;
+  // project-18 (STC-606). A malformed block is dropped, the take keeping the
+  // default (off), the same rule as framing: never a guessed ceiling.
+  const peakLimit = cleanPeakLimit(doc.peakLimit);
+  if (peakLimit && !isDefaultPeakLimit(peakLimit)) project.peakLimit = peakLimit;
   return project;
 }
 
@@ -426,11 +431,13 @@ function hasSpeedPair(project: Project): boolean {
   return !!project.overrides?.some((o) => (o.kind === "geometry" || o.kind === "manual") && isPairEasing(o.easing));
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 {
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 {
   // Highest first: a document needing v17 needs it whatever its pip style,
   // framing, keycast, showClicks, mutes, mic level, cleanup, levels, bookmarks,
   // slug, overrides, zoom or textPt say. v17 (STC-619) is a block's separate
   // in/out speeds; a plain preset name stays at v6.
+  // v18 (STC-606) is the audio ceiling, written only when it is not the default.
+  if (!isDefaultPeakLimit(project.peakLimit)) return 18;
   if (hasSpeedPair(project)) return 17;
   if (project.pip?.style) return 16;
   if (project.framing) return 15;
@@ -488,5 +495,6 @@ export function projectForWrite(project: Project, durationNs: number): Project {
   if (version >= 13) out.showClicks = project.showClicks !== false;
   if (version >= 14) out.keycast = { show: project.keycast?.show !== false };
   if (version >= 15 && project.framing) out.framing = project.framing;
+  if (version >= 18 && project.peakLimit) out.peakLimit = { ...project.peakLimit };
   return out;
 }

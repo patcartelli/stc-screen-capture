@@ -74,6 +74,10 @@ import { decodeMicForMix, decodeSystemForMix } from "@transform/decode-audio";
 import type { DemuxedAudio } from "@transform/demux-audio";
 import { PreviewAudio } from "@transform/preview-audio";
 import { mixPeaks, isClipped } from "@transform/waveform";
+import {
+  ceilingLevel, cleanPeakLimit, formatCeilingDb, isDefaultPeakLimit, mixLimit, peaksOver,
+  CEILING_DB_MAX, CEILING_DB_MIN, DEFAULT_PEAK_LIMIT, type PeakLimit,
+} from "@transform/peak-limit";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
 import {
   projectForWrite, exportWindow, estimateExportMs,
@@ -870,7 +874,7 @@ function scheduleWaveform(): void {
   const levels = previewLevels();
   const it = mixPeaks({
     mic: audio.micTrack, system: audio.systemTrack,
-    micLevel: levels.mic, systemLevel: levels.system,
+    micLevel: levels.mic, systemLevel: levels.system, ceiling: levels.ceiling,
     durationNs: player.durationNs,
   });
   canvas.dataset.state = "computing";
@@ -906,6 +910,7 @@ function drawAudioLane(): void {
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
+  layoutPeakOverlays();
   const peaks = wavePeaks;
   if (!peaks) return;
   const css = getComputedStyle(document.documentElement);
@@ -913,6 +918,7 @@ function drawAudioLane(): void {
   const hot = css.getPropertyValue("--wave-clip").trim() || "#e5483f";
   const mid = cssH / 2;
   const half = mid - PEAK_DOT_PX;
+  const limit = mixLimit(openProject?.peakLimit);
   // STC-484: the canvas shows the VISIBLE span only, redrawn on every zoom or
   // pan rather than CSS-stretched, so a zoomed lane stays sharp.
   const dur = player?.durationNs ?? 0;
@@ -924,7 +930,7 @@ function drawAudioLane(): void {
     const peak = columnMax(peaks, f0 + (x / cssW) * (f1 - f0), f0 + ((x + WAVE_PITCH_PX) / cssW) * (f1 - f0));
     if (!(peak > 0)) continue;
     const a = Math.max(1, peak * half);
-    if (!isClipped(peak)) {
+    if (!isClipped(peak, limit)) {
       ctx.fillStyle = normal;
       fillBar(ctx, x * scale, (mid - a) * scale, WAVE_BAR_PX * scale, 2 * a * scale, scale);
       continue;
@@ -2991,9 +2997,13 @@ $("sysmute").addEventListener("click", () => {
 
 function updateVoiceCleanUI(): void {
   updateMicUI();
-  const row = $("voiceclean");
+  // STC-606: the group holds Limit peaks and Ceiling too, which any take with
+  // audio has; the voice rows stay mic-only.
+  const anyAudio = (!!openSession?.micAudio || !!openSession?.systemAudio) && !!openProject;
+  $("voiceclean").toggleAttribute("hidden", !anyAudio);
+  updatePeakLimitUI();
   const has = !!openSession?.micAudio && !!openProject;
-  row.toggleAttribute("hidden", !has);
+  for (const r of $("voiceclean").querySelectorAll<HTMLElement>(".voicerow")) r.toggleAttribute("hidden", !has);
   if (!has) return;
   const n = openProject!.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP;
   const pct = Math.round(n.strength * 100);
@@ -3007,6 +3017,133 @@ function updateVoiceCleanUI(): void {
 function currentCleanup(): NarrationCleanup {
   return { ...(openProject?.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP) };
 }
+
+// ---- the audio ceiling (STC-606, Figma 171:1546) ----------------------------
+//
+// Limit peaks and the ceiling (Patrick, 2026-10-30): on, the mix is hard-limited
+// at the ceiling in the preview, the export and the waveform alike (previewLevels
+// is the one reader); either way the ceiling is the lane's guide. The lane's
+// line, its handle and the peak markers, and the transport readout, show only
+// while Audio is the active section. Saved as project-18's peakLimit, only when
+// not the default.
+
+function currentPeakLimit(): PeakLimit {
+  return { ...(openProject?.peakLimit ?? DEFAULT_PEAK_LIMIT) };
+}
+
+function updatePeakLimitUI(): void {
+  const p = currentPeakLimit();
+  ($("peaklimiton") as HTMLInputElement).checked = p.enabled;
+  const range = $("peakceiling") as HTMLInputElement;
+  range.value = String(p.ceilingDb);
+  range.style.setProperty("--fill-pct", `${((p.ceilingDb - CEILING_DB_MIN) / (CEILING_DB_MAX - CEILING_DB_MIN)) * 100}%`);
+  $("peakceilingvalue").textContent = formatCeilingDb(p.ceilingDb);
+}
+
+/** The one writer. The mix only changes when the limit is on (or just turned
+ *  on or off), so only then is the waveform recomputed. */
+function setPeakLimit(next: PeakLimit, persist: boolean): void {
+  if (!openProject) return;
+  const clean = cleanPeakLimit({ ...next, ceilingDb: Math.round(next.ceilingDb * 2) / 2 }) ?? currentPeakLimit();
+  const before = currentPeakLimit();
+  if (isDefaultPeakLimit(clean)) delete openProject.peakLimit;
+  else openProject.peakLimit = clean;
+  updatePeakLimitUI();
+  if (clean.enabled !== before.enabled || (clean.enabled && clean.ceilingDb !== before.ceilingDb)) scheduleWaveform();
+  else drawAudioLane();
+  if (persist) void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+/** The line, the markers and the readout. Reads the section from the body
+ *  attribute: the lane is first drawn while the editor is still loading. */
+function layoutPeakOverlays(): void {
+  const line = $("ceilingline") as HTMLElement;
+  const markers = $("peakmarkers") as HTMLElement;
+  const readout = $("peakreadout") as HTMLElement;
+  const lane = $("audio-lane") as HTMLElement;
+  const shown = !lane.hidden && document.body.dataset.section === "audio" && !!openProject;
+  line.hidden = !shown;
+  readout.hidden = !shown;
+  markers.replaceChildren();
+  if (!shown) return;
+  const p = currentPeakLimit();
+  const level = ceilingLevel(p);
+  // The waveform's own geometry (drawAudioLane): mirrored about the middle,
+  // full scale at `half` from it.
+  const cssH = lane.clientHeight || audioLaneHeight;
+  const mid = cssH / 2;
+  const half = mid - PEAK_DOT_PX;
+  line.style.top = `${mid - level * half}px`;
+  $("peakreadoutceiling").textContent = `Ceiling ${formatCeilingDb(p.ceilingDb)}`;
+  const peaks = wavePeaks;
+  const counted = peaks ? peaksOver(peaks, level) : null;
+  $("peakreadoutcount").textContent = counted ? `${counted.length} peak${counted.length === 1 ? "" : "s"} over` : "";
+  ($("peakreadoutdot") as HTMLElement).hidden = !counted || counted.length === 0;
+  if (!counted || !peaks) return;
+  const track = $("timeline").getBoundingClientRect();
+  const laneBox = lane.getBoundingClientRect();
+  const wrap = (document.querySelector(".timelinewrap") as HTMLElement).getBoundingClientRect();
+  const MARKER_GAP_PX = 4;
+  for (const run of counted) {
+    const x = track.left + (((run.start + run.end) / 2) / peaks.length) * track.width;
+    if (x < laneBox.left || x > laneBox.right) continue;
+    const m = document.createElement("i");
+    m.className = "peakmarker";
+    m.style.left = `${x - wrap.left}px`;
+    m.style.top = `${laneBox.top - wrap.top - MARKER_GAP_PX}px`;
+    markers.append(m);
+  }
+}
+
+$("peaklimiton").addEventListener("change", () => {
+  setPeakLimit({ ...currentPeakLimit(), enabled: ($("peaklimiton") as HTMLInputElement).checked }, true);
+});
+$("peakceiling").addEventListener("input", () => {
+  setPeakLimit({ ...currentPeakLimit(), ceilingDb: Number(($("peakceiling") as HTMLInputElement).value) }, false);
+});
+$("peakceiling").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+(() => {
+  const handle = $("ceilinghandle");
+  let dragging = false;
+  const dbAt = (clientY: number): number => {
+    const lane = $("audio-lane");
+    const r = lane.getBoundingClientRect();
+    const mid = (lane.clientHeight || audioLaneHeight) / 2;
+    const half = mid - PEAK_DOT_PX;
+    const level = half > 0 ? (mid - (clientY - r.top)) / half : 1;
+    return level > 0 ? 20 * Math.log10(level) : CEILING_DB_MIN;
+  };
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragging = true;
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    if ((e.buttons & 1) === 0) { dragging = false; return; }
+    const db = Math.min(CEILING_DB_MAX, Math.max(CEILING_DB_MIN, dbAt(e.clientY)));
+    setPeakLimit({ ...currentPeakLimit(), ceilingDb: db }, false);
+  });
+  const end = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  handle.addEventListener("lostpointercapture", end);
+  handle.addEventListener("keydown", (e) => {
+    const step = e.key === "ArrowUp" ? 0.5 : e.key === "ArrowDown" ? -0.5 : 0;
+    if (!step) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const p = currentPeakLimit();
+    setPeakLimit({ ...p, ceilingDb: Math.min(CEILING_DB_MAX, Math.max(CEILING_DB_MIN, p.ceilingDb + step)) }, true);
+  });
+})();
 
 $("voicecleanon").addEventListener("change", () => {
   if (!openProject) return;
@@ -3214,6 +3351,7 @@ function selectSection(s: PaneSection): void {
   document.body.dataset.section = s;
   layoutExportOverlays();
   layoutZoomChip();
+  layoutPeakOverlays();
   for (const tab of $("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")) {
     const on = tab.dataset.section === s;
     tab.setAttribute("aria-selected", String(on));
@@ -3346,10 +3484,12 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
  * keeps being scheduled, so the clock the picture follows never changes
  * under a mute.
  */
-function previewLevels(): { system: number; mic: number } {
+function previewLevels(): { system: number; mic: number; ceiling: number } {
   return {
     system: openProject?.systemAudioMuted ? 0 : openProject?.systemAudioLevel ?? 1,
     mic: openProject?.micMuted ? 0 : openProject?.micLevel ?? 1,
+    // STC-606: Limit peaks moves the mix's hard limit down to the ceiling.
+    ceiling: mixLimit(openProject?.peakLimit),
   };
 }
 
