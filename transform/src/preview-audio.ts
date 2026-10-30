@@ -157,7 +157,7 @@ export class PreviewAudio {
 
   /** `levels` is read per chunk, so a slider moved during playback is heard within the horizon. */
   constructor(tracks: { mic: PcmTrack | null; system: PcmTrack | null },
-              private readonly levels: () => { system: number; mic: number }) {
+              private readonly levels: () => { system: number; mic: number; ceiling?: number }) {
     this.mic = tracks.mic;
     this.system = tracks.system;
   }
@@ -255,11 +255,11 @@ export class PreviewAudio {
     if (!ctx || !gain) return;
     const plan = planChunks({ anchorCtxS: this.anchorCtxS, nextFrame: this.nextFrame, nowCtxS: ctx.currentTime });
     this.nextFrame = plan.nextFrame;
-    const { system: systemLevel, mic: micLevel } = this.levels();
+    const { system: systemLevel, mic: micLevel, ceiling } = this.levels();
     for (const c of plan.chunks) {
       const peaks: MixPeaks = { blockFrames: METER_BLOCK_FRAMES, mic: new Float32Array(0), system: new Float32Array(0), mix: new Float32Array(0) };
       const planes = mixBlock({
-        mic: this.mic, system: this.system, systemLevel, micLevel,
+        mic: this.mic, system: this.system, systemLevel, micLevel, ceiling,
         originNs: this.anchorNs, from: c.from, frames: c.frames, peaks,
       });
       for (let k = 0; k < peaks.mix.length; k++) {

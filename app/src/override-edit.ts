@@ -20,6 +20,60 @@ export function draftOf(spec: EasingSpec | CompleteEasing | undefined): SpeedDra
   return { in: s.in ?? "", out: s.out ?? "" };
 }
 
+/**
+ * The Zoom chip (STC-606, Figma 171:561; Patrick 2026-10-30): In / Out / Both
+ * picks which side its Slow / Medium / Fast control edits, Both setting the
+ * two together. The chip edits the same draft as the Ease in / Ease out rows,
+ * so the two always agree.
+ */
+export type ChipSide = "in" | "out" | "both";
+
+/** The speed the chip's control shows for `side`: Both with two different sides is "mixed" (none lit). */
+export function chipSpeed(d: SpeedDraft, side: ChipSide): ZoomPreset | "" | "mixed" {
+  if (side !== "both") return d[side];
+  return d.in === d.out ? d.in : "mixed";
+}
+
+/** The draft after picking `speed` with `side` chosen. */
+export function withChipSpeed(d: SpeedDraft, side: ChipSide, speed: ZoomPreset | ""): SpeedDraft {
+  if (side === "both") return { in: speed, out: speed };
+  return { ...d, [side]: speed };
+}
+
+/** The side the chip opens on: Both when the two agree, else In, so the control shows a real value. */
+export function chipSideFor(d: SpeedDraft): ChipSide {
+  return d.in === d.out ? "both" : "in";
+}
+
+/**
+ * How far a drawn region zooms in (STC-606's editable Amount): the frame over
+ * the region's longer side, as zoomAmountLabel reads it. Setting it resizes
+ * the region about its centre, keeping its shape, and slides it back inside
+ * the frame if the larger size would cross an edge. No new field: the amount
+ * IS the region's size. The range is this ticket's call: from just past no
+ * zoom to 4x.
+ */
+export const ZOOM_AMOUNT_MIN = 1.1;
+export const ZOOM_AMOUNT_MAX = 4;
+
+export function amountOf(rect: Rect): number {
+  const longer = Math.max(rect.width, rect.height);
+  return longer > 0 ? 1 / longer : 1;
+}
+
+export function rectAtAmount(rect: Rect, amount: number): Rect {
+  const a = Math.min(ZOOM_AMOUNT_MAX, Math.max(ZOOM_AMOUNT_MIN, Number.isFinite(amount) ? amount : ZOOM_AMOUNT_MIN));
+  const longer = Math.max(rect.width, rect.height);
+  if (!(longer > 0)) return rect;
+  const k = (1 / a) / longer;
+  const width = rect.width * k;
+  const height = rect.height * k;
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  const clamp = (v: number, size: number) => Math.min(1 - size, Math.max(0, v));
+  return { x: clamp(cx - width / 2, width), y: clamp(cy - height / 2, height), width, height };
+}
+
 const pairOf = (d: SpeedDraft): SpeedPair => ({
   ...(d.in ? { in: d.in } : {}), ...(d.out ? { out: d.out } : {}),
 });

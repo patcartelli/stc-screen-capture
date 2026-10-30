@@ -47,7 +47,8 @@ export const WAVEFORM_BLOCK_FRAMES = MIX_SAMPLE_RATE;
  * The editor draws such a bucket in red, the only clip indicator.
  */
 export const CLIP_PEAK = 0.999;
-export const isClipped = (peak: number): boolean => peak >= CLIP_PEAK;
+/** STC-606: with Limit peaks on the mix is limited at the ceiling, so that is where a bucket reads clipped. */
+export const isClipped = (peak: number, limit = 1): boolean => peak >= limit * CLIP_PEAK;
 
 export interface MixPeaksInput {
   mic: PcmTrack | null;
@@ -55,6 +56,8 @@ export interface MixPeaksInput {
   /** A muted track is passed as level 0 (or null): it contributes nothing, as in the export. */
   micLevel: number;
   systemLevel: number;
+  /** STC-606: the mix's limit (peak-limit.ts's `mixLimit`), absent = full scale. */
+  ceiling?: number;
   /** The timeline's length; bucket `i` covers `[i, i + 1) * durationNs / buckets`. */
   durationNs: number;
   buckets?: number;
@@ -80,6 +83,7 @@ export function* mixPeaks(opts: MixPeaksInput): Generator<void, Float32Array, vo
       system: sysOn ? opts.system : null,
       micLevel: opts.micLevel,
       systemLevel: opts.systemLevel,
+      ceiling: opts.ceiling,
       originNs: 0,
       from,
       frames,

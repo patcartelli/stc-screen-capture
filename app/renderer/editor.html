@@ -31,7 +31,7 @@
        Red and teal are within 1.4:1 of each other in luminance, so a peak
        also carries a non-color cue: it is drawn hatched (2 px dashes, 1 px
        gaps) where the rest of the waveform is solid (drawAudioLane). */
-    :root { --clip: #6fa3a0; --zoom: #d6b25e; --zoom-fill: var(--zoom); --bookmark: #c97b6a; --wave: var(--clip); --wave-clip: #e5483f; --lane-label: #a9b4c2; --audio-lane-h: 44px; --lane-pad: 6px; }
+    :root { --clip: #6fa3a0; --zoom: #d6b25e; --zoom-fill: var(--zoom); --bookmark: #c97b6a; --wave: var(--clip); --wave-clip: #e5483f; --lane-label: #a9b4c2; --audio-lane-h: 44px; --lane-pad: 6px; --strip-h: 36px; }
     /* The editor's own accent (STC-601): the played bar, focus rings and the
        pressed states follow the primary instead of the app's blue. tokens.css's
        --accent is untouched, so Library, Settings and the still editor keep
@@ -158,9 +158,17 @@
        the selected Zoom block or over the box itself (editor.ts toggles
        data-shown), and for as long as it is being dragged. It is still in the
        DOM and still the drag's target, just not drawn. */
-    #overridebox { position: absolute; border: 1.5px solid var(--zoom);
-                   background: color-mix(in srgb, var(--zoom) 12%, transparent); pointer-events: none;
-                   opacity: 0; }
+    /* STC-606 (Figma 171:561): dashed brass, a square at two corners, and a
+       readout above it: the amount and the region's size in capture pixels. */
+    #overridebox { position: absolute; border: 1.5px dashed var(--zoom); background: transparent;
+                   pointer-events: none; opacity: 0; }
+    #overridebox::before, #overridebox::after { content: ""; position: absolute; width: 6px; height: 6px;
+                                                background: var(--zoom); border-radius: 1px; }
+    #overridebox::before { left: -4px; top: -4px; }
+    #overridebox::after { right: -4px; bottom: -4px; }
+    #overridereadout { position: absolute; left: -1.5px; bottom: 100%; margin-bottom: 7px; padding: 3px 8px;
+                       border-radius: 4px; background: rgba(10, 10, 12, .88); color: var(--zoom); white-space: nowrap;
+                       font: 400 10px/14px var(--font-readout); }
     #overridebox[data-shown] { opacity: 1; }
     @media (prefers-reduced-motion: no-preference) {
       #overridebox { transition: opacity .12s ease; }
@@ -261,6 +269,8 @@
     #pane .audiorow[hidden] { display: none; }
     #pane .audiorow > .row + .row { border-top: 1px solid var(--hairline); }
     #pane .row { display: flex; align-items: center; gap: 16px; padding: 12px 0; min-height: 22px; }
+    /* STC-606: the Cleanup group's voice rows hide for a take with no mic. */
+    #pane .row[hidden] { display: none; }
     /* display:flex above beats the UA's display:none for [hidden]. */
     #pane .row[hidden] { display: none; }
     /* "More": what the Figma frame does not draw, one click away. A native
@@ -425,7 +435,7 @@
     .tlrow { display: grid; grid-template-columns: var(--label-col) minmax(0, 1fr); align-items: center; }
     .tlrow > :last-child { grid-column: 2; }
     .rulerrow { height: 22px; }
-    .striprow { height: 36px; }
+    .striprow { height: var(--strip-h); }
     .lanerow + .lanerow { margin-top: 8px; }
     .lanerow:has(> #audio-lane[hidden]) { display: none; }
     .lanelabel { font: 10px/13px var(--font-readout); text-transform: uppercase; letter-spacing: .6px;
@@ -482,6 +492,89 @@
     #strip-content { position: absolute; top: 0; height: 100%; left: calc(var(--lane-pad) - 1px);
                      width: calc(100% - 2 * var(--lane-pad) + 2px); transform-origin: 0 0; pointer-events: none; }
     #strip-bookmarks { position: absolute; inset: 0; }
+    /* STC-606: the section overlays' layer in the strip. Unlike #strip-content
+       it is NOT under the pan/zoom transform, so a chip keeps its own size;
+       editor.ts places each overlay in the strip's px. The layer passes
+       presses through; an overlay control opts back in with .overlayctl, which
+       is also what keeps the playhead grab (NOT_THE_PLAYHEAD) off it. Which
+       overlays show is keyed off body[data-section], set by selectSection. */
+    #strip-overlays { position: absolute; inset: 0; pointer-events: none; }
+    .overlayctl { pointer-events: auto; }
+    /* STC-606, Export (Figma 171:2050): while Export is the active section the
+       in/out points are brass bars from the Clip lane's top to the last lane's
+       bottom, and a chip in the strip reads the range. Elsewhere the Clip
+       lane's own brackets stay, as before. The bars are drag targets for the
+       same trim (editor.ts's onHandleDown); a 10px box around a 4px line. */
+    .exportonly { display: none; }
+    body[data-section="export"] .exportonly:not([hidden]) { display: block; }
+    body[data-section="export"] .timeline .handle { opacity: 0; }
+    .exportbar { position: absolute; top: calc(22px + var(--strip-h)); bottom: 0; left: 0; width: 10px;
+                 margin-left: -5px; z-index: 6; cursor: ew-resize; touch-action: none;
+                 background: linear-gradient(to right, transparent 3px, var(--zoom) 3px, var(--zoom) 7px, transparent 7px);
+                 border-radius: 2px; }
+    .exportbar.held { background: linear-gradient(to right, transparent 3px, var(--warn) 3px, var(--warn) 7px, transparent 7px); }
+    #rangechip { position: absolute; top: 50%; left: 0; transform: translateY(-50%); padding: 3px 8px;
+                 border: 1px solid color-mix(in srgb, var(--zoom) 70%, transparent); border-radius: 5px;
+                 background: rgba(10, 10, 12, .88); color: var(--zoom); white-space: nowrap;
+                 font: 400 11px/14px var(--font-readout); pointer-events: none; }
+    #rangechip span + span { margin-left: 10px; }
+    #rangechip .k { color: var(--text-dim); margin-right: 4px; }
+    /* STC-606, Zoom (Figma 171:561): the selected block's chip, in the strip
+       above the block so it never covers the Clip lane. Amount (drag or arrow
+       keys), In / Out / Both picking which side the speed sets, Slow / Med /
+       Fast, and a red delete (red is destructive). Shown only while Zoom is
+       the active section and a block is open (editor.ts's layoutZoomChip). */
+    #zoomchip { position: absolute; top: 50%; left: 0; transform: translateY(-50%); display: flex; align-items: center;
+                gap: 6px; height: 28px; padding: 0 4px 0 8px; border: 1px solid color-mix(in srgb, var(--zoom) 70%, transparent);
+                border-radius: 7px; background: rgba(10, 10, 12, .92); white-space: nowrap;
+                font: 400 10px/1 var(--font-readout); }
+    #zoomchip[hidden], body:not([data-section="zoom"]) #zoomchip { display: none; }
+    #zoomchip button { height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent;
+                       color: var(--text-dim); font: inherit; cursor: pointer; }
+    #zoomchip button:hover { color: var(--text); }
+    #zoomchip button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    #zoomchip .chipamount { padding: 0 2px; color: var(--zoom); font-size: 11px; cursor: ew-resize; touch-action: none; }
+    #zoomchip .chipseg { display: flex; padding: 2px; border-radius: 5px; background: rgba(255, 255, 255, .05); }
+    #zoomchip .chipseg button[aria-checked="true"] { color: var(--text); background: rgba(255, 255, 255, .12); }
+    #zoomchip .chipdelete { display: grid; place-items: center; width: 22px; padding: 0; color: var(--rec); }
+    #zoomchip .chipdelete:hover { color: var(--rec); background: color-mix(in srgb, var(--rec) 16%, transparent); }
+    #zoomchip .chipdelete svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3;
+                                stroke-linecap: round; stroke-linejoin: round; }
+    /* STC-606, Audio (Figma 171:1546): a red ceiling line across the Audio
+       lane with a round handle at its right end, red diamonds in the gap above
+       the lane, one per peak over the ceiling, and a readout in the transport
+       row. Only while Audio is the active section. */
+    body:not([data-section="audio"]) .audioonly { display: none !important; }
+    #ceilingline { position: absolute; left: 0; right: 0; top: 0; height: 0; z-index: 5; pointer-events: none;
+                   border-top: 1.5px solid var(--wave-clip); }
+    #ceilingline[hidden] { display: none; }
+    #ceilinghandle { position: absolute; right: 4px; top: -7px; width: 12px; height: 12px; padding: 0;
+                     border: 2px solid var(--wave-clip); border-radius: 50%; background: #fff;
+                     cursor: ns-resize; pointer-events: auto; touch-action: none; }
+    #ceilinghandle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    #peakmarkers { position: absolute; left: 0; right: 0; top: 0; height: 0; pointer-events: none; z-index: 5; }
+    .peakmarker { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; transform: rotate(45deg);
+                  background: var(--wave-clip); border-radius: 1px; }
+    #peakreadout { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px;
+                   border: 1px solid rgba(255, 255, 255, .08); border-radius: 6px; background: rgba(10, 10, 12, .6);
+                   font-size: 10px; color: var(--text); white-space: nowrap; }
+    #peakreadout[hidden] { display: none; }
+    #peakreadoutcount { color: var(--text-dim); }
+    #peakreadoutdot { width: 6px; height: 6px; border-radius: 50%; background: var(--wave-clip); }
+    #peakreadoutdot[hidden] { display: none; }
+    /* STC-606, Frame (Figma 171:78): hovering the lanes while Frame is the
+       active section draws a hairline through every lane and a tooltip beside
+       it: the time, then the clicks and keys the Clip bar there stands for.
+       Display only; it never takes a press (editor.ts's frame hover). */
+    .frameonly { display: none; }
+    body[data-section="frame"] .frameonly:not([hidden]) { display: block; }
+    #hoverline { position: absolute; top: calc(22px + var(--strip-h)); bottom: 0; left: 0; width: 1px;
+                 margin-left: -.5px; background: rgba(255, 255, 255, .28); pointer-events: none; z-index: 5; }
+    #hovertip { position: absolute; top: calc(22px + var(--strip-h) + 6px); left: 0; padding: 5px 10px 6px;
+                border: 1px solid rgba(255, 255, 255, .08); border-radius: 6px; background: rgba(10, 10, 12, .92);
+                white-space: nowrap; pointer-events: none; z-index: 8; }
+    #hovertime { font: 400 11px/14px var(--font-readout); color: var(--bone); }
+    #hovercount { margin-top: 2px; font: 400 9px/12px var(--font-readout); color: var(--text-dim); }
     .stripbookmark { position: absolute; top: 0; bottom: 0; width: calc(1px * var(--inv, 1));
                      margin-left: calc(-.5px * var(--inv, 1));
                      background: color-mix(in srgb, var(--bookmark) 55%, transparent); }
@@ -502,6 +595,9 @@
        (Clip) and #zoom-cut-head/#zoom-cut-tail (Zoom) all place one of these;
        editor.ts's updateTrimUI sets left/width on all four the same way. */
     .lanedim { position: absolute; top: 0; height: 100%; background: var(--scrim); pointer-events: none; }
+    /* STC-606: the Audio lane's share of the same dimming, on a layer of its
+       own because its canvas wrap is not under the pan/zoom transform. */
+    #audio-dims { pointer-events: none; }
     .laneviewport { position: relative; overflow: hidden; border-radius: 6px; background: var(--lane-well); }
     .laneviewport.clip { height: 56px; }
     .laneviewport.zoom { height: 64px; }
@@ -523,7 +619,7 @@
        existing scrubber/trim arithmetic (app/src/scrubber.ts) needs no
        span-aware rewrite. The three canvas wraps share the box but are not
        transformed: their bitmaps are redrawn for the visible span. */
-    #timeline, #ruler-content, #clip-canvas-wrap, #audio-canvas-wrap, #zoom-canvas-wrap, #override-blocks {
+    #timeline, #ruler-content, #clip-canvas-wrap, #audio-canvas-wrap, #zoom-canvas-wrap, #override-blocks, #audio-dims {
       position: absolute; left: var(--lane-pad); top: 0; width: calc(100% - 2 * var(--lane-pad)); height: 100%;
       transform-origin: 0 0;
     }
@@ -562,7 +658,9 @@
                  background: transparent; border: none; padding: 0; margin: 0;
                  cursor: pointer; border-radius: 3px; }
     .zoomblock:hover { background: color-mix(in srgb, var(--zoom) 15%, transparent); }
-    .zoomblock.selected { outline: 1.5px solid var(--zoom); outline-offset: -1.5px; }
+    /* STC-606 (Figma 171:561): the open block is ringed in bone, its two
+       timing edges drawn as brass bars (the .manualhandle grips below). */
+    .zoomblock.selected { outline: 1px solid color-mix(in srgb, var(--bone) 70%, transparent); outline-offset: -1px; }
     .zoomblock.overridden::after { content: ""; position: absolute; left: 2px; right: 2px;
                                     bottom: 1px; height: 2px; background: var(--zoom); border-radius: 1px; }
     /* A window with no derived counterpart at all (STC-331) — dashed rather
@@ -580,6 +678,8 @@
                     border: none; background: transparent; cursor: ew-resize; }
     .manualhandle.start { left: -4px; }
     .manualhandle.end { right: -4px; }
+    .manualhandle::after { content: ""; position: absolute; left: 2.5px; top: 0; width: 3px; height: 100%;
+                           border-radius: 1.5px; background: var(--zoom); }
     .manualhandle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     /* STC-605: the Clip lane is the activity bars now (#clip-activity), so the
        old 4px kept track is not drawn. #kept keeps its geometry: the scrubber
@@ -685,7 +785,7 @@
     }
   </style>
 </head>
-<body>
+<body data-section="frame">
   <!-- STC-603: the glass title bar. #closepreview moved here from the header
        row: the frame has no close icon in the group, and the e2e suite closes
        the editor through this id. -->
@@ -709,7 +809,7 @@
     <!-- STC-330: shown only while a zoom block is selected; drawing a new
          rect always shows the UNZOOMED frame (see editor.ts) so a pointer
          pixel maps 1:1 to capture UV with no crop math to invert. -->
-    <div id="rectoverlay" hidden><div id="overridebox" hidden></div></div>
+    <div id="rectoverlay" hidden><div id="overridebox" hidden><span id="overridereadout"></span></div></div>
     <!-- STC-461: the PiP, draggable (with snapping) and resizable from its
          corner, shown only while the Camera popover is open. -->
     <div id="pipoverlay" hidden><div class="pipbox"><span id="piplabel"></span><div id="piphandle"></div></div></div>
@@ -758,6 +858,10 @@
         <span id="shuttle" class="mono"></span>
       </div>
       <div class="right">
+        <!-- STC-606: the ceiling and the peaks over it, in the transport row
+             (not on the lane), while Audio is the active section. -->
+        <span id="peakreadout" class="mono audioonly" hidden><span id="peakreadoutceiling"></span><span
+              id="peakreadoutcount"></span><i id="peakreadoutdot" aria-hidden="true"></i></span>
         <span id="framestatus" role="status" hidden></span>
         <!-- STC-454: the preview plays the export's own mix at 1x. Muting is
              an app setting, never part of the take or its export. -->
@@ -806,6 +910,14 @@
     the Clip lane's drag.
   -->
   <div class="timelinewrap">
+    <!-- STC-606: the Export section's full-height in/out bars. -->
+    <div class="exportbar exportonly overlayctl" id="exportbar-in" aria-hidden="true"></div>
+    <div class="exportbar exportonly overlayctl" id="exportbar-out" aria-hidden="true"></div>
+    <!-- STC-606: the Audio section's peak markers, in the gap above the lane. -->
+    <div id="peakmarkers" class="audioonly" aria-hidden="true"></div>
+    <!-- STC-606: the Frame section's hover hairline and tooltip. -->
+    <div id="hoverline" class="frameonly" hidden></div>
+    <div id="hovertip" class="frameonly" hidden><div id="hovertime"></div><div id="hovercount"></div></div>
     <!-- STC-605: the ruler row. Its label cell holds STC-484's zoom buttons
          (the overview strip they sat beside is gone: the frame has none, and
          #ruler itself is the pan handle, by pointer or by arrow key). -->
@@ -830,10 +942,31 @@
       </div>
     </div>
     <!-- STC-605: reserved for overlays (STC-606's zoom chip), so nothing ever
-         covers the Clip lane. Empty here except for each bookmark's line. -->
+         covers the Clip lane. #strip-content carries each bookmark's line;
+         #strip-overlays holds STC-606's section overlays. -->
     <div class="tlrow striprow">
       <div id="overlay-strip">
         <div id="strip-content"><div id="strip-bookmarks"></div></div>
+        <div id="strip-overlays">
+          <div id="rangechip" class="exportonly" aria-live="polite"></div>
+          <div id="zoomchip" class="overlayctl" role="group" aria-label="Zoom block" hidden>
+            <button type="button" id="chipamount" class="chipamount"
+                    title="Amount: drag sideways, or use the arrow keys">Auto</button>
+            <div class="chipseg" id="chipside" role="radiogroup" aria-label="Which side the speed sets">
+              <button type="button" role="radio" data-side="in">In</button>
+              <button type="button" role="radio" data-side="out">Out</button>
+              <button type="button" role="radio" data-side="both">Both</button>
+            </div>
+            <div class="chipseg" id="chipspeed" role="radiogroup" aria-label="Speed (press the lit one for the project default)">
+              <button type="button" role="radio" data-speed="calm">Slow</button>
+              <button type="button" role="radio" data-speed="standard">Med</button>
+              <button type="button" role="radio" data-speed="snappy">Fast</button>
+            </div>
+            <button type="button" id="chipdelete" class="chipdelete" aria-label="Delete block" title="Delete block">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/></svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="tlrow lanerow">
@@ -889,6 +1022,14 @@
       <span class="lanelabel">Audio</span>
       <div class="laneviewport audio" id="audio-lane" hidden>
         <div id="audio-canvas-wrap"><canvas id="audio-waveform"></canvas></div>
+        <div id="ceilingline" class="audioonly" hidden>
+          <button type="button" id="ceilinghandle" class="overlayctl" aria-label="Ceiling"
+                  title="Drag up or down to set the ceiling (Up/Down keys nudge it)"></button>
+        </div>
+        <div id="audio-dims">
+          <div class="lanedim" id="audio-cut-head"></div>
+          <div class="lanedim" id="audio-cut-tail"></div>
+        </div>
         <button type="button" id="audio-resize" aria-label="Resize the audio lane"
                 title="Drag to resize the audio lane (Up/Down keys nudge it)"></button>
       </div>
@@ -1068,21 +1209,35 @@
       <!-- STC-455: narration cleanup — steady background noise and harsh
            "s" sounds, on the mic only. Off by default; the strength is kept
            while it is off. project-10's narrationCleanup. -->
-      <div id="voiceclean" hidden
-           title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
+      <div id="voiceclean" hidden>
         <p class="panelabel">Cleanup</p>
         <div class="group">
-          <div class="row">
+          <div class="row voicerow"
+               title="Cleans up your voice: removes steady background noise (fan, hiss, room tone) and softens harsh 's' sounds">
             <label class="label" for="voicecleanon">Clean up voice</label>
             <input id="voicecleanon" type="checkbox" class="switch" role="switch" aria-label="Clean up voice">
           </div>
-          <div class="row">
+          <div class="row voicerow">
             <label class="label" for="voicecleanstrength">Strength</label>
             <div class="fader">
               <input id="voicecleanstrength" type="range" min="0" max="100" step="1" value="50"
                      aria-label="Voice cleanup strength" disabled>
             </div>
             <span id="voicecleanvalue" class="value mono" data-resets="voicecleanstrength">50%</span>
+          </div>
+          <!-- STC-606 (Figma 171:1546; Patrick 2026-10-30): Limit peaks hard-limits
+               the mix at the ceiling; either way the ceiling is the Audio lane's
+               guide. Any take with audio. project-18's peakLimit. -->
+          <div class="row" title="Holds the mix at the ceiling: anything louder is cut there, in the preview and the export">
+            <label class="label" for="peaklimiton">Limit peaks</label>
+            <input id="peaklimiton" type="checkbox" class="switch" role="switch" aria-label="Limit peaks">
+          </div>
+          <div class="row">
+            <label class="label" for="peakceiling">Ceiling</label>
+            <div class="fader">
+              <input id="peakceiling" type="range" min="-12" max="0" step="0.5" value="-1" aria-label="Ceiling">
+            </div>
+            <span id="peakceilingvalue" class="value mono">−1 dB</span>
           </div>
         </div>
       </div>
@@ -1113,8 +1268,11 @@
         <div>
           <p class="panelabel">Zoom block</p>
           <div class="group">
+            <!-- STC-606: Amount is editable (Patrick, 2026-10-30). It IS the drawn
+                 region's size, so the slider resizes the region about its centre. -->
             <div class="row">
-              <span class="label">Amount</span>
+              <label class="label" for="zoomamountrange">Amount</label>
+              <div class="fader"><input id="zoomamountrange" type="range" min="1.1" max="4" step="0.1" aria-label="Amount"></div>
               <span id="zoomamount" class="value mono" title="How far the block zooms in: the frame divided by the drawn region">Auto</span>
             </div>
             <!-- STC-619: the push in and the release out are set separately, so a

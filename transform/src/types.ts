@@ -1,4 +1,5 @@
 import type { PipStyle } from "./pip-style.js";
+import type { PeakLimit } from "./peak-limit.js";
 /**
  * `ZoomPreset` is derived from `ZOOM_PRESETS` in zoom.ts (`keyof typeof`), so
  * the preset NAMES have one source — the table itself. That makes this a
@@ -289,7 +290,7 @@ export type ZoomOverride =
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
@@ -369,6 +370,12 @@ export interface Project {
    * follows.
    */
   narrationCleanup?: NarrationCleanup;
+  /**
+   * The audio ceiling (project-18, STC-606): Limit peaks on hard-limits the
+   * mix there; either way it is the Audio lane's guide (peak-limit.ts). Absent
+   * is the default, off at -1 dB, and the mix limits at full scale as before.
+   */
+  peakLimit?: PeakLimit;
   /**
    * The recorded mic's level (project-11, STC-454 part 2): a linear gain,
    * 0..`MIC_LEVEL_MAX` (+12 dB) — unlike `systemAudioLevel` it may BOOST,
