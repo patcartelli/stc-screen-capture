@@ -3452,6 +3452,10 @@ function onHandleDown(which: "in" | "out", e: PointerEvent): void {
 
 function onHandleMove(e: PointerEvent): void {
   if (!dragging || !player || !openProject) return;
+  // STC-606: a move with no button down means the release was missed (seen
+  // when a second drag followed at once: the in-point then chased the pointer
+  // to the out bar). End the drag rather than move a point nobody holds.
+  if ((e.buttons & 1) === 0) { onHandleUp(); return; }
   const durationNs = player.durationNs;
   const startFrame = nsToFrame(openProject.trim?.startNs ?? 0, durationNs);
   const endFrame = nsToFrame(openProject.trim?.endNs ?? durationNs, durationNs);
@@ -3497,12 +3501,15 @@ $("trim-in").addEventListener("pointerup", onHandleUp);
 $("trim-out").addEventListener("pointerup", onHandleUp);
 $("trim-in").addEventListener("pointercancel", onHandleUp);
 $("trim-out").addEventListener("pointercancel", onHandleUp);
+$("trim-in").addEventListener("lostpointercapture", onHandleUp);
+$("trim-out").addEventListener("lostpointercapture", onHandleUp);
 // STC-606: the Export section's bars drag the same points.
 for (const [id, which] of [["exportbar-in", "in"], ["exportbar-out", "out"]] as const) {
   $(id).addEventListener("pointerdown", (e) => onHandleDown(which, e as PointerEvent));
   $(id).addEventListener("pointermove", (e) => onHandleMove(e as PointerEvent));
   $(id).addEventListener("pointerup", onHandleUp);
   $(id).addEventListener("pointercancel", onHandleUp);
+  $(id).addEventListener("lostpointercapture", onHandleUp);
 }
 
 // ---- export -------------------------------------------------------------

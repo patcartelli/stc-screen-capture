@@ -241,14 +241,26 @@ describe("the Export overlay", () => {
     await win.waitForSelector("#audio-lane:not([hidden])", { timeout: 20_000 });
     await win.click("#tab-export");
     const track = await box(win, "#timeline");
+    // The in bar first, then the out bar straight after with no wait: that
+    // pair once lost the first release, so the in-point chased the pointer
+    // across to the out bar and both ended at the end of the take.
+    const bin = await box(win, "#exportbar-in");
+    await win.mouse.move(bin.x, (bin.top + bin.bottom) / 2);
+    await win.mouse.down();
+    await win.mouse.move(track.left + (track.right - track.left) * 0.2, (bin.top + bin.bottom) / 2, { steps: 8 });
+    await win.mouse.up();
     const bout = await box(win, "#exportbar-out");
     await win.mouse.move(bout.x, (bout.top + bout.bottom) / 2);
     await win.mouse.down();
     await win.mouse.move(track.left + (track.right - track.left) * 0.6, (bout.top + bout.bottom) / 2, { steps: 8 });
     await win.mouse.up();
-    const [clipTail, audioTail, audio, bout2] = await Promise.all([
+    const [clipTail, audioTail, audio, bout2, bin2] = await Promise.all([
       box(win, "#cut-tail"), box(win, "#audio-cut-tail"), box(win, ".laneviewport.audio"), box(win, "#exportbar-out"),
+      box(win, "#exportbar-in"),
     ]);
+    const w = track.right - track.left;
+    expect(Math.abs(bin2.x - (track.left + w * 0.2))).toBeLessThanOrEqual(4);
+    expect(Math.abs(bout2.x - (track.left + w * 0.6))).toBeLessThanOrEqual(4);
     expect(Math.abs(audioTail.left - clipTail.left)).toBeLessThanOrEqual(1);
     expect(audioTail.right - audioTail.left).toBeGreaterThan(0);
     // With audio, the bars reach the Audio lane's bottom.
