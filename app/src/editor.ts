@@ -108,7 +108,7 @@ import {
 import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel } from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, dragCenter, resizeFromCorner, styleFromFixedCorner,
-  anchorCenter, anchorOf, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
+  anchorCenter, anchorOf, PIP_CIRCLE_HANDLE_FRACTION, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
   panFraming, zoomFraming, framingSource,
 } from "@transform/pip-style";
 import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-inspector.js";
@@ -2320,6 +2320,17 @@ function layoutPipOverlay(): void {
     left: `${(frame.x + r.x) * k}px`, top: `${(frame.y + r.y) * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
     borderRadius: style.shape === "circle" ? "50%" : `${style.cornerRadius * Math.min(r.width, r.height) * k}px`,
   });
+  // The resize handle: a corner of the box, except on a circle, where the
+  // corner floats off the picture and the handle sits ON the edge instead
+  // (resizeFromCorner measures a circle by distance, so grabbing it does not
+  // jump). The inline values are cleared for any other shape.
+  const handle = $("piphandle");
+  if (style.shape === "circle") {
+    const at = `${PIP_CIRCLE_HANDLE_FRACTION * 100}%`;
+    Object.assign(handle.style, { left: at, top: at, right: "auto", bottom: "auto", transform: "translate(-50%, -50%)" });
+  } else {
+    Object.assign(handle.style, { left: "", top: "", right: "", bottom: "", transform: "" });
+  }
 }
 
 let pipDrag: { kind: "move" | "resize"; dx: number; dy: number } | null = null;

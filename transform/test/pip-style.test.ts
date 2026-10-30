@@ -5,7 +5,7 @@ import {
   PIP_WIDTH_MAX, PIP_FRAMING_ZOOM_MAX, type PipStyle,
   PIP_PRESETS, editPipStyle, snapCenter, resizeFromCorner, panFraming, zoomFraming,
   PIP_SNAP_MARGIN_PX, PIP_WIDTH_MIN, DEFAULT_BORDER, inspectorSide, inspectorLeftPx,
-  PIP_ANCHORS, anchorCenter, anchorOf, dragCenter,
+  PIP_ANCHORS, anchorCenter, anchorOf, dragCenter, PIP_CIRCLE_HANDLE_FRACTION,
 } from "../src/pip-style.js";
 import { fixedCornerPipUv, uvRectToPixels, outputRect, roundRect } from "../src/spaces.js";
 import { DEFAULT_PIP } from "../src/trim.js";
@@ -204,6 +204,36 @@ describe("resizeFromCorner", () => {
     expect(resizeFromCorner(s, { x: 650, y: 500 }, out, CAM).width).toBeCloseTo(0.3, 12);
     expect(resizeFromCorner(s, { x: 2000, y: 500 }, out, CAM).width).toBe(PIP_WIDTH_MAX);
     expect(resizeFromCorner(s, { x: 500, y: 500 }, out, CAM).width).toBe(PIP_WIDTH_MIN);
+  });
+
+  describe("a circle's handle sits on its edge (STC-604)", () => {
+    const out = { width: 1000, height: 1000 };
+    const circle = style({ shape: "circle", center: { x: 0.5, y: 0.5 }, width: 0.3 });
+    const r = (0.3 * 1000) / 2;
+
+    test("grabbing the handle where it is leaves the size unchanged, with no jump", () => {
+      const f = PIP_CIRCLE_HANDLE_FRACTION;
+      // The handle is at the box's (f, f) point; the box is centred on 500,500 with side 2r.
+      const handle = { x: 500 - r + f * 2 * r, y: 500 - r + f * 2 * r };
+      expect(Math.hypot(handle.x - 500, handle.y - 500)).toBeCloseTo(r, 9);
+      expect(resizeFromCorner(circle, handle, out, CAM).width).toBeCloseTo(0.3, 9);
+    });
+
+    test("the size follows the pointer's distance, in any direction", () => {
+      const d = 200;
+      for (const p of [{ x: 500 + d, y: 500 }, { x: 500, y: 500 + d }, { x: 500 + d * Math.SQRT1_2, y: 500 + d * Math.SQRT1_2 }]) {
+        expect(resizeFromCorner(circle, p, out, CAM).width).toBeCloseTo(0.4, 9);
+      }
+    });
+
+    test("the fraction is the point on the circle at 45 degrees", () => {
+      expect(PIP_CIRCLE_HANDLE_FRACTION).toBeCloseTo(0.853553, 6);
+    });
+
+    test("a rectangle still uses its corner: the larger axis wins", () => {
+      const rect = style({ shape: "square", center: { x: 0.5, y: 0.5 }, width: 0.3 });
+      expect(resizeFromCorner(rect, { x: 650, y: 560 }, out, CAM).width).toBeCloseTo(0.3, 12);
+    });
   });
 });
 
