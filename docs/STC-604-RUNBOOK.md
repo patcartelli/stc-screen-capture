@@ -80,6 +80,11 @@ brass Zoom and the Export button), and real fonts. The snapshots had **no fonts*
   export and confirm the saved padding is what the preview showed.
 - Shadow off then on returns to the preset's own shadow.
 - Choosing a new style keeps the numbers you set.
+- The Colour swatch shows for every style but None: the fill for Solid, the
+  **first colour of the gradient** for Clean and Dark (its second colour and
+  angle stay the preset's). Pick one and watch the preview repaint while the
+  picker moves; switch to another style and confirm it starts on its own colours,
+  not the one you edited.
 - Clicks and Keys switches still change the preview and the export.
 
 ## 6b. "More" groups

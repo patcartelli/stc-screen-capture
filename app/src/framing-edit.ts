@@ -1,5 +1,5 @@
 import {
-  FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, type Framing,
+  DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, type Framing, type FramingBackground,
 } from "@transform/framing";
 
 /**
@@ -41,3 +41,38 @@ export function withShadow(f: Framing, on: boolean): Framing {
 
 /** Corners in output pixels, for the readout. */
 export const radiusPx = (f: Framing, shortEdge: number): number => Math.round(framingRadius(f) * shortEdge);
+
+/**
+ * The Colour row (STC-604, from the Figma Frame frame): one swatch for every
+ * style. For Solid it is the fill; for Clean and Dark, which paint a two-stop
+ * gradient, it is the FIRST colour of that gradient, the second and the angle
+ * left as they are. The explicit `background` field is what holds it (the
+ * document's own rule: an explicit field wins over the preset's), so there is
+ * no schema change and a preset that is never edited stays exactly the preset.
+ */
+function backgroundOf(f: Framing): FramingBackground {
+  return f.background
+    ?? (f.preset === "solid"
+      ? { kind: "solid", color: f.color ?? DEFAULT_SOLID_COLOR }
+      : FRAMING_PRESETS[f.preset].background);
+}
+
+/** The colour the swatch shows: the fill, or the gradient's first stop. */
+export function framingColor(f: Framing): string {
+  const bg = backgroundOf(f);
+  return bg.kind === "solid" ? bg.color : bg.colors[0];
+}
+
+/**
+ * `f` with the swatch's colour changed. Solid with no explicit background is
+ * written the way it always was (`color`); anything else writes `background`,
+ * keeping a gradient's second colour and angle.
+ */
+export function withColor(f: Framing, hex: string): Framing {
+  if (f.preset === "solid" && !f.background) return { ...f, color: hex };
+  const bg = backgroundOf(f);
+  const background: FramingBackground = bg.kind === "solid"
+    ? { kind: "solid", color: hex }
+    : { kind: "linear", colors: [hex, bg.colors[1]], angleDeg: bg.angleDeg };
+  return { ...f, background };
+}

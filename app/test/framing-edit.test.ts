@@ -1,8 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
+  framingColor, withColor,
 } from "../src/framing-edit.js";
-import { FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, framingProblem, type Framing } from "@transform/framing";
+import {
+  DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, framingProblem, type Framing,
+} from "@transform/framing";
 
 const clean: Framing = { preset: "clean" };
 
@@ -48,5 +51,53 @@ describe("the Frame section's Padding, Corners and Shadow (STC-604)", () => {
   test("corners read in output pixels off the short edge", () => {
     expect(radiusPx(withRadius(clean, 0.0111), 1080)).toBe(12);
     expect(radiusPx(clean, 1000)).toBe(12);
+  });
+});
+
+describe("the Colour row: one swatch for every style (STC-604)", () => {
+  test("the swatch shows the gradient's first colour for Clean and Dark, the fill for Solid", () => {
+    expect(framingColor({ preset: "clean" })).toBe("#e9edf2");
+    expect(framingColor({ preset: "dark" })).toBe("#2a3040");
+    expect(framingColor({ preset: "solid" })).toBe(DEFAULT_SOLID_COLOR);
+    expect(framingColor({ preset: "solid", color: "#112233" })).toBe("#112233");
+  });
+
+  test("editing Clean writes an explicit gradient: new first colour, the preset's second colour and angle", () => {
+    const out = withColor({ preset: "clean" }, "#112233");
+    const bg = FRAMING_PRESETS.clean.background;
+    expect(bg.kind).toBe("linear");
+    expect(out.background).toEqual({
+      kind: "linear", colors: ["#112233", bg.kind === "linear" ? bg.colors[1] : ""], angleDeg: bg.kind === "linear" ? bg.angleDeg : 0,
+    });
+    expect(out.preset).toBe("clean");
+    expect(framingColor(out)).toBe("#112233");
+  });
+
+  test("editing again changes only the first colour of the gradient already written", () => {
+    const once = withColor({ preset: "dark" }, "#aa0000");
+    const twice = withColor(once, "#00aa00");
+    const bg = twice.background!;
+    expect(bg.kind === "linear" && bg.colors[0]).toBe("#00aa00");
+    const preset = FRAMING_PRESETS.dark.background;
+    expect(bg.kind === "linear" && preset.kind === "linear" && bg.colors[1]).toBe(preset.kind === "linear" ? preset.colors[1] : "");
+  });
+
+  test("Solid with no explicit background is written the way it always was: `color`", () => {
+    expect(withColor({ preset: "solid" }, "#445566")).toEqual({ preset: "solid", color: "#445566" });
+  });
+
+  test("a solid background set on a gradient preset stays solid", () => {
+    const f: Framing = { preset: "clean", background: { kind: "solid", color: "#000000" } };
+    expect(withColor(f, "#ffffff").background).toEqual({ kind: "solid", color: "#ffffff" });
+  });
+
+  test("an edit keeps padding, corners and shadow, and every result is a framing the loader accepts", () => {
+    const f = withShadow(withRadius(withPadding({ preset: "clean" }, 0.1), 0.03), false);
+    const out = withColor(f, "#123456");
+    expect(out).toMatchObject({ paddingPct: 0.1, radiusPct: 0.03 });
+    expect(out.shadow).toEqual(f.shadow);
+    for (const x of [out, withColor({ preset: "dark" }, "#abcdef"), withColor({ preset: "solid" }, "#010203")]) {
+      expect(framingProblem(x)).toBeUndefined();
+    }
   });
 });
