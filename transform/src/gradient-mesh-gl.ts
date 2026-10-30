@@ -4,9 +4,16 @@
 // transform/src/frame-diff-rule.ts. Ported into Capture's still pipeline by
 // STC-622. A re-sync is a deliberate, by-hand decision, never a silent drift.
 //
-// Changed on the way in, and nothing else: import specifiers end in .js
-// rather than .ts, because this repo's tsconfig resolves the bundler way
-// without allowImportingTsExtensions.
+// Changed on the way in: import specifiers end in .js rather than .ts,
+// because this repo's tsconfig resolves the bundler way without
+// allowImportingTsExtensions. And ONE deliberate divergence (STC-622,
+// Patrick 2026-10-30): the grain hash is a PCG integer hash (`grain` below),
+// as the STC-610 decision recommended, instead of upstream's
+// fract(sin-free float product) `hash`. The float hash had a faint
+// repeating structure and let float32 rounding pick a different grain value
+// for ~1 pixel in 5,000 against the CPU reference; integers have neither.
+// Same amplitude (a uniform +-0.0175), so the look's strength is unchanged;
+// only the pattern is new. A re-sync from upstream must keep this.
 //
 // ── upstream file, verbatim from here ─────────────────────────────────────
 //
@@ -107,10 +114,21 @@ out vec4 outColor;
 
 const float GAIN = ${NOISE_GAIN.toFixed(1)};
 
-float hash(vec2 p) {
-  p = fract(p * vec2(123.34, 456.21));
-  p += dot(p, p + 45.32);
-  return fract(p.x * p.y);
+// pcg2d (Jarzynski & Olano, "Hash Functions for GPU Rendering", 2020) on the
+// integer pixel. The top 24 bits divide exactly in float32, so the CPU
+// reference gets the identical value.
+uvec2 pcg2d(uvec2 v) {
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1664525u;
+  v = v ^ (v >> 16u);
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1664525u;
+  v = v ^ (v >> 16u);
+  return v;
+}
+float grain(vec2 fragCoord) {
+  return float(pcg2d(uvec2(fragCoord)).x >> 8u) / 16777216.0;
 }
 float nz(vec2 p) { return fbm2(p, 3) * GAIN; }
 
@@ -148,7 +166,7 @@ void main() {
   col = mix(uC[1], col, uValueRange);
   if (uGrain == 1) {
     // gl_FragCoord only, never uT: a still must not shimmer.
-    col += (hash(gl_FragCoord.xy) - 0.5) * 0.035;
+    col += (grain(gl_FragCoord.xy) - 0.5) * 0.035;
   }
   outColor = vec4(col, 1.0);
 }

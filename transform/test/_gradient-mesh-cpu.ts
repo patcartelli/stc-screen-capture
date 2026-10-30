@@ -4,9 +4,13 @@
 // transform/src/frame-diff-rule.ts. Ported into Capture's still pipeline by
 // STC-622. A re-sync is a deliberate, by-hand decision, never a silent drift.
 //
-// Changed on the way in, and nothing else: import specifiers end in .js
-// rather than .ts, because this repo's tsconfig resolves the bundler way
-// without allowImportingTsExtensions.
+// Changed on the way in: import specifiers end in .js rather than .ts,
+// because this repo's tsconfig resolves the bundler way without
+// allowImportingTsExtensions. And the grain hash follows the shader's
+// divergence from upstream (STC-622, Patrick 2026-10-30; see the header of
+// transform/src/gradient-mesh-gl.ts): a PCG integer hash, computed exactly
+// here, so with grain on the two now differ by the same <= 1 level as
+// without.
 //
 // A TEST REFERENCE ONLY, here and upstream: the shader is the renderer (the
 // CPU costs 3.4 s at 4K against the GPU's 23 ms, docs/stc-610-decision.md).
@@ -24,9 +28,8 @@
 // not wired into anything.
 //
 // The noise is seeded-noise.ts, which the shader is already held to. The
-// rest runs in float64 where the shader runs in float32; the grain's hash is
-// emulated in float32 (Math.fround) because a fract() of a product that size
-// is decided by the low bits.
+// rest runs in float64 where the shader runs in float32; the grain is an
+// integer hash here (see this file's header), so it is exact.
 
 import { TABLE_SEED, createNoise } from '../src/seeded-noise.js';
 import { foldScaleFor, type Point } from '../src/gradient-mesh-params.js';
@@ -34,7 +37,6 @@ import type { RenderInput } from '../src/gradient-mesh-gl.js';
 
 /** Matches NOISE_GAIN in gradient-mesh-gl.ts. */
 const GAIN = 2.0;
-const f = Math.fround;
 
 type Vec3 = [number, number, number];
 
@@ -47,18 +49,25 @@ function smoothstep(e0: number, e1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
-function fract(x: number): number {
-  return x - Math.floor(x);
+/** The shader's pcg2d, in exact uint32 arithmetic: Math.imul wraps as GLSL's uint multiply does. */
+function pcg2d(x: number, y: number): [number, number] {
+  const M = 1664525;
+  x = (Math.imul(x, M) + 1013904223) >>> 0;
+  y = (Math.imul(y, M) + 1013904223) >>> 0;
+  x = (x + Math.imul(y, M)) >>> 0;
+  y = (y + Math.imul(x, M)) >>> 0;
+  x = (x ^ (x >>> 16)) >>> 0;
+  y = (y ^ (y >>> 16)) >>> 0;
+  x = (x + Math.imul(y, M)) >>> 0;
+  y = (y + Math.imul(x, M)) >>> 0;
+  x = (x ^ (x >>> 16)) >>> 0;
+  y = (y ^ (y >>> 16)) >>> 0;
+  return [x, y];
 }
 
-/** The shader's grain hash, in float32 so the low bits behave the same. */
-function hash(px: number, py: number): number {
-  let x = f(fract(f(px * f(123.34))));
-  let y = f(fract(f(py * f(456.21))));
-  const d = f(f(x * f(x + f(45.32))) + f(y * f(y + f(45.32))));
-  x = f(x + d);
-  y = f(y + d);
-  return f(fract(f(x * y)));
+/** The shader's grain at integer pixel (px, py), bottom row 0. Exact: 24 bits over 2^24. */
+function grain(px: number, py: number): number {
+  return (pcg2d(px, py)[0] >>> 8) / 16777216;
 }
 
 /**
@@ -146,7 +155,7 @@ export function renderMeshCpu(
       b = c1[2] + (b - c1[2]) * input.valueRange;
 
       if (input.grain) {
-        const n = (hash(px + 0.5, py + 0.5) - 0.5) * 0.035;
+        const n = (grain(px, py) - 0.5) * 0.035;
         r += n; g += n; b += n;
       }
 

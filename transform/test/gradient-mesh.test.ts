@@ -150,7 +150,10 @@ describe("pinned values: a stored seed must always mean the same picture", () =>
     expect(fnv(renderMeshCpu(input(false), 64, 40))).toBe("4e8a985c");
   });
 
+  // Re-pinned once, 2026-10-30, when the grain moved to the PCG integer hash
+  // (STC-622, Patrick's call) — before any build that could store a mesh
+  // had shipped, so no saved picture moved.
   test("the reference render of one stored mesh, with grain", () => {
-    expect(fnv(renderMeshCpu(input(true), 64, 40))).toBe("e18aa6fa");
+    expect(fnv(renderMeshCpu(input(true), 64, 40))).toBe("dcf42241");
   });
 });

@@ -471,10 +471,10 @@ export interface MeshParity {
 /**
  * The shader against `renderMeshCpu`, pixel for pixel (STC-622). Both come
  * back bottom row first — readPixels' order, which the CPU reference writes
- * in on purpose — so no flip. STC-610 measured, on Metal and SwiftShader:
- * at most 1 level without grain; with grain ~1 pixel in 5,000 lands on a
- * different grain value (a fract() of a large float32 product), which the
- * gate's 99.5%-within-2 leaves room for.
+ * in on purpose — so no flip. STC-610 measured at most 1 level without grain
+ * on Metal and SwiftShader; with its float grain hash ~1 pixel in 5,000
+ * landed on a different grain value. The grain is a PCG integer hash now
+ * (STC-622), exact on both sides, so the gate holds both to 1 level.
  */
 function meshParityAt(bg: ReturnType<typeof meshBackground>, w: number, h: number): MeshParity {
   const input = meshRenderInput(bg);

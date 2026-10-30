@@ -20,7 +20,7 @@
  *   - the shadow decreases away from the window and reaches zero;
  *   - a background covers every pixel, so a mode that promises one has no
  *     transparent hole — a mesh background too (STC-622), which is also held
- *     to its CPU reference within STC-610's measured tolerances;
+ *     to its CPU reference within one 8-bit level;
  *   - canvas presets give exact dimensions with the capture centred;
  *   - and two renders of one document agree, byte for byte, inside this
  *     browser — the acceptance list's "render() stays pure", checked where it
@@ -332,8 +332,10 @@ try {
       const pct = (x) => `${(x * 100).toFixed(2)}%`;
       const what = `${m.grain ? "with" : "without"} grain: max ${m.maxDiff} levels, ` +
                    `${pct(m.within1)} within 1, ${pct(m.within2)} within 2 over ${m.pixels} px`;
-      if (!m.grain && m.maxDiff > 1) fail(`mesh vs CPU reference ${what} — without grain it may differ by 1 at most`);
-      else if (m.grain && m.within2 < 0.995) fail(`mesh vs CPU reference ${what} — with grain, 99.5% must be within 2`);
+      // One level, grain or no grain: the grain is an integer hash on both
+      // sides (STC-622), so the float32 grain mismatch STC-610 measured (~1
+      // pixel in 5,000, up to 9 levels) cannot happen any more.
+      if (m.maxDiff > 1) fail(`mesh vs CPU reference ${what} — they may differ by 1 level at most`);
       else ok(`the shader lands on the CPU reference ${what}`);
     }
     if ((result.meshParity ?? []).length !== 2) fail("mesh: the CPU/GPU comparison did not run both ways");
