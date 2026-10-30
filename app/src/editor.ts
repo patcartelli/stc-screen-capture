@@ -2937,6 +2937,8 @@ function meterFrame(nowMs: number): void {
   sysMeter = meterStep(sysMeter, blk?.system ?? 0, limited && (blk?.system ?? 0) > 0, nowMs, dt);
   paintMeter("mic", micMeter, nowMs);
   paintMeter("sys", sysMeter, nowMs);
+  // The meter line shows only while the preview plays (editor.html's CSS).
+  $("audiopanel").toggleAttribute("data-playing", !!player?.isPlaying);
   meterRaf = requestAnimationFrame(meterFrame);
 }
 
@@ -2947,6 +2949,7 @@ function setMetersRunning(open: boolean): void {
     meterRaf = 0;
     micMeter = METER_IDLE; sysMeter = METER_IDLE;
     paintMeter("mic", micMeter, 0); paintMeter("sys", sysMeter, 0);
+    $("audiopanel").removeAttribute("data-playing");
   }
 }
 

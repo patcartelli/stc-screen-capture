@@ -102,4 +102,15 @@ describe("the Audio pane's feel", () => {
     await win.click("#tab-frame");
     expect(await win.evaluate(() => !document.getElementById("audiopanel")!.hidden)).toBe(false);
   }, 120_000);
+
+  test("the meter line is hidden until the preview plays, and hides again when it stops", async () => {
+    // The Figma rows draw no meter, so it shows only while there is sound to meter.
+    const win = await openEditor(makeMicTakeFolder().dir);
+    await win.click("#audiobtn");
+    expect(await win.isVisible("#micaudio .meterrow")).toBe(false);
+    await win.click("#playpause");
+    await expect.poll(() => win.isVisible("#micaudio .meterrow"), { timeout: 10_000 }).toBe(true);
+    await win.click("#playpause");
+    await expect.poll(() => win.isVisible("#micaudio .meterrow"), { timeout: 10_000 }).toBe(false);
+  }, 120_000);
 });
