@@ -1,16 +1,14 @@
-// Vendored from patcartelli/studio-cartelli, src/lib/gradient-mesh-cpu.ts, as of commit 3ea1d6b
-// (STC-610, PRs #779 and #790) — NOT imported: the two are separate repos
-// with no package published between them, the same arrangement as
-// transform/src/frame-diff-rule.ts. Ported into Capture's still pipeline by
-// STC-622. A re-sync is a deliberate, by-hand decision, never a silent drift.
+// Vendored from patcartelli/studio-cartelli, src/lib/gradient-mesh-cpu.ts, as of commit 3f724eb
+// (STC-610, PRs #779 and #790; the PCG grain hash, STC-622, PR #792) — NOT
+// imported: the two are separate repos with no package published between
+// them, the same arrangement as transform/src/frame-diff-rule.ts. Ported into
+// Capture's still pipeline by STC-622. A re-sync is a deliberate, by-hand
+// decision, never a silent drift.
 //
-// Changed on the way in: import specifiers end in .js rather than .ts,
-// because this repo's tsconfig resolves the bundler way without
-// allowImportingTsExtensions. And the grain hash follows the shader's
-// divergence from upstream (STC-622, Patrick 2026-10-30; see the header of
-// transform/src/gradient-mesh-gl.ts): a PCG integer hash, computed exactly
-// here, so with grain on the two now differ by the same <= 1 level as
-// without.
+// Changed on the way in: import specifiers point at ../src/*.js rather than
+// ./*.ts, because this repo's tsconfig resolves the bundler way without
+// allowImportingTsExtensions and the file lives under transform/test/.
+// Nothing else.
 //
 // A TEST REFERENCE ONLY, here and upstream: the shader is the renderer (the
 // CPU costs 3.4 s at 4K against the GPU's 23 ms, docs/stc-610-decision.md).
@@ -28,8 +26,9 @@
 // not wired into anything.
 //
 // The noise is seeded-noise.ts, which the shader is already held to. The
-// rest runs in float64 where the shader runs in float32; the grain is an
-// integer hash here (see this file's header), so it is exact.
+// rest runs in float64 where the shader runs in float32; the grain is a PCG
+// integer hash (STC-622) computed in exact uint32 with Math.imul, so it matches
+// the shader bit for bit.
 
 import { TABLE_SEED, createNoise } from '../src/seeded-noise.js';
 import { foldScaleFor, type Point } from '../src/gradient-mesh-params.js';
