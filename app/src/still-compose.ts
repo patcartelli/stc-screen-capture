@@ -1,6 +1,7 @@
 import type { Shot } from "@transform/shot";
 import { layoutStill, pxPerPointOf } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
+import { withMeshBackground } from "@transform/still-mesh";
 import { colorSpaceFor, planRender, type ExportOptions, type RenderPlan } from "@transform/still-export";
 
 /**
@@ -30,6 +31,13 @@ import { colorSpaceFor, planRender, type ExportOptions, type RenderPlan } from "
  *    `display-p3` on the way out is oversaturated on any P3-calibrated
  *    screen — the numbers didn't change, but what they now MEAN did.
  *
+ * 3. **A mesh background** (STC-622) is rendered here, on the GPU, at the
+ *    plan's SCALED canvas size — the same rule as 1., for the same reason —
+ *    and handed to `renderStill` as its background source. The mesh is
+ *    defined in UV, so preview and export show the same picture at any size.
+ *    Its palette is sRGB hex, so a P3 context converts it on `drawImage`
+ *    exactly as it converts every other background's colours.
+ *
  * Callers still own the fallback-to-PNG decision (`stillIsBlocked`, when a
  * stored format cannot carry the alpha a mode needs) and the shot they pass
  * in — a live decoration in progress, an already-persisted document, or a
@@ -56,7 +64,8 @@ export function composeStill(
   // against the frame, and reading an existing composite would read pixels an
   // earlier fill had already replaced.
   const redactionFills = sampleRedactionFills(frame, shot.frame, shot.decoration.redactions);
-  renderStill(ctx as never, { frame, redactionFills }, plan.layout);
+  withMeshBackground(plan.layout.background, canvas.width, canvas.height, (background) =>
+    renderStill(ctx as never, { frame, redactionFills, background }, plan.layout));
   return { canvas, plan };
 }
 

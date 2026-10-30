@@ -3,7 +3,13 @@ import { colorSpaceFor, planRender, stillIsBlocked,
          DEFAULT_EXPORT_OPTIONS, DEFAULT_FLATTEN_COLOR,
          type OutputScale, type StillFormat } from "@transform/still-export";
 import { renderStill } from "@transform/still-render";
-import { parseShot, type DecorationMode, type Shot } from "@transform/shot";
+import { parseShot, type Background, type DecorationMode, type Shot } from "@transform/shot";
+import { meshBackground, meshRenderInput, withMeshBackground } from "@transform/still-mesh";
+import { GradientMeshRenderer } from "@transform/gradient-mesh-gl";
+// The CPU port is a test reference only, which is why it lives under
+// transform/test/ — this page is test infrastructure, the one place in a
+// browser that holds the shader to it (STC-622).
+import { renderMeshCpu } from "../transform/test/_gradient-mesh-cpu.js";
 import { mark } from "./mark.js";
 
 /**
@@ -72,7 +78,7 @@ function makeCapture(fill: { r: number; g: number; b: number } = FILL): HTMLCanv
 }
 
 function shotFor(mode: DecorationMode, canvasPreset = "natural",
-                 annotations: unknown[] = []): Shot {
+                 annotations: unknown[] = [], background?: Background): Shot {
   const dec = decorationForMode(mode, { canvas: canvasPreset as never });
   const base: Record<string, unknown> = {
     version: 1,
@@ -87,6 +93,10 @@ function shotFor(mode: DecorationMode, canvasPreset = "natural",
   if (annotations.length > 0) {
     base.version = 2;   // the minimum version that can express annotations
     (base.decoration as Record<string, unknown>).annotations = annotations;
+  }
+  if (background) {
+    if (background.kind === "mesh") base.version = 3;   // the minimum that can express a mesh
+    (base.decoration as Record<string, unknown>).background = JSON.parse(JSON.stringify(background));
   }
   if (mode === "selected-area") {
     base.kind = "display-crop";
@@ -140,6 +150,8 @@ export interface StillProbe {
   shadowRay: number[];
   /** Every pixel opaque? The test for "a background covers everything". */
   fullyOpaque: boolean;
+  /** Distinct colours along the top row, which only the background reaches. */
+  topRowColours: number;
   /** The capture's own colour, so an assertion can compare against the right one. */
   fill: { r: number; g: number; b: number };
   /**
@@ -159,9 +171,10 @@ export interface StillProbe {
 
 function render(mode: DecorationMode, canvasPreset: string,
                 annotations: unknown[] = [],
-                fill: { r: number; g: number; b: number } = FILL):
+                fill: { r: number; g: number; b: number } = FILL,
+                background?: Background):
                 { probe: StillProbe; data: ImageData } {
-  const shot = shotFor(mode, canvasPreset, annotations);
+  const shot = shotFor(mode, canvasPreset, annotations, background);
   const layout = layoutStill(shot);
   const cv = document.createElement("canvas");
   cv.width = layout.canvas.width;
@@ -170,7 +183,10 @@ function render(mode: DecorationMode, canvasPreset: string,
   // opaque black, which is the exact failure the gate exists to catch, and it
   // would catch it as "everything is opaque" rather than as a context mistake.
   const ctx = cv.getContext("2d", { alpha: true, willReadFrequently: true })!;
-  renderStill(ctx as never, { frame: makeCapture(fill) }, layout);
+  // A mesh goes through `withMeshBackground`, the function the app's
+  // `still-compose.ts` calls, so this is the app's path and not a copy.
+  withMeshBackground(layout.background, cv.width, cv.height, (background) =>
+    renderStill(ctx as never, { frame: makeCapture(fill), background }, layout));
 
   const data = ctx.getImageData(0, 0, cv.width, cv.height);
   const { content } = layout;
@@ -198,6 +214,13 @@ function render(mode: DecorationMode, canvasPreset: string,
   for (let i = 3; i < data.data.length; i += 4) {
     if (data.data[i] !== 255) { fullyOpaque = false; break; }
   }
+  // How many distinct colours along the canvas's top row: one means a flat
+  // fill, which for a mesh means paintBackground's fallback ran instead.
+  const topRow = new Set<number>();
+  for (let x = 0; x < data.width; x++) {
+    const i = x * 4;
+    topRow.add((data.data[i]! << 16) | (data.data[i + 1]! << 8) | data.data[i + 2]!);
+  }
 
   return {
     data,
@@ -206,7 +229,7 @@ function render(mode: DecorationMode, canvasPreset: string,
       interior: pixelAt(data, content.x + content.width / 2, content.y + content.height / 2),
       outsideCorner,
       canvasCorner: pixelAt(data, 0, 0),
-      fringe, shadowRay, fullyOpaque, fill,
+      fringe, shadowRay, fullyOpaque, fill, topRowColours: topRow.size,
       ...(annotations.length > 0 ? { arrowCross: arrowCrossSection(data, content) } : {}),
     },
   };
@@ -284,7 +307,8 @@ async function decorateReal(shotDoc: unknown, frameSrc: string,
   cv.width = layout.canvas.width;
   cv.height = layout.canvas.height;
   const ctx = cv.getContext("2d", { alpha: true })!;
-  renderStill(ctx as never, { frame: img }, layout);
+  withMeshBackground(layout.background, cv.width, cv.height, (background) =>
+    renderStill(ctx as never, { frame: img, background }, layout));
   return cv.toDataURL("image/png");
 }
 
@@ -300,6 +324,10 @@ declare global {
       probes: StillProbe[];
       /** The same mode rendered twice: the hashes must agree. */
       repeat: { first: string; second: string };
+      /** The same with a mesh background (STC-622): the GPU must repeat itself too. */
+      meshRepeat: { first: string; second: string };
+      /** The shader against the CPU reference, at one size, without and with grain. */
+      meshParity: MeshParity[];
       fill: { r: number; g: number; b: number };
       cornerRadius: number;
     }>;
@@ -350,7 +378,8 @@ window.__composite = async (shotDoc, frameSrc, format, scale) => {
   cv.width = plan.layout.canvas.width;
   cv.height = plan.layout.canvas.height;
   const ctx = cv.getContext("2d", { alpha: true, colorSpace }) as CanvasRenderingContext2D;
-  renderStill(ctx as never, { frame: img }, plan.layout);
+  withMeshBackground(plan.layout.background, cv.width, cv.height, (background) =>
+    renderStill(ctx as never, { frame: img, background }, plan.layout));
 
   if (flattened) {
     // `destination-over`: fills exactly the pixels whose alpha is short of 1,
@@ -412,8 +441,59 @@ window.__stillGate = async () => {
 
   const a = render("window-shadow-background", "natural").probe.hash;
   const b = render("window-shadow-background", "natural").probe.hash;
-  return { probes, repeat: { first: a, second: b }, fill: FILL, cornerRadius: CORNER_RADIUS };
+
+  // STC-622: a mesh background, through the same render() as every probe, so
+  // "a background covers every pixel" and "two renders agree" apply as they
+  // stand. Grain on — the per-pixel term most able to break a repeat.
+  mark("still gate: mesh");
+  const mesh = meshBackground(806664024);
+  const meshProbe = render("window-shadow-background", "natural", [], FILL, mesh).probe;
+  meshProbe.mode = "window-shadow-background+mesh";
+  probes.push(meshProbe);
+  const m2 = render("window-shadow-background", "natural", [], FILL, mesh).probe.hash;
+  const meshParity = [false, true].map((grain) => meshParityAt({ ...mesh, grain }, 320, 200));
+  mark("still gate: mesh rendered");
+
+  return { probes, repeat: { first: a, second: b }, meshRepeat: { first: meshProbe.hash, second: m2 },
+           meshParity, fill: FILL, cornerRadius: CORNER_RADIUS };
 };
+
+export interface MeshParity {
+  grain: boolean;
+  pixels: number;
+  /** Largest per-channel difference, in 8-bit levels. */
+  maxDiff: number;
+  /** Fraction of pixels whose every channel is within 1 / within 2 levels. */
+  within1: number;
+  within2: number;
+}
+
+/**
+ * The shader against `renderMeshCpu`, pixel for pixel (STC-622). Both come
+ * back bottom row first — readPixels' order, which the CPU reference writes
+ * in on purpose — so no flip. STC-610 measured, on Metal and SwiftShader:
+ * at most 1 level without grain; with grain ~1 pixel in 5,000 lands on a
+ * different grain value (a fract() of a large float32 product), which the
+ * gate's 99.5%-within-2 leaves room for.
+ */
+function meshParityAt(bg: ReturnType<typeof meshBackground>, w: number, h: number): MeshParity {
+  const input = meshRenderInput(bg);
+  const canvas = document.createElement("canvas");
+  const gpu = new GradientMeshRenderer(canvas);
+  gpu.drawAt(input, w, h);
+  const g = gpu.pixels();
+  canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+  const c = renderMeshCpu(input, w, h);
+  let maxDiff = 0, in1 = 0, in2 = 0;
+  for (let i = 0; i < w * h; i++) {
+    let d = 0;
+    for (let k = 0; k < 3; k++) d = Math.max(d, Math.abs(g[i * 4 + k]! - c[i * 4 + k]!));
+    maxDiff = Math.max(maxDiff, d);
+    if (d <= 1) in1++;
+    if (d <= 2) in2++;
+  }
+  return { grain: bg.grain, pixels: w * h, maxDiff, within1: in1 / (w * h), within2: in2 / (w * h) };
+}
 
 window.__ready = true;
 mark("still gate: ready");
