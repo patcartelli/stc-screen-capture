@@ -1,3 +1,4 @@
+import { mixLimit } from "./peak-limit.js";
 import { render } from "./render.js";
 import { exportFrameTimeNs } from "./time.js";
 import { ForwardFrameSource } from "./frame-source.js";
@@ -245,7 +246,7 @@ export async function exportSession(
   // audio track, exactly like a take recorded without sound.
   const plan = exportAudioPlan({
     encode, hasMic: !!micAudio, hasSystem: !!session.systemAudio, cleanup, micLevel: project.micLevel,
-    micMuted: project.micMuted, systemMuted: project.systemAudioMuted,
+    micMuted: project.micMuted, systemMuted: project.systemAudioMuted, limit: !!project.peakLimit?.enabled,
   });
   const cleaning = plan.cleanMic;
   const mixing = plan.path === "mix";
@@ -489,7 +490,7 @@ export async function exportSession(
           const n = Math.min(MIX_BLOCK_FRAMES, frames - at);
           const planes = mixBlock({
             mic: mixMic, system: mixSystem, systemLevel: level, micLevel: project.micLevel ?? 1,
-            originNs, from: at, frames: n,
+            ceiling: mixLimit(project.peakLimit), originNs, from: at, frames: n,
           });
           const data = new Float32Array(n * MIX_CHANNELS);
           for (let ch = 0; ch < MIX_CHANNELS; ch++) data.set(planes[ch]!, ch * n);

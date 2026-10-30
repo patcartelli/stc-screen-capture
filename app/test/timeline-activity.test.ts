@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
-  clipActivity, zoomCurve, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT, formatBlockTime, zoomAmountLabel,
+  clipActivity, zoomCurve, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT, formatBlockTime, zoomAmountLabel, trimRangeParts,
+  activityIn, activityLabel,
 } from "../src/timeline-activity.js";
 import type { SessionEvent } from "@transform/types.js";
 
@@ -114,5 +115,45 @@ describe("the Zoom section's readouts (STC-604)", () => {
     expect(zoomAmountLabel({ width: 0.4545, height: 0.4 })).toBe("2.2×");
     expect(zoomAmountLabel(null)).toBe("Auto");
     expect(zoomAmountLabel({ width: 0, height: 0 })).toBe("Auto");
+  });
+});
+
+describe("trimRangeParts (STC-606's Export range chip)", () => {
+  const S = 1_000_000_000;
+  test("the frame's own example: In 0:02.8, Out 0:44.2, 0:41", () => {
+    expect(trimRangeParts(2.8 * S, 44.2 * S)).toEqual({ in: "0:02.8", out: "0:44.2", length: "0:41" });
+  });
+  test("the ends floor to the tenth, as a block's times do; the length rounds, as the Length row does", () => {
+    expect(trimRangeParts(2.86 * S, 44.29 * S)).toEqual({ in: "0:02.8", out: "0:44.2", length: "0:41" });
+    expect(trimRangeParts(0, 59.6 * S).length).toBe("1:00");
+  });
+  test("past a minute", () => {
+    expect(trimRangeParts(61.5 * S, 125 * S)).toEqual({ in: "1:01.5", out: "2:05.0", length: "1:04" });
+  });
+});
+
+describe("activityIn / activityLabel (STC-606's Frame hover tooltip)", () => {
+  const down = (t: number): SessionEvent => ({ t, kind: "down", x: 0, y: 0, button: 0 });
+  const up = (t: number): SessionEvent => ({ t, kind: "up", x: 0, y: 0, button: 0 });
+  const move = (t: number): SessionEvent => ({ t, kind: "move", x: 0, y: 0 });
+  test("a click is its down: the up and the moves between do not count", () => {
+    const events = [down(1 * S), move(1.1 * S), up(1.2 * S), down(1.5 * S), up(1.6 * S)];
+    expect(activityIn(events, [], 1 * S, 2 * S).clicks).toBe(2);
+  });
+  test("the span is half-open, so a bar's edge is counted once, by the later bar", () => {
+    const events = [down(2 * S)];
+    expect(activityIn(events, [], 1 * S, 2 * S).clicks).toBe(0);
+    expect(activityIn(events, [], 2 * S, 3 * S).clicks).toBe(1);
+  });
+  test("keys in the span are counted; a take with no key track says nothing about keys", () => {
+    const keys = [{ t: 1.1 * S }, { t: 1.9 * S }, { t: 2.5 * S }];
+    expect(activityIn([], keys, 1 * S, 2 * S)).toEqual({ clicks: 0, keys: 2 });
+    expect(activityIn([], undefined, 1 * S, 2 * S)).toEqual({ clicks: 0, keys: undefined });
+  });
+  test("the label: the frame's own example, singulars, and no keys part without a key track", () => {
+    expect(activityLabel({ clicks: 2, keys: 14 })).toBe("2 clicks · 14 keys");
+    expect(activityLabel({ clicks: 1, keys: 1 })).toBe("1 click · 1 key");
+    expect(activityLabel({ clicks: 0, keys: 0 })).toBe("0 clicks · 0 keys");
+    expect(activityLabel({ clicks: 3, keys: undefined })).toBe("3 clicks");
   });
 });

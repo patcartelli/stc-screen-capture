@@ -69,6 +69,7 @@ import type { WindowInfo } from "./selection.js";
 import type { OptionsState } from "./record-options.js";
 import { recordTimeProject, defaultStyleForTake, type RecordTimeChoices } from "./take-project.js";
 import { cleanPipStyle } from "@transform/pip-style.js";
+import { cleanPeakLimit } from "@transform/peak-limit.js";
 import {
   presentThumbnail, beforeCapture as hideThumbnailForCapture,
   afterCapture as showHiddenThumbnails, closeThumbnail, dismissThumbnail,
@@ -2987,7 +2988,7 @@ const KNOWN_PROJECT_FIELDS = new Set([
   "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
   "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
   "micLevel", "micMuted", "systemAudioMuted", "showClicks", "keycast",
-  "framing",
+  "framing", "peakLimit",
 ]);
 
 /**
@@ -3104,6 +3105,10 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
     if (!isPlainObject(doc.transform) || !Number.isInteger(doc.transform.version) || doc.transform.version < 1) {
       throw new Error("project.json: transform.version must be a positive integer");
     }
+  }
+  // project-18 (STC-606): the audio ceiling, refused rather than written bad.
+  if (doc.peakLimit !== undefined && cleanPeakLimit(doc.peakLimit) === null) {
+    throw new Error("project.json: malformed peakLimit");
   }
   if (doc.narrationCleanup !== undefined) {
     const n = doc.narrationCleanup;

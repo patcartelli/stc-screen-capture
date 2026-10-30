@@ -74,6 +74,10 @@ import { decodeMicForMix, decodeSystemForMix } from "@transform/decode-audio";
 import type { DemuxedAudio } from "@transform/demux-audio";
 import { PreviewAudio } from "@transform/preview-audio";
 import { mixPeaks, isClipped } from "@transform/waveform";
+import {
+  ceilingLevel, cleanPeakLimit, formatCeilingDb, isDefaultPeakLimit, mixLimit, peaksOver,
+  CEILING_DB_MAX, CEILING_DB_MIN, DEFAULT_PEAK_LIMIT, type PeakLimit,
+} from "@transform/peak-limit";
 import type { NarrationCleanup, Project, ZoomOverride } from "@transform/types";
 import {
   projectForWrite, exportWindow, estimateExportMs,
@@ -91,8 +95,10 @@ import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
 import { windowId, overrideFor, resolvedWindows, rectFromGesture } from "@transform/zoom-override";
+import { deriveZoomCrop } from "@transform/zoom-change";
 import {
   committedOverrides, overridesWithoutWindow, overridesWithoutManual, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft,
+  chipSpeed, withChipSpeed, chipSideFor, amountOf, rectAtAmount, ZOOM_AMOUNT_MIN, ZOOM_AMOUNT_MAX, type ChipSide,
 } from "./override-edit.js";
 import type { Rect } from "@transform/spaces";
 import {
@@ -105,7 +111,9 @@ import {
   isFit, isMinSpan, overviewBox, panBy, timelineZoomKeyIntent,
   wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
-import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel } from "./timeline-activity.js";
+import {
+  clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts, activityIn, activityLabel,
+} from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, dragCenter, resizeFromCorner, styleFromFixedCorner,
   anchorCenter, anchorOf, PIP_CIRCLE_HANDLE_FRACTION, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
@@ -225,7 +233,7 @@ function applySpanTransform(): void {
   ($("timeline") as HTMLElement).style.setProperty("--inv", String(1 / scale));
   // STC-605: the ruler's labels and pennants and the strip's bookmark lines
   // undo it the same way.
-  for (const id of ["ruler-content", "strip-content"]) {
+  for (const id of ["ruler-content", "strip-content", "audio-dims"]) {
     ($(id) as HTMLElement).style.transform = transform;
     ($(id) as HTMLElement).style.setProperty("--inv", String(1 / scale));
   }
@@ -249,6 +257,8 @@ function applySpanTransform(): void {
   renderBookmarks();
   updateZoomBar();
   updateRulerPlayhead(player?.currentNs ?? 0);
+  layoutExportOverlays();
+  layoutZoomChip();
 }
 
 // ---- the ruler's adaptive ticks + played line (STC-444 slice 2) ------------
@@ -552,6 +562,13 @@ function updateTrimUI(): void {
   const zTail = $("zoom-cut-tail") as HTMLElement;
   zTail.style.left = `${outPct}%`;
   zTail.style.width = `${Math.max(0, 100 - outPct)}%`;
+  // STC-606: and the Audio lane, the Export frame's third.
+  const aHead = $("audio-cut-head") as HTMLElement;
+  aHead.style.left = "0%";
+  aHead.style.width = `${Math.max(0, inPct)}%`;
+  const aTail = $("audio-cut-tail") as HTMLElement;
+  aTail.style.left = `${outPct}%`;
+  aTail.style.width = `${Math.max(0, 100 - outPct)}%`;
   updateTicks();
 
   const w = exportWindow(openProject, player.durationNs, player.firstRenderableNs);
@@ -561,6 +578,43 @@ function updateTrimUI(): void {
     : `${fmtClock(w.startNs)}–${fmtClock(w.endNs)} · ${fmtClock(w.endNs - w.startNs)} · ${est}`;
   // The Export section's Length (STC-604): the window the export renders.
   $("exportlength").textContent = fmtClock(w.endNs - w.startNs);
+  // STC-606: the strip's range chip reads the same window.
+  const parts = trimRangeParts(w.startNs, w.endNs);
+  $("rangechip").replaceChildren(...([["In", parts.in], ["Out", parts.out], ["", parts.length]] as const).map(([k, v]) => {
+    const span = document.createElement("span");
+    if (k) { const key = document.createElement("span"); key.className = "k"; key.textContent = k; span.append(key); }
+    span.append(v);
+    return span;
+  }));
+  layoutExportOverlays();
+}
+
+/**
+ * STC-606, Export (Figma 171:2050): place the full-height in/out bars and the
+ * strip's range chip in px, the way updateRulerPlayhead places the playhead.
+ * They show only while Export is the active section (editor.html's
+ * .exportonly); a bar whose point is panned out of view is hidden.
+ */
+function layoutExportOverlays(): void {
+  if (paneSection !== "export" || !player || !openProject) return;
+  const d = player.durationNs || 1;
+  const track = $("timeline").getBoundingClientRect();
+  const lane = (document.querySelector(".laneviewport.clip") as HTMLElement).getBoundingClientRect();
+  const wrap = (document.querySelector(".timelinewrap") as HTMLElement).getBoundingClientRect();
+  const xAt = (ns: number) => track.left + (ns / d) * track.width;
+  const inX = xAt(openProject.trim?.startNs ?? 0);
+  const outX = xAt(openProject.trim?.endNs ?? player.durationNs);
+  for (const [id, x] of [["exportbar-in", inX], ["exportbar-out", outX]] as const) {
+    const bar = $(id) as HTMLElement;
+    bar.hidden = track.width <= 0 || x < lane.left - 1 || x > lane.right + 1;
+    bar.style.left = `${x - wrap.left}px`;
+  }
+  // The chip sits just past the in-point, kept inside the strip.
+  const chip = $("rangechip") as HTMLElement;
+  const strip = $("overlay-strip").getBoundingClientRect();
+  const CHIP_GAP_PX = 8;
+  const max = Math.max(0, strip.width - chip.offsetWidth - 2);
+  chip.style.left = `${Math.min(max, Math.max(2, inX - strip.left + CHIP_GAP_PX))}px`;
 }
 
 /**
@@ -820,10 +874,11 @@ function scheduleWaveform(): void {
   const levels = previewLevels();
   const it = mixPeaks({
     mic: audio.micTrack, system: audio.systemTrack,
-    micLevel: levels.mic, systemLevel: levels.system,
+    micLevel: levels.mic, systemLevel: levels.system, ceiling: levels.ceiling,
     durationNs: player.durationNs,
   });
   canvas.dataset.state = "computing";
+  layoutPeakOverlays(); // STC-606: the old count goes until the new mix is in
   const step = (): void => {
     if (run !== waveRun) return;
     const until = performance.now() + WAVE_SLICE_MS;
@@ -856,6 +911,7 @@ function drawAudioLane(): void {
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
+  layoutPeakOverlays();
   const peaks = wavePeaks;
   if (!peaks) return;
   const css = getComputedStyle(document.documentElement);
@@ -863,6 +919,7 @@ function drawAudioLane(): void {
   const hot = css.getPropertyValue("--wave-clip").trim() || "#e5483f";
   const mid = cssH / 2;
   const half = mid - PEAK_DOT_PX;
+  const limit = mixLimit(openProject?.peakLimit);
   // STC-484: the canvas shows the VISIBLE span only, redrawn on every zoom or
   // pan rather than CSS-stretched, so a zoomed lane stays sharp.
   const dur = player?.durationNs ?? 0;
@@ -874,7 +931,7 @@ function drawAudioLane(): void {
     const peak = columnMax(peaks, f0 + (x / cssW) * (f1 - f0), f0 + ((x + WAVE_PITCH_PX) / cssW) * (f1 - f0));
     if (!(peak > 0)) continue;
     const a = Math.max(1, peak * half);
-    if (!isClipped(peak)) {
+    if (!isClipped(peak, limit)) {
       ctx.fillStyle = normal;
       fillBar(ctx, x * scale, (mid - a) * scale, WAVE_BAR_PX * scale, 2 * a * scale, scale);
       continue;
@@ -1038,6 +1095,8 @@ const ZOOM_LANE_FLOOR = 0.002;
 function redrawLanes(): void {
   drawClipLane(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks();
   updateRulerPlayhead(player?.currentNs ?? 0);
+  layoutExportOverlays();
+  layoutZoomChip();
 }
 
 /** A zoom or pan redraws the three canvases; a drag fires many per frame, so
@@ -1178,7 +1237,7 @@ function syncOverrideBoxShown(): void {
   else box.removeAttribute("data-shown");
 }
 function overBlockTarget(e: Event): boolean {
-  return (e.target as HTMLElement | null)?.closest?.(".zoomblock.selected, #manualdraft") != null;
+  return (e.target as HTMLElement | null)?.closest?.(".zoomblock.selected, #manualdraft, #zoomchip") != null;
 }
 document.addEventListener("pointerover", (e) => {
   if (overBlockTarget(e) !== overrideBlockHover) { overrideBlockHover = overBlockTarget(e); syncOverrideBoxShown(); }
@@ -1186,6 +1245,7 @@ document.addEventListener("pointerover", (e) => {
 
 function drawOverrideBox(rect: Rect | null): void {
   $("zoomamount").textContent = zoomAmountLabel(rect);
+  syncZoomAmount();
   const box = $("overridebox") as HTMLElement;
   if (!rect) { box.setAttribute("hidden", ""); return; }
   box.removeAttribute("hidden");
@@ -1193,6 +1253,9 @@ function drawOverrideBox(rect: Rect | null): void {
   box.style.top = `${rect.y * 100}%`;
   box.style.width = `${rect.width * 100}%`;
   box.style.height = `${rect.height * 100}%`;
+  // STC-606: "2.2× · 412×232", the amount and the region in capture pixels.
+  const px = openCapture ? ` · ${Math.round(rect.width * openCapture.width)}×${Math.round(rect.height * openCapture.height)}` : "";
+  $("overridereadout").textContent = `${zoomAmountLabel(rect)}${px}`;
 }
 
 /** The DYNAMIC blocks only — derived windows (at their RESOLVED position —
@@ -1314,6 +1377,7 @@ function updateManualDraftBlock(): void {
   const d = player.durationNs || 1;
   el.style.left = `${(draftManualStart / d) * 100}%`;
   el.style.width = `${Math.max(0, ((draftManualEnd - draftManualStart) / d) * 100)}%`;
+  layoutZoomChip();
 }
 
 /** Shared tail of every way an editor can open: shows the rect tool and
@@ -1336,6 +1400,7 @@ function openOverrideEditorUI(): void {
   ($("rectoverlay") as HTMLElement).removeAttribute("hidden");
   // The pane follows selection (STC-604): the block's controls live in Zoom.
   selectSection("zoom");
+  chipSide = chipSideFor(draftEasing);
   drawOverrideBox(draftRect);
   layoutOverrideBlocks();
   updateManualDraftBlock();
@@ -1372,6 +1437,7 @@ function resetEditingState(): void {
   ($("overridebar") as HTMLElement).setAttribute("hidden", "");
   ($("rectoverlay") as HTMLElement).setAttribute("hidden", "");
   drawOverrideBox(null);
+  layoutZoomChip();
   // The Zoom lane's curve samples render(), so a committed easing, retime or
   // removal changes it; the lane is otherwise redrawn only on open, zoom, pan
   // and resize, so without this it stayed stale until one of those (STC-619).
@@ -1557,10 +1623,132 @@ $("rectoverlay").addEventListener("pointercancel", endOverrideDrag);
 // release out, each on its own, "" = the project default for that side.
 $("overridein").addEventListener("change", () => {
   draftEasing = { ...draftEasing, in: ($("overridein") as HTMLSelectElement).value as SpeedDraft["in"] };
+  layoutZoomChip();
 });
 $("overrideout").addEventListener("change", () => {
   draftEasing = { ...draftEasing, out: ($("overrideout") as HTMLSelectElement).value as SpeedDraft["out"] };
+  layoutZoomChip();
 });
+
+// ---- the Zoom chip (STC-606, Figma 171:561) --------------------------------
+//
+// The open block's chip, in the overlay strip above it (Patrick, 2026-10-30):
+// the amount (drag sideways or arrow keys), In / Out / Both choosing which side
+// Slow / Med / Fast sets, and delete. It edits the same draft as the Zoom
+// section's rows (draftRect, draftEasing), so Done, Escape and every mid-edit
+// save treat a chip edit exactly as an inspector one (override-edit.ts's
+// committedOverrides).
+
+let chipSide: ChipSide = "both";
+
+function editingBlock(): boolean {
+  return editingWindowId !== null || editingManualId !== null;
+}
+
+/** Where an Auto block (no drawn region) starts when its amount is first set:
+ *  the region stage 2 would zoom to, else a default box at the centre. */
+function startingRect(): Rect {
+  if (editingWindowId && openSession) {
+    const w = zoomWindows(openSession.events).find((x) => windowId(x) === editingWindowId);
+    const r = w ? deriveZoomCrop(w, openSession.changes, openSession.anchors, openSession.frames) : null;
+    if (r) return r;
+  }
+  return rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
+}
+
+/** The inspector's Amount slider and the chip's amount, from draftRect. */
+function syncZoomAmount(): void {
+  const range = $("zoomamountrange") as HTMLInputElement;
+  const editing = editingBlock();
+  range.disabled = !editing;
+  const a = editing ? amountOf(draftRect ?? startingRect()) : ZOOM_AMOUNT_MIN;
+  range.value = String(Math.round(a * 10) / 10);
+  range.style.setProperty("--fill-pct", `${((Number(range.value) - ZOOM_AMOUNT_MIN) / (ZOOM_AMOUNT_MAX - ZOOM_AMOUNT_MIN)) * 100}%`);
+  $("chipamount").textContent = zoomAmountLabel(draftRect);
+}
+
+function setZoomAmount(amount: number): void {
+  if (!editingBlock()) return;
+  draftRect = rectAtAmount(draftRect ?? startingRect(), amount);
+  ($("overrideclear") as HTMLButtonElement).disabled = false;
+  drawOverrideBox(draftRect);
+  ($("overridebox") as HTMLElement).setAttribute("data-shown", "");
+  layoutOverrideBlocks();
+}
+
+/** Show, fill and place the chip: centred over the open block, inside the strip. */
+function layoutZoomChip(): void {
+  const chip = $("zoomchip") as HTMLElement;
+  const shown = editingBlock() && paneSection === "zoom";
+  chip.hidden = !shown;
+  if (!shown) return;
+  for (const b of $("chipside").querySelectorAll<HTMLElement>("[data-side]")) {
+    b.setAttribute("aria-checked", String(b.dataset.side === chipSide));
+  }
+  const speed = chipSpeed(draftEasing, chipSide);
+  for (const b of $("chipspeed").querySelectorAll<HTMLElement>("[data-speed]")) {
+    b.setAttribute("aria-checked", String(b.dataset.speed === speed));
+  }
+  const block = $("manualdraft").getBoundingClientRect();
+  const strip = $("overlay-strip").getBoundingClientRect();
+  const mid = (block.left + block.right) / 2 - strip.left;
+  const max = Math.max(2, strip.width - chip.offsetWidth - 2);
+  chip.style.left = `${Math.min(max, Math.max(2, mid - chip.offsetWidth / 2))}px`;
+}
+
+$("chipside").addEventListener("click", (e) => {
+  const side = (e.target as HTMLElement).closest<HTMLElement>("[data-side]")?.dataset.side as ChipSide | undefined;
+  if (!side) return;
+  chipSide = side;
+  layoutZoomChip();
+});
+$("chipspeed").addEventListener("click", (e) => {
+  const speed = (e.target as HTMLElement).closest<HTMLElement>("[data-speed]")?.dataset.speed as ZoomPreset | undefined;
+  if (!speed || !editingBlock()) return;
+  // The lit speed pressed again goes back to the project default for that side.
+  const next = chipSpeed(draftEasing, chipSide) === speed ? "" : speed;
+  draftEasing = withChipSpeed(draftEasing, chipSide, next);
+  ($("overridein") as HTMLSelectElement).value = draftEasing.in;
+  ($("overrideout") as HTMLSelectElement).value = draftEasing.out;
+  layoutZoomChip();
+});
+$("chipdelete").addEventListener("click", () => {
+  // A derived block's delete drops it (it never plays); a manual block's is
+  // the same as the section's Delete window.
+  if (editingWindowId) $("overridedelete").click();
+  else $("overrideclear").click();
+});
+$("zoomamountrange").addEventListener("input", () => {
+  setZoomAmount(Number(($("zoomamountrange") as HTMLInputElement).value));
+});
+(() => {
+  const btn = $("chipamount");
+  let drag: { x: number; amount: number } | null = null;
+  btn.addEventListener("pointerdown", (e) => {
+    if (!editingBlock()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    drag = { x: e.clientX, amount: amountOf(draftRect ?? startingRect()) };
+    btn.setPointerCapture(e.pointerId);
+  });
+  btn.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if ((e.buttons & 1) === 0) { drag = null; return; }
+    // 100 px of drag is one whole step of zoom (1.0x).
+    setZoomAmount(Math.round((drag.amount + (e.clientX - drag.x) / 100) * 10) / 10);
+  });
+  const end = (): void => { drag = null; };
+  btn.addEventListener("pointerup", end);
+  btn.addEventListener("pointercancel", end);
+  btn.addEventListener("lostpointercapture", end);
+  btn.addEventListener("keydown", (e) => {
+    const step = e.key === "ArrowUp" || e.key === "ArrowRight" ? 0.1 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -0.1 : 0;
+    if (!step || !editingBlock()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setZoomAmount(Math.round((amountOf(draftRect ?? startingRect()) + step) * 10) / 10);
+  });
+})();
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
   void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
@@ -1973,7 +2161,7 @@ $("scrub").addEventListener("input", () => {
 // reach it. The drag is the same seek #scrub's input makes (rule 3: a drag is
 // direct).
 const PLAYHEAD_GRAB_PX = 6;
-const NOT_THE_PLAYHEAD = ".handle, .rulerbookmark, .zoomblock, #manualdraft, #audio-resize, .zoomctl";
+const NOT_THE_PLAYHEAD = ".handle, .rulerbookmark, .zoomblock, #manualdraft, #audio-resize, .zoomctl, .overlayctl";
 let draggingPlayhead = false;
 
 function nearPlayhead(e: PointerEvent): boolean {
@@ -1982,6 +2170,44 @@ function nearPlayhead(e: PointerEvent): boolean {
   const r = ph.getBoundingClientRect();
   return Math.abs(e.clientX - (r.left + r.width / 2)) <= PLAYHEAD_GRAB_PX
     && !(e.target as HTMLElement).closest(NOT_THE_PLAYHEAD);
+}
+
+// ---- the Frame section's hover (STC-606, Figma 171:78) -------------------
+//
+// Over the lanes, while Frame is the active section and nothing is held: a
+// hairline at the pointer through every lane, and a tooltip with the time and
+// the clicks and keys the Clip bar under the pointer stands for (the same
+// CLIP_PITCH_PX column drawClipLane draws, over the visible span).
+
+function hideFrameHover(): void {
+  ($("hoverline") as HTMLElement).hidden = true;
+  ($("hovertip") as HTMLElement).hidden = true;
+}
+
+function frameHover(e: PointerEvent): void {
+  if (paneSection !== "frame" || e.buttons !== 0 || draggingPlayhead || !player || !openSession) {
+    hideFrameHover();
+    return;
+  }
+  const wrap = (document.querySelector(".timelinewrap") as HTMLElement).getBoundingClientRect();
+  const lanes = $("clip-canvas-wrap").getBoundingClientRect();
+  const x = e.clientX - lanes.left;
+  if (x < 0 || x > lanes.width || lanes.width <= 0 || e.clientY < lanes.top) { hideFrameHover(); return; }
+  const vis = visibleSpan();
+  const at = (px: number) => vis.start + (px / lanes.width) * (vis.end - vis.start);
+  const col = Math.floor(x / CLIP_PITCH_PX) * CLIP_PITCH_PX;
+  $("hovertime").textContent = formatBlockTime(at(x));
+  $("hovercount").textContent = activityLabel(activityIn(openSession.events, openSession.keys, at(col), at(col + CLIP_PITCH_PX)));
+  const line = $("hoverline") as HTMLElement;
+  const tip = $("hovertip") as HTMLElement;
+  line.hidden = false;
+  tip.hidden = false;
+  const lineX = e.clientX - wrap.left;
+  line.style.left = `${lineX}px`;
+  // Beside the line, flipped to its left when it would run past the lanes.
+  const TIP_GAP_PX = 8;
+  const right = lineX + TIP_GAP_PX;
+  tip.style.left = `${right + tip.offsetWidth > lanes.right - wrap.left ? lineX - TIP_GAP_PX - tip.offsetWidth : right}px`;
 }
 
 function seekToClientX(clientX: number): void {
@@ -2015,6 +2241,8 @@ function seekToClientX(clientX: number): void {
   wrap.addEventListener("pointerup", end);
   wrap.addEventListener("pointercancel", end);
   wrap.addEventListener("pointerleave", () => { if (!draggingPlayhead) wrap.removeAttribute("data-near-playhead"); });
+  wrap.addEventListener("pointermove", (e) => frameHover(e));
+  wrap.addEventListener("pointerleave", hideFrameHover);
 })();
 
 // ---- system-audio level (STC-418 PR 3) --------------------------------
@@ -2321,6 +2549,11 @@ function layoutPipOverlay(): void {
     left: `${(frame.x + r.x) * k}px`, top: `${(frame.y + r.y) * k}px`, width: `${r.width * k}px`, height: `${r.height * k}px`,
     borderRadius: style.shape === "circle" ? "50%" : `${style.cornerRadius * Math.min(r.width, r.height) * k}px`,
   });
+  // STC-606: the readout hugs the box's side nearest the stage edge, and goes
+  // under the box when the box is too near the top for it to fit above.
+  const LABEL_ROOM_PX = 26;
+  box.classList.toggle("right", r.x + r.width / 2 > frame.width / 2);
+  box.classList.toggle("below", (frame.y + r.y) * k < LABEL_ROOM_PX);
   // The resize handle: a corner of the box, except on a circle, where the
   // corner floats off the picture and the handle sits ON the edge instead
   // (resizeFromCorner measures a circle by distance, so grabbing it does not
@@ -2765,9 +2998,13 @@ $("sysmute").addEventListener("click", () => {
 
 function updateVoiceCleanUI(): void {
   updateMicUI();
-  const row = $("voiceclean");
+  // STC-606: the group holds Limit peaks and Ceiling too, which any take with
+  // audio has; the voice rows stay mic-only.
+  const anyAudio = (!!openSession?.micAudio || !!openSession?.systemAudio) && !!openProject;
+  $("voiceclean").toggleAttribute("hidden", !anyAudio);
+  updatePeakLimitUI();
   const has = !!openSession?.micAudio && !!openProject;
-  row.toggleAttribute("hidden", !has);
+  for (const r of $("voiceclean").querySelectorAll<HTMLElement>(".voicerow")) r.toggleAttribute("hidden", !has);
   if (!has) return;
   const n = openProject!.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP;
   const pct = Math.round(n.strength * 100);
@@ -2781,6 +3018,135 @@ function updateVoiceCleanUI(): void {
 function currentCleanup(): NarrationCleanup {
   return { ...(openProject?.narrationCleanup ?? DEFAULT_NARRATION_CLEANUP) };
 }
+
+// ---- the audio ceiling (STC-606, Figma 171:1546) ----------------------------
+//
+// Limit peaks and the ceiling (Patrick, 2026-10-30): on, the mix is hard-limited
+// at the ceiling in the preview, the export and the waveform alike (previewLevels
+// is the one reader); either way the ceiling is the lane's guide. The lane's
+// line, its handle and the peak markers, and the transport readout, show only
+// while Audio is the active section. Saved as project-18's peakLimit, only when
+// not the default.
+
+function currentPeakLimit(): PeakLimit {
+  return { ...(openProject?.peakLimit ?? DEFAULT_PEAK_LIMIT) };
+}
+
+function updatePeakLimitUI(): void {
+  const p = currentPeakLimit();
+  ($("peaklimiton") as HTMLInputElement).checked = p.enabled;
+  const range = $("peakceiling") as HTMLInputElement;
+  range.value = String(p.ceilingDb);
+  range.style.setProperty("--fill-pct", `${((p.ceilingDb - CEILING_DB_MIN) / (CEILING_DB_MAX - CEILING_DB_MIN)) * 100}%`);
+  $("peakceilingvalue").textContent = formatCeilingDb(p.ceilingDb);
+}
+
+/** The one writer. The mix only changes when the limit is on (or just turned
+ *  on or off), so only then is the waveform recomputed. */
+function setPeakLimit(next: PeakLimit, persist: boolean): void {
+  if (!openProject) return;
+  const clean = cleanPeakLimit({ ...next, ceilingDb: Math.round(next.ceilingDb * 2) / 2 }) ?? currentPeakLimit();
+  const before = currentPeakLimit();
+  if (isDefaultPeakLimit(clean)) delete openProject.peakLimit;
+  else openProject.peakLimit = clean;
+  updatePeakLimitUI();
+  if (clean.enabled !== before.enabled || (clean.enabled && clean.ceilingDb !== before.ceilingDb)) scheduleWaveform();
+  else drawAudioLane();
+  if (persist) void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+}
+
+/** The line, the markers and the readout. Reads the section from the body
+ *  attribute: the lane is first drawn while the editor is still loading. */
+function layoutPeakOverlays(): void {
+  const line = $("ceilingline") as HTMLElement;
+  const markers = $("peakmarkers") as HTMLElement;
+  const readout = $("peakreadout") as HTMLElement;
+  const lane = $("audio-lane") as HTMLElement;
+  const shown = !lane.hidden && document.body.dataset.section === "audio" && !!openProject;
+  line.hidden = !shown;
+  readout.hidden = !shown;
+  markers.replaceChildren();
+  if (!shown) return;
+  const p = currentPeakLimit();
+  const level = ceilingLevel(p);
+  // The waveform's own geometry (drawAudioLane): mirrored about the middle,
+  // full scale at `half` from it.
+  const cssH = lane.clientHeight || audioLaneHeight;
+  const mid = cssH / 2;
+  const half = mid - PEAK_DOT_PX;
+  line.style.top = `${mid - level * half}px`;
+  $("peakreadoutceiling").textContent = `Ceiling ${formatCeilingDb(p.ceilingDb)}`;
+  // Only a finished waveform is counted: mid-recompute, wavePeaks is the old mix's.
+  const ready = ($("audio-waveform") as HTMLCanvasElement).dataset.state === "ready";
+  const peaks = ready ? wavePeaks : null;
+  const counted = peaks ? peaksOver(peaks, level) : null;
+  $("peakreadoutcount").textContent = counted ? `${counted.length} peak${counted.length === 1 ? "" : "s"} over` : "";
+  ($("peakreadoutdot") as HTMLElement).hidden = !counted || counted.length === 0;
+  if (!counted || !peaks) return;
+  const track = $("timeline").getBoundingClientRect();
+  const laneBox = lane.getBoundingClientRect();
+  const wrap = (document.querySelector(".timelinewrap") as HTMLElement).getBoundingClientRect();
+  const MARKER_GAP_PX = 4;
+  for (const run of counted) {
+    const x = track.left + (((run.start + run.end) / 2) / peaks.length) * track.width;
+    if (x < laneBox.left || x > laneBox.right) continue;
+    const m = document.createElement("i");
+    m.className = "peakmarker";
+    m.style.left = `${x - wrap.left}px`;
+    m.style.top = `${laneBox.top - wrap.top - MARKER_GAP_PX}px`;
+    markers.append(m);
+  }
+}
+
+$("peaklimiton").addEventListener("change", () => {
+  setPeakLimit({ ...currentPeakLimit(), enabled: ($("peaklimiton") as HTMLInputElement).checked }, true);
+});
+$("peakceiling").addEventListener("input", () => {
+  setPeakLimit({ ...currentPeakLimit(), ceilingDb: Number(($("peakceiling") as HTMLInputElement).value) }, false);
+});
+$("peakceiling").addEventListener("change", () => {
+  void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+(() => {
+  const handle = $("ceilinghandle");
+  let dragging = false;
+  const dbAt = (clientY: number): number => {
+    const lane = $("audio-lane");
+    const r = lane.getBoundingClientRect();
+    const mid = (lane.clientHeight || audioLaneHeight) / 2;
+    const half = mid - PEAK_DOT_PX;
+    const level = half > 0 ? (mid - (clientY - r.top)) / half : 1;
+    return level > 0 ? 20 * Math.log10(level) : CEILING_DB_MIN;
+  };
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragging = true;
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    if ((e.buttons & 1) === 0) { dragging = false; return; }
+    const db = Math.min(CEILING_DB_MAX, Math.max(CEILING_DB_MIN, dbAt(e.clientY)));
+    setPeakLimit({ ...currentPeakLimit(), ceilingDb: db }, false);
+  });
+  const end = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    void persistProject().catch((e: any) => alertUser(String(e?.message ?? e)));
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  handle.addEventListener("lostpointercapture", end);
+  handle.addEventListener("keydown", (e) => {
+    const step = e.key === "ArrowUp" ? 0.5 : e.key === "ArrowDown" ? -0.5 : 0;
+    if (!step) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const p = currentPeakLimit();
+    setPeakLimit({ ...p, ceilingDb: Math.min(CEILING_DB_MAX, Math.max(CEILING_DB_MIN, p.ceilingDb + step)) }, true);
+  });
+})();
 
 $("voicecleanon").addEventListener("change", () => {
   if (!openProject) return;
@@ -2983,6 +3349,9 @@ function selectSection(s: PaneSection): void {
   if ($("sectionswitch").querySelector(`[data-section="${s}"]`)?.hasAttribute("hidden")) s = "frame";
   const was = paneSection;
   paneSection = s;
+  // STC-606: the section overlays show only while their section is active,
+  // keyed off this attribute in CSS (body[data-section="zoom"] ...).
+  document.body.dataset.section = s;
   for (const tab of $("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")) {
     const on = tab.dataset.section === s;
     tab.setAttribute("aria-selected", String(on));
@@ -3004,7 +3373,20 @@ function selectSection(s: PaneSection): void {
     void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
   }
   layoutPipOverlay();
+  // STC-606: after the panels swap, so the overlays measure the timeline the
+  // section actually shows (a px-placed bar measured before it went stale).
+  layoutSectionOverlays();
 }
+
+/** The section overlays placed in px (STC-606), measured from the lanes now. */
+function layoutSectionOverlays(): void {
+  layoutExportOverlays();
+  layoutZoomChip();
+  layoutPeakOverlays();
+}
+// The lanes can change width with no window resize (the pane's contents, a
+// scrollbar): the overlays placed in px follow, as the %-placed brackets do.
+new ResizeObserver(() => layoutSectionOverlays()).observe(document.querySelector(".timelinewrap") as HTMLElement);
 
 $("sectionswitch").addEventListener("click", (e) => {
   const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-section]");
@@ -3115,10 +3497,12 @@ async function loadPreviewAudio(session: LoadedSession, gen: number): Promise<vo
  * keeps being scheduled, so the clock the picture follows never changes
  * under a mute.
  */
-function previewLevels(): { system: number; mic: number } {
+function previewLevels(): { system: number; mic: number; ceiling: number } {
   return {
     system: openProject?.systemAudioMuted ? 0 : openProject?.systemAudioLevel ?? 1,
     mic: openProject?.micMuted ? 0 : openProject?.micLevel ?? 1,
+    // STC-606: Limit peaks moves the mix's hard limit down to the ceiling.
+    ceiling: mixLimit(openProject?.peakLimit),
   };
 }
 
@@ -3397,6 +3781,10 @@ function onHandleDown(which: "in" | "out", e: PointerEvent): void {
 
 function onHandleMove(e: PointerEvent): void {
   if (!dragging || !player || !openProject) return;
+  // STC-606: a move with no button down means the release was missed (seen
+  // when a second drag followed at once: the in-point then chased the pointer
+  // to the out bar). End the drag rather than move a point nobody holds.
+  if ((e.buttons & 1) === 0) { onHandleUp(); return; }
   const durationNs = player.durationNs;
   const startFrame = nsToFrame(openProject.trim?.startNs ?? 0, durationNs);
   const endFrame = nsToFrame(openProject.trim?.endNs ?? durationNs, durationNs);
@@ -3407,23 +3795,27 @@ function onHandleMove(e: PointerEvent): void {
   if (dragging === "in") setTrim(frameToNs(clamped, durationNs), frameToNs(endFrame, durationNs), false);
   else setTrim(frameToNs(startFrame, durationNs), frameToNs(clamped, durationNs), false);
 
-  const handle = $(dragging === "in" ? "trim-in" : "trim-out");
-  if (held) {
-    const r = $("timeline").getBoundingClientRect();
-    const clampedX = r.left + fractionOfFrame(clamped, durationNs) * r.width;
-    const excess = dragging === "in" ? e.clientX - clampedX : clampedX - e.clientX;
-    const band = rubberBandPx(excess) * (dragging === "in" ? 1 : -1);
-    handle.classList.add("held");
-    handle.style.marginLeft = `${-5 + band}px`;
-  } else {
-    handle.classList.remove("held");
-    handle.style.marginLeft = "";
+  // STC-606: the Export section's bar for the same point rubber-bands with it.
+  const marks = dragging === "in" ? ["trim-in", "exportbar-in"] : ["trim-out", "exportbar-out"];
+  for (const id of marks) {
+    const handle = $(id);
+    if (held) {
+      const r = $("timeline").getBoundingClientRect();
+      const clampedX = r.left + fractionOfFrame(clamped, durationNs) * r.width;
+      const excess = dragging === "in" ? e.clientX - clampedX : clampedX - e.clientX;
+      const band = rubberBandPx(excess) * (dragging === "in" ? 1 : -1);
+      handle.classList.add("held");
+      handle.style.marginLeft = `${-5 + band}px`;
+    } else {
+      handle.classList.remove("held");
+      handle.style.marginLeft = "";
+    }
   }
 }
 
 function onHandleUp(): void {
   if (!dragging) return;
-  for (const id of ["trim-in", "trim-out"]) {
+  for (const id of ["trim-in", "trim-out", "exportbar-in", "exportbar-out"]) {
     $(id).classList.remove("held");
     $(id).style.marginLeft = "";
   }
@@ -3438,6 +3830,16 @@ $("trim-in").addEventListener("pointerup", onHandleUp);
 $("trim-out").addEventListener("pointerup", onHandleUp);
 $("trim-in").addEventListener("pointercancel", onHandleUp);
 $("trim-out").addEventListener("pointercancel", onHandleUp);
+$("trim-in").addEventListener("lostpointercapture", onHandleUp);
+$("trim-out").addEventListener("lostpointercapture", onHandleUp);
+// STC-606: the Export section's bars drag the same points.
+for (const [id, which] of [["exportbar-in", "in"], ["exportbar-out", "out"]] as const) {
+  $(id).addEventListener("pointerdown", (e) => onHandleDown(which, e as PointerEvent));
+  $(id).addEventListener("pointermove", (e) => onHandleMove(e as PointerEvent));
+  $(id).addEventListener("pointerup", onHandleUp);
+  $(id).addEventListener("pointercancel", onHandleUp);
+  $(id).addEventListener("lostpointercapture", onHandleUp);
+}
 
 // ---- export -------------------------------------------------------------
 
