@@ -2988,7 +2988,7 @@ const KNOWN_PROJECT_FIELDS = new Set([
   "version", "output", "cursor", "transform", "pip", "trim", "zoom", "textPt",
   "overrides", "slug", "bookmarks", "systemAudioLevel", "narrationCleanup",
   "micLevel", "micMuted", "systemAudioMuted", "showClicks", "keycast",
-  "framing",
+  "framing", "peakLimit",
 ]);
 
 /**

@@ -878,6 +878,7 @@ function scheduleWaveform(): void {
     durationNs: player.durationNs,
   });
   canvas.dataset.state = "computing";
+  layoutPeakOverlays(); // STC-606: the old count goes until the new mix is in
   const step = (): void => {
     if (run !== waveRun) return;
     const until = performance.now() + WAVE_SLICE_MS;
@@ -3075,7 +3076,9 @@ function layoutPeakOverlays(): void {
   const half = mid - PEAK_DOT_PX;
   line.style.top = `${mid - level * half}px`;
   $("peakreadoutceiling").textContent = `Ceiling ${formatCeilingDb(p.ceilingDb)}`;
-  const peaks = wavePeaks;
+  // Only a finished waveform is counted: mid-recompute, wavePeaks is the old mix's.
+  const ready = ($("audio-waveform") as HTMLCanvasElement).dataset.state === "ready";
+  const peaks = ready ? wavePeaks : null;
   const counted = peaks ? peaksOver(peaks, level) : null;
   $("peakreadoutcount").textContent = counted ? `${counted.length} peak${counted.length === 1 ? "" : "s"} over` : "";
   ($("peakreadoutdot") as HTMLElement).hidden = !counted || counted.length === 0;
