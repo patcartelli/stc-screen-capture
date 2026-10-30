@@ -73,7 +73,11 @@ describe("the Audio popover", () => {
     await expect.poll(() => panelOpen(win)).toBe(true);
     expect(await win.isVisible("#sysaudiolevel")).toBe(true);
     expect(await win.getAttribute("#micaudio", "hidden")).not.toBeNull();
-    expect(await win.getAttribute("#voiceclean", "hidden")).not.toBeNull();
+    // STC-606: Cleanup holds Limit peaks and Ceiling, which any take with audio
+    // has, so the group shows; its voice rows stay mic-only.
+    expect(await win.getAttribute("#voiceclean", "hidden")).toBeNull();
+    expect(await win.isVisible("#peaklimiton")).toBe(true);
+    expect(await win.isHidden("#voicecleanon")).toBe(true);
   }, 120_000);
 });
 

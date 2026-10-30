@@ -3352,9 +3352,6 @@ function selectSection(s: PaneSection): void {
   // STC-606: the section overlays show only while their section is active,
   // keyed off this attribute in CSS (body[data-section="zoom"] ...).
   document.body.dataset.section = s;
-  layoutExportOverlays();
-  layoutZoomChip();
-  layoutPeakOverlays();
   for (const tab of $("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")) {
     const on = tab.dataset.section === s;
     tab.setAttribute("aria-selected", String(on));
@@ -3376,7 +3373,20 @@ function selectSection(s: PaneSection): void {
     void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
   }
   layoutPipOverlay();
+  // STC-606: after the panels swap, so the overlays measure the timeline the
+  // section actually shows (a px-placed bar measured before it went stale).
+  layoutSectionOverlays();
 }
+
+/** The section overlays placed in px (STC-606), measured from the lanes now. */
+function layoutSectionOverlays(): void {
+  layoutExportOverlays();
+  layoutZoomChip();
+  layoutPeakOverlays();
+}
+// The lanes can change width with no window resize (the pane's contents, a
+// scrollbar): the overlays placed in px follow, as the %-placed brackets do.
+new ResizeObserver(() => layoutSectionOverlays()).observe(document.querySelector(".timelinewrap") as HTMLElement);
 
 $("sectionswitch").addEventListener("click", (e) => {
   const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-section]");

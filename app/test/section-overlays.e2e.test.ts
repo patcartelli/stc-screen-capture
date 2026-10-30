@@ -192,13 +192,17 @@ describe("the Zoom chip", () => {
     expect(chip.bottom).toBeLessThanOrEqual(clip.top);
     // Centred over the block (the block is mid-take, so no clamping here).
     expect(Math.abs((chip.left + chip.right) / 2 - (block.left + block.right) / 2)).toBeLessThanOrEqual(2);
-    // Another section hides it; back to Zoom shows it again.
+    // Closing the block hides it.
+    await done(win);
+    expect((await rect(win, "#zoomchip")).shown).toBe(false);
+    // Leaving Zoom commits and closes an open block (STC-604), so the chip
+    // goes with the section and does not come back on its own.
+    await win.click(".zoomblock");
+    await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
+    expect((await rect(win, "#zoomchip")).shown).toBe(true);
     await win.click("#tab-frame");
     expect((await rect(win, "#zoomchip")).shown).toBe(false);
     await win.click("#tab-zoom");
-    expect((await rect(win, "#zoomchip")).shown).toBe(true);
-    // Closing the block hides it.
-    await done(win);
     expect((await rect(win, "#zoomchip")).shown).toBe(false);
   }, 60_000);
 
