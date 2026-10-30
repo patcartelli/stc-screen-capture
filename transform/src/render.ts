@@ -5,8 +5,9 @@ import {
   throughCrop, throughCropVector, uvRectToPixels, type Rect, type Size,
 } from "./spaces.js";
 import {
-  ZOOM_PRESETS, createZoomSim, zoomWindows, type ZoomPreset, type ZoomSim, type ZoomWindow,
+  createZoomSim, zoomWindows, type ZoomSim, type ZoomWindow,
 } from "./zoom.js";
+import { zoomEasingOf } from "./zoom-easing.js";
 import {
   groupByEasing, manualWindows, nearestWindow, resolvedCrop, resolvedWindows, windowId,
   type CombinedZoomWindow,
@@ -214,7 +215,7 @@ const windowsCache = new WeakMap<Session, ZoomWindow[]>();
  * overrides would have shared one answer — the same "a cache that ignores
  * an input" trap this comment already warned about once.
  */
-const zoomCache = new WeakMap<Session, Map<string, Map<ZoomPreset, ZoomSim>>>();
+const zoomCache = new WeakMap<Session, Map<string, Map<string, ZoomSim>>>();
 
 /**
  * Stage 2's derived crop (STC-326), memoised per window — it is a pure
@@ -281,8 +282,11 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   let groupSims = byKey.get(overridesKey);
   if (!groupSims) {
     groupSims = new Map();
-    for (const [name, ws] of groupByEasing(windows, project.overrides, zoom.preset)) {
-      groupSims.set(name, createZoomSim(ws, ZOOM_PRESETS[name]));
+    // One sim per resolved PAIR of speeds (STC-619): a preset's own pair is
+    // exactly that preset's shoulders, so a block with no per-direction
+    // setting steps what it always did.
+    for (const [key, g] of groupByEasing(windows, project.overrides, zoom.preset)) {
+      groupSims.set(key, createZoomSim(g.windows, zoomEasingOf(g.pair)));
     }
     byKey.set(overridesKey, groupSims);
   }

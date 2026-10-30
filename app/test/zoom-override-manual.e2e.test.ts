@@ -171,7 +171,8 @@ describe("the preset picker on a manual window", () => {
   test("a chosen easing is written on the override, required rather than falling back to the project", async () => {
     const { win, takeDir } = await openPreview();
     await clickEmptyLane(win);
-    await win.selectOption("#overridepreset", "snappy");
+    await win.selectOption("#overridein", "snappy");
+    await win.selectOption("#overrideout", "snappy");
     await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.[0]?.easing, { timeout: 10_000 }).toBe("snappy");

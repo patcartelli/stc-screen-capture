@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { committedOverrides, type OverrideEdit } from "../src/override-edit.js";
+import { committedOverrides, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft } from "../src/override-edit.js";
 import type { SessionEvent, ZoomOverride } from "@transform/types";
 import { zoomWindows } from "@transform/zoom";
 import { windowId } from "@transform/zoom-override";
@@ -10,6 +10,8 @@ import { windowId } from "@transform/zoom-override";
 // mid-edit" and "what Done writes" cannot drift apart.
 
 const MS = 1_000_000;
+/** Both sides on Fast: what the single "Snappy" picker used to mean. */
+const SNAPPY: SpeedDraft = { in: "snappy", out: "snappy" };
 const down = (ms: number): SessionEvent => ({ t: ms * MS, kind: "down", x: 0, y: 0, button: 0 });
 const up = (ms: number): SessionEvent => ({ t: ms * MS, kind: "up", x: 0, y: 0, button: 0 });
 
@@ -30,10 +32,10 @@ const others: ZoomOverride[] = [
 ];
 
 const derived = (o: Partial<Extract<OverrideEdit, { kind: "derived" }>> = {}): OverrideEdit => ({
-  kind: "derived", windowId: id1, rect: null, easing: "", startNs: w1!.startNs, endNs: w1!.endNs, ...o,
+  kind: "derived", windowId: id1, rect: null, easing: NO_SPEEDS, startNs: w1!.startNs, endNs: w1!.endNs, ...o,
 });
 const manual = (o: Partial<Extract<OverrideEdit, { kind: "manual" }>> = {}): OverrideEdit => ({
-  kind: "manual", id: "m1", rect: R, easing: "", startNs: 5000 * MS, endNs: 8000 * MS, ...o,
+  kind: "manual", id: "m1", rect: R, easing: NO_SPEEDS, startNs: 5000 * MS, endNs: 8000 * MS, ...o,
 });
 
 const forWindow = (list: ZoomOverride[], id: string) =>
@@ -47,7 +49,7 @@ describe("committedOverrides — a derived window (STC-330 geometry, STC-329 ret
   });
 
   test("geometry with an explicit easing carries it; an empty picker writes no easing key", () => {
-    const withEasing = committedOverrides([], derived({ rect: R, easing: "snappy" }), events, "calm");
+    const withEasing = committedOverrides([], derived({ rect: R, easing: SNAPPY }), events, "calm");
     expect(withEasing).toEqual([{ kind: "geometry", windowId: id1, rect: R, easing: "snappy" }]);
     const without = committedOverrides([], derived({ rect: R }), events, "calm");
     expect("easing" in without[0]!).toBe(false);
@@ -101,7 +103,7 @@ describe("committedOverrides — a derived window (STC-330 geometry, STC-329 ret
     ];
     const out = committedOverrides(
       input,
-      derived({ rect: R, easing: "snappy", startNs: w1!.startNs + 10 * MS, endNs: w1!.endNs + 10 * MS }),
+      derived({ rect: R, easing: SNAPPY, startNs: w1!.startNs + 10 * MS, endNs: w1!.endNs + 10 * MS }),
       events, undefined,
     );
     expect(out).toEqual(input);
@@ -127,7 +129,7 @@ describe("committedOverrides — a derived window (STC-330 geometry, STC-329 ret
 
 describe("committedOverrides — a manual window (STC-331)", () => {
   test("written with the draft's own easing", () => {
-    const out = committedOverrides(others, manual({ easing: "snappy" }), events, "calm");
+    const out = committedOverrides(others, manual({ easing: SNAPPY }), events, "calm");
     expect(out).toEqual([
       ...others,
       { kind: "manual", id: "m1", startNs: 5000 * MS, endNs: 8000 * MS, rect: R, easing: "snappy" },
@@ -149,7 +151,7 @@ describe("committedOverrides — a manual window (STC-331)", () => {
       ...others,
       { kind: "manual", id: "m1", startNs: 1, endNs: 2, rect: R2, easing: "calm" },
     ];
-    const out = committedOverrides(prior, manual({ easing: "snappy" }), events, undefined);
+    const out = committedOverrides(prior, manual({ easing: SNAPPY }), events, undefined);
     expect(out.filter((o) => o.kind === "manual" && o.id === "m1")).toHaveLength(1);
     expect(out.slice(0, 3)).toEqual(others);
   });
@@ -172,5 +174,49 @@ describe("committedOverrides — absent overrides", () => {
   test("undefined input is an empty list", () => {
     expect(committedOverrides(undefined, derived(), events, undefined)).toEqual([]);
     expect(committedOverrides(undefined, manual({ rect: null }), events, undefined)).toEqual([]);
+  });
+});
+
+// STC-619: the two Ease rows
+describe("committing per-direction speeds (STC-619)", () => {
+  test("equal sides are written as the preset's name, the way every older document is", () => {
+    const out = committedOverrides([], derived({ rect: R, easing: SNAPPY }), events, "calm");
+    expect(out).toEqual([{ kind: "geometry", windowId: id1, rect: R, easing: "snappy" }]);
+  });
+
+  test("slow in and fast out is an object holding both sides", () => {
+    const out = committedOverrides([], derived({ rect: R, easing: { in: "calm", out: "snappy" } }), events, "standard");
+    expect(out).toEqual([{ kind: "geometry", windowId: id1, rect: R, easing: { in: "calm", out: "snappy" } }]);
+  });
+
+  test("one side set writes only that side; the other stays the project's default", () => {
+    const out = committedOverrides([], derived({ rect: R, easing: { in: "calm", out: "" } }), events, "standard");
+    expect(out).toEqual([{ kind: "geometry", windowId: id1, rect: R, easing: { in: "calm" } }]);
+  });
+
+  test("both sides on Project default write no easing key", () => {
+    const out = committedOverrides([], derived({ rect: R, easing: NO_SPEEDS }), events, "standard");
+    expect("easing" in out[0]!).toBe(false);
+  });
+
+  test("a manual window resolves each unset side to the project's preset, else standard", () => {
+    expect(committedOverrides([], manual({ easing: { in: "calm", out: "" } }), events, "snappy")[0])
+      .toMatchObject({ kind: "manual", easing: { in: "calm", out: "snappy" } });
+    expect(committedOverrides([], manual({ easing: { in: "", out: "calm" } }), events, undefined)[0])
+      .toMatchObject({ kind: "manual", easing: { in: "standard", out: "calm" } });
+  });
+
+  test("a manual window that resolves to equal sides is written as the name", () => {
+    expect(committedOverrides([], manual({ easing: { in: "calm", out: "" } }), events, "calm")[0])
+      .toMatchObject({ kind: "manual", easing: "calm" });
+  });
+
+  test("draftOf shows a saved easing as the two rows do, and is the inverse of committing it", () => {
+    expect(draftOf(undefined)).toEqual({ in: "", out: "" });
+    expect(draftOf("snappy")).toEqual({ in: "snappy", out: "snappy" });
+    expect(draftOf({ in: "calm" })).toEqual({ in: "calm", out: "" });
+    const saved = { in: "calm", out: "snappy" } as const;
+    const out = committedOverrides([], derived({ rect: R, easing: draftOf(saved) }), events, "standard");
+    expect(out[0]).toMatchObject({ easing: saved });
   });
 });
