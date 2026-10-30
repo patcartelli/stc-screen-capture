@@ -19,10 +19,20 @@ import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 let app: ElectronApplication | undefined;
 afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, APP_CLOSE_MS);
 
+/**
+ * `waitForTakeLoaded` returns before the player reports its duration: the
+ * clock still reads "/ 0:00:00" and a bracket that sits at the take's end is
+ * on the start. Layout reads wait for the total, or they measure a frame the
+ * editor has not drawn yet (found on a Mac pass, STC-607).
+ */
+const waitForDuration = (win: Page) =>
+  win.waitForFunction(() => !/\/\s*0:00:00\s*$/.test(document.getElementById("clock")?.textContent ?? ""), null, { timeout: 20_000 });
+
 async function openEditor(): Promise<Page> {
   const { app: a, editorWin } = await launchWithTakeInEditor();
   app = a;
   await waitForTakeLoaded(editorWin);
+  await waitForDuration(editorWin);
   return editorWin;
 }
 
@@ -455,6 +465,7 @@ describe("the Export overlay", () => {
     const { app: a, editorWin: win, takeDir } = await launchWithTakeInEditor();
     app = a;
     await waitForTakeLoaded(win);
+    await waitForDuration(win);
     await win.click("#tab-export");
     const track = await box(win, "#timeline");
     const bin = await box(win, "#exportbar-in");
@@ -491,6 +502,7 @@ describe("the Export overlay", () => {
     const win = await openEditorFromLibrary(app, launched.win);
     await waitForTakeLoaded(win);
     await win.waitForSelector("#audio-lane:not([hidden])", { timeout: 20_000 });
+    await waitForDuration(win);
     await win.click("#tab-export");
     const track = await box(win, "#timeline");
     // The in bar first, then the out bar straight after with no wait: that
