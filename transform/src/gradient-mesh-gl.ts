@@ -1,19 +1,15 @@
-// Vendored from patcartelli/studio-cartelli, src/lib/gradient-mesh-gl.ts, as of commit 3ea1d6b
-// (STC-610, PRs #779 and #790) — NOT imported: the two are separate repos
-// with no package published between them, the same arrangement as
-// transform/src/frame-diff-rule.ts. Ported into Capture's still pipeline by
-// STC-622. A re-sync is a deliberate, by-hand decision, never a silent drift.
+// Vendored from patcartelli/studio-cartelli, src/lib/gradient-mesh-gl.ts, as of commit 3f724eb
+// (STC-610, PRs #779 and #790; the PCG grain hash, STC-622, PR #792) — NOT
+// imported: the two are separate repos with no package published between
+// them, the same arrangement as transform/src/frame-diff-rule.ts. Ported into
+// Capture's still pipeline by STC-622. A re-sync is a deliberate, by-hand
+// decision, never a silent drift.
 //
 // Changed on the way in: import specifiers end in .js rather than .ts,
 // because this repo's tsconfig resolves the bundler way without
-// allowImportingTsExtensions. And ONE deliberate divergence (STC-622,
-// Patrick 2026-10-30): the grain hash is a PCG integer hash (`grain` below),
-// as the STC-610 decision recommended, instead of upstream's
-// fract(sin-free float product) `hash`. The float hash had a faint
-// repeating structure and let float32 rounding pick a different grain value
-// for ~1 pixel in 5,000 against the CPU reference; integers have neither.
-// Same amplitude (a uniform +-0.0175), so the look's strength is unchanged;
-// only the pattern is new. A re-sync from upstream must keep this.
+// allowImportingTsExtensions. Nothing else: the grain is a PCG integer hash
+// upstream too (STC-622, Patrick 2026-10-30), so the lab page and Capture
+// draw identical grain.
 //
 // ── upstream file, verbatim from here ─────────────────────────────────────
 //
