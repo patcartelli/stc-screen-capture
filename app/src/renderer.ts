@@ -130,6 +130,7 @@ import {
 import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS } from "./stop-copy.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
+import { withMeshBackground } from "@transform/still-mesh";
 import { colorSpaceFor, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { composeStill, stillPixelBytes } from "./still-compose.js";
 import type { Shot } from "@transform/shot";
@@ -501,7 +502,8 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
     // against the frame, and reading the composite would read pixels a
     // previous fill had already replaced.
     const fills = sampleRedactionFills(frame, shot.frame, decorated.decoration.redactions);
-    renderStill(ctx as never, { frame, redactionFills: fills }, layout);
+    withMeshBackground(layout.background, full.width, full.height, (background) =>
+      renderStill(ctx as never, { frame, redactionFills: fills, background }, layout));
 
     const small = document.createElement("canvas");
     small.width = Math.max(1, Math.round(full.width * fit));

@@ -97,11 +97,16 @@ function paintBackground(ctx: StillRenderContext, bg: Background,
                          width: number, height: number, image: unknown): void {
   const colors = bg.colors && bg.colors.length > 0 ? bg.colors : ["#ffffff"];
 
-  if (bg.kind === "image" || bg.kind === "wallpaper") {
+  if (bg.kind === "image" || bg.kind === "wallpaper" || bg.kind === "mesh") {
     // No image supplied — for `wallpaper` that is the normal state today,
     // since nothing sources the desktop picture yet (STC-291, not built). Fall
     // back to the first colour rather than leaving the canvas transparent: a
     // mode that promises a background must produce one.
+    //
+    // A `mesh` arrives here already drawn, by `still-mesh.ts`'s
+    // `renderMeshBackground` at this canvas's own size (STC-622): this file
+    // stays a file that draws what it is told. Without one — a caller that
+    // never rendered it — the darkest stop, which is what most of a mesh is.
     if (image) {
       ctx.drawImage(image, 0, 0, width, height);
       return;
@@ -152,7 +157,10 @@ export function shadowParkDistance(layout: StillLayout): number {
 export interface StillSources {
   /** The captured frame. Null renders everything except the capture itself. */
   frame: unknown;
-  /** A background image for `image`/`wallpaper` modes, when one was supplied. */
+  /**
+   * A background image for `image`/`wallpaper` modes, when one was supplied,
+   * or a `mesh` background already rendered at the canvas's size (STC-622).
+   */
   background?: unknown;
   /**
    * One CSS colour per `layout.redactions`, in the same order (STC-297).

@@ -4,8 +4,9 @@ import { join } from "node:path";
 import AjvImport from "ajv";
 import {
   parseShot, shotForWrite, defaultDecoration, ShotLoadError,
-  DECORATION_MODES, WINDOW_MODES, type Shot,
+  DECORATION_MODES, WINDOW_MODES, versionFor, type Shot,
 } from "../src/shot.js";
+import { meshBackground } from "../src/still-mesh.js";
 import { CURSOR_SHAPES } from "../src/cursor-art.js";
 
 // CJS/ESM interop: ajv v8 ships CJS; vitest may or may not unwrap the default.
@@ -30,10 +31,11 @@ const ajv = new Ajv({ allErrors: true, strict: true });
  * than about any one document. Those lists have to match the loader's, and they
  * live in the version that has all of them.
  */
-const schema = load("schema/shot-2.schema.json");
+const schema = load("schema/shot-3.schema.json");
 const VALIDATORS: Record<number, ReturnType<typeof ajv.compile>> = {
   1: ajv.compile(load("schema/shot-1.schema.json")),
   2: ajv.compile(load("schema/shot-2.schema.json")),
+  3: ajv.compile(load("schema/shot-3.schema.json")),
 };
 let lastErrors: unknown;
 function validate(doc: any): boolean {
@@ -135,7 +137,7 @@ describe("shot-1 schema and loader agree", () => {
 
 describe("documents that must be refused — by both the schema and the loader", () => {
   const refused: [string, (d: any) => void][] = [
-    ["a future version", (d) => { d.version = 3; }],
+    ["a future version", (d) => { d.version = 4; }],
     ["no version", (d) => { delete d.version; }],
     ["a crop on a window shot", (d) => { Object.assign(d, clone(windowShot)); d.crop = { x: 0, y: 0, width: 1, height: 1 }; }],
     ["a window block on a display-crop shot", (d) => { d.window = clone(windowShot).window; }],
@@ -194,5 +196,108 @@ describe("what the loader tolerates that the schema also tolerates", () => {
     expect(shot.decoration).toEqual({ ...doc.decoration, annotations: [] });
     // ...and the write path puts the document back exactly as it was.
     expect(JSON.parse(JSON.stringify(shotForWrite(shot))).decoration).toEqual(doc.decoration);
+  });
+});
+
+/**
+ * shot-3 (STC-622): STC-610's gradient mesh, stored as its settings. The
+ * schema and the loader are held to each other here exactly as shot-1's are
+ * above — a document one accepts, the other must parse; one it refuses, the
+ * other must refuse.
+ */
+describe("shot-3: the mesh background", () => {
+  const MESH = {
+    kind: "mesh", colors: ["#050a12", "#0d4a52", "#5b3fd1"], seed: 806664024,
+    sheen: 0.9, warp: 0.22, scale: 0.75, grain: true, points: null, t: 11.734,
+  };
+  /** The decision's own example document, on the window shot. */
+  const meshShot = () => {
+    const d = clone(windowShot) as any;
+    d.version = 3;
+    d.decoration.mode = "window-shadow-background";
+    d.decoration.background = clone(MESH);
+    return d;
+  };
+
+  test("STC-610's example document validates and round-trips at v3", () => {
+    const doc = meshShot();
+    expect(validate(doc), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    const shot = parseShot(doc);
+    expect(shot.decoration.background).toEqual(MESH);
+    const written = JSON.parse(JSON.stringify(shotForWrite(shot)));
+    expect(written.version).toBe(3);
+    expect(written.decoration.annotations).toBeUndefined();
+    expect(validate(written), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    expect(written).toEqual(doc);
+  });
+
+  test("dragged points round-trip", () => {
+    const doc = meshShot();
+    doc.decoration.background.points = [[0, 1], [0.25, 0.5], [1, 0], [0.5, 0.5]];
+    expect(validate(doc), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    expect(parseShot(doc).decoration.background?.points).toEqual([[0, 1], [0.25, 0.5], [1, 0], [0.5, 0.5]]);
+  });
+
+  test("the version is the minimum: a mesh is v3, and taking it away goes back", () => {
+    const shot = parseShot(meshShot());
+    expect(versionFor(shot)).toBe(3);
+    const marked = { ...shot, decoration: { ...shot.decoration, annotations: [
+      { kind: "arrow" as const, from: { x: 0.1, y: 0.1 }, to: { x: 0.5, y: 0.5 }, weight: "bold" as const } ] } };
+    expect(versionFor(marked)).toBe(3);
+    const withAnnotations = JSON.parse(JSON.stringify(shotForWrite(marked)));
+    expect(withAnnotations.decoration.annotations).toHaveLength(1);
+    expect(validate(withAnnotations), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    const linear = { ...shot, decoration: { ...shot.decoration, background: { kind: "linear" as const, colors: ["#000000", "#ffffff"] } } };
+    expect(shotForWrite(linear).version).toBe(1);
+    expect(shotForWrite({ ...linear, decoration: { ...linear.decoration, annotations: marked.decoration.annotations } }).version).toBe(2);
+  });
+
+  test("a fresh mesh validates, with grain on", () => {
+    const bg = meshBackground(42);
+    expect(bg.grain).toBe(true);
+    const shot = parseShot(meshShot());
+    const written = JSON.parse(JSON.stringify(shotForWrite({ ...shot, decoration: { ...shot.decoration, background: bg } })));
+    expect(validate(written), JSON.stringify(validate.errors, null, 2)).toBe(true);
+  });
+
+  const refused: [string, (d: any) => void][] = [
+    ["a mesh in a v2 document", (d) => { d.version = 2; }],
+    ["a mesh in a v1 document", (d) => { d.version = 1; }],
+    ["two colours", (d) => { d.decoration.background.colors = ["#000000", "#ffffff"]; }],
+    ["four colours", (d) => { d.decoration.background.colors.push("#ffffff"); }],
+    ["a colour with alpha", (d) => { d.decoration.background.colors[0] = "#050a12ff"; }],
+    ["no seed", (d) => { delete d.decoration.background.seed; }],
+    ["a negative seed", (d) => { d.decoration.background.seed = -1; }],
+    ["a seed past uint32", (d) => { d.decoration.background.seed = 2 ** 32; }],
+    ["a fractional seed", (d) => { d.decoration.background.seed = 1.5; }],
+    ["sheen past 0.9", (d) => { d.decoration.background.sheen = 1; }],
+    ["warp past 0.6", (d) => { d.decoration.background.warp = 0.7; }],
+    ["scale under 0.2", (d) => { d.decoration.background.scale = 0.1; }],
+    ["scale past 1.5", (d) => { d.decoration.background.scale = 1.6; }],
+    ["grain as a number", (d) => { d.decoration.background.grain = 1; }],
+    ["no points key (null is the explicit 'untouched')", (d) => { delete d.decoration.background.points; }],
+    ["three points", (d) => { d.decoration.background.points = [[0, 0], [0, 0], [0, 0]]; }],
+    ["a point outside 0..1", (d) => { d.decoration.background.points = [[0, 0], [0, 0], [0, 0], [1.2, 0]]; }],
+    ["no t", (d) => { delete d.decoration.background.t; }],
+    ["calm (left out on purpose)", (d) => { d.decoration.background.calm = 0; }],
+    ["a stored noise offset (it derives from the seed)", (d) => { d.decoration.background.offset = [1, 2]; }],
+    ["an angle on a mesh", (d) => { d.decoration.background.angleDeg = 90; }],
+    ["a mesh setting on a linear background", (d) => {
+      d.version = 1; d.decoration.background = { kind: "linear", colors: ["#000000", "#ffffff"], seed: 3 };
+    }],
+  ];
+  test.each(refused)("%s is refused by both", (_name, mutate) => {
+    const doc = meshShot();
+    mutate(doc);
+    expect(validate(doc), "the schema accepted it").toBe(false);
+    expect(() => parseShot(doc)).toThrow(ShotLoadError);
+  });
+
+  test("the loader's ranges are the schema's", () => {
+    const p = schema.properties.decoration.properties.background.properties;
+    for (const k of ["sheen", "warp", "scale"] as const) {
+      expect([p[k].minimum, p[k].maximum], k).toEqual(
+        ({ sheen: [0, 0.9], warp: [0, 0.6], scale: [0.2, 1.5] })[k]);
+    }
   });
 });
