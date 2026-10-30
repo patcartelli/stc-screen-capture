@@ -109,6 +109,8 @@ export type OverrideEdit =
       /** The draft's timing; a retime is written only where it differs from the TRUE derived bounds. */
       startNs: number;
       endNs: number;
+      /** Follow cursor (STC-617): written as `follow: true` on the geometry entry, so only with a rect. */
+      follow?: boolean;
     }
   | {
       kind: "manual";
@@ -119,6 +121,8 @@ export type OverrideEdit =
       easing: SpeedDraft;
       startNs: number;
       endNs: number;
+      /** Follow cursor (STC-617). */
+      follow?: boolean;
     };
 
 export function overridesWithoutWindow(overrides: readonly ZoomOverride[] | undefined, id: string): ZoomOverride[] {
@@ -153,6 +157,11 @@ export function overridesWithoutManual(overrides: readonly ZoomOverride[] | unde
  * the project's preset for its out). Equal sides are written as the preset's
  * name. An empty `rect` deletes the window outright — its rect and timing ARE
  * the window.
+ *
+ * Follow cursor (STC-617) is written as `follow: true` on whichever entry
+ * carries the rect, and never otherwise: off is the field's absence, and a
+ * derived block with no rect has no entry to carry it (the editor gives it
+ * stage 2's rect the moment Follow is switched on).
  */
 export function committedOverrides(
   overrides: readonly ZoomOverride[] | undefined,
@@ -167,6 +176,7 @@ export function committedOverrides(
           kind: "manual" as const, id: edit.id, startNs: edit.startNs, endNs: edit.endNs,
           rect: edit.rect,
           easing: normalizeEasing(resolveEasing(normalizeEasing(pairOf(edit.easing)), preset ?? "standard")) as CompleteEasing,
+          ...(edit.follow ? { follow: true as const } : {}),
         }]
       : withoutThis;
   }
@@ -178,6 +188,7 @@ export function committedOverrides(
     ? [...withoutGeometry, {
         kind: "geometry" as const, windowId: id, rect: edit.rect,
         ...(easing !== undefined ? { easing } : {}),
+        ...(edit.follow ? { follow: true as const } : {}),
       }]
     : withoutGeometry;
 

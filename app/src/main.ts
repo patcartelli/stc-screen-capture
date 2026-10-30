@@ -3064,12 +3064,14 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
       if (!isPlainObject(entry)) throw new Error("project.json: overrides entry is not an object");
       if (entry.kind === "geometry") {
         if (typeof entry.windowId !== "string" || !entry.windowId || !isRect(entry.rect)
-            || (entry.easing !== undefined && !isEasingSpec(entry.easing))) {
+            || (entry.easing !== undefined && !isEasingSpec(entry.easing))
+            || (entry.follow !== undefined && entry.follow !== true)) {
           throw new Error("project.json: malformed geometry override");
         }
       } else if (entry.kind === "manual") {
         if (typeof entry.id !== "string" || !entry.id || !Number.isInteger(entry.startNs) || entry.startNs < 0
-            || !Number.isInteger(entry.endNs) || entry.endNs < 0 || !isRect(entry.rect) || !isCompleteEasing(entry.easing)) {
+            || !Number.isInteger(entry.endNs) || entry.endNs < 0 || !isRect(entry.rect) || !isCompleteEasing(entry.easing)
+            || (entry.follow !== undefined && entry.follow !== true)) {
           throw new Error("project.json: malformed manual override");
         }
       } else if (entry.kind === "removed") {

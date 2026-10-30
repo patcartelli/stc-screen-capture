@@ -147,6 +147,19 @@ export function resolvedCrop(
 }
 
 /**
+ * Whether a window's crop follows the cursor (STC-617): its manual entry's
+ * own flag, else its geometry override's. A window with no rect of its own
+ * never follows: `follow` lives only on the two variants that carry one.
+ */
+export function followsCursor(
+  overrides: readonly ZoomOverride[] | undefined,
+  window: CombinedZoomWindow,
+): boolean {
+  if (window.manual) return window.manual.follow === true;
+  return overrideFor(overrides, window)?.follow === true;
+}
+
+/**
  * A window's easing as a PAIR of preset names, one per direction (STC-619) —
  * the override's, side by side, else the project's own for any side it leaves
  * out. Names rather than the `{omega,zeta}` shoulders so callers can GROUP
