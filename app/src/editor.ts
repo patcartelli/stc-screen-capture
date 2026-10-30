@@ -1145,6 +1145,8 @@ let heldFraming: FramingHold | null = null;
 let editingManualId: string | null = null;
 let draftRect: Rect | null = null;
 let draftEasing: SpeedDraft = { ...NO_SPEEDS };
+/** The open block's Follow cursor switch (STC-617). */
+let draftFollow = false;
 let draftManualStart = 0;
 let draftManualEnd = 0;
 let dragAnchorUv: { x: number; y: number } | null = null;
@@ -1176,13 +1178,13 @@ function editState(): OverrideEdit | null {
   if (editingWindowId !== null) {
     return {
       kind: "derived", windowId: editingWindowId, rect: draftRect, easing: draftEasing,
-      startNs: draftManualStart, endNs: draftManualEnd,
+      startNs: draftManualStart, endNs: draftManualEnd, follow: draftFollow,
     };
   }
   if (editingManualId !== null) {
     return {
       kind: "manual", id: editingManualId, rect: draftRect, easing: draftEasing,
-      startNs: draftManualStart, endNs: draftManualEnd,
+      startNs: draftManualStart, endNs: draftManualEnd, follow: draftFollow,
     };
   }
   return null;
@@ -1386,6 +1388,7 @@ function updateManualDraftBlock(): void {
 function openOverrideEditorUI(): void {
   ($("overridein") as HTMLSelectElement).value = draftEasing.in;
   ($("overrideout") as HTMLSelectElement).value = draftEasing.out;
+  ($("zoomfollow") as HTMLInputElement).checked = draftFollow;
   const clear = $("overrideclear") as HTMLButtonElement;
   clear.disabled = !draftRect;
   clear.textContent = editingManualId ? "Delete window" : "Remove override";
@@ -1430,6 +1433,7 @@ function resetEditingState(): void {
   editingManualId = null;
   draftRect = null;
   draftEasing = { ...NO_SPEEDS };
+  draftFollow = false;
   draftManualStart = 0;
   draftManualEnd = 0;
   dragAnchorUv = null;
@@ -1484,6 +1488,7 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   const existing = overrideFor(openProject.overrides, w);
   draftRect = existing?.rect ?? null;
   draftEasing = draftOf(existing?.easing);
+  draftFollow = existing?.follow === true;
   // Seeded from `w`'s own (already RESOLVED, possibly already-retimed)
   // bounds — re-opening a retimed window edits from where it currently
   // plays, not from the original derivation.
@@ -1510,6 +1515,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   draftManualEnd = o.endNs;
   draftRect = o.rect;
   draftEasing = draftOf(o.easing);
+  draftFollow = o.follow === true;
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
   setAsideFraming();
   openOverrideEditorUI();
@@ -1538,6 +1544,7 @@ async function createManualWindow(clickNs: number): Promise<void> {
   draftManualEnd = endNs;
   draftRect = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
   draftEasing = { ...NO_SPEEDS };
+  draftFollow = false;
   setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((startNs + endNs) / 2));
@@ -1718,6 +1725,21 @@ $("chipdelete").addEventListener("click", () => {
   if (editingWindowId) $("overridedelete").click();
   else $("overrideclear").click();
 });
+// Follow cursor (STC-617): the block keeps its region's SIZE and the cursor
+// decides where it sits (zoom-follow.ts). An Auto block has no region to keep
+// a size from, so switching it on gives it the one stage 2 would zoom to, the
+// same starting region Amount uses.
+$("zoomfollow").addEventListener("change", () => {
+  if (!editingBlock()) return;
+  draftFollow = ($("zoomfollow") as HTMLInputElement).checked;
+  if (draftFollow && !draftRect) {
+    draftRect = startingRect();
+    ($("overrideclear") as HTMLButtonElement).disabled = false;
+    drawOverrideBox(draftRect);
+    ($("overridebox") as HTMLElement).setAttribute("data-shown", "");
+  }
+  layoutOverrideBlocks();
+});
 $("zoomamountrange").addEventListener("input", () => {
   setZoomAmount(Number(($("zoomamountrange") as HTMLInputElement).value));
 });
@@ -1751,6 +1773,7 @@ $("zoomamountrange").addEventListener("input", () => {
 })();
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
+  draftFollow = false;
   void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 $("overridedelete").addEventListener("click", () => {
@@ -2058,6 +2081,7 @@ async function closeTake(): Promise<void> {
   heldFraming = null; // the project is discarded below; nothing to restore into
   draftRect = null;
   draftEasing = { ...NO_SPEEDS };
+  draftFollow = false;
   dragAnchorUv = null;
   // STC-454: detach and drop the sound first, and bump the generation so a
   // decode or a cleanup still in flight for THIS take lands nowhere.

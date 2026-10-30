@@ -267,3 +267,25 @@ describe("the Zoom chip's amount (STC-606)", () => {
     near(amountOf(rectAtAmount({ x: 0.4, y: 0.4, width: 0.2, height: 0.2 }, 0.5)), ZOOM_AMOUNT_MIN);
   });
 });
+
+describe("committedOverrides — Follow cursor (STC-617)", () => {
+  test("on, a derived block's geometry entry carries follow: true", () => {
+    const out = committedOverrides(others, derived({ rect: R, follow: true }), events, undefined);
+    expect(forWindow(out, id1)).toEqual([{ kind: "geometry", windowId: id1, rect: R, follow: true }]);
+  });
+
+  test("off, it is the field's absence, never follow: false", () => {
+    const out = committedOverrides([], derived({ rect: R, follow: false }), events, undefined);
+    expect(forWindow(out, id1)).toEqual([{ kind: "geometry", windowId: id1, rect: R }]);
+  });
+
+  test("a derived block with no rect writes nothing, follow or not", () => {
+    const out = committedOverrides([], derived({ rect: null, follow: true }), events, undefined);
+    expect(forWindow(out, id1)).toEqual([]);
+  });
+
+  test("a manual block carries it too", () => {
+    const out = committedOverrides([], manual({ rect: R, follow: true }), events, undefined);
+    expect(out.find((o) => o.kind === "manual")).toMatchObject({ follow: true });
+  });
+});

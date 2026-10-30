@@ -18,6 +18,7 @@ import {
 } from "./keycast.js";
 import { FRAMING_PRESETS, DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_RADIUS_MAX } from "./framing.js";
 import { CAMERA_STALL_NS } from "./camera-gaps.js";
+import { FOLLOW_DEAD_ZONE_FRACTION, FOLLOW_OMEGA } from "./zoom-follow.js";
 
 /**
  * Which transform made the pixels (STC-308).
@@ -201,8 +202,18 @@ import { CAMERA_STALL_NS } from "./camera-gaps.js";
  * output frames. render() now returns no PiP whenever the screen has no frame yet. A take whose
  * screen starts at or before its camera draws exactly what version 16 did. No constant moved,
  * so the fingerprint is unchanged.
+ *
+ * ## Version 18: a zoom block can follow the cursor (STC-617)
+ *
+ * project-19's `follow: true` on a geometry or manual override keeps the
+ * block's rect size and moves its place with the pointer (zoom-follow.ts): it
+ * opens centred on the cursor, holds while the pointer stays in the middle
+ * `FOLLOW_DEAD_ZONE_FRACTION` of the crop, then pans on one critically damped
+ * `FOLLOW_OMEGA` spring, inside the frame. A document with no following block
+ * renders exactly what version 17 did. The fingerprint moved: the two follow
+ * constants reach the pixels.
  */
-export const TRANSFORM_VERSION = 17;
+export const TRANSFORM_VERSION = 18;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -223,6 +234,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 15, since: "2026-10-02", changed: "the styled PiP (STC-461): project-16's pip.style — shape (rect/square/circle) and corner radius, an authored centre and width (UV over the content rect, i.e. the whole output when there is no framing), a framing crop of the camera, mirror, border in display points and one drop shadow, all resolved in render() and drawn by the one compositor. A document with no style draws exactly what version 14 did. The fingerprint moved: PIP_SHADOW and DEFAULT_FRAMING reach the pixels" },
   { version: 16, since: "2026-10-16", changed: "no frozen PiP across a camera stall (STC-553, folding in STC-557): inside the camera track, the PiP is hidden from one frame interval after the last real frame to the first real frame after, across each anchors-16 camera.stalledSpans span and across any camera frame-grid gap longer than CAMERA_STALL_NS (3 s) of recording time. Paused time does not count toward a gap, and the PiP is never hidden inside a pause (camera-gaps.ts). A take whose camera never went 3 s without a frame outside a pause draws exactly what version 15 did. The fingerprint moved: CAMERA_STALL_NS reaches the pixels" },
   { version: 17, since: "2026-10-26", changed: "no PiP before the screen's first frame (STC-578): the camera is warmed during the countdown, so its first frame can land before the display's, and the PiP was drawn over the black painted for 'no screen frame yet' for up to three output frames. render() now returns no PiP while the screen has no frame. A take whose screen starts at or before its camera draws exactly what version 16 did. No constant reaches the pixels, so the fingerprint is unchanged" },
+  { version: 18, since: "2026-10-30", changed: "a zoom block can follow the cursor (STC-617): project-19's follow:true on a geometry or manual override keeps the block's rect SIZE and moves its place with the pointer (zoom-follow.ts). The crop opens centred on the cursor at the block's start, a goal centre moves only once the pointer leaves the middle FOLLOW_DEAD_ZONE_FRACTION (0.5) of the crop, and the crop chases it on one critically damped FOLLOW_OMEGA (8 rad/s) spring, clamped inside the frame and frozen after the block's end. Stepped per 120 Hz tick from the block's first tick with checkpoints, so a seek and a continuous run agree. A document with no following block renders exactly what version 17 did. The fingerprint moved: the follow constants reach the pixels" },
 ];
 
 /**
@@ -258,6 +270,8 @@ export function transformFingerprint(): string {
     framing: { FRAMING_PRESETS, DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_RADIUS_MAX },
     // STC-553: how long a camera gap must be before the PiP hides rather than freezes.
     cameraStall: CAMERA_STALL_NS,
+    // STC-617: where a following zoom block's crop sits.
+    zoomFollow: { FOLLOW_DEAD_ZONE_FRACTION, FOLLOW_OMEGA },
   };
   const text = JSON.stringify(inputs);
   let h = 0x811c9dc5;

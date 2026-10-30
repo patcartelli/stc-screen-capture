@@ -394,6 +394,8 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
         const e = normalizeEasing(speedsOf(d.easing));
         if (e !== undefined) entry.easing = e;
       }
+      // project-19 (STC-617): only `true` means anything; anything else is a fixed crop.
+      if (d.follow === true) entry.follow = true;
       out.push(entry);
     } else if (d.kind === "manual") {
       const rect = cleanOverrideRect(d.rect);
@@ -407,6 +409,7 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
       out.push({
         kind: "manual", id: d.id, startNs: d.startNs as number, endNs: d.endNs as number,
         rect, easing: normalizeEasing(speedsOf(d.easing)) as CompleteEasing,
+        ...(d.follow === true ? { follow: true as const } : {}),
       });
     } else if (d.kind === "removed") {
       if (typeof d.windowId !== "string" || !d.windowId) continue;
@@ -431,7 +434,15 @@ function hasSpeedPair(project: Project): boolean {
   return !!project.overrides?.some((o) => (o.kind === "geometry" || o.kind === "manual") && isPairEasing(o.easing));
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 {
+/** A block that follows the cursor (STC-617): the one thing v19 expresses. */
+function hasFollow(project: Project): boolean {
+  return !!project.overrides?.some((o) => (o.kind === "geometry" || o.kind === "manual") && o.follow === true);
+}
+
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 {
+  // v19 (STC-617) is a block that follows the cursor; its overrides are
+  // carried by the `version >= 6` line below like every other override field.
+  if (hasFollow(project)) return 19;
   // Highest first: a document needing v17 needs it whatever its pip style,
   // framing, keycast, showClicks, mutes, mic level, cleanup, levels, bookmarks,
   // slug, overrides, zoom or textPt say. v17 (STC-619) is a block's separate

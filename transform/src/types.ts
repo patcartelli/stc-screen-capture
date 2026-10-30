@@ -281,16 +281,20 @@ export interface Zoom {
  * `resolvedWindows` is what applies both, and a `geometry` override for the
  * same `windowId` still composes with a `retime` exactly as it would with an
  * unretimed window: retiming changes WHEN, never WHERE.
+ *
+ * `follow: true` (project-19, STC-617) on a `geometry` or `manual` entry makes
+ * the block follow the cursor: its rect supplies only the crop's SIZE, and
+ * `zoom-follow.ts` decides where it sits at each tick. Written only when true.
  */
 export type ZoomOverride =
-  | { kind: "geometry"; windowId: string; rect: { x: number; y: number; width: number; height: number }; easing?: EasingSpec }
-  | { kind: "manual"; id: string; startNs: number; endNs: number; rect: { x: number; y: number; width: number; height: number }; easing: CompleteEasing }
+  | { kind: "geometry"; windowId: string; rect: { x: number; y: number; width: number; height: number }; easing?: EasingSpec; follow?: true }
+  | { kind: "manual"; id: string; startNs: number; endNs: number; rect: { x: number; y: number; width: number; height: number }; easing: CompleteEasing; follow?: true }
   | { kind: "removed"; windowId: string }
   | { kind: "retime"; windowId: string; startNs?: number; endNs?: number };
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).
