@@ -11,7 +11,9 @@ import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication, type Page } from "playwright";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchWithTakeInEditor, waitForTakeLoaded, inkiness } from "./_editor-fixture.js";
+import { launchWithTakeInEditor, waitForTakeLoaded, inkiness, launchApp, openEditorFromLibrary } from "./_editor-fixture.js";
+import { makeMicTakeFolder } from "./_take-fixture.js";
+import { trimRangeParts } from "../src/timeline-activity.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
 
 let app: ElectronApplication | undefined;
@@ -149,4 +151,107 @@ describe("the Camera overlay", () => {
     }, { timeout: 10_000 }).toBeDefined();
     expect(await win.textContent("#piplabel")).toMatch(/ · Top left$/);
   }, 120_000);
+});
+
+/**
+ * Export (Figma 171:2050). Brass in/out bars through every lane and a range
+ * chip in the strip, Export only (Patrick, 2026-10-29); the Clip lane's own
+ * brackets elsewhere. Dimming outside the range now reaches the Audio lane.
+ * `fixtures/basic` for the bars and chip; a mic take for the Audio dimming.
+ */
+describe("the Export overlay", () => {
+  const savedTrim = (dir: string) => {
+    try { return JSON.parse(readFileSync(join(dir, "project.json"), "utf8")).trim as { startNs: number; endNs: number } | undefined; }
+    catch { return undefined; }
+  };
+  const box = (win: Page, sel: string) => win.evaluate((s) => {
+    const el = document.querySelector<HTMLElement>(s)!;
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, x: (r.left + r.right) / 2,
+             shown: getComputedStyle(el).display !== "none" && r.width > 0 };
+  }, sel);
+
+  test("bars and chip show only in Export; the Clip brackets stay elsewhere", async () => {
+    const win = await openEditor();
+    expect((await box(win, "#exportbar-in")).shown).toBe(false);
+    expect((await box(win, "#rangechip")).shown).toBe(false);
+    expect(await win.evaluate(() => getComputedStyle(document.getElementById("trim-in")!).opacity)).toBe("1");
+    await win.click("#tab-export");
+    for (const sel of ["#exportbar-in", "#exportbar-out", "#rangechip"]) expect((await box(win, sel)).shown).toBe(true);
+    // The brackets keep their ids and hit area (the e2e suite and rule 4 rely
+    // on them) but give way to the bars visually.
+    expect(await win.evaluate(() => getComputedStyle(document.getElementById("trim-in")!).opacity)).toBe("0");
+    await win.click("#tab-frame");
+    expect((await box(win, "#exportbar-in")).shown).toBe(false);
+  }, 60_000);
+
+  test("each bar sits on its trim point and runs from the Clip lane's top to the last lane's bottom", async () => {
+    const win = await openEditor();
+    await win.click("#tab-export");
+    const [bin, bout, hin, hout, clip, zoom] = await Promise.all([
+      box(win, "#exportbar-in"), box(win, "#exportbar-out"), box(win, "#trim-in"), box(win, "#trim-out"),
+      box(win, ".laneviewport.clip"), box(win, ".laneviewport.zoom"),
+    ]);
+    expect(Math.abs(bin.x - hin.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bout.x - hout.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bin.top - clip.top)).toBeLessThanOrEqual(1);
+    // No audio in this fixture, so the Zoom lane is the last.
+    expect(Math.abs(bin.bottom - zoom.bottom)).toBeLessThanOrEqual(1);
+  }, 60_000);
+
+  test("dragging the in bar trims, the chip reads the range, and a press on a bar never grabs the playhead", async () => {
+    const { app: a, editorWin: win, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await waitForTakeLoaded(win);
+    await win.click("#tab-export");
+    const track = await box(win, "#timeline");
+    const bin = await box(win, "#exportbar-in");
+    const clockBefore = await win.textContent("#clock");
+    await win.mouse.move(bin.x, (bin.top + bin.bottom) / 2);
+    await win.mouse.down();
+    await win.mouse.move(track.left + (track.right - track.left) * 0.25, (bin.top + bin.bottom) / 2, { steps: 8 });
+    await win.mouse.up();
+    await expect.poll(() => savedTrim(takeDir)?.startNs ?? 0, { timeout: 10_000 }).toBeGreaterThan(0);
+    const t = savedTrim(takeDir)!;
+    // The bar followed, and so did the bracket it stands in for.
+    const [bin2, hin2] = await Promise.all([box(win, "#exportbar-in"), box(win, "#trim-in")]);
+    expect(Math.abs(bin2.x - hin2.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bin2.x - (track.left + (track.right - track.left) * 0.25))).toBeLessThanOrEqual(4);
+    // The chip: the export window's ends (the trim, here past the first frame)
+    // and the same length as the Export section's Length row.
+    const parts = trimRangeParts(t.startNs, t.endNs);
+    const chip = await win.textContent("#rangechip");
+    expect(chip).toContain(`In${parts.in}`);
+    expect(chip).toContain(`Out${parts.out}`);
+    expect(chip!.endsWith(await win.textContent("#exportlength") ?? "?")).toBe(true);
+    // The chip sits just right of the in bar, inside the strip.
+    const [chipBox, strip] = await Promise.all([box(win, "#rangechip"), box(win, "#overlay-strip")]);
+    expect(chipBox.left).toBeGreaterThan(bin2.x);
+    expect(chipBox.right).toBeLessThanOrEqual(strip.right);
+    // The press was the bar's, not the playhead's (it started at frame 0,
+    // where the playhead sits on the in-point).
+    expect(await win.textContent("#clock")).toBe(clockBefore);
+  }, 60_000);
+
+  test("the Audio lane dims outside the range like Clip and Zoom", async () => {
+    const launched = await launchApp(makeMicTakeFolder().dir);
+    app = launched.app;
+    const win = await openEditorFromLibrary(app, launched.win);
+    await waitForTakeLoaded(win);
+    await win.waitForSelector("#audio-lane:not([hidden])", { timeout: 20_000 });
+    await win.click("#tab-export");
+    const track = await box(win, "#timeline");
+    const bout = await box(win, "#exportbar-out");
+    await win.mouse.move(bout.x, (bout.top + bout.bottom) / 2);
+    await win.mouse.down();
+    await win.mouse.move(track.left + (track.right - track.left) * 0.6, (bout.top + bout.bottom) / 2, { steps: 8 });
+    await win.mouse.up();
+    const [clipTail, audioTail, audio, bout2] = await Promise.all([
+      box(win, "#cut-tail"), box(win, "#audio-cut-tail"), box(win, ".laneviewport.audio"), box(win, "#exportbar-out"),
+    ]);
+    expect(Math.abs(audioTail.left - clipTail.left)).toBeLessThanOrEqual(1);
+    expect(audioTail.right - audioTail.left).toBeGreaterThan(0);
+    // With audio, the bars reach the Audio lane's bottom.
+    expect(Math.abs(bout2.bottom - audio.bottom)).toBeLessThanOrEqual(1);
+  }, 90_000);
 });

@@ -103,7 +103,7 @@ import {
   isFit, isMinSpan, overviewBox, panBy, timelineZoomKeyIntent,
   wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
-import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel } from "./timeline-activity.js";
+import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts } from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, dragCenter, resizeFromCorner, styleFromFixedCorner,
   anchorCenter, anchorOf, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
@@ -222,7 +222,7 @@ function applySpanTransform(): void {
   ($("timeline") as HTMLElement).style.setProperty("--inv", String(1 / scale));
   // STC-605: the ruler's labels and pennants and the strip's bookmark lines
   // undo it the same way.
-  for (const id of ["ruler-content", "strip-content"]) {
+  for (const id of ["ruler-content", "strip-content", "audio-dims"]) {
     ($(id) as HTMLElement).style.transform = transform;
     ($(id) as HTMLElement).style.setProperty("--inv", String(1 / scale));
   }
@@ -246,6 +246,7 @@ function applySpanTransform(): void {
   renderBookmarks();
   updateZoomBar();
   updateRulerPlayhead(player?.currentNs ?? 0);
+  layoutExportOverlays();
 }
 
 // ---- the ruler's adaptive ticks + played line (STC-444 slice 2) ------------
@@ -549,6 +550,13 @@ function updateTrimUI(): void {
   const zTail = $("zoom-cut-tail") as HTMLElement;
   zTail.style.left = `${outPct}%`;
   zTail.style.width = `${Math.max(0, 100 - outPct)}%`;
+  // STC-606: and the Audio lane, the Export frame's third.
+  const aHead = $("audio-cut-head") as HTMLElement;
+  aHead.style.left = "0%";
+  aHead.style.width = `${Math.max(0, inPct)}%`;
+  const aTail = $("audio-cut-tail") as HTMLElement;
+  aTail.style.left = `${outPct}%`;
+  aTail.style.width = `${Math.max(0, 100 - outPct)}%`;
   updateTicks();
 
   const w = exportWindow(openProject, player.durationNs, player.firstRenderableNs);
@@ -558,6 +566,43 @@ function updateTrimUI(): void {
     : `${fmtClock(w.startNs)}–${fmtClock(w.endNs)} · ${fmtClock(w.endNs - w.startNs)} · ${est}`;
   // The Export section's Length (STC-604): the window the export renders.
   $("exportlength").textContent = fmtClock(w.endNs - w.startNs);
+  // STC-606: the strip's range chip reads the same window.
+  const parts = trimRangeParts(w.startNs, w.endNs);
+  $("rangechip").replaceChildren(...([["In", parts.in], ["Out", parts.out], ["", parts.length]] as const).map(([k, v]) => {
+    const span = document.createElement("span");
+    if (k) { const key = document.createElement("span"); key.className = "k"; key.textContent = k; span.append(key); }
+    span.append(v);
+    return span;
+  }));
+  layoutExportOverlays();
+}
+
+/**
+ * STC-606, Export (Figma 171:2050): place the full-height in/out bars and the
+ * strip's range chip in px, the way updateRulerPlayhead places the playhead.
+ * They show only while Export is the active section (editor.html's
+ * .exportonly); a bar whose point is panned out of view is hidden.
+ */
+function layoutExportOverlays(): void {
+  if (paneSection !== "export" || !player || !openProject) return;
+  const d = player.durationNs || 1;
+  const track = $("timeline").getBoundingClientRect();
+  const lane = (document.querySelector(".laneviewport.clip") as HTMLElement).getBoundingClientRect();
+  const wrap = (document.querySelector(".timelinewrap") as HTMLElement).getBoundingClientRect();
+  const xAt = (ns: number) => track.left + (ns / d) * track.width;
+  const inX = xAt(openProject.trim?.startNs ?? 0);
+  const outX = xAt(openProject.trim?.endNs ?? player.durationNs);
+  for (const [id, x] of [["exportbar-in", inX], ["exportbar-out", outX]] as const) {
+    const bar = $(id) as HTMLElement;
+    bar.hidden = track.width <= 0 || x < lane.left - 1 || x > lane.right + 1;
+    bar.style.left = `${x - wrap.left}px`;
+  }
+  // The chip sits just past the in-point, kept inside the strip.
+  const chip = $("rangechip") as HTMLElement;
+  const strip = $("overlay-strip").getBoundingClientRect();
+  const CHIP_GAP_PX = 8;
+  const max = Math.max(0, strip.width - chip.offsetWidth - 2);
+  chip.style.left = `${Math.min(max, Math.max(2, inX - strip.left + CHIP_GAP_PX))}px`;
 }
 
 /**
@@ -1035,6 +1080,7 @@ const ZOOM_LANE_FLOOR = 0.002;
 function redrawLanes(): void {
   drawClipLane(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks();
   updateRulerPlayhead(player?.currentNs ?? 0);
+  layoutExportOverlays();
 }
 
 /** A zoom or pan redraws the three canvases; a drag fires many per frame, so
@@ -2951,6 +2997,7 @@ function selectSection(s: PaneSection): void {
   // STC-606: the section overlays show only while their section is active,
   // keyed off this attribute in CSS (body[data-section="zoom"] ...).
   document.body.dataset.section = s;
+  layoutExportOverlays();
   for (const tab of $("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")) {
     const on = tab.dataset.section === s;
     tab.setAttribute("aria-selected", String(on));
@@ -3375,23 +3422,27 @@ function onHandleMove(e: PointerEvent): void {
   if (dragging === "in") setTrim(frameToNs(clamped, durationNs), frameToNs(endFrame, durationNs), false);
   else setTrim(frameToNs(startFrame, durationNs), frameToNs(clamped, durationNs), false);
 
-  const handle = $(dragging === "in" ? "trim-in" : "trim-out");
-  if (held) {
-    const r = $("timeline").getBoundingClientRect();
-    const clampedX = r.left + fractionOfFrame(clamped, durationNs) * r.width;
-    const excess = dragging === "in" ? e.clientX - clampedX : clampedX - e.clientX;
-    const band = rubberBandPx(excess) * (dragging === "in" ? 1 : -1);
-    handle.classList.add("held");
-    handle.style.marginLeft = `${-5 + band}px`;
-  } else {
-    handle.classList.remove("held");
-    handle.style.marginLeft = "";
+  // STC-606: the Export section's bar for the same point rubber-bands with it.
+  const marks = dragging === "in" ? ["trim-in", "exportbar-in"] : ["trim-out", "exportbar-out"];
+  for (const id of marks) {
+    const handle = $(id);
+    if (held) {
+      const r = $("timeline").getBoundingClientRect();
+      const clampedX = r.left + fractionOfFrame(clamped, durationNs) * r.width;
+      const excess = dragging === "in" ? e.clientX - clampedX : clampedX - e.clientX;
+      const band = rubberBandPx(excess) * (dragging === "in" ? 1 : -1);
+      handle.classList.add("held");
+      handle.style.marginLeft = `${-5 + band}px`;
+    } else {
+      handle.classList.remove("held");
+      handle.style.marginLeft = "";
+    }
   }
 }
 
 function onHandleUp(): void {
   if (!dragging) return;
-  for (const id of ["trim-in", "trim-out"]) {
+  for (const id of ["trim-in", "trim-out", "exportbar-in", "exportbar-out"]) {
     $(id).classList.remove("held");
     $(id).style.marginLeft = "";
   }
@@ -3406,6 +3457,13 @@ $("trim-in").addEventListener("pointerup", onHandleUp);
 $("trim-out").addEventListener("pointerup", onHandleUp);
 $("trim-in").addEventListener("pointercancel", onHandleUp);
 $("trim-out").addEventListener("pointercancel", onHandleUp);
+// STC-606: the Export section's bars drag the same points.
+for (const [id, which] of [["exportbar-in", "in"], ["exportbar-out", "out"]] as const) {
+  $(id).addEventListener("pointerdown", (e) => onHandleDown(which, e as PointerEvent));
+  $(id).addEventListener("pointermove", (e) => onHandleMove(e as PointerEvent));
+  $(id).addEventListener("pointerup", onHandleUp);
+  $(id).addEventListener("pointercancel", onHandleUp);
+}
 
 // ---- export -------------------------------------------------------------
 

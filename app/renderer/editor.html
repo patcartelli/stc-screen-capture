@@ -485,6 +485,25 @@
        overlays show is keyed off body[data-section], set by selectSection. */
     #strip-overlays { position: absolute; inset: 0; pointer-events: none; }
     .overlayctl { pointer-events: auto; }
+    /* STC-606, Export (Figma 171:2050): while Export is the active section the
+       in/out points are brass bars from the Clip lane's top to the last lane's
+       bottom, and a chip in the strip reads the range. Elsewhere the Clip
+       lane's own brackets stay, as before. The bars are drag targets for the
+       same trim (editor.ts's onHandleDown); a 10px box around a 4px line. */
+    .exportonly { display: none; }
+    body[data-section="export"] .exportonly:not([hidden]) { display: block; }
+    body[data-section="export"] .timeline .handle { opacity: 0; }
+    .exportbar { position: absolute; top: calc(22px + var(--strip-h)); bottom: 0; left: 0; width: 10px;
+                 margin-left: -5px; z-index: 6; cursor: ew-resize; touch-action: none;
+                 background: linear-gradient(to right, transparent 3px, var(--zoom) 3px, var(--zoom) 7px, transparent 7px);
+                 border-radius: 2px; }
+    .exportbar.held { background: linear-gradient(to right, transparent 3px, var(--warn) 3px, var(--warn) 7px, transparent 7px); }
+    #rangechip { position: absolute; top: 50%; left: 0; transform: translateY(-50%); padding: 3px 8px;
+                 border: 1px solid color-mix(in srgb, var(--zoom) 70%, transparent); border-radius: 5px;
+                 background: rgba(10, 10, 12, .88); color: var(--zoom); white-space: nowrap;
+                 font: 400 11px/14px var(--font-readout); pointer-events: none; }
+    #rangechip span + span { margin-left: 10px; }
+    #rangechip .k { color: var(--text-dim); margin-right: 4px; }
     .stripbookmark { position: absolute; top: 0; bottom: 0; width: calc(1px * var(--inv, 1));
                      margin-left: calc(-.5px * var(--inv, 1));
                      background: color-mix(in srgb, var(--bookmark) 55%, transparent); }
@@ -505,6 +524,9 @@
        (Clip) and #zoom-cut-head/#zoom-cut-tail (Zoom) all place one of these;
        editor.ts's updateTrimUI sets left/width on all four the same way. */
     .lanedim { position: absolute; top: 0; height: 100%; background: var(--scrim); pointer-events: none; }
+    /* STC-606: the Audio lane's share of the same dimming, on a layer of its
+       own because its canvas wrap is not under the pan/zoom transform. */
+    #audio-dims { pointer-events: none; }
     .laneviewport { position: relative; overflow: hidden; border-radius: 6px; background: var(--lane-well); }
     .laneviewport.clip { height: 56px; }
     .laneviewport.zoom { height: 64px; }
@@ -526,7 +548,7 @@
        existing scrubber/trim arithmetic (app/src/scrubber.ts) needs no
        span-aware rewrite. The three canvas wraps share the box but are not
        transformed: their bitmaps are redrawn for the visible span. */
-    #timeline, #ruler-content, #clip-canvas-wrap, #audio-canvas-wrap, #zoom-canvas-wrap, #override-blocks {
+    #timeline, #ruler-content, #clip-canvas-wrap, #audio-canvas-wrap, #zoom-canvas-wrap, #override-blocks, #audio-dims {
       position: absolute; left: var(--lane-pad); top: 0; width: calc(100% - 2 * var(--lane-pad)); height: 100%;
       transform-origin: 0 0;
     }
@@ -809,6 +831,9 @@
     the Clip lane's drag.
   -->
   <div class="timelinewrap">
+    <!-- STC-606: the Export section's full-height in/out bars. -->
+    <div class="exportbar exportonly overlayctl" id="exportbar-in" aria-hidden="true"></div>
+    <div class="exportbar exportonly overlayctl" id="exportbar-out" aria-hidden="true"></div>
     <!-- STC-605: the ruler row. Its label cell holds STC-484's zoom buttons
          (the overview strip they sat beside is gone: the frame has none, and
          #ruler itself is the pan handle, by pointer or by arrow key). -->
@@ -838,7 +863,9 @@
     <div class="tlrow striprow">
       <div id="overlay-strip">
         <div id="strip-content"><div id="strip-bookmarks"></div></div>
-        <div id="strip-overlays"></div>
+        <div id="strip-overlays">
+          <div id="rangechip" class="exportonly" aria-live="polite"></div>
+        </div>
       </div>
     </div>
     <div class="tlrow lanerow">
@@ -894,6 +921,10 @@
       <span class="lanelabel">Audio</span>
       <div class="laneviewport audio" id="audio-lane" hidden>
         <div id="audio-canvas-wrap"><canvas id="audio-waveform"></canvas></div>
+        <div id="audio-dims">
+          <div class="lanedim" id="audio-cut-head"></div>
+          <div class="lanedim" id="audio-cut-tail"></div>
+        </div>
         <button type="button" id="audio-resize" aria-label="Resize the audio lane"
                 title="Drag to resize the audio lane (Up/Down keys nudge it)"></button>
       </div>

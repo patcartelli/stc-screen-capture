@@ -109,6 +109,21 @@ export function formatBlockTime(ns: number): string {
 }
 
 /**
+ * The Export section's range chip (STC-606, Figma 171:2050): "In 0:02.8",
+ * "Out 0:44.2", and the length as the clock shows it ("0:41", whole seconds
+ * rounded, as the Export section's Length row does). The window is the one the
+ * export renders, so it agrees with that row and with #triminfo.
+ */
+export function trimRangeParts(startNs: number, endNs: number): { in: string; out: string; length: string } {
+  const s = Math.max(0, Math.round((endNs - startNs) / 1e9));
+  return {
+    in: formatBlockTime(startNs),
+    out: formatBlockTime(endNs),
+    length: `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`,
+  };
+}
+
+/**
  * How far a block zooms in, from its drawn region (UV of the frame): the frame
  * over the region's longer side, to one decimal ("2.0×"). A block with no drawn
  * region zooms where stage 2 decides, so it reads "Auto".
