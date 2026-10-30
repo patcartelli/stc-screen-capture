@@ -22,6 +22,7 @@ import {
 } from "./still-io.js";
 import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite } from "@transform/shot.js";
+import { applyLook, parseLookWrite } from "@transform/backgrounds.js";
 import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
@@ -4015,20 +4016,29 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
  * file plus a rename in the take directory, and a half-written `shot.json`
  * from a crash mid-write costs the DECORATION, never the capture — `frame.png`
  * is untouched here and is what the shot actually is.
+ *
+ * `look` (STC-599, the still editor's background picker) widens the channel
+ * once more by the same argument: it names exactly `mode`, `background` and
+ * `shadow` (`parseLookWrite` refuses any other key), and the merged result
+ * still goes through `parseShot`, which judges the colours, the shadow and
+ * whether the mode fits the shot. A `null` deletes the key, which is how Clean
+ * replaces Dark's explicit fill instead of being overridden by it. When given,
+ * `look.mode` is the mode and the separate `mode` argument is not consulted.
  */
-ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown) => {
+ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown, look?: unknown) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
   const file = join(dir, "shot.json");
   const stored = parseShot(JSON.parse(await readFile(file, "utf8")));
+  const base = look === undefined ? stored.decoration : applyLook(stored.decoration, parseLookWrite(look));
   const next = parseShot({
     ...stored,
     decoration: {
-      ...stored.decoration,
+      ...base,
       redactions,
-      ...(mode !== undefined ? { mode } : {}),
+      ...(look === undefined && mode !== undefined ? { mode } : {}),
     },
   });
   // Through `shotForWrite`, which decides the VERSION: a shot with no
