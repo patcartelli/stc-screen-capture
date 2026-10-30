@@ -1,6 +1,7 @@
 import type { Rect } from "./spaces.js";
 import type { ZoomOverride } from "./types.js";
-import { ZOOM_PRESET_NAMES, type ZoomPreset, type ZoomWindow } from "./zoom.js";
+import type { ZoomPreset, ZoomWindow } from "./zoom.js";
+import { easingKey, resolveEasing, type EasingPair } from "./zoom-easing.js";
 
 /**
  * Manual zoom overrides (STC-330): resolving what a DERIVED window (zoom.ts,
@@ -146,25 +147,29 @@ export function resolvedCrop(
 }
 
 /**
- * A window's easing PRESET NAME — the override's, if it names one, else the
- * project's own. Returns a name rather than the `{omega,zeta}` pair so
- * callers can GROUP windows by it (`groupByEasing` below) without comparing
- * objects.
+ * A window's easing as a PAIR of preset names, one per direction (STC-619) —
+ * the override's, side by side, else the project's own for any side it leaves
+ * out. Names rather than the `{omega,zeta}` shoulders so callers can GROUP
+ * windows by it (`groupByEasing` below) without comparing objects.
+ *
+ * A window with no easing at all resolves to the project preset on both
+ * sides, which is the pair `{ in: p, out: p }` — exactly preset `p`'s own two
+ * shoulders, so a document that predates per-direction speeds renders as it
+ * always did.
  *
  * A manual window's easing is REQUIRED on the schema (types.ts's own note
- * says why) and returned directly — it never falls back to the project
- * preset, because "the project's own preset" is exactly the fallback a
- * geometry override without an opinion uses, and a manual window always
- * has one.
+ * says why) and complete (a name, or both sides), so it never falls back to
+ * the project preset: "the project's own preset" is exactly the fallback a
+ * geometry override without an opinion uses, and a manual window always has
+ * one. The fallback passed to `resolveEasing` is therefore never read for it.
  */
-export function resolvedEasingName(
+export function resolvedEasing(
   overrides: readonly ZoomOverride[] | undefined,
   window: CombinedZoomWindow,
   projectPreset: ZoomPreset,
-): ZoomPreset {
-  if (window.manual) return window.manual.easing;
-  const o = overrideFor(overrides, window);
-  return o?.easing && ZOOM_PRESET_NAMES.includes(o.easing) ? o.easing : projectPreset;
+): EasingPair {
+  if (window.manual) return resolveEasing(window.manual.easing, projectPreset);
+  return resolveEasing(overrideFor(overrides, window)?.easing, projectPreset);
 }
 
 /**
@@ -190,16 +195,24 @@ export function resolvedEasingName(
  * spring over just its own windows, unmodified from what STC-325 already
  * built and tested.
  */
+export interface EasingGroup { pair: EasingPair; windows: CombinedZoomWindow[] }
+
+/**
+ * Keyed by `easingKey` (STC-619: a group is a PAIR of speeds now, not one
+ * name), so blocks with the same in and out share a spring exactly as blocks
+ * with the same preset always did.
+ */
 export function groupByEasing(
   windows: readonly CombinedZoomWindow[],
   overrides: readonly ZoomOverride[] | undefined,
   projectPreset: ZoomPreset,
-): Map<ZoomPreset, CombinedZoomWindow[]> {
-  const groups = new Map<ZoomPreset, CombinedZoomWindow[]>();
+): Map<string, EasingGroup> {
+  const groups = new Map<string, EasingGroup>();
   for (const w of windows) {
-    const name = resolvedEasingName(overrides, w, projectPreset);
-    const g = groups.get(name);
-    if (g) g.push(w); else groups.set(name, [w]);
+    const pair = resolvedEasing(overrides, w, projectPreset);
+    const key = easingKey(pair);
+    const g = groups.get(key);
+    if (g) g.windows.push(w); else groups.set(key, { pair, windows: [w] });
   }
   return groups;
 }

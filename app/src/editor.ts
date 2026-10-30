@@ -91,7 +91,9 @@ import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
 import { windowId, overrideFor, resolvedWindows, rectFromGesture } from "@transform/zoom-override";
-import { committedOverrides, overridesWithoutWindow, overridesWithoutManual, type OverrideEdit } from "./override-edit.js";
+import {
+  committedOverrides, overridesWithoutWindow, overridesWithoutManual, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft,
+} from "./override-edit.js";
 import type { Rect } from "@transform/spaces";
 import {
   clampTrimFrame, decideKey, formatReadout, formatShuttle, frameAtFraction, frameToNs,
@@ -106,12 +108,13 @@ import {
 import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts } from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, dragCenter, resizeFromCorner, styleFromFixedCorner,
-  anchorCenter, anchorOf, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
+  anchorCenter, anchorOf, PIP_CIRCLE_HANDLE_FRACTION, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
   panFraming, zoomFraming, framingSource,
 } from "@transform/pip-style";
 import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-inspector.js";
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
+  framingColor, withColor,
 } from "./framing-edit.js";
 import { homeRelative } from "./path-label.js";
 
@@ -1128,7 +1131,7 @@ let editingWindowId: string | null = null;
 let heldFraming: FramingHold | null = null;
 let editingManualId: string | null = null;
 let draftRect: Rect | null = null;
-let draftEasing: ZoomPreset | "" = "";
+let draftEasing: SpeedDraft = { ...NO_SPEEDS };
 let draftManualStart = 0;
 let draftManualEnd = 0;
 let dragAnchorUv: { x: number; y: number } | null = null;
@@ -1363,7 +1366,8 @@ function updateManualDraftBlock(): void {
  *  override bar, seeds the preset picker and Remove/Delete button, and
  *  refreshes both block layers. */
 function openOverrideEditorUI(): void {
-  ($("overridepreset") as HTMLSelectElement).value = draftEasing;
+  ($("overridein") as HTMLSelectElement).value = draftEasing.in;
+  ($("overrideout") as HTMLSelectElement).value = draftEasing.out;
   const clear = $("overrideclear") as HTMLButtonElement;
   clear.disabled = !draftRect;
   clear.textContent = editingManualId ? "Delete window" : "Remove override";
@@ -1406,7 +1410,7 @@ function resetEditingState(): void {
   editingWindowId = null;
   editingManualId = null;
   draftRect = null;
-  draftEasing = "";
+  draftEasing = { ...NO_SPEEDS };
   draftManualStart = 0;
   draftManualEnd = 0;
   dragAnchorUv = null;
@@ -1414,6 +1418,10 @@ function resetEditingState(): void {
   ($("overridebar") as HTMLElement).setAttribute("hidden", "");
   ($("rectoverlay") as HTMLElement).setAttribute("hidden", "");
   drawOverrideBox(null);
+  // The Zoom lane's curve samples render(), so a committed easing, retime or
+  // removal changes it; the lane is otherwise redrawn only on open, zoom, pan
+  // and resize, so without this it stayed stale until one of those (STC-619).
+  scheduleLaneRedraw();
 }
 
 async function closeOverrideEditor(): Promise<void> {
@@ -1455,7 +1463,7 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   editingWindowId = id;
   const existing = overrideFor(openProject.overrides, w);
   draftRect = existing?.rect ?? null;
-  draftEasing = existing?.easing ?? "";
+  draftEasing = draftOf(existing?.easing);
   // Seeded from `w`'s own (already RESOLVED, possibly already-retimed)
   // bounds — re-opening a retimed window edits from where it currently
   // plays, not from the original derivation.
@@ -1481,7 +1489,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   draftManualStart = o.startNs;
   draftManualEnd = o.endNs;
   draftRect = o.rect;
-  draftEasing = o.easing;
+  draftEasing = draftOf(o.easing);
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
   setAsideFraming();
   openOverrideEditorUI();
@@ -1509,7 +1517,7 @@ async function createManualWindow(clickNs: number): Promise<void> {
   draftManualStart = startNs;
   draftManualEnd = endNs;
   draftRect = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
-  draftEasing = "";
+  draftEasing = { ...NO_SPEEDS };
   setAsideFraming();
   openOverrideEditorUI();
   const mid = Math.min(player.durationNs, Math.round((startNs + endNs) / 2));
@@ -1591,8 +1599,13 @@ $("rectoverlay").addEventListener("pointerleave", () => {
 $("rectoverlay").addEventListener("pointerup", endOverrideDrag);
 $("rectoverlay").addEventListener("pointercancel", endOverrideDrag);
 
-$("overridepreset").addEventListener("change", () => {
-  draftEasing = ($("overridepreset") as HTMLSelectElement).value as ZoomPreset | "";
+// The two Ease rows (STC-619): Slow / Medium / Fast for the push in and the
+// release out, each on its own, "" = the project default for that side.
+$("overridein").addEventListener("change", () => {
+  draftEasing = { ...draftEasing, in: ($("overridein") as HTMLSelectElement).value as SpeedDraft["in"] };
+});
+$("overrideout").addEventListener("change", () => {
+  draftEasing = { ...draftEasing, out: ($("overrideout") as HTMLSelectElement).value as SpeedDraft["out"] };
 });
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
@@ -1902,7 +1915,7 @@ async function closeTake(): Promise<void> {
   editingManualId = null;
   heldFraming = null; // the project is discarded below; nothing to restore into
   draftRect = null;
-  draftEasing = "";
+  draftEasing = { ...NO_SPEEDS };
   dragAnchorUv = null;
   // STC-454: detach and drop the sound first, and bump the generation so a
   // decode or a cleanup still in flight for THIS take lands nowhere.
@@ -2359,6 +2372,17 @@ function layoutPipOverlay(): void {
   const LABEL_ROOM_PX = 26;
   box.classList.toggle("right", r.x + r.width / 2 > frame.width / 2);
   box.classList.toggle("below", (frame.y + r.y) * k < LABEL_ROOM_PX);
+  // The resize handle: a corner of the box, except on a circle, where the
+  // corner floats off the picture and the handle sits ON the edge instead
+  // (resizeFromCorner measures a circle by distance, so grabbing it does not
+  // jump). The inline values are cleared for any other shape.
+  const handle = $("piphandle");
+  if (style.shape === "circle") {
+    const at = `${PIP_CIRCLE_HANDLE_FRACTION * 100}%`;
+    Object.assign(handle.style, { left: at, top: at, right: "auto", bottom: "auto", transform: "translate(-50%, -50%)" });
+  } else {
+    Object.assign(handle.style, { left: "", top: "", right: "", bottom: "", transform: "" });
+  }
 }
 
 let pipDrag: { kind: "move" | "resize"; dx: number; dy: number } | null = null;
@@ -2639,10 +2663,12 @@ function setFramePresetDisabled(disabled: boolean): void {
 function updateFramingUI(): void {
   const f = chosenFraming(openProject, heldFraming);
   setFramePresetUI(f?.preset ?? "none");
+  // One swatch for every style (STC-604): the fill for Solid, the gradient's
+  // first colour for Clean and Dark. Nothing to colour with no frame.
   const color = $("framecolor") as HTMLInputElement;
-  color.hidden = f?.preset !== "solid";
-  $("framecolorrow").hidden = f?.preset !== "solid";
-  color.value = f?.color ?? DEFAULT_SOLID_COLOR;
+  color.hidden = !f;
+  $("framecolorrow").hidden = !f;
+  color.value = f ? framingColor(f) : DEFAULT_SOLID_COLOR;
   $("framecolorvalue").textContent = color.value.toUpperCase();
   // Padding, corners and shadow adjust a frame, so they wait for one.
   const short = openProject ? Math.min(openProject.output.width, openProject.output.height) : 0;
@@ -2709,21 +2735,32 @@ function framingFromControls(): Framing | undefined {
   const v = framePresetValue();
   if (v === "none") return undefined;
   const preset = v as FramingPreset;
+  const was = chosenFraming(openProject, heldFraming);
+  // A new style starts on its OWN colours: a colour edit belongs to the style
+  // it was made on, so it is not carried across (a custom Clean gradient must
+  // not turn Dark into Clean). Solid keeps a colour the user already gave it.
   const next: Framing = preset === "solid"
-    ? { preset, color: ($("framecolor") as HTMLInputElement).value }
+    ? { preset, color: was?.preset === "solid" ? framingColor(was) : DEFAULT_SOLID_COLOR }
     : { preset };
   // The numbers set in the Frame section (padding, corners, shadow) are the
   // user's own, so a new style keeps them (STC-604).
-  const was = chosenFraming(openProject, heldFraming);
   if (was?.paddingPct !== undefined) next.paddingPct = was.paddingPct;
   if (was?.radiusPct !== undefined) next.radiusPct = was.radiusPct;
   if (was?.shadow !== undefined) next.shadow = was.shadow;
   return next;
 }
 
-$("framecolor").addEventListener("change", () => {
-  void setFraming(framingFromControls()).catch((e: any) => alertUser(String(e?.message ?? e)));
-});
+// The Colour swatch edits the chosen framing (framing-edit.ts's withColor):
+// the picture repaints while the picker moves, and the write is on its commit.
+function editFramingColor(persist: boolean): void {
+  const f = chosenFraming(openProject, heldFraming);
+  if (!f) return;
+  const hex = ($("framecolor") as HTMLInputElement).value;
+  void setFraming(withColor(f, hex), persist).catch((e: any) => alertUser(String(e?.message ?? e)));
+  $("framecolorvalue").textContent = hex.toUpperCase();
+}
+$("framecolor").addEventListener("input", () => editFramingColor(false));
+$("framecolor").addEventListener("change", () => editFramingColor(true));
 // The Style segments: a click picks one (a rollback on a failed write redraws it).
 $("framepreset").addEventListener("click", (e) => {
   const seg = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-frame-preset]");
@@ -2965,6 +3002,8 @@ function meterFrame(nowMs: number): void {
   sysMeter = meterStep(sysMeter, blk?.system ?? 0, limited && (blk?.system ?? 0) > 0, nowMs, dt);
   paintMeter("mic", micMeter, nowMs);
   paintMeter("sys", sysMeter, nowMs);
+  // The meter line shows only while the preview plays (editor.html's CSS).
+  $("audiopanel").toggleAttribute("data-playing", !!player?.isPlaying);
   meterRaf = requestAnimationFrame(meterFrame);
 }
 
@@ -2975,6 +3014,7 @@ function setMetersRunning(open: boolean): void {
     meterRaf = 0;
     micMeter = METER_IDLE; sysMeter = METER_IDLE;
     paintMeter("mic", micMeter, 0); paintMeter("sys", sysMeter, 0);
+    $("audiopanel").removeAttribute("data-playing");
   }
 }
 

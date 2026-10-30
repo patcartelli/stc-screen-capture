@@ -2,6 +2,27 @@ import type { SessionEvent, ZoomOverride } from "@transform/types";
 import type { Rect } from "@transform/spaces";
 import { zoomWindows, type ZoomPreset } from "@transform/zoom";
 import { windowId } from "@transform/zoom-override";
+import {
+  normalizeEasing, resolveEasing, speedsOf, type CompleteEasing, type EasingSpec, type SpeedPair,
+} from "@transform/zoom-easing";
+
+/**
+ * The two Ease rows' state while a block is open (STC-619): one speed per
+ * direction, "" = the project default for that side. Slow / Medium / Fast are
+ * the preset names calm / standard / snappy.
+ */
+export interface SpeedDraft { in: ZoomPreset | ""; out: ZoomPreset | "" }
+export const NO_SPEEDS: Readonly<SpeedDraft> = Object.freeze({ in: "", out: "" });
+
+/** A saved easing as the two rows show it. A plain name is both sides. */
+export function draftOf(spec: EasingSpec | CompleteEasing | undefined): SpeedDraft {
+  const s = speedsOf(spec);
+  return { in: s.in ?? "", out: s.out ?? "" };
+}
+
+const pairOf = (d: SpeedDraft): SpeedPair => ({
+  ...(d.in ? { in: d.in } : {}), ...(d.out ? { out: d.out } : {}),
+});
 
 /**
  * What an OPEN zoom-override edit commits to (STC-500). No DOM, no Electron.
@@ -29,8 +50,8 @@ export type OverrideEdit =
       windowId: string;
       /** null = no geometry override (the window zooms where stage 2 says). */
       rect: Rect | null;
-      /** "" = the project default (no `easing` key written). */
-      easing: ZoomPreset | "";
+      /** "" on a side = the project default for it; both "" writes no `easing` key. */
+      easing: SpeedDraft;
       /** The draft's timing; a retime is written only where it differs from the TRUE derived bounds. */
       startNs: number;
       endNs: number;
@@ -40,8 +61,8 @@ export type OverrideEdit =
       id: string;
       /** null = the window is deleted (Remove/Delete window). */
       rect: Rect | null;
-      /** "" resolves to the project's preset at commit time, else "standard". */
-      easing: ZoomPreset | "";
+      /** A "" side resolves to the project's preset at commit time, else "standard". */
+      easing: SpeedDraft;
       startNs: number;
       endNs: number;
     };
@@ -72,10 +93,12 @@ export function overridesWithoutManual(overrides: readonly ZoomOverride[] | unde
  * already-retimed) window, so comparing against it would miss a retime that
  * exactly undoes a previous one.
  *
- * Manual window: `easing` is REQUIRED on the schema, so an unresolved
- * "Project default" picker is resolved to `preset` (a snapshot, not a live
- * link), else "standard". An empty `rect` deletes the window outright — its
- * rect and timing ARE the window.
+ * Manual window: `easing` is REQUIRED on the schema, so each side still on
+ * "Project default" is resolved to `preset` (a snapshot, not a live link),
+ * else "standard" (STC-619: per side, so a block with only Ease in set keeps
+ * the project's preset for its out). Equal sides are written as the preset's
+ * name. An empty `rect` deletes the window outright — its rect and timing ARE
+ * the window.
  */
 export function committedOverrides(
   overrides: readonly ZoomOverride[] | undefined,
@@ -88,17 +111,19 @@ export function committedOverrides(
     return edit.rect
       ? [...withoutThis, {
           kind: "manual" as const, id: edit.id, startNs: edit.startNs, endNs: edit.endNs,
-          rect: edit.rect, easing: edit.easing || preset || "standard",
+          rect: edit.rect,
+          easing: normalizeEasing(resolveEasing(normalizeEasing(pairOf(edit.easing)), preset ?? "standard")) as CompleteEasing,
         }]
       : withoutThis;
   }
 
   const id = edit.windowId;
   const withoutGeometry = overridesWithoutWindow(overrides, id);
+  const easing = normalizeEasing(pairOf(edit.easing));
   const withGeometry = edit.rect
     ? [...withoutGeometry, {
         kind: "geometry" as const, windowId: id, rect: edit.rect,
-        ...(edit.easing ? { easing: edit.easing } : {}),
+        ...(easing !== undefined ? { easing } : {}),
       }]
     : withoutGeometry;
 

@@ -118,16 +118,54 @@ describe("the preset picker", () => {
     const { win, takeDir } = await openPreview();
     await win.click(".zoomblock");
     await dragOnStage(win, { x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 });
-    await win.selectOption("#overridepreset", "snappy");
+    await win.selectOption("#overridein", "snappy");
+    await win.selectOption("#overrideout", "snappy");
     await pressOverrideDone(win);
 
     await expect.poll(() => readProject(takeDir).overrides?.[0]?.easing, { timeout: 10_000 }).toBe("snappy");
 
     // Reopening the same block shows the stored preset, not the default.
     await win.click(".zoomblock");
-    await expect.poll(() => win.inputValue("#overridepreset"), { timeout: 10_000 }).toBe("snappy");
+    await expect.poll(() => win.inputValue("#overridein"), { timeout: 10_000 }).toBe("snappy");
+    expect(await win.inputValue("#overrideout")).toBe("snappy");
     await pressOverrideDone(win);
   }, 30_000);
+});
+
+describe("separate ease in and ease out (STC-619)", () => {
+  test("slow in and fast out is written as a pair at project v17, and read back on reopen", async () => {
+    const { win, takeDir } = await openPreview();
+    await win.click(".zoomblock");
+    await dragOnStage(win, { x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 });
+    await win.selectOption("#overridein", "calm");
+    await win.selectOption("#overrideout", "snappy");
+    await pressOverrideDone(win);
+
+    await expect.poll(() => readProject(takeDir).overrides?.[0]?.easing, { timeout: 10_000 })
+      .toEqual({ in: "calm", out: "snappy" });
+    expect(readProject(takeDir).version).toBe(17);
+
+    await win.click(".zoomblock");
+    await expect.poll(() => win.inputValue("#overridein"), { timeout: 10_000 }).toBe("calm");
+    expect(await win.inputValue("#overrideout")).toBe("snappy");
+    await pressOverrideDone(win);
+  }, 60_000);
+
+  test("one side set leaves the other on the project default, and no sides writes no easing", async () => {
+    const { win, takeDir } = await openPreview();
+    await win.click(".zoomblock");
+    await dragOnStage(win, { x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 });
+    await win.selectOption("#overrideout", "calm");
+    await pressOverrideDone(win);
+    await expect.poll(() => readProject(takeDir).overrides?.[0]?.easing, { timeout: 10_000 }).toEqual({ out: "calm" });
+
+    await win.click(".zoomblock");
+    await expect.poll(() => win.inputValue("#overrideout"), { timeout: 10_000 }).toBe("calm");
+    expect(await win.inputValue("#overridein")).toBe("");
+    await win.selectOption("#overrideout", "");
+    await pressOverrideDone(win);
+    await expect.poll(() => "easing" in (readProject(takeDir).overrides?.[0] ?? {}), { timeout: 10_000 }).toBe(false);
+  }, 60_000);
 });
 
 describe("removing an override", () => {

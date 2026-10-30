@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  windowId, overrideFor, resolvedCrop, resolvedEasingName, groupByEasing, nearestWindow,
+  windowId, overrideFor, resolvedCrop, resolvedEasing, groupByEasing, nearestWindow,
   manualWindows, resolvedWindows, rectFromGesture, DEFAULT_OVERRIDE_RECT_FRACTION, MIN_DRAG_UV,
   type CombinedZoomWindow,
 } from "../src/zoom-override.js";
@@ -41,18 +41,18 @@ describe("resolvedCrop", () => {
   });
 });
 
-describe("resolvedEasingName", () => {
+describe("resolvedEasing", () => {
   test("falls back to the project preset when no override, or its easing is absent", () => {
     const noEasing: ZoomOverride[] = [{ kind: "geometry", windowId: "100", rect: { x: 0, y: 0, width: 1, height: 1 } }];
-    expect(resolvedEasingName(noEasing, w(100, 200), "calm")).toBe("calm");
-    expect(resolvedEasingName(undefined, w(100, 200), "snappy")).toBe("snappy");
+    expect(resolvedEasing(noEasing, w(100, 200), "calm")).toEqual({ in: "calm", out: "calm" });
+    expect(resolvedEasing(undefined, w(100, 200), "snappy")).toEqual({ in: "snappy", out: "snappy" });
   });
 
   test("uses the override's own easing when it names a real preset", () => {
     const withEasing: ZoomOverride[] = [
       { kind: "geometry", windowId: "100", rect: { x: 0, y: 0, width: 1, height: 1 }, easing: "snappy" },
     ];
-    expect(resolvedEasingName(withEasing, w(100, 200), "calm")).toBe("snappy");
+    expect(resolvedEasing(withEasing, w(100, 200), "calm")).toEqual({ in: "snappy", out: "snappy" });
   });
 
   test("an override naming an easing this build does not have falls back, not throws", () => {
@@ -61,7 +61,7 @@ describe("resolvedEasingName", () => {
     const bogus = [
       { kind: "geometry", windowId: "100", rect: { x: 0, y: 0, width: 1, height: 1 }, easing: "extreme" },
     ] as unknown as ZoomOverride[];
-    expect(resolvedEasingName(bogus, w(100, 200), "calm")).toBe("calm");
+    expect(resolvedEasing(bogus, w(100, 200), "calm")).toEqual({ in: "calm", out: "calm" });
   });
 });
 
@@ -70,7 +70,7 @@ describe("groupByEasing", () => {
     const windows = [w(0, 100), w(1000, 1100), w(2000, 2100)];
     const groups = groupByEasing(windows, undefined, "standard");
     expect(groups.size).toBe(1);
-    expect(groups.get("standard")).toEqual(windows);
+    expect(groups.get("standard/standard")?.windows).toEqual(windows);
   });
 
   test("an overridden easing splits its window into a different group", () => {
@@ -79,8 +79,8 @@ describe("groupByEasing", () => {
       { kind: "geometry", windowId: "1000", rect: { x: 0, y: 0, width: 1, height: 1 }, easing: "snappy" },
     ];
     const groups = groupByEasing(windows, overrides, "standard");
-    expect(groups.get("standard")).toEqual([windows[0], windows[2]]);
-    expect(groups.get("snappy")).toEqual([windows[1]]);
+    expect(groups.get("standard/standard")?.windows).toEqual([windows[0], windows[2]]);
+    expect(groups.get("snappy/snappy")?.windows).toEqual([windows[1]]);
   });
 
   test("group order within each group follows the original window order", () => {
@@ -90,7 +90,7 @@ describe("groupByEasing", () => {
       { kind: "geometry", windowId: "3000", rect: { x: 0, y: 0, width: 1, height: 1 }, easing: "calm" },
     ];
     const groups = groupByEasing(windows, overrides, "standard");
-    expect(groups.get("calm")).toEqual([windows[1], windows[3]]);
+    expect(groups.get("calm/calm")?.windows).toEqual([windows[1], windows[3]]);
   });
 
   /**
@@ -104,7 +104,7 @@ describe("groupByEasing", () => {
     const singleSim = createZoomSim(windows, ZOOM_PRESETS.standard);
     const groups = groupByEasing(windows, undefined, "standard");
     expect(groups.size).toBe(1);
-    const groupSim = createZoomSim(groups.get("standard")!, ZOOM_PRESETS.standard);
+    const groupSim = createZoomSim(groups.get("standard/standard")!.windows, ZOOM_PRESETS.standard);
     for (let t = 0; t < 12000 * MS; t += 250 * MS) {
       const n = Math.floor(t / (1_000_000_000 / 120));
       expect(groupSim.amountAt(n)).toBeCloseTo(singleSim.amountAt(n), 12);
@@ -245,13 +245,13 @@ describe("manualWindows", () => {
   });
 });
 
-describe("resolvedCrop / resolvedEasingName with a manual window", () => {
+describe("resolvedCrop / resolvedEasing with a manual window", () => {
   test("a manual window's own rect and easing win outright, with no overrides-table lookup", () => {
     const [win] = manualWindows([manual("m1", 0, 1000, { x: 0.3, y: 0.4, width: 0.1, height: 0.2 }, "calm")]);
     // Overrides table has nothing matching windowId "0" — proves the crop
     // came from `.manual`, not from an accidental geometry-style lookup.
     expect(resolvedCrop(undefined, win!)).toEqual({ x: 0.3, y: 0.4, width: 0.1, height: 0.2 });
-    expect(resolvedEasingName(undefined, win!, "snappy")).toBe("calm");
+    expect(resolvedEasing(undefined, win!, "snappy")).toEqual({ in: "calm", out: "calm" });
   });
 
   test("a derived window (no .manual) is unaffected — falls through to the existing geometry lookup", () => {
@@ -260,7 +260,7 @@ describe("resolvedCrop / resolvedEasingName with a manual window", () => {
       { kind: "geometry", windowId: "100", rect: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } },
     ];
     expect(resolvedCrop(overrides, derived)).toEqual({ x: 0.5, y: 0.5, width: 0.1, height: 0.1 });
-    expect(resolvedEasingName(overrides, derived, "standard")).toBe("standard"); // no easing on the override
+    expect(resolvedEasing(overrides, derived, "standard")).toEqual({ in: "standard", out: "standard" }); // no easing on the override
   });
 });
 
@@ -269,8 +269,8 @@ describe("groupByEasing mixes derived and manual windows", () => {
     const derived = [w(0, 100)];
     const [m] = manualWindows([manual("m1", 5000, 6000, undefined, "snappy")]);
     const groups = groupByEasing([...derived, m!], undefined, "calm");
-    expect(groups.get("calm")).toEqual(derived);
-    expect(groups.get("snappy")).toEqual([m]);
+    expect(groups.get("calm/calm")?.windows).toEqual(derived);
+    expect(groups.get("snappy/snappy")?.windows).toEqual([m]);
   });
 });
 
@@ -359,5 +359,44 @@ describe("inWindow (zoom.ts) under overlap — STC-331's own concern, exercised 
     const windows = [w(0, 1000), w(100, 200)];
     expect(inWindow(windows, 500)).toBe(true);
     expect(inWindow([...windows].reverse(), 500)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STC-619: a block's easing can be separate speeds for in and out
+// ---------------------------------------------------------------------------
+
+describe("per-direction easing (STC-619)", () => {
+  const rect = { x: 0, y: 0, width: 1, height: 1 };
+
+  test("a pair resolves side by side; a side left out is the project's preset", () => {
+    const o: ZoomOverride[] = [{ kind: "geometry", windowId: "100", rect, easing: { in: "calm" } }];
+    expect(resolvedEasing(o, w(100, 200), "snappy")).toEqual({ in: "calm", out: "snappy" });
+    const both: ZoomOverride[] = [{ kind: "geometry", windowId: "100", rect, easing: { in: "calm", out: "snappy" } }];
+    expect(resolvedEasing(both, w(100, 200), "standard")).toEqual({ in: "calm", out: "snappy" });
+  });
+
+  test("a manual window's complete pair is used as it stands, never the project preset", () => {
+    const [win] = manualWindows([{ kind: "manual", id: "m1", startNs: 0, endNs: 1000, rect, easing: { in: "calm", out: "snappy" } }]);
+    expect(resolvedEasing(undefined, win!, "standard")).toEqual({ in: "calm", out: "snappy" });
+  });
+
+  test("a different pair is a different group; the same pair shares one", () => {
+    const windows = [w(0, 100), w(1000, 1100), w(2000, 2100), w(3000, 3100)];
+    const overrides: ZoomOverride[] = [
+      { kind: "geometry", windowId: "1000", rect, easing: { in: "calm", out: "snappy" } },
+      { kind: "geometry", windowId: "2000", rect, easing: { in: "calm", out: "snappy" } },
+      { kind: "geometry", windowId: "3000", rect, easing: { in: "snappy", out: "calm" } },
+    ];
+    const groups = groupByEasing(windows, overrides, "standard");
+    expect([...groups.keys()].sort()).toEqual(["calm/snappy", "snappy/calm", "standard/standard"]);
+    expect(groups.get("calm/snappy")?.windows).toEqual([windows[1], windows[2]]);
+    expect(groups.get("calm/snappy")?.pair).toEqual({ in: "calm", out: "snappy" });
+  });
+
+  test("a pair of equals groups with the preset of that name (it IS that preset)", () => {
+    const windows = [w(0, 100), w(1000, 1100)];
+    const overrides: ZoomOverride[] = [{ kind: "geometry", windowId: "1000", rect, easing: { in: "standard", out: "standard" } }];
+    expect([...groupByEasing(windows, overrides, "standard").keys()]).toEqual(["standard/standard"]);
   });
 });

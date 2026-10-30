@@ -8,6 +8,7 @@ import type { PipStyle } from "./pip-style.js";
  * three names here and letting them drift from the table that defines them.
  */
 import type { ZoomPreset } from "./zoom.js";
+import type { CompleteEasing, EasingSpec } from "./zoom-easing.js";
 import type { Changes } from "./changes.js";
 import type { Framing } from "./framing.js";
 
@@ -281,14 +282,14 @@ export interface Zoom {
  * unretimed window: retiming changes WHEN, never WHERE.
  */
 export type ZoomOverride =
-  | { kind: "geometry"; windowId: string; rect: { x: number; y: number; width: number; height: number }; easing?: ZoomPreset }
-  | { kind: "manual"; id: string; startNs: number; endNs: number; rect: { x: number; y: number; width: number; height: number }; easing: ZoomPreset }
+  | { kind: "geometry"; windowId: string; rect: { x: number; y: number; width: number; height: number }; easing?: EasingSpec }
+  | { kind: "manual"; id: string; startNs: number; endNs: number; rect: { x: number; y: number; width: number; height: number }; easing: CompleteEasing }
   | { kind: "removed"; windowId: string }
   | { kind: "retime"; windowId: string; startNs?: number; endNs?: number };
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).

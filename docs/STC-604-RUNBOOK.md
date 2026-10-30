@@ -32,8 +32,10 @@ brass Zoom and the Export button), and real fonts. The snapshots had **no fonts*
 
 ## 2. Audio (#407)
 
-- The meters run only while Audio is the active section and sit at the floor
-  otherwise. Play with the section open: do they move with the voice?
+- The meter line under each level slider is hidden until the preview plays (the
+  Figma rows draw none), and stays up while a clip mark is lit. The meters run
+  only while Audio is the active section. Play with the section open: does the
+  line appear and move with the voice, and hide again when you pause?
 - The Microphone / System audio switch is the track's mute and reads inverted
   (on = heard). Mute keeps the slider where it was, dimmed.
 - Double-click a slider resets it; the value is also a reset button while it
@@ -78,6 +80,11 @@ brass Zoom and the Export button), and real fonts. The snapshots had **no fonts*
   export and confirm the saved padding is what the preview showed.
 - Shadow off then on returns to the preset's own shadow.
 - Choosing a new style keeps the numbers you set.
+- The Colour swatch shows for every style but None: the fill for Solid, the
+  **first colour of the gradient** for Clean and Dark (its second colour and
+  angle stay the preset's). Pick one and watch the preview repaint while the
+  picker moves; switch to another style and confirm it starts on its own colours,
+  not the one you edited.
 - Clicks and Keys switches still change the preview and the export.
 
 ## 6b. "More" groups

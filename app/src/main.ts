@@ -25,6 +25,7 @@ import { parseShot, shotForWrite } from "@transform/shot.js";
 import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
+import { isCompleteEasing, isEasingSpec } from "@transform/zoom-easing.js";
 import { framingProblem } from "@transform/framing.js";
 import { withTimeout } from "@transform/timeout.js";
 import { RECOVERY_STOP_REASON } from "@transform/recover-anchors.js";
@@ -3055,19 +3056,19 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
   // refusal.
   if (doc.overrides !== undefined) {
     if (!Array.isArray(doc.overrides)) throw new Error("project.json: overrides must be an array");
-    const isEasing = (v: unknown) => v === "calm" || v === "standard" || v === "snappy";
+    // A name, or (project-17, STC-619) separate in/out speeds: zoom-easing.ts is the one shape.
     const isRect = (v: unknown): v is Record<string, any> =>
       isPlainObject(v) && ["x", "y", "width", "height"].every((k) => isFiniteNum(v[k]) && inRange(v[k], 0, 1));
     for (const entry of doc.overrides) {
       if (!isPlainObject(entry)) throw new Error("project.json: overrides entry is not an object");
       if (entry.kind === "geometry") {
         if (typeof entry.windowId !== "string" || !entry.windowId || !isRect(entry.rect)
-            || (entry.easing !== undefined && !isEasing(entry.easing))) {
+            || (entry.easing !== undefined && !isEasingSpec(entry.easing))) {
           throw new Error("project.json: malformed geometry override");
         }
       } else if (entry.kind === "manual") {
         if (typeof entry.id !== "string" || !entry.id || !Number.isInteger(entry.startNs) || entry.startNs < 0
-            || !Number.isInteger(entry.endNs) || entry.endNs < 0 || !isRect(entry.rect) || !isEasing(entry.easing)) {
+            || !Number.isInteger(entry.endNs) || entry.endNs < 0 || !isRect(entry.rect) || !isCompleteEasing(entry.easing)) {
           throw new Error("project.json: malformed manual override");
         }
       } else if (entry.kind === "removed") {

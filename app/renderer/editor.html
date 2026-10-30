@@ -334,7 +334,12 @@
                          left: calc(6px + (100% - 12px) * var(--unity, 1)); pointer-events: none; opacity: 0.7; }
     /* Under the track and out of the row's height, so the slider alone centres
        against its label (the Figma rows carry no meter). */
-    #audiopanel .meterrow { position: absolute; left: 0; right: 0; top: 20px; display: flex; align-items: center; gap: 6px; height: 6px; }
+    #audiopanel .meterrow { position: absolute; left: 0; right: 0; top: 20px; display: flex; align-items: center; gap: 6px; height: 6px;
+                            visibility: hidden; }
+    /* The meter is not in the Figma rows, so it shows only while the preview is
+       playing (editor.ts sets data-playing), and stays up while a clip mark is
+       lit, so "did it clip?" is still answered after the sound stops. */
+    #audiopanel[data-playing] .meterrow, #audiopanel .meterrow:has(.clip[data-lit]) { visibility: visible; }
     #audiopanel .meter { position: relative; flex: 1; height: 4px; border-radius: 2px; overflow: hidden;
                          background: var(--surface-hover); }
     #audiopanel .meter > i { position: absolute; inset: 0; transform-origin: left center; transform: scaleX(0);
@@ -1153,13 +1158,25 @@
               <span class="label">Amount</span>
               <span id="zoomamount" class="value mono" title="How far the block zooms in: the frame divided by the drawn region">Auto</span>
             </div>
+            <!-- STC-619: the push in and the release out are set separately, so a
+                 block can zoom in slowly and out fast. Slow / Medium / Fast are the
+                 calm / standard / snappy shoulders FOR THAT DIRECTION. -->
             <div class="row">
-              <label class="label" for="overridepreset">Ease</label>
-              <select id="overridepreset">
+              <label class="label" for="overridein">Ease in</label>
+              <select id="overridein">
                 <option value="">Project default</option>
-                <option value="calm">Calm</option>
-                <option value="standard">Standard</option>
-                <option value="snappy">Snappy</option>
+                <option value="calm">Slow</option>
+                <option value="standard">Medium</option>
+                <option value="snappy">Fast</option>
+              </select>
+            </div>
+            <div class="row">
+              <label class="label" for="overrideout">Ease out</label>
+              <select id="overrideout">
+                <option value="">Project default</option>
+                <option value="calm">Slow</option>
+                <option value="standard">Medium</option>
+                <option value="snappy">Fast</option>
               </select>
             </div>
             <div class="row">
