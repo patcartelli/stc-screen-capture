@@ -19,7 +19,8 @@
  *     list calls it out;
  *   - the shadow decreases away from the window and reaches zero;
  *   - a background covers every pixel, so a mode that promises one has no
- *     transparent hole;
+ *     transparent hole — a mesh background too (STC-622), which is also held
+ *     to its CPU reference within one 8-bit level;
  *   - canvas presets give exact dimensions with the capture centred;
  *   - and two renders of one document agree, byte for byte, inside this
  *     browser — the acceptance list's "render() stays pure", checked where it
@@ -306,11 +307,50 @@ try {
   }
   ok("16:9, 4:3 and 1:1 are exact, with the capture centred and unscaled");
 
+  // ── the mesh background (STC-622) ────────────────────────────────────────
+  //
+  // STC-610's gradient mesh, rendered on the GPU through the app's own
+  // `renderMeshBackground`. The two checks every background already gets
+  // apply as they stand — it covers every pixel, and two renders agree (in
+  // the determinism block below) — plus two of its own: it is really a mesh
+  // and not paintBackground's flat fallback, and the shader still lands on
+  // the CPU reference within STC-610's measured tolerances.
+  {
+    const p = by["window-shadow-background+mesh"];
+    if (!p) fail("no mesh probe — the harness stopped rendering one");
+    else {
+      if (p.alpha) fail("mesh: layout claims alpha, but a background fills every pixel");
+      if (!p.fullyOpaque) fail("mesh: some pixel is not opaque — the background has a hole");
+      if (p.topRowColours < 16) {
+        fail(`mesh: only ${p.topRowColours} colours along the top row — that is a flat fill, ` +
+             "so the mesh was never drawn and paintBackground's fallback ran instead");
+      } else if (p.fullyOpaque) {
+        ok(`the mesh covers every pixel (${p.topRowColours} colours along the top row)`);
+      }
+    }
+    for (const m of result.meshParity ?? []) {
+      const pct = (x) => `${(x * 100).toFixed(2)}%`;
+      const what = `${m.grain ? "with" : "without"} grain: max ${m.maxDiff} levels, ` +
+                   `${pct(m.within1)} within 1, ${pct(m.within2)} within 2 over ${m.pixels} px`;
+      // One level, grain or no grain: the grain is an integer hash on both
+      // sides (STC-622), so the float32 grain mismatch STC-610 measured (~1
+      // pixel in 5,000, up to 9 levels) cannot happen any more.
+      if (m.maxDiff > 1) fail(`mesh vs CPU reference ${what} — they may differ by 1 level at most`);
+      else ok(`the shader lands on the CPU reference ${what}`);
+    }
+    if ((result.meshParity ?? []).length !== 2) fail("mesh: the CPU/GPU comparison did not run both ways");
+  }
+
   // ── determinism ──────────────────────────────────────────────────────────
   if (repeat.first !== repeat.second) {
     fail(`two renders of one document differ: ${repeat.first} vs ${repeat.second}`);
   } else {
     ok(`two renders of one document are identical (${repeat.first})`);
+  }
+  if (result.meshRepeat.first !== result.meshRepeat.second) {
+    fail(`two renders of one mesh document differ: ${result.meshRepeat.first} vs ${result.meshRepeat.second}`);
+  } else {
+    ok(`two renders of one mesh document are identical (${result.meshRepeat.first})`);
   }
 
   console.log("");

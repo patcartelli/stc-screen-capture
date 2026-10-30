@@ -68,11 +68,50 @@ export interface ShotFrame {
 export interface ShotCursor { x: number; y: number; shape: CursorShape }
 
 export interface Background {
-  kind: "solid" | "linear" | "radial" | "image" | "wallpaper";
+  kind: "solid" | "linear" | "radial" | "image" | "wallpaper" | "mesh";
   colors?: string[];
   angleDeg?: number;
   file?: string;
+  // ── mesh only (STC-622, shot-3): STC-610's gradient mesh as its SETTINGS,
+  // never its pixels. Every one is present on a mesh and absent on any other
+  // kind; `MeshBackground` is the narrowed shape. ─────────────────────────
+  seed?: number;
+  sheen?: number;
+  warp?: number;
+  scale?: number;
+  grain?: boolean;
+  /** UV, y UP (the shader's convention): [bright, mid, dark, dark]. Null = the seed's own arrangement. */
+  points?: MeshPoints | null;
+  t?: number;
 }
+
+export type MeshPoints = [[number, number], [number, number], [number, number], [number, number]];
+
+/** A `mesh` background as the loader guarantees it: every setting present, three stops. */
+export interface MeshBackground extends Background {
+  kind: "mesh";
+  colors: [string, string, string];
+  seed: number;
+  sheen: number;
+  warp: number;
+  scale: number;
+  grain: boolean;
+  points: MeshPoints | null;
+  t: number;
+}
+
+export const isMeshBackground = (bg: Background | undefined): bg is MeshBackground => bg?.kind === "mesh";
+
+/**
+ * The mesh's ranges, the loader's and the schema's (STC-610's findings: the
+ * lab page's sliders stop exactly here, because past them the look turns from
+ * "designed" to "noisy"). `calm` is deliberately not a setting: tuning never
+ * moved it, and legibility did not need it.
+ */
+export const MESH_RANGES = {
+  sheen: [0, 0.9], warp: [0, 0.6], scale: [0.2, 1.5],
+} as const;
+const MESH_ONLY_FIELDS = ["seed", "sheen", "warp", "scale", "grain", "points", "t"] as const;
 
 export interface Shadow { offsetX: number; offsetY: number; blur: number; spread: number; opacity: number }
 
@@ -97,7 +136,7 @@ export interface Decoration {
 
 export interface Shot {
   /** The MINIMUM version that can express this document — see `versionFor`. */
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   kind: ShotKind;
   /** mach-clock ns as a decimal string, like anchors.t0Ns */
   capturedAtNs: string;
@@ -117,7 +156,7 @@ export class ShotLoadError extends Error {
   }
 }
 
-export const SHOT_VERSIONS: readonly number[] = [1, 2];
+export const SHOT_VERSIONS: readonly number[] = [1, 2, 3];
 
 /**
  * The version a document should be WRITTEN as: the minimum that can express it.
@@ -132,7 +171,12 @@ export const SHOT_VERSIONS: readonly number[] = [1, 2];
  * unreadable to an older reader for a field it does not use, which is a cost
  * paid by everyone to benefit nobody.
  */
-export function versionFor(shot: { decoration: { annotations?: readonly unknown[] } }): 1 | 2 {
+export function versionFor(shot: {
+  decoration: { annotations?: readonly unknown[]; background?: { kind: string } };
+}): 1 | 2 | 3 {
+  // A mesh background is v3 whether or not there are annotations: v3 is a
+  // superset of v2, so the highest feature in use decides.
+  if (shot.decoration.background?.kind === "mesh") return 3;
   return (shot.decoration.annotations?.length ?? 0) > 0 ? 2 : 1;
 }
 export const DECORATION_MODES: readonly DecorationMode[] = [
@@ -281,7 +325,7 @@ export function parseShot(raw: unknown): Shot {
   const frame: ShotFrame = { file: f.file, width: f.width, height: f.height, alpha: f.alpha };
 
   const shot: Shot = {
-    version: raw.version as 1 | 2, kind, capturedAtNs: raw.capturedAtNs,
+    version: raw.version as 1 | 2 | 3, kind, capturedAtNs: raw.capturedAtNs,
     timebase: { numer: tb.numer, denom: tb.denom }, display, frame,
     decoration: defaultDecoration(kind),
   };
@@ -356,9 +400,25 @@ export function parseShot(raw: unknown): Shot {
   }
   if (dec.background !== undefined) {
     const b = dec.background;
-    if (!isObj(b) || !["solid", "linear", "radial", "image", "wallpaper"].includes(b.kind as string)) {
+    if (!isObj(b) || !["solid", "linear", "radial", "image", "wallpaper", "mesh"].includes(b.kind as string)) {
       throw new ShotLoadError("decoration.background.kind is not a known kind");
     }
+    noExtra(b, ["kind", "colors", "angleDeg", "file", ...MESH_ONLY_FIELDS], "decoration.background");
+    if (b.kind === "mesh") {
+      // The same rule as annotations on a v1 document: a document that claims
+      // a version and then uses a feature that version cannot express.
+      if (raw.version !== 3) {
+        throw new ShotLoadError(`decoration.background.kind mesh needs version 3; this document says version ${String(raw.version)}`);
+      }
+      decoration.background = meshBackground(b);
+    } else {
+      for (const k of MESH_ONLY_FIELDS) {
+        if (b[k] !== undefined) throw new ShotLoadError(`decoration.background.${k} is for a mesh background, not ${String(b.kind)}`);
+      }
+    }
+  }
+  if (dec.background !== undefined && !isMeshBackground(decoration.background)) {
+    const b = dec.background as Record<string, unknown>;
     const bg: Background = { kind: b.kind as Background["kind"] };
     if (b.colors !== undefined) {
       if (!Array.isArray(b.colors) || b.colors.length === 0 ||
@@ -409,7 +469,48 @@ export function shotForWrite(shot: Shot): ShotDocument {
   const version = versionFor(shot);
   const checked = parseShot(JSON.parse(JSON.stringify({ ...shot, version })));
   const doc: ShotDocument = { ...checked, version };
-  // `parseShot` always hands back the array; a v1 document may not carry it.
-  if (version === 1) delete doc.decoration.annotations;
+  // `parseShot` always hands back the array; a v1 document may not carry it,
+  // and a v3 one with nothing to say has no reason to.
+  if (version === 1 || doc.decoration.annotations?.length === 0) delete doc.decoration.annotations;
   return doc;
+}
+
+const HEX6 = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * One mesh background, refused rather than defaulted (STC-622). A clamped
+ * sheen or a defaulted seed would draw a DIFFERENT picture from the one the
+ * author saved, which is the failure this loader exists to say out loud.
+ */
+function meshBackground(b: Record<string, unknown>): MeshBackground {
+  const what = "decoration.background";
+  for (const k of ["angleDeg", "file"] as const) {
+    if (b[k] !== undefined) throw new ShotLoadError(`${what}.${k} is not a mesh setting`);
+  }
+  if (!Array.isArray(b.colors) || b.colors.length !== 3 || !b.colors.every((c) => typeof c === "string" && HEX6.test(c))) {
+    throw new ShotLoadError(`${what}.colors must be exactly three #rrggbb stops, darkest first`);
+  }
+  if (!isInt(b.seed) || b.seed < 0 || b.seed > 0xffffffff) throw new ShotLoadError(`${what}.seed must be a uint32`);
+  const ranged = (k: keyof typeof MESH_RANGES): number => {
+    const v = b[k];
+    const [lo, hi] = MESH_RANGES[k];
+    if (!isNum(v) || v < lo || v > hi) throw new ShotLoadError(`${what}.${k} must be within ${lo}..${hi}`);
+    return v;
+  };
+  const sheen = ranged("sheen"), warp = ranged("warp"), scale = ranged("scale");
+  if (typeof b.grain !== "boolean") throw new ShotLoadError(`${what}.grain must be a boolean`);
+  if (!isNum(b.t) || b.t < 0) throw new ShotLoadError(`${what}.t must be a number >= 0`);
+  let points: MeshPoints | null;
+  if (b.points === null) points = null;
+  else {
+    const p = b.points;
+    const unit = (v: unknown): v is number => isNum(v) && v >= 0 && v <= 1;
+    if (!Array.isArray(p) || p.length !== 4 ||
+        !p.every((q) => Array.isArray(q) && q.length === 2 && unit(q[0]) && unit(q[1]))) {
+      throw new ShotLoadError(`${what}.points must be null or four [x, y] pairs within 0..1`);
+    }
+    points = p.map((q: number[]) => [q[0], q[1]]) as MeshPoints;
+  }
+  return { kind: "mesh", colors: [...b.colors] as [string, string, string], seed: b.seed,
+           sheen, warp, scale, grain: b.grain, points, t: b.t };
 }
