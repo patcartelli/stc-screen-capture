@@ -1,5 +1,8 @@
 import { describe, test, expect } from "vitest";
-import { committedOverrides, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft } from "../src/override-edit.js";
+import {
+  committedOverrides, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft,
+  chipSpeed, withChipSpeed, chipSideFor, amountOf, rectAtAmount, ZOOM_AMOUNT_MIN, ZOOM_AMOUNT_MAX,
+} from "../src/override-edit.js";
 import type { SessionEvent, ZoomOverride } from "@transform/types";
 import { zoomWindows } from "@transform/zoom";
 import { windowId } from "@transform/zoom-override";
@@ -218,5 +221,49 @@ describe("committing per-direction speeds (STC-619)", () => {
     const saved = { in: "calm", out: "snappy" } as const;
     const out = committedOverrides([], derived({ rect: R, easing: draftOf(saved) }), events, "standard");
     expect(out[0]).toMatchObject({ easing: saved });
+  });
+});
+
+describe("the Zoom chip's speed (STC-606)", () => {
+  const d = (i: SpeedDraft["in"], o: SpeedDraft["out"]): SpeedDraft => ({ in: i, out: o });
+  test("Both sets the two sides together; In or Out sets only its own", () => {
+    expect(withChipSpeed(d("calm", "standard"), "both", "snappy")).toEqual(d("snappy", "snappy"));
+    expect(withChipSpeed(d("standard", "standard"), "in", "calm")).toEqual(d("calm", "standard"));
+    expect(withChipSpeed(d("standard", "standard"), "out", "")).toEqual(d("standard", ""));
+  });
+  test("Both shows a speed only when the sides agree", () => {
+    expect(chipSpeed(d("calm", "calm"), "both")).toBe("calm");
+    expect(chipSpeed(d("calm", "snappy"), "both")).toBe("mixed");
+    expect(chipSpeed(d("calm", "snappy"), "out")).toBe("snappy");
+    expect(chipSpeed(NO_SPEEDS, "both")).toBe("");
+  });
+  test("the chip opens on Both when the sides agree, else on In", () => {
+    expect(chipSideFor(d("standard", "standard"))).toBe("both");
+    expect(chipSideFor(NO_SPEEDS)).toBe("both");
+    expect(chipSideFor(d("calm", "snappy"))).toBe("in");
+  });
+});
+
+describe("the Zoom chip's amount (STC-606)", () => {
+  const near = (a: number, b: number) => expect(Math.abs(a - b)).toBeLessThan(1e-9);
+  test("the amount is the frame over the region's longer side", () => {
+    near(amountOf({ x: 0, y: 0, width: 0.5, height: 0.4 }), 2);
+  });
+  test("setting it resizes about the centre and keeps the shape", () => {
+    const r = rectAtAmount({ x: 0.3, y: 0.3, width: 0.4, height: 0.2 }, 4);
+    near(amountOf(r), 4);
+    near(r.width / r.height, 2);
+    near(r.x + r.width / 2, 0.5);
+    near(r.y + r.height / 2, 0.4);
+  });
+  test("a larger region near an edge slides back inside the frame", () => {
+    const r = rectAtAmount({ x: 0.75, y: 0, width: 0.25, height: 0.25 }, 1.25);
+    near(r.width, 0.8);
+    near(r.x, 0.2);
+    near(r.y, 0);
+  });
+  test("the amount is held to its range", () => {
+    near(amountOf(rectAtAmount({ x: 0.4, y: 0.4, width: 0.2, height: 0.2 }, 99)), ZOOM_AMOUNT_MAX);
+    near(amountOf(rectAtAmount({ x: 0.4, y: 0.4, width: 0.2, height: 0.2 }, 0.5)), ZOOM_AMOUNT_MIN);
   });
 });

@@ -158,9 +158,17 @@
        the selected Zoom block or over the box itself (editor.ts toggles
        data-shown), and for as long as it is being dragged. It is still in the
        DOM and still the drag's target, just not drawn. */
-    #overridebox { position: absolute; border: 1.5px solid var(--zoom);
-                   background: color-mix(in srgb, var(--zoom) 12%, transparent); pointer-events: none;
-                   opacity: 0; }
+    /* STC-606 (Figma 171:561): dashed brass, a square at two corners, and a
+       readout above it: the amount and the region's size in capture pixels. */
+    #overridebox { position: absolute; border: 1.5px dashed var(--zoom); background: transparent;
+                   pointer-events: none; opacity: 0; }
+    #overridebox::before, #overridebox::after { content: ""; position: absolute; width: 6px; height: 6px;
+                                                background: var(--zoom); border-radius: 1px; }
+    #overridebox::before { left: -4px; top: -4px; }
+    #overridebox::after { right: -4px; bottom: -4px; }
+    #overridereadout { position: absolute; left: -1.5px; bottom: 100%; margin-bottom: 7px; padding: 3px 8px;
+                       border-radius: 4px; background: rgba(10, 10, 12, .88); color: var(--zoom); white-space: nowrap;
+                       font: 400 10px/14px var(--font-readout); }
     #overridebox[data-shown] { opacity: 1; }
     @media (prefers-reduced-motion: no-preference) {
       #overridebox { transition: opacity .12s ease; }
@@ -509,6 +517,27 @@
                  font: 400 11px/14px var(--font-readout); pointer-events: none; }
     #rangechip span + span { margin-left: 10px; }
     #rangechip .k { color: var(--text-dim); margin-right: 4px; }
+    /* STC-606, Zoom (Figma 171:561): the selected block's chip, in the strip
+       above the block so it never covers the Clip lane. Amount (drag or arrow
+       keys), In / Out / Both picking which side the speed sets, Slow / Med /
+       Fast, and a red delete (red is destructive). Shown only while Zoom is
+       the active section and a block is open (editor.ts's layoutZoomChip). */
+    #zoomchip { position: absolute; top: 50%; left: 0; transform: translateY(-50%); display: flex; align-items: center;
+                gap: 6px; height: 28px; padding: 0 4px 0 8px; border: 1px solid color-mix(in srgb, var(--zoom) 70%, transparent);
+                border-radius: 7px; background: rgba(10, 10, 12, .92); white-space: nowrap;
+                font: 400 10px/1 var(--font-readout); }
+    #zoomchip[hidden], body:not([data-section="zoom"]) #zoomchip { display: none; }
+    #zoomchip button { height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent;
+                       color: var(--text-dim); font: inherit; cursor: pointer; }
+    #zoomchip button:hover { color: var(--text); }
+    #zoomchip button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    #zoomchip .chipamount { padding: 0 2px; color: var(--zoom); font-size: 11px; cursor: ew-resize; touch-action: none; }
+    #zoomchip .chipseg { display: flex; padding: 2px; border-radius: 5px; background: rgba(255, 255, 255, .05); }
+    #zoomchip .chipseg button[aria-checked="true"] { color: var(--text); background: rgba(255, 255, 255, .12); }
+    #zoomchip .chipdelete { display: grid; place-items: center; width: 22px; padding: 0; color: var(--rec); }
+    #zoomchip .chipdelete:hover { color: var(--rec); background: color-mix(in srgb, var(--rec) 16%, transparent); }
+    #zoomchip .chipdelete svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3;
+                                stroke-linecap: round; stroke-linejoin: round; }
     /* STC-606, Frame (Figma 171:78): hovering the lanes while Frame is the
        active section draws a hairline through every lane and a tooltip beside
        it: the time, then the clicks and keys the Clip bar there stands for.
@@ -605,7 +634,9 @@
                  background: transparent; border: none; padding: 0; margin: 0;
                  cursor: pointer; border-radius: 3px; }
     .zoomblock:hover { background: color-mix(in srgb, var(--zoom) 15%, transparent); }
-    .zoomblock.selected { outline: 1.5px solid var(--zoom); outline-offset: -1.5px; }
+    /* STC-606 (Figma 171:561): the open block is ringed in bone, its two
+       timing edges drawn as brass bars (the .manualhandle grips below). */
+    .zoomblock.selected { outline: 1px solid color-mix(in srgb, var(--bone) 70%, transparent); outline-offset: -1px; }
     .zoomblock.overridden::after { content: ""; position: absolute; left: 2px; right: 2px;
                                     bottom: 1px; height: 2px; background: var(--zoom); border-radius: 1px; }
     /* A window with no derived counterpart at all (STC-331) — dashed rather
@@ -623,6 +654,8 @@
                     border: none; background: transparent; cursor: ew-resize; }
     .manualhandle.start { left: -4px; }
     .manualhandle.end { right: -4px; }
+    .manualhandle::after { content: ""; position: absolute; left: 2.5px; top: 0; width: 3px; height: 100%;
+                           border-radius: 1.5px; background: var(--zoom); }
     .manualhandle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     /* STC-605: the Clip lane is the activity bars now (#clip-activity), so the
        old 4px kept track is not drawn. #kept keeps its geometry: the scrubber
@@ -752,7 +785,7 @@
     <!-- STC-330: shown only while a zoom block is selected; drawing a new
          rect always shows the UNZOOMED frame (see editor.ts) so a pointer
          pixel maps 1:1 to capture UV with no crop math to invert. -->
-    <div id="rectoverlay" hidden><div id="overridebox" hidden></div></div>
+    <div id="rectoverlay" hidden><div id="overridebox" hidden><span id="overridereadout"></span></div></div>
     <!-- STC-461: the PiP, draggable (with snapping) and resizable from its
          corner, shown only while the Camera popover is open. -->
     <div id="pipoverlay" hidden><div class="pipbox"><span id="piplabel"></span><div id="piphandle"></div></div></div>
@@ -886,6 +919,23 @@
         <div id="strip-content"><div id="strip-bookmarks"></div></div>
         <div id="strip-overlays">
           <div id="rangechip" class="exportonly" aria-live="polite"></div>
+          <div id="zoomchip" class="overlayctl" role="group" aria-label="Zoom block" hidden>
+            <button type="button" id="chipamount" class="chipamount"
+                    title="Amount: drag sideways, or use the arrow keys">Auto</button>
+            <div class="chipseg" id="chipside" role="radiogroup" aria-label="Which side the speed sets">
+              <button type="button" role="radio" data-side="in">In</button>
+              <button type="button" role="radio" data-side="out">Out</button>
+              <button type="button" role="radio" data-side="both">Both</button>
+            </div>
+            <div class="chipseg" id="chipspeed" role="radiogroup" aria-label="Speed (press the lit one for the project default)">
+              <button type="button" role="radio" data-speed="calm">Slow</button>
+              <button type="button" role="radio" data-speed="standard">Med</button>
+              <button type="button" role="radio" data-speed="snappy">Fast</button>
+            </div>
+            <button type="button" id="chipdelete" class="chipdelete" aria-label="Delete block" title="Delete block">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/></svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1170,8 +1220,11 @@
         <div>
           <p class="panelabel">Zoom block</p>
           <div class="group">
+            <!-- STC-606: Amount is editable (Patrick, 2026-10-30). It IS the drawn
+                 region's size, so the slider resizes the region about its centre. -->
             <div class="row">
-              <span class="label">Amount</span>
+              <label class="label" for="zoomamountrange">Amount</label>
+              <div class="fader"><input id="zoomamountrange" type="range" min="1.1" max="4" step="0.1" aria-label="Amount"></div>
               <span id="zoomamount" class="value mono" title="How far the block zooms in: the frame divided by the drawn region">Auto</span>
             </div>
             <!-- STC-619: the push in and the release out are set separately, so a

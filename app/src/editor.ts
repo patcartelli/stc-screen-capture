@@ -91,8 +91,10 @@ import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
 import { windowId, overrideFor, resolvedWindows, rectFromGesture } from "@transform/zoom-override";
+import { deriveZoomCrop } from "@transform/zoom-change";
 import {
   committedOverrides, overridesWithoutWindow, overridesWithoutManual, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft,
+  chipSpeed, withChipSpeed, chipSideFor, amountOf, rectAtAmount, ZOOM_AMOUNT_MIN, ZOOM_AMOUNT_MAX, type ChipSide,
 } from "./override-edit.js";
 import type { Rect } from "@transform/spaces";
 import {
@@ -252,6 +254,7 @@ function applySpanTransform(): void {
   updateZoomBar();
   updateRulerPlayhead(player?.currentNs ?? 0);
   layoutExportOverlays();
+  layoutZoomChip();
 }
 
 // ---- the ruler's adaptive ticks + played line (STC-444 slice 2) ------------
@@ -1086,6 +1089,7 @@ function redrawLanes(): void {
   drawClipLane(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks();
   updateRulerPlayhead(player?.currentNs ?? 0);
   layoutExportOverlays();
+  layoutZoomChip();
 }
 
 /** A zoom or pan redraws the three canvases; a drag fires many per frame, so
@@ -1226,7 +1230,7 @@ function syncOverrideBoxShown(): void {
   else box.removeAttribute("data-shown");
 }
 function overBlockTarget(e: Event): boolean {
-  return (e.target as HTMLElement | null)?.closest?.(".zoomblock.selected, #manualdraft") != null;
+  return (e.target as HTMLElement | null)?.closest?.(".zoomblock.selected, #manualdraft, #zoomchip") != null;
 }
 document.addEventListener("pointerover", (e) => {
   if (overBlockTarget(e) !== overrideBlockHover) { overrideBlockHover = overBlockTarget(e); syncOverrideBoxShown(); }
@@ -1234,6 +1238,7 @@ document.addEventListener("pointerover", (e) => {
 
 function drawOverrideBox(rect: Rect | null): void {
   $("zoomamount").textContent = zoomAmountLabel(rect);
+  syncZoomAmount();
   const box = $("overridebox") as HTMLElement;
   if (!rect) { box.setAttribute("hidden", ""); return; }
   box.removeAttribute("hidden");
@@ -1241,6 +1246,9 @@ function drawOverrideBox(rect: Rect | null): void {
   box.style.top = `${rect.y * 100}%`;
   box.style.width = `${rect.width * 100}%`;
   box.style.height = `${rect.height * 100}%`;
+  // STC-606: "2.2× · 412×232", the amount and the region in capture pixels.
+  const px = openCapture ? ` · ${Math.round(rect.width * openCapture.width)}×${Math.round(rect.height * openCapture.height)}` : "";
+  $("overridereadout").textContent = `${zoomAmountLabel(rect)}${px}`;
 }
 
 /** The DYNAMIC blocks only — derived windows (at their RESOLVED position —
@@ -1362,6 +1370,7 @@ function updateManualDraftBlock(): void {
   const d = player.durationNs || 1;
   el.style.left = `${(draftManualStart / d) * 100}%`;
   el.style.width = `${Math.max(0, ((draftManualEnd - draftManualStart) / d) * 100)}%`;
+  layoutZoomChip();
 }
 
 /** Shared tail of every way an editor can open: shows the rect tool and
@@ -1384,6 +1393,7 @@ function openOverrideEditorUI(): void {
   ($("rectoverlay") as HTMLElement).removeAttribute("hidden");
   // The pane follows selection (STC-604): the block's controls live in Zoom.
   selectSection("zoom");
+  chipSide = chipSideFor(draftEasing);
   drawOverrideBox(draftRect);
   layoutOverrideBlocks();
   updateManualDraftBlock();
@@ -1420,6 +1430,7 @@ function resetEditingState(): void {
   ($("overridebar") as HTMLElement).setAttribute("hidden", "");
   ($("rectoverlay") as HTMLElement).setAttribute("hidden", "");
   drawOverrideBox(null);
+  layoutZoomChip();
   // The Zoom lane's curve samples render(), so a committed easing, retime or
   // removal changes it; the lane is otherwise redrawn only on open, zoom, pan
   // and resize, so without this it stayed stale until one of those (STC-619).
@@ -1605,10 +1616,132 @@ $("rectoverlay").addEventListener("pointercancel", endOverrideDrag);
 // release out, each on its own, "" = the project default for that side.
 $("overridein").addEventListener("change", () => {
   draftEasing = { ...draftEasing, in: ($("overridein") as HTMLSelectElement).value as SpeedDraft["in"] };
+  layoutZoomChip();
 });
 $("overrideout").addEventListener("change", () => {
   draftEasing = { ...draftEasing, out: ($("overrideout") as HTMLSelectElement).value as SpeedDraft["out"] };
+  layoutZoomChip();
 });
+
+// ---- the Zoom chip (STC-606, Figma 171:561) --------------------------------
+//
+// The open block's chip, in the overlay strip above it (Patrick, 2026-10-30):
+// the amount (drag sideways or arrow keys), In / Out / Both choosing which side
+// Slow / Med / Fast sets, and delete. It edits the same draft as the Zoom
+// section's rows (draftRect, draftEasing), so Done, Escape and every mid-edit
+// save treat a chip edit exactly as an inspector one (override-edit.ts's
+// committedOverrides).
+
+let chipSide: ChipSide = "both";
+
+function editingBlock(): boolean {
+  return editingWindowId !== null || editingManualId !== null;
+}
+
+/** Where an Auto block (no drawn region) starts when its amount is first set:
+ *  the region stage 2 would zoom to, else a default box at the centre. */
+function startingRect(): Rect {
+  if (editingWindowId && openSession) {
+    const w = zoomWindows(openSession.events).find((x) => windowId(x) === editingWindowId);
+    const r = w ? deriveZoomCrop(w, openSession.changes, openSession.anchors, openSession.frames) : null;
+    if (r) return r;
+  }
+  return rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
+}
+
+/** The inspector's Amount slider and the chip's amount, from draftRect. */
+function syncZoomAmount(): void {
+  const range = $("zoomamountrange") as HTMLInputElement;
+  const editing = editingBlock();
+  range.disabled = !editing;
+  const a = editing ? amountOf(draftRect ?? startingRect()) : ZOOM_AMOUNT_MIN;
+  range.value = String(Math.round(a * 10) / 10);
+  range.style.setProperty("--fill-pct", `${((Number(range.value) - ZOOM_AMOUNT_MIN) / (ZOOM_AMOUNT_MAX - ZOOM_AMOUNT_MIN)) * 100}%`);
+  $("chipamount").textContent = zoomAmountLabel(draftRect);
+}
+
+function setZoomAmount(amount: number): void {
+  if (!editingBlock()) return;
+  draftRect = rectAtAmount(draftRect ?? startingRect(), amount);
+  ($("overrideclear") as HTMLButtonElement).disabled = false;
+  drawOverrideBox(draftRect);
+  ($("overridebox") as HTMLElement).setAttribute("data-shown", "");
+  layoutOverrideBlocks();
+}
+
+/** Show, fill and place the chip: centred over the open block, inside the strip. */
+function layoutZoomChip(): void {
+  const chip = $("zoomchip") as HTMLElement;
+  const shown = editingBlock() && paneSection === "zoom";
+  chip.hidden = !shown;
+  if (!shown) return;
+  for (const b of $("chipside").querySelectorAll<HTMLElement>("[data-side]")) {
+    b.setAttribute("aria-checked", String(b.dataset.side === chipSide));
+  }
+  const speed = chipSpeed(draftEasing, chipSide);
+  for (const b of $("chipspeed").querySelectorAll<HTMLElement>("[data-speed]")) {
+    b.setAttribute("aria-checked", String(b.dataset.speed === speed));
+  }
+  const block = $("manualdraft").getBoundingClientRect();
+  const strip = $("overlay-strip").getBoundingClientRect();
+  const mid = (block.left + block.right) / 2 - strip.left;
+  const max = Math.max(2, strip.width - chip.offsetWidth - 2);
+  chip.style.left = `${Math.min(max, Math.max(2, mid - chip.offsetWidth / 2))}px`;
+}
+
+$("chipside").addEventListener("click", (e) => {
+  const side = (e.target as HTMLElement).closest<HTMLElement>("[data-side]")?.dataset.side as ChipSide | undefined;
+  if (!side) return;
+  chipSide = side;
+  layoutZoomChip();
+});
+$("chipspeed").addEventListener("click", (e) => {
+  const speed = (e.target as HTMLElement).closest<HTMLElement>("[data-speed]")?.dataset.speed as ZoomPreset | undefined;
+  if (!speed || !editingBlock()) return;
+  // The lit speed pressed again goes back to the project default for that side.
+  const next = chipSpeed(draftEasing, chipSide) === speed ? "" : speed;
+  draftEasing = withChipSpeed(draftEasing, chipSide, next);
+  ($("overridein") as HTMLSelectElement).value = draftEasing.in;
+  ($("overrideout") as HTMLSelectElement).value = draftEasing.out;
+  layoutZoomChip();
+});
+$("chipdelete").addEventListener("click", () => {
+  // A derived block's delete drops it (it never plays); a manual block's is
+  // the same as the section's Delete window.
+  if (editingWindowId) $("overridedelete").click();
+  else $("overrideclear").click();
+});
+$("zoomamountrange").addEventListener("input", () => {
+  setZoomAmount(Number(($("zoomamountrange") as HTMLInputElement).value));
+});
+(() => {
+  const btn = $("chipamount");
+  let drag: { x: number; amount: number } | null = null;
+  btn.addEventListener("pointerdown", (e) => {
+    if (!editingBlock()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    drag = { x: e.clientX, amount: amountOf(draftRect ?? startingRect()) };
+    btn.setPointerCapture(e.pointerId);
+  });
+  btn.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if ((e.buttons & 1) === 0) { drag = null; return; }
+    // 100 px of drag is one whole step of zoom (1.0x).
+    setZoomAmount(Math.round((drag.amount + (e.clientX - drag.x) / 100) * 10) / 10);
+  });
+  const end = (): void => { drag = null; };
+  btn.addEventListener("pointerup", end);
+  btn.addEventListener("pointercancel", end);
+  btn.addEventListener("lostpointercapture", end);
+  btn.addEventListener("keydown", (e) => {
+    const step = e.key === "ArrowUp" || e.key === "ArrowRight" ? 0.1 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -0.1 : 0;
+    if (!step || !editingBlock()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setZoomAmount(Math.round((amountOf(draftRect ?? startingRect()) + step) * 10) / 10);
+  });
+})();
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
   void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
@@ -3080,6 +3213,7 @@ function selectSection(s: PaneSection): void {
   // keyed off this attribute in CSS (body[data-section="zoom"] ...).
   document.body.dataset.section = s;
   layoutExportOverlays();
+  layoutZoomChip();
   for (const tab of $("sectionswitch").querySelectorAll<HTMLElement>("[data-section]")) {
     const on = tab.dataset.section === s;
     tab.setAttribute("aria-selected", String(on));

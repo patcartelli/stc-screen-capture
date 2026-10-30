@@ -13,6 +13,11 @@ Written 2026-10-29 by a scheduled prep run, after both blockers were Done in Lin
 - **Export bars:** the full-height bars and the strip range readout show only while Export is active. Other sections keep today's Clip-lane trim handles.
 - **Camera:** restyle only. The resize handle, section gating and readout already landed in STC-604.
 
+**Zoom chip note (Patrick, 2026-10-30).** The chip holds the amount, In / Out / Both, a Slow / Med / Fast control, and delete. In / Out / Both picks which side the speed sets; Both sets both, and with two different sides lights none. Pressing the lit speed returns that side to the project default. The Ease in / Ease out rows stay and follow the chip.
+- **Edits:** the open block's draft (`draftRect`, `draftEasing`), the same as the Zoom section's rows. The amount is editable: it is the region's size (frame ÷ longer side), so changing it resizes the region about its centre and slides it back inside the frame. An Auto block starts from the region stage 2 would zoom to. The range, 1.1× to 4×, is this ticket's call. An Amount slider is added to the Zoom section, as in the frame.
+- **Saves to the project:** yes, through `committedOverrides`, with no new field. The easing uses STC-619's fields (project-17 only when the sides differ). Delete uses the existing paths: a manual block is deleted, and an auto block is marked removed.
+- **Tests:** unit tests for the side and speed rule and for resizing to an amount. The e2e tests cover: the chip shows only in Zoom with a block open, above the block and never over the Clip lane; speeds and the amount are saved; the arrow keys stay with the chip; delete removes the block; a press on the chip never grabs the playhead.
+
 ## Summary
 
 STC-606 adds one set of overlays per inspector section, each shown only while its section is active:

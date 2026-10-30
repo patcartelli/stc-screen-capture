@@ -154,6 +154,114 @@ describe("the Camera overlay", () => {
 });
 
 /**
+ * Zoom (Figma 171:561). The open block's chip in the strip: amount, In / Out /
+ * Both choosing which side Slow / Med / Fast sets, and delete (Patrick,
+ * 2026-10-30). It edits the same draft as the Zoom section's rows.
+ * `fixtures/basic` has one derived window, "1705000000" (zoom-override.e2e).
+ */
+describe("the Zoom chip", () => {
+  const project = (dir: string): any => {
+    try { return JSON.parse(readFileSync(join(dir, "project.json"), "utf8")); } catch { return undefined; }
+  };
+  const rect = (win: Page, sel: string) => win.evaluate((s) => {
+    const el = document.querySelector<HTMLElement>(s)!;
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, shown: getComputedStyle(el).display !== "none" && r.width > 0 };
+  }, sel);
+  async function openBlock() {
+    const { app: a, editorWin: win, takeDir } = await launchWithTakeInEditor();
+    app = a;
+    await waitForTakeLoaded(win);
+    await expect.poll(() => win.locator(".zoomblock").count(), { timeout: 10_000 }).toBe(1);
+    await win.click(".zoomblock");
+    await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
+    return { win, takeDir };
+  }
+  const done = async (win: Page) => {
+    await win.click("#overridedone");
+    await win.waitForSelector("#overridebar", { state: "hidden", timeout: 10_000 });
+  };
+
+  test("in the strip above the open block, only in Zoom, never over the Clip lane", async () => {
+    const { win } = await openBlock();
+    const [chip, block, strip, clip] = await Promise.all([
+      rect(win, "#zoomchip"), rect(win, "#manualdraft"), rect(win, "#overlay-strip"), rect(win, ".laneviewport.clip"),
+    ]);
+    expect(chip.shown).toBe(true);
+    expect(chip.top).toBeGreaterThanOrEqual(strip.top);
+    expect(chip.bottom).toBeLessThanOrEqual(clip.top);
+    // Centred over the block (the block is mid-take, so no clamping here).
+    expect(Math.abs((chip.left + chip.right) / 2 - (block.left + block.right) / 2)).toBeLessThanOrEqual(2);
+    // Another section hides it; back to Zoom shows it again.
+    await win.click("#tab-frame");
+    expect((await rect(win, "#zoomchip")).shown).toBe(false);
+    await win.click("#tab-zoom");
+    expect((await rect(win, "#zoomchip")).shown).toBe(true);
+    // Closing the block hides it.
+    await done(win);
+    expect((await rect(win, "#zoomchip")).shown).toBe(false);
+  }, 60_000);
+
+  test("Both sets the two sides; In then sets only the push in; the Ease rows follow", async () => {
+    const { win, takeDir } = await openBlock();
+    expect(await win.getAttribute('#chipside [data-side="both"]', "aria-checked")).toBe("true");
+    await win.click('#chipspeed [data-speed="snappy"]');
+    expect(await win.inputValue("#overridein")).toBe("snappy");
+    expect(await win.inputValue("#overrideout")).toBe("snappy");
+    await win.click('#chipside [data-side="in"]');
+    await win.click('#chipspeed [data-speed="calm"]');
+    expect(await win.inputValue("#overridein")).toBe("calm");
+    expect(await win.inputValue("#overrideout")).toBe("snappy");
+    // Both with two different sides lights no speed.
+    await win.click('#chipside [data-side="both"]');
+    expect(await win.locator('#chipspeed [aria-checked="true"]').count()).toBe(0);
+    // A region, so the override has something to carry the easing on.
+    await win.focus("#chipamount");
+    await win.keyboard.press("ArrowUp");
+    await done(win);
+    await expect.poll(() => project(takeDir)?.overrides?.[0]?.easing, { timeout: 10_000 })
+      .toEqual({ in: "calm", out: "snappy" });
+  }, 60_000);
+
+  test("the amount: arrow keys and the slider resize the region about its centre, and it is saved", async () => {
+    const { win, takeDir } = await openBlock();
+    expect(await win.textContent("#chipamount")).toBe("Auto");
+    await win.focus("#chipamount");
+    await win.keyboard.press("ArrowUp");
+    const first = await win.textContent("#chipamount");
+    expect(first).toMatch(/^\d\.\d×$/);
+    expect(await win.textContent("#zoomamount")).toBe(first);
+    // The arrow key stayed with the chip: the playhead did not move.
+    const frame = await win.evaluate(() => (document.getElementById("scrub") as HTMLInputElement).value);
+    await win.keyboard.press("ArrowUp");
+    expect(await win.evaluate(() => (document.getElementById("scrub") as HTMLInputElement).value)).toBe(frame);
+    await win.fill("#zoomamountrange", "3");
+    await win.dispatchEvent("#zoomamountrange", "input");
+    expect(await win.textContent("#chipamount")).toBe("3.0×");
+    expect(await win.textContent("#overridereadout")).toMatch(/^3\.0× · \d+×\d+$/);
+    await done(win);
+    await expect.poll(() => {
+      const r = project(takeDir)?.overrides?.[0]?.rect;
+      return r ? Math.round(10 / Math.max(r.width, r.height)) / 10 : undefined;
+    }, { timeout: 10_000 }).toBe(3);
+  }, 60_000);
+
+  test("delete removes the block, and a press on the chip never grabs the playhead", async () => {
+    const { win, takeDir } = await openBlock();
+    // The playhead sits mid-block (selecting seeks there), under the chip.
+    const clock = await win.textContent("#clock");
+    const amount = await rect(win, "#chipamount");
+    await win.mouse.click((amount.left + amount.right) / 2, (amount.top + amount.bottom) / 2);
+    expect(await win.textContent("#clock")).toBe(clock);
+    await win.click("#chipdelete");
+    await win.waitForSelector("#overridebar", { state: "hidden", timeout: 10_000 });
+    await expect.poll(() => project(takeDir)?.overrides, { timeout: 10_000 })
+      .toEqual([{ kind: "removed", windowId: "1705000000" }]);
+    expect(await win.locator(".zoomblock").count()).toBe(0);
+  }, 60_000);
+});
+
+/**
  * Frame (Figma 171:78). Hovering the lanes in Frame draws a hairline and a
  * tooltip: the time, then the clicks and keys of the Clip bar under the
  * pointer. `fixtures/basic` has one click, at 2.005 s.
