@@ -19,7 +19,7 @@ Patrick's calls (2026-10-30, on the ticket):
 
 After the block ends, the crop stops chasing, so the zoom out relaxes from a still crop. Both constants live in `transform/src/zoom-follow.ts`. `TRANSFORM_VERSION` is 18.
 
-**One departure from the ticket text:** the crop is *not* held to stage 2's `[0.5, 0.7]` viewport limits. A following block keeps the size its Amount gives it (1.1x to 4x), exactly as a fixed block does, so that the Amount slider still means something with Follow on. It is held inside the frame.
+**One departure from the ticket text, confirmed by Patrick (2026-10-30):** the crop is *not* held to stage 2's `[0.5, 0.7]` viewport limits. A following block keeps the size its Amount gives it (1.1x to 4x), exactly as a fixed block does, so that the Amount slider still means something with Follow on. It is held inside the frame.
 
 ## What was checked here
 
