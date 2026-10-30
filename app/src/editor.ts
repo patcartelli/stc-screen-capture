@@ -105,7 +105,9 @@ import {
   isFit, isMinSpan, overviewBox, panBy, timelineZoomKeyIntent,
   wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
-import { clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts } from "./timeline-activity.js";
+import {
+  clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts, activityIn, activityLabel,
+} from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, dragCenter, resizeFromCorner, styleFromFixedCorner,
   anchorCenter, anchorOf, PIP_CIRCLE_HANDLE_FRACTION, PIP_SNAP_THRESHOLD_SCREEN_PX, type PipAnchor, type PipEdit, type PipStyle,
@@ -2030,6 +2032,44 @@ function nearPlayhead(e: PointerEvent): boolean {
     && !(e.target as HTMLElement).closest(NOT_THE_PLAYHEAD);
 }
 
+// ---- the Frame section's hover (STC-606, Figma 171:78) -------------------
+//
+// Over the lanes, while Frame is the active section and nothing is held: a
+// hairline at the pointer through every lane, and a tooltip with the time and
+// the clicks and keys the Clip bar under the pointer stands for (the same
+// CLIP_PITCH_PX column drawClipLane draws, over the visible span).
+
+function hideFrameHover(): void {
+  ($("hoverline") as HTMLElement).hidden = true;
+  ($("hovertip") as HTMLElement).hidden = true;
+}
+
+function frameHover(e: PointerEvent): void {
+  if (paneSection !== "frame" || e.buttons !== 0 || draggingPlayhead || !player || !openSession) {
+    hideFrameHover();
+    return;
+  }
+  const wrap = (document.querySelector(".timelinewrap") as HTMLElement).getBoundingClientRect();
+  const lanes = $("clip-canvas-wrap").getBoundingClientRect();
+  const x = e.clientX - lanes.left;
+  if (x < 0 || x > lanes.width || lanes.width <= 0 || e.clientY < lanes.top) { hideFrameHover(); return; }
+  const vis = visibleSpan();
+  const at = (px: number) => vis.start + (px / lanes.width) * (vis.end - vis.start);
+  const col = Math.floor(x / CLIP_PITCH_PX) * CLIP_PITCH_PX;
+  $("hovertime").textContent = formatBlockTime(at(x));
+  $("hovercount").textContent = activityLabel(activityIn(openSession.events, openSession.keys, at(col), at(col + CLIP_PITCH_PX)));
+  const line = $("hoverline") as HTMLElement;
+  const tip = $("hovertip") as HTMLElement;
+  line.hidden = false;
+  tip.hidden = false;
+  const lineX = e.clientX - wrap.left;
+  line.style.left = `${lineX}px`;
+  // Beside the line, flipped to its left when it would run past the lanes.
+  const TIP_GAP_PX = 8;
+  const right = lineX + TIP_GAP_PX;
+  tip.style.left = `${right + tip.offsetWidth > lanes.right - wrap.left ? lineX - TIP_GAP_PX - tip.offsetWidth : right}px`;
+}
+
 function seekToClientX(clientX: number): void {
   if (!player) return;
   const frame = frameAtClientX(clientX);
@@ -2061,6 +2101,8 @@ function seekToClientX(clientX: number): void {
   wrap.addEventListener("pointerup", end);
   wrap.addEventListener("pointercancel", end);
   wrap.addEventListener("pointerleave", () => { if (!draggingPlayhead) wrap.removeAttribute("data-near-playhead"); });
+  wrap.addEventListener("pointermove", (e) => frameHover(e));
+  wrap.addEventListener("pointerleave", hideFrameHover);
 })();
 
 // ---- system-audio level (STC-418 PR 3) --------------------------------

@@ -47,6 +47,32 @@ export function clipActivity(
 }
 
 /**
+ * The Frame section's hover tooltip (STC-606, Figma 171:78): how many clicks
+ * and keys fall in `[startNs, endNs)`, the span the Clip lane bar under the
+ * pointer stands for. A click is a `down` (its `up` is the same click). Keys
+ * are commands only (STC-419: typing never reaches disk), so the count cannot
+ * reveal what was typed. `keys` is undefined for a take recorded before keys
+ * were captured, and the label then leaves keys out rather than claim zero.
+ */
+export function activityIn(
+  events: readonly SessionEvent[],
+  keys: readonly { t: number }[] | undefined,
+  startNs: number,
+  endNs: number,
+): { clicks: number; keys: number | undefined } {
+  const inSpan = (t: number) => t >= startNs && t < endNs;
+  let clicks = 0;
+  for (const e of events) if (e.kind === "down" && inSpan(e.t)) clicks++;
+  return { clicks, keys: keys ? keys.filter((k) => inSpan(k.t)).length : undefined };
+}
+
+/** "2 clicks · 14 keys", singular at one; keys left out when the take has none recorded. */
+export function activityLabel(a: { clicks: number; keys: number | undefined }): string {
+  const n = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  return a.keys === undefined ? n(a.clicks, "click") : `${n(a.clicks, "click")} · ${n(a.keys, "key")}`;
+}
+
+/**
  * A read-only automation curve, sampled at `samples` evenly spaced points
  * across `[0, durationNs]`, inclusive of both ends.
  *

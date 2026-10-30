@@ -509,6 +509,19 @@
                  font: 400 11px/14px var(--font-readout); pointer-events: none; }
     #rangechip span + span { margin-left: 10px; }
     #rangechip .k { color: var(--text-dim); margin-right: 4px; }
+    /* STC-606, Frame (Figma 171:78): hovering the lanes while Frame is the
+       active section draws a hairline through every lane and a tooltip beside
+       it: the time, then the clicks and keys the Clip bar there stands for.
+       Display only; it never takes a press (editor.ts's frame hover). */
+    .frameonly { display: none; }
+    body[data-section="frame"] .frameonly:not([hidden]) { display: block; }
+    #hoverline { position: absolute; top: calc(22px + var(--strip-h)); bottom: 0; left: 0; width: 1px;
+                 margin-left: -.5px; background: rgba(255, 255, 255, .28); pointer-events: none; z-index: 5; }
+    #hovertip { position: absolute; top: calc(22px + var(--strip-h) + 6px); left: 0; padding: 5px 10px 6px;
+                border: 1px solid rgba(255, 255, 255, .08); border-radius: 6px; background: rgba(10, 10, 12, .92);
+                white-space: nowrap; pointer-events: none; z-index: 8; }
+    #hovertime { font: 400 11px/14px var(--font-readout); color: var(--bone); }
+    #hovercount { margin-top: 2px; font: 400 9px/12px var(--font-readout); color: var(--text-dim); }
     .stripbookmark { position: absolute; top: 0; bottom: 0; width: calc(1px * var(--inv, 1));
                      margin-left: calc(-.5px * var(--inv, 1));
                      background: color-mix(in srgb, var(--bookmark) 55%, transparent); }
@@ -839,6 +852,9 @@
     <!-- STC-606: the Export section's full-height in/out bars. -->
     <div class="exportbar exportonly overlayctl" id="exportbar-in" aria-hidden="true"></div>
     <div class="exportbar exportonly overlayctl" id="exportbar-out" aria-hidden="true"></div>
+    <!-- STC-606: the Frame section's hover hairline and tooltip. -->
+    <div id="hoverline" class="frameonly" hidden></div>
+    <div id="hovertip" class="frameonly" hidden><div id="hovertime"></div><div id="hovercount"></div></div>
     <!-- STC-605: the ruler row. Its label cell holds STC-484's zoom buttons
          (the overview strip they sat beside is gone: the frame has none, and
          #ruler itself is the pan handle, by pointer or by arrow key). -->

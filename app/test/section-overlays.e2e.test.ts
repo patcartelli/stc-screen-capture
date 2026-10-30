@@ -154,6 +154,63 @@ describe("the Camera overlay", () => {
 });
 
 /**
+ * Frame (Figma 171:78). Hovering the lanes in Frame draws a hairline and a
+ * tooltip: the time, then the clicks and keys of the Clip bar under the
+ * pointer. `fixtures/basic` has one click, at 2.005 s.
+ */
+describe("the Frame hover", () => {
+  const CLICK_NS = 2_005_000_000;
+  const shown = (win: Page, id: string) => win.evaluate((i) => {
+    const el = document.getElementById(i)!;
+    return getComputedStyle(el).display !== "none";
+  }, id);
+  const rectOf = (win: Page, sel: string) => win.evaluate((s) => {
+    const r = document.querySelector(s)!.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width };
+  }, sel);
+
+  test("a hairline and tooltip over the lanes in Frame, gone on leaving and in other sections", async () => {
+    const win = await openEditor();
+    const clip = await rectOf(win, ".laneviewport.clip");
+    const x = clip.left + clip.width * 0.3;
+    await win.mouse.move(x, clip.top + 20);
+    await expect.poll(() => shown(win, "hovertip"), { timeout: 5_000 }).toBe(true);
+    expect(await shown(win, "hoverline")).toBe(true);
+    const line = await rectOf(win, "#hoverline");
+    expect(Math.abs((line.left + line.right) / 2 - x)).toBeLessThanOrEqual(1);
+    expect(await win.textContent("#hovertime")).toMatch(/^\d+:\d\d\.\d$/);
+    expect(await win.textContent("#hovercount")).toMatch(/^\d+ clicks?( · \d+ keys?)?$/);
+    // Display only: it never takes a press.
+    expect(await win.evaluate(() => getComputedStyle(document.getElementById("hovertip")!).pointerEvents)).toBe("none");
+    // Off the lanes (over the preview), it goes.
+    const stage = await rectOf(win, "#stage");
+    await win.mouse.move(stage.left + 20, stage.top + 20);
+    await expect.poll(() => shown(win, "hovertip"), { timeout: 5_000 }).toBe(false);
+    // In another section, hovering the lanes shows nothing.
+    await win.click("#tab-zoom");
+    await win.mouse.move(x, clip.top + 20);
+    await win.mouse.move(x + 3, clip.top + 20);
+    expect(await shown(win, "hovertip")).toBe(false);
+    expect(await shown(win, "hoverline")).toBe(false);
+  }, 60_000);
+
+  test("over the fixture's one click, the tooltip counts it", async () => {
+    const win = await openEditor();
+    const dur = await win.evaluate(() => Number((document.getElementById("scrub") as HTMLInputElement).max));
+    expect(dur).toBeGreaterThan(0);
+    const track = await rectOf(win, "#clip-canvas-wrap");
+    // The duration in ns, from the fixture's own numbers (300 frames at 60 fps
+    // = 4983333349 ns, scrubber.e2e's constant).
+    const x = track.left + (CLICK_NS / 4_983_333_349) * track.width;
+    await win.mouse.move(x, track.top + 20);
+    await expect.poll(() => win.textContent("#hovercount"), { timeout: 5_000 }).toMatch(/^1 click\b/);
+    // And a bar well before it has none.
+    await win.mouse.move(track.left + 8, track.top + 20);
+    await expect.poll(() => win.textContent("#hovercount"), { timeout: 5_000 }).toMatch(/^0 clicks\b/);
+  }, 60_000);
+});
+
+/**
  * Export (Figma 171:2050). Brass in/out bars through every lane and a range
  * chip in the strip, Export only (Patrick, 2026-10-29); the Clip lane's own
  * brackets elsewhere. Dimming outside the range now reaches the Audio lane.
