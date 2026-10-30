@@ -9,9 +9,10 @@ import {
 } from "./zoom.js";
 import { zoomEasingOf } from "./zoom-easing.js";
 import {
-  groupByEasing, manualWindows, nearestWindow, resolvedCrop, resolvedWindows, windowId,
+  followsCursor, groupByEasing, manualWindows, nearestWindow, resolvedCrop, resolvedWindows, windowId,
   type CombinedZoomWindow,
 } from "./zoom-override.js";
+import { createFollowSim, followPointsUv, type FollowPoint, type FollowSim } from "./zoom-follow.js";
 import { framingLayout, type FramingLayout } from "./framing.js";
 import { deriveZoomCrop } from "./zoom-change.js";
 import { geometryAt } from "./display-geometry.js";
@@ -241,6 +242,31 @@ function derivedCropFor(session: Session, window: ZoomWindow): Rect | null {
   return byWindow.get(key)!;
 }
 
+/**
+ * A following block's pan (STC-617), memoised per session like the sims
+ * above: the cursor's UV points once per session, and one `FollowSim` per
+ * distinct (window, bounds, rect). Every input the sim reads is in its key,
+ * so a block whose rect or timing is edited gets a fresh sim rather than
+ * another block's answer.
+ */
+const followPointsCache = new WeakMap<Session, FollowPoint[]>();
+const followSimCache = new WeakMap<Session, Map<string, FollowSim>>();
+
+function followCropFor(session: Session, window: CombinedZoomWindow, rect: Rect, tick: number): Rect {
+  let points = followPointsCache.get(session);
+  if (!points) {
+    points = followPointsUv(session.events, session.anchors, session.frames);
+    followPointsCache.set(session, points);
+  }
+  let byWindow = followSimCache.get(session);
+  if (!byWindow) { byWindow = new Map(); followSimCache.set(session, byWindow); }
+  const id = window.manual ? `m:${window.manual.id}` : `d:${windowId(window)}`;
+  const key = `${id}:${window.startNs}:${window.endNs}:${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
+  let sim = byWindow.get(key);
+  if (!sim) { sim = createFollowSim(points, window.startNs, window.endNs, rect); byWindow.set(key, sim); }
+  return sim.cropAt(tick);
+}
+
 function windowsFor(session: Session): ZoomWindow[] {
   let windows = windowsCache.get(session);
   if (!windows) {
@@ -331,10 +357,17 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
   // asked about one. A window with no override at all and no usable
   // derived crop is a no-op on the pixels by construction: lerping the
   // whole frame toward itself is the whole frame at every `zoomAmount`.
+  //
+  // A tuned crop that FOLLOWS the cursor (STC-617) keeps only its size; its
+  // place at this tick is zoom-follow.ts's answer, blended exactly as a fixed
+  // crop is. A block that does not follow resolves as it always did.
   const nearWindow = nearestWindow(windows, tNs);
-  const zoomTarget = nearWindow
-    ? resolvedCrop(project.overrides, nearWindow) ?? derivedCropFor(session, nearWindow) ?? FULL_FRAME_UV
-    : FULL_FRAME_UV;
+  const tuned = nearWindow ? resolvedCrop(project.overrides, nearWindow) : undefined;
+  const zoomTarget = !nearWindow
+    ? FULL_FRAME_UV
+    : tuned && followsCursor(project.overrides, nearWindow)
+      ? followCropFor(session, nearWindow, tuned, tick)
+      : tuned ?? derivedCropFor(session, nearWindow) ?? FULL_FRAME_UV;
   const crop = lerpRect(FULL_FRAME_UV, zoomTarget, zoomAmount);
 
   // The cursor is drawn IN the picture, and the picture the compositor draws

@@ -1296,6 +1296,12 @@
                 <option value="snappy">Fast</option>
               </select>
             </div>
+            <!-- STC-617 (Figma 171:561): the region keeps its size and moves with
+                 the pointer inside the block. -->
+            <div class="row" title="The zoomed region keeps its size and moves with the pointer, panning once it nears the region's edge">
+              <label class="label" for="zoomfollow">Follow cursor</label>
+              <input id="zoomfollow" type="checkbox" class="switch" role="switch" aria-label="Follow cursor">
+            </div>
             <div class="row">
               <span class="label">Starts</span>
               <span id="zoomstarts" class="value mono"></span>

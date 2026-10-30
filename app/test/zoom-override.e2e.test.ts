@@ -168,6 +168,26 @@ describe("separate ease in and ease out (STC-619)", () => {
   }, 60_000);
 });
 
+describe("Follow cursor (STC-617)", () => {
+  test("on an Auto block it writes a geometry override with follow at v19, read back on reopen", async () => {
+    const { win, takeDir } = await openPreview();
+    await win.click(".zoomblock");
+    // No region drawn: switching Follow on gives the block stage 2's region.
+    await win.check("#zoomfollow");
+    await pressOverrideDone(win);
+
+    await expect.poll(() => readProject(takeDir).overrides?.[0]?.follow, { timeout: 10_000 }).toBe(true);
+    expect(readProject(takeDir).overrides[0]).toMatchObject({ kind: "geometry" });
+    expect(readProject(takeDir).version).toBe(19);
+
+    await win.click(".zoomblock");
+    await expect.poll(() => win.isChecked("#zoomfollow"), { timeout: 10_000 }).toBe(true);
+    await win.uncheck("#zoomfollow");
+    await pressOverrideDone(win);
+    await expect.poll(() => "follow" in (readProject(takeDir).overrides?.[0] ?? {}), { timeout: 10_000 }).toBe(false);
+  }, 60_000);
+});
+
 describe("removing an override", () => {
   test("clears the entry from project.json", async () => {
     const { win, takeDir } = await openPreview();
