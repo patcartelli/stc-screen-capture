@@ -160,3 +160,48 @@ pre-fix files. STC-593 added the GIF thumbnail under Reduce motion: a hover
 plays it with no preference set (the control) and leaves its first frame under
 `reduce`, which fails with `renderer.ts`'s `reduce.matches` guard removed. What
 only a Mac can judge is `docs/STC-587-RUNBOOK.md` §5-§7.
+
+## STC-607 — the rebuilt editor (2026-10-30)
+
+STC-603 to STC-606 rebuilt the editor around the section pane and its
+overlays. This row is what changed on the surfaces they added or touched; the
+older Video editor row above still stands for the rest of the window.
+
+| Surface (file) | hover | focus-visible | active | disabled | loading | keyboard path | reduced motion |
+|---|---|---|---|---|---|---|---|
+| **Trim brackets, scrub bar, manual handles, override bar** (`editor.html`) | unchanged | ok — all four use `--focus` now (they used `--accent` / `--section-accent`). In Export the brackets are `opacity: 0` behind the brass bars; a bracket with `:focus-visible` is `opacity: 1` and `z-index: 7`, above the bar | unchanged | unchanged | n/a | unchanged | ok — a held bracket (dragged past its limit) crossfades its colour under reduce and no longer scales; it had an unguarded `transform .12s` (this closes the `.timeline .handle` GAP in the Video editor row above) |
+| **Zoom chip, Audio ceiling handle** (`editor.html`) | unchanged | ok — already `--focus` (STC-606) | unchanged | n/a | n/a | the chip's buttons and the ceiling handle are Tab stops; the chip's In/Out/Both and speed groups are radio groups | ok — neither animates |
+| **Export bars** (`#exportbar-in`, `#exportbar-out`) | cursor only | n/a — `aria-hidden`, pointer-only; the brackets they stand in for are the keyboard path | held: amber | n/a | n/a | the brackets, above | ok — no transition |
+
+**axe** (`npm run axe:renderers`): zero violations on `editor.html`, light and
+dark. It does not see the canvas lanes.
+
+**e2e:** `app/test/editor-a11y.e2e.test.ts` (Linux, Xvfb): the `--focus` ring on
+the brackets and the scrub bar, a focused Export bracket visible and above its
+bar, and a held bracket's transition properties under `emulateMedia`. All three
+fail on the old CSS. Mac pass (2026-10-30): ring colour, the Export bracket (it
+was covered by the bar until the z-index fix), and the held bracket's thickening
+with Reduce motion off and its colour-only change with it on.
+
+**Contrast** (STC-607, against STC-601's palette). The editor is `data-surface="dark"`
+and has no light mode: its tokens read the same under `prefers-color-scheme:
+light` and `dark` (measured in the running app), so "light" is the one
+rendering. Ratios against the lane (white 4% over the card, the worst bed at
+`#1e2022`) / the card `#151719`:
+
+| Colour | on lane | on card | needs |
+|---|---|---|---|
+| teal clip and waveform `#6fa3a0` | 5.78 | 6.35 | 3 (graphics) |
+| brass zoom `#d6b25e` | 8.09 | 8.89 | 3 |
+| red peaks `#ff6b6b` | 5.89 | 6.48 | 3 |
+| bookmark `#c97b6a` | 5.08 | 5.58 | 3 |
+| bone bracket `#e9e6dc` | 13.09 | 14.39 | 3 |
+| amber held `#e0925a` | 6.56 | 7.21 | 3 |
+| `--focus` ring `#7aa2ff` | 6.57 | 7.22 | 3 |
+| text `#f1f1ee` | 14.44 | 15.88 | 4.5 |
+
+Every colour clears its bar on every editor surface. The colours do not
+separate from EACH OTHER (brass/bookmark 1.59, teal/brass 1.40, red/bookmark
+1.16), so none carries meaning alone: peaks are hatched as well as red, zoom is
+the ramp silhouette, bookmarks are ruler markers, which is STC-601's non-colour
+rule. A first look at the canvas lanes themselves is Patrick's, on the Mac.
