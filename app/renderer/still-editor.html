@@ -53,6 +53,56 @@
     @media (prefers-reduced-motion: reduce) {
       .iconbtn:active:not([disabled]) { transform: none; background: var(--border); }
     }
+    /* ── the background picker (STC-599): a swatch grid, a radio group. Only
+       window shots with alpha get it (still-editor-renderer.ts unhides it). */
+    #looks {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+      padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface);
+    }
+    #looks[hidden] { display: none; }
+    #looks .label {
+      font-size: var(--type-label); font-weight: var(--type-label-weight);
+      letter-spacing: var(--type-label-tracking); text-transform: uppercase; color: var(--text-dim);
+      margin-right: 4px;
+    }
+    #lookgrid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .look {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      padding: 3px; border: 1px solid transparent; border-radius: 8px;
+      background: none; color: var(--text-dim); cursor: pointer;
+      font: inherit; font-size: var(--type-meta);
+    }
+    .look .chip {
+      width: 44px; height: 30px; border-radius: 5px; box-sizing: border-box;
+      border: 1px solid var(--border-strong); position: relative; overflow: hidden;
+    }
+    /* The two no-background options show a window on the page's own colour. */
+    .look[data-look="window-only"] .chip,
+    .look[data-look="window-shadow"] .chip { background: var(--surface-hover); }
+    .look[data-look="window-only"] .chip::after,
+    .look[data-look="window-shadow"] .chip::after {
+      content: ""; position: absolute; inset: 7px 9px; border-radius: 2px;
+      background: var(--surface); border: 1px solid var(--border-strong);
+    }
+    .look[data-look="window-shadow"] .chip::after { box-shadow: 0 3px 5px rgba(0,0,0,.35); }
+    .look:hover:not([aria-disabled="true"]) { background: var(--surface-hover); color: var(--text); }
+    .look:active:not([aria-disabled="true"]) { transform: scale(.96); }
+    .look:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .look[aria-checked="true"] { border-color: var(--accent); color: var(--text); }
+    .look[aria-disabled="true"] { opacity: .4; cursor: default; }
+    @media (prefers-reduced-motion: reduce) {
+      .look:active:not([aria-disabled="true"]) { transform: none; background: var(--border); }
+    }
+    #customcolors { display: flex; align-items: center; gap: 6px; }
+    #customcolors[hidden] { display: none; }
+    #customcolors input {
+      width: 72px; padding: 4px 6px; border-radius: 6px; box-sizing: border-box;
+      border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+      font: inherit; font-size: var(--type-meta); font-family: var(--mono, ui-monospace, monospace);
+    }
+    #customcolors input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    #customcolors input[aria-invalid="true"] { border-color: var(--warn, #c0392b); }
+
     /* Done keeps its primary weight (the ticket's own words) — the shared
        accent token now, not a hardcoded #3b6fe0 this window used to own. */
     #done { border-color: var(--accent); color: var(--accent); }
@@ -61,6 +111,14 @@
 </head>
 <body>
   <div id="stage"><canvas id="stagecanvas"></canvas></div>
+  <div id="looks" hidden>
+    <span class="label" id="lookslabel">Background</span>
+    <div id="lookgrid" role="radiogroup" aria-labelledby="lookslabel"></div>
+    <div id="customcolors" hidden>
+      <input id="custom-a" type="text" spellcheck="false" autocomplete="off" maxlength="7" aria-label="Custom colour, #rrggbb" placeholder="#3b4252">
+      <input id="custom-b" type="text" spellcheck="false" autocomplete="off" maxlength="7" aria-label="Second colour, optional, #rrggbb" placeholder="optional">
+    </div>
+  </div>
   <div id="toolbar">
     <span id="hint">Drag a box over anything private.</span>
     <button id="undo" class="iconbtn" aria-label="Undo" title="Undo the last box (⌘Z)">

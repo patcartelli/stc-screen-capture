@@ -14,12 +14,13 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("stillEditor", {
   getShot: (dir: string) => ipcRenderer.invoke("library:shot", dir),
   getFrame: (dir: string, name: string) => ipcRenderer.invoke("still:frame", dir, name),
-  // Redactions only — there is no mode to send, unlike the panel's old
-  // `writeShot`, since this editor has no Style picker (none was moved here;
-  // see `still-editor-window.ts`'s module doc). `undefined` for `mode` keeps
-  // whatever the document already has, exactly as `still:writeShot`'s own
-  // doc describes for "a redaction-only call".
-  writeShot: (dir: string, redactions: unknown) => ipcRenderer.invoke("still:writeShot", dir, redactions),
+  // Redactions, and optionally a `look` (STC-599): the background picker's
+  // mode + background + shadow, which `still:writeShot` validates and merges.
+  // Without one the document's look is kept, exactly as `still:writeShot`'s own
+  // doc describes for "a redaction-only call". The separate `mode` argument is
+  // the panel's and is never sent from here.
+  writeShot: (dir: string, redactions: unknown, look?: unknown) =>
+    ipcRenderer.invoke("still:writeShot", dir, redactions, undefined, look),
   // STC-446: the editor can write the finished file now. Both channels are
   // the thumbnail panel's own (`still:export`, `recorder:getSettings`) — the
   // editor is the ONLY door to a still already in the library, and until
