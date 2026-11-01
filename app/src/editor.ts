@@ -1414,6 +1414,21 @@ async function commitCurrentEdit(): Promise<void> {
   else if (editingManualId) await commitManualDraft();
 }
 
+/**
+ * The opening half of every select/create: commits whatever block is open,
+ * then lets go of it, so the block about to open is the ONLY target (STC-623).
+ * Committing alone left the old id set: a manual block opened straight from a
+ * derived one had both ids at once, so the Danger group showed "Delete window"
+ * twice and `editState()` (which reads the derived id first) would have
+ * committed the manual draft onto the old derived window and lost the manual
+ * one. The held framing stays held, since an edit is about to reopen.
+ */
+async function leaveCurrentEditForAnother(): Promise<void> {
+  await commitCurrentEdit();
+  editingWindowId = null;
+  editingManualId = null;
+}
+
 /** The teardown half of leaving edit mode — shared by a normal close (which
  *  commits first) and a delete (which does not: there is nothing left to
  *  commit for a window that no longer exists). */
@@ -1482,7 +1497,7 @@ async function deleteDerivedWindow(): Promise<void> {
 
 async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   if (!player || !openProject) return;
-  await commitCurrentEdit(); // switching straight from one block to another
+  await leaveCurrentEditForAnother(); // switching straight from one block to another
   const id = windowId(w);
   editingWindowId = id;
   const existing = overrideFor(openProject.overrides, w);
@@ -1509,7 +1524,7 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
  *  behaviour. */
 async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>): Promise<void> {
   if (!player || !openProject) return;
-  await commitCurrentEdit();
+  await leaveCurrentEditForAnother();
   editingManualId = o.id;
   draftManualStart = o.startNs;
   draftManualEnd = o.endNs;
@@ -1537,7 +1552,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
  */
 async function createManualWindow(clickNs: number): Promise<void> {
   if (!player || !openProject) return;
-  await commitCurrentEdit();
+  await leaveCurrentEditForAnother();
   const { startNs, endNs } = defaultManualSpan(clickNs, player.durationNs);
   editingManualId = crypto.randomUUID();
   draftManualStart = startNs;

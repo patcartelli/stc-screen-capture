@@ -215,3 +215,57 @@ describe("re-opening a manual window without dragging", () => {
     expect(readProject(takeDir).overrides[0]).toEqual(before);
   }, 60_000);
 });
+
+/**
+ * Opening one block straight from another (STC-623). Each select committed
+ * the open block but never let go of it, so after a switch between a derived
+ * and a manual block both were "being edited" at once: the Danger group read
+ * "Delete window" twice, and a manual window opened from a derived one was
+ * committed onto the derived window on Done and lost. The derived block is
+ * the lane's one non-manual `.zoomblock` in #override-blocks-dynamic.
+ */
+const DERIVED_BLOCK = "#override-blocks-dynamic .zoomblock:not(.manual)";
+
+async function dangerGroup(win: Page): Promise<{ clear: string | null; deleteShown: boolean }> {
+  return {
+    clear: await win.textContent("#overrideclear"),
+    deleteShown: await win.isVisible("#overridedelete"),
+  };
+}
+
+describe("switching straight between a derived and a manual block", () => {
+  test("derived, then a new manual window: one delete action, and Done keeps the manual window", async () => {
+    const { win, takeDir } = await openPreview();
+    await win.click(DERIVED_BLOCK);
+    await expect.poll(() => win.isVisible("#overridebar"), { timeout: 10_000 }).toBe(true);
+    await clickEmptyLane(win);
+    await expect.poll(() => win.locator("#manualdraft.manual").count(), { timeout: 10_000 }).toBe(1);
+
+    expect(await dangerGroup(win)).toEqual({ clear: "Delete window", deleteShown: false });
+    // The derived block is no longer the one open, so the lane draws it again.
+    await expect.poll(() => win.locator(DERIVED_BLOCK).count(), { timeout: 10_000 }).toBe(1);
+
+    await pressOverrideDone(win);
+    await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
+    expect(readProject(takeDir).overrides[0].kind).toBe("manual");
+  }, 60_000);
+
+  test("manual, then the derived block: Remove override and Delete window, each once", async () => {
+    const { win, takeDir } = await openPreview();
+    await clickEmptyLane(win);
+    await pressOverrideDone(win);
+    await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
+    const manual = readProject(takeDir).overrides[0];
+
+    await win.click(".zoomblock.manual");
+    await expect.poll(() => win.textContent("#overrideclear"), { timeout: 10_000 }).toBe("Delete window");
+    await win.click(DERIVED_BLOCK);
+    await expect.poll(() => win.locator("#manualdraft.manual").count(), { timeout: 10_000 }).toBe(0);
+
+    expect(await dangerGroup(win)).toEqual({ clear: "Remove override", deleteShown: true });
+
+    await win.keyboard.press("Escape");
+    await expect.poll(() => win.isHidden("#overridebar"), { timeout: 10_000 }).toBe(true);
+    expect(readProject(takeDir).overrides).toEqual([manual]);
+  }, 60_000);
+});
