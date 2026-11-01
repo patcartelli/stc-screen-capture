@@ -1,4 +1,8 @@
-import { parseShot, type Redaction, type Shot } from "@transform/shot";
+import {
+  CUSTOM_START_COLOR, LOOKS, applyLook, customBackground, lookOf, lookWrite,
+  type LookId, type LookWrite,
+} from "@transform/backgrounds";
+import { parseShot, type Background, type Redaction, type Shot } from "@transform/shot";
 import { decorationForMode } from "@transform/still-decorate";
 import { DEFAULT_EXPORT_OPTIONS, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { normaliseRegion, undoLast } from "@transform/still-redact";
@@ -18,10 +22,13 @@ import { composeStill, stillPixelBytes } from "./still-compose.js";
  * `REDACT_SIZE` — so the canvas refits itself on every resize instead of
  * being computed once against a constant.
  *
- * There is no decoration-mode picker here: the Style `<select>` was not
- * moved, it was removed as redundant in the compact panel, so `shot.decoration
- * .mode` is read once and never changes — this window's whole write path is
- * `writeShot(dir, regions)`, redactions only.
+ * The background picker (STC-599) is the one other thing this window writes:
+ * a swatch grid for window shots with alpha, persisted on change like a box.
+ * What each swatch MEANS lives in `transform/src/backgrounds.ts`; this file
+ * draws the grid, reports the choice, and sends `mode`/`background`/`shadow`
+ * to `still:writeShot`, which merges them into the stored document and
+ * re-validates it. Display-crop shots cannot wear a window mode (`parseShot`
+ * refuses it), so for them the picker stays hidden.
  */
 
 declare global {
@@ -32,7 +39,7 @@ declare global {
       // crosses the process boundary.
       getShot(dir: string): Promise<Shot>;
       getFrame(dir: string, name: string): Promise<ArrayBuffer>;
-      writeShot(dir: string, redactions: unknown): Promise<{ ok: boolean; redactions: number }>;
+      writeShot(dir: string, redactions: unknown, look?: LookWrite): Promise<{ ok: boolean; redactions: number }>;
       exportStill(req: Record<string, unknown>): Promise<any>;
       getSettings(): Promise<{ still: ExportOptions; saveFolder: string | null }>;
     };
@@ -46,6 +53,11 @@ const hint = $("hint");
 const undoBtn = $("undo") as HTMLButtonElement;
 const doneBtn = $("done") as HTMLButtonElement;
 const saveBtn = $("save") as HTMLButtonElement;
+const looksBar = $("looks");
+const lookGrid = $("lookgrid");
+const customFields = $("customcolors");
+const customA = $("custom-a") as HTMLInputElement;
+const customB = $("custom-b") as HTMLInputElement;
 
 const dir = new URLSearchParams(location.search).get("dir") ?? "";
 
@@ -288,6 +300,171 @@ document.addEventListener("keydown", (e) => {
   else if (key === "s") { e.preventDefault(); if (!saveBtn.disabled) void saveFinished(); }
 });
 
+// ── the background picker (STC-599) ──────────────────────────────────────────
+
+/** A swatch's fill as CSS. Approximate by design: the canvas draws the real one. */
+function cssFill(bg: Background | undefined): string {
+  const colors = bg?.colors ?? [];
+  if (!bg || colors.length === 0) return "";
+  if (bg.kind === "solid" || colors.length === 1) return colors[0]!;
+  const stops = colors.join(", ");
+  return bg.kind === "radial" ? `radial-gradient(circle, ${stops})` : `linear-gradient(${bg.angleDeg ?? 180}deg, ${stops})`;
+}
+
+let selectedLook: LookId | undefined;
+let writing = false;
+/** Writes queue behind each other: a second pick during a write must not read a stale document. */
+let writeChain: Promise<void> = Promise.resolve();
+
+const swatches = new Map<LookId, HTMLButtonElement>();
+
+/** The colour fields' current content as a fill, or the reason it is not one. */
+function customFromFields() {
+  return customBackground(customA.value, customB.value);
+}
+
+function paintSwatches(): void {
+  for (const [id, el] of swatches) {
+    el.setAttribute("aria-checked", String(id === selectedLook));
+    if (document.activeElement !== el) el.tabIndex = (selectedLook ?? "window-only") === id ? 0 : -1;
+    // aria-disabled, not `disabled`: a disabled button drops the keyboard focus,
+    // and a keyboard user would lose their place in the grid on every pick.
+    el.setAttribute("aria-disabled", String(writing));
+  }
+  customFields.hidden = selectedLook !== "custom";
+  customA.readOnly = customB.readOnly = writing;
+  // The Custom chip shows the fill the fields describe, once they describe one.
+  const chip = swatches.get("custom")?.querySelector<HTMLElement>(".chip");
+  const c = customFromFields();
+  if (chip) chip.style.background = c.ok ? cssFill(c.background) : "";
+}
+
+/** The sentence from main, without Electron's "Error invoking remote method" wrapper. */
+function reasonOf(e: unknown): string {
+  const m = String((e as any)?.message ?? e);
+  return m.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, "");
+}
+
+/**
+ * Apply a look: the preview first, then the disk. A write that main refuses
+ * puts the previous look back and says why in the hint line, so what is shown
+ * is always what is stored.
+ */
+function applyChoice(id: LookId, write: LookWrite): void {
+  if (!shot) return;
+  const before = { shot, selected: selectedLook };
+  try {
+    shot = parseShot({ ...shot, decoration: applyLook(shot.decoration, write) });
+  } catch (e) {
+    setHint(`Could not use that background: ${reasonOf(e)}`);
+    return;
+  }
+  selectedLook = id;
+  writing = true;
+  paintSwatches();
+  void draw();
+  const label = LOOKS.find((l) => l.id === id)?.label ?? "Background";
+  writeChain = writeChain.then(async () => {
+    try {
+      await window.stillEditor.writeShot(dir, regions, write);
+      setHint(`Background: ${label}.`);
+    } catch (e) {
+      shot = before.shot;
+      selectedLook = before.selected;
+      void draw();
+      setHint(`Could not store that background: ${reasonOf(e)}`);
+    } finally {
+      writing = false;
+      paintSwatches();
+    }
+  });
+}
+
+function choose(id: LookId): void {
+  const look = LOOKS.find((l) => l.id === id);
+  if (!look || writing) return;
+  if (id === "custom") {
+    // Starts from Solid's colour each time (decided on the ticket); a shot that
+    // is already Custom keeps the colours it has.
+    if (selectedLook !== "custom") {
+      customA.value = CUSTOM_START_COLOR;
+      customB.value = "";
+    }
+    const c = customFromFields();
+    if (!c.ok) { setHint(c.reason); return; }
+    applyChoice("custom", lookWrite(look, c.background));
+    return;
+  }
+  applyChoice(id, lookWrite(look));
+}
+
+let customTimer: ReturnType<typeof setTimeout> | undefined;
+function onCustomInput(): void {
+  const firstOk = customBackground(customA.value).ok;
+  const c = customFromFields();
+  customA.setAttribute("aria-invalid", String(!firstOk));
+  customB.setAttribute("aria-invalid", String(firstOk && !c.ok));
+  paintSwatches();
+  clearTimeout(customTimer);
+  if (!c.ok) { setHint(c.reason); return; }
+  customTimer = setTimeout(() => {
+    const look = LOOKS.find((l) => l.id === "custom")!;
+    const again = customFromFields();
+    if (again.ok) applyChoice("custom", lookWrite(look, again.background));
+  }, 250);
+}
+customA.addEventListener("input", onCustomInput);
+customB.addEventListener("input", onCustomInput);
+
+/** Arrow keys move the focus around the grid; Enter or Space (a click) picks. */
+lookGrid.addEventListener("keydown", (e) => {
+  const ids = [...swatches.keys()];
+  const at = ids.findIndex((id) => swatches.get(id) === document.activeElement);
+  let to: number;
+  if (e.key === "Home") to = 0;
+  else if (e.key === "End") to = ids.length - 1;
+  else if (e.key === "ArrowRight" || e.key === "ArrowDown") to = (at + 1) % ids.length;
+  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") to = (at - 1 + ids.length) % ids.length;
+  else return;
+  if (at < 0) return;
+  e.preventDefault();
+  const el = swatches.get(ids[to]!)!;
+  for (const s of swatches.values()) s.tabIndex = s === el ? 0 : -1;
+  el.focus();
+});
+
+function initLooks(): void {
+  // A display-crop shot is an opaque rectangle: parseShot refuses every window
+  // mode on it, so there is nothing to offer.
+  if (!shot || shot.kind !== "window" || !shot.frame.alpha) return;
+  for (const look of LOOKS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "look";
+    b.dataset.look = look.id;
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-label", look.label);
+    b.title = look.label;
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.style.background = cssFill(look.background);
+    const text = document.createElement("span");
+    text.textContent = look.label;
+    b.append(chip, text);
+    b.addEventListener("click", () => choose(look.id));
+    swatches.set(look.id, b);
+    lookGrid.append(b);
+  }
+  selectedLook = lookOf(shot.decoration);
+  const bg = shot.decoration.background;
+  if (selectedLook === "custom" && bg?.colors) {
+    customA.value = bg.colors[0] ?? "";
+    customB.value = bg.colors[1] ?? "";
+  }
+  looksBar.hidden = false;
+  paintSwatches();
+}
+
 // Refit on every resize — the one thing a fixed `REDACT_SIZE` panel never
 // needed and a real, resizable window always does.
 let resizeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -305,5 +482,6 @@ void (async () => {
   const bytes = await window.stillEditor.getFrame(dir, shot.frame.file);
   frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   await draw();
+  initLooks();
   setHint(regions.length === 0 ? "Drag a box over anything private." : regionCountText());
 })();
