@@ -61,6 +61,13 @@ the **Dock** is over it, and that window tints under the Dock.
 If that reads wrong, the fix is to let the Dock and menu bar occlude too
 (`Still.swift`'s `windows` verb). Say so and it is a small change.
 
+## §3a — the camera pointer
+
+In window mode the pointer is a camera (`app/renderer/cursor-camera.svg`,
+hotspot the lens centre); in area mode it stays the crosshair. Check that it
+is sharp on a retina display rather than a blurry 1x bitmap, and that it
+reads over a light and a dark window.
+
 ## §4 — does the tint read
 
 The highlight is now an 18% accent fill with no border (an outline on each

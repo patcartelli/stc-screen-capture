@@ -2,7 +2,7 @@
 <html lang="en" data-surface="dark">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'">
 <title>stc selection</title>
 <!-- Fonts and the dropdown component (STC-456). Linked BEFORE the <style>
      below, whose html/body rule has to win: tokens.css gives :root a font and
@@ -19,7 +19,10 @@
     user-select: none; -webkit-user-select: none; cursor: crosshair;
     font: var(--type-body-weight) var(--type-body)/var(--type-body-lh) var(--font-sans);
   }
-  body.window-mode { cursor: default; }
+  /* Window mode points with a camera (STC-625), as macOS's own window shot
+     does: the pointer says a click takes a picture of what it is over. The
+     hotspot is the lens centre. */
+  body.window-mode { cursor: url(cursor-camera.svg) 16 18, default; }
 
   /* The dim, and the hole in it.
 
