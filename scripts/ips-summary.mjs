@@ -13,8 +13,9 @@
  *
  * For each report: the process, its time, the exception (type, signal,
  * subtype), any application-specific message, and the faulting thread's top
- * frames as `image symbol+offset` (or `image +imageOffset` when the report is
- * unsymbolicated, which Electron Framework's frames usually are). The full
+ * frames as `image symbol+offset @0xImageOffset` (or `image +imageOffset` when
+ * the report is unsymbolicated), then each of those images' UUID and load
+ * address, so `atos` can resolve them from the job log alone (STC-624). The full
  * report stays in the artifact for anyone who can download it.
  *
  * Never exits non-zero for a report it cannot parse: the step runs on a run
@@ -41,10 +42,32 @@ function parseIps(text) {
   return { header, body: rest ? JSON.parse(rest) : undefined };
 }
 
+/**
+ * A symbolicated frame keeps its raw image offset too (STC-624): macOS names
+ * an Electron Framework frame after the nearest EXPORTED symbol, which is
+ * usually unrelated (`v8::BackingStore::MaxByteLength()+58716` was really
+ * `TrayIconCocoa::SetContextMenu`), and only the offset can be fed to `atos`.
+ */
 function frameLine(frame, images) {
   const image = images[frame.imageIndex]?.name ?? `image#${frame.imageIndex ?? "?"}`;
-  if (frame.symbol) return `${image} ${frame.symbol}+${frame.symbolLocation ?? 0}`;
+  const raw = typeof frame.imageOffset === "number" ? ` @0x${frame.imageOffset.toString(16)}` : "";
+  if (frame.symbol) return `${image} ${frame.symbol}+${frame.symbolLocation ?? 0}${raw}`;
   return `${image} +${frame.imageOffset ?? "?"}`;
+}
+
+/**
+ * Each image the printed frames sit in, with what `atos` needs to resolve them
+ * against a dSYM: its UUID (to pick the matching dSYM) and its load address.
+ * `atos -o <dSYM> -arch arm64 -l <base> <base + offset>`.
+ */
+function imageLines(frameLists, images) {
+  const used = [...new Set(frameLists.flat().map((f) => f.imageIndex).filter((i) => typeof i === "number"))];
+  return used.flatMap((i) => {
+    const im = images[i];
+    if (!im || (!im.uuid && typeof im.base !== "number")) return [];
+    const base = typeof im.base === "number" ? `0x${im.base.toString(16)}` : "?";
+    return [`    ${im.name ?? `image#${i}`} uuid ${im.uuid ?? "?"} base ${base}${im.arch ? ` ${im.arch}` : ""}`];
+  });
 }
 
 /**
@@ -84,6 +107,8 @@ export function summarizeIps(text, name = "report", frames = DEFAULT_FRAMES) {
     out.push(`  last exception backtrace, top ${Math.min(frames, last.length)} of ${last.length}:`);
     last.slice(0, frames).forEach((f, i) => out.push(`    ${String(i).padStart(2)} ${frameLine(f, images)}`));
   }
+  const imgs = imageLines([(thread.frames ?? []).slice(0, frames), Array.isArray(last) ? last.slice(0, frames) : []], images);
+  if (imgs.length) out.push("  images (for atos):", ...imgs);
   return out;
 }
 
