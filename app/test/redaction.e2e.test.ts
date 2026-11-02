@@ -276,6 +276,33 @@ describe("redaction", () => {
                       { timeout: 15_000 }).toBe(false);
   }, 60_000);
 
+  test("the keyboard alone places, moves, resizes and deletes a box (STC-576)", async () => {
+    const { win } = await launch();
+    const { editor, dir } = await redactingEditor(win);
+    await settledCanvasBox(editor);
+    // Tab reaches the canvas: it is the page's first Tab stop.
+    await editor.keyboard.press("Tab");
+    expect(await editor.evaluate(() => document.activeElement?.id)).toBe("stagecanvas");
+
+    await editor.keyboard.press("Enter");
+    await expect.poll(() => storedRegions(dir).length, { timeout: 15_000 }).toBe(1);
+    const placed = storedRegions(dir)[0]!;
+    expect(placed.x + placed.width / 2).toBeCloseTo(0.5, 2);
+    await expect.poll(async () => isRedactionFill(await canvasPixel(editor, 0.5, 0.5)),
+                      { timeout: 15_000 }).toBe(true);
+
+    // ⇧→ moves it a tenth of the capture; ⌥↓ grows it a hundredth.
+    await editor.keyboard.press("Shift+ArrowRight");
+    await expect.poll(() => storedRegions(dir)[0]!.x, { timeout: 15_000 }).toBeCloseTo(placed.x + 0.1, 3);
+    await editor.keyboard.press("Alt+ArrowDown");
+    await expect.poll(() => storedRegions(dir)[0]!.height, { timeout: 15_000 }).toBeCloseTo(placed.height + 0.01, 3);
+    expect(storedRegions(dir)[0]!.y).toBeCloseTo(placed.y, 6);
+
+    await editor.keyboard.press("Delete");
+    await expect.poll(() => storedRegions(dir).length, { timeout: 15_000 }).toBe(0);
+    expect(await editor.evaluate(() => (document.getElementById("undo") as HTMLButtonElement).disabled)).toBe(true);
+  }, 120_000);
+
   test("a click is not a region", async () => {
     const { win } = await launch();
     const { editor, dir } = await redactingEditor(win);

@@ -124,8 +124,8 @@ import {
 } from "./scrubber.js";
 import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
 import {
-  isFit, isMinSpan, overviewBox, panBy, timelineZoomKeyIntent,
-  wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
+  centreSpan, followSpan, isFit, isMinSpan, overviewBox, panBy, playheadKeyIntent, playheadSide, revealSpan,
+  spanTransform, timelineZoomKeyIntent, wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
 import {
   clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts, activityIn, activityLabel,
@@ -228,6 +228,8 @@ let spanEnd = 0;
 function resetSpan(): void {
   spanStart = 0;
   spanEnd = player?.durationNs ?? 0;
+  following = false;
+  wasPlaying = false;
 }
 
 /** The span the lane canvases draw: the whole take until a span is set. */
@@ -238,9 +240,7 @@ function visibleSpan(): { start: number; end: number } {
 
 function applySpanTransform(): void {
   const durationNs = player?.durationNs ?? 0;
-  const span = Math.max(1, spanEnd - spanStart);
-  const scale = durationNs > 0 ? durationNs / span : 1;
-  const translatePct = durationNs > 0 ? -(spanStart / span) * 100 : 0;
+  const { scale, translatePct } = spanTransform({ startNs: spanStart, endNs: spanEnd }, durationNs);
   const transform = `scaleX(${scale}) translateX(${translatePct}%)`;
   ($("timeline") as HTMLElement).style.transform = transform;
   // STC-484: what the transform stretches, the trim brackets and the playhead
@@ -249,7 +249,9 @@ function applySpanTransform(): void {
   ($("timeline") as HTMLElement).style.setProperty("--inv", String(1 / scale));
   // STC-605: the ruler's labels and pennants and the strip's bookmark lines
   // undo it the same way.
-  for (const id of ["ruler-content", "strip-content", "audio-dims"]) {
+  // STC-621: and the zoom blocks' (#override-blocks), whose borders, radii,
+  // minimum width and drag handles are drawn in the stretched space.
+  for (const id of ["ruler-content", "strip-content", "audio-dims", "override-blocks"]) {
     ($(id) as HTMLElement).style.transform = transform;
     ($(id) as HTMLElement).style.setProperty("--inv", String(1 / scale));
   }
@@ -330,7 +332,6 @@ function renderRulerTicks(): void {
   const durationNs = player.durationNs;
   if (!(durationNs > 0)) return;
   const span = Math.max(1, spanEnd - spanStart);
-  const scale = durationNs / span;
   const visibleS = span / 1e9;
   const pxPerSecond = width / Math.max(1e-9, visibleS);
 
@@ -350,7 +351,6 @@ function renderRulerTicks(): void {
   }
 
   const durationS = durationNs / 1e9;
-  const tickWidthPx = Math.max(0.05, 1 / scale);
   const frag = document.createDocumentFragment();
 
   // Render minor ticks first (so they appear behind major ticks in z-order)
@@ -363,7 +363,6 @@ function renderRulerTicks(): void {
       const div = document.createElement("div");
       div.className = "ruler-tick minor";
       div.style.left = `${Math.min(100, (t / durationS) * 100)}%`;
-      div.style.width = `${tickWidthPx}px`;
       frag.appendChild(div);
     }
   }
@@ -378,7 +377,6 @@ function renderRulerTicks(): void {
     const div = document.createElement("div");
     div.className = "ruler-tick";
     div.style.left = left;
-    div.style.width = `${tickWidthPx}px`;
     frag.appendChild(div);
     if (k % labelEvery !== 0) continue;
     const label = document.createElement("span");
@@ -409,7 +407,7 @@ function fmtRulerTime(s: number): string {
 function updateRulerPlayhead(tNs: number): void {
   const el = $("playhead") as HTMLElement;
   const durationNs = player?.durationNs ?? 0;
-  if (!(durationNs > 0)) { el.hidden = true; return; }
+  if (!(durationNs > 0)) { el.hidden = true; updatePlayheadChip(tNs); return; }
   const frac = Math.max(0, Math.min(1, tNs / durationNs));
   const track = $("timeline").getBoundingClientRect();
   const lane = (document.querySelector(".laneviewport.clip") as HTMLElement).getBoundingClientRect();
@@ -417,6 +415,7 @@ function updateRulerPlayhead(tNs: number): void {
   const x = track.left + frac * track.width;
   el.hidden = track.width <= 0 || x < lane.left || x > lane.right;
   el.style.left = `${x - wrap.left}px`;
+  updatePlayheadChip(tNs);
 }
 
 /** Pan by a fraction of the CURRENT span (positive moves later in the take). */
@@ -437,13 +436,77 @@ function zoomSpan(factor: number, anchorFraction: number): void {
 
 /** The one writer of the span after a user's input (STC-484): applies it and
  *  lets the hidden readout say so. resetSpan() is not that — opening a take
- *  is not the user zooming. */
-function setSpan(next: { startNs: number; endNs: number }): void {
+ *  is not the user zooming.
+ *
+ *  `how` is who moved it (STC-621): the person's own hand (pan, zoom) ends
+ *  playback's page-following until the next Play; the editor bringing the
+ *  playhead back into view ("reveal") or flipping a page ("follow") does not,
+ *  and a flip is silent, since the readout would blink on every page. */
+type SpanMove = "hand" | "reveal" | "follow";
+function setSpan(next: { startNs: number; endNs: number }, how: SpanMove = "hand"): void {
   if (next.startNs === spanStart && next.endNs === spanEnd) return;
   spanStart = next.startNs;
   spanEnd = next.endNs;
+  if (how === "hand") following = false;
   applySpanTransform();
-  pulseZoomReadout();
+  if (how !== "follow") pulseZoomReadout();
+}
+
+// ---- keeping the playhead in reach (STC-621) --------------------------------
+//
+// timeline-zoom.ts rule 6 decides; this is the wiring. `following` is true from
+// the moment playback starts until the person pans or zooms by hand.
+
+let following = false;
+let wasPlaying = false;
+
+function currentSpan(): { startNs: number; endNs: number } {
+  return { startNs: spanStart, endNs: spanEnd };
+}
+
+/** An explicit move to `tNs` (a key, a jump): slide the view if it left it. */
+function revealPlayhead(tNs: number): void {
+  const durationNs = player?.durationNs ?? 0;
+  if (durationNs <= 0 || !player) return;
+  // The playhead's place BEFORE this move (seek() updates it synchronously, so
+  // callers reveal first), for revealSpan's heading-into-the-margin rule.
+  setSpan(revealSpan(currentSpan(), durationNs, tNs, player.currentNs), "reveal");
+}
+
+/** "Go to playhead": the same zoom, centred on it. */
+function goToPlayhead(): void {
+  const durationNs = player?.durationNs ?? 0;
+  if (durationNs <= 0 || !player) return;
+  setSpan(centreSpan(currentSpan(), durationNs, player.currentNs), "reveal");
+}
+
+/** Called every playback tick: flip a page when the playhead runs off. */
+function followPlayhead(tNs: number, rate: number): void {
+  const durationNs = player?.durationNs ?? 0;
+  if (durationNs <= 0) return;
+  const next = followSpan(currentSpan(), durationNs, tNs, rate < 0 ? -1 : 1);
+  if (next) setSpan(next, "follow");
+}
+
+/** The chip at the edge of the lanes when the playhead is out of the span. */
+function updatePlayheadChip(tNs: number): void {
+  const chip = $("playheadchip") as HTMLButtonElement;
+  const durationNs = player?.durationNs ?? 0;
+  const side = durationNs > 0 && spanEnd > spanStart ? playheadSide(currentSpan(), tNs) : null;
+  if (side === null) {
+    if (!chip.hidden) chip.hidden = true;
+    return;
+  }
+  const time = fmtClock(tNs);
+  const text = side === "before" ? `\u2190 ${time}` : `${time} \u2192`;
+  // Written only on a change: this runs every playback tick.
+  if (chip.dataset.side !== side) chip.dataset.side = side;
+  if (chip.textContent !== text) {
+    chip.textContent = text;
+    chip.setAttribute("aria-label",
+      `Playhead is ${side === "before" ? "before" : "after"} the visible part, at ${time}. Go to playhead`);
+  }
+  if (chip.hidden) chip.hidden = false;
 }
 
 /** The button / key doors: playhead-anchored (timeline-zoom.ts rule 2). */
@@ -484,11 +547,14 @@ function updateZoomBar(): void {
   ($("zoomin") as HTMLButtonElement).disabled = !open || isMinSpan(span, durationNs);
   ($("zoomout") as HTMLButtonElement).disabled = !open || isFit(span, durationNs);
   ($("zoomfit") as HTMLButtonElement).disabled = !open || isFit(span, durationNs);
+  ($("zoomplayhead") as HTMLButtonElement).disabled = !open;
 }
 
 $("zoomin").addEventListener("click", () => zoomIntent("in"));
 $("zoomout").addEventListener("click", () => zoomIntent("out"));
 $("zoomfit").addEventListener("click", () => zoomIntent("fit"));
+$("zoomplayhead").addEventListener("click", goToPlayhead);
+$("playheadchip").addEventListener("click", goToPlayhead);
 
 $("ruler").addEventListener("keydown", (e) => {
   const k = (e as KeyboardEvent).key;
@@ -671,7 +737,11 @@ function updateTicks(): void {
     return;
   }
   ticks.removeAttribute("hidden");
-  ticks.style.setProperty("--tick-px", `${(width / lastFrame(player.durationNs)) * stride}px`);
+  // `width` is the transformed track, so the spacing is on-screen px; #ticks
+  // sits INSIDE the transform, so the gradient wants it in the track's own px
+  // (times --inv) or every tick and gap would be stretched by the zoom (STC-621).
+  const inv = spanEnd > spanStart && player.durationNs > 0 ? (spanEnd - spanStart) / player.durationNs : 1;
+  ticks.style.setProperty("--tick-px", `${(width / lastFrame(player.durationNs)) * stride * inv}px`);
 }
 
 window.addEventListener("resize", () => { if (player) { updateTicks(); renderRulerTicks(); } });
@@ -2147,6 +2217,11 @@ async function openTakeOrThrow(dir: string): Promise<void> {
     // plays at 1x only, and then the picture runs on the audio clock).
     ($("stage") as HTMLCanvasElement).dataset.clock = player!.clock;
     if (!scrubbing) scrub.value = String(frame);
+    // STC-621: playback follows the playhead from Play until the person pans
+    // or zooms by hand; the next Play follows again.
+    if (playing && !wasPlaying) following = true;
+    wasPlaying = playing;
+    if (playing && following) followPlayhead(tNs, player!.rate);
     updateRulerPlayhead(tNs);
   };
   // STC-236: a frame read or decode failed (the take deleted from the library
@@ -3821,11 +3896,19 @@ window.addEventListener("keydown", (e) => {
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;
+  const inTextField = isTextField(document.activeElement);
+  // STC-621: G brings the view to the playhead (bare, and only when nothing is
+  // being typed — the scrubber's rule 8, held by playheadKeyIntent).
+  if (playheadKeyIntent({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, inTextField })) {
+    e.preventDefault();
+    goToPlayhead();
+    return;
+  }
   const action = decideKey(
     {
       key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey,
       ctrlKey: e.ctrlKey, altKey: e.altKey,
-      inTextField: isTextField(document.activeElement),
+      inTextField,
     },
     scrubState(),
   );
@@ -3853,6 +3936,8 @@ function applyScrubAction(action: ScrubAction): void {
   switch (action.kind) {
     case "seek":
       if (player.rate !== 0) player.pause();
+      // STC-621: a key's move brings the view along if it left it.
+      revealPlayhead(frameToNs(action.frame, player.durationNs));
       void player.seek(frameToNs(action.frame, player.durationNs));
       break;
     case "shuttle":
