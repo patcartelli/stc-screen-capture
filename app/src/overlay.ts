@@ -1,7 +1,7 @@
 import type {
   DisplayInfo, Handle, Point, Rect, SelectionOutcome, SelectionState, WindowInfo,
 } from "./selection.js";
-import { pixelSize, rectContains } from "./selection.js";
+import { pixelSize, rectContains, visibleTopLeft } from "./selection.js";
 import { HANDLES, handleAt, handlePoint } from "./overlay-hittest.js";
 import {
   barContains, barPress, controlAt, controlEnabled, parseDimension, sizeLabel,
@@ -335,24 +335,25 @@ function render(p: OverlayPayload): void {
     hide(marquee, sizeChip, ...handles.values());
     const w = p.windows.find((x) => x.id === state.hoveredWindowId);
     if (!w) { hide(highlight, titleChip); return; }
-    const local = toLocal(w.bounds);
-    place(highlight, local);
-    // Not fully visible (STC-380): still shown, so the target does not just
-    // vanish, but styled apart and captioned instead of measured — the size
-    // readout would be true and still misleading, since a click here will not
-    // capture it.
-    highlight.classList.toggle("not-fully-visible", !w.fullyVisible);
+    // STC-625: tint what can be SEEN of it, one piece per visible rect, and
+    // nothing over the window in front. The readout still measures the whole
+    // window, because that is what a click captures.
+    highlight.replaceChildren(...w.visible.map((r) => {
+      const tint = document.createElement("div");
+      tint.className = "tint";
+      place(tint, toLocal(r));
+      return tint;
+    }));
+    highlight.style.display = "block";
     const name = [w.app, w.title].filter(Boolean).join(" — ") || "Window";
-    if (w.fullyVisible) {
-      const display = p.displays.find((d) => rectContains(d.bounds, {
-        x: w.bounds.x + w.bounds.width / 2, y: w.bounds.y + w.bounds.height / 2,
-      }));
-      const px = pixelSize(w.bounds, display);
-      titleChip.textContent = `${name}   ${px.width} × ${px.height}`;
-    } else {
-      titleChip.textContent = `${name} — not fully visible, choose another window`;
-    }
-    placeChip(titleChip, local.x, local.y, false);
+    const display = p.displays.find((d) => rectContains(d.bounds, {
+      x: w.bounds.x + w.bounds.width / 2, y: w.bounds.y + w.bounds.height / 2,
+    }));
+    const px = pixelSize(w.bounds, display);
+    titleChip.textContent = `${name}   ${px.width} × ${px.height}`;
+    const top = visibleTopLeft(w);
+    const at = { x: top.x - origin.x, y: top.y - origin.y };
+    placeChip(titleChip, at.x, at.y, false);
     return;
   }
 

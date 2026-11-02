@@ -12,7 +12,7 @@
 import { COUNTDOWN_OPTIONS } from "./countdown.js";
 import { ICON_PLACEMENTS, ICON_PLACEMENT_LABELS, cleanIconPlacement, type IconPlacement } from "./icon-placement.js";
 import {
-  ACTION_LABELS, BINDABLE_ACTIONS, OUTCOME_LABELS, acceleratorFromKeyStroke, explainShortcut, explainVariant,
+  ACTION_LABELS, BINDABLE_ACTIONS, isShotAction, OUTCOME_LABELS, acceleratorFromKeyStroke, explainShortcut, explainVariant,
   formatAccelerator, parseAccelerator,
   type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
@@ -517,7 +517,8 @@ function renderShortcuts(): void {
   // leave focus on the page and the next Tab would start from the top.
   const focused = document.activeElement?.closest("#pane-shortcuts") ? document.activeElement.id : "";
   // Shots, then Recording: Record is the one motion action (STC-581).
-  $("shortcuts-shots").replaceChildren(...BINDABLE_ACTIONS.filter((a) => a !== "record").map(shortcutRow));
+  $("shortcuts-shots").replaceChildren(...BINDABLE_ACTIONS.filter(isShotAction).map(shortcutRow));
+  $("shortcuts-tools").replaceChildren(shortcutRow("pick-color"));
   $("shortcuts-recording").replaceChildren(shortcutRow("record"));
   if (!focused) return;
   const again = document.getElementById(focused) as HTMLButtonElement | null;

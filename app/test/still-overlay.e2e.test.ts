@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { stubQuitDialog, closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
-import { windowCount, hasWindow } from "./_windows.js";
+import { windowCount } from "./_windows.js";
 import { pressShot } from "./_library-window.js";
 import { toastText } from "./_toast.js";
 
@@ -187,36 +187,31 @@ describe("the selection overlay", () => {
     expect(shot.window?.id).toBe(4711);
   }, 120_000);
 
-  test("a not-fully-visible window highlights on hover but a click does not capture it (STC-380)", async () => {
-    const { win, recordings, stillLog } = await launch({ STC_FAKE_HIDDEN_WINDOW: "1" });
-    const before = readdirSync(recordings).length;
+  test("a window with only a corner showing is hovered there and captured whole (STC-625)", async () => {
+    const { win, stillLog } = await launch({ STC_FAKE_CORNER_WINDOW: "1" });
     await pressShot(win);
     const overlay = await overlayWindow();
 
     await send(overlay, { t: "key", key: " " });
-    // The stand-in's third window (STC_FAKE_HIDDEN_WINDOW) sits at (1800,100)
-    // 400x300, mostly off the 1920x1080 display — hover well inside its bounds.
-    await send(overlay, { t: "pointermove", at: { x: 1900, y: 200 } });
+    // Inside the stand-in's third window's frame but under Finder: Finder wins.
+    await send(overlay, { t: "pointermove", at: { x: 120, y: 120 } });
+    await expect.poll(async () => {
+      const s = await overlay.evaluate(() => (window as any).__overlayState);
+      return s?.hoveredWindowId;
+    }, { timeout: 10_000 }).toBe(4711);
+
+    // Its showing corner: that window, and the click asks for it by id.
+    await send(overlay, { t: "pointermove", at: { x: 60, y: 60 } });
     await expect.poll(async () => {
       const s = await overlay.evaluate(() => (window as any).__overlayState);
       return s?.hoveredWindowId;
     }, { timeout: 10_000 }).toBe(4713);
-
-    await send(overlay, { t: "pointerdown", at: { x: 1900, y: 200 } });
-    // Give a real capture-still request time to have gone out if this were a
-    // selection, then check none did: the overlay refused the click rather
-    // than merely being slow to answer it.
-    await sleep(300);
-    expect(readRequests(stillLog)).toEqual([]);
-    expect(readdirSync(recordings).length).toBe(before);
-    expect(await hasWindow(app!, "overlay.html")).toBe(true);
-
-    // The overlay stays usable: a fully-visible window still captures normally.
-    await send(overlay, { t: "pointermove", at: { x: 200, y: 200 } });
-    await send(overlay, { t: "pointerdown", at: { x: 200, y: 200 } });
+    await send(overlay, { t: "pointerdown", at: { x: 60, y: 60 } });
     await expect.poll(() => readRequests(stillLog).length, { timeout: 15_000 }).toBe(1);
     const [req] = readRequests(stillLog);
-    expect(req.windowId).toBe(4711);
+    expect(req.kind).toBe("window");
+    expect(req.windowId).toBe(4713);
+    expect(req.crop).toBeUndefined();
   }, 120_000);
 
   test("a helper that refuses the capture is reported", async () => {

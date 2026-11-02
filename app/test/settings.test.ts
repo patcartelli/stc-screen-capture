@@ -304,6 +304,7 @@ describe("the capture shortcuts", () => {
       region: "Alt+Command+1", window: "Alt+Command+2", display: "Alt+Command+3",
       record: "Alt+Command+4",
       "self-timer": "Alt+Command+5",
+      "pick-color": null,
     });
   });
 
@@ -401,6 +402,7 @@ describe("the Record binding (STC-388)", () => {
       region: "Control+Alt+Shift+Command+1", window: "Control+Alt+Shift+Command+2",
       display: "Control+Alt+Shift+Command+3", record: DEFAULT_SHORTCUTS.record,
       "self-timer": "Control+Alt+Shift+Command+5",
+      "pick-color": null,
     });
   });
 
@@ -421,6 +423,7 @@ describe("the Record binding (STC-388)", () => {
       region: "Control+Alt+Shift+Command+1", window: "Shift+Command+2",
       display: "Control+Alt+Shift+Command+3", record: "Control+Alt+Shift+Command+4",
       "self-timer": "Shift+Command+7",
+      "pick-color": null,
     });
   });
 
@@ -439,6 +442,7 @@ describe("the Record binding (STC-388)", () => {
       display: "Alt+Shift+R",
       record: "Control+Alt+Shift+Command+4",
       "self-timer": "Shift+Command+7",
+      "pick-color": null,
     };
     writeFileSync(join(d, "settings.json"), JSON.stringify({ shortcuts: stored }));
     expect(readSettings(d).shortcuts).toEqual(stored);

@@ -138,19 +138,14 @@ export interface WindowInfo {
   app?: string;
   title?: string;
   /**
-   * Whether a person could actually see this window as the thing it is
-   * (STC-380) — computed by the helper from the SAME rectangles that produced
-   * `bounds`: not hanging mostly off every display, and not mostly buried
-   * under a window in front of it. `SCShareableContent`'s own
-   * `onScreenWindowsOnly` only excludes a minimized window; it says nothing
-   * about either of those, which is how the picker used to offer both.
-   *
-   * Still LISTED either way (`windowUnderPoint` does not filter on this) —
-   * dropping it would make a window someone is actually looking for vanish
-   * for no reason they could see. `confirm` and `reduce` are what refuse to
-   * select one; `overlay.ts` is what draws it differently.
+   * Where a pointer finds this window (STC-625), GLOBAL points: its frame on
+   * the displays minus every window in front of it, as disjoint rects. The
+   * helper computes it (`pickableWindows`, StillDecisions.swift) and lists
+   * no window whose region is empty. `windowUnderPoint` hit-tests these and
+   * `overlay.ts` tints exactly these, while a pick still captures `bounds`
+   * whole.
    */
-  fullyVisible: boolean;
+  visible: Rect[];
 }
 
 export type Mode = "region" | "window";
@@ -402,19 +397,26 @@ export function toDisplayLocal(r: Rect, d: DisplayInfo): Rect {
 }
 
 /**
- * The topmost window under the pointer, or undefined over bare desktop.
+ * The window under the pointer, or undefined over bare desktop (STC-625).
  *
- * First match wins because the list is front-to-back; the helper's `windows`
- * verb already drops other layers, zero-sized frames and (through
- * `SCShareableContent`'s own filtering) minimised windows, so anything here is
- * something a click could actually hit — hit the RECTANGLE, that is.
- * `fullyVisible` (STC-380) is not consulted here: hovering must still find a
- * barely-visible window so the overlay can show it and explain why it cannot
- * be picked. What refuses the pick is `confirm` and `reduce`'s pointerdown
- * handler, not this function.
+ * A hit on what can be SEEN, not on the frame: a window counts only where its
+ * `visible` region is, so a fully covered window can never be hovered and a
+ * window with a corner showing is hovered over that corner. The regions are
+ * disjoint, so at most one window matches; the swift twin is `windowAt`.
  */
 export function windowUnderPoint(windows: WindowInfo[], p: Point): WindowInfo | undefined {
-  return windows.find((w) => rectContains(w.bounds, p));
+  return windows.find((w) => w.visible.some((r) => rectContains(r, p)));
+}
+
+/**
+ * Where the window's name chip hangs (STC-625): the top-left of its highest
+ * visible piece, leftmost on a tie. The frame's own corner may be under
+ * another window, and a chip there would label the wrong window.
+ */
+export function visibleTopLeft(w: WindowInfo): Point {
+  const top = w.visible.reduce<Rect | undefined>(
+    (best, r) => (!best || r.y < best.y || (r.y === best.y && r.x < best.x) ? r : best), undefined);
+  return top ? { x: top.x, y: top.y } : { x: w.bounds.x, y: w.bounds.y };
 }
 
 /** Pixels for a region on a display, for the live readout. */
@@ -439,10 +441,6 @@ export function confirm(state: SelectionState, ctx: SelectionContext): Selection
     // `no-such-window`, which is the second half of the same guarantee.
     const w = ctx.windows.find((w) => w.id === id);
     if (!w) return undefined;
-    // Not fully visible (STC-380): still hoverable so the overlay can show it
-    // and say why, but Return must not pick a window the user can't actually
-    // see — the same refusal `reduce`'s pointerdown gives a click.
-    if (!w.fullyVisible) return undefined;
     return { kind: "window", windowId: id };
   }
 
@@ -479,10 +477,6 @@ export function reduce(state: SelectionState, ev: SelectionEvent,
         // confirming gesture would be ceremony.
         const w = windowUnderPoint(ctx.windows, pointer);
         if (!w) return { state: { ...state, pointer } };
-        // Not fully visible (STC-380): the click still lands and updates the
-        // hover, so the overlay keeps showing why nothing happened, but it is
-        // not a selection — same refusal `confirm` gives Enter.
-        if (!w.fullyVisible) return { state: { ...state, pointer, hoveredWindowId: w.id } };
         return { state: { ...state, pointer, hoveredWindowId: w.id },
                  outcome: { kind: "window", windowId: w.id } };
       }

@@ -145,46 +145,70 @@ check("display above main: a pointer on main is absent for it", loc(700, 500, on
 check("exactly on the far edge is outside (half-open, like CGRect.contains)",
       loc(1920, 500, on: main), "absent")
 
-// ── window visibility (STC-380) ─────────────────────────────────────────────
+// ── window hit-testing (STC-625) ────────────────────────────────────────────
+// Hand-built overlapping rects, no display and no grant. The ticket's own
+// case: three overlapping windows, one fully hidden, one with only a corner
+// showing.
 let d0 = StillRect(x: 0, y: 0, width: 1920, height: 1080)
+let d1 = StillRect(x: 1920, y: 0, width: 1920, height: 1080)
 let full = StillRect(x: 100, y: 100, width: 400, height: 300)
-check("a window well inside one display, nothing in front, is fully visible",
-      isFullyVisible(full, displays: [d0], occluders: []), true)
-check("a window entirely off every display is not",
-      isFullyVisible(StillRect(x: 5000, y: 5000, width: 400, height: 300), displays: [d0], occluders: []),
-      false)
-check("a window mostly off the display edge is not",
-      isFullyVisible(StillRect(x: 1800, y: 100, width: 400, height: 300), displays: [d0], occluders: []),
-      false)
-check("a window flush against the far edge, exactly on it, is fully visible (no slack needed)",
-      isFullyVisible(StillRect(x: 1520, y: 100, width: 400, height: 300), displays: [d0], occluders: []), true)
-check("a window spanning two displays, fully covered by their union, is fully visible",
-      isFullyVisible(StillRect(x: 1800, y: 100, width: 400, height: 300),
-                     displays: [d0, StillRect(x: 1920, y: 0, width: 1920, height: 1080)], occluders: []), true)
-check("a window entirely covered by one window in front is not",
-      isFullyVisible(full, displays: [d0], occluders: [StillRect(x: 0, y: 0, width: 1920, height: 1080)]), false)
-check("a window covered by TWO windows together, neither alone covering it, is not",
-      isFullyVisible(full, displays: [d0],
-                     occluders: [StillRect(x: 100, y: 100, width: 200, height: 300),
-                                 StillRect(x: 300, y: 100, width: 200, height: 300)]),
-      false)
-check("a window with an occluder that misses it entirely is unaffected",
-      isFullyVisible(full, displays: [d0], occluders: [StillRect(x: 900, y: 900, width: 100, height: 100)]), true)
-check("a sliver poking out from under an occluder is not enough to count as fully visible",
-      isFullyVisible(full, displays: [d0],
-                     occluders: [StillRect(x: 100, y: 100, width: 395, height: 300)]), false)
-check("STC-481: a window 30% under another is still selectable",
-      isFullyVisible(full, displays: [d0], occluders: [StillRect(x: 100, y: 100, width: 120, height: 300)]), true)
-check("STC-481: a window 60% under another is not",
-      isFullyVisible(full, displays: [d0], occluders: [StillRect(x: 100, y: 100, width: 240, height: 300)]), false)
-check("a window behind is not consulted (occluders here empty on purpose)",
-      isFullyVisible(full, displays: [d0], occluders: []), true)
-check("remainingFraction of an empty rect is 0, not NaN",
-      remainingFraction(StillRect(x: 0, y: 0, width: 0, height: 0), subtracting: []), 0.0)
+func area(_ rs: [StillRect]) -> Double { rs.reduce(0) { $0 + $1.width * $1.height } }
+
+check("a window with nothing in front is visible whole",
+      visibleRegion(full, displays: [d0], occluders: []), [full])
+check("a window entirely off every display has nothing visible",
+      visibleRegion(StillRect(x: 5000, y: 5000, width: 400, height: 300), displays: [d0], occluders: []),
+      [] as [StillRect])
+check("a window mostly off the display edge keeps the part on it",
+      visibleRegion(StillRect(x: 1800, y: 100, width: 400, height: 300), displays: [d0], occluders: []),
+      [StillRect(x: 1800, y: 100, width: 120, height: 300)])
+check("a window spanning two displays is visible on both, in two pieces with the whole area",
+      area(visibleRegion(StillRect(x: 1800, y: 100, width: 400, height: 300), displays: [d0, d1], occluders: [])),
+      400.0 * 300.0)
+check("a window entirely covered by one in front has nothing visible",
+      visibleRegion(full, displays: [d0], occluders: [d0]), [] as [StillRect])
+check("a window covered by TWO windows together, neither alone covering it, has nothing visible",
+      visibleRegion(full, displays: [d0], occluders: [StillRect(x: 100, y: 100, width: 200, height: 300),
+                                                      StillRect(x: 300, y: 100, width: 200, height: 300)]),
+      [] as [StillRect])
+check("a few points poking out from under an occluder are still visible (STC-481 refused this)",
+      visibleRegion(full, displays: [d0], occluders: [StillRect(x: 100, y: 100, width: 395, height: 300)]),
+      [StillRect(x: 495, y: 100, width: 5, height: 300)])
+check("a sub-point sliver is dust, not something a pointer can land on",
+      visibleRegion(full, displays: [d0], occluders: [StillRect(x: 100, y: 100, width: 399.5, height: 300)]),
+      [] as [StillRect])
 check("subtractRect leaves an untouched rect alone",
       subtractRect([full], StillRect(x: 900, y: 900, width: 10, height: 10)), [full])
 check("subtractRect removes a fully-covering cut entirely",
-      subtractRect([full], StillRect(x: 0, y: 0, width: 1920, height: 1080)), [] as [StillRect])
+      subtractRect([full], d0), [] as [StillRect])
+
+// Front to back: A on top; B under A with only its bottom-right corner
+// showing; C entirely under A.
+let winA = StillRect(x: 100, y: 100, width: 800, height: 600)
+let winB = StillRect(x: 200, y: 200, width: 740, height: 540)   // corner 900..940 x 700..740 shows
+let winC = StillRect(x: 300, y: 300, width: 200, height: 200)
+let stack = pickableWindows([PickCandidate(id: 1, frame: winA),
+                             PickCandidate(id: 2, frame: winB),
+                             PickCandidate(id: 3, frame: winC)], displays: [d0])
+check("the fully hidden window is not offered at all", stack.map { $0.id }, [1, 2])
+check("the front window is visible whole", stack[0].visible, [winA])
+check("the corner window keeps its WHOLE frame for the capture", stack[1].frame, winB)
+check("the corner window is visible exactly where A does not cover it",
+      area(stack[1].visible), 740.0 * 540.0 - 700.0 * 500.0)
+check("hit: over A is A", windowAt(x: 400, y: 400, in: stack) ?? -1, 1)
+check("hit: over the hidden C's frame is still A — it can never be hovered", windowAt(x: 350, y: 350, in: stack) ?? -1, 1)
+check("hit: B's showing corner, a few points in, is B", windowAt(x: 935, y: 735, in: stack) ?? -1, 2)
+check("hit: B's strip below A is B", windowAt(x: 300, y: 720, in: stack) ?? -1, 2)
+check("hit: bare desktop is nothing", windowAt(x: 1500, y: 900, in: stack) ?? -1, -1)
+check("hit: half-open — A's right edge belongs to B, not A", windowAt(x: 900, y: 650, in: stack) ?? -1, 2)
+check("visible regions of different windows never overlap",
+      stack[1].visible.allSatisfy { intersectRect($0, winA) == nil }, true)
+
+// A window that draws nothing (alpha ~0) is neither picked nor an occluder.
+let ghost = pickableWindows([PickCandidate(id: 9, frame: d0, covers: false),
+                             PickCandidate(id: 1, frame: winA)], displays: [d0])
+check("a transparent window in front is not offered and hides nothing", ghost.map { $0.id }, [1])
+check("hit: through a transparent window", windowAt(x: 400, y: 400, in: ghost) ?? -1, 1)
 
 // ── shape names ─────────────────────────────────────────────────────────────
 // Classification itself is STC-309's (`classifyCursor`, covered by

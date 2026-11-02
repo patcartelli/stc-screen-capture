@@ -41,6 +41,7 @@ const ACTION_GLYPHS: Record<BindableAction, TrayGlyph> = {
   display: "display",
   record: "record",
   "self-timer": "timer",
+  "pick-color": "color",
 };
 
 export interface TrayItem {

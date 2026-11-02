@@ -144,8 +144,12 @@ describe("pixels: tokens are applied", () => {
         p.style.height = "40px";
       }
       if (f === "overlay.html") {
-        // Window mode's pick outline.
-        Object.assign($("highlight").style, { display: "block", left: "40px", top: "40px", width: "200px", height: "120px" });
+        // Window mode's pick: one tinted visible piece (STC-625), as overlay.ts draws it.
+        const tint = document.createElement("div");
+        tint.className = "tint";
+        Object.assign(tint.style, { display: "block", left: "40px", top: "40px", width: "200px", height: "120px" });
+        $("highlight").replaceChildren(tint);
+        $("highlight").style.display = "block";
       }
     }, file);
   };

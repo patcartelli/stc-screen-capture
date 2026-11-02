@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -37,4 +37,19 @@ describe("every renderer page declares a Content-Security-Policy (STC-467)", () 
       expect(html).toMatch(/<meta\s+http-equiv=["']Content-Security-Policy["']/i);
     });
   }
+});
+
+describe("the overlay's camera pointer (STC-625)", () => {
+  // A CSS cursor image is an image load, so the CSP must allow it: blocked, it
+  // falls back to the plain arrow without a word, and no other test would see.
+  const html = readFileSync(join(rendererDir, "overlay.html"), "utf8");
+
+  test("window mode points with the camera, and the file ships beside the page", () => {
+    expect(html).toMatch(/body\.window-mode \{ cursor: url\(cursor-camera\.svg\) \d+ \d+, default; \}/);
+    expect(existsSync(join(rendererDir, "cursor-camera.svg"))).toBe(true);
+  });
+
+  test("the CSP lets the page load its own images", () => {
+    expect(html).toMatch(/Content-Security-Policy"[^>]*img-src 'self'/);
+  });
 });

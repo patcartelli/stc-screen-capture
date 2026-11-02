@@ -2,7 +2,7 @@
 <html lang="en" data-surface="dark">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'">
 <title>stc selection</title>
 <!-- Fonts and the dropdown component (STC-456). Linked BEFORE the <style>
      below, whose html/body rule has to win: tokens.css gives :root a font and
@@ -19,7 +19,10 @@
     user-select: none; -webkit-user-select: none; cursor: crosshair;
     font: var(--type-body-weight) var(--type-body)/var(--type-body-lh) var(--font-sans);
   }
-  body.window-mode { cursor: default; }
+  /* Window mode points with a camera (STC-625), as macOS's own window shot
+     does: the pointer says a click takes a picture of what it is over. The
+     hotspot is the lens centre. */
+  body.window-mode { cursor: url(cursor-camera.svg) 16 18, default; }
 
   /* The dim, and the hole in it.
 
@@ -59,20 +62,21 @@
   .handle.n  { cursor: ns-resize }   .handle.s  { cursor: ns-resize }
   .handle.w  { cursor: ew-resize }   .handle.e  { cursor: ew-resize }
 
-  /* The window-mode highlight: the window's own frame, filled faintly so the
-     target reads as picked rather than merely outlined. */
+  /* The window-mode highlight (STC-625): a tint over the part of the window
+     that can be SEEN, one `.tint` per visible rect, and nothing over whatever
+     covers the rest. No border: the pieces of one region meet edge to edge,
+     and an outline on each would draw seams inside the window. Never
+     animated, so reduced motion needs nothing here. */
   #highlight {
-    position: absolute; display: none; box-sizing: border-box;
-    border: 2px solid var(--accent);
-    background: var(--accent-soft);
-    border-radius: var(--radius-sm);
+    position: absolute; left: 0; top: 0; display: none;
+    pointer-events: none;
   }
-  /* Hovering a window the picker refuses to pick (STC-380) — dashed and dim
-     rather than the solid blue "this is what Return takes", and no fill, so
-     it reads as "here, but not selectable" rather than "selected". */
-  #highlight.not-fully-visible {
-    border: 2px dashed var(--text-dim);
-    background: transparent;
+  /* Mixed from --accent rather than --accent-soft (a fixed rgba): the tint is
+     now the highlight's ONLY mark, so it must follow the accent token. At 18%
+     it is --accent-soft's own dark value. */
+  #highlight .tint {
+    position: absolute;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
   }
 
   /* Readouts. Positioned by script; styled to stay legible over anything. */

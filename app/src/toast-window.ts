@@ -187,6 +187,7 @@ export function showMessageToast(message: ToastInput, opts: ToastWindowOptions):
   const query: Record<string, string> = { mode: "message", text: m.body, ms: String(ms), corner: opts.corner };
   if (m.title) query.title = m.title;
   if (m.tone) query.tone = m.tone;
+  if (m.swatch) query.swatch = m.swatch;
   if (m.action) { query.action = m.action.id; query.actionLabel = m.action.label; }
   // Always MESSAGE_TOAST_SIZE, and never resized (STC-509). It used to shrink
   // to the card when its page reported a height (`toast:fit`, STC-457), and
