@@ -98,7 +98,14 @@
     /* The inspector pane: slate, a hairline on its left edge, its content
        starting under the title bar. */
     #pane { position: relative; background: var(--shell-bg); border-left: 1px solid var(--hairline);
-            padding: 63px 24px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; }
+            padding: 63px 24px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px;
+            /* STC-615: the pane scrolls INSIDE its column. A grid item's content still sizes an
+               auto row even with overflow set, so a section taller than the window (Export,
+               once it gained the Type row) stretched .shell and .workcol and pushed the
+               timeline down and off screen: the Export bars were then unreachable, and
+               section-overlays.e2e's two bar-drag tests failed on every CI run. Size
+               containment takes the content out of that sizing; stretch still fills the row. */
+            contain: size; }
     #pane .panelabel { margin: 0 0 8px; font-size: var(--type-label); font-weight: 500;
                        color: rgba(255, 255, 255, .45); }
     /* The glass title bar (STC-584's, as the Library has it): over the whole
@@ -1348,9 +1355,27 @@
       <div>
         <p class="panelabel">Format</p>
         <div class="group">
+          <!-- STC-615: Type is chosen at export time and never saved with the
+               take. GIF replaces Size (its width is its own setting) with the
+               app's GIF rate and max width, the same ones Settings edits. -->
           <div class="row">
+            <label class="label" for="exporttype">Type</label>
+            <select id="exporttype">
+              <option value="mp4">MP4</option>
+              <option value="gif">GIF</option>
+            </select>
+          </div>
+          <div class="row" id="outsizerow">
             <label class="label" for="outsize">Size</label>
             <select id="outsize"></select>
+          </div>
+          <div class="row" id="gifraterow" hidden>
+            <label class="label" for="gifrate">Frame rate</label>
+            <select id="gifrate"></select>
+          </div>
+          <div class="row" id="gifwidthrow" hidden>
+            <label class="label" for="gifwidth">Max width</label>
+            <select id="gifwidth"></select>
           </div>
           <p id="outsizenote" class="panehint mono"></p>
         </div>
