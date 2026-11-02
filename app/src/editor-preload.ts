@@ -38,7 +38,8 @@ contextBridge.exposeInMainWorld("editor", {
   // call still succeeds.
   setPipStyleDefault: (style: unknown) => ipcRenderer.invoke("recorder:setSettings", { pipStyle: style }),
   // STC-616: Copy to clipboard — STC-488's render-and-copy, for the open take.
-  copyToClipboard: (type: string) => ipcRenderer.invoke("editor:copy", type),
+  // STC-614: the Frame rate travels with the Type; main validates both.
+  copyToClipboard: (type: string, rate: number) => ipcRenderer.invoke("editor:copy", type, rate),
   // STC-615: a GIF export, and its two options (the app's own settings.gif,
   // the ones Settings edits). The merge in `recorder:setSettings` keeps the
   // field not named.
