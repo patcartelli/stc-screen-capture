@@ -389,8 +389,14 @@ describe("STC-301 gate 3: capture latency", () => {
     // STC_GATE3_DISPLAY=<id> shoots a window on that display, so each
     // display's wallpaper size can be measured on its own.
     const onDisplay = process.env.STC_GATE3_DISPLAY ? Number(process.env.STC_GATE3_DISPLAY) : undefined;
-    const win = (list.windows as Array<{ id: number; fullyVisible: boolean; app?: string; displayId?: number }>)
-      .find((w) => w.fullyVisible && (onDisplay === undefined || w.displayId === onDisplay));
+    // STC-625 replaced the `fullyVisible` flag with `visible`, the window's
+    // uncovered rects: a window nothing covers is one rect equal to its frame.
+    type Rect = { x: number; y: number; width: number; height: number };
+    const whole = (w: Rect & { visible: Rect[] }) =>
+      w.visible?.length === 1 && w.visible[0]!.x === w.x && w.visible[0]!.y === w.y
+      && w.visible[0]!.width === w.width && w.visible[0]!.height === w.height;
+    const win = (list.windows as Array<Rect & { id: number; visible: Rect[]; app?: string; displayId?: number }>)
+      .find((w) => whole(w) && (onDisplay === undefined || w.displayId === onDisplay));
     if (!win) throw new Error("SKIP-WINDOW: no fully visible window to shoot; open one and run again.");
     process.stderr.write(
       `[gate 3 wallpaper] shooting window ${win.id} (${win.app ?? "?"}) on display ${win.displayId ?? "?"}\n`);

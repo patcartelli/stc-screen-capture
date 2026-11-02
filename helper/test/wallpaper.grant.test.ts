@@ -99,6 +99,17 @@ function jpegInfo(path: string): { width: number; height: number; icc: boolean }
   throw new Error(`${path}: no SOF marker`);
 }
 
+type Rect = { x: number; y: number; width: number; height: number };
+type ListedWindow = Rect & { id: number; displayId?: number; visible: Rect[] };
+
+/**
+ * Nothing covers it: STC-625 replaced the `fullyVisible` flag with `visible`,
+ * the window's uncovered rects, so a whole window is one rect equal to its frame.
+ */
+const fullyVisible = (w: ListedWindow) =>
+  w.visible?.length === 1 && w.visible[0]!.x === w.x && w.visible[0]!.y === w.y
+  && w.visible[0]!.width === w.width && w.visible[0]!.height === w.height;
+
 /** A window to shoot, and its display's pixel size, or a SKIP naming why not. */
 async function target(h: ReturnType<typeof spawnHelper>) {
   const list = await h.request({ cmd: "windows" });
@@ -106,8 +117,8 @@ async function target(h: ReturnType<typeof spawnHelper>) {
     throw new Error(`SKIP-GRANT: windows answered ${list.code}: ${list.detail}. Without a Screen ` +
       "Recording grant for the process running the tests, the wallpaper read is unverified.");
   }
-  const win = (list.windows as Array<{ id: number; fullyVisible: boolean; displayId?: number }>)
-    .find((w) => w.fullyVisible && w.displayId !== undefined);
+  const win = (list.windows as ListedWindow[])
+    .find((w) => fullyVisible(w) && w.displayId !== undefined);
   if (!win) throw new Error("SKIP-WINDOW: no fully visible window to shoot; open one and run again.");
   return win as { id: number; displayId: number };
 }
