@@ -782,8 +782,8 @@
     /* A folder path: takes the row and clips with an ellipsis; the full path is its tooltip. */
     #pane .pathvalue { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                        text-align: right; }
-    #sharestatus { flex: 1; min-width: 0; opacity: .75; text-align: right; }
-    #pane #share, #pane #sharereveal { width: auto; padding: 12px 0; }
+    #sharestatus, #copystatus { flex: 1; min-width: 0; opacity: .75; text-align: right; }
+    #pane #share, #pane #sharereveal, #pane #copyclip { width: auto; padding: 12px 0; }
     #exportbar { display: flex; align-items: center; gap: 10px; }
     #exportbar[hidden] { display: none; }
     #exportprogress { flex: 1; }
@@ -1403,6 +1403,12 @@
           <div class="row">
             <span class="label">Folder</span>
             <span id="exportfolder" class="value mono pathvalue"></span>
+          </div>
+          <!-- STC-616: the file Export would write (this size, this trim),
+               rendered and put on the clipboard. The progress is the foot's. -->
+          <div class="row">
+            <button type="button" id="copyclip" class="paneaction" title="Render this take with the current trim and settings and put the file on the clipboard">Copy to clipboard</button>
+            <span id="copystatus" class="value" role="status"></span>
           </div>
           <div class="row">
             <label class="label" for="shareslug">Publish as</label>

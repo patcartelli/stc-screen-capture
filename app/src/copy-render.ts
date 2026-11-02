@@ -2,7 +2,8 @@
  * A recording's Copy, rendered (STC-488). Loads the take through
  * `session-io.ts` (the editor's own loader) and runs the unchanged
  * `exportSession` with the take's project: the default one, since a panel
- * only ever shows an unedited take. Never shown; cancelled by main
+ * only ever shows an unedited take (STC-616: or, for the editor's Copy, the
+ * saved project at its own output size). Never shown; cancelled by main
  * destroying this window, so nothing here listens for a cancel.
  *
  * STC-395: with `?format=gif` it runs `exportGif` instead, over the same
@@ -75,8 +76,10 @@ void (async () => {
     // STC-495: a copy is for chat, so it renders at the embed width (1x) —
     // never larger than the capture (no upscaling), and with the aspect and
     // even-dimension rules `outputSizeFor` owns. Export and Save are untouched.
+    // STC-616: the editor's Copy asks for the project's own size (`size=project`).
     const size = outputSizeFor(project.output, EMBED_CSS_WIDTH);
-    const smaller = size.width < project.output.width && !isCaptureSize(project.output, size);
+    const smaller = params.get("size") !== "project"
+      && size.width < project.output.width && !isCaptureSize(project.output, size);
     const chat = smaller ? { ...project, output: { ...project.output, ...size } } : project;
     const result = await exportSession(session, chat, {
       captureId,

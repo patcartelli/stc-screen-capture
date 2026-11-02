@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
-  copiesRoot, copyPathFor, gifCopyPathFor, savedGifName, purgeDecision, PARTIAL_SUFFIX,
+  copiesRoot, copyPathFor, editCopyPathFor, gifCopyPathFor, savedGifName, purgeDecision, PARTIAL_SUFFIX,
   COPY_MAX_AGE_MS, PARTIAL_MAX_AGE_MS,
 } from "../src/recording-copy.js";
 import { PRODUCT_NAME } from "../src/product.js";
@@ -52,6 +52,28 @@ describe("the purge", () => {
 
   test("ignores anything that is not a copy or a partial", () => {
     expect(purgeDecision([{ name: ".DS_Store", mtimeMs: 0 }], now, new Set(), root)).toEqual([]);
+  });
+});
+
+describe("STC-616: the editor's copy", () => {
+  const env = { STC_COPIES_DIR: "/c" };
+  const take = "/lib/2026-10-01_18-04-12";
+
+  test("is its own file, never the panel's cache key", () => {
+    // `copyPathFor`'s existence IS a cache hit for the unedited take; an editor
+    // copy is a function of the saved project, so it must never collide.
+    expect(editCopyPathFor(env, take)).toBe("/c/2026-10-01_18-04-12-edit.mp4");
+    expect(editCopyPathFor(env, take)).not.toBe(copyPathFor(env, take));
+    expect(editCopyPathFor(env, take)).not.toBe(gifCopyPathFor(env, take));
+  });
+
+  test("the purge treats it like any copy: 24 h, except what is on the clipboard", () => {
+    const now = 10 * COPY_MAX_AGE_MS;
+    const e = { name: "t-edit.mp4", mtimeMs: now - COPY_MAX_AGE_MS - 1 };
+    expect(purgeDecision([e], now, new Set(), "/c")).toEqual(["t-edit.mp4"]);
+    expect(purgeDecision([e], now, new Set(["/c/t-edit.mp4"]), "/c")).toEqual([]);
+    expect(purgeDecision([{ name: `t-edit.mp4${PARTIAL_SUFFIX}`, mtimeMs: now - PARTIAL_MAX_AGE_MS - 1 }],
+      now, new Set(), "/c")).toEqual([`t-edit.mp4${PARTIAL_SUFFIX}`]);
   });
 });
 
