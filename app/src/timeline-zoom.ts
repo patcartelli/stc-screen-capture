@@ -19,6 +19,10 @@
  *  4. The span is clamped on both sides: never wider than the take (that is
  *     Fit), never narrower than `MIN_SPAN_FRACTION` of it.
  *  5. The readout is a sentence about the span, nothing more.
+ *  6. The playhead is free to leave the view (STC-621), and the view never
+ *     fences it; it only comes back to it. An explicit move reveals it, a
+ *     playing one flips a page, and a marker plus a key bring it home. Pulling
+ *     the view along stops when the person pans or zooms by hand.
  *
  * Reduced motion needs nothing from this file: a span change is a jump, never
  * an animation, so there is nothing to switch off. It is stated here so the
@@ -52,6 +56,27 @@ export function isFit(span: Span, durationNs: number): boolean {
 
 export function isMinSpan(span: Span, durationNs: number): boolean {
   return span.endNs - span.startNs <= durationNs * MIN_SPAN_FRACTION + 1e-6;
+}
+
+/**
+ * The CSS `scaleX(scale) translateX(translatePct%)` that stretches the
+ * FULL-DURATION track so only `span` shows (editor.ts's applySpanTransform).
+ *
+ * Order matters and was wrong until STC-621. In a transform list the LAST
+ * function applies first, so the translate happens in the track's own,
+ * unscaled pixels and the scale then stretches it: x' = scale * (x + t). The
+ * span's start sits at x = (startNs / durationNs) * W, so t is that, negated,
+ * as a share of the track's width W: `-startNs / durationNs`. It was
+ * `-startNs / spanWidth`, which is the same thing only at Fit or when the span
+ * starts at 0, and otherwise throws every transformed layer (ruler, bookmarks,
+ * blocks, the playhead's own position) off by a factor of the zoom while the
+ * canvas lanes, which are redrawn rather than transformed, stayed right: the
+ * "parallax" on a wheel pan, and a playhead that vanished when the view moved.
+ */
+export function spanTransform(span: Span, durationNs: number): { scale: number; translatePct: number } {
+  const width = Math.max(1, span.endNs - span.startNs);
+  if (!(durationNs > 0)) return { scale: 1, translatePct: 0 };
+  return { scale: durationNs / width, translatePct: -(span.startNs / durationNs) * 100 };
 }
 
 /** A span of `width` starting at `start`, slid back inside the take. */
@@ -91,6 +116,87 @@ export function zoomByIntent(span: Span, durationNs: number, intent: ZoomIntent,
   const inside = playheadNs >= span.startNs && playheadNs <= span.endNs;
   const anchor = inside ? playheadNs : (span.startNs + span.endNs) / 2;
   return zoomAbout(span, durationNs, intent === "in" ? BUTTON_ZOOM_STEP : 1 / BUTTON_ZOOM_STEP, anchor);
+}
+
+// ---- keeping the playhead in reach (STC-621) -------------------------------
+//
+// Four doors, all jumps (never a tween), and none of them fences the playhead:
+// it stays free to leave the view, these only bring the view back to it.
+//
+//  - `revealSpan`: an explicit move (a key, a bookmark jump, a scrub) slides
+//    the view the least that shows the playhead. A seek already in view leaves
+//    the span alone, so a drag inside the view never moves it.
+//  - `followSpan`: during playback the view flips a page when the playhead
+//    runs off an edge, landing it ahead of the way playback is going.
+//  - `centreSpan`: "go to playhead", the same zoom re-centred on it.
+//  - `playheadSide`: which edge the off-screen marker belongs on.
+
+/** How far in from the edge `revealSpan` leaves the playhead, as a span fraction. */
+export const REVEAL_MARGIN_FRACTION = 0.05;
+/** Where a page flip lands the playhead, as a fraction of the span from the edge it entered by. */
+export const FOLLOW_LANDING_FRACTION = 0.1;
+
+export type PlayheadSide = "before" | "after";
+
+/** Which side of the span the playhead is off, or null when it is in view. */
+export function playheadSide(span: Span, tNs: number): PlayheadSide | null {
+  if (tNs < span.startNs) return "before";
+  if (tNs > span.endNs) return "after";
+  return null;
+}
+
+/**
+ * The least slide that keeps `tNs` in view with a small margin.
+ *
+ * Out of view, it comes back to `REVEAL_MARGIN_FRACTION` inside the edge it
+ * left by. With `fromNs` (where the playhead was), a move that is still in view
+ * but is heading INTO that margin at an edge also slides, by exactly what it
+ * moved: a held arrow key scrolls the view a frame per step instead of
+ * waiting for the playhead to leave and then jumping a margin's worth. A move
+ * away from an edge never slides the view, whatever zone it ends in.
+ */
+export function revealSpan(span: Span, durationNs: number, tNs: number, fromNs?: number): Span {
+  if (!(durationNs > 0)) return span;
+  const width = span.endNs - span.startNs;
+  if (!(width > 0)) return span;
+  const margin = width * REVEAL_MARGIN_FRACTION;
+  const later = tNs > span.endNs - margin && (tNs > span.endNs || (fromNs !== undefined && tNs > fromNs));
+  if (later) return placed(tNs + margin - width, width, durationNs);
+  const earlier = tNs < span.startNs + margin && (tNs < span.startNs || (fromNs !== undefined && tNs < fromNs));
+  if (earlier) return placed(tNs - margin, width, durationNs);
+  return span;
+}
+
+/** The same zoom, centred on `tNs` (as far as the take's ends allow). */
+export function centreSpan(span: Span, durationNs: number, tNs: number): Span {
+  const width = span.endNs - span.startNs;
+  if (!(durationNs > 0) || !(width > 0)) return span;
+  return placed(tNs - width / 2, width, durationNs);
+}
+
+/**
+ * Playback's page flip, or null while the playhead is in view. The landing
+ * follows the way playback is going, not which edge it left by: forward lands
+ * the playhead `FOLLOW_LANDING_FRACTION` in from the left, reverse that far
+ * from the right, so there is always room to run. (Pressing Play with the
+ * playhead already off the left of the view therefore still lands it left.)
+ */
+export function followSpan(span: Span, durationNs: number, tNs: number, direction: 1 | -1): Span | null {
+  if (playheadSide(span, tNs) === null || !(durationNs > 0)) return null;
+  const width = span.endNs - span.startNs;
+  if (!(width > 0)) return null;
+  const inset = width * FOLLOW_LANDING_FRACTION;
+  return placed(direction > 0 ? tNs - inset : tNs - width + inset, width, durationNs);
+}
+
+/**
+ * "Go to playhead" is a bare G, so it follows the scrubber's rule 8: it is the
+ * timeline's only when nothing is being typed and no modifier is down (⌘G and
+ * the like stay the platform's, and none of ⌘= ⌘− ⌘0 is touched).
+ */
+export function playheadKeyIntent(c: KeyChord & { inTextField?: boolean }): boolean {
+  if (c.inTextField || c.metaKey || c.ctrlKey || c.altKey) return false;
+  return c.key.toLowerCase() === "g";
 }
 
 // ---- the wheel -------------------------------------------------------------
