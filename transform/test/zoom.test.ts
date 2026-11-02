@@ -140,6 +140,44 @@ describe("inWindow", () => {
   });
 });
 
+describe("amountsAt — many ticks in one pass (STC-620)", () => {
+  const windows = zoomWindows([down(10_000), up(10_050), down(40_000), down(41_000), up(41_050)]);
+  const lastTick = tickOf(windows[windows.length - 1]!.endNs) + 400;
+  // Spans several checkpoints (interval 1024), unsorted, with duplicates and a tick before 0.
+  const ticks = [lastTick, 0, 5, 1023, 1024, 1025, 3000, 2047, 2048, 1024, 17, lastTick - 3, -5, 5, 8191, 8192];
+
+  test("every answer is bit-identical to amountAt at that tick", () => {
+    for (const name of ZOOM_PRESET_NAMES) {
+      const a = createZoomSim(windows, ZOOM_PRESETS[name]);
+      const b = createZoomSim(windows, ZOOM_PRESETS[name]);
+      const many = a.amountsAt(ticks);
+      expect(many).toHaveLength(ticks.length);
+      ticks.forEach((n, i) => expect(many[i], `${name} tick ${n}`).toBe(b.amountAt(n)));
+    }
+  });
+
+  test("it does not disturb the checkpoints: amountAt afterwards, and a second pass, agree", () => {
+    const sim = createZoomSim(windows);
+    const first = sim.amountsAt(ticks);
+    const fresh = createZoomSim(windows);
+    expect(ticks.map((n) => sim.amountAt(n))).toEqual(ticks.map((n) => fresh.amountAt(n)));
+    expect(sim.amountsAt(ticks)).toEqual(first);
+  });
+
+  test("a dense run of consecutive ticks matches stepping one tick at a time", () => {
+    const from = tickOf(windows[0]!.startNs) - 20;
+    const run = Array.from({ length: 600 }, (_, i) => from + i);
+    const a = createZoomSim(windows).amountsAt(run);
+    const b = createZoomSim(windows);
+    run.forEach((n, i) => expect(a[i]).toBe(b.amountAt(n)));
+  });
+
+  test("no windows is flat zero, one answer per tick", () => {
+    expect(createZoomSim([]).amountsAt([0, 5, 99])).toEqual([0, 0, 0]);
+    expect(createZoomSim([]).amountsAt([])).toEqual([]);
+  });
+});
+
 describe("the easing spring", () => {
   const windows = zoomWindows([down(10_000), up(10_050)]);
 

@@ -102,7 +102,7 @@ import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from 
 import type { Size } from "@transform/spaces";
 import { holdFraming, restoreFraming, withHeldFraming, chosenFraming, type FramingHold } from "./framing-hold.js";
 import { contentFraction, framingLayout, DEFAULT_SOLID_COLOR, type Framing, type FramingPreset } from "@transform/framing";
-import { render } from "@transform/render";
+import { render, zoomAmountSampler } from "@transform/render";
 import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, effectivePointWidth, legibility, legibilitySentence, zoomFactorForCrop,
 } from "@transform/legibility";
@@ -127,7 +127,8 @@ import {
   spanTransform, timelineZoomKeyIntent, wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
 import {
-  clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts, activityIn, activityLabel,
+  clipActivity, zoomCurveSamples, ZOOM_LANE_FLOOR, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts,
+  activityIn, activityLabel,
 } from "./timeline-activity.js";
 import {
   editPipStyle, pipRect, pipSize, dragCenter, resizeFromCorner, styleFromFixedCorner,
@@ -1121,13 +1122,20 @@ function drawZoomLane(): void {
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
   if (!player || !openSession || !openProject) return;
-  const curve = zoomCurve(
-    (tNs) => render(openProject!, openSession!, tNs).zoom.amount,
-    player.durationNs,
-    LANE_BUCKETS,
-    visibleSpan().start,
-    visibleSpan().end,
-  );
+  // STC-620: the amount comes from render()'s own sims (zoomAmountSampler), so
+  // the lane cannot disagree with the frame or the export, but read in one
+  // pass at the samples zoomCurveSamples picks (dense at block edges, a pixel
+  // apart inside blocks, none where the zoom is out) rather than a whole
+  // render() at 480 evenly spaced instants.
+  const vis = visibleSpan();
+  const sampler = zoomAmountSampler(openProject, openSession);
+  const { tNs: sampleT, amount: curve } = zoomCurveSamples({
+    amountsAt: sampler.amountsAt,
+    windows: sampler.windows,
+    startNs: vis.start,
+    endNs: vis.end,
+    baseSamples: Math.ceil(box.width || LANE_BUCKETS),
+  });
   // STC-330: a FILLED area, not a stroked line — the same sampled curve
   // reads as one silhouette per window (ease-in ramp, flat top, ease-out
   // ramp), with #override-blocks laying the click targets over it.
@@ -1140,7 +1148,10 @@ function drawZoomLane(): void {
   const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#d6b25e";
   const top = 2 * scale;
   const yAt = (v: number): number => h - Math.max(0, Math.min(1, v)) * (h - top);
-  const xAt = (i: number): number => (i / (curve.length - 1)) * w;
+  // Samples are no longer evenly spaced (dense at block edges), so x comes from
+  // each sample's own time.
+  const spanNs = Math.max(1, vis.end - vis.start);
+  const xAt = (i: number): number => ((sampleT[i]! - vis.start) / spanNs) * w;
   ctx.lineWidth = 2 * scale;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
@@ -1172,10 +1183,6 @@ function drawZoomLane(): void {
     i = b + 1;
   }
 }
-
-/** Below this the zoom is at rest: no block is drawn, so the lane's floor
- *  stays empty between windows instead of carrying a hairline. */
-const ZOOM_LANE_FLOOR = 0.002;
 
 function redrawLanes(): void {
   drawClipLane(); drawAudioLane(); drawZoomLane(); layoutOverrideBlocks();
