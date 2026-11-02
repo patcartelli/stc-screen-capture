@@ -676,32 +676,54 @@
        never need to know the visible span. The silhouette itself is drawn
        into #zoom-curve; this layer only carries the click target and the
        selection/hover ring. */
-    .zoomblock { position: absolute; top: 0; height: 100%; min-width: 6px;
+    /* STC-621: this whole layer sits under the zoom's scaleX, which stretches
+       every horizontal measure by the zoom. Anything with a fixed on-screen
+       size (the minimum width, borders, radii, the dot, the handles below) is
+       written as `calc(N px * var(--inv, 1))`; editor.ts's applySpanTransform
+       sets --inv on #override-blocks. A radius is `horizontal / vertical`. */
+    .zoomblock { position: absolute; top: 0; height: 100%; min-width: calc(6px * var(--inv, 1));
                  background: transparent; border: none; padding: 0; margin: 0;
-                 cursor: pointer; border-radius: 3px; }
+                 cursor: pointer; border-radius: calc(3px * var(--inv, 1)) / 3px; }
     .zoomblock:hover { background: color-mix(in srgb, var(--zoom) 15%, transparent); }
     /* STC-606 (Figma 171:561): the open block is ringed in bone, its two
-       timing edges drawn as brass bars (the .manualhandle grips below). */
-    .zoomblock.selected { outline: 1px solid color-mix(in srgb, var(--bone) 70%, transparent); outline-offset: -1px; }
-    .zoomblock.overridden::after { content: ""; position: absolute; left: 2px; right: 2px;
-                                    bottom: 1px; height: 2px; background: var(--zoom); border-radius: 1px; }
+       timing edges drawn as brass bars (the .manualhandle grips below). The
+       ring is a border on ::before: an `outline` cannot take a per-side width. */
+    .zoomblock.selected::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+                                  border: 1px solid color-mix(in srgb, var(--bone) 70%, transparent);
+                                  border-left-width: calc(1px * var(--inv, 1));
+                                  border-right-width: calc(1px * var(--inv, 1));
+                                  border-radius: inherit; }
+    .zoomblock.overridden::after { content: ""; position: absolute; left: calc(2px * var(--inv, 1));
+                                    right: calc(2px * var(--inv, 1)); bottom: 1px; height: 2px;
+                                    background: var(--zoom); border-radius: calc(1px * var(--inv, 1)) / 1px; }
     /* A window with no derived counterpart at all (STC-331) — dashed rather
        than solid, the one visual cue distinguishing "authored from nothing"
        from "tuning something auto-zoom already opened". #manualdraft reuses
-       this plus .selected, since it is only ever shown while being edited. */
-    .zoomblock.manual { border: 1px dashed var(--zoom); background: color-mix(in srgb, var(--zoom) 8%, transparent); }
+       this plus .selected, since it is only ever shown while being edited.
+       Four gradient lines instead of `border: dashed`, whose dash length is
+       measured along the stretched axis. */
+    .zoomblock.manual { background-color: color-mix(in srgb, var(--zoom) 8%, transparent);
+                        background-image:
+                          repeating-linear-gradient(to right, var(--zoom) 0 calc(4px * var(--inv, 1)), transparent 0 calc(7px * var(--inv, 1))),
+                          repeating-linear-gradient(to right, var(--zoom) 0 calc(4px * var(--inv, 1)), transparent 0 calc(7px * var(--inv, 1))),
+                          repeating-linear-gradient(to bottom, var(--zoom) 0 4px, transparent 0 7px),
+                          repeating-linear-gradient(to bottom, var(--zoom) 0 4px, transparent 0 7px);
+                        background-size: 100% 1px, 100% 1px, calc(1px * var(--inv, 1)) 100%, calc(1px * var(--inv, 1)) 100%;
+                        background-position: 0 0, 0 100%, 0 0, 100% 0;
+                        background-repeat: no-repeat; }
     #manualdraft[hidden] { display: none; }
     /* The two edges a window's own timing is dragged from — a manual
        window's (STC-331) or, since STC-329, a DERIVED window's own retime —
        pinned to the block's edges via negative offsets (so they sit HALF
        outside a narrow block rather than being squeezed inside it) exactly
        the way .timeline .handle sits astride the trim lane's own edges. */
-    .manualhandle { position: absolute; top: 0; width: 8px; height: 100%; margin: 0; padding: 0;
+    .manualhandle { position: absolute; top: 0; width: calc(8px * var(--inv, 1)); height: 100%; margin: 0; padding: 0;
                     border: none; background: transparent; cursor: ew-resize; }
-    .manualhandle.start { left: -4px; }
-    .manualhandle.end { right: -4px; }
-    .manualhandle::after { content: ""; position: absolute; left: 2.5px; top: 0; width: 3px; height: 100%;
-                           border-radius: 1.5px; background: var(--zoom); }
+    .manualhandle.start { left: calc(-4px * var(--inv, 1)); }
+    .manualhandle.end { right: calc(-4px * var(--inv, 1)); }
+    .manualhandle::after { content: ""; position: absolute; left: calc(2.5px * var(--inv, 1)); top: 0;
+                           width: calc(3px * var(--inv, 1)); height: 100%;
+                           border-radius: calc(1.5px * var(--inv, 1)) / 1.5px; background: var(--zoom); }
     .manualhandle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     /* STC-605: the Clip lane is the activity bars now (#clip-activity), so the
        old 4px kept track is not drawn. #kept keeps its geometry: the scrubber

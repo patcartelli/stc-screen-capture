@@ -238,7 +238,9 @@ function applySpanTransform(): void {
   ($("timeline") as HTMLElement).style.setProperty("--inv", String(1 / scale));
   // STC-605: the ruler's labels and pennants and the strip's bookmark lines
   // undo it the same way.
-  for (const id of ["ruler-content", "strip-content", "audio-dims"]) {
+  // STC-621: and the zoom blocks' (#override-blocks), whose borders, radii,
+  // minimum width and drag handles are drawn in the stretched space.
+  for (const id of ["ruler-content", "strip-content", "audio-dims", "override-blocks"]) {
     ($(id) as HTMLElement).style.transform = transform;
     ($(id) as HTMLElement).style.setProperty("--inv", String(1 / scale));
   }
