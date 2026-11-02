@@ -150,6 +150,48 @@ export function easeStep(current: PillPoint, target: PillPoint, ease = PILL_DRAG
   return { x: current.x + dx * ease, y: current.y + dy * ease };
 }
 
+/**
+ * The keyboard's way to move the pill (STC-576): one of six fixed spots,
+ * picked from the menu bar's Move Pill submenu while a take records.
+ *
+ * Not arrow keys on a focused pill, which is what the ticket first suggested:
+ * the pill is `focusable: false` (STC-550), and focusing it would take key
+ * status from the app being recorded, whose windows would go inactive on
+ * camera. The menu-bar menu is keyboard-reachable (⌃F8, VoiceOver) and takes
+ * nothing from the recorded app (Patrick, 2026-11-02).
+ *
+ * A spot is a jump, never eased, so reduced motion needs nothing extra here.
+ */
+export type PillSpot = "top-left" | "top-centre" | "top-right" | "bottom-left" | "bottom-centre" | "bottom-right";
+
+/** Every spot, in menu order, with its label. */
+export const PILL_SPOTS: readonly { spot: PillSpot; label: string }[] = [
+  { spot: "top-left", label: "Top Left" },
+  { spot: "top-centre", label: "Top Centre" },
+  { spot: "top-right", label: "Top Right" },
+  { spot: "bottom-left", label: "Bottom Left" },
+  { spot: "bottom-centre", label: "Bottom Centre" },
+  { spot: "bottom-right", label: "Bottom Right" },
+];
+
+/**
+ * Where a spot puts the pill on the work area of the display it is on. Its
+ * size is kept; every edge it sits against is `PILL_TOP_INSET_PX` away, the
+ * same gap `pillBounds` leaves under the menu bar, so Top Centre is exactly
+ * where a take's pill opens.
+ */
+export function pillSpotBounds(spot: PillSpot, workArea: PillRect, current: PillRect): PillRect {
+  const width = Math.min(current.width, Math.max(1, workArea.width));
+  const height = Math.min(current.height, Math.max(1, workArea.height));
+  const [row, col] = spot.split("-") as ["top" | "bottom", "left" | "centre" | "right"];
+  const x = col === "left" ? workArea.x + PILL_TOP_INSET_PX
+    : col === "right" ? workArea.x + workArea.width - width - PILL_TOP_INSET_PX
+    : workArea.x + (workArea.width - width) / 2;
+  const y = row === "top" ? workArea.y + PILL_TOP_INSET_PX
+    : workArea.y + workArea.height - height - PILL_TOP_INSET_PX;
+  return { x: Math.round(x), y: Math.round(y), width, height };
+}
+
 /** What the library window is doing at the moment a take is about to start. */
 export interface LibraryAtTakeStart {
   /** A library window exists at all. Since STC-502 there often is none. */

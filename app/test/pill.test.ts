@@ -7,7 +7,7 @@ import {
   PILL_NOTICE_MS, shouldShowTrackNotice,
   METER_FLOOR_DB, NO_SIGNAL_TOOLTIP, meterFill, meterView, parseLevel,
   PILL_CHROME_PX, PILL_TOP_INSET_PX, pillBounds, resizePillBounds, libraryAroundTake,
-  dragTarget, easeStep, PILL_DRAG_FRAME_MS,
+  dragTarget, easeStep, PILL_DRAG_FRAME_MS, PILL_SPOTS, pillSpotBounds,
 } from "../src/pill.js";
 import { trackLossPillLabel } from "../src/stop-copy.js";
 
@@ -208,6 +208,42 @@ describe("resizePillBounds (STC-550)", () => {
     const atEdge = { x: 1000 - 120, y: 30, width: 120, height: PILL_HEIGHT_PX };
     const b = resizePillBounds(atEdge, workArea, 300);
     expect(b.x + b.width).toBe(1000);
+  });
+});
+
+describe("pillSpotBounds: Move Pill, the keyboard path (STC-576)", () => {
+  const workArea = { x: 0, y: 25, width: 1512, height: 920 };
+  const dragged = { x: 333, y: 444, width: 130, height: PILL_HEIGHT_PX };
+
+  it("Top Centre is exactly where a take's pill opens", () => {
+    const opened = pillBounds(workArea, 100);
+    expect(pillSpotBounds("top-centre", workArea, { ...dragged, width: opened.width })).toEqual(opened);
+  });
+
+  it("puts every spot the same inset from the edges it sits against, keeping the size", () => {
+    const at = (s: Parameters<typeof pillSpotBounds>[0]) => pillSpotBounds(s, workArea, dragged);
+    expect(at("top-left")).toEqual({ x: PILL_TOP_INSET_PX, y: 25 + PILL_TOP_INSET_PX, width: 130, height: PILL_HEIGHT_PX });
+    expect(at("top-right").x + 130).toBe(1512 - PILL_TOP_INSET_PX);
+    const bottom = 25 + 920 - PILL_TOP_INSET_PX;
+    for (const s of ["bottom-left", "bottom-centre", "bottom-right"] as const) expect(at(s).y + PILL_HEIGHT_PX).toBe(bottom);
+    expect(at("bottom-centre").x).toBe(at("top-centre").x);
+  });
+
+  it("stays on the display it is on, in negative screen coordinates", () => {
+    const left = { x: -2560, y: -400, width: 2560, height: 1415 };
+    for (const { spot } of PILL_SPOTS) {
+      const b = pillSpotBounds(spot, left, dragged);
+      expect(b.x).toBeGreaterThanOrEqual(left.x);
+      expect(b.x + b.width).toBeLessThanOrEqual(left.x + left.width);
+      expect(b.y).toBeGreaterThanOrEqual(left.y);
+      expect(b.y + b.height).toBeLessThanOrEqual(left.y + left.height);
+    }
+  });
+
+  it("offers six distinct spots, each a whole-pixel place", () => {
+    const places = PILL_SPOTS.map(({ spot }) => pillSpotBounds(spot, workArea, dragged));
+    expect(new Set(places.map((b) => `${b.x},${b.y}`)).size).toBe(6);
+    for (const b of places) { expect(Number.isInteger(b.x)).toBe(true); expect(Number.isInteger(b.y)).toBe(true); }
   });
 });
 

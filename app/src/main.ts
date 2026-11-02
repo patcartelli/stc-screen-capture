@@ -81,8 +81,8 @@ import { quitDecision } from "./quit-guard.js";
 import { editorIsOpen, fitEditorToContent, hideEditor, openEditor } from "./editor-window.js";
 import { hideStillEditor, openStillEditor, stillEditorIsOpen } from "./still-editor-window.js";
 import { decideIcons } from "./icon-placement.js";
-import { discardPill, pillIsUp, pillStarted, preparePill } from "./pill-window.js";
-import { libraryAroundTake, type LibraryAtTakeStart } from "./pill.js";
+import { discardPill, movePillTo, pillIsUp, pillStarted, preparePill } from "./pill-window.js";
+import { libraryAroundTake, PILL_SPOTS, type LibraryAtTakeStart } from "./pill.js";
 import type { MicInfo } from "./mic-devices.js";
 import type { DeviceLike } from "./device-picker.js";
 import { PendingTrash, TRASH_COMMIT_AT_QUIT_MS } from "./pending-trash.js";
@@ -542,6 +542,9 @@ function mountTray(): TrayHandle {
     // The same door the overlay bar's Settings control uses (STC-551).
     if (id === "settings") return openSettings();
     if (id === "about") { app.focus({ steal: true }); return app.showAboutPanel(); }
+    // STC-576: Move Pill, the pill's keyboard path.
+    const spot = PILL_SPOTS.find((s) => id === `pill:${s.spot}`);
+    if (spot) return movePillTo(spot.spot);
     const action = BINDABLE_ACTIONS.find((a) => id === `action:${a}`);
     if (!action) return;
     if (action === "record") {

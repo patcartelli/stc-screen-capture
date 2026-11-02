@@ -136,3 +136,130 @@ export function normaliseRegion(a: Point, b: Point, frame: Size,
 export function undoLast(regions: readonly Redaction[]): Redaction[] {
   return regions.slice(0, -1);
 }
+
+// ── the keyboard path (STC-576) ──────────────────────────────────────────────
+//
+// A box can be placed, moved, resized and deleted without a pointer. The
+// canvas takes the focus (Tab reaches it), and these keys act on it:
+//
+//   Return / Space        place a new box, centred, and select it
+//   ] / [                 select the next / previous box
+//   arrows                move the selected box (⇧: a bigger step)
+//   ⌥ + arrows            resize it from its bottom-right corner (⇧: bigger)
+//   Delete / ⌫            delete it
+//
+// Tab is never taken: it must still leave the canvas. Escape is the window's
+// (it closes, STC-443), so it stays untouched here too.
+//
+// Steps are fractions of the CAPTURE, never view pixels: a step has to mean
+// the same thing at every window size, the same reason regions are stored
+// normalised. A box always stays inside the frame and never shrinks under
+// `MIN_REDACTION_PX` on either side, so no key can make a box a click would
+// not have made.
+
+/** A new box's size, as a fraction of the capture. Big enough to see at once, small enough to move. */
+export const KEYBOARD_REDACTION_SIZE = { width: 0.2, height: 0.1 } as const;
+/** One arrow press, as a fraction of the capture: 1%. */
+export const REDACTION_STEP = 0.01;
+/** One ⇧-arrow press: 10%. */
+export const REDACTION_STEP_LARGE = 0.1;
+
+/** A new box, centred on the capture. */
+export function placeRegion(): Redaction {
+  const { width, height } = KEYBOARD_REDACTION_SIZE;
+  return { x: (1 - width) / 2, y: (1 - height) / 2, width, height };
+}
+
+/** Moved by (dx, dy), kept whole and inside the frame. */
+export function moveRegion(r: Redaction, dx: number, dy: number): Redaction {
+  return {
+    x: clamp(r.x + dx, 0, 1 - r.width),
+    y: clamp(r.y + dy, 0, 1 - r.height),
+    width: r.width, height: r.height,
+  };
+}
+
+/**
+ * Grown (or shrunk) by (dw, dh) from its bottom-right corner: never past the
+ * frame's edge, never under `minPx` capture pixels on a side.
+ */
+export function resizeRegion(r: Redaction, dw: number, dh: number, frame: Size,
+                             minPx = MIN_REDACTION_PX): Redaction {
+  const minW = frame.width > 0 ? Math.min(1, minPx / frame.width) : 0;
+  const minH = frame.height > 0 ? Math.min(1, minPx / frame.height) : 0;
+  return {
+    x: r.x, y: r.y,
+    width: clamp(r.width + dw, minW, 1 - r.x),
+    height: clamp(r.height + dh, minH, 1 - r.y),
+  };
+}
+
+/** The canvas's whole keyboard state: the boxes, and which one the keys act on. */
+export interface RedactKeyState {
+  regions: readonly Redaction[];
+  /** Index into `regions`, or undefined when none is selected. */
+  selected: number | undefined;
+}
+
+/** The parts of a `KeyboardEvent` this reads, so a test needs no DOM. */
+export interface RedactKey {
+  key: string;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+}
+
+export interface RedactKeyResult extends RedactKeyState {
+  /** The boxes changed, so they must be redrawn and stored. A selection alone is not a change. */
+  changed: boolean;
+}
+
+/** After a box is gone, the selection moves to the one before it, or none is left. */
+export function selectionAfterDelete(deleted: number, remaining: number): number | undefined {
+  return remaining === 0 ? undefined : Math.min(Math.max(0, deleted - 1), remaining - 1);
+}
+
+/**
+ * What a key does on the focused canvas, or undefined when it is not the
+ * canvas's key: the caller then leaves the event alone, so ⌘Z, ⌘S, Tab and
+ * Escape keep doing what they did.
+ */
+export function decideRedactKey(k: RedactKey, s: RedactKeyState, frame: Size): RedactKeyResult | undefined {
+  // Every command shortcut is the window's; ⌥ is ours (resize).
+  if (k.metaKey || k.ctrlKey) return undefined;
+  const regions = s.regions;
+  const selected = s.selected !== undefined && s.selected >= 0 && s.selected < regions.length
+    ? s.selected : undefined;
+
+  if (k.key === "Enter" || k.key === " ") {
+    const next = [...regions, placeRegion()];
+    return { regions: next, selected: next.length - 1, changed: true };
+  }
+  if (k.key === "]" || k.key === "[") {
+    if (regions.length === 0) return { regions: [...regions], selected: undefined, changed: false };
+    const n = regions.length;
+    const to = selected === undefined
+      ? (k.key === "]" ? 0 : n - 1)
+      : (selected + (k.key === "]" ? 1 : n - 1)) % n;
+    return { regions: [...regions], selected: to, changed: false };
+  }
+  if (k.key === "Delete" || k.key === "Backspace") {
+    if (selected === undefined) return { regions: [...regions], selected: undefined, changed: false };
+    const next = regions.filter((_, i) => i !== selected);
+    return { regions: next, selected: selectionAfterDelete(selected, next.length), changed: true };
+  }
+  const arrow = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as
+    Record<string, [number, number]>)[k.key];
+  if (!arrow) return undefined;
+  if (selected === undefined) return { regions: [...regions], selected: undefined, changed: false };
+  const step = k.shiftKey ? REDACTION_STEP_LARGE : REDACTION_STEP;
+  const [ax, ay] = arrow;
+  const r = regions[selected]!;
+  const moved = k.altKey
+    ? resizeRegion(r, ax * step, ay * step, frame)
+    : moveRegion(r, ax * step, ay * step);
+  const next = regions.map((x, i) => (i === selected ? moved : x));
+  const changed = moved.x !== r.x || moved.y !== r.y || moved.width !== r.width || moved.height !== r.height;
+  return { regions: next, selected, changed };
+}
