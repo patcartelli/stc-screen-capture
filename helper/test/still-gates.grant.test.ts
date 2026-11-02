@@ -385,10 +385,14 @@ describe("STC-301 gate 3: capture latency", () => {
     await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
     const list = await h.request({ cmd: "windows" });
     expect(list.ev, JSON.stringify(list)).toBe("windows");
-    const win = (list.windows as Array<{ id: number; fullyVisible: boolean; app?: string }>)
-      .find((w) => w.fullyVisible);
+    // STC_GATE3_DISPLAY=<id> shoots a window on that display, so each
+    // display's wallpaper size can be measured on its own.
+    const onDisplay = process.env.STC_GATE3_DISPLAY ? Number(process.env.STC_GATE3_DISPLAY) : undefined;
+    const win = (list.windows as Array<{ id: number; fullyVisible: boolean; app?: string; displayId?: number }>)
+      .find((w) => w.fullyVisible && (onDisplay === undefined || w.displayId === onDisplay));
     if (!win) throw new Error("SKIP-WINDOW: no fully visible window to shoot; open one and run again.");
-    process.stderr.write(`[gate 3 wallpaper] shooting window ${win.id} (${win.app ?? "?"})\n`);
+    process.stderr.write(
+      `[gate 3 wallpaper] shooting window ${win.id} (${win.app ?? "?"}) on display ${win.displayId ?? "?"}\n`);
 
     const walls: number[] = [];
     const buffers: number[] = [];
@@ -399,8 +403,8 @@ describe("STC-301 gate 3: capture latency", () => {
       const wall = performance.now() - t0;
       expect(r.ev, JSON.stringify(r)).toBe("still");
       expect(r.wallpaperError, `the wallpaper was not read: ${r.wallpaperError}`).toBeUndefined();
-      expect(r.wallpaper?.file).toBe("wallpaper.png");
-      expect(existsSync(join(dir, "wallpaper.png"))).toBe(true);
+      expect(r.wallpaper?.file).toBe("wallpaper.jpg");
+      expect(existsSync(join(dir, "wallpaper.jpg"))).toBe(true);
       // The document is untouched: the wallpaper is the app's to use.
       expect((r.shot as any).decoration.mode).toBe("window-only");
 

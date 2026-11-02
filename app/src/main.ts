@@ -23,6 +23,7 @@ import {
 import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite } from "@transform/shot.js";
 import { applyLook, parseLookWrite } from "@transform/backgrounds.js";
+import { stillFrameNameAllowed } from "./still-frame-name.js";
 import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
@@ -4058,7 +4059,7 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
   if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to read a path outside the recordings folder");
   }
-  if (!/^[A-Za-z0-9._-]+\.png$/.test(name) || name.includes("..")) {
+  if (!stillFrameNameAllowed(name)) {
     throw new Error(`refusing to read "${name}"`);
   }
   const buf = await readFile(join(dir, name));

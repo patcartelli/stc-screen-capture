@@ -18,8 +18,8 @@ describe("captureLook (STC-628)", () => {
     expect(captureLook("background", null, undefined).write).toEqual(clean);
   });
   test("wallpaper with a file gives the wallpaper look, no notice", () => {
-    const r = captureLook("wallpaper", null, { file: "wallpaper.png" });
-    expect(r.write).toEqual(wallpaperLookWrite("wallpaper.png"));
+    const r = captureLook("wallpaper", null, { file: "wallpaper.jpg" });
+    expect(r.write).toEqual(wallpaperLookWrite("wallpaper.jpg"));
     expect(r.notice).toBeUndefined();
   });
   test("wallpaper that failed or is missing falls back to Clean with a notice", () => {

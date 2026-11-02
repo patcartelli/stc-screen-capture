@@ -431,13 +431,14 @@ describe("capture-still — validation answers on fd3 before anything touches Sc
 
 describe("wallpaper — the still editor's way to read a display's wallpaper (STC-628)", () => {
   // Refused by parseWallpaperRequest before anything is read, so no grant is
-  // needed. The file rule is capture-still's plus `.png`: the renderer loads
-  // the wallpaper through still:frame, which takes nothing else.
+  // needed. The file rule is capture-still's plus `.jpg`: the wallpaper is
+  // always JPEG, and still:frame lets exactly that name through.
   const cases: Array<[string, object, string]> = [
     ["no dir", { cmd: "wallpaper", displayId: 1 }, "missing-dir"],
     ["no display", { cmd: "wallpaper", dir: tmpSession() }, "missing-display-id"],
-    ["file that is a path", { cmd: "wallpaper", dir: tmpSession(), displayId: 1, file: "../wallpaper.png" }, "bad-file"],
-    ["file that is not a png", { cmd: "wallpaper", dir: tmpSession(), displayId: 1, file: "wallpaper.heic" }, "bad-file"],
+    ["file that is a path", { cmd: "wallpaper", dir: tmpSession(), displayId: 1, file: "../wallpaper.jpg" }, "bad-file"],
+    ["file that is not a jpg", { cmd: "wallpaper", dir: tmpSession(), displayId: 1, file: "wallpaper.heic" }, "bad-file"],
+    ["a png (the wallpaper is always JPEG)", { cmd: "wallpaper", dir: tmpSession(), displayId: 1, file: "wallpaper.png" }, "bad-file"],
   ];
   for (const [name, cmd, code] of cases) {
     test(`${name} -> ${code}`, async () => {
@@ -478,9 +479,9 @@ describe("wallpaper — the still editor's way to read a display's wallpaper (ST
       expect(r.code).toBe("wallpaper-unavailable");
       expect(readdirSync(dir)).toEqual([]);
     } else {
-      expect(r.file).toBe("wallpaper.png");
+      expect(r.file).toBe("wallpaper.jpg");
       expect(typeof r.source).toBe("string");
-      expect(readdirSync(dir)).toEqual(["wallpaper.png"]);
+      expect(readdirSync(dir)).toEqual(["wallpaper.jpg"]);
     }
     expect(h.out.some((l) => l.seq === 43)).toBe(false);
   }, 20_000);

@@ -1,4 +1,6 @@
 import { describe, test, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   LOOKS, WALLPAPER_FILE, wallpaperBackground, wallpaperLookWrite, customBackground, lookOf, lookWrite, applyLook, parseLookWrite, CUSTOM_START_COLOR,
 } from "../src/backgrounds.js";
@@ -164,6 +166,15 @@ describe("the Wallpaper look (STC-628)", () => {
     expect(wallpaperLookWrite(f)).toMatchObject({ mode: "window-shadow-custom-background", shadow: null });
     const drawn = decorationForMode("window-shadow-custom-background", wearing(wallpaperLookWrite(f)).decoration).shadow;
     expect(drawn).toEqual(decorationForMode("window-shadow-background", {}).shadow);
+  });
+
+  // JPEG, not PNG (Patrick, 2026-11-02): a PNG of a gradient wallpaper cost
+  // ~300-590 ms to encode per shot. One name, written by the helper and named
+  // here; the two are held together so neither can drift alone.
+  test("the file is wallpaper.jpg, the same name the helper writes", () => {
+    expect(f).toBe("wallpaper.jpg");
+    const swift = readFileSync(join(__dirname, "..", "..", "helper", "src", "StillDecisions.swift"), "utf8");
+    expect(swift.match(/static let wallpaperFile = "([^"]+)"/)?.[1]).toBe(f);
   });
 
   test("it stores in the same version as Clean", () => {

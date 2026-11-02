@@ -11,8 +11,9 @@ import type { Readable } from "node:stream";
  * on a Mac: the wallpaper window is captured through ScreenCaptureKit, which
  * CI cannot be granted.
  *
- * What it holds: a window shot asked for its wallpaper gets `wallpaper.png`
- * beside its frame (a PNG at most the display's pixel size), the reply says
+ * What it holds: a window shot asked for its wallpaper gets `wallpaper.jpg`
+ * beside its frame (a JPEG with the display's colour profile, at most the
+ * display's pixel size), the reply says
  * which source it came from, and shot.json is untouched; the verb writes the
  * same file for a display named by id; and `STC_CAPTURE_FAULT=wallpaper-
  * unavailable` turns both into the sentence the app falls back to Clean on —
@@ -76,10 +77,26 @@ async function waitFor<T>(fn: () => T | undefined | false, ms = 15_000, what = "
 const find = (ls: Line[], ev: string) => ls.find((l) => l.ev === ev);
 const shotDir = () => mkdtempSync(join(tmpdir(), "stc-wallpaper-"));
 
-function pngSize(path: string): { width: number; height: number } {
+/**
+ * A JPEG's pixel size from its first SOF marker, and whether it carries an ICC
+ * profile (an APP2 `ICC_PROFILE` segment): the display's colour space must
+ * survive the switch from PNG (STC-628, Patrick 2026-11-02).
+ */
+function jpegInfo(path: string): { width: number; height: number; icc: boolean } {
   const b = readFileSync(path);
-  expect(b.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
-  return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+  expect(b.subarray(0, 2).toString("hex")).toBe("ffd8");
+  let icc = false;
+  for (let i = 2; i + 4 <= b.length;) {
+    expect(b[i]).toBe(0xff);
+    const marker = b[i + 1]!;
+    const len = b.readUInt16BE(i + 2);
+    if (marker === 0xe2 && b.subarray(i + 4, i + 15).toString("latin1") === "ICC_PROFILE") icc = true;
+    if (marker >= 0xc0 && marker <= 0xc3) {
+      return { height: b.readUInt16BE(i + 5), width: b.readUInt16BE(i + 7), icc };
+    }
+    i += 2 + len;
+  }
+  throw new Error(`${path}: no SOF marker`);
 }
 
 /** A window to shoot, and its display's pixel size, or a SKIP naming why not. */
@@ -96,7 +113,7 @@ async function target(h: ReturnType<typeof spawnHelper>) {
 }
 
 describe("the wallpaper (STC-628)", () => {
-  test("a window shot that asks gets wallpaper.png beside its frame, and shot.json is untouched", async () => {
+  test("a window shot that asks gets wallpaper.jpg beside its frame, and shot.json is untouched", async () => {
     const h = spawnHelper();
     await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
     const win = await target(h);
@@ -104,17 +121,18 @@ describe("the wallpaper (STC-628)", () => {
     const r = await h.request({ cmd: "capture-still", dir, kind: "window", windowId: win.id, wallpaper: true });
     expect(r.ev, JSON.stringify(r)).toBe("still");
     expect(r.wallpaperError, `the wallpaper was not read: ${r.wallpaperError}`).toBeUndefined();
-    expect(r.wallpaper.file).toBe("wallpaper.png");
+    expect(r.wallpaper.file).toBe("wallpaper.jpg");
     expect(["cache", "wallpaper-window", "desktop-image-file"]).toContain(r.wallpaper.source);
     expect(typeof r.wallpaper.ms).toBe("number");
     process.stderr.write(`[wallpaper] shot: source ${r.wallpaper.source}, read in ${Number(r.wallpaper.ms).toFixed(1)} ms\n`);
 
-    expect(readdirSync(dir).sort()).toEqual(["frame.png", "shot.json", "wallpaper.png"]);
+    expect(readdirSync(dir).sort()).toEqual(["frame.png", "shot.json", "wallpaper.jpg"]);
     const shot = JSON.parse(readFileSync(join(dir, "shot.json"), "utf8"));
     expect(shot.version).toBe(1);
     expect(shot.decoration.mode).toBe("window-only");
     // Capped at the display's pixel size: never larger than covering it needs.
-    const size = pngSize(join(dir, "wallpaper.png"));
+    const size = jpegInfo(join(dir, "wallpaper.jpg"));
+    expect(size.icc, "the wallpaper JPEG lost its colour profile").toBe(true);
     expect(size.width).toBeLessThanOrEqual(shot.display.pixelWidth);
     expect(size.height).toBeLessThanOrEqual(shot.display.pixelHeight);
     expect(size.width).toBeGreaterThan(0);
@@ -139,16 +157,16 @@ describe("the wallpaper (STC-628)", () => {
     await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
     const win = await target(h);
     const dir = shotDir();
-    const r = await h.request({ cmd: "wallpaper", dir, displayId: win.displayId, file: "wallpaper.png" });
+    const r = await h.request({ cmd: "wallpaper", dir, displayId: win.displayId, file: "wallpaper.jpg" });
     expect(r.ev, JSON.stringify(r)).toBe("wallpaper");
-    expect(r.file).toBe("wallpaper.png");
+    expect(r.file).toBe("wallpaper.jpg");
     process.stderr.write(`[wallpaper] verb: source ${r.source}, read in ${Number(r.ms).toFixed(1)} ms\n`);
-    expect(readdirSync(dir)).toEqual(["wallpaper.png"]);
-    pngSize(join(dir, "wallpaper.png"));
+    expect(readdirSync(dir)).toEqual(["wallpaper.jpg"]);
+    expect(jpegInfo(join(dir, "wallpaper.jpg")).icc).toBe(true);
     // Again, into the same folder: replaced, never a second file or a partial.
     const again = await h.request({ cmd: "wallpaper", dir, displayId: win.displayId });
     expect(again.ev, JSON.stringify(again)).toBe("wallpaper");
-    expect(readdirSync(dir)).toEqual(["wallpaper.png"]);
+    expect(readdirSync(dir)).toEqual(["wallpaper.jpg"]);
     h.kill();
   }, 60_000);
 

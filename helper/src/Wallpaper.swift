@@ -3,7 +3,7 @@ import AppKit
 import ScreenCaptureKit
 import ImageIO
 
-/// The desktop wallpaper of one display, as a PNG in a shot's folder (STC-628).
+/// The desktop wallpaper of one display, as a JPEG in a shot's folder (STC-628).
 ///
 /// A window shot's default look sits the window on the user's own wallpaper,
 /// so `capture-still` reads it BESIDE the window capture (same shareable
@@ -43,7 +43,7 @@ struct WallpaperFailure: Error, CustomStringConvertible {
 
 /// A read wallpaper, not yet in any shot folder.
 struct WallpaperPicture {
-    let png: URL
+    let url: URL
     let source: WallpaperSource
     /// Milliseconds from the read's start to the picture being ready.
     let ms: Double
@@ -120,9 +120,9 @@ final class WallpaperRead {
                                     imageURL: isStatic ? picture?.url.path : nil,
                                     modified: picture?.modified,
                                     spaceId: Self.currentSpace(displayId: displayId))
-        let cached = key == WALLPAPER_UNCACHEABLE ? nil : cacheDir?.appendingPathComponent(key + ".png")
+        let cached = key == WALLPAPER_UNCACHEABLE ? nil : cacheDir?.appendingPathComponent(key + ".jpg")
         if let cached, FileManager.default.fileExists(atPath: cached.path) {
-            return .success(WallpaperPicture(png: cached, source: .cache, ms: ms(), temporary: false))
+            return .success(WallpaperPicture(url: cached, source: .cache, ms: ms(), temporary: false))
         }
 
         let pixels = Self.displayPixelSize(displayId)
@@ -130,7 +130,7 @@ final class WallpaperRead {
         switch windowImage(pixels: pixels) {
         case .success(let image):
             if let out = encode(image, cached: cached, cacheDir: cacheDir) {
-                return .success(WallpaperPicture(png: out.url, source: .window, ms: ms(), temporary: out.temporary))
+                return .success(WallpaperPicture(url: out.url, source: .window, ms: ms(), temporary: out.temporary))
             }
             whyNoWindow = "the wallpaper window's picture could not be encoded"
         case .failure(let f):
@@ -149,7 +149,7 @@ final class WallpaperRead {
                 "could not read the wallpaper of display \(displayId): \(whyNoWindow), and its picture "
                 + "\(picture.url.lastPathComponent) could not be decoded"))
         }
-        return .success(WallpaperPicture(png: out.url, source: .file, ms: ms(), temporary: out.temporary))
+        return .success(WallpaperPicture(url: out.url, source: .file, ms: ms(), temporary: out.temporary))
     }
 
     // MARK: the wallpaper window
@@ -245,7 +245,7 @@ final class WallpaperRead {
 
     /// The file's one image, no larger than covering the display needs
     /// (`wallpaperPixelSize`), redrawn in the display's own colour space so the
-    /// PNG means what the screen shows.
+    /// picture means what the screen shows.
     private static func fileImage(_ url: URL, displayId: UInt32,
                                   pixels: (width: Int, height: Int)) -> CGImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -263,14 +263,17 @@ final class WallpaperRead {
 
     // MARK: encoding, the cache, and the shot folder
 
-    /// PNG into the cache entry when the picture is cacheable, otherwise a
-    /// temporary file beside the cache. Written under a temporary name and
-    /// renamed, so a reader never sees half a cache entry.
+    /// JPEG (`WALLPAPER_JPEG_QUALITY`, full resolution) into the cache entry
+    /// when the picture is cacheable, otherwise a temporary file beside the
+    /// cache. ImageIO embeds the image's own colour space as the file's ICC
+    /// profile, so a Display P3 capture stays P3. Written under a temporary
+    /// name and renamed, so a reader never sees half a cache entry.
     private func encode(_ image: CGImage, cached: URL?, cacheDir: URL?) -> (url: URL, temporary: Bool)? {
         let dir = cacheDir ?? FileManager.default.temporaryDirectory
-        let tmp = dir.appendingPathComponent(".wallpaper-\(UUID().uuidString).png")
-        guard let dest = CGImageDestinationCreateWithURL(tmp as CFURL, "public.png" as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(dest, image, nil)
+        let tmp = dir.appendingPathComponent(".wallpaper-\(UUID().uuidString).jpg")
+        guard let dest = CGImageDestinationCreateWithURL(tmp as CFURL, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, image,
+                                   [kCGImageDestinationLossyCompressionQuality: WALLPAPER_JPEG_QUALITY] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else {
             try? FileManager.default.removeItem(at: tmp)
             return nil
@@ -303,7 +306,7 @@ final class WallpaperRead {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
         else { return }
-        let dated = names.filter { $0.pathExtension == "png" }
+        let dated = names.filter { $0.pathExtension == "jpg" }
             .map { ($0, (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
         let entries = dated.filter { !$0.0.lastPathComponent.hasPrefix(".") }.sorted { $0.1 > $1.1 }
         for (url, _) in entries.dropFirst(cacheEntriesKept) { try? fm.removeItem(at: url) }
@@ -324,10 +327,10 @@ final class WallpaperRead {
         let partial = dir.appendingPathComponent(".\(file).partial")
         try? fm.removeItem(at: partial)
         var placed = false
-        if picture.temporary { placed = rename(picture.png.path, partial.path) == 0 }
-        if !placed { placed = clonefile(picture.png.path, partial.path, 0) == 0 }
-        if !placed { placed = (try? fm.copyItem(at: picture.png, to: partial)) != nil }
-        if picture.temporary { try? fm.removeItem(at: picture.png) }
+        if picture.temporary { placed = rename(picture.url.path, partial.path) == 0 }
+        if !placed { placed = clonefile(picture.url.path, partial.path, 0) == 0 }
+        if !placed { placed = (try? fm.copyItem(at: picture.url, to: partial)) != nil }
+        if picture.temporary { try? fm.removeItem(at: picture.url) }
         guard placed else { return WallpaperFailure(reason: "the wallpaper could not be copied into the shot's folder") }
         guard rename(partial.path, dest.path) == 0 else {
             try? fm.removeItem(at: partial)

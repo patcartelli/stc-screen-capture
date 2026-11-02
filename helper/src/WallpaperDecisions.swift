@@ -17,18 +17,30 @@ struct WallpaperRequest: Equatable {
     let dir: String
     /// The display whose wallpaper is read — a shot's own `display.id`.
     let displayId: UInt32
-    /// A bare `.png` name beside shot.json: the renderer loads it through
-    /// `still:frame`, which accepts nothing else.
+    /// A bare `.jpg` name beside shot.json. The wallpaper is always JPEG
+    /// (`WALLPAPER_JPEG_QUALITY`), so the name says so.
     let file: String
 
     static let defaultFile = StillRequest.wallpaperFile
 }
 
-/// A `.png` name and nothing else. Shared by the `wallpaper` verb and by
-/// `capture-still`'s own wallpaper, which always uses the default name.
-func isPngName(_ file: String) -> Bool {
-    !file.isEmpty && !file.contains("/") && file.lowercased().hasSuffix(".png") && file.count > ".png".count
+/// A `.jpg` name and nothing else: no path, no other extension, not even
+/// `.jpeg` — one spelling, the one `still:frame` lets through for the
+/// wallpaper. Shared by the `wallpaper` verb and by `capture-still`'s own
+/// wallpaper, which always uses the default name.
+func isJpgName(_ file: String) -> Bool {
+    !file.isEmpty && !file.contains("/") && file.lowercased().hasSuffix(".jpg") && file.count > ".jpg".count
 }
+
+/// The wallpaper's JPEG quality. JPEG and not PNG because a PNG of a smooth,
+/// dithered gradient wallpaper took ~300 ms per 8.4 MP to encode on hardware
+/// (2026-11-02; ~590 ms at 5K), which no shot budget can carry, while JPEG
+/// took ~33 ms (Patrick's call, 2026-11-02). 0.9 because the wallpaper is a
+/// background seen around a window and under a shadow: above it the file
+/// grows fast for nothing visible, and below it banding starts to show in
+/// exactly the gradients wallpapers are made of. Full resolution, and the
+/// display's colour profile is kept.
+let WALLPAPER_JPEG_QUALITY = 0.9
 
 /// The `wallpaper` verb's request, or exactly why it cannot be done.
 ///
@@ -40,7 +52,7 @@ func parseWallpaperRequest(_ cmd: [String: Any]) -> Result<WallpaperRequest, Sti
     guard let dir = cmd["dir"] as? String, !dir.isEmpty else { return .failure(.missingDir) }
     guard let displayId = id32(cmd["displayId"]) else { return .failure(.missingDisplayId) }
     let file = cmd["file"] as? String ?? WallpaperRequest.defaultFile
-    guard isPngName(file) else { return .failure(.notPng(file)) }
+    guard isJpgName(file) else { return .failure(.notJpg(file)) }
     return .success(WallpaperRequest(dir: dir, displayId: displayId, file: file))
 }
 

@@ -413,11 +413,11 @@ check("a window shot does not get one unasked",
       wantsWallpaper(["dir": "/tmp/x", "kind": "window", "windowId": 3]), "no")
 check("a display-crop shot's wallpaper flag is ignored, not refused",
       wantsWallpaper(["dir": "/tmp/x", "wallpaper": true]), "no")
-check("a frame named wallpaper.png would be overwritten by its own wallpaper, so it is refused",
+check("a frame named wallpaper.jpg would be overwritten by its own wallpaper, so it is refused",
       wantsWallpaper(["dir": "/tmp/x", "kind": "window", "windowId": 3, "wallpaper": true,
-                      "file": "wallpaper.png"]), "err:bad-file")
+                      "file": "wallpaper.jpg"]), "err:bad-file")
 check("without the wallpaper, any name stays a name",
-      wantsWallpaper(["dir": "/tmp/x", "kind": "window", "windowId": 3, "file": "wallpaper.png"]), "no")
+      wantsWallpaper(["dir": "/tmp/x", "kind": "window", "windowId": 3, "file": "wallpaper.jpg"]), "no")
 
 func parseWall(_ cmd: [String: Any]) -> String {
     switch parseWallpaperRequest(cmd) {
@@ -430,14 +430,18 @@ check("wallpaper: an empty dir is missing", parseWall(["dir": "", "displayId": 1
 check("wallpaper: the display is named, never defaulted", parseWall(["dir": "/tmp/x"]), "err:missing-display-id")
 check("wallpaper: a negative display id is no display id",
       parseWall(["dir": "/tmp/x", "displayId": -4]), "err:missing-display-id")
-check("wallpaper: file defaults to wallpaper.png", parseWall(["dir": "/tmp/x", "displayId": 1]), "ok:1:wallpaper.png")
+check("wallpaper: file defaults to wallpaper.jpg", parseWall(["dir": "/tmp/x", "displayId": 1]), "ok:1:wallpaper.jpg")
 check("wallpaper: file is a name, never a path",
-      parseWall(["dir": "/tmp/x", "displayId": 1, "file": "../wallpaper.png"]), "err:bad-file")
-check("wallpaper: file must be a .png (still:frame only loads those)",
+      parseWall(["dir": "/tmp/x", "displayId": 1, "file": "../wallpaper.jpg"]), "err:bad-file")
+check("wallpaper: file must be a .jpg, not a HEIC",
       parseWall(["dir": "/tmp/x", "displayId": 1, "file": "wallpaper.heic"]), "err:bad-file")
-check("wallpaper: a bare .png is not a name", parseWall(["dir": "/tmp/x", "displayId": 1, "file": ".png"]), "err:bad-file")
-check("wallpaper: another png name is fine",
-      parseWall(["dir": "/tmp/x", "displayId": 2, "file": "desk.png"]), "ok:2:desk.png")
+check("wallpaper: nor a PNG any more (the wallpaper is always JPEG)",
+      parseWall(["dir": "/tmp/x", "displayId": 1, "file": "wallpaper.png"]), "err:bad-file")
+check("wallpaper: nor .jpeg (one spelling, the one still:frame names)",
+      parseWall(["dir": "/tmp/x", "displayId": 1, "file": "wallpaper.jpeg"]), "err:bad-file")
+check("wallpaper: a bare .jpg is not a name", parseWall(["dir": "/tmp/x", "displayId": 1, "file": ".jpg"]), "err:bad-file")
+check("wallpaper: another jpg name is fine",
+      parseWall(["dir": "/tmp/x", "displayId": 2, "file": "desk.jpg"]), "ok:2:desk.jpg")
 
 check("one image is a static wallpaper", wallpaperIsStatic(imageCount: 1), true)
 check("a multi-image HEIC is a dynamic wallpaper", wallpaperIsStatic(imageCount: 24), false)

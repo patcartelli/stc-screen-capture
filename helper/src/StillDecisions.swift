@@ -65,7 +65,7 @@ struct StillRequest: Equatable {
     /// contains exactly one window, so nothing else can appear anyway.
     let excludeWindowIds: [UInt32]
     /// window: also read the desktop wallpaper of the window's display into
-    /// `wallpaper.png` beside the frame (STC-628). Always false for a
+    /// `wallpaper.jpg` beside the frame (STC-628). Always false for a
     /// display-crop shot: a crop has the real desktop in its pixels already,
     /// so the flag is ignored there rather than refused.
     let wallpaper: Bool
@@ -73,7 +73,7 @@ struct StillRequest: Equatable {
     static let defaultFile = "frame.png"
     /// What the wallpaper is called in a shot's folder: `background.file` of a
     /// wallpaper shot, and the `wallpaper` verb's default.
-    static let wallpaperFile = "wallpaper.png"
+    static let wallpaperFile = "wallpaper.jpg"
 }
 
 enum StillRequestError: Error, Equatable, CustomStringConvertible {
@@ -85,7 +85,7 @@ enum StillRequestError: Error, Equatable, CustomStringConvertible {
     case badFile(String)
     /// The `wallpaper` verb (STC-628) only.
     case missingDisplayId
-    case notPng(String)
+    case notJpg(String)
 
     var code: String {
         switch self {
@@ -96,7 +96,7 @@ enum StillRequestError: Error, Equatable, CustomStringConvertible {
         case .badCrop:          return "bad-crop"
         case .badFile:          return "bad-file"
         case .missingDisplayId: return "missing-display-id"
-        case .notPng:           return "bad-file"
+        case .notJpg:           return "bad-file"
         }
     }
 
@@ -109,7 +109,7 @@ enum StillRequestError: Error, Equatable, CustomStringConvertible {
         case .badCrop(let why): return "crop must be {x, y, width, height} in display-local points with positive size: \(why)"
         case .badFile(let f): return "file must be a bare file name beside shot.json, not \"\(f)\""
         case .missingDisplayId: return "wallpaper requires \"displayId\" (a CGDirectDisplayID; a shot's display.id)"
-        case .notPng(let f): return "file must be a bare .png name beside shot.json, not \"\(f)\""
+        case .notJpg(let f): return "file must be a bare .jpg name beside shot.json, not \"\(f)\""
         }
     }
 }
