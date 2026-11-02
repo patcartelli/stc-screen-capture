@@ -43,6 +43,8 @@ export interface StillRenderContext {
   clearRect(x: number, y: number, w: number, h: number): void;
   fillRect(x: number, y: number, w: number, h: number): void;
   drawImage(image: unknown, dx: number, dy: number, dw: number, dh: number): void;
+  drawImage(image: unknown, sx: number, sy: number, sw: number, sh: number,
+            dx: number, dy: number, dw: number, dh: number): void;
   createLinearGradient(x0: number, y0: number, x1: number, y1: number): unknown;
   createRadialGradient(x0: number, y0: number, r0: number,
                        x1: number, y1: number, r1: number): unknown;
@@ -92,23 +94,46 @@ export function gradientLine(width: number, height: number, angleDeg: number): {
   return { x0: cx - dx * half, y0: cy - dy * half, x1: cx + dx * half, y1: cy + dy * half };
 }
 
+/**
+ * The source rectangle that covers a `dstW` x `dstH` canvas from a `srcW` x
+ * `srcH` image with no stretch: scaled until both axes are covered, then the
+ * overflow on the longer axis cropped evenly from both sides (STC-628).
+ */
+export function coverRect(srcW: number, srcH: number, dstW: number, dstH: number):
+    { sx: number; sy: number; sw: number; sh: number } {
+  if (srcW * dstH > srcH * dstW) {
+    // The source is wider than the canvas: crop the sides.
+    const sw = (srcH * dstW) / dstH;
+    return { sx: (srcW - sw) / 2, sy: 0, sw, sh: srcH };
+  }
+  const sh = (srcW * dstH) / dstW;
+  return { sx: 0, sy: (srcH - sh) / 2, sw: srcW, sh };
+}
+
 /** Paints the background over the whole canvas. */
 function paintBackground(ctx: StillRenderContext, bg: Background,
                          width: number, height: number, image: unknown): void {
   const colors = bg.colors && bg.colors.length > 0 ? bg.colors : ["#ffffff"];
 
   if (bg.kind === "image" || bg.kind === "wallpaper" || bg.kind === "mesh") {
-    // No image supplied — for `wallpaper` that is the normal state today,
-    // since nothing sources the desktop picture yet (STC-291, not built). Fall
-    // back to the first colour rather than leaving the canvas transparent: a
-    // mode that promises a background must produce one.
+    // No image supplied — a `wallpaper` whose picture could not be read, say.
+    // Fall back to the first colour rather than leaving the canvas
+    // transparent: a mode that promises a background must produce one.
     //
     // A `mesh` arrives here already drawn, by `still-mesh.ts`'s
     // `renderMeshBackground` at this canvas's own size (STC-622): this file
     // stays a file that draws what it is told. Without one — a caller that
     // never rendered it — the darkest stop, which is what most of a mesh is.
     if (image) {
-      ctx.drawImage(image, 0, 0, width, height);
+      const { width: iw, height: ih } = image as { width?: unknown; height?: unknown };
+      if (bg.kind !== "mesh" && typeof iw === "number" && typeof ih === "number" && iw > 0 && ih > 0) {
+        // A picture is cover-cropped, never stretched (STC-628). A mesh was
+        // rendered at this canvas's size already, so it is drawn as is.
+        const r = coverRect(iw, ih, width, height);
+        ctx.drawImage(image, r.sx, r.sy, r.sw, r.sh, 0, 0, width, height);
+      } else {
+        ctx.drawImage(image, 0, 0, width, height);
+      }
       return;
     }
     ctx.fillStyle = colors[0]!;
