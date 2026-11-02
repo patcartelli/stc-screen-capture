@@ -89,13 +89,14 @@ describe("the editor's MP4 Frame rate", () => {
   test("30 fps exports every other frame, and is not saved on the take", async () => {
     const { editorWin, recordings, takeDir } = await launch();
     await exportMp4(editorWin);
-    const at60 = JSON.parse(readFileSync(join(recordings, exportManifestName(TAKE)), "utf8"));
+    // The manifest goes in the take; the MP4 in the save folder (main's export:write).
+    const at60 = JSON.parse(readFileSync(join(takeDir, exportManifestName(TAKE)), "utf8"));
     expect(at60.rate).toBe(60);
     expect(videoTrack(join(recordings, exportMediaName(TAKE))).samples).toBe(at60.frames);
 
     await editorWin.selectOption("#exportrate", "30");
     await exportMp4(editorWin);
-    const at30 = JSON.parse(readFileSync(join(recordings, exportManifestName(TAKE)), "utf8"));
+    const at30 = JSON.parse(readFileSync(join(takeDir, exportManifestName(TAKE)), "utf8"));
     expect(at30.rate).toBe(30);
     expect(at30.frames).toBe(Math.ceil(at60.frames / 2));
     const track = videoTrack(join(recordings, exportMediaName(TAKE)));
@@ -108,10 +109,10 @@ describe("the editor's MP4 Frame rate", () => {
   }, 300_000);
 
   test("Copy follows the Frame rate", async () => {
-    const { editorWin, recordings, copies, copyLog } = await launch();
+    const { editorWin, takeDir, copies, copyLog } = await launch();
     await editorWin.selectOption("#exportrate", "30");
     await exportMp4(editorWin);
-    const exported = JSON.parse(readFileSync(join(recordings, exportManifestName(TAKE)), "utf8"));
+    const exported = JSON.parse(readFileSync(join(takeDir, exportManifestName(TAKE)), "utf8"));
 
     await editorWin.click("#copyclip");
     await expect.poll(() => editorWin.textContent("#copystatus"), { timeout: 120_000 })
