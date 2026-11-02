@@ -6,11 +6,12 @@ import CoreGraphics
 /// without a display or a grant, as `StillDecisions.swift` is for the still.
 /// `Wallpaper.swift` calls these; it does not repeat them.
 ///
-/// What is decided here: what a `wallpaper` request means; whether a desktop
-/// picture is one still image (and so may be cached) or a dynamic/aerial one
-/// (which must be read as it is showing, every time); the cache key; which
-/// window in the window server's list IS the wallpaper of a display; and the
-/// pixel size the picture is kept at.
+/// What is decided here: what a `wallpaper` request means; which window in
+/// the window server's list IS the wallpaper of a display; whether the desktop
+/// picture's file may stand in when that window cannot be captured; and the
+/// pixel size a file is kept at. There is no cache: every read captures the
+/// wallpaper as it is showing (STC-628 review — a cache keyed on the picture
+/// missed its Fill/Fit options, the display's size and the appearance).
 
 struct WallpaperRequest: Equatable {
     /// The shot's own directory; `file` is written inside it.
@@ -56,39 +57,14 @@ func parseWallpaperRequest(_ cmd: [String: Any]) -> Result<WallpaperRequest, Sti
     return .success(WallpaperRequest(dir: dir, displayId: displayId, file: file))
 }
 
-/// A desktop picture is one still image only when its file holds exactly one
-/// image. A dynamic wallpaper is a HEIC with one image per time of day (or per
-/// appearance); an aerial has no file the picture can be read from at all, so
-/// it arrives here as nil. Neither may be cached or read from the file — the
-/// frame CURRENTLY showing is the one the shot wants.
+/// Whether the desktop picture's FILE may stand in for the wallpaper, which it
+/// is asked only when the wallpaper window could not be captured: only when it
+/// holds exactly one image. A dynamic wallpaper is a HEIC with one image per
+/// time of day (or per appearance), and a folder or an aerial has no one file
+/// to read (nil) — reading any of those would be a picture that is not the one
+/// showing.
 func wallpaperIsStatic(imageCount: Int?) -> Bool {
     imageCount == 1
-}
-
-/// The key that is never looked up and never written: a wallpaper with this
-/// key is read afresh for every shot.
-let WALLPAPER_UNCACHEABLE = ""
-
-/// The cache entry's name for one display's wallpaper.
-///
-/// `imageURL` is the desktop picture's path ONLY when `wallpaperIsStatic` said
-/// so; a dynamic or aerial wallpaper passes nil and gets
-/// `WALLPAPER_UNCACHEABLE`, so it always re-captures. A missing mtime is the
-/// same: without it, a picture edited in place under the same name would keep
-/// its old pixels. The Space is in the key because each Space can show a
-/// different picture; an unknown Space (nil) is a key of its own.
-///
-/// FNV-1a over the fields rather than the fields themselves, so the key is
-/// always a short, safe file name whatever the path holds.
-func wallpaperCacheKey(displayId: UInt32, imageURL: String?, modified: Double?, spaceId: Int?) -> String {
-    guard let imageURL, let modified else { return WALLPAPER_UNCACHEABLE }
-    let fields = "\(displayId)\u{1F}\(imageURL)\u{1F}\(modified)\u{1F}\(spaceId.map { "\($0)" } ?? "-")"
-    var h: UInt64 = 0xcbf2_9ce4_8422_2325
-    for b in fields.utf8 {
-        h ^= UInt64(b)
-        h = h &* 0x0000_0100_0000_01b3
-    }
-    return "d\(displayId)-" + String(h, radix: 16)
 }
 
 /// One entry of the window server's list, as far as choosing the wallpaper

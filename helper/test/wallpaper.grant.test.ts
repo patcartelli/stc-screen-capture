@@ -122,7 +122,7 @@ describe("the wallpaper (STC-628)", () => {
     expect(r.ev, JSON.stringify(r)).toBe("still");
     expect(r.wallpaperError, `the wallpaper was not read: ${r.wallpaperError}`).toBeUndefined();
     expect(r.wallpaper.file).toBe("wallpaper.jpg");
-    expect(["cache", "wallpaper-window", "desktop-image-file"]).toContain(r.wallpaper.source);
+    expect(["wallpaper-window", "desktop-image-file"]).toContain(r.wallpaper.source);
     expect(typeof r.wallpaper.ms).toBe("number");
     process.stderr.write(`[wallpaper] shot: source ${r.wallpaper.source}, read in ${Number(r.wallpaper.ms).toFixed(1)} ms\n`);
 

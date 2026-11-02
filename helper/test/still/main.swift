@@ -448,36 +448,6 @@ check("a multi-image HEIC is a dynamic wallpaper", wallpaperIsStatic(imageCount:
 check("an unreadable picture is not static", wallpaperIsStatic(imageCount: nil), false)
 check("an empty image source is not static", wallpaperIsStatic(imageCount: 0), false)
 
-let key0 = wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
-                             modified: 1_700_000_000, spaceId: 7)
-check("the cache key is stable for the same picture",
-      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
-                        modified: 1_700_000_000, spaceId: 7), key0)
-check("the cache key is a file name", key0.contains("/") || key0.isEmpty, false)
-check("the cache key changes with the picture",
-      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sea.jpg",
-                        modified: 1_700_000_000, spaceId: 7) == key0, false)
-check("the cache key changes when the file is edited in place",
-      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
-                        modified: 1_700_000_001, spaceId: 7) == key0, false)
-check("the cache key changes with the Space",
-      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
-                        modified: 1_700_000_000, spaceId: 8) == key0, false)
-check("the cache key changes with the display",
-      wallpaperCacheKey(displayId: 2, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
-                        modified: 1_700_000_000, spaceId: 7) == key0, false)
-check("an unknown Space is its own key, not a crash",
-      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
-                        modified: 1_700_000_000, spaceId: nil) == key0, false)
-// A dynamic or aerial wallpaper is passed with no URL (`wallpaperIsStatic`
-// said no), and must re-capture every time: its key is the one that is never
-// looked up or written.
-check("no URL (a dynamic wallpaper) never hits the cache",
-      wallpaperCacheKey(displayId: 1, imageURL: nil, modified: 1_700_000_000, spaceId: 7), WALLPAPER_UNCACHEABLE)
-check("no mtime never hits the cache either",
-      wallpaperCacheKey(displayId: 1, imageURL: "/x.jpg", modified: nil, spaceId: 7), WALLPAPER_UNCACHEABLE)
-check("the uncacheable key is not a file name anyone could have written", WALLPAPER_UNCACHEABLE.isEmpty, true)
-
 // The wallpaper window: below the desktop-icon layer, frame = the display,
 // drawn by the process that draws the wallpaper.
 let iconLayer = -2_147_483_603

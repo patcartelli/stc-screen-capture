@@ -8,30 +8,33 @@ import ImageIO
 /// A window shot's default look sits the window on the user's own wallpaper,
 /// so `capture-still` reads it BESIDE the window capture (same shareable
 /// content, its own screenshot) and the `wallpaper` verb reads it on its own
-/// for the still editor. Either way the picture is copied into the shot's
+/// for the still editor. Either way the picture is written into the shot's
 /// folder, so the shot renders the same after the wallpaper changes.
 ///
+/// Every read is fresh; there is no cache. One keyed on the picture's file
+/// could not see its Fill/Fit/Centre options, the display's size or the
+/// appearance, so it could hand back a picture that was not the one showing
+/// (STC-628 review), and with the JPEG a fresh read fits gate 3 anyway.
+///
 /// Where the picture comes from, in order:
-///  1. **The cache**, for a static picture already read: the same file, mtime,
-///     display and Space (`wallpaperCacheKey`). A dynamic or aerial wallpaper
-///     never hits it.
-///  2. **The wallpaper window**, captured alone through `SCScreenshotManager`
-///     at the display's pixel size. This is the frame CURRENTLY showing, which
-///     is what a dynamic or aerial wallpaper needs, and it has no icons and no
-///     other windows in it. Which window that is, is `chooseWallpaperWindow`
-///     (WallpaperDecisions.swift); what its screenshot holds is the runbook's.
-///  3. **The desktop picture's file** (`NSWorkspace.desktopImageURL(for:)`),
-///     only when it is one still image: scaled to cover the display at most,
+///  1. **The wallpaper window**, captured alone through `SCScreenshotManager`
+///     at the display's pixel size. This is the frame CURRENTLY showing, as
+///     the desktop draws it (its options and appearance included), and it has
+///     no icons and no other windows in it. Which window that is, is
+///     `chooseWallpaperWindow` (WallpaperDecisions.swift).
+///  2. **The desktop picture's file** (`NSWorkspace.desktopImageURL(for:)`),
+///     only when the window could not be captured and the file is one still
+///     image (`wallpaperIsStatic`): scaled to cover the display at most,
 ///     redrawn in the display's colour space.
 /// The reply's `source` says which (`WallpaperSource`).
 ///
 /// Nothing here may fail or wedge the shot it rides with: every wait is
-/// bounded, a failure is a sentence (`WallpaperFailure`), and the result is
-/// written into the shot's folder only by `place`, on the caller's thread,
-/// once the caller has decided to use it — a read that answers late writes
-/// only into the cache.
+/// bounded and a failure is a sentence (`WallpaperFailure`). The JPEG is
+/// encoded under a hidden `.partial` name in the shot's folder and renamed to
+/// its real name only by `wait`, on the caller's thread, once the caller has
+/// decided to use it. A read that answers after its caller gave up removes its
+/// own partial, so the folder never holds a wallpaper the reply did not name.
 enum WallpaperSource: String {
-    case cache
     case window = "wallpaper-window"
     case file = "desktop-image-file"
 }
@@ -41,15 +44,11 @@ struct WallpaperFailure: Error, CustomStringConvertible {
     var description: String { reason }
 }
 
-/// A read wallpaper, not yet in any shot folder.
+/// A wallpaper in place in the shot's folder.
 struct WallpaperPicture {
-    let url: URL
     let source: WallpaperSource
-    /// Milliseconds from the read's start to the picture being ready.
+    /// Milliseconds from the read's start to the picture being encoded.
     let ms: Double
-    /// True for a picture that is not a cache entry (a dynamic wallpaper):
-    /// `place` moves it rather than copying, so nothing is left behind.
-    let temporary: Bool
 }
 
 final class WallpaperRead {
@@ -58,17 +57,13 @@ final class WallpaperRead {
     /// instead; `still-bounds.test.ts` holds it well inside the still's own
     /// backstop, so a wallpaper can never turn a shot into a `still-timeout`.
     static let joinTimeoutSeconds: Double = 3
-    /// The `wallpaper` verb's whole bound: content enumeration, the screenshot,
-    /// the encode and the copy. `still-bounds.test.ts` holds it inside the
-    /// client's request timeout.
+    /// The `wallpaper` verb's whole bound: content enumeration, the screenshot
+    /// and the encode. `still-bounds.test.ts` holds it inside the client's
+    /// request timeout.
     static let verbTimeoutSeconds: Double = 8
     /// Each ScreenCaptureKit callback the read waits on, so one that is never
     /// answered (STC-470's lost call) ends the read rather than its thread.
     private static let stepTimeoutSeconds: Double = 2.5
-    /// Static pictures kept in the cache, newest first. A handful covers every
-    /// display and Space someone uses; anything older is a wallpaper since
-    /// replaced.
-    private static let cacheEntriesKept = 8
 
     /// `STC_CAPTURE_FAULT=wallpaper-unavailable`: every read fails, as an
     /// unreadable wallpaper would, so the fallback to Clean and its sentence
@@ -77,79 +72,107 @@ final class WallpaperRead {
 
     private let displayId: UInt32
     private let content: SCShareableContent?
+    private let dir: URL
+    private let file: String
     private let startNs = Clock.nowNs()
     private let done = DispatchSemaphore(value: 0)
     private let lock = NSLock()
-    private var result: Result<WallpaperPicture, WallpaperFailure>?
+    /// The encoded partial and where it came from, or why not.
+    private var result: Result<(partial: URL, picture: WallpaperPicture), WallpaperFailure>?
+    /// Set once the caller stops waiting; a result that lands after removes itself.
+    private var abandoned = false
 
-    /// Starts at once, on its own queue. `content` is the shareable content to
-    /// find the wallpaper window in — `capture-still`'s own, fetched WITH
-    /// desktop windows — or nil to fetch it here.
-    init(displayId: UInt32, content: SCShareableContent?) {
+    /// Starts at once, on its own queue, and writes `file` into `dir` (made if
+    /// missing). `content` is the shareable content to find the wallpaper
+    /// window in — `capture-still`'s own, fetched WITH desktop windows — or nil
+    /// to fetch it here.
+    init(displayId: UInt32, content: SCShareableContent?, dir: URL, file: String) {
         self.displayId = displayId
         self.content = content
+        self.dir = dir
+        self.file = file
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let r = self.read()
-            self.lock.lock(); self.result = r; self.lock.unlock()
+            self.lock.lock()
+            if self.abandoned, case .success(let done) = r {
+                try? FileManager.default.removeItem(at: done.partial)
+            } else {
+                self.result = r
+            }
+            self.lock.unlock()
             self.done.signal()
         }
     }
 
-    /// The picture, or why not. Never longer than `timeoutSeconds`.
+    /// The picture, in place as `dir/file`, or why not. Never longer than
+    /// `timeoutSeconds` (plus a rename).
     func wait(timeoutSeconds: Double) -> Result<WallpaperPicture, WallpaperFailure> {
-        guard done.wait(timeout: .now() + timeoutSeconds) == .success else {
-            return .failure(WallpaperFailure(reason:
-                "the wallpaper was not read within \(timeoutSeconds) s"))
+        _ = done.wait(timeout: .now() + timeoutSeconds)
+        lock.lock()
+        abandoned = true
+        let r = result
+        lock.unlock()
+        guard let r else {
+            return .failure(WallpaperFailure(reason: "the wallpaper was not read within \(timeoutSeconds) s"))
         }
-        lock.lock(); defer { lock.unlock() }
-        return result ?? .failure(WallpaperFailure(reason: "the wallpaper read ended without an answer"))
+        switch r {
+        case .failure(let f):
+            return .failure(f)
+        case .success(let done):
+            guard rename(done.partial.path, dir.appendingPathComponent(file).path) == 0 else {
+                try? FileManager.default.removeItem(at: done.partial)
+                return .failure(WallpaperFailure(reason: "the wallpaper could not be written as \(file)"))
+            }
+            return .success(done.picture)
+        }
+    }
+
+    /// The caller will not use this read (its shot failed): whatever it has
+    /// written, or writes later, is removed, so a failed shot's folder is left
+    /// as the failure left it.
+    func abandon() {
+        lock.lock()
+        abandoned = true
+        let r = result
+        result = nil
+        lock.unlock()
+        if case .success(let done) = r { try? FileManager.default.removeItem(at: done.partial) }
     }
 
     private func ms() -> Double { Double(Clock.nowNs() &- startNs) / 1e6 }
 
-    private func read() -> Result<WallpaperPicture, WallpaperFailure> {
+    private func read() -> Result<(partial: URL, picture: WallpaperPicture), WallpaperFailure> {
         if Self.faulted {
             IO.log("STC_CAPTURE_FAULT=wallpaper-unavailable: the wallpaper read is refused")
             return .failure(WallpaperFailure(reason:
                 "STC_CAPTURE_FAULT=wallpaper-unavailable: the wallpaper read is refused, as an unreadable wallpaper would be"))
         }
-        let cacheDir = Self.cacheDirectory()
-        let picture = Self.desktopPicture(displayId: displayId)
-        let isStatic = wallpaperIsStatic(imageCount: picture?.imageCount)
-        let key = wallpaperCacheKey(displayId: displayId,
-                                    imageURL: isStatic ? picture?.url.path : nil,
-                                    modified: picture?.modified,
-                                    spaceId: Self.currentSpace(displayId: displayId))
-        let cached = key == WALLPAPER_UNCACHEABLE ? nil : cacheDir?.appendingPathComponent(key + ".jpg")
-        if let cached, FileManager.default.fileExists(atPath: cached.path) {
-            return .success(WallpaperPicture(url: cached, source: .cache, ms: ms(), temporary: false))
-        }
-
         let pixels = Self.displayPixelSize(displayId)
         var whyNoWindow: String
         switch windowImage(pixels: pixels) {
         case .success(let image):
-            if let out = encode(image, cached: cached, cacheDir: cacheDir) {
-                return .success(WallpaperPicture(url: out.url, source: .window, ms: ms(), temporary: out.temporary))
+            if let partial = encode(image) {
+                return .success((partial, WallpaperPicture(source: .window, ms: ms())))
             }
-            whyNoWindow = "the wallpaper window's picture could not be encoded"
+            whyNoWindow = "the wallpaper window's picture could not be written"
         case .failure(let f):
             whyNoWindow = f.reason
         }
 
-        guard isStatic, let picture else {
+        let picture = Self.desktopPicture(displayId: displayId)
+        guard let picture, wallpaperIsStatic(imageCount: picture.imageCount) else {
             let what = picture == nil ? "macOS gave no desktop picture for it"
-                                      : "the desktop picture is not one still image (dynamic or aerial)"
+                                      : "the desktop picture is not one still image (dynamic, aerial or a folder)"
             return .failure(WallpaperFailure(reason:
                 "could not read the wallpaper of display \(displayId): \(whyNoWindow), and \(what)"))
         }
         guard let image = Self.fileImage(picture.url, displayId: displayId, pixels: pixels),
-              let out = encode(image, cached: cached, cacheDir: cacheDir) else {
+              let partial = encode(image) else {
             return .failure(WallpaperFailure(reason:
                 "could not read the wallpaper of display \(displayId): \(whyNoWindow), and its picture "
-                + "\(picture.url.lastPathComponent) could not be decoded"))
+                + "\(picture.url.lastPathComponent) could not be decoded or written"))
         }
-        return .success(WallpaperPicture(url: out.url, source: .file, ms: ms(), temporary: out.temporary))
+        return .success((partial, WallpaperPicture(source: .file, ms: ms())))
     }
 
     // MARK: the wallpaper window
@@ -170,8 +193,8 @@ final class WallpaperRead {
         let iconLayer = Int(CGWindowLevelForKey(.desktopIconWindow))
         guard let id = chooseWallpaperWindow(candidates, display: StillRect(bounds), desktopIconLayer: iconLayer),
               let win = content.windows.first(where: { $0.windowID == id }) else {
-            // Said in full, because which window the wallpaper is was a guess
-            // (WallpaperDecisions.swift) and this line is how a Mac corrects it.
+            // Said in full, because which window the wallpaper is was partly a
+            // guess (WallpaperDecisions.swift) and this line is how a Mac corrects it.
             let below = candidates.filter { $0.layer < 0 }.map {
                 "\($0.id) \($0.bundleId ?? $0.app ?? "?") \"\($0.title ?? "")\" layer \($0.layer) \(Int($0.frame.width))x\(Int($0.frame.height))@\(Int($0.frame.x)),\(Int($0.frame.y))"
             }
@@ -224,11 +247,10 @@ final class WallpaperRead {
         return out
     }
 
-    // MARK: the desktop picture's file
+    // MARK: the desktop picture's file (the fallback)
 
     private struct DesktopPicture {
         let url: URL
-        let modified: Double?
         let imageCount: Int?
     }
 
@@ -237,10 +259,8 @@ final class WallpaperRead {
         guard let screen = NSScreen.screens.first(where: {
                   ($0.deviceDescription[key] as? NSNumber)?.uint32Value == displayId }),
               let url = NSWorkspace.shared.desktopImageURL(for: screen), url.isFileURL else { return nil }
-        let modified = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)?
-            .map { $0.timeIntervalSince1970 }
         let count = CGImageSourceCreateWithURL(url as CFURL, nil).map { CGImageSourceGetCount($0) }
-        return DesktopPicture(url: url, modified: modified, imageCount: count)
+        return DesktopPicture(url: url, imageCount: count)
     }
 
     /// The file's one image, no larger than covering the display needs
@@ -261,82 +281,25 @@ final class WallpaperRead {
         return ctx.makeImage()
     }
 
-    // MARK: encoding, the cache, and the shot folder
+    // MARK: encoding
 
-    /// JPEG (`WALLPAPER_JPEG_QUALITY`, full resolution) into the cache entry
-    /// when the picture is cacheable, otherwise a temporary file beside the
-    /// cache. ImageIO embeds the image's own colour space as the file's ICC
-    /// profile, so a Display P3 capture stays P3. Written under a temporary
-    /// name and renamed, so a reader never sees half a cache entry.
-    private func encode(_ image: CGImage, cached: URL?, cacheDir: URL?) -> (url: URL, temporary: Bool)? {
-        let dir = cacheDir ?? FileManager.default.temporaryDirectory
-        let tmp = dir.appendingPathComponent(".wallpaper-\(UUID().uuidString).jpg")
-        guard let dest = CGImageDestinationCreateWithURL(tmp as CFURL, "public.jpeg" as CFString, 1, nil) else { return nil }
+    /// JPEG (`WALLPAPER_JPEG_QUALITY`, full resolution) to a hidden partial in
+    /// the shot's folder, beside where it will be renamed to (same volume, so
+    /// the rename is atomic). ImageIO embeds the image's own colour space as
+    /// the file's ICC profile, so a Display P3 capture stays P3.
+    private func encode(_ image: CGImage) -> URL? {
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        catch { return nil }
+        let partial = dir.appendingPathComponent(".\(file).\(UUID().uuidString).partial")
+        guard let dest = CGImageDestinationCreateWithURL(partial as CFURL, "public.jpeg" as CFString, 1, nil)
+        else { return nil }
         CGImageDestinationAddImage(dest, image,
                                    [kCGImageDestinationLossyCompressionQuality: WALLPAPER_JPEG_QUALITY] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else {
-            try? FileManager.default.removeItem(at: tmp)
+            try? FileManager.default.removeItem(at: partial)
             return nil
         }
-        // Only ever our own cache directory: never the shared temporary one.
-        defer { if let cacheDir { Self.pruneCache(cacheDir) } }
-        guard let cached else { return (tmp, true) }
-        if rename(tmp.path, cached.path) != 0 {
-            // Kept as a temporary picture rather than lost: the shot still gets it.
-            return (tmp, true)
-        }
-        return (cached, false)
-    }
-
-    /// `~/Library/Caches/<bundle id>/wallpaper/`, made on first use; nil when
-    /// it cannot be, which only costs the cache.
-    private static func cacheDirectory() -> URL? {
-        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
-        let bundle = Bundle.main.bundleIdentifier ?? "com.studiocartelli.capture"
-        let dir = caches.appendingPathComponent(bundle).appendingPathComponent("wallpaper")
-        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-        catch { return nil }
-        return dir
-    }
-
-    /// Keeps the newest `cacheEntriesKept` entries, and drops any temporary
-    /// picture a read left behind more than a minute ago (one whose shot had
-    /// stopped waiting for it).
-    private static func pruneCache(_ dir: URL) {
-        let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
-        else { return }
-        let dated = names.filter { $0.pathExtension == "jpg" }
-            .map { ($0, (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
-        let entries = dated.filter { !$0.0.lastPathComponent.hasPrefix(".") }.sorted { $0.1 > $1.1 }
-        for (url, _) in entries.dropFirst(cacheEntriesKept) { try? fm.removeItem(at: url) }
-        let stale = Date().addingTimeInterval(-60)
-        for (url, when) in dated where url.lastPathComponent.hasPrefix(".wallpaper-") && when < stale {
-            try? fm.removeItem(at: url)
-        }
-    }
-
-    /// Puts a read picture into `dir` as `file`, replacing any earlier one.
-    /// A cache entry is CLONED (`clonefile(2)`: no bytes copied on APFS) and
-    /// copied when the clone is refused (another volume); a temporary picture
-    /// is moved. Either way it lands under a temporary name first and is
-    /// renamed, so the folder never holds half a wallpaper.
-    static func place(_ picture: WallpaperPicture, into dir: URL, file: String) -> WallpaperFailure? {
-        let fm = FileManager.default
-        let dest = dir.appendingPathComponent(file)
-        let partial = dir.appendingPathComponent(".\(file).partial")
-        try? fm.removeItem(at: partial)
-        var placed = false
-        if picture.temporary { placed = rename(picture.url.path, partial.path) == 0 }
-        if !placed { placed = clonefile(picture.url.path, partial.path, 0) == 0 }
-        if !placed { placed = (try? fm.copyItem(at: picture.url, to: partial)) != nil }
-        if picture.temporary { try? fm.removeItem(at: picture.url) }
-        guard placed else { return WallpaperFailure(reason: "the wallpaper could not be copied into the shot's folder") }
-        guard rename(partial.path, dest.path) == 0 else {
-            try? fm.removeItem(at: partial)
-            return WallpaperFailure(reason: "the wallpaper could not be written as \(file)")
-        }
-        return nil
+        return partial
     }
 
     // MARK: the display
@@ -345,23 +308,6 @@ final class WallpaperRead {
         if let mode = CGDisplayCopyDisplayMode(id) { return (mode.pixelWidth, mode.pixelHeight) }
         let b = CGDisplayBounds(id)
         return (Int(b.width), Int(b.height))
-    }
-
-    private typealias MainConnectionFn = @convention(c) () -> Int32
-    private typealias DisplaySpaceFn = @convention(c) (Int32, CFString) -> UInt64
-
-    /// The Space a display is showing, through the window server's private
-    /// SPI, looked up at run time; nil when it is not there, which only makes
-    /// the cache key coarser (the URL already follows the Space's picture).
-    private static func currentSpace(displayId: UInt32) -> Int? {
-        guard let h = dlopen(nil, RTLD_NOW),
-              let conn = dlsym(h, "CGSMainConnectionID"),
-              let space = dlsym(h, "CGSManagedDisplayGetCurrentSpace"),
-              let uuid = CGDisplayCreateUUIDFromDisplayID(displayId)?.takeRetainedValue(),
-              let name = CFUUIDCreateString(nil, uuid) else { return nil }
-        let cid = unsafeBitCast(conn, to: MainConnectionFn.self)()
-        let sid = unsafeBitCast(space, to: DisplaySpaceFn.self)(cid, name)
-        return sid == 0 ? nil : Int(sid)
     }
 }
 
@@ -372,15 +318,12 @@ enum WallpaperVerb {
     static func run(_ req: WallpaperRequest,
                     completion: @escaping (Result<[String: Any], WallpaperFailure>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let read = WallpaperRead(displayId: req.displayId, content: nil)
+            let read = WallpaperRead(displayId: req.displayId, content: nil,
+                                     dir: URL(fileURLWithPath: req.dir), file: req.file)
             switch read.wait(timeoutSeconds: WallpaperRead.verbTimeoutSeconds) {
             case .failure(let f):
                 completion(.failure(f))
             case .success(let pic):
-                let dir = URL(fileURLWithPath: req.dir)
-                do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-                catch { completion(.failure(WallpaperFailure(reason: "could not make \(req.dir): \(error)"))); return }
-                if let f = WallpaperRead.place(pic, into: dir, file: req.file) { completion(.failure(f)); return }
                 completion(.success(["file": req.file, "source": pic.source.rawValue, "ms": pic.ms]))
             }
         }

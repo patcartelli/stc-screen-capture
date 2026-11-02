@@ -146,7 +146,11 @@ final class StillCapture {
         lock.lock()
         let c = completion
         completion = nil
+        let read = wallpaperRead
         lock.unlock()
+        // A failed shot leaves no wallpaper behind (STC-628): its folder must
+        // stay one `removeIfNothingWorthKeeping` can recognise as empty.
+        if case .failure = result, c != nil { read?.abandon() }
         c?(result)
     }
 
@@ -239,7 +243,8 @@ final class StillCapture {
                                        pointWidth: display.width, pointHeight: display.height)
             // Started now, so it runs while the window is captured and encoded.
             if wantsWallpaper {
-                let read = WallpaperRead(displayId: display.displayID, content: content)
+                let read = WallpaperRead(displayId: display.displayID, content: content,
+                                         dir: dir, file: StillRequest.wallpaperFile)
                 lock.lock(); wallpaperRead = read; lock.unlock()
             }
             let bounds = StillRect(x: Double(win.frame.minX) - geometry.originX,
@@ -365,17 +370,12 @@ final class StillCapture {
         lock.lock(); let read = wallpaperRead; lock.unlock()
         guard let read else { return [:] }
         at("wallpaper")
-        let file = WallpaperRequest.defaultFile
         let out: [String: Any]
         switch read.wait(timeoutSeconds: WallpaperRead.joinTimeoutSeconds) {
         case .failure(let f):
             out = ["wallpaperError": f.description]
         case .success(let pic):
-            if let f = WallpaperRead.place(pic, into: dir, file: file) {
-                out = ["wallpaperError": f.description]
-            } else {
-                out = ["wallpaper": ["file": file, "source": pic.source.rawValue, "ms": pic.ms]]
-            }
+            out = ["wallpaper": ["file": StillRequest.wallpaperFile, "source": pic.source.rawValue, "ms": pic.ms]]
         }
         mark("wallpaperMs")
         return out

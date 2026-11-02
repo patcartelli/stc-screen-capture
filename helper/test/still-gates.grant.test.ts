@@ -376,8 +376,9 @@ describe("STC-301 gate 3: capture latency", () => {
    * spec forbids moving them. A window shot, because only a window shot reads
    * the wallpaper. The wallpaper must actually be read (a `wallpaperError`
    * fails the gate rather than passing it fast), and each sample says where
-   * it came from: `cache` is the steady state for a static picture, while a
-   * dynamic or aerial one is read afresh every time and is the hard case.
+   * it came from. There is no cache: every sample captures the wallpaper
+   * window afresh and encodes a full-resolution JPEG, which is the case the
+   * budgets have to hold.
    */
   test("a window shot with the wallpaper is inside both budgets", async () => {
     skipUnless(await probe());
