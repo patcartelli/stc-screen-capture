@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
-  copiesRoot, copyPathFor, editCopyPathFor, gifCopyPathFor, savedGifName, purgeDecision, PARTIAL_SUFFIX,
+  copiesRoot, copyPathFor, editCopyPathFor, editGifCopyPathFor, gifCopyPathFor, savedGifName, purgeDecision, PARTIAL_SUFFIX,
   COPY_MAX_AGE_MS, PARTIAL_MAX_AGE_MS,
 } from "../src/recording-copy.js";
 import { PRODUCT_NAME } from "../src/product.js";
@@ -65,6 +65,12 @@ describe("STC-616: the editor's copy", () => {
     expect(editCopyPathFor(env, take)).toBe("/c/2026-10-01_18-04-12-edit.mp4");
     expect(editCopyPathFor(env, take)).not.toBe(copyPathFor(env, take));
     expect(editCopyPathFor(env, take)).not.toBe(gifCopyPathFor(env, take));
+  });
+
+  test("STC-615: its GIF is a third file, never the panel's .gif cache", () => {
+    expect(editGifCopyPathFor(env, take)).toBe("/c/2026-10-01_18-04-12-edit.gif");
+    expect(editGifCopyPathFor(env, take)).not.toBe(gifCopyPathFor(env, take));
+    expect(editGifCopyPathFor(env, take)).not.toBe(editCopyPathFor(env, take));
   });
 
   test("the purge treats it like any copy: 24 h, except what is on the clipboard", () => {

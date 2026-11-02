@@ -1348,9 +1348,27 @@
       <div>
         <p class="panelabel">Format</p>
         <div class="group">
+          <!-- STC-615: Type is chosen at export time and never saved with the
+               take. GIF replaces Size (its width is its own setting) with the
+               app's GIF rate and max width, the same ones Settings edits. -->
           <div class="row">
+            <label class="label" for="exporttype">Type</label>
+            <select id="exporttype">
+              <option value="mp4">MP4</option>
+              <option value="gif">GIF</option>
+            </select>
+          </div>
+          <div class="row" id="outsizerow">
             <label class="label" for="outsize">Size</label>
             <select id="outsize"></select>
+          </div>
+          <div class="row" id="gifraterow" hidden>
+            <label class="label" for="gifrate">Frame rate</label>
+            <select id="gifrate"></select>
+          </div>
+          <div class="row" id="gifwidthrow" hidden>
+            <label class="label" for="gifwidth">Max width</label>
+            <select id="gifwidth"></select>
           </div>
           <p id="outsizenote" class="panehint mono"></p>
         </div>
