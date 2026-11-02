@@ -228,13 +228,18 @@ describe("window shot looks (STC-628)", () => {
     test("wallpaper, Clean, wallpaper again keeps the capture-time file's bytes", async () => {
       const { win } = await launch({ windowShotLook: "wallpaper" });
       const { editor, dir } = await editorOnWindowShot(win);
-      const before = readFileSync(join(dir, "wallpaper.jpg"));
       await editor.waitForSelector('#lookgrid [data-look="wallpaper"]');
       await swatch(editor, "clean").click();
       await expect.poll(() => checked(editor, "clean"), { timeout: 15_000 }).toBe("true");
+      // The stand-in helper writes the same bytes on every read, so comparing
+      // against them proves nothing. Stand in a picture it could never write:
+      // the same JPEG with bytes after its end marker (still decodes). A fresh
+      // read on the re-pick would replace it; reusing the file keeps it.
+      const sentinel = Buffer.concat([readFileSync(join(dir, "wallpaper.jpg")), Buffer.from("STC-628 capture-time")]);
+      writeFileSync(join(dir, "wallpaper.jpg"), sentinel);
       await swatch(editor, "wallpaper").click();
       await expect.poll(() => checked(editor, "wallpaper"), { timeout: 15_000 }).toBe("true");
-      expect(readFileSync(join(dir, "wallpaper.jpg")).equals(before)).toBe(true);
+      expect(readFileSync(join(dir, "wallpaper.jpg")).equals(sentinel)).toBe(true);
     }, 120_000);
 
     test("the editor's Clean fallback does not replace the remembered Capture background", async () => {
