@@ -132,7 +132,7 @@ import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { withMeshBackground } from "@transform/still-mesh";
 import { colorSpaceFor, stillIsBlocked, type ExportOptions } from "@transform/still-export";
-import { composeStill, stillPixelBytes } from "./still-compose.js";
+import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 import type { Shot } from "@transform/shot";
 import type { GifSettings } from "@transform/gif-options";
 import { PERMISSION_ACTION_LABELS, type Grant, type PermissionsState, type RowAction } from "./permissions.js";
@@ -483,6 +483,7 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
   const shot = await recorder.getShot(dir);
   const bytes = await recorder.getFrame(dir, shot.frame.file);
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  const background = await loadShotBackground(shot, (name) => recorder.getFrame(dir, name));
   try {
     // The stored decoration, filled in from the mode's presets exactly as the
     // panel does — so a shot never opened since capture still shows what it
@@ -502,8 +503,8 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
     // against the frame, and reading the composite would read pixels a
     // previous fill had already replaced.
     const fills = sampleRedactionFills(frame, shot.frame, decorated.decoration.redactions);
-    withMeshBackground(layout.background, full.width, full.height, (background) =>
-      renderStill(ctx as never, { frame, redactionFills: fills, background }, layout));
+    withMeshBackground(layout.background, full.width, full.height, (mesh) =>
+      renderStill(ctx as never, { frame, redactionFills: fills, background: mesh ?? background }, layout));
 
     const small = document.createElement("canvas");
     small.width = Math.max(1, Math.round(full.width * fit));
@@ -708,14 +709,15 @@ async function copyStillImage(item: LibraryItem): Promise<void> {
   const shot = await recorder.getShot(dir);
   const bytes = await recorder.getFrame(dir, shot.frame.file);
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  const background = await loadShotBackground(shot, (name) => recorder.getFrame(dir, name));
   try {
     const decorated = { ...shot, decoration: decorationForMode(shot.decoration.mode, shot.decoration) };
     let options: ExportOptions = { ...(await recorder.getSettings()).still } as ExportOptions;
-    let composed = composeStill(decorated, frame, options);
+    let composed = composeStill(decorated, frame, options, background);
     // A stored JPEG under a style with transparency: PNG, as the panel does.
     if (stillIsBlocked(composed.plan)) {
       options = { ...options, format: "png" };
-      composed = composeStill(decorated, frame, options);
+      composed = composeStill(decorated, frame, options, background);
     }
     const { canvas, plan } = composed;
     const r = await recorder.exportStill({

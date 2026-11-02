@@ -6,7 +6,7 @@ import { parseShot, type Background, type Redaction, type Shot } from "@transfor
 import { decorationForMode } from "@transform/still-decorate";
 import { DEFAULT_EXPORT_OPTIONS, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { normaliseRegion, undoLast } from "@transform/still-redact";
-import { composeStill, stillPixelBytes } from "./still-compose.js";
+import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 
 /**
  * The still editor's view (STC-300) — v1's whole job is Redact, moved here
@@ -64,6 +64,9 @@ const dir = new URLSearchParams(location.search).get("dir") ?? "";
 
 let shot: Shot | undefined;
 let frame: ImageBitmap | undefined;
+/** The image/wallpaper file behind the shot's background (STC-628), and the name it was read from. */
+let background: ImageBitmap | undefined;
+let backgroundFile: string | undefined;
 let composite: HTMLCanvasElement | undefined;
 let regions: Redaction[] = [];
 /** Where the capture sits inside the view canvas, in view pixels — the same role `thumbnail-renderer.ts`'s `contentInView` played. */
@@ -115,7 +118,7 @@ async function draw(): Promise<void> {
   // checked here because nothing compared this window's colours to the
   // panel's.
   const { canvas: out, plan } = composeStill(decorated, frame,
-    { ...DEFAULT_EXPORT_OPTIONS, scale: "native" });
+    { ...DEFAULT_EXPORT_OPTIONS, scale: "native" }, background);
   composite = out;
 
   // Never cropped, unlike the panel's own resting view (STC-426): every edge
@@ -254,11 +257,11 @@ async function saveFinished(): Promise<void> {
     const settings = (await window.stillEditor.getSettings()).still;
     const decorated = decoratedShot();
     let options: ExportOptions = { ...settings };
-    let composed = composeStill(decorated, frame, options);
+    let composed = composeStill(decorated, frame, options, background);
     let fellBackToPng = false;
     if (stillIsBlocked(composed.plan)) {
       options = { ...options, format: "png" };
-      composed = composeStill(decorated, frame, options);
+      composed = composeStill(decorated, frame, options, background);
       fellBackToPng = true;
     }
 
@@ -347,6 +350,19 @@ function reasonOf(e: unknown): string {
 }
 
 /**
+ * Load the shot's background file again if `background.file` is not the one
+ * already decoded (STC-628). Never throws. True when the bitmap changed.
+ */
+async function refreshBackground(): Promise<boolean> {
+  if (!shot) return false;
+  const file = shot.decoration.background?.file;
+  if (file === backgroundFile) return false;
+  background = await loadShotBackground(shot, (name) => window.stillEditor.getFrame(dir, name));
+  backgroundFile = file;
+  return true;
+}
+
+/**
  * Apply a look: the preview first, then the disk. A write that main refuses
  * puts the previous look back and says why in the hint line, so what is shown
  * is always what is stored.
@@ -368,10 +384,14 @@ function applyChoice(id: LookId, write: LookWrite): void {
   writeChain = writeChain.then(async () => {
     try {
       await window.stillEditor.writeShot(dir, regions, write);
+      // The write is what puts a wallpaper's file in the bundle, so it is read
+      // only now; until then the draw above shows the colour.
+      if (await refreshBackground()) void draw();
       setHint(`Background: ${label}.`);
     } catch (e) {
       shot = before.shot;
       selectedLook = before.selected;
+      await refreshBackground();
       void draw();
       setHint(`Could not store that background: ${reasonOf(e)}`);
     } finally {
@@ -483,6 +503,7 @@ void (async () => {
   updateUndoState();
   const bytes = await window.stillEditor.getFrame(dir, shot.frame.file);
   frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  await refreshBackground();
   await draw();
   initLooks();
   setHint(regions.length === 0 ? "Drag a box over anything private." : regionCountText());

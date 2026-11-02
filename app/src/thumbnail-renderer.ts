@@ -10,7 +10,7 @@ import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still
 import {
   actionsFor, closesPanel, lockedWhileCopying, lockedWhileConverting, offersFormat, type PanelAction, type PanelTake,
 } from "./panel-actions.js";
-import { composeStill, stillPixelBytes } from "./still-compose.js";
+import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 import {
   INITIAL_GIF_STATE, reduceGif, effectOfPick, formatOf, gifLabel, copySaveEnabled,
   type GifState, type GifEvent, type OutputFormat,
@@ -208,6 +208,8 @@ const CARD_BOX: Size = {
 };
 
 let frame: ImageBitmap | undefined;
+/** The image/wallpaper file behind the shot's background, loaded once beside the frame (STC-628). */
+let background: ImageBitmap | undefined;
 /** The full-resolution composite, kept apart from the (scaled-down) view canvas. */
 let composite: HTMLCanvasElement | undefined;
 /**
@@ -284,7 +286,7 @@ async function draw(): Promise<void> {
   // default `native` scale, which is why a hand-rolled copy of this in the
   // still editor survived unnoticed. It also creates the context with the
   // shot's own colour space, which that copy had dropped entirely.
-  const { canvas: out, plan } = composeStill(shot, frame, settings);
+  const { canvas: out, plan } = composeStill(shot, frame, settings, background);
   composite = out;
 
   // Fill the pane rather than shrinking to fit inside it (STC-426 revision):
@@ -1014,6 +1016,7 @@ void (async () => {
   }
   const bytes = await window.thumb.getFrame(dir, stillShot.frame.file);
   frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  background = await loadShotBackground(stillShot, (name) => window.thumb.getFrame(dir, name));
   await draw();
   markReady();
   // A silent panel is never shown, so there is nothing to paint FOR: it
