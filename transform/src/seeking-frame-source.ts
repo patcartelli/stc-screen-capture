@@ -36,6 +36,8 @@ export class SeekingFrameSource {
   private readonly keyIndices: number[];
   private peakBuffered = 0;
   private decoderGenerations = 0;
+  /** Every frame the decoder emitted, wanted or not: a seek mid-group decodes its way there. */
+  private framesDecoded = 0;
   /** A flushed decoder refuses delta chunks until it sees a keyframe again. */
   private needsKeyframe = false;
 
@@ -113,6 +115,7 @@ export class SeekingFrameSource {
       output: (frame) => {
         this.pending.push(frame);
         this.nextOutIndex++;
+        this.framesDecoded++;
         this.peakBuffered = Math.max(this.peakBuffered, this.pending.length + (this.current ? 1 : 0));
         this.wake?.();
       },
@@ -232,6 +235,7 @@ export class SeekingFrameSource {
     return {
       peakBuffered: this.peakBuffered,
       decoderGenerations: this.decoderGenerations,
+      framesDecoded: this.framesDecoded,
       liveFrames: this.pending.length + (this.current ? 1 : 0),
     };
   }
