@@ -44,3 +44,7 @@ Do section 2 on the **built-in P3 display** and on an **external sRGB display**.
 - Whether the loupe appears at all from a background helper with no window (`NSColorSampler` is normally called from an app that can be active). If it does not, the toast says "Couldn't pick a color" with the reason. Report what it says.
 - Whether the toast's swatch is visible against a dark and a light desktop (it has a hairline inset border).
 - Whether `prefers-reduced-motion` leaves the toast fading rather than sliding (it reuses the existing message toast).
+
+## 5. Result (2026-11-02)
+
+Run by Patrick: a flat sRGB blue matched Digital Color Meter in sRGB mode (`#3478f6`; native mode reads differently, which is expected). Every swatch on `docs/STC-627-colors.html` matched and responded correctly, on both displays. The loupe, Esc, the menu bar, the shortcut and recording all worked.
