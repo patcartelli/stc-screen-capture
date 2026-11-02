@@ -45,7 +45,7 @@ import {
 import { GifCache } from "./gif-cache.js";
 import { panelReason, panelAction, isHelperDecidedStop, stopCause, isStopActionId, trackLossLine, type StopAction } from "./stop-copy.js";
 import {
-  copyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
+  copyPathFor, editCopyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
   copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
 } from "./recording-copy.js";
 import { readOptionalTakeFile } from "./take-read.js";
@@ -195,7 +195,13 @@ function setOpenTake(e: IpcMainInvokeEvent, dir: string): void {
   openTakes.set(e.sender.id, dir);
   if (!cleanedUpSenders.has(e.sender)) {
     cleanedUpSenders.add(e.sender);
-    e.sender.once("destroyed", () => openTakes.delete(e.sender.id));
+    const id = e.sender.id;
+    e.sender.once("destroyed", () => {
+      // STC-616: a window closed mid-Copy takes its render with it.
+      const dir = openTakes.get(id);
+      openTakes.delete(id);
+      if (dir) void cancelCopyRender(dir);
+    });
   }
 }
 
@@ -2840,6 +2846,9 @@ async function trashWithConfirmation(
     // A window with this take open no longer has anywhere valid to write —
     // cleared for every target regardless of what its own trash attempt
     // does, since writing into a path mid-deletion is wrong either way.
+    // STC-616: end an editor Copy first, or its render window (which reads the
+    // take through this same map) would fail mid-read instead of cancelling.
+    await Promise.all(targets.map((t) => cancelCopyRender(t.path)));
     for (const [sid, d] of openTakes) if (targets.some((t) => t.path === d)) openTakes.delete(sid);
 
     const outcomes = await Promise.all(targets.map(async (target) => {
@@ -2917,7 +2926,12 @@ ipcMain.handle("preview:open", async (e, dir: string) => {
   return true;
 });
 
-ipcMain.handle("preview:close", async (e) => { clearOpenTake(e); });
+ipcMain.handle("preview:close", async (e) => {
+  // STC-616: an editor Copy reads this take; closing the take ends the render.
+  const dir = getOpenTake(e);
+  clearOpenTake(e);
+  if (dir) await cancelCopyRender(dir);
+});
 
 /**
  * Open the editor window on a take (STC-373) — the library's "Preview" action
@@ -3642,6 +3656,18 @@ function startBackgroundCopy(dir: string): void {
   });
 }
 
+/**
+ * The pasteboard's change count, or undefined when it cannot be read. One
+ * reader for the panel's Copy (the editor's, STC-616, writes without the
+ * courtesy this feeds).
+ */
+async function pasteboardChangeCount(helper: NonNullable<typeof sup>): Promise<number | undefined> {
+  try {
+    const n = Number((await helper.pasteboardFiles()).changeCount);
+    return Number.isFinite(n) ? n : undefined;
+  } catch { return undefined; }
+}
+
 ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) => {
   if (typeof dir !== "string" || !insideTempTakesRoot(process.env, dir) || takeFor(dir)?.kind !== "recording") {
     return { ok: false, detail: "not a recording on a panel" };
@@ -3651,12 +3677,7 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) =>
   // A render takes long enough for the person to copy something else. The
   // clipboard's changeCount is read before it and after it; a courtesy, not a
   // gate: if it cannot be read (the client rejects on an error reply), write.
-  const readChangeCount = async (): Promise<number | undefined> => {
-    try {
-      const n = Number((await helper.pasteboardFiles()).changeCount);
-      return Number.isFinite(n) ? n : undefined;
-    } catch { return undefined; }
-  };
+  const readChangeCount = (): Promise<number | undefined> => pasteboardChangeCount(helper);
   let out: string;
   let changeBefore: number | undefined;
   let rendered = false;
@@ -3705,6 +3726,66 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) =>
     return { ok: false, detail: String(err?.detail ?? err?.code ?? err?.message ?? err) };
   }
   return { ok: true };
+});
+
+/**
+ * The editor's Copy (STC-616): render the open take with its SAVED project
+ * (trim, framing, size, levels; the renderer persists before it asks), then
+ * put the file on the pasteboard. The same `startCopyRender` job and the same
+ * `copy-file` as the panel's Copy, and nothing else of the panel's:
+ *
+ * - No cache. The panel's `<leaf>.mp4` is a cache key for an UNEDITED take;
+ *   this file is a function of the project, so every Copy renders and replaces
+ *   `<leaf>-edit.mp4` (`editCopyPathFor`). The 24 h purge and its clipboard
+ *   exemption cover it unchanged: they list the folder.
+ * - The project's own output size (`size: "project"`), not the panel's embed
+ *   width: the Size row above the Destination group is a setting of this copy.
+ * - No clipboard courtesy. The panel writes nothing over what the person
+ *   copied meanwhile, because a panel can be forgotten. The editor is the
+ *   window they are sitting in, with a progress bar and a Cancel, so pressing
+ *   Copy asks to end up with THIS on the clipboard.
+ * - Not locked by `lockedWhileCopying`: that is the panel's Save/Edit/Trash
+ *   rule. The editor disables its own Export and Copy against each other.
+ * - Cancelled with the take: `cancelCopyRender` is keyed by directory, and the
+ *   editor's Cancel, a closed take or window, and a Trash of the take all end
+ *   the job and delete its partial.
+ *
+ * The take is `getOpenTake(e)` (set by `preview:open`, inside the library
+ * root), never a path the renderer names.
+ */
+ipcMain.handle("editor:copy", async (e) => {
+  const dir = getOpenTake(e);
+  if (!dir) return { ok: false, detail: "no take is open" };
+  const helper = sup;   // captured: the render below is long and `sup` can go away under it
+  if (!helper) return { ok: false, detail: "the helper is not running" };
+  const sender = e.sender;
+  const r = await startCopyRender({
+    takeDir: dir, outPath: editCopyPathFor(process.env, dir),
+    size: "project",
+    dist: here, rendererDir: join(here, "..", "renderer"),
+    delayMs: Number(process.env.STC_COPY_RENDER_DELAY_MS) || undefined,
+    grant: (id, d) => openTakes.set(id, d),
+    revoke: (id) => openTakes.delete(id),
+    onProgress: (done, total) => {
+      if (!sender.isDestroyed()) sender.send("editor:copyProgress", done, total);
+    },
+  });
+  if (!r.ok) return r.cancelled ? { ok: false, cancelled: true } : { ok: false, detail: r.detail };
+  // The take can be closed or Trashed between the render's last byte and here;
+  // a gone editor gets no pasteboard write.
+  if (sender.isDestroyed() || getOpenTake(e) !== dir) return { ok: false, cancelled: true };
+  try {
+    // HelperClient.request REJECTS with a HelperError on an error reply.
+    await helper.copyFile(r.path);
+  } catch (err: any) {
+    return { ok: false, detail: String(err?.detail ?? err?.code ?? err?.message ?? err) };
+  }
+  return { ok: true };
+});
+
+ipcMain.handle("editor:cancelCopy", async (e) => {
+  const dir = getOpenTake(e);
+  if (dir) await cancelCopyRender(dir);
 });
 
 /**
