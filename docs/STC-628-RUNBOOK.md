@@ -13,8 +13,8 @@ npm run app:start
 ## What changed
 
 - A window shot has a **look**, set in **Settings > Capture > Window shot look** and applied the moment
-  the shot is taken: **Just the window** (`window-only`), **Window with drop shadow** (`window-shadow`),
-  **Capture backgrounds** (the last swatch picked in the still editor, `clean` if none; a Custom pick
+  the shot is taken: **Just the window** (`window-only`), **Window with shadow** (`window-shadow`),
+  **Capture background** (the last swatch picked in the still editor, `clean` if none; a Custom pick
   keeps its colours) and **Desktop wallpaper**. **The default is Desktop wallpaper**, existing users
   included.
 - The wallpaper is drawn **cover-cropped** behind the window with the same margin (9% of the short
@@ -31,7 +31,7 @@ npm run app:start
 - With **When a shot is taken = Copy to clipboard**, a fallback shot is still copied but the **panel is
   shown anyway** with that line. It reaches the library when you press Save, like any panel-mode shot.
 - The still editor's background picker has a **Wallpaper** swatch. Picking it on a shot with no
-  wallpaper file reads the wallpaper as it is now from the shot's own display, with the same fallback.
+  wallpaper file reads the wallpaper as it is now from the shot's own display, with the same fallback. A shot that already has `wallpaper.jpg` keeps its capture-time picture when Wallpaper is re-picked.
 - `lastBackgroundLook` (the last swatch) is written by main only; `recorder:setSettings` strips it.
 - Fault: `STC_CAPTURE_FAULT=wallpaper-unavailable` makes every read fail.
 
@@ -117,8 +117,8 @@ Then relaunch without the fault: Wallpaper works again.
 
 Settings > Capture > Window shot look: four choices, operable by keyboard, a visible focus ring, the
 selected one announced by VoiceOver, light and dark. A fresh profile (delete `settings.json`) shows
-Desktop wallpaper selected. Pick Capture backgrounds with no swatch ever picked: shots use Clean. Pick
-a swatch (say Ember) in the still editor, then shoot with Capture backgrounds: it uses Ember, and
+Desktop wallpaper selected. Pick Capture background with no swatch ever picked: shots use Clean. Pick
+a swatch (say Ember) in the still editor, then shoot with Capture background: it uses Ember, and
 Custom keeps its colours.
 
 ## §7 Sign-off (the ticket stays open until you do this)

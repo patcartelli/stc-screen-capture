@@ -40,7 +40,7 @@ declare global {
       // crosses the process boundary.
       getShot(dir: string): Promise<Shot>;
       getFrame(dir: string, name: string): Promise<ArrayBuffer>;
-      writeShot(dir: string, redactions: unknown, look?: LookWrite): Promise<{ ok: boolean; redactions: number }>;
+      writeShot(dir: string, redactions: unknown, look?: LookWrite, remember?: boolean): Promise<{ ok: boolean; redactions: number }>;
       exportStill(req: Record<string, unknown>): Promise<any>;
       getSettings(): Promise<{ still: ExportOptions; saveFolder: string | null }>;
       fetchWallpaper(dir: string): Promise<{ ok: true; file: string } | { ok: false; notice: string }>;
@@ -455,7 +455,7 @@ async function refreshBackground(force = false): Promise<boolean> {
 }
 
 /** True when the look was stored; false when it was refused or the write failed (the hint says why). */
-async function storeLook(id: LookId, write: LookWrite): Promise<boolean> {
+async function storeLook(id: LookId, write: LookWrite, remember = true): Promise<boolean> {
   if (!shot) return false;
   const before = { shot, selected: selectedLook };
   try {
@@ -469,7 +469,7 @@ async function storeLook(id: LookId, write: LookWrite): Promise<boolean> {
   void draw();
   const label = LOOKS.find((l) => l.id === id)?.label ?? "Background";
   try {
-    await window.stillEditor.writeShot(dir, regions, write);
+    await window.stillEditor.writeShot(dir, regions, write, remember);
     // The write is what puts a wallpaper's file in the bundle, so it is read
     // only now; until then the draw above shows the colour.
     if (await refreshBackground(true)) void draw();
@@ -526,7 +526,9 @@ function chooseWallpaper(): void {
       return;
     }
     if (fetched.ok) { await storeLook("wallpaper", wallpaperLookWrite(fetched.file)); return; }
-    const stored = await storeLook("clean", lookWrite(LOOKS.find((l) => l.id === "clean")!));
+    // remember = false: the user never picked Clean, so it must not become the
+    // next "Capture background" shot's look.
+    const stored = await storeLook("clean", lookWrite(LOOKS.find((l) => l.id === "clean")!), false);
     // main's WALLPAPER_NOTICE, not retyped here. A Clean write that failed keeps
     // its own hint, with the notice after it.
     setHint(stored ? fetched.notice : `${hint.textContent} ${fetched.notice}`);

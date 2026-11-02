@@ -24,7 +24,7 @@ export const wantsWallpaper = (look: WindowShotLook): boolean => look === "wallp
 /** A Capture-backgrounds look: a background mode whose background is not the wallpaper. */
 export function isRememberedBackground(write: LookWrite): boolean {
   if (write.mode !== "window-shadow-background" && write.mode !== "window-shadow-custom-background") return false;
-  return write.background?.kind !== "wallpaper";
+  return write.background?.kind !== "wallpaper" && write.background?.kind !== "image";
 }
 
 /**

@@ -19,8 +19,8 @@ contextBridge.exposeInMainWorld("stillEditor", {
   // Without one the document's look is kept, exactly as `still:writeShot`'s own
   // doc describes for "a redaction-only call". The separate `mode` argument is
   // the panel's and is never sent from here.
-  writeShot: (dir: string, redactions: unknown, look?: unknown) =>
-    ipcRenderer.invoke("still:writeShot", dir, redactions, undefined, look),
+  writeShot: (dir: string, redactions: unknown, look?: unknown, remember?: boolean) =>
+    ipcRenderer.invoke("still:writeShot", dir, redactions, undefined, look, remember),
   // STC-446: the editor can write the finished file now. Both channels are
   // the thumbnail panel's own (`still:export`, `recorder:getSettings`) — the
   // editor is the ONLY door to a still already in the library, and until

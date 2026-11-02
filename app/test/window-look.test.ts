@@ -46,6 +46,7 @@ describe("isRememberedBackground", () => {
     expect(isRememberedBackground(lookWrite(byId("window-only")))).toBe(false);
     expect(isRememberedBackground(lookWrite(byId("window-shadow")))).toBe(false);
     expect(isRememberedBackground(wallpaperLookWrite("w.png"))).toBe(false);
+    expect(isRememberedBackground({ ...clean, background: { kind: "image", file: "i.png", colors: ["#000000"] } } as typeof clean)).toBe(false);
   });
 });
 

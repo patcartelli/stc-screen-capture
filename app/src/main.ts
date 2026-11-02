@@ -4193,11 +4193,12 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
  * replaces Dark's explicit fill instead of being overridden by it. When given,
  * `look.mode` is the mode and the separate `mode` argument is not consulted.
  */
-ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown, look?: unknown) => {
+ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown, look?: unknown, remember?: unknown) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
+  if (remember !== undefined && typeof remember !== "boolean") throw new Error("remember must be a boolean");
   const write = look === undefined ? undefined : parseLookWrite(look);
   // `rewriteShot` (shot-write.ts) is the merge, the `parseShot` check, the
   // version rule and the thumbnail drop, shared with a fresh capture's look.
@@ -4210,8 +4211,15 @@ ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, m
   // "Capture background" window shot wears. Main's alone, like
   // `capturePrimed`: `recorder:setSettings` strips it (`stripMainOnly`), so
   // this write, after `parseShot` accepted the look, is its only way in.
-  if (write !== undefined && isRememberedBackground(write)) {
-    writeSettings(app.getPath("userData"), { lastBackgroundLook: write });
+  // `remember: false` is the editor's own fallback write (a wallpaper that
+  // could not be read): the user never picked that Clean. A settings failure
+  // must not reject the IPC, since shot.json has changed already.
+  if (write !== undefined && remember !== false && isRememberedBackground(write)) {
+    try {
+      writeSettings(app.getPath("userData"), { lastBackgroundLook: write });
+    } catch (e) {
+      console.log("[settings] could not remember the background look:", e);
+    }
   }
   return { ok: true, redactions: next.decoration.redactions.length };
 });
@@ -4231,6 +4239,11 @@ ipcMain.handle("still:fetchWallpaper", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
+  // A shot that already has its capture-time picture keeps it: re-picking
+  // Wallpaper must not replace it with today's desktop, or fall back to Clean
+  // when that display is gone.
+  const existing = await stat(join(dir, WALLPAPER_FILE)).catch(() => undefined);
+  if (existing?.isFile()) return { ok: true, file: WALLPAPER_FILE };
   if (!sup) return { ok: false, notice: WALLPAPER_NOTICE };
   const shot = parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
   try {

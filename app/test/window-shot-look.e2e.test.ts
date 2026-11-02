@@ -225,6 +225,29 @@ describe("window shot looks (STC-628)", () => {
       expect(await checked(editor, "wallpaper")).toBe("false");
     }, 120_000);
 
+    test("wallpaper, Clean, wallpaper again keeps the capture-time file's bytes", async () => {
+      const { win } = await launch({ windowShotLook: "wallpaper" });
+      const { editor, dir } = await editorOnWindowShot(win);
+      const before = readFileSync(join(dir, "wallpaper.jpg"));
+      await editor.waitForSelector('#lookgrid [data-look="wallpaper"]');
+      await swatch(editor, "clean").click();
+      await expect.poll(() => checked(editor, "clean"), { timeout: 15_000 }).toBe("true");
+      await swatch(editor, "wallpaper").click();
+      await expect.poll(() => checked(editor, "wallpaper"), { timeout: 15_000 }).toBe("true");
+      expect(readFileSync(join(dir, "wallpaper.jpg")).equals(before)).toBe(true);
+    }, 120_000);
+
+    test("the editor's Clean fallback does not replace the remembered Capture background", async () => {
+      const { win, userData } = await launch({ windowShotLook: "window-only" }, { STC_FAKE_WALLPAPER: "fail" });
+      const { editor, dir } = await editorOnWindowShot(win);
+      const dark = lookWrite(LOOKS.find((l) => l.id === "dark")!);
+      await editor.evaluate(([d, w]) => (window as any).stillEditor.writeShot(d, [], w), [dir, dark] as const);
+      await expect.poll(() => storedSettings(userData).lastBackgroundLook, { timeout: 10_000 }).toEqual(dark);
+      await swatch(editor, "wallpaper").click();
+      await expect.poll(() => hintOf(editor), { timeout: 15_000 }).toBe(WALLPAPER_NOTICE);
+      expect(storedSettings(userData).lastBackgroundLook).toEqual(dark);
+    }, 120_000);
+
     test("a fetch that is refused keeps the previous look and says why", async () => {
       const { win } = await launch({ windowShotLook: "window-only" });
       const { editor, dir } = await editorOnWindowShot(win);
