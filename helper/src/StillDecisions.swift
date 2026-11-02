@@ -235,23 +235,22 @@ func localizeCursor(mouseX: Double, mouseY: Double,
 /// classified by STC-309's `classifyCursor`; shot-1's enum is the same set as
 /// events-2's, and `still-decisions.test.ts` holds the Swift list to it.
 
-// ── window visibility (STC-380) ──────────────────────────────────────────────
+// ── window hit-testing (STC-625, replacing STC-380/481's visibility filter) ──
 //
-// The `windows` verb (Still.swift) used to list every layer-0 on-screen window
-// SCShareableContent reports, with no regard for whether a click could
-// actually reach it as the thing it looks like: a window hanging mostly off
-// every display, or buried under another window with only a sliver showing,
-// still appeared as a full-size, freely selectable entry. `onScreenWindowsOnly`
-// only means "not minimized" — it says nothing about occlusion or a frame
-// that has drifted off every display, which is exactly what left both open.
+// STC-380 flagged a window as unpickable unless most of it could be seen, and
+// STC-481 relaxed "most" to half. In use that was still wrong: a window with
+// only a corner showing is often exactly the one wanted, and it was refused.
+// What the user can actually point at is the right question, so the picker
+// now hit-tests. The window under the pointer is the frontmost one whose
+// VISIBLE region contains it, and a click captures the WHOLE window
+// (ScreenCaptureKit captures a window regardless of what covers it).
 //
-// `isFullyVisible` answers both with one primitive: how much of a rectangle's
-// area survives having a list of other rectangles subtracted from it. Run
-// against the display union it finds the off-screen fraction; run against the
-// windows strictly in front of this one (SCShareableContent's own front-to-back
-// order — a window BEHIND never occludes) it finds the covered fraction. Same
-// arithmetic, different occluders, so there is one function to get right
-// rather than two.
+// A window's visible region is its frame clipped to the displays, minus every
+// window strictly in front of it. A window whose region is empty is fully
+// covered or entirely off-screen, so nothing can hover it and it is not
+// offered at all. The regions of different windows are disjoint by
+// construction, which is what lets the overlay tint one without ever tinting
+// the window in front of it.
 
 /// Splits each rect in `rects` around its overlap with `cut`, keeping only the
 /// parts that do NOT overlap it — up to four pieces (above/below/left/right of
@@ -275,37 +274,74 @@ func subtractRect(_ rects: [StillRect], _ cut: StillRect) -> [StillRect] {
     return out
 }
 
-/// The fraction of `rect`'s own area left after removing every overlap with
-/// `cutters`, 0...1. Order does not matter: each subtraction only ever shrinks
-/// what remains, and an empty `cutters` list leaves the whole rect.
-func remainingFraction(_ rect: StillRect, subtracting cutters: [StillRect]) -> Double {
-    guard rect.width > 0, rect.height > 0 else { return 0 }
-    var remaining = [rect]
-    for c in cutters {
-        remaining = subtractRect(remaining, c)
-        if remaining.isEmpty { return 0 }
-    }
-    let total = remaining.reduce(0.0) { $0 + $1.width * $1.height }
-    return total / (rect.width * rect.height)
+/// The overlap of two rects, or nil when they share no area.
+func intersectRect(_ a: StillRect, _ b: StillRect) -> StillRect? {
+    let x0 = max(a.x, b.x), y0 = max(a.y, b.y)
+    let x1 = min(a.x + a.width, b.x + b.width), y1 = min(a.y + a.height, b.y + b.height)
+    guard x1 > x0, y1 > y0 else { return nil }
+    return StillRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
 }
 
-/// The least fraction of a window's own area that must be on a display AND
-/// uncovered for the picker to let it be selected (STC-481). STC-380 shipped a
-/// 2% tolerance ("fully visible"), which on a real desktop refused every window
-/// with any overlap at all — a window 30% under another was unselectable. Half
-/// is enough to recognise a window as the thing it is. The wire flag is still
-/// named `fullyVisible`; this is the one dial for what it means.
-let MIN_VISIBLE_FRACTION = 0.5
+/// The smallest visible piece worth keeping, in points on each axis. Below
+/// one point a piece is arithmetic dust (a frame at a fractional origin
+/// against a neighbour's), not something a pointer can land on. "A few
+/// pixels at a corner" is the ticket's floor and sits well above this.
+let MIN_VISIBLE_POINTS = 1.0
 
-/// Whether at least `MIN_VISIBLE_FRACTION` of `frame` is on a display and not
-/// covered by `occluders` (windows strictly in front of it, see `frontToBack`).
-/// Off-display and covered fractions are summed, which can only over-count
-/// where the two overlap — it errs toward refusing, never toward offering a
-/// window that is mostly unseen.
-func isFullyVisible(_ frame: StillRect, displays: [StillRect], occluders: [StillRect]) -> Bool {
-    let offDisplay = remainingFraction(frame, subtracting: displays)
-    let covered = 1 - remainingFraction(frame, subtracting: occluders)
-    return 1 - offDisplay - covered >= MIN_VISIBLE_FRACTION
+/// The parts of `frame` that are on a display and not covered by any of
+/// `occluders` (the windows strictly in front of it), as disjoint rects in the
+/// same global points. Empty means nothing of it can be seen. Displays do not
+/// overlap, so clipping to each one separately cannot double-count.
+func visibleRegion(_ frame: StillRect, displays: [StillRect], occluders: [StillRect]) -> [StillRect] {
+    var region = displays.compactMap { intersectRect(frame, $0) }
+    for o in occluders {
+        region = subtractRect(region, o)
+        if region.isEmpty { return [] }
+    }
+    return region.filter { $0.width >= MIN_VISIBLE_POINTS && $0.height >= MIN_VISIBLE_POINTS }
+}
+
+/// One candidate for the picker, front to back. `covers` is false for a window
+/// that draws nothing (alpha ~0): it can be neither seen nor picked, and it
+/// hides nothing behind it.
+struct PickCandidate: Equatable {
+    let id: Int
+    let frame: StillRect
+    var covers: Bool = true
+}
+
+/// A window the picker offers, with the region a pointer can find it in.
+struct PickableWindow: Equatable {
+    let id: Int
+    let frame: StillRect
+    let visible: [StillRect]
+}
+
+/// Every candidate that has something visible, in the input's (front-to-back)
+/// order, each with its visible region. A window's occluders are exactly the
+/// covering candidates ahead of it. Fully covered and off-screen windows are
+/// dropped: hit-testing could never reach them, so listing them would only
+/// offer something no gesture can pick.
+func pickableWindows(_ frontToBack: [PickCandidate], displays: [StillRect]) -> [PickableWindow] {
+    var out: [PickableWindow] = []
+    var inFront: [StillRect] = []
+    for c in frontToBack {
+        guard c.covers else { continue }
+        let visible = visibleRegion(c.frame, displays: displays, occluders: inFront)
+        if !visible.isEmpty { out.append(PickableWindow(id: c.id, frame: c.frame, visible: visible)) }
+        inFront.append(c.frame)
+    }
+    return out
+}
+
+/// The window a pointer at (`x`, `y`) would pick, or nil over bare desktop.
+/// Half-open on each rect, like `CGRect.contains`, so a point on the seam
+/// between two windows belongs to exactly one. `selection.ts`'s
+/// `windowUnderPoint` is the same rule over the same `visible` rects.
+func windowAt(x: Double, y: Double, in windows: [PickableWindow]) -> Int? {
+    windows.first { w in
+        w.visible.contains { r in x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height }
+    }?.id
 }
 
 /// Front-to-back order for `ids` (STC-481). SCShareableContent's `windows` array

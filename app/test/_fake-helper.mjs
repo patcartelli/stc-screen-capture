@@ -302,18 +302,24 @@ process.stdin.on("data", (chunk) => {
           send("error", { seq, code: "no-displays", detail: "stand-in has no grant" });
           break;
         }
-        // STC_FAKE_HIDDEN_WINDOW appends a third window mostly off the
-        // display's right edge (STC-380) — opt-in, so every test that does
-        // not care about it sees exactly the same two windows it always has.
+        // `visible` is what the real helper's `pickableWindows` sends for
+        // these frames (STC-625): Safari is behind Finder, so it shows only
+        // below and to the right of it. There is no fully covered window to
+        // add, because the real helper never lists one; STC_FAKE_CORNER_WINDOW
+        // puts a third window with only its corner out from under Finder.
         const windows = [
           { id: 4711, app: "Finder", title: "Downloads", x: 100, y: 100, width: 400, height: 300,
-            displayId: 1, fullyVisible: true },
+            displayId: 1, visible: [{ x: 100, y: 100, width: 400, height: 300 }] },
           { id: 4712, app: "Safari", title: "Example", x: 200, y: 150, width: 800, height: 600,
-            displayId: 1, fullyVisible: true },
+            displayId: 1, visible: [{ x: 200, y: 400, width: 800, height: 350 },
+                                    { x: 500, y: 150, width: 500, height: 250 }] },
         ];
-        if (process.env.STC_FAKE_HIDDEN_WINDOW) {
-          windows.push({ id: 4713, app: "Terminal", title: "Mostly off-screen",
-            x: 1800, y: 100, width: 400, height: 300, displayId: 1, fullyVisible: false });
+        if (process.env.STC_FAKE_CORNER_WINDOW) {
+          // Behind both, its frame (50,50)-(150,150) mostly under Finder; only
+          // the L of it above and left of Finder shows.
+          windows.push({ id: 4713, app: "Terminal", title: "Corner showing",
+            x: 50, y: 50, width: 100, height: 100, displayId: 1,
+            visible: [{ x: 50, y: 50, width: 100, height: 50 }, { x: 50, y: 100, width: 50, height: 50 }] });
         }
         send("windows", { seq, windows, displays: [{ id: 1, pointWidth: 1920, pointHeight: 1080 }] });
         break;

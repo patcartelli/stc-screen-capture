@@ -702,8 +702,8 @@ class OverlaySession {
         // (`mode` flips to "window", `pending` untouched) — `pending.kind`
         // was still `"region"`, so the old guard took the `confirm()` branch
         // WHILE `state.mode` was `"window"`, confirming whatever the pointer
-        // happened to be hovering (or silently doing nothing, if nothing
-        // `fullyVisible` was under it) — a hover the user never clicked.
+        // happened to be hovering (or silently doing nothing, if no window
+        // was under it) — a hover the user never clicked.
         //
         // In window mode this ALWAYS uses `pending`, never `confirm()` — even
         // when something IS validly hovered. Only a CLICK produces a window
@@ -718,7 +718,7 @@ class OverlaySession {
         // DECIDED: hovering nothing falls back to `pending` (the last real
         // commit — almost always the region from before Space was pressed)
         // rather than a silent no-op. `confirm()` returns `undefined` in
-        // window mode when nothing `fullyVisible` is under the pointer, and
+        // window mode when no window is under the pointer, and
         // the alternative to falling back — doing nothing at all — is the
         // worst of the three options on a button whose entire job is to
         // commit: no capture starts and nothing tells the user why. Falling
