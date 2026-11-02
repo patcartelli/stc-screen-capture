@@ -235,16 +235,20 @@ describe("displayToOutput — a whole-capture contentRect is bit-identical to no
 
 /**
  * The rule as it was written inline in render.ts before STC-314, kept here as
- * the control. The refactor's whole claim is that it changes no pixels.
+ * the control. The refactor's whole claim is that it changes no pixels. Since
+ * STC-591 the margin is `marginPx` at a 1080-pixel short side, scaled to the
+ * output; it is written out here from the spec rather than imported, so the
+ * control does not share a bug with the code it checks.
  */
 function legacyPipRect(pip: { widthPct: number; marginPx: number },
                        output: { width: number; height: number },
                        cam: { width: number; height: number }) {
   const width = Math.round(output.width * pip.widthPct);
   const height = Math.round((width * cam.height) / cam.width);
+  const margin = Math.round(Math.min(output.width, output.height) * pip.marginPx / 1080);
   return {
-    x: output.width - width - pip.marginPx,
-    y: output.height - height - pip.marginPx,
+    x: output.width - width - margin,
+    y: output.height - height - margin,
     width, height,
   };
 }
@@ -290,8 +294,9 @@ describe("fixedCornerPipUv — the PiP is a crop in UV, not a corner in pixels",
     const uv = fixedCornerPipUv({ widthPct: 0.125, marginPx: 48 },
                                 { width: 3840, height: 2160 }, { width: 1280, height: 720 });
     expect(uv.width).toBeCloseTo(0.125, 12);
-    expect(uv.x + uv.width).toBeCloseTo(1 - 48 / 3840, 12);
-    expect(uv.y + uv.height).toBeCloseTo(1 - 48 / 2160, 12);
+    // 48 px at a 1080 short side is 96 px at 2160 (STC-591).
+    expect(uv.x + uv.width).toBeCloseTo(1 - 96 / 3840, 12);
+    expect(uv.y + uv.height).toBeCloseTo(1 - 96 / 2160, 12);
     for (const v of [uv.x, uv.y, uv.width, uv.height]) {
       expect(v).toBeGreaterThan(0);
       expect(v).toBeLessThan(1);
@@ -308,8 +313,8 @@ describe("fixedCornerPipUv — the PiP is a crop in UV, not a corner in pixels",
                        cam: { width: number; height: number }) => {
       const w = output.width * pip.widthPct;
       const h = (w * cam.height) / cam.width;
-      return roundRect({ x: output.width - w - pip.marginPx,
-                         y: output.height - h - pip.marginPx, width: w, height: h });
+      const m = Math.round(Math.min(output.width, output.height) * pip.marginPx / 1080);
+      return roundRect({ x: output.width - w - m, y: output.height - h - m, width: w, height: h });
     };
     const disagreements = [];
     for (const output of OUTPUTS) {
@@ -332,7 +337,8 @@ describe("fixedCornerPipUv — the PiP is a crop in UV, not a corner in pixels",
     const pip = { widthPct: 0.25, marginPx: 16 };
     expect(pipRect(pip, output, cam)).toEqual(legacyPipRect(pip, output, cam));
     // 640-wide output at 25% is a 160px PiP; a 1280x720 camera makes it 90 tall.
-    expect(pipRect(pip, output, cam)).toEqual({ x: 464, y: 254, width: 160, height: 90 });
+    // The 16 px margin is at a 1080 short side, so at 360 it is 5 (STC-591; it was 16, x 464 / y 254).
+    expect(pipRect(pip, output, cam)).toEqual({ x: 475, y: 265, width: 160, height: 90 });
   });
 });
 
