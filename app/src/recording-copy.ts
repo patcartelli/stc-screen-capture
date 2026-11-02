@@ -58,6 +58,11 @@ export function editCopyPathFor(env: NodeJS.ProcessEnv, takeDir: string): string
   return join(copiesRoot(env), `${basename(takeDir)}-edit.mp4`);
 }
 
+/** STC-615: the editor's Copy as a GIF. Its own file for the same reason `editCopyPathFor` is. */
+export function editGifCopyPathFor(env: NodeJS.ProcessEnv, takeDir: string): string {
+  return join(copiesRoot(env), `${basename(takeDir)}-edit.gif`);
+}
+
 /** STC-395: the GIF beside the mp4 copy; same name rule, same purge. */
 export function gifCopyPathFor(env: NodeJS.ProcessEnv, takeDir: string): string {
   return join(copiesRoot(env), `${basename(takeDir)}.gif`);
