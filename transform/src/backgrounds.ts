@@ -1,6 +1,6 @@
 import { DEFAULT_SOLID_COLOR, FRAMING_PRESETS } from "./framing.js";
 import type { Background, Decoration, DecorationMode, Shadow } from "./shot.js";
-import { decorationForMode, PRESET_SHADOW } from "./still-decorate.js";
+import { decorationForMode, PRESET_BACKGROUND, PRESET_SHADOW } from "./still-decorate.js";
 
 /**
  * The still editor's background picker (STC-599, phase A): which LOOKS a window
@@ -36,7 +36,7 @@ import { decorationForMode, PRESET_SHADOW } from "./still-decorate.js";
 export type LookId =
   | "window-only" | "window-shadow"
   | "clean" | "dark" | "solid" | "aurora" | "ember"
-  | "custom";
+  | "wallpaper" | "custom";
 
 export interface Look {
   id: LookId;
@@ -46,6 +46,14 @@ export interface Look {
   background?: Background;
   /** Undefined: the mode's own default shadow. */
   shadow?: Shadow;
+}
+
+/** Where main saves the desktop wallpaper, beside `frame.png` (STC-628). */
+export const WALLPAPER_FILE = "wallpaper.png";
+
+/** The wallpaper background; its one colour is the fill drawn while the image cannot be (Clean's first stop). */
+export function wallpaperBackground(file: string): Background {
+  return { kind: "wallpaper", file, colors: [PRESET_BACKGROUND.colors![0]!] };
 }
 
 /** The fixed-fill value of the Custom swatch before the user types anything. */
@@ -81,6 +89,8 @@ export const LOOKS: readonly Look[] = [
     background: { kind: "linear", colors: ["#050a12", "#0d4a52", "#5b3fd1"], angleDeg: 135 } },
   { id: "ember", label: "Ember", mode: "window-shadow-custom-background",
     background: { kind: "linear", colors: ["#12061a", "#7a1f5c", "#ff7a3d"], angleDeg: 160 } },
+  // Background supplied at selection, like Custom: the file is the desktop wallpaper main saves beside the shot.
+  { id: "wallpaper", label: "Wallpaper", mode: "window-shadow-custom-background" },
   { id: "custom", label: "Custom", mode: "window-shadow-custom-background" },
 ];
 
@@ -124,13 +134,17 @@ export interface LookWrite {
 }
 
 export function lookWrite(look: Look, custom?: Background): LookWrite {
-  const background = look.id === "custom" ? custom : look.background;
+  const background = look.id === "custom" || look.id === "wallpaper" ? custom : look.background;
   return {
     mode: look.mode,
     background: background ? { ...background, ...(background.colors ? { colors: [...background.colors] } : {}) } : null,
     shadow: look.shadow ? { ...look.shadow } : null,
   };
 }
+
+/** Wallpaper behind the window, with the mode's default shadow. */
+export const wallpaperLookWrite = (file: string): LookWrite =>
+  lookWrite(LOOKS.find((l) => l.id === "wallpaper")!, wallpaperBackground(file));
 
 /** The decoration fields a `LookWrite` replaces, applied to a decoration. Used by the preview and by the main-side merge alike. */
 export function applyLook(decoration: Decoration, write: LookWrite): Decoration {
@@ -177,8 +191,9 @@ const sameBackground = (a: Background | undefined, b: Background | undefined): b
  */
 export function lookOf(decoration: Decoration): LookId | undefined {
   const drawn = decorationForMode(decoration.mode, decoration);
+  if (drawn.background?.kind === "wallpaper") return "wallpaper";
   for (const look of LOOKS) {
-    if (look.id === "custom" || look.mode !== decoration.mode) continue;
+    if (look.id === "custom" || look.id === "wallpaper" || look.mode !== decoration.mode) continue;
     const want = decorationForMode(look.mode, { background: look.background, shadow: look.shadow });
     if (sameBackground(drawn.background, want.background) && JSON.stringify(drawn.shadow ?? null) === JSON.stringify(want.shadow ?? null)) {
       return look.id;

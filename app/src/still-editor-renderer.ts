@@ -438,6 +438,7 @@ function initLooks(): void {
   // mode on it, so there is nothing to offer.
   if (!shot || shot.kind !== "window" || !shot.frame.alpha) return;
   for (const look of LOOKS) {
+    if (look.id === "wallpaper") continue; // STC-628 Task 7 wires this swatch
     const b = document.createElement("button");
     b.type = "button";
     b.className = "look";
