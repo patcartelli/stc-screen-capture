@@ -3,7 +3,8 @@ import { join } from "node:path";
 import type { HelperSupervisor } from "./supervisor.js";
 import {
   MIN_PILL_WIDTH_PX, PILL_DRAG_FRAME_MS, PILL_NOTICE_MS, decidePillAction, dragTarget, easeStep,
-  pillBounds, resizePillBounds, shouldShowTrackNotice, type PillPoint, type PillWindowState,
+  pillBounds, pillSpotBounds, resizePillBounds, shouldShowTrackNotice,
+  type PillPoint, type PillSpot, type PillWindowState,
 } from "./pill.js";
 import { trackLossPillLabel, TRACK_LOSS_WARNINGS } from "./stop-copy.js";
 import { setBoundsUnlessClosing, trackClosing } from "./window-geometry.js";
@@ -70,6 +71,9 @@ let active: PillSession | undefined;
 
 /** Whether a pill (visible or still invisible) exists right now. For tests and guards. */
 export function pillIsUp(): boolean { return active !== undefined; }
+
+/** The menu bar's Move Pill (STC-576). Does nothing when there is no pill. */
+export function movePillTo(spot: PillSpot): void { active?.moveTo(spot); }
 
 /**
  * Step 1. Never rejects: a pill that could not be made costs the take its
@@ -236,6 +240,20 @@ class PillSession {
   private stopDragTimer(): void {
     if (this.dragTimer !== undefined) clearInterval(this.dragTimer);
     this.dragTimer = undefined;
+  }
+
+  /**
+   * The menu bar's Move Pill (STC-576): straight to a spot on the display the
+   * pill is on now. A drag in progress is dropped, so its easing cannot pull
+   * the pill back toward the pointer afterwards.
+   */
+  moveTo(spot: PillSpot): void {
+    if (this.over || this.win.isDestroyed()) return;
+    this.drag = undefined;
+    this.stopDragTimer();
+    const current = this.win.getBounds();
+    const workArea = screen.getDisplayMatching(current).workArea;
+    setBoundsUnlessClosing(this.win, pillSpotBounds(spot, workArea, current), "pill move");
   }
 
   private place(p: PillPoint): void {
