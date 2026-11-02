@@ -1662,12 +1662,13 @@ async function reclaimSpace(parent: BrowserWindow | undefined = win): Promise<{ 
  * `false` and the throwaway stream would run again at the next launch.
  * `libraryWindow` (STC-560) the same way: an echo would put back the place the
  * window had when the sheet loaded, over the one its `close` just wrote.
+ * `lastBackgroundLook` (STC-628) the same: it is written when a shot is made.
  */
 ipcMain.handle("recorder:setSettings", async (e, patch: Partial<Settings>): Promise<Settings> => {
   // Destructured rather than deleted, so `saveFolder` is named here and a
   // reader can see exactly which keys do not survive.
   const {
-    saveFolder: _mainsAlone, capturePrimed: _alsoMains, shortcutsOffered: _mainsOffered, libraryWindow: _mainsToo, ...withoutMainsKeys
+    saveFolder: _mainsAlone, capturePrimed: _alsoMains, shortcutsOffered: _mainsOffered, libraryWindow: _mainsToo, lastBackgroundLook: _mainsLook, ...withoutMainsKeys
   } = { ...(patch ?? {}) };
   const clean: Partial<Settings> = withoutMainsKeys as Partial<Settings>;
   if (clean.share) {
