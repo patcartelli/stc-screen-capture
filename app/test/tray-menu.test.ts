@@ -1,8 +1,9 @@
 import { describe, test, expect } from "vitest";
 import {
-  TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, STOP_RECORDING_LABEL, SETTINGS_ACCELERATOR,
+  TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, STOP_RECORDING_LABEL, SETTINGS_ACCELERATOR, MOVE_PILL_LABEL,
   bgraFromMask, marqueeMask, trayTemplate,
 } from "../src/tray-menu.js";
+import { PILL_SPOTS } from "../src/pill.js";
 import { TRAY_GLYPHS, trayGlyphMask } from "../src/tray-icons.js";
 import {
   BINDABLE_ACTIONS, SHOT_ACTIONS, DEFAULT_SHORTCUTS,
@@ -134,6 +135,17 @@ describe("menu item icons (STC-597)", () => {
       trayTemplate({ shortcuts: DEFAULT_SHORTCUTS, recording }).find((i) => i.id === "action:record")!;
     expect(at(false).icon).toBe("record");
     expect(at(true).icon).toBe("record-stop");
+  });
+
+  test("Move Pill (STC-576) is offered only mid-take, right under Stop, with every spot", () => {
+    expect(trayTemplate({ shortcuts: DEFAULT_SHORTCUTS }).some((i) => i.id === "move-pill")).toBe(false);
+    const items = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS, recording: true });
+    const at = items.findIndex((i) => i.id === "move-pill");
+    expect(items[at - 1]?.id).toBe("action:self-timer");
+    expect(items.findIndex((i) => i.id === "action:record")).toBeLessThan(at);
+    expect(items[at]!.label).toBe(MOVE_PILL_LABEL);
+    expect(items[at]!.submenu!.map((i) => i.id)).toEqual(PILL_SPOTS.map((s) => `pill:${s.spot}`));
+    expect(items[at]!.submenu!.map((i) => i.label)).toEqual(PILL_SPOTS.map((s) => s.label));
   });
 
   for (const glyph of TRAY_GLYPHS) {

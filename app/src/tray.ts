@@ -2,7 +2,7 @@ import { Menu, nativeImage, Tray } from "electron";
 import {
   bgraFromMask, marqueeMask, trayTemplate,
   TRAY_ICON_SIZE, TRAY_ICON_SIZE_2X, TRAY_TOOLTIP,
-  type TrayContext, type TrayItemId,
+  type TrayContext, type TrayItem, type TrayItemId,
 } from "./tray-menu.js";
 import { trayGlyphMask, type TrayGlyph } from "./tray-icons.js";
 import { logTray } from "./tray-log.js";
@@ -73,10 +73,7 @@ export function installTray(
   logTray("create");
   tray.setToolTip(TRAY_TOOLTIP);
 
-  const build = (c: TrayContext): void => {
-    // STC-624: a menu rebuild is what crashed at quit; say who asked for it.
-    logTray("set-menu", `${c.recording ? "recording" : "idle"}${c.busy ? " busy" : ""}`);
-    tray.setContextMenu(Menu.buildFromTemplate(trayTemplate(c).map((item) => (
+  const toMenu = (items: TrayItem[]): Electron.MenuItemConstructorOptions[] => items.map((item) => (
       item.type === "separator"
         ? { type: "separator" as const }
         : {
@@ -88,9 +85,14 @@ export function installTray(
             // shortcut already holds — which would make the same keystroke
             // fire twice whenever this app happened to be frontmost.
             ...(item.accelerator ? { accelerator: item.accelerator, registerAccelerator: item.fires === true } : {}),
-            click: () => onSelect(item.id),
+            // A submenu item has no click of its own (Move Pill, STC-576).
+            ...(item.submenu ? { submenu: toMenu(item.submenu) } : { click: () => onSelect(item.id) }),
           }
-    ))));
+    ));
+  const build = (c: TrayContext): void => {
+    // STC-624: a menu rebuild is what crashed at quit; say who asked for it.
+    logTray("set-menu", `${c.recording ? "recording" : "idle"}${c.busy ? " busy" : ""}`);
+    tray.setContextMenu(Menu.buildFromTemplate(toMenu(trayTemplate(c))));
   };
   build(ctx);
 
