@@ -31,6 +31,12 @@ export interface CopyJobOptions {
   outPath: string;
   /** STC-395: what the hidden page renders. Absent = "mp4", STC-488's Copy. */
   format?: "mp4" | "gif";
+  /**
+   * STC-616: "chat" (absent) is the panel's Copy, rendered at the embed width
+   * (STC-495). "project" renders at the project's own output size, so the
+   * editor's Copy is the file Export would have written.
+   */
+  size?: "chat" | "project";
   /** STC-395: required with `format: "gif"` — read by main once, at the job's start. */
   gif?: GifSettings;
   dist: string;
@@ -219,6 +225,7 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   // with the GIF settings main read once, at this job's start.
   const query: Record<string, string> = {};
   if (opts.delayMs) query.delayMs = String(opts.delayMs);
+  if (opts.size === "project") query.size = "project";
   if (opts.format === "gif" && opts.gif) {
     query.format = "gif";
     query.fps = String(opts.gif.fps);

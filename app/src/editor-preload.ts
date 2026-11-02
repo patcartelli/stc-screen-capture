@@ -37,6 +37,14 @@ contextBridge.exposeInMainWorld("editor", {
   // is not refused — it is silently REPLACED by DEFAULT_PIP_STYLE, and the
   // call still succeeds.
   setPipStyleDefault: (style: unknown) => ipcRenderer.invoke("recorder:setSettings", { pipStyle: style }),
+  // STC-616: Copy to clipboard — STC-488's render-and-copy, for the open take.
+  copyToClipboard: () => ipcRenderer.invoke("editor:copy"),
+  cancelCopy: () => ipcRenderer.invoke("editor:cancelCopy"),
+  onCopyProgress: (cb: (done: number, total: number) => void) => {
+    ipcRenderer.on("editor:copyProgress", (_e, done: unknown, total: unknown) => {
+      cb(Number(done) || 0, Number(total) || 0);
+    });
+  },
   publish: () => ipcRenderer.invoke("share:publish"),
   revealPublished: () => ipcRenderer.invoke("share:reveal"),
   // STC-483: grow the window to show every lane, once a take is open.

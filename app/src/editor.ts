@@ -50,6 +50,11 @@ declare const editor: {
   getSettings: () => Promise<AppSettings>;
   setPreviewMuted: (muted: boolean) => Promise<unknown>;
   setPipStyleDefault: (style: unknown) => Promise<unknown>;
+  // STC-616: Copy to clipboard. `cancelled` is a field of its own (a cancel is
+  // a decision, not a fault), checked before `!ok`.
+  copyToClipboard(): Promise<{ ok: boolean; cancelled?: boolean; detail?: string }>;
+  cancelCopy(): Promise<void>;
+  onCopyProgress(cb: (done: number, total: number) => void): void;
   publish(): Promise<{
     ok: boolean; plan: string; message?: string;
     file?: string; name?: string; replaced?: boolean; snippet?: string;
@@ -3882,11 +3887,25 @@ for (const [id, which] of [["exportbar-in", "in"], ["exportbar-out", "out"]] as 
 
 // ---- export -------------------------------------------------------------
 
+/**
+ * Export and Copy (STC-616) each render the live project, so while one runs the
+ * controls that change what it renders — and the other one — are off.
+ */
+function setOutputBusy(busy: boolean): void {
+  ($("export") as HTMLButtonElement).disabled = busy;
+  ($("copyclip") as HTMLButtonElement).disabled = busy;
+  ($("outsize") as HTMLSelectElement).disabled = busy;
+  setFramePresetDisabled(busy);
+  ($("framecolor") as HTMLInputElement).disabled = busy;
+  for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = busy;
+}
+
 async function runExport(): Promise<void> {
-  if (!openSession || !openProject || exportAbort) return;
+  if (!openSession || !openProject || exportAbort || copying) return;
   // STC-461/STC-500: commit a reframe and an open override edit first — the
   // export reads the live project.
   await finishOpenEdits();
+  if (exportAbort || copying) return;   // another output began while the edits settled
   player?.pause();
   exportAbort = new AbortController();
 
@@ -3894,11 +3913,7 @@ async function runExport(): Promise<void> {
   const progress = $("exportprogress") as HTMLProgressElement;
   const status = $("exportstatus");
   bar.removeAttribute("hidden");
-  ($("export") as HTMLButtonElement).disabled = true;
-  ($("outsize") as HTMLSelectElement).disabled = true;
-  setFramePresetDisabled(true);
-  ($("framecolor") as HTMLInputElement).disabled = true;
-  for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = true;
+  setOutputBusy(true);
   progress.value = 0;
   status.textContent = "Exporting…";
   clearAlert();
@@ -3959,16 +3974,73 @@ async function runExport(): Promise<void> {
     alertUser(`Export failed: ${e?.message ?? e}`);
   } finally {
     exportAbort = undefined;
-    ($("export") as HTMLButtonElement).disabled = false;
-    ($("outsize") as HTMLSelectElement).disabled = false;
-    setFramePresetDisabled(false);
-    ($("framecolor") as HTMLInputElement).disabled = false;
+    setOutputBusy(false);
     updateFramingUI();   // padding, corners and shadow wait for a frame again
   }
 }
 
 $("export").addEventListener("click", () => void runExport());
-$("cancelexport").addEventListener("click", () => exportAbort?.abort());
+$("cancelexport").addEventListener("click", () => {
+  exportAbort?.abort();
+  if (copying) void editor.cancelCopy();
+});
+
+// ---- Copy to clipboard (STC-616) -------------------------------------------
+//
+// STC-488's render-and-copy, for the open take: main renders it in a hidden
+// window from the SAVED project and the helper puts the file on the pasteboard
+// (`editor:copy`, main.ts, where the cache, size and clipboard decisions are
+// written down). This side's whole job is to make the saved project the one on
+// screen, show the progress, and say how it ended. It shares Export's bar and
+// Cancel, and locks Export (and is locked by it) through `setOutputBusy`.
+
+let copying = false;
+const copyStatus = (text: string): void => { $("copystatus").textContent = text; };
+
+editor.onCopyProgress((done, total) => {
+  if (!copying || total <= 0) return;
+  ($("exportprogress") as HTMLProgressElement).value = Math.round((done / total) * 1000);
+  $("exportstatus").textContent = `${done} / ${total} frames`;
+});
+
+async function copyToClipboard(): Promise<void> {
+  if (!openSession || !openProject || exportAbort || copying) return;
+  // STC-461/STC-500: commit a reframe and an open override edit first — the
+  // render reads project.json, which still lacks them until they are committed.
+  await finishOpenEdits();
+  if (exportAbort || copying || !player) return;   // another output began while the edits settled
+  copying = true;
+  player.pause();
+  setOutputBusy(true);
+  const progress = $("exportprogress") as HTMLProgressElement;
+  progress.value = 0;
+  $("exportstatus").textContent = "Rendering…";
+  $("exportbar").removeAttribute("hidden");
+  copyStatus("");
+  clearAlert();
+  try {
+    // The render window loads project.json itself. Most edits are saved as they
+    // are made; this makes it certain, so a Copy is never one edit behind.
+    await persistProject();
+    const r = await editor.copyToClipboard();
+    if (r.ok) copyStatus("Copied. Paste anywhere.");
+    else if (r.cancelled) copyStatus("Cancelled.");
+    else {
+      copyStatus("Could not copy.");
+      alertUser(`Copy failed: ${r.detail ?? "unknown error"}`);
+    }
+  } catch (e: any) {
+    copyStatus("Could not copy.");
+    alertUser(`Copy failed: ${e?.message ?? e}`);
+  } finally {
+    copying = false;
+    $("exportbar").setAttribute("hidden", "");
+    setOutputBusy(false);
+    updateFramingUI();   // padding, corners and shadow wait for a frame again
+  }
+}
+
+$("copyclip").addEventListener("click", () => void copyToClipboard());
 
 // ---- share, folded into the export dialog (STC-444 slice 3) ---------------
 //
@@ -3993,6 +4065,7 @@ async function refreshShareRow(): Promise<void> {
   ($("shareslug") as HTMLInputElement).value = currentSlugOrDefault();
   $("sharereveal").setAttribute("hidden", "");
   shareStatus("");
+  if (!copying) copyStatus("");
   const { share } = await editor.getSettings();
   $("sitedestnote").textContent = share.destination
     ? `→ ${share.destination}` : "No site folder set — choose one in Preferences.";

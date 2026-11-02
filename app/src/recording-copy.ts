@@ -46,6 +46,18 @@ export function copyPathFor(env: NodeJS.ProcessEnv, takeDir: string): string {
   return join(copiesRoot(env), `${basename(takeDir)}.mp4`);
 }
 
+/**
+ * STC-616: the editor's Copy. NOT `copyPathFor`'s file: that one is a cache key
+ * ("this file exists, so it IS this take's finished copy"), and it holds the
+ * panel's UNEDITED chat-size render. An editor copy is a function of the saved
+ * project (trim, framing, size, levels), which the leaf does not name, so it is
+ * never reused: every Copy renders and replaces this file. Same folder, same
+ * 24 h purge, same clipboard exemption.
+ */
+export function editCopyPathFor(env: NodeJS.ProcessEnv, takeDir: string): string {
+  return join(copiesRoot(env), `${basename(takeDir)}-edit.mp4`);
+}
+
 /** STC-395: the GIF beside the mp4 copy; same name rule, same purge. */
 export function gifCopyPathFor(env: NodeJS.ProcessEnv, takeDir: string): string {
   return join(copiesRoot(env), `${basename(takeDir)}.gif`);
