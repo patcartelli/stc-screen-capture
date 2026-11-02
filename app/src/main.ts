@@ -3124,9 +3124,13 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
     for (const entry of doc.overrides) {
       if (!isPlainObject(entry)) throw new Error("project.json: overrides entry is not an object");
       if (entry.kind === "geometry") {
-        if (typeof entry.windowId !== "string" || !entry.windowId || !isRect(entry.rect)
+        // No rect (project-20, STC-630) is an Auto block with its own speed:
+        // it must then carry the speed, and cannot follow (no size to follow with).
+        const hasRect = entry.rect !== undefined;
+        if (typeof entry.windowId !== "string" || !entry.windowId || (hasRect && !isRect(entry.rect))
             || (entry.easing !== undefined && !isEasingSpec(entry.easing))
-            || (entry.follow !== undefined && entry.follow !== true)) {
+            || (!hasRect && entry.easing === undefined)
+            || (entry.follow !== undefined && (entry.follow !== true || !hasRect))) {
           throw new Error("project.json: malformed geometry override");
         }
       } else if (entry.kind === "manual") {

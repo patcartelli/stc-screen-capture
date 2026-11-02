@@ -1483,7 +1483,7 @@ function openOverrideEditorUI(): void {
   ($("overrideout") as HTMLSelectElement).value = draftEasing.out;
   ($("zoomfollow") as HTMLInputElement).checked = draftFollow;
   const clear = $("overrideclear") as HTMLButtonElement;
-  clear.disabled = !draftRect;
+  clear.disabled = !draftRect && !(editingWindowId && (draftEasing.in || draftEasing.out));
   clear.textContent = editingManualId ? "Delete window" : "Remove override";
   // STC-329: a derived window's OWN delete — hidden for a manual one, whose
   // single delete action stays #overrideclear (there is no crop to reset a
@@ -1882,6 +1882,8 @@ $("zoomamountrange").addEventListener("input", () => {
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
   draftFollow = false;
+  // A speed alone is an override now (STC-630), so Remove override takes it too.
+  draftEasing = { ...NO_SPEEDS };
   void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 $("overridedelete").addEventListener("click", () => {

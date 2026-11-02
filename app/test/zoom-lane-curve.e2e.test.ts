@@ -25,9 +25,7 @@ async function openBlock(): Promise<Page> {
   await expect.poll(() => win.locator(".zoomblock").count(), { timeout: 10_000 }).toBe(1);
   await win.click(".zoomblock");
   await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
-  // A region, so the override has something to carry the easing on.
-  await win.focus("#chipamount");
-  await win.keyboard.press("ArrowUp");
+  // No region: an Auto block carries its speed on its own (STC-630).
   return win;
 }
 

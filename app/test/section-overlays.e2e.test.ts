@@ -229,12 +229,12 @@ describe("the Zoom chip", () => {
     // Both with two different sides lights no speed.
     await win.click('#chipside [data-side="both"]');
     expect(await win.locator('#chipspeed [aria-checked="true"]').count()).toBe(0);
-    // A region, so the override has something to carry the easing on.
-    await win.focus("#chipamount");
-    await win.keyboard.press("ArrowUp");
+    // No region drawn: the block stays Auto and still keeps its speed (STC-630).
     await done(win);
     await expect.poll(() => project(takeDir)?.overrides?.[0]?.easing, { timeout: 10_000 })
       .toEqual({ in: "calm", out: "snappy" });
+    expect(project(takeDir)?.overrides?.[0]?.rect).toBeUndefined();
+    expect(project(takeDir)?.version).toBe(20);
   }, 60_000);
 
   test("the amount: arrow keys and the slider resize the region about its centre, and it is saved", async () => {
