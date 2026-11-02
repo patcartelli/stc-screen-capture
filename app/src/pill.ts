@@ -21,7 +21,7 @@ import type { SupervisorState } from "./supervisor-state.js";
  * app launch to the menu bar, and every state the library could be in
  * (closed, minimized, hidden with ⌘H) then turned up as a pill bug. So the
  * pill is a window of its own now (`pill-window.ts`, `pill.html`), one per
- * take, top-centre of the display being recorded (`pillBounds`), and the
+ * take, top-center of the display being recorded (`pillBounds`), and the
  * library only steps out of the way (`libraryAroundTake`).
  *
  * The state names below kept their STC-375 meaning so every rule written
@@ -162,28 +162,28 @@ export function easeStep(current: PillPoint, target: PillPoint, ease = PILL_DRAG
  *
  * A spot is a jump, never eased, so reduced motion needs nothing extra here.
  */
-export type PillSpot = "top-left" | "top-centre" | "top-right" | "bottom-left" | "bottom-centre" | "bottom-right";
+export type PillSpot = "top-left" | "top-center" | "top-right" | "bottom-left" | "bottom-center" | "bottom-right";
 
 /** Every spot, in menu order, with its label. */
 export const PILL_SPOTS: readonly { spot: PillSpot; label: string }[] = [
   { spot: "top-left", label: "Top Left" },
-  { spot: "top-centre", label: "Top Centre" },
+  { spot: "top-center", label: "Top Center" },
   { spot: "top-right", label: "Top Right" },
   { spot: "bottom-left", label: "Bottom Left" },
-  { spot: "bottom-centre", label: "Bottom Centre" },
+  { spot: "bottom-center", label: "Bottom Center" },
   { spot: "bottom-right", label: "Bottom Right" },
 ];
 
 /**
  * Where a spot puts the pill on the work area of the display it is on. Its
  * size is kept; every edge it sits against is `PILL_TOP_INSET_PX` away, the
- * same gap `pillBounds` leaves under the menu bar, so Top Centre is exactly
+ * same gap `pillBounds` leaves under the menu bar, so Top Center is exactly
  * where a take's pill opens.
  */
 export function pillSpotBounds(spot: PillSpot, workArea: PillRect, current: PillRect): PillRect {
   const width = Math.min(current.width, Math.max(1, workArea.width));
   const height = Math.min(current.height, Math.max(1, workArea.height));
-  const [row, col] = spot.split("-") as ["top" | "bottom", "left" | "centre" | "right"];
+  const [row, col] = spot.split("-") as ["top" | "bottom", "left" | "center" | "right"];
   const x = col === "left" ? workArea.x + PILL_TOP_INSET_PX
     : col === "right" ? workArea.x + workArea.width - width - PILL_TOP_INSET_PX
     : workArea.x + (workArea.width - width) / 2;

@@ -215,9 +215,9 @@ describe("pillSpotBounds: Move Pill, the keyboard path (STC-576)", () => {
   const workArea = { x: 0, y: 25, width: 1512, height: 920 };
   const dragged = { x: 333, y: 444, width: 130, height: PILL_HEIGHT_PX };
 
-  it("Top Centre is exactly where a take's pill opens", () => {
+  it("Top Center is exactly where a take's pill opens", () => {
     const opened = pillBounds(workArea, 100);
-    expect(pillSpotBounds("top-centre", workArea, { ...dragged, width: opened.width })).toEqual(opened);
+    expect(pillSpotBounds("top-center", workArea, { ...dragged, width: opened.width })).toEqual(opened);
   });
 
   it("puts every spot the same inset from the edges it sits against, keeping the size", () => {
@@ -225,8 +225,8 @@ describe("pillSpotBounds: Move Pill, the keyboard path (STC-576)", () => {
     expect(at("top-left")).toEqual({ x: PILL_TOP_INSET_PX, y: 25 + PILL_TOP_INSET_PX, width: 130, height: PILL_HEIGHT_PX });
     expect(at("top-right").x + 130).toBe(1512 - PILL_TOP_INSET_PX);
     const bottom = 25 + 920 - PILL_TOP_INSET_PX;
-    for (const s of ["bottom-left", "bottom-centre", "bottom-right"] as const) expect(at(s).y + PILL_HEIGHT_PX).toBe(bottom);
-    expect(at("bottom-centre").x).toBe(at("top-centre").x);
+    for (const s of ["bottom-left", "bottom-center", "bottom-right"] as const) expect(at(s).y + PILL_HEIGHT_PX).toBe(bottom);
+    expect(at("bottom-center").x).toBe(at("top-center").x);
   });
 
   it("stays on the display it is on, in negative screen coordinates", () => {
