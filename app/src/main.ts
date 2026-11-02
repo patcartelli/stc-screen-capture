@@ -45,9 +45,10 @@ import {
 import { GifCache } from "./gif-cache.js";
 import { panelReason, panelAction, isHelperDecidedStop, stopCause, isStopActionId, trackLossLine, type StopAction } from "./stop-copy.js";
 import {
-  copyPathFor, editCopyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
+  copyPathFor, editCopyPathFor, editGifCopyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
   copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
 } from "./recording-copy.js";
+import { cleanExportType, looksLikeGif } from "./export-type.js";
 import { readOptionalTakeFile } from "./take-read.js";
 import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir, rename } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
@@ -3241,6 +3242,40 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
 });
 
 /**
+ * The editor's GIF export (STC-615): write a GIF the renderer made into the
+ * save folder, beside the exports, and return where it went.
+ *
+ * It is exactly what `panel:save` does with the panel's GIF (STC-395), by the
+ * same rules: named after the take, `-2`/`-3` on a collision and NEVER an
+ * overwrite (`savedGifName`, which also counts a `.partial` as taken); written
+ * through `.partial` + rename; **untagged** — no capture id, no manifest — and
+ * outside `MEDIA_EXTENSIONS`, so the library finds it by its extension
+ * (STC-592) and Reclaim never sees it. That is why this is not `export:write`,
+ * whose job is the identity-tagged MP4 and whose name rule REPLACES the take's
+ * prior export. The renderer sends bytes; the destination is main's.
+ */
+ipcMain.handle("export:writeGif", async (e, bytes: ArrayBuffer) => {
+  const openTake = getOpenTake(e);
+  if (!openTake) throw new Error("no take is open");
+  const data = Buffer.from(bytes);
+  if (!looksLikeGif(data)) throw new Error("refusing to write a file that is not a GIF");
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  const root = takesRoot(process.env, saveFolder);
+  const name = savedGifName(basename(openTake), await readdir(root).catch(() => []));
+  const dest = join(root, name);
+  const partial = dest + PARTIAL_SUFFIX;
+  try {
+    await writeFile(partial, data);
+    await rename(partial, dest);
+  } catch (err) {
+    await rm(partial, { force: true }).catch(() => {});
+    throw err;
+  }
+  lastSavedGif = dest;
+  return { path: dest, name };
+});
+
+/**
  * STC-413: the editor's export path (`app/src/editor.ts:1237`) is a
  * renderer, and `ensureCaptureId` reaches `node:fs` — a browser-typechecked
  * module cannot import it directly, so the id crosses the bridge instead.
@@ -3756,15 +3791,20 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) =>
  * The take is `getOpenTake(e)` (set by `preview:open`, inside the library
  * root), never a path the renderer names.
  */
-ipcMain.handle("editor:copy", async (e) => {
+ipcMain.handle("editor:copy", async (e, type: unknown) => {
   const dir = getOpenTake(e);
   if (!dir) return { ok: false, detail: "no take is open" };
   const helper = sup;   // captured: the render below is long and `sup` can go away under it
   if (!helper) return { ok: false, detail: "the helper is not running" };
   const sender = e.sender;
+  // STC-615: Copy follows the editor's Type. A GIF is the same render job in
+  // its other format, with the app's GIF settings read once, at its start.
+  const gif = cleanExportType(type) === "gif";
   const r = await startCopyRender({
-    takeDir: dir, outPath: editCopyPathFor(process.env, dir),
+    takeDir: dir,
+    outPath: gif ? editGifCopyPathFor(process.env, dir) : editCopyPathFor(process.env, dir),
     size: "project",
+    ...(gif ? { format: "gif" as const, gif: readSettings(app.getPath("userData")).gif } : {}),
     dist: here, rendererDir: join(here, "..", "renderer"),
     delayMs: Number(process.env.STC_COPY_RENDER_DELAY_MS) || undefined,
     grant: (id, d) => openTakes.set(id, d),

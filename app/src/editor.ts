@@ -21,6 +21,8 @@ interface AppSettings {
   // published without a second door back to a folder picker this window
   // does not own.
   share: { destination: string | null };
+  /** STC-615: the GIF options (STC-395's), which the Type control's GIF rows edit. */
+  gif: GifSettings;
 }
 declare const editor: {
   fitWindow: (contentHeight: number) => Promise<void>;
@@ -52,7 +54,10 @@ declare const editor: {
   setPipStyleDefault: (style: unknown) => Promise<unknown>;
   // STC-616: Copy to clipboard. `cancelled` is a field of its own (a cancel is
   // a decision, not a fault), checked before `!ok`.
-  copyToClipboard(): Promise<{ ok: boolean; cancelled?: boolean; detail?: string }>;
+  copyToClipboard(type: ExportType): Promise<{ ok: boolean; cancelled?: boolean; detail?: string }>;
+  // STC-615: a GIF export lands in the save folder, untagged; main names it.
+  writeGif(bytes: ArrayBuffer): Promise<{ path: string; name: string }>;
+  setGifSettings(gif: Partial<GifSettings>): Promise<unknown>;
   cancelCopy(): Promise<void>;
   onCopyProgress(cb: (done: number, total: number) => void): void;
   publish(): Promise<{
@@ -67,6 +72,11 @@ import type { LoadedSession } from "@transform/session";
 import { loadTake, type TakeIO, type CountingSource } from "./session-io.js";
 import { PreviewPlayer } from "@transform/preview";
 import { exportSession } from "@transform/export";
+import { exportGif } from "@transform/gif-export";
+import { GIF_FPS_OPTIONS, GIF_WIDTH_OPTIONS, type GifSettings } from "@transform/gif-options";
+import {
+  cleanExportType, exportButtonLabel, gifFormatNote, gifSavedLine, type ExportType,
+} from "./export-type.js";
 import {
   levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack, type ExportDecoded,
   micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
@@ -1808,6 +1818,67 @@ window.addEventListener("keydown", (e) => {
   void closeOverrideEditor().catch((err: any) => alertUser(String(err?.message ?? err)));
 });
 
+// ---- export Type (STC-615) -----------------------------------------------
+//
+// MP4 or GIF, for Export and Copy alike. An export-time choice that lives only
+// in this window (export-type.ts says why): it is not on the project, so a take
+// opens as MP4. A GIF's rate and max width are the app's `settings.gif` — read
+// here, written back through the bridge, and read again when the export starts.
+
+let exportType: ExportType = "mp4";
+/** The app's `settings.gif` as last read; absent until the Export section first opens. */
+let gifSettings: GifSettings | undefined;
+
+for (const fps of GIF_FPS_OPTIONS) {
+  const o = document.createElement("option");
+  o.value = String(fps);
+  o.textContent = `${fps} fps`;
+  $("gifrate").append(o);
+}
+for (const w of GIF_WIDTH_OPTIONS) {
+  const o = document.createElement("option");
+  o.value = String(w);
+  o.textContent = w === "original" ? "Original" : `${w} px`;
+  $("gifwidth").append(o);
+}
+
+function updateExportTypeUI(): void {
+  const gif = exportType === "gif";
+  ($("exporttype") as HTMLSelectElement).value = exportType;
+  $("outsizerow").hidden = gif;
+  $("gifraterow").hidden = !gif;
+  $("gifwidthrow").hidden = !gif;
+  $("export").textContent = exportButtonLabel(exportType);
+  if (gifSettings) {
+    ($("gifrate") as HTMLSelectElement).value = String(gifSettings.fps);
+    ($("gifwidth") as HTMLSelectElement).value = String(gifSettings.maxWidth);
+  }
+  updateOutputSizeUI();
+}
+
+function applyGifSettings(g: GifSettings): void {
+  gifSettings = g;
+  updateExportTypeUI();
+}
+
+$("exporttype").addEventListener("change", () => {
+  exportType = cleanExportType(($("exporttype") as HTMLSelectElement).value);
+  updateExportTypeUI();
+});
+$("gifrate").addEventListener("change", () => {
+  const fps = Number(($("gifrate") as HTMLSelectElement).value);
+  void editor.setGifSettings({ fps: fps as GifSettings["fps"] })
+    .then(() => { if (gifSettings) applyGifSettings({ ...gifSettings, fps: fps as GifSettings["fps"] }); })
+    .catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+$("gifwidth").addEventListener("change", () => {
+  const raw = ($("gifwidth") as HTMLSelectElement).value;
+  const maxWidth = (raw === "original" ? "original" : Number(raw)) as GifSettings["maxWidth"];
+  void editor.setGifSettings({ maxWidth })
+    .then(() => { if (gifSettings) applyGifSettings({ ...gifSettings, maxWidth }); })
+    .catch((e: any) => alertUser(String(e?.message ?? e)));
+});
+
 // ---- export size --------------------------------------------------------
 
 function updateOutputSizeUI(): void {
@@ -1835,9 +1906,12 @@ function updateOutputSizeUI(): void {
   sel.value = known ? known.id : "custom";
 
   const note = $("outsizenote");
-  note.textContent = known?.id === "capture" || (!known && sameAsCapture(out))
-    ? "No rescale."
-    : `Capture is ${openCapture.width}×${openCapture.height}.`;
+  // A GIF is sized by its own max width, not by the project's output (STC-615).
+  note.textContent = exportType === "gif" && gifSettings
+    ? gifFormatNote(openCapture, gifSettings)
+    : known?.id === "capture" || (!known && sameAsCapture(out))
+      ? "No rescale."
+      : `Capture is ${openCapture.width}×${openCapture.height}.`;
 }
 
 const sameAsCapture = (out: Size) =>
@@ -3895,6 +3969,7 @@ function setOutputBusy(busy: boolean): void {
   ($("export") as HTMLButtonElement).disabled = busy;
   ($("copyclip") as HTMLButtonElement).disabled = busy;
   ($("outsize") as HTMLSelectElement).disabled = busy;
+  for (const id of ["exporttype", "gifrate", "gifwidth"]) ($(id) as HTMLSelectElement).disabled = busy;
   setFramePresetDisabled(busy);
   ($("framecolor") as HTMLInputElement).disabled = busy;
   for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = busy;
@@ -3921,6 +3996,24 @@ async function runExport(): Promise<void> {
   const started = performance.now();
   const exporting: Project = structuredClone(withHeldFraming(openProject, heldFraming));
   try {
+    if (exportType === "gif") {
+      // STC-615: STC-395's sink, over the same trim, framing and zoom as the
+      // MP4. The options are read now, once, as the panel's conversion does.
+      const settings = (await editor.getSettings()).gif;
+      const r = await exportGif(openSession, exporting, {
+        settings,
+        signal: exportAbort.signal,
+        onProgress: (done, total) => {
+          progress.value = Math.round((done / total) * 1000);
+          status.textContent = `${Math.floor((done / total) * 100)}%`;
+        },
+      });
+      // Copied out: `bytes` may be a view into a larger buffer.
+      const bytes = r.bytes.buffer.slice(r.bytes.byteOffset, r.bytes.byteOffset + r.bytes.byteLength) as ArrayBuffer;
+      const saved = await editor.writeGif(bytes);
+      status.textContent = gifSavedLine(saved.name, r.frames, r.bytes.byteLength);
+      return;
+    }
     // STC-413: the bundle's stable identity, so the written MP4 can point
     // back at its source after a Finder rename or move. Best-effort, same as
     // main.ts's still-export path — a bundle that cannot be tagged (a
@@ -3970,6 +4063,8 @@ async function runExport(): Promise<void> {
 
     status.textContent = `Done — ${result.frames} frames, ${(result.encodedBytes / 1e6).toFixed(1)} MB`;
   } catch (e: any) {
+    // exportGif ends a cancel with an AbortError (exportSession returns `cancelled`).
+    if (e?.name === "AbortError") { status.textContent = "Cancelled."; return; }
     status.textContent = "Failed.";
     alertUser(`Export failed: ${e?.message ?? e}`);
   } finally {
@@ -4022,7 +4117,7 @@ async function copyToClipboard(): Promise<void> {
     // The render window loads project.json itself. Most edits are saved as they
     // are made; this makes it certain, so a Copy is never one edit behind.
     await persistProject();
-    const r = await editor.copyToClipboard();
+    const r = await editor.copyToClipboard(exportType);
     if (r.ok) copyStatus("Copied. Paste anywhere.");
     else if (r.cancelled) copyStatus("Cancelled.");
     else {
@@ -4066,7 +4161,9 @@ async function refreshShareRow(): Promise<void> {
   $("sharereveal").setAttribute("hidden", "");
   shareStatus("");
   if (!copying) copyStatus("");
-  const { share } = await editor.getSettings();
+  const settings = await editor.getSettings();
+  const { share } = settings;
+  applyGifSettings(settings.gif);   // Settings may have changed them since this section last opened
   $("sitedestnote").textContent = share.destination
     ? `→ ${share.destination}` : "No site folder set — choose one in Preferences.";
 }
