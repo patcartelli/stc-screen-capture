@@ -444,10 +444,11 @@
     #ruler:active { cursor: grabbing; }
     #ruler:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 3px; }
     /* The zoom buttons (STC-484), in the ruler's label cell since STC-605. */
-    .zoomctl { display: flex; align-items: center; gap: 1px; height: 100%; }
-    .zoombtn { min-width: 16px; height: 16px; padding: 0; border: none; border-radius: 3px; background: transparent;
+    .zoomctl { display: flex; align-items: center; gap: 0; height: 100%; }
+    .zoombtn { min-width: 13px; height: 16px; padding: 0; border: none; border-radius: 3px; background: transparent;
                color: var(--lane-label); font: 10px/1 var(--font-readout); cursor: pointer; }
-    .zoombtn.fit { padding: 0 4px; }
+    .zoombtn.fit { padding: 0 2px; }
+    .zoombtn svg { display: block; margin: 0 auto; }
     .zoombtn:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
     .zoombtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .zoombtn:disabled { opacity: .35; cursor: default; }
@@ -528,6 +529,19 @@
                 gap: 6px; height: 28px; padding: 0 4px 0 8px; border: 1px solid color-mix(in srgb, var(--zoom) 70%, transparent);
                 border-radius: 7px; background: rgba(10, 10, 12, .92); white-space: nowrap;
                 font: 400 10px/1 var(--font-readout); }
+    /* STC-621: the off-screen playhead marker, at the lanes' edge, at the TOP of
+       the strip so the section chips (vertically centred) stay clear of it.
+       No transition: a span change is a jump, so there is nothing to switch
+       off for reduced motion. */
+    #playheadchip { position: absolute; top: 1px; z-index: 3; display: flex; align-items: center; height: 14px;
+                    padding: 0 6px; border: 1px solid color-mix(in srgb, var(--bone) 55%, transparent);
+                    border-radius: 5px; background: rgba(10, 10, 12, .92); color: var(--bone);
+                    font: 400 10px/1 var(--font-readout); white-space: nowrap; cursor: pointer; }
+    #playheadchip[hidden] { display: none; }
+    #playheadchip[data-side="before"] { left: 2px; }
+    #playheadchip[data-side="after"] { right: 2px; }
+    #playheadchip:hover { background: rgba(40, 40, 46, .96); }
+    #playheadchip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #zoomchip[hidden], body:not([data-section="zoom"]) #zoomchip { display: none; }
     #zoomchip button { height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent;
                        color: var(--text-dim); font: inherit; cursor: pointer; }
@@ -933,6 +947,10 @@
         <button type="button" class="zoombtn" id="zoomin" aria-label="Zoom in" title="Zoom in (⌘=)">+</button>
         <button type="button" class="zoombtn fit" id="zoomfit" aria-label="Fit the whole take"
                 title="Fit the whole take (⌘0)">Fit</button>
+        <button type="button" class="zoombtn" id="zoomplayhead" aria-label="Go to playhead"
+                title="Go to playhead (G)">
+          <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><circle cx="6" cy="6" r="3.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 0v2.5M6 9.5V12M0 6h2.5M9.5 6H12" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+        </button>
       </div>
       <!-- STC-444 slice 2: adaptive ticks, drawn by editor.ts's
            renderRulerTicks. STC-605 adds a time label at the major ticks
@@ -954,6 +972,9 @@
       <div id="overlay-strip">
         <div id="strip-content"><div id="strip-bookmarks"></div></div>
         <div id="strip-overlays">
+          <!-- STC-621: shown only while the playhead is out of the visible span;
+               a click brings the view to it (the same zoom, centred). -->
+          <button type="button" id="playheadchip" class="overlayctl" hidden></button>
           <div id="rangechip" class="exportonly" aria-live="polite"></div>
           <div id="zoomchip" class="overlayctl" role="group" aria-label="Zoom block" hidden>
             <button type="button" id="chipamount" class="chipamount"
