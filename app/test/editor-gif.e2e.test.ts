@@ -55,6 +55,24 @@ async function launch(): Promise<Launched> {
 const gifs = (dir: string) => readdirSync(dir).filter((n) => n.endsWith(".gif")).sort();
 
 describe("GIF as the editor's export Type", () => {
+  test("the Export section scrolls inside the pane and never pushes the timeline off screen", async () => {
+    const { editorWin } = await launch();
+    // Many rows, so the section is taller than any window this suite opens.
+    await editorWin.selectOption("#exporttype", "gif");
+    await editorWin.evaluate(() => {
+      const p = document.getElementById("pane")!;
+      for (let i = 0; i < 40; i++) { const d = document.createElement("div"); d.style.height = "46px"; d.textContent = "x"; p.append(d); }
+    });
+    const m = await editorWin.evaluate(() => ({
+      vh: innerHeight, docH: document.documentElement.scrollHeight,
+      timelineBottom: document.getElementById("timeline")!.getBoundingClientRect().bottom,
+      paneScrolls: document.getElementById("pane")!.scrollHeight > document.getElementById("pane")!.clientHeight,
+    }));
+    expect(m.docH).toBeLessThanOrEqual(m.vh);
+    expect(m.timelineBottom).toBeLessThanOrEqual(m.vh);
+    expect(m.paneScrolls).toBe(true);
+  }, 120_000);
+
   test("GIF swaps Size for the GIF options, and the button says what it makes", async () => {
     const { editorWin } = await launch();
     expect(await editorWin.isVisible("#outsize")).toBe(true);

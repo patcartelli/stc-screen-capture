@@ -98,7 +98,14 @@
     /* The inspector pane: slate, a hairline on its left edge, its content
        starting under the title bar. */
     #pane { position: relative; background: var(--shell-bg); border-left: 1px solid var(--hairline);
-            padding: 63px 24px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; }
+            padding: 63px 24px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px;
+            /* STC-615: the pane scrolls INSIDE its column. A grid item's content still sizes an
+               auto row even with overflow set, so a section taller than the window (Export,
+               once it gained the Type row) stretched .shell and .workcol and pushed the
+               timeline down and off screen: the Export bars were then unreachable, and
+               section-overlays.e2e's two bar-drag tests failed on every CI run. Size
+               containment takes the content out of that sizing; stretch still fills the row. */
+            contain: size; }
     #pane .panelabel { margin: 0 0 8px; font-size: var(--type-label); font-weight: 500;
                        color: rgba(255, 255, 255, .45); }
     /* The glass title bar (STC-584's, as the Library has it): over the whole
