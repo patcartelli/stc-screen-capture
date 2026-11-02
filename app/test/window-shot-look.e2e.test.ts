@@ -200,8 +200,18 @@ describe("window shot looks (STC-628)", () => {
       expect(existsSync(join(dir, "wallpaper.jpg"))).toBe(true);
       expect(parseShot(JSON.parse(readFileSync(join(dir, "shot.json"), "utf8"))).decoration.background?.kind)
         .toBe("wallpaper");
-      // The chip's picture is an object URL: img-src must allow blob:.
-      await sleep(500);
+      // The chip's picture is an object URL, so img-src must allow blob:. Load
+      // it as an image from the page: that load is what img-src governs, and
+      // `has-image` (a class set from JS) would be there either way.
+      await editor.evaluate(() => new Promise<void>((resolve, reject) => {
+        const chip = document.querySelector('#lookgrid [data-look="wallpaper"] .chip')!;
+        const url = /url\("?([^")]+)"?\)/.exec(getComputedStyle(chip).backgroundImage)?.[1];
+        if (!url || !url.startsWith("blob:")) { reject(new Error(`chip background is ${url}`)); return; }
+        const img = new Image();
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("the chip's object URL did not load (img-src?)"));
+        img.src = url;
+      }));
       expect(consoleErrors.filter((t) => /Content Security Policy|violates/i.test(t))).toEqual([]);
     }, 120_000);
 
