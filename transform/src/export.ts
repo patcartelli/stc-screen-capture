@@ -6,6 +6,7 @@ import { composite } from "./compositor.js";
 import type { LoadedSession } from "./session.js";
 import type { Project } from "./types.js";
 import { exportWindow, availableFrames } from "./trim.js";
+import { DEFAULT_EXPORT_RATE, exportRateStep, exportRateFrameCount, type ExportRate } from "./export-rate.js";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
 import { decodeAllAudio, decodeMicForMix, decodeSystemForMix } from "./decode-audio.js";
@@ -52,6 +53,11 @@ export interface ExportOptions {
   decoded?: ExportDecoded;
   /** Test/gate only: a SHA-256 over every mixed audio block handed to the encoder. */
   audioHash?: boolean;
+  /**
+   * STC-614: the output frame rate, 60 (absent) or 30. `fromFrame`/`maxFrames`
+   * stay in 60 fps GRID frames; 30 encodes every other one (export-rate.ts).
+   */
+  rate?: ExportRate;
 }
 
 export interface ExportResult {
@@ -197,6 +203,10 @@ export async function exportSession(
   const micAudio = session.micAudio;
   const { width, height, fps } = project.output;
   const wantHash = opts.hash ?? false;
+  // STC-614: `fps` above is the export GRID (always 60); `rate` is what the
+  // file plays at. Every frame index below stays a grid index.
+  const rate = opts.rate ?? DEFAULT_EXPORT_RATE;
+  const step = exportRateStep(rate);
 
   const lastFrameNs = session.frames[session.frames.length - 1]!;
   // The same formula exportWindow uses, from the same module. A second copy
@@ -349,7 +359,7 @@ export async function exportSession(
       error: (e) => { encoderError = e instanceof Error ? e : new Error(String(e)); },
     });
     // High @ L5.2 (PHASE-0 §8). NOT L4.0: its 2 Mpixel coded-area cap rejects 4K.
-    encoder.configure({ codec: "avc1.640034", width, height, framerate: fps, bitrate: 12_000_000 });
+    encoder.configure({ codec: "avc1.640034", width, height, framerate: rate, bitrate: 12_000_000 });
 
     if (audioParams) {
       audioEncoder = new AudioEncoder({
@@ -382,10 +392,14 @@ export async function exportSession(
   const stats: FrameLoopStats = { peakBuffered: 0, decodedFrames: 0, cameraDecodedFrames: 0 };
   let cancelled = false;
 
+  // STC-614: output frames, which progress and `frames` count. `total` stays
+  // the window in grid frames, which is what the loop and the audio cut need.
+  const expected = exportRateFrameCount(total, rate);
+
   try {
     let produced = 0;
     for await (const { k, tNs, ctx } of compositeFrames(session, project, {
-      from, total, readback: opts.softwareRaster ?? wantHash, signal: opts.signal, stats,
+      from, total, step, readback: opts.softwareRaster ?? wantHash, signal: opts.signal, stats,
     })) {
       if (encoderError) throw encoderError;
       produced++;
@@ -398,6 +412,7 @@ export async function exportSession(
 
       if (encoder) {
         const vf = new VideoFrame(ctx.canvas, { timestamp: Math.round((tNs - originNs) / 1000) });
+        // k is a grid index, so this is a keyframe every second at either rate.
         encoder.encode(vf, { keyFrame: k % fps === 0 });
         vf.close();
         // Bounded. An encoder that stops draining — no hardware encoder on the
@@ -409,7 +424,7 @@ export async function exportSession(
           if (opts.signal?.aborted) break;
           if (performance.now() > queueDeadline) {
             throw new Error(
-              `encoder stopped draining at frame ${k} of ${total} ` +
+              `encoder stopped draining at frame ${produced} of ${expected} ` +
               `(queue stuck at ${encoder.encodeQueueSize}) — no usable H.264 encoder?`,
             );
           }
@@ -418,14 +433,14 @@ export async function exportSession(
       }
       // Yield periodically so a cancel click and the progress bar are not
       // starved by a loop that can run for minutes.
-      if (k % 10 === 0) {
-        opts.onProgress?.(k + 1, total);
+      if (produced % 10 === 1) {
+        opts.onProgress?.(produced, expected);
         await new Promise((r) => setTimeout(r, 0));
       }
     }
     // The loop stops early only on an abort (a throw leaves this function).
     // An abort that lands after the last frame was produced is not a cancel.
-    cancelled = produced < total && opts.signal?.aborted === true;
+    cancelled = produced < expected && opts.signal?.aborted === true;
 
     let micEncodedChunks = 0;
     if (audioEncoder && decodedAudio && audioParams && !cancelled) {
@@ -554,10 +569,10 @@ export async function exportSession(
     }
     if (encoder && encoder.state !== "closed") encoder.close();
     if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();
-    opts.onProgress?.(total, total);
+    opts.onProgress?.(expected, expected);
 
     return {
-      frames: cancelled ? 0 : total,
+      frames: cancelled ? 0 : expected,
       hash: wantHash && !cancelled ? await sha256Hex(rolling) : "",
       encodedBytes, encoded,
       peakBufferedFrames: stats.peakBuffered,

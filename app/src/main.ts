@@ -54,6 +54,7 @@ import {
   copiesRoot, purgeDecision, COPY_PURGE_INTERVAL_MS, COPY_PURGE_FIRST_DELAY_MS,
 } from "./recording-copy.js";
 import { cleanExportType, looksLikeGif } from "./export-type.js";
+import { cleanExportRate } from "@transform/export-rate.js";
 import { readOptionalTakeFile } from "./take-read.js";
 import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir, rename } from "node:fs/promises";
 import { HelperSupervisor } from "./supervisor.js";
@@ -3874,7 +3875,7 @@ ipcMain.handle("panel:copyRecording", async (e, dir: string, format: unknown) =>
  * The take is `getOpenTake(e)` (set by `preview:open`, inside the library
  * root), never a path the renderer names.
  */
-ipcMain.handle("editor:copy", async (e, type: unknown) => {
+ipcMain.handle("editor:copy", async (e, type: unknown, rate: unknown) => {
   const dir = getOpenTake(e);
   if (!dir) return { ok: false, detail: "no take is open" };
   const helper = sup;   // captured: the render below is long and `sup` can go away under it
@@ -3887,7 +3888,8 @@ ipcMain.handle("editor:copy", async (e, type: unknown) => {
     takeDir: dir,
     outPath: gif ? editGifCopyPathFor(process.env, dir) : editCopyPathFor(process.env, dir),
     size: "project",
-    ...(gif ? { format: "gif" as const, gif: readSettings(app.getPath("userData")).gif } : {}),
+    // STC-614: an mp4 Copy follows the editor's Frame rate too; a GIF has its own.
+    ...(gif ? { format: "gif" as const, gif: readSettings(app.getPath("userData")).gif } : { rate: cleanExportRate(rate) }),
     dist: here, rendererDir: join(here, "..", "renderer"),
     delayMs: Number(process.env.STC_COPY_RENDER_DELAY_MS) || undefined,
     grant: (id, d) => openTakes.set(id, d),
