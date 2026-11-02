@@ -4,7 +4,9 @@
  * human can look at it. Structural checks prove the sinks agree; only watching
  * proves the cursor lands where it belongs.
  *
- * Usage: node scripts/export-one.mjs <sessionDir> [seconds]
+ * Usage: node scripts/export-one.mjs <sessionDir> [seconds] [fromSeconds] [rate]
+ *
+ * `rate` is the editor's Frame rate (STC-614), 60 (default) or 30.
  */
 import { createServer } from "vite";
 import { chromium } from "playwright";
@@ -14,8 +16,9 @@ import { join } from "node:path";
 const sessionDir = process.argv[2];
 const seconds = Number(process.argv[3] ?? 10);
 const fromSeconds = Number(process.argv[4] ?? 0);
-if (!sessionDir || !existsSync(join(sessionDir, "display.mp4"))) {
-  console.error("usage: node scripts/export-one.mjs <sessionDir> [seconds] [fromSeconds]");
+const rate = Number(process.argv[5] ?? 60);
+if (!sessionDir || !existsSync(join(sessionDir, "display.mp4")) || (rate !== 60 && rate !== 30)) {
+  console.error("usage: node scripts/export-one.mjs <sessionDir> [seconds] [fromSeconds] [rate: 60|30]");
   process.exit(2);
 }
 const anchors = JSON.parse(readFileSync(join(sessionDir, "anchors.json"), "utf8"));
@@ -75,12 +78,12 @@ try {
   // non-integer width), which is the narrower version of the very defect this
   // hunk was added to fix. The size is printed below, from the export's own
   // answer, so there is exactly one source for it and it cannot be premature.
-  console.log(`exporting ${seconds}s from t=${fromSeconds}s (${frames} frames)…`);
-  const r = await page.evaluate(([p, f, ff]) =>
-    window.exportSession("/session", p, { maxFrames: f, fromFrame: ff, encode: true, returnFile: true }),
-    [project, frames, fromFrame]);
+  console.log(`exporting ${seconds}s from t=${fromSeconds}s at ${rate} fps (${frames} grid frames)…`);
+  const r = await page.evaluate(([p, f, ff, fr]) =>
+    window.exportSession("/session", p, { maxFrames: f, fromFrame: ff, rate: fr, encode: true, returnFile: true }),
+    [project, frames, fromFrame, rate]);
 
-  const dest = join(sessionDir, `export-${seconds}s-from${fromSeconds}s.mp4`);
+  const dest = join(sessionDir, `export-${seconds}s-from${fromSeconds}s${rate === 60 ? "" : `-${rate}fps`}.mp4`);
   writeFileSync(dest, Buffer.from(r.encodedBase64, "base64"));
   console.log(`\n${r.frames} frames in ${(r.durationMs / 1000).toFixed(1)}s`);
   const { width: outW, height: outH } = r.output;
