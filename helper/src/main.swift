@@ -194,6 +194,24 @@ final class App {
                     }
                 }
             }
+        case "wallpaper":
+            // STC-628. State-free like capture-still: the still editor may ask
+            // during a recording. A bad request is refused by its own code
+            // before anything is read; any read that fails is one code.
+            switch parseWallpaperRequest(cmd) {
+            case .failure(let e):
+                IO.send("error", seq: seq, ["code": e.code, "detail": e.description])
+            case .success(let req):
+                WallpaperVerb.run(req) { result in
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success(let o): IO.send("wallpaper", seq: seq, o)
+                        case .failure(let f):
+                            IO.send("error", seq: seq, ["code": "wallpaper-unavailable", "detail": f.description])
+                        }
+                    }
+                }
+            }
         case "windows":
             WindowList.enumerate { result in
                 DispatchQueue.main.async {

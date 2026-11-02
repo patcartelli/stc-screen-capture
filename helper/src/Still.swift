@@ -116,6 +116,14 @@ final class StillCapture {
     /// it was slow — content enumeration and PNG encoding are both outside
     /// the capture the ticket's 200 ms is about.
     private var timing: [String: Double] = [:]
+    /// STC-628: the window's display's wallpaper, read beside the window
+    /// capture and joined before the answer. nil unless asked for.
+    private var wallpaperRead: WallpaperRead?
+
+    /// A window shot that asked for its wallpaper. Its content is fetched WITH
+    /// desktop windows, because the wallpaper window is one; the window it
+    /// captures is looked up by id, so nothing else about the shot changes.
+    private var wantsWallpaper: Bool { request.kind == .window && request.wallpaper }
 
     init(request: StillRequest, dir: URL) {
         self.request = request
@@ -156,7 +164,7 @@ final class StillCapture {
 
 
         at("content")
-        SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { [weak self] content, err in
+        SCShareableContent.getExcludingDesktopWindows(!wantsWallpaper, onScreenWindowsOnly: true) { [weak self] content, err in
             guard let self else { return }
             self.mark("contentMs")
             guard let content, !content.displays.isEmpty else {
@@ -229,6 +237,11 @@ final class StillCapture {
                 ?? content.displays[0]
             geometry = displayGeometry(id: display.displayID,
                                        pointWidth: display.width, pointHeight: display.height)
+            // Started now, so it runs while the window is captured and encoded.
+            if wantsWallpaper {
+                let read = WallpaperRead(displayId: display.displayID, content: content)
+                lock.lock(); wallpaperRead = read; lock.unlock()
+            }
             let bounds = StillRect(x: Double(win.frame.minX) - geometry.originX,
                                    y: Double(win.frame.minY) - geometry.originY,
                                    width: Double(win.frame.width), height: Double(win.frame.height))
@@ -327,10 +340,12 @@ final class StillCapture {
         }
         do { try data.write(to: dir.appendingPathComponent("shot.json")) }
         catch { finish(.failure(.writeFailed("shot.json: \(error)"))); return }
+        let wallpaper = joinWallpaper()
         mark("totalMs")
 
         lock.lock(); let t = timing; lock.unlock()
         var reply: [String: Any] = ["dir": dir.path, "file": request.file, "shot": doc, "timing": t]
+        reply.merge(wallpaper) { _, new in new }
         if request.kind == .window && !alpha {
             // Honest rather than promised: the document says selected-area and
             // the reply says why, instead of a window-only mode over pixels
@@ -339,6 +354,31 @@ final class StillCapture {
                 + "decoration is selected-area, not window-only"
         }
         finish(.success(reply))
+    }
+
+    /// The wallpaper's half of the reply (STC-628): `wallpaper` with where it
+    /// came from, or `wallpaperError` saying why not. Never a failure of the
+    /// shot — the frame and shot.json are already written, shot.json says
+    /// window-only either way, and the app falls back to Clean on the
+    /// sentence. The wait is bounded (`WallpaperRead.joinTimeoutSeconds`).
+    private func joinWallpaper() -> [String: Any] {
+        lock.lock(); let read = wallpaperRead; lock.unlock()
+        guard let read else { return [:] }
+        at("wallpaper")
+        let file = WallpaperRequest.defaultFile
+        let out: [String: Any]
+        switch read.wait(timeoutSeconds: WallpaperRead.joinTimeoutSeconds) {
+        case .failure(let f):
+            out = ["wallpaperError": f.description]
+        case .success(let pic):
+            if let f = WallpaperRead.place(pic, into: dir, file: file) {
+                out = ["wallpaperError": f.description]
+            } else {
+                out = ["wallpaper": ["file": file, "source": pic.source.rawValue, "ms": pic.ms]]
+            }
+        }
+        mark("wallpaperMs")
+        return out
     }
 }
 

@@ -399,7 +399,158 @@ check("(d) an empty title is omitted, not written empty",
       (d["window"] as? [String: Any])?["title"] == nil, true)
 emit("window-opaque", d)
 
-// ── z-order (STC-481) ───────────────────────────────────────────────────────
+// ── the wallpaper (STC-628) ─────────────────────────────────────────────────
+// A window shot may ask for the desktop wallpaper beside it; nothing else may.
+func wantsWallpaper(_ cmd: [String: Any]) -> String {
+    switch parseStillRequest(cmd) {
+    case .success(let r): return r.wallpaper ? "yes" : "no"
+    case .failure(let e): return "err:\(e.code)"
+    }
+}
+check("a window shot can ask for the wallpaper",
+      wantsWallpaper(["dir": "/tmp/x", "kind": "window", "windowId": 3, "wallpaper": true]), "yes")
+check("a window shot does not get one unasked",
+      wantsWallpaper(["dir": "/tmp/x", "kind": "window", "windowId": 3]), "no")
+check("a display-crop shot's wallpaper flag is ignored, not refused",
+      wantsWallpaper(["dir": "/tmp/x", "wallpaper": true]), "no")
+check("a frame named wallpaper.png would be overwritten by its own wallpaper, so it is refused",
+      wantsWallpaper(["dir": "/tmp/x", "kind": "window", "windowId": 3, "wallpaper": true,
+                      "file": "wallpaper.png"]), "err:bad-file")
+check("without the wallpaper, any name stays a name",
+      wantsWallpaper(["dir": "/tmp/x", "kind": "window", "windowId": 3, "file": "wallpaper.png"]), "no")
+
+func parseWall(_ cmd: [String: Any]) -> String {
+    switch parseWallpaperRequest(cmd) {
+    case .success(let r): return "ok:\(r.displayId):\(r.file)"
+    case .failure(let e): return "err:\(e.code)"
+    }
+}
+check("wallpaper: dir is required", parseWall(["cmd": "wallpaper", "displayId": 1]), "err:missing-dir")
+check("wallpaper: an empty dir is missing", parseWall(["dir": "", "displayId": 1]), "err:missing-dir")
+check("wallpaper: the display is named, never defaulted", parseWall(["dir": "/tmp/x"]), "err:missing-display-id")
+check("wallpaper: a negative display id is no display id",
+      parseWall(["dir": "/tmp/x", "displayId": -4]), "err:missing-display-id")
+check("wallpaper: file defaults to wallpaper.png", parseWall(["dir": "/tmp/x", "displayId": 1]), "ok:1:wallpaper.png")
+check("wallpaper: file is a name, never a path",
+      parseWall(["dir": "/tmp/x", "displayId": 1, "file": "../wallpaper.png"]), "err:bad-file")
+check("wallpaper: file must be a .png (still:frame only loads those)",
+      parseWall(["dir": "/tmp/x", "displayId": 1, "file": "wallpaper.heic"]), "err:bad-file")
+check("wallpaper: a bare .png is not a name", parseWall(["dir": "/tmp/x", "displayId": 1, "file": ".png"]), "err:bad-file")
+check("wallpaper: another png name is fine",
+      parseWall(["dir": "/tmp/x", "displayId": 2, "file": "desk.png"]), "ok:2:desk.png")
+
+check("one image is a static wallpaper", wallpaperIsStatic(imageCount: 1), true)
+check("a multi-image HEIC is a dynamic wallpaper", wallpaperIsStatic(imageCount: 24), false)
+check("an unreadable picture is not static", wallpaperIsStatic(imageCount: nil), false)
+check("an empty image source is not static", wallpaperIsStatic(imageCount: 0), false)
+
+let key0 = wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
+                             modified: 1_700_000_000, spaceId: 7)
+check("the cache key is stable for the same picture",
+      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
+                        modified: 1_700_000_000, spaceId: 7), key0)
+check("the cache key is a file name", key0.contains("/") || key0.isEmpty, false)
+check("the cache key changes with the picture",
+      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sea.jpg",
+                        modified: 1_700_000_000, spaceId: 7) == key0, false)
+check("the cache key changes when the file is edited in place",
+      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
+                        modified: 1_700_000_001, spaceId: 7) == key0, false)
+check("the cache key changes with the Space",
+      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
+                        modified: 1_700_000_000, spaceId: 8) == key0, false)
+check("the cache key changes with the display",
+      wallpaperCacheKey(displayId: 2, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
+                        modified: 1_700_000_000, spaceId: 7) == key0, false)
+check("an unknown Space is its own key, not a crash",
+      wallpaperCacheKey(displayId: 1, imageURL: "/System/Library/Desktop Pictures/Sky.jpg",
+                        modified: 1_700_000_000, spaceId: nil) == key0, false)
+// A dynamic or aerial wallpaper is passed with no URL (`wallpaperIsStatic`
+// said no), and must re-capture every time: its key is the one that is never
+// looked up or written.
+check("no URL (a dynamic wallpaper) never hits the cache",
+      wallpaperCacheKey(displayId: 1, imageURL: nil, modified: 1_700_000_000, spaceId: 7), WALLPAPER_UNCACHEABLE)
+check("no mtime never hits the cache either",
+      wallpaperCacheKey(displayId: 1, imageURL: "/x.jpg", modified: nil, spaceId: 7), WALLPAPER_UNCACHEABLE)
+check("the uncacheable key is not a file name anyone could have written", WALLPAPER_UNCACHEABLE.isEmpty, true)
+
+// The wallpaper window: below the desktop-icon layer, frame = the display,
+// drawn by the process that draws the wallpaper.
+let iconLayer = -2_147_483_603
+let mainDisplay = StillRect(x: 0, y: 0, width: 1512, height: 982)
+let sideDisplay = StillRect(x: 1512, y: -200, width: 2560, height: 1440)
+func cand(_ id: UInt32, bundle: String?, app: String?, title: String? = nil, layer: Int,
+          _ f: StillRect) -> WallpaperWindowCandidate {
+    WallpaperWindowCandidate(id: id, bundleId: bundle, app: app, title: title, layer: layer, frame: f)
+}
+// The list SEEN on a two-display macOS 27 Mac (2026-11-02), trimmed: the
+// window server's backstops have no owner, WindowManager draws a "Wallpaper"
+// per display and an off-screen "Fullscreen Backdrop", Finder the icons.
+let seenLeft = StillRect(x: 0, y: 0, width: 2560, height: 1440)
+let seenRight = StillRect(x: 2560, y: 0, width: 1800, height: 1169)
+let seen = [
+    cand(68, bundle: "com.apple.finder", app: "Finder", layer: -2_147_483_603, seenLeft),
+    cand(27790, bundle: "com.apple.WindowManager", app: "WindowManager", title: "Wallpaper",
+         layer: -2_147_483_624, seenRight),
+    cand(28577, bundle: "com.apple.WindowManager", app: "WindowManager", title: "Fullscreen Backdrop",
+         layer: -2_147_483_622, seenLeft),
+    cand(26635, bundle: "com.apple.WindowManager", app: "WindowManager", title: "Wallpaper",
+         layer: -2_147_483_624, seenLeft),
+    cand(4, bundle: nil, app: nil, title: "Display 5 Backstop", layer: -2_147_483_626, seenLeft),
+    cand(3, bundle: nil, app: nil, title: "Display 1 Backstop", layer: -2_147_483_626, seenRight),
+]
+check("seen: the left display's Wallpaper window",
+      chooseWallpaperWindow(seen, display: seenLeft, desktopIconLayer: iconLayer) ?? 0, UInt32(26635))
+check("seen: the right display's Wallpaper window",
+      chooseWallpaperWindow(seen, display: seenRight, desktopIconLayer: iconLayer) ?? 0, UInt32(27790))
+check("seen: WindowManager's Fullscreen Backdrop is never the wallpaper",
+      chooseWallpaperWindow([seen[2]], display: seenLeft, desktopIconLayer: iconLayer) ?? 0, UInt32(0))
+check("seen: the window server's ownerless backstop is never the wallpaper, though it is lowest",
+      chooseWallpaperWindow([seen[4]], display: seenLeft, desktopIconLayer: iconLayer) ?? 0, UInt32(0))
+let wpCands = [
+    cand(10, bundle: "com.apple.finder", app: "Finder", layer: iconLayer, mainDisplay),   // desktop icons
+    cand(11, bundle: "com.apple.wallpaper.agent", app: "WallpaperAgent", layer: iconLayer - 21, mainDisplay),
+    cand(12, bundle: "com.apple.wallpaper.agent", app: "WallpaperAgent", layer: iconLayer - 21, sideDisplay),
+    cand(13, bundle: "com.apple.dock", app: "Dock", layer: 20, mainDisplay),               // the Dock itself
+]
+check("the wallpaper window of the main display",
+      chooseWallpaperWindow(wpCands, display: mainDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(11))
+check("each display has its own",
+      chooseWallpaperWindow(wpCands, display: sideDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(12))
+check("the Dock's own window is above the icons, so not the wallpaper",
+      chooseWallpaperWindow([wpCands[3]], display: mainDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(0))
+check("Finder's desktop is the icons, never the wallpaper",
+      chooseWallpaperWindow([wpCands[0]], display: mainDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(0))
+check("an older macOS's Dock-owned desktop picture counts",
+      chooseWallpaperWindow([cand(20, bundle: "com.apple.dock", app: "Dock", layer: iconLayer - 20, mainDisplay)],
+                            display: mainDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(20))
+check("named only by its app (no bundle id) still counts",
+      chooseWallpaperWindow([cand(21, bundle: nil, app: "Wallpaper", layer: iconLayer - 21, mainDisplay)],
+                            display: mainDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(21))
+check("a window that does not fill the display is not the wallpaper",
+      chooseWallpaperWindow([cand(22, bundle: "com.apple.dock", app: "Dock", layer: iconLayer - 20,
+                                  StillRect(x: 0, y: 0, width: 1512, height: 900))],
+                            display: mainDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(0))
+check("half a point of rounding is still the display",
+      chooseWallpaperWindow([cand(23, bundle: "com.apple.dock", app: "Dock", layer: iconLayer - 20,
+                                  StillRect(x: 0, y: 0.5, width: 1512, height: 981.5))],
+                            display: mainDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(23))
+check("of two, the lowest layer wins (the picture, not a tint above it)",
+      chooseWallpaperWindow([cand(24, bundle: "com.apple.dock", app: "Dock", layer: iconLayer - 5, mainDisplay),
+                             cand(25, bundle: "com.apple.dock", app: "Dock", layer: iconLayer - 20, mainDisplay)],
+                            display: mainDisplay, desktopIconLayer: iconLayer) ?? 0, UInt32(25))
+
+// Capped at the display's pixel size, never stretched, still covering it.
+func capped(_ iw: Int, _ ih: Int, _ dw: Int, _ dh: Int) -> String {
+    let s = wallpaperPixelSize(imageWidth: iw, imageHeight: ih, displayWidth: dw, displayHeight: dh)
+    return "\(s.width)x\(s.height)"
+}
+check("a 6K picture on a 3024x1964 display is cut to cover it", capped(6016, 3384, 3024, 1964), "3492x1964")
+check("a picture already smaller than the display is never enlarged", capped(1920, 1080, 3024, 1964), "1920x1080")
+check("the exact size stays the exact size", capped(3024, 1964, 3024, 1964), "3024x1964")
+check("a tall picture covers by its width", capped(4000, 8000, 2000, 1000), "2000x4000")
+
+// ── z-order (STC-481)───────────────────────────────────────────────────────
 // SCK listed Linear first though CG had it near the back; CG's order must win.
 check("frontToBack: CG rank overrides input order",
       frontToBack([128, 119956, 118223], zRank: [118223: 0, 119956: 1, 128: 2]), [118223, 119956, 128])
