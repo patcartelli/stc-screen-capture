@@ -82,10 +82,12 @@ const MAP = {
   "timer": "timer",
   "library": "video_library",
   "editor": "movie_edit",
+  // STC-627: the color picker.
+  "color": "colorize",
 };
 
 /** The glyphs the menu-bar menu draws, rasterised into app/src/tray-icons.ts. */
-const TRAY = ["area", "window", "display", "record", "record-stop", "timer", "library", "editor", "settings"];
+const TRAY = ["area", "window", "display", "record", "record-stop", "timer", "library", "editor", "settings", "color"];
 /** 16 pt at 1x and 2x: the two representations a menu asks for. */
 const TRAY_SIZES = [16, 32];
 const RESVG = "@resvg/resvg-js@2.6.2";

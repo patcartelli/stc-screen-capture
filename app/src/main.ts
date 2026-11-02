@@ -92,6 +92,7 @@ import {
   libraryBounds, clampSize, LIBRARY_MIN_SIZE, type Rect,
 } from "./window-size.js";
 import { startQuitWindowLog, startWindowLog, WINDOW_LOG_ENV, WINDOW_LOG_AT_LAUNCH } from "./quit-window-log.js";
+import { pickOutcome, pickFailure, type PickOutcome } from "./color-pick.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
   ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
@@ -561,6 +562,7 @@ function mountTray(): TrayHandle {
     // Through `captureAndAnnounce`, like the hotkey: a menu-bar shot used to
     // call `captureStill` bare, so its refusal was dropped AND an open window
     // never heard about the shot at all (STC-465 review).
+    if (action === "pick-color") return void pickColorAndAnnounce();
     if (isShotAction(action)) void captureAndAnnounce(action, "menu-bar");
   });
 }
@@ -2440,6 +2442,41 @@ async function recordAndAnnounce(source: Exclude<RecordSource, "window">): Promi
   showNotice(recordRefusalText(r));
 }
 
+/** True while the system loupe is up: a second press (or menu click) joins it rather than raising another. */
+let pickingColor = false;
+
+/**
+ * The color picker (STC-627): the helper shows the system loupe, a click puts
+ * `#rrggbb` on the clipboard and a toast shows the swatch. Esc copies and shows
+ * nothing. A refused or unavailable sampler is a visible message, never a
+ * silent no-op, and never throws: a hotkey has no caller to reject to.
+ */
+async function pickColorAndAnnounce(): Promise<void> {
+  if (pickingColor) return;
+  pickingColor = true;
+  try {
+    const helper = sup;
+    let outcome: PickOutcome = pickFailure("The capture helper is not running.");
+    if (helper) {
+      try {
+        // HelperClient.request REJECTS with a HelperError on an error reply.
+        outcome = pickOutcome(await helper.pickColor() as Record<string, unknown>);
+      } catch (err: any) {
+        outcome = pickFailure(String(err?.detail || err?.code || err?.message || err));
+      }
+    }
+    if (outcome.kind === "copied") {
+      clipboard.writeText(outcome.hex);
+      showNotice(outcome.toast);
+    } else if (outcome.kind === "failed") {
+      console.error("[color] pick failed:", outcome.toast.body);
+      showNotice(outcome.toast);
+    }
+  } finally {
+    pickingColor = false;
+  }
+}
+
 /**
  * A shot, asked for over the library window's bridge. Like `recorder:start`, no
  * button calls it since STC-584; the e2e suite does. It is announced as the
@@ -2477,6 +2514,7 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     try {
       ok = globalShortcut.register(plan.accelerator, () => {
         if (plan.action === "record") return void onRecordHotkey();
+        if (plan.action === "pick-color") return void pickColorAndAnnounce();
         if (isShotAction(plan.action)) void captureAndAnnounce(plan.action, "hotkey");
       });
     } catch {

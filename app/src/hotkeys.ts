@@ -52,7 +52,7 @@
  * is frozen from this commit on.
  */
 export const BINDABLE_ACTIONS = [
-  "region", "window", "display", "record", "self-timer",
+  "region", "window", "display", "record", "self-timer", "pick-color",
 ] as const;
 
 export type BindableAction = (typeof BINDABLE_ACTIONS)[number];
@@ -64,10 +64,13 @@ export type RecordAction = "record";
  * Stills (STC-398): it names the OUTCOME rather than the timing, and all four
  * produce a shot — `self-timer` after a countdown, the rest immediately.
  */
-export type ShotAction = Exclude<BindableAction, RecordAction>;
+export type ShotAction = Exclude<BindableAction, RecordAction | PickColorAction>;
+
+/** The color picker (STC-627): neither a shot nor a take, and unbound by default. */
+export type PickColorAction = "pick-color";
 
 export function isShotAction(a: BindableAction): a is ShotAction {
-  return a !== "record";
+  return a !== "record" && a !== "pick-color";
 }
 
 /** DERIVED, never restated — see `BINDABLE_ACTIONS`. */
@@ -108,6 +111,7 @@ export const ACTION_LABELS: Record<BindableAction, string> = {
   // countdown is the mechanism, "with a delay" is the reason anyone reaches
   // for it. It is one shot, not a mode that stays on (STC-391).
   "self-timer": "Shot with Self-Timer",
+  "pick-color": "Pick Color",
 };
 
 /** `null` is a deliberately unbound action, which is not a failure. */
@@ -137,6 +141,9 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   display: "Alt+Command+3",
   record: "Alt+Command+4",
   "self-timer": "Alt+Command+5",
+  // Unbound (STC-627): ⇧⌘5 is reserved for STC-569, and a global key taken
+  // without being asked is worse than a menu item the user binds themselves.
+  "pick-color": null,
 };
 
 /**
@@ -149,6 +156,7 @@ export const LEGACY_DEFAULT_SHORTCUTS: Shortcuts = {
   display: `${HYPER}+3`,
   record: `${HYPER}+4`,
   "self-timer": `${HYPER}+5`,
+  "pick-color": null,
 };
 
 /** STC-415's defaults, replaced by STC-582. */
@@ -158,6 +166,7 @@ export const STC415_DEFAULT_SHORTCUTS: Shortcuts = {
   display: "Shift+Command+3",
   record: "Shift+Command+8",
   "self-timer": "Shift+Command+7",
+  "pick-color": null,
 };
 
 /**
@@ -172,6 +181,7 @@ export const SUPERSEDED_DEFAULT_SHORTCUTS: Record<BindableAction, readonly strin
   display: [LEGACY_DEFAULT_SHORTCUTS.display!, STC415_DEFAULT_SHORTCUTS.display!],
   record: [LEGACY_DEFAULT_SHORTCUTS.record!, "Shift+Command+6", STC415_DEFAULT_SHORTCUTS.record!],
   "self-timer": [LEGACY_DEFAULT_SHORTCUTS["self-timer"]!, STC415_DEFAULT_SHORTCUTS["self-timer"]!],
+  "pick-color": [],
 };
 
 /**
