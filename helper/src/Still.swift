@@ -343,15 +343,13 @@ final class StillCapture {
 }
 
 /// `windows`: the on-screen windows a window shot can name, for the picker
-/// (STC-290) and for `still.grant.test.ts`. Layer 0 only — menus, the Dock and
-/// overlays live on other layers and are not what "capture that window" means.
-/// Each entry carries `fullyVisible` (STC-380): SCShareableContent's own
-/// `onScreenWindowsOnly` only excludes a minimized window, not one hanging
-/// mostly off every display or buried under another — `isFullyVisible`
-/// (StillDecisions.swift) is what actually answers "could the user see this
-/// as the thing it is". The picker still lists it, deprioritized, rather than
-/// dropping it — a window that IS what someone is looking for should not
-/// silently vanish from the list because it is hard to see right now.
+/// (STC-290) and for `still.grant.test.ts`. Layer 0 only — menus, the menu bar,
+/// the Dock, and Capture's own overlay and pill all live on other layers and
+/// are not what "capture that window" means; desktop icons are excluded by
+/// SCShareableContent itself. Each entry carries `visible` (STC-625): the
+/// rects, in global points, where a pointer finds it — its frame on the
+/// displays, minus every layer-0 window in front of it (`pickableWindows`,
+/// StillDecisions.swift). A window with nothing visible is not listed.
 /// Bounded like a still; answers exactly once.
 enum WindowList {
     static func enumerate(completion: @escaping (Result<[String: Any], StillError>) -> Void) {
@@ -385,17 +383,25 @@ enum WindowList {
             }
             let filtered = content.windows.filter { $0.windowLayer == 0 && $0.frame.width > 0 && $0.frame.height > 0 }
             let byID = Dictionary(filtered.map { (Int($0.windowID), $0) }, uniquingKeysWith: { a, _ in a })
-            let visible = frontToBack(filtered.map { Int($0.windowID) }, zRank: zRank).compactMap { byID[$0] }
+            // STC-625: a window CoreGraphics does not list as on-screen (another
+            // Space, say) draws no pixels anywhere, so it is not a candidate at
+            // all. Sorted to the back instead, it would be hoverable over bare
+            // desktop where it is not.
+            let onScreen = filtered.map { Int($0.windowID) }.filter { zRank[$0] != nil }
+            let ordered = frontToBack(onScreen, zRank: zRank).compactMap { byID[$0] }
+            let picks = pickableWindows(ordered.map {
+                PickCandidate(id: Int($0.windowID), frame: StillRect($0.frame),
+                              covers: !invisible.contains(Int($0.windowID)))
+            }, displays: displayRects)
             var out: [[String: Any]] = []
-            for (i, w) in visible.enumerated() {
-                let frame = StillRect(w.frame)
+            for p in picks {
+                guard let w = byID[p.id] else { continue }
                 let mid = CGPoint(x: w.frame.midX, y: w.frame.midY)
-                let occluders = visible[..<i].filter { !invisible.contains(Int($0.windowID)) }.map { StillRect($0.frame) }
                 var o: [String: Any] = [
-                    "id": Int(w.windowID),
+                    "id": p.id,
                     "x": Double(w.frame.minX), "y": Double(w.frame.minY),
                     "width": Double(w.frame.width), "height": Double(w.frame.height),
-                    "fullyVisible": isFullyVisible(frame, displays: displayRects, occluders: occluders),
+                    "visible": p.visible.map { $0.json },
                 ]
                 if let app = w.owningApplication {
                     o["app"] = app.applicationName

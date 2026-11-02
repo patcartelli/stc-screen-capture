@@ -1,4 +1,5 @@
 import type { SessionEvent } from "@transform/types.js";
+import { tickOf, tickTimeNs } from "@transform/time.js";
 
 /**
  * The editor's Clip lane signal (STC-373): pointer activity, weighted for
@@ -73,31 +74,119 @@ export function activityLabel(a: { clicks: number; keys: number | undefined }): 
 }
 
 /**
- * A read-only automation curve, sampled at `samples` evenly spaced points
- * across `[0, durationNs]`, inclusive of both ends.
- *
- * Takes a plain `(tNs) => amount` sampler rather than a zoom sim directly, so
- * the editor can pass `render(project, session, tNs).zoom.amount` — the same
- * answer `updateLegibilityUI` already reads `render()` for — instead of a
- * second computation of `enabled`/`intensity`/`preset` here. One reader of
- * the zoom pipeline's output, not two.
+ * The Zoom lane draws only what rises above this. A sample at or under it is
+ * "the zoom is out", so the lane needs no samples where the curve cannot be
+ * above it (see `ZOOM_LANE_REACH_NS`).
  */
-export function zoomCurve(
-  sampleAt: (tNs: number) => number,
-  durationNs: number,
-  samples: number,
-  /** STC-484: the visible span, when zoomed; default is the whole take. */
-  startNs = 0,
-  endNs = durationNs,
-): number[] {
-  const n = Math.max(2, Math.floor(samples));
-  const out = new Array<number>(n);
-  const a = Math.max(0, startNs);
-  const b = Math.max(a, endNs);
-  for (let i = 0; i < n; i++) {
-    out[i] = sampleAt(a + (i / (n - 1)) * (b - a));
+export const ZOOM_LANE_FLOOR = 0.002;
+
+/**
+ * How long after a block's end the curve can still be above the floor: its
+ * ease-out tail. The springs are critically damped (zoom.ts), so the slowest
+ * shoulder (Slow, omega 6) is back under the floor in ~1.6 s; this leaves
+ * headroom, and `timeline-activity.test.ts` re-derives it from `ZOOM_PRESETS`,
+ * so a slower preset fails there instead of drawing a clipped tail.
+ */
+export const ZOOM_LANE_REACH_NS = 2_000_000_000;
+/** One sim tick is 1/120 s; the dense run samples every other tick (~16.7 ms). */
+export const ZOOM_LANE_DENSE_STEP_NS = 16_666_667;
+/** How far before an edge the dense run starts, so the foot of a ramp is drawn from zero. */
+export const ZOOM_LANE_LEAD_NS = 4 * 8_333_334;
+
+export interface CurveSamples {
+  /** Strictly increasing, each the start of a sim tick, within a tick of the span. */
+  tNs: number[];
+  amount: number[];
+}
+
+/**
+ * Where to read the zoom curve for the lane, and its values there (STC-620).
+ *
+ * The old lane took a fixed 480 samples across the span: one per ~1.5 s on a
+ * 12 minute take, against ramps of 0.14 to 0.8 s, so a block drew as a step or
+ * was missed. The curve is flat zero except in and just after a block, so:
+ *
+ *  - outside every block's zone (from a short lead before it to
+ *    `ZOOM_LANE_REACH_NS` after it) there are NO samples: the curve is under
+ *    the floor there and the lane draws nothing for it;
+ *  - inside a zone, one sample per pixel (`baseSamples`) keeps plateaus and
+ *    long ramps exact when zoomed in;
+ *  - around each block edge there is a dense run (every other sim tick) so a
+ *    ramp is covered by ~8 samples even at its fastest, whatever the zoom.
+ *    It is skipped when the pixel rate is already that fine.
+ *
+ * `amountsAt` is called ONCE with every time (ascending), so the caller can
+ * read them in a single pass. Nothing here models the curve: the values come
+ * from whatever `amountsAt` answers, which the editor makes `render()`'s own.
+ *
+ * A ramp narrower than a pixel is still narrower than a pixel at a coarse
+ * zoom: this makes the shape right (edge positions, peaks, ramp geometry), not
+ * wider. Slow and Fast resolve when the span is about a minute.
+ */
+export function zoomCurveSamples(args: {
+  amountsAt: (tNs: readonly number[]) => number[];
+  windows: readonly { startNs: number; endNs: number }[];
+  /** The visible span. */
+  startNs: number;
+  endNs: number;
+  /** One per pixel of the lane. */
+  baseSamples: number;
+}): CurveSamples {
+  const a = Math.max(0, args.startNs);
+  const b = Math.max(a, args.endNs);
+  const n = Math.max(2, Math.floor(args.baseSamples));
+  if (!(b > a) || args.windows.length === 0) return { tNs: [], amount: [] };
+  const spacing = (b - a) / (n - 1);
+
+  // Zones, clipped to the span, merged.
+  const raw: [number, number][] = [];
+  for (const w of args.windows) {
+    const lo = Math.max(a, w.startNs - ZOOM_LANE_LEAD_NS);
+    const hi = Math.min(b, w.endNs + ZOOM_LANE_REACH_NS);
+    if (hi > lo) raw.push([lo, hi]);
   }
-  return out;
+  raw.sort((x, y) => x[0] - y[0]);
+  const zones: [number, number][] = [];
+  for (const z of raw) {
+    const last = zones[zones.length - 1];
+    if (last && z[0] <= last[1]) last[1] = Math.max(last[1], z[1]);
+    else zones.push([z[0], z[1]]);
+  }
+
+  const times: number[] = [];
+  for (const [lo, hi] of zones) {
+    times.push(lo, hi);
+    for (let i = Math.ceil((lo - a) / spacing); i <= n - 1; i++) {
+      const t = a + i * spacing;
+      if (t > hi) break;
+      times.push(t);
+    }
+  }
+  if (spacing > ZOOM_LANE_DENSE_STEP_NS) {
+    for (const w of args.windows) {
+      for (const edge of [w.startNs, w.endNs]) {
+        const lo = Math.max(a, edge - ZOOM_LANE_LEAD_NS);
+        const hi = Math.min(b, edge + ZOOM_LANE_REACH_NS);
+        for (let t = lo; t <= hi; t += ZOOM_LANE_DENSE_STEP_NS) times.push(t);
+        if (hi > lo) times.push(hi);
+      }
+    }
+  }
+
+  // Every time is snapped to the start of its sim tick. The sim (and so
+  // render()) is a 120 Hz staircase: the value "at t" is the value at tick
+  // floor(t*120), up to one tick EARLIER than t. A sample drawn at x = t with
+  // that earlier value is off by the curve's slope times that lag (~0.04 on a
+  // Fast ramp); at the tick's own start time it is exact, and the polygon only
+  // has to interpolate between true points. A snapped time can sit up to one
+  // tick outside the span; the canvas clips it.
+  times.sort((x, y) => x - y);
+  const tNs: number[] = [];
+  for (const t of times) {
+    const snapped = tickTimeNs(tickOf(t));
+    if (tNs.length === 0 || snapped > tNs[tNs.length - 1]!) tNs.push(snapped);
+  }
+  return { tNs, amount: args.amountsAt(tNs) };
 }
 
 /**

@@ -105,6 +105,13 @@ export const START_FAULTS: Record<string, ToastMessage> = {
       "and press Record.",
     action: { id: "open-input-monitoring-settings", label: "Open Input Monitoring" },
   },
+  // STC-625: the window picked on the overlay closed before the take started.
+  // The overlay's list is the one it opened with, so a click on a window that
+  // has since gone still names it and the helper refuses the id.
+  "window-not-found": {
+    title: "That window closed",
+    body: "Nothing was recorded. Press Record and pick a window again.",
+  },
 };
 
 /** The shape every door's Record answer shares (`main.ts`'s `RecordResult`). */
@@ -168,6 +175,9 @@ export function stillNoticeText(r: StillOutcome): ToastMessage | undefined {
       return { title: "Shots aren't available", body: "Shots need macOS 14 or newer." };
     case "overlay-open":
       return { title: "Shot in progress", body: "Finish or cancel it first." };
+    // STC-625: the window picked on the overlay closed before the shot.
+    case "no-such-window":
+      return { title: "That window closed", body: "Nothing was captured. Take the shot again." };
     default:
       return {
         title: "Couldn't take the shot",

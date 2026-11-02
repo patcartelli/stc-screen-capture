@@ -58,6 +58,15 @@ if (tone === "success") {
   document.getElementById("icon")!.textContent = "\u2713";
 }
 
+// STC-627: a picked color replaces the icon with a swatch of itself.
+const swatch = params.get("swatch") ?? "";
+if (/^#[0-9a-f]{6}$/.test(swatch)) {
+  const icon = document.getElementById("icon")!;
+  icon.textContent = "";
+  icon.style.background = swatch;
+  icon.style.boxShadow = "inset 0 0 0 1px rgba(128,128,128,.5)";
+}
+
 if (mode === "message") {
   label.textContent = text;
   undoBtn.hidden = true;

@@ -47,6 +47,8 @@ export interface ToastMessage {
    * warning look every existing toast has; no other value is valid.
    */
   tone?: "success";
+  /** `#rrggbb`: the header icon becomes this color (STC-627's picked color). */
+  swatch?: string;
   action?: { id: ToastActionId; label: string };
 }
 
@@ -74,12 +76,16 @@ export function isToastActionId(id: unknown): id is ToastActionId {
 export function parseToastMessage(x: unknown): ToastMessage | undefined {
   if (typeof x === "string") return x ? { body: x } : undefined;
   if (typeof x !== "object" || x === null) return undefined;
-  const { title, body, action, tone } = x as Record<string, unknown>;
+  const { title, body, action, tone, swatch } = x as Record<string, unknown>;
   if (typeof body !== "string" || !body) return undefined;
   if (title !== undefined && (typeof title !== "string" || !title)) return undefined;
   if (tone !== undefined && tone !== "success") return undefined;
   const out: ToastMessage = { body };
   if (tone === "success") out.tone = "success";
+  if (swatch !== undefined) {
+    if (typeof swatch !== "string" || !/^#[0-9a-f]{6}$/.test(swatch)) return undefined;
+    out.swatch = swatch;
+  }
   if (title !== undefined) out.title = title as string;
   if (action !== undefined) {
     if (typeof action !== "object" || action === null) return undefined;
