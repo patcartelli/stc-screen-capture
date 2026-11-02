@@ -80,7 +80,10 @@ If even that can't fit, stop and bring it back. Don't loosen the gate.
   shot is still taken and saved.
 - **With "When a shot is taken" set to "Copy to clipboard"**, the shot is still
   copied, but a fallback **shows the panel anyway** (with that line), overriding
-  the silent path for that one shot only (Patrick, 2026-11-02). A shot whose
+  the silent path for that one shot only (Patrick, 2026-11-02). That shot then
+  behaves as a panel-mode shot does: it reaches the library when Save is
+  pressed, not automatically (saving closes the panel, and with it the line).
+  A shot whose
   wallpaper was read stays silent as before. Today the silent path is main's
   `silent: true` presentation (`app/src/main.ts` ~2306).
 - In the still editor, picking Wallpaper on a shot that has no wallpaper file
