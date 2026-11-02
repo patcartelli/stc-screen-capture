@@ -483,8 +483,9 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
   const shot = await recorder.getShot(dir);
   const bytes = await recorder.getFrame(dir, shot.frame.file);
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-  const background = await loadShotBackground(shot, (name) => recorder.getFrame(dir, name));
+  let background: ImageBitmap | undefined;
   try {
+    background = await loadShotBackground(shot, (name) => recorder.getFrame(dir, name));
     // The stored decoration, filled in from the mode's presets exactly as the
     // panel does — so a shot never opened since capture still shows what it
     // would export.
@@ -522,6 +523,7 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
     // ~30 MB at 4K, and 500 of them is the tab-killer this repo already
     // documents. Closed on every path, including the failing one.
     frame.close();
+    background?.close();
   }
 }
 
@@ -734,6 +736,7 @@ async function copyStillImage(item: LibraryItem): Promise<void> {
     alertUser(`Copied “${item.label ?? item.id}” to the clipboard.`);
   } finally {
     frame.close();
+    background?.close();
   }
 }
 

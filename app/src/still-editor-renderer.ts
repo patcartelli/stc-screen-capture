@@ -351,13 +351,18 @@ function reasonOf(e: unknown): string {
 
 /**
  * Load the shot's background file again if `background.file` is not the one
- * already decoded (STC-628). Never throws. True when the bitmap changed.
+ * already decoded, or when `force` and there is a file (STC-628). Closes the
+ * bitmap it replaces. Never throws. True when the bitmap changed.
  */
-async function refreshBackground(): Promise<boolean> {
+async function refreshBackground(force = false): Promise<boolean> {
   if (!shot) return false;
   const file = shot.decoration.background?.file;
-  if (file === backgroundFile) return false;
-  background = await loadShotBackground(shot, (name) => window.stillEditor.getFrame(dir, name));
+  // `force` is a stored look write: a wallpaper pick re-fetches into the SAME
+  // name (`wallpaper.jpg`), so the name alone cannot say the bytes are new.
+  if (file === backgroundFile && !(force && file)) return false;
+  const next = await loadShotBackground(shot, (name) => window.stillEditor.getFrame(dir, name));
+  background?.close();
+  background = next;
   backgroundFile = file;
   return true;
 }
@@ -386,12 +391,12 @@ function applyChoice(id: LookId, write: LookWrite): void {
       await window.stillEditor.writeShot(dir, regions, write);
       // The write is what puts a wallpaper's file in the bundle, so it is read
       // only now; until then the draw above shows the colour.
-      if (await refreshBackground()) void draw();
+      if (await refreshBackground(true)) void draw();
       setHint(`Background: ${label}.`);
     } catch (e) {
       shot = before.shot;
       selectedLook = before.selected;
-      await refreshBackground();
+      await refreshBackground(true);
       void draw();
       setHint(`Could not store that background: ${reasonOf(e)}`);
     } finally {
