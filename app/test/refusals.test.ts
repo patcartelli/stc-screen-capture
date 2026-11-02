@@ -67,6 +67,9 @@ describe("a shot", () => {
       .toBe("Screen Recording permission needed");
     expect(stillNoticeText({ ok: false, code: "still-unsupported" })?.body).toBe("Shots need macOS 14 or newer.");
     expect(stillNoticeText({ ok: false, code: "overlay-open" })?.title).toBe("Shot in progress");
+    // STC-625: a window that closed between hover and click.
+    expect(stillNoticeText({ ok: false, code: "no-such-window" })?.title).toBe("That window closed");
+    expect(recordRefusalText({ ok: false, code: "window-not-found" })?.title).toBe("That window closed");
     expect(stillNoticeText({ ok: false, code: "helper-not-running", detail: "x" }))
       .toEqual({ title: "Couldn't take the shot", body: "helper-not-running\nx" });
   });

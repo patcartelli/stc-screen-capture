@@ -112,7 +112,7 @@ const display: DisplayInfo = {
   id: 1, bounds: { x: 0, y: 0, width: 1600, height: 1000 }, scaleFactor: 2,
 };
 const windowBounds: Rect = { x: 200, y: 150, width: 640, height: 480 };
-const windows: WindowInfo[] = [{ id: 7, bounds: windowBounds, fullyVisible: true }];
+const windows: WindowInfo[] = [{ id: 7, bounds: windowBounds, visible: [windowBounds] }];
 const windowPick: SelectionOutcome = { kind: "window", windowId: 7 };
 
 describe("the bar's anchor rect (STC-388)", () => {

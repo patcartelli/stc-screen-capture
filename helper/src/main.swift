@@ -178,6 +178,15 @@ final class App {
                 let code = e.reason == "NSPasteboard refused the file" ? "pasteboard-failed" : "copy-refused"
                 IO.send("error", seq: seq, ["code": code, "detail": e.reason])
             }
+        case "pick-color":
+            // STC-627. State-free (see ColorPick.swift). The reply waits for the
+            // person, so it is answered from the sampler's callback.
+            ColorPick.run { result in
+                switch result {
+                case .success(let o): IO.send("color-picked", seq: seq, o)
+                case .failure(let e): IO.send("error", seq: seq, ["code": e.code, "detail": e.detail])
+                }
+            }
         case "pasteboard-files":
             IO.send("pasteboard-files", seq: seq, ["paths": CopyFile.files(), "changeCount": CopyFile.changeCount()])
         case "export-still":

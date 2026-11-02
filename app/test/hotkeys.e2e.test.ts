@@ -89,7 +89,8 @@ describe("the capture shortcuts", () => {
     // `isRegistered` asks Electron, not our own report — the point of the
     // assertion is that something outside this app agreed to the binding.
     await launch();
-    for (const accelerator of Object.values(DEFAULT_SHORTCUTS)) {
+    // pick-color ships unbound (STC-627): null is no key to register.
+    for (const accelerator of Object.values(DEFAULT_SHORTCUTS).filter((a) => a !== null)) {
       expect(await isRegistered(accelerator!), accelerator!).toBe(true);
     }
   }, 120_000);
@@ -186,7 +187,8 @@ describe("the capture shortcuts", () => {
 
     await win.click("#resetshortcuts");
     await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌥⌘1");
-    for (const accelerator of Object.values(DEFAULT_SHORTCUTS)) {
+    // pick-color ships unbound (STC-627): null is no key to register.
+    for (const accelerator of Object.values(DEFAULT_SHORTCUTS).filter((a) => a !== null)) {
       expect(await isRegistered(accelerator!), accelerator!).toBe(true);
     }
     expect(await isRegistered("Control+Alt+Shift+F9")).toBe(false);

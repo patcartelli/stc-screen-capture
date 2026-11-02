@@ -203,11 +203,14 @@ describe("capture-still — one frame, no stream (requires Screen Recording, mac
     await waitFor(() => find(h.fd3, "ready"));
     const list = await h.request({ cmd: "windows" });
     expect(list.ev, JSON.stringify(list)).toBe("windows");
-    // Every entry carries fullyVisible (STC-380) — a boolean, not merely
-    // present-or-absent, so a caller that forgets to check it gets `false`
-    // rather than `undefined` slipping through as truthy somewhere downstream.
+    // Every entry carries a non-empty `visible` region (STC-625) inside its
+    // own frame: a window with nothing visible is not listed at all.
     for (const w of list.windows as any[]) {
-      expect(typeof w.fullyVisible, JSON.stringify(w)).toBe("boolean");
+      expect(Array.isArray(w.visible) && w.visible.length > 0, JSON.stringify(w)).toBe(true);
+      for (const r of w.visible) {
+        expect(r.x >= w.x && r.y >= w.y && r.x + r.width <= w.x + w.width
+               && r.y + r.height <= w.y + w.height, JSON.stringify(w)).toBe(true);
+      }
     }
     // Any titled layer-0 window will do; a Finder or Terminal window is
     // always around on a machine running this. No window at all is a skip,

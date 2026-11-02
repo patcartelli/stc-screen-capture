@@ -6,6 +6,19 @@ import {
   messageToastMs, MESSAGE_TOAST_MIN_MS,
 } from "../src/toast.js";
 
+/** STC-627: a picked color's swatch. */
+describe("a toast swatch", () => {
+  test("a #rrggbb swatch survives parsing", () => {
+    expect(parseToastMessage({ title: "#0aabcd", body: "b", tone: "success", swatch: "#0aabcd" }))
+      .toEqual({ title: "#0aabcd", body: "b", tone: "success", swatch: "#0aabcd" });
+  });
+  test("anything else is refused, so a page cannot inject a style", () => {
+    for (const bad of ["red", "#fff", "#FFFFFF", "url(x)", "#12345g", 5]) {
+      expect(parseToastMessage({ body: "b", swatch: bad }), String(bad)).toBeUndefined();
+    }
+  });
+});
+
 /** STC-457: the structured message. */
 describe("a toast message", () => {
   test("a plain string is a body-only message", () => {
