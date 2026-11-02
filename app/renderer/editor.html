@@ -449,6 +449,10 @@
                color: var(--lane-label); font: 10px/1 var(--font-readout); cursor: pointer; }
     .zoombtn.fit { padding: 0 2px; }
     .zoombtn svg { display: block; margin: 0 auto; }
+    /* The playhead glyph, in the playhead's own bone (STC-621): the dim label
+       grey made it read as a stray mark beside Fit. */
+    #zoomplayhead { color: var(--bone); }
+    #zoomplayhead:hover:not(:disabled) { color: #fff; }
     .zoombtn:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
     .zoombtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .zoombtn:disabled { opacity: .35; cursor: default; }
@@ -948,8 +952,8 @@
         <button type="button" class="zoombtn fit" id="zoomfit" aria-label="Fit the whole take"
                 title="Fit the whole take (⌘0)">Fit</button>
         <button type="button" class="zoombtn" id="zoomplayhead" aria-label="Go to playhead"
-                title="Go to playhead (G)">
-          <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><circle cx="6" cy="6" r="3.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 0v2.5M6 9.5V12M0 6h2.5M9.5 6H12" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+                title="Go to playhead (G): bring the view to it, same zoom">
+          <svg viewBox="0 0 12 14" width="10" height="12" aria-hidden="true"><path d="M2 1.5h8v3.4L6 8.4 2 4.9z" fill="currentColor"/><path d="M6 8v5.5" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
         </button>
       </div>
       <!-- STC-444 slice 2: adaptive ticks, drawn by editor.ts's
@@ -974,7 +978,7 @@
         <div id="strip-overlays">
           <!-- STC-621: shown only while the playhead is out of the visible span;
                a click brings the view to it (the same zoom, centred). -->
-          <button type="button" id="playheadchip" class="overlayctl" hidden></button>
+          <button type="button" id="playheadchip" class="overlayctl" title="Go to playhead (G)" hidden></button>
           <div id="rangechip" class="exportonly" aria-live="polite"></div>
           <div id="zoomchip" class="overlayctl" role="group" aria-label="Zoom block" hidden>
             <button type="button" id="chipamount" class="chipamount"
