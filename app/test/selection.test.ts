@@ -1,9 +1,9 @@
 import { describe, test, expect } from "vitest";
 import {
   reduce, confirm, initialState, dragRect, resizeRect, moveRect, snapRectEdges,
-  dominantDisplay, toDisplayLocal, windowUnderPoint, intersect, pixelSize,
+  dominantDisplay, toDisplayLocal, windowUnderPoint, visibleTopLeft, intersect, pixelSize,
   MIN_SELECTION_POINTS, NUDGE_POINTS_SHIFT,
-  type SelectionState, type SelectionContext, type SelectionEvent, type Rect,
+  type SelectionState, type SelectionContext, type SelectionEvent, type Rect, type WindowInfo,
 } from "../src/selection.js";
 
 /**
@@ -23,18 +23,22 @@ import {
 const MAIN = { id: 1, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, scaleFactor: 1 };
 const RIGHT = { id: 2, bounds: { x: 1920, y: 0, width: 2560, height: 1440 }, scaleFactor: 2 };
 
-const WINDOWS = [
-  // Front to back, as SCShareableContent lists them — the front one overlaps
-  // the back one, which is the only way to prove the order is respected.
-  { id: 11, bounds: { x: 100, y: 100, width: 400, height: 300 }, app: "Notes", title: "Front", fullyVisible: true },
-  { id: 12, bounds: { x: 200, y: 150, width: 800, height: 600 }, app: "Finder", title: "Behind", fullyVisible: true },
+const WINDOWS: WindowInfo[] = [
+  // Front to back, as the helper lists them — the front one overlaps the back
+  // one. `visible` is what the helper's `pickableWindows` would send for these
+  // frames (STC-625), worked by hand: 12 minus 11 leaves the strip below 11
+  // and the block to its right.
+  { id: 11, bounds: { x: 100, y: 100, width: 400, height: 300 }, app: "Notes", title: "Front",
+    visible: [{ x: 100, y: 100, width: 400, height: 300 }] },
+  { id: 12, bounds: { x: 200, y: 150, width: 800, height: 600 }, app: "Finder", title: "Behind",
+    visible: [{ x: 200, y: 400, width: 800, height: 350 }, { x: 500, y: 150, width: 500, height: 250 }] },
   { id: 13, bounds: { x: 2000, y: 200, width: 500, height: 400 }, app: "Safari",
-    title: "On the right display", fullyVisible: true },
-  // Mostly off the right display's edge (STC-380) — not one of the two
+    title: "On the right display", visible: [{ x: 2000, y: 200, width: 500, height: 400 }] },
+  // Partly off the right display's bottom edge — not one of the two
   // overlapping windows above, so it can be added to a test without
   // disturbing any assertion about THEM.
   { id: 14, bounds: { x: 2400, y: 1200, width: 400, height: 300 }, app: "Terminal",
-    title: "Barely on screen", fullyVisible: false },
+    title: "Partly off screen", visible: [{ x: 2400, y: 1200, width: 400, height: 240 }] },
 ];
 
 const ctx: SelectionContext = { displays: [MAIN, RIGHT], windows: WINDOWS };
@@ -408,28 +412,45 @@ describe("window mode", () => {
   });
 
   /**
-   * STC-380: a window that is not fully visible (mostly off every display, or
-   * mostly buried under another) is still listed and still hoverable — the
-   * overlay draws it deprioritized rather than making it silently vanish —
-   * but it must not be a selection, from a click or from Return. Window 14 in
-   * the fixture is exactly that case.
+   * STC-625: the pick is a hit on what can be SEEN. STC-380/481 refused a
+   * window under about half visible; now any visible part of a window picks
+   * it, and the pick is the whole window by id.
    */
-  test("hovering a not-fully-visible window highlights it but a click selects nothing", () => {
+  test("a partly covered window is picked where it shows, whole", () => {
+    // (900, 200): inside 12's frame, right of 11 — 12 shows there.
     const { state, outcome } = run([
       { t: "key", key: " " },
-      { t: "pointermove", at: { x: 2500, y: 1300 } },
-      { t: "pointerdown", at: { x: 2500, y: 1300 } },
+      { t: "pointermove", at: { x: 900, y: 200 } },
+      { t: "pointerdown", at: { x: 900, y: 200 } },
     ]);
-    expect(state.hoveredWindowId).toBe(14);
-    expect(outcome).toBeUndefined();
+    expect(state.hoveredWindowId).toBe(12);
+    expect(outcome).toEqual({ kind: "window", windowId: 12 });
   });
 
-  test("Return over a not-fully-visible window confirms nothing", () => {
+  test("a partly off-screen window is picked by click and by Return", () => {
     const hovered = run([{ t: "key", key: " " }, { t: "pointermove", at: { x: 2500, y: 1300 } }]).state;
     expect(hovered.hoveredWindowId).toBe(14);
-    expect(confirm(hovered, ctx)).toBeUndefined();
-    const { outcome } = run([{ t: "key", key: "Enter" }], hovered);
-    expect(outcome).toBeUndefined();
+    expect(confirm(hovered, ctx)).toEqual({ kind: "window", windowId: 14 });
+  });
+
+  test("the hit is on the visible region, not the frame, whatever the list order", () => {
+    // 12 listed FIRST, so a frame hit would wrongly answer 12 at (250, 200),
+    // where 11 covers it. Its visible region does not contain that point.
+    const reversed = [WINDOWS[1]!, WINDOWS[0]!];
+    expect(windowUnderPoint(reversed, { x: 250, y: 200 })?.id).toBe(11);
+    expect(windowUnderPoint(reversed, { x: 250, y: 500 })?.id).toBe(12);
+  });
+
+  test("a window with nothing visible can never be hovered", () => {
+    const buried: WindowInfo = { id: 15, bounds: { x: 150, y: 150, width: 100, height: 100 }, visible: [] };
+    expect(windowUnderPoint([buried, ...WINDOWS], { x: 200, y: 200 })?.id).toBe(11);
+  });
+
+  test("the name chip hangs at the highest visible piece, not the covered frame corner", () => {
+    expect(visibleTopLeft(WINDOWS[1]!)).toEqual({ x: 500, y: 150 });
+    expect(visibleTopLeft(WINDOWS[0]!)).toEqual({ x: 100, y: 100 });
+    expect(visibleTopLeft({ id: 1, bounds: { x: 7, y: 8, width: 1, height: 1 }, visible: [] }))
+      .toEqual({ x: 7, y: 8 });
   });
 });
 
