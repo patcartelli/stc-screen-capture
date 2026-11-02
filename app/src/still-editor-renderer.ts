@@ -381,14 +381,15 @@ async function refreshBackground(force = false): Promise<boolean> {
   return true;
 }
 
-async function storeLook(id: LookId, write: LookWrite): Promise<void> {
-  if (!shot) return;
+/** True when the look was stored; false when it was refused or the write failed (the hint says why). */
+async function storeLook(id: LookId, write: LookWrite): Promise<boolean> {
+  if (!shot) return false;
   const before = { shot, selected: selectedLook };
   try {
     shot = parseShot({ ...shot, decoration: applyLook(shot.decoration, write) });
   } catch (e) {
     setHint(`Could not use that background: ${reasonOf(e)}`);
-    return;
+    return false;
   }
   selectedLook = id;
   paintSwatches();
@@ -400,12 +401,14 @@ async function storeLook(id: LookId, write: LookWrite): Promise<void> {
     // only now; until then the draw above shows the colour.
     if (await refreshBackground(true)) void draw();
     setHint(`Background: ${label}.`);
+    return true;
   } catch (e) {
     shot = before.shot;
     selectedLook = before.selected;
     await refreshBackground(true);
     void draw();
     setHint(`Could not store that background: ${reasonOf(e)}`);
+    return false;
   }
 }
 
@@ -426,7 +429,7 @@ function queueWrite(job: () => Promise<void>): void {
  */
 function applyChoice(id: LookId, write: LookWrite): void {
   if (!shot) return;
-  queueWrite(() => storeLook(id, write));
+  queueWrite(async () => { await storeLook(id, write); });
 }
 
 /**
@@ -450,8 +453,10 @@ function chooseWallpaper(): void {
       return;
     }
     if (fetched.ok) { await storeLook("wallpaper", wallpaperLookWrite(fetched.file)); return; }
-    await storeLook("clean", lookWrite(LOOKS.find((l) => l.id === "clean")!));
-    setHint(fetched.notice); // main's WALLPAPER_NOTICE, not retyped here
+    const stored = await storeLook("clean", lookWrite(LOOKS.find((l) => l.id === "clean")!));
+    // main's WALLPAPER_NOTICE, not retyped here. A Clean write that failed keeps
+    // its own hint, with the notice after it.
+    setHint(stored ? fetched.notice : `${hint.textContent} ${fetched.notice}`);
   });
 }
 

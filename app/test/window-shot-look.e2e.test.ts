@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
-import { mkdtempSync, readdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTakeFolder } from "./_take-fixture.js";
@@ -181,4 +181,50 @@ describe("window shot looks (STC-628)", () => {
     const r = await editor.evaluate((d) => (window as any).stillEditor.fetchWallpaper(d), dir);
     expect(r).toEqual({ ok: false, notice: WALLPAPER_NOTICE });
   }, 120_000);
+
+  describe("the Wallpaper swatch in the still editor", () => {
+    const swatch = (editor: Page, id: string) => editor.locator(`#lookgrid [data-look="${id}"]`);
+    const checked = (editor: Page, id: string) => swatch(editor, id).getAttribute("aria-checked");
+    const hintOf = (editor: Page) => editor.textContent("#hint");
+
+    test("picking it on a shot with none reads the desktop and shows it in the chip, with no CSP error", async () => {
+      const { win } = await launch({ windowShotLook: "window-only" });
+      const { editor, dir } = await editorOnWindowShot(win);
+      const consoleErrors: string[] = [];
+      editor.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
+      await editor.waitForSelector('#lookgrid [data-look="wallpaper"]');
+      await swatch(editor, "wallpaper").click();
+      await expect.poll(() => checked(editor, "wallpaper"), { timeout: 15_000 }).toBe("true");
+      await expect.poll(() => editor.locator('#lookgrid [data-look="wallpaper"] .chip').evaluate(
+        (el) => el.classList.contains("has-image")), { timeout: 15_000 }).toBe(true);
+      expect(existsSync(join(dir, "wallpaper.jpg"))).toBe(true);
+      expect(parseShot(JSON.parse(readFileSync(join(dir, "shot.json"), "utf8"))).decoration.background?.kind)
+        .toBe("wallpaper");
+      // The chip's picture is an object URL: img-src must allow blob:.
+      await sleep(500);
+      expect(consoleErrors.filter((t) => /Content Security Policy|violates/i.test(t))).toEqual([]);
+    }, 120_000);
+
+    test("an unreadable wallpaper writes Clean and says so", async () => {
+      const { win } = await launch({ windowShotLook: "window-only" }, { STC_FAKE_WALLPAPER: "fail" });
+      const { editor } = await editorOnWindowShot(win);
+      await editor.waitForSelector('#lookgrid [data-look="wallpaper"]');
+      await swatch(editor, "wallpaper").click();
+      await expect.poll(() => hintOf(editor), { timeout: 15_000 }).toBe(WALLPAPER_NOTICE);
+      expect(await checked(editor, "clean")).toBe("true");
+      expect(await checked(editor, "wallpaper")).toBe("false");
+    }, 120_000);
+
+    test("a fetch that is refused keeps the previous look and says why", async () => {
+      const { win } = await launch({ windowShotLook: "window-only" });
+      const { editor, dir } = await editorOnWindowShot(win);
+      await editor.waitForSelector('#lookgrid [data-look="wallpaper"]');
+      // No shot.json to merge into: main rejects the fetch.
+      rmSync(join(dir, "shot.json"));
+      await swatch(editor, "wallpaper").click();
+      await expect.poll(() => hintOf(editor), { timeout: 15_000 }).toContain("Could not read your wallpaper");
+      expect(await checked(editor, "window-only")).toBe("true");
+      expect(await checked(editor, "wallpaper")).toBe("false");
+    }, 120_000);
+  });
 });
