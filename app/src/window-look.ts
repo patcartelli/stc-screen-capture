@@ -16,6 +16,9 @@ export const WINDOW_SHOT_LOOKS: readonly { value: WindowShotLook; label: string 
 const lookById = (id: string) => LOOKS.find((l) => l.id === id)!;
 const cleanWrite = () => lookWrite(lookById("clean"));
 
+/** The fallback line, said by the panel and the still editor alike. */
+export const WALLPAPER_NOTICE = "Couldn't read your wallpaper, so this shot uses Clean.";
+
 export const wantsWallpaper = (look: WindowShotLook): boolean => look === "wallpaper";
 
 /** A Capture-backgrounds look: a background mode whose background is not the wallpaper. */
@@ -41,6 +44,21 @@ export function captureLook(
       return { write: lastBackground ?? cleanWrite() };
     case "wallpaper":
       if (wallpaper && "file" in wallpaper) return { write: wallpaperLookWrite(wallpaper.file) };
-      return { write: cleanWrite(), notice: "Couldn't read your wallpaper, so this shot uses Clean." };
+      return { write: cleanWrite(), notice: WALLPAPER_NOTICE };
   }
+}
+
+/**
+ * How a fresh capture's panel is presented. `afterShot` is the panel preference
+ * already resolved ("clipboard" = `thumbnail.skip`, or a variant hotkey). A
+ * notice must be seen, so it shows the panel even in clipboard mode, for that
+ * one shot only, and the shot is still copied (`copy`), as the silent path
+ * would have done (Patrick, 2026-11-02).
+ */
+export function presentFlags(
+  afterShot: "panel" | "clipboard",
+  notice?: string,
+): { silent: boolean; copy: boolean } {
+  if (afterShot === "panel") return { silent: false, copy: false };
+  return notice ? { silent: false, copy: true } : { silent: true, copy: false };
 }

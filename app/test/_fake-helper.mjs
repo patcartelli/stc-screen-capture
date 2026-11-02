@@ -34,6 +34,21 @@ const [fakeScreen, fakeInput] = (process.env.STC_FAKE_PERMISSIONS ?? "1,granted"
 const permissions = { screenRecording: fakeScreen === "1", inputMonitoring: fakeInput };
 
 /** fd3 = reliable: responses and lifecycle. */
+/**
+ * STC-628: the wallpaper read, both halves. Writes a real `wallpaper.jpg` (a
+ * 1x1 JPEG) so a caller loading it through `still:frame` gets a file, or says
+ * why not with STC_FAKE_WALLPAPER=fail.
+ */
+function fakeWallpaper(dir) {
+  if (process.env.STC_FAKE_WALLPAPER === "fail") {
+    return { wallpaperError: "stand-in: the wallpaper could not be read" };
+  }
+  writeFileSync(join(dir, "wallpaper.jpg"), Buffer.from(
+    "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffc0000b080001000101011100ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffda0008010100003f00fbd3ffd9",
+    "hex"));
+  return { wallpaper: { file: "wallpaper.jpg", source: "desktop-image-file", ms: 1 } };
+}
+
 const send = (ev, o = {}) => writeSync(3, JSON.stringify({ ev, ...o }) + "\n");
 /** stdout = lossy: stats only. */
 const stat = (o) => process.stdout.write(JSON.stringify({ ev: "stats", ...o }) + "\n");
@@ -376,10 +391,21 @@ process.stdin.on("data", (chunk) => {
           if (process.env.STC_FAKE_STILL_LOG) {
             writeFileSync(process.env.STC_FAKE_STILL_LOG, JSON.stringify(cmd) + "\n", { flag: "a" });
           }
-          send("still", { seq, dir, file: "frame.png", shot, timing: { totalMs: 1 } });
+          // STC-628: a window shot that asked for its wallpaper gets one beside
+          // it, or `wallpaperError` with STC_FAKE_WALLPAPER=fail — the real
+          // helper's two answers, never a failed capture.
+          const wallpaper = cmd.kind === "window" && cmd.wallpaper === true ? fakeWallpaper(dir) : {};
+          send("still", { seq, dir, file: "frame.png", shot, timing: { totalMs: 1 }, ...wallpaper });
         } catch (e) {
           send("error", { seq, code: "write-failed", detail: String(e) });
         }
+        break;
+      }
+      // ── STC-628: the still editor's wallpaper, read as it is now ────────
+      case "wallpaper": {
+        const r = fakeWallpaper(cmd.dir);
+        if (r.wallpaper) send("wallpaper", { seq, ...r.wallpaper });
+        else send("error", { seq, code: "wallpaper-unavailable", detail: r.wallpaperError });
         break;
       }
       // ── the export path (STC-293/296) ───────────────────────────────────

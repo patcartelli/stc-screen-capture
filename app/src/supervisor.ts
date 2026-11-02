@@ -114,6 +114,16 @@ export class HelperSupervisor {
     return this.client.request("copy-file", { path });
   }
 
+  /**
+   * Read a display's wallpaper into `dir` as `file` (STC-628), for the still
+   * editor's Wallpaper swatch on a shot that has none. State-free like
+   * `captureStill`. Rejects with `wallpaper-unavailable` when it cannot.
+   */
+  async wallpaper(dir: string, displayId: number, file: string): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("wallpaper", { dir, displayId, file });
+  }
+
   /** Screen Recording and Input Monitoring as the helper sees them (STC-476). Never prompts. */
   async permissions(): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");

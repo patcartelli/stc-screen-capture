@@ -180,6 +180,13 @@ const stillShot: Shot | null =
  */
 // Never for a recording: it has no Copy to run (STC-487 §3.2).
 const silent = take.kind === "shot" && params.get("silent") === "1";
+/**
+ * STC-628: a fresh shot's one line to say (the wallpaper fallback), and
+ * whether to copy as a silent panel would have — set together when the notice
+ * overrode a clipboard capture's `silent` (`presentFlags`, `window-look.ts`).
+ */
+const notice = take.kind === "shot" ? params.get("notice") ?? "" : "";
+const copyOnLoad = take.kind === "shot" && params.get("copy") === "1";
 /** Which way this panel leaves the screen — see `discardDirection`. */
 const corner = parseCorner(params.get("corner"));
 
@@ -1032,7 +1039,15 @@ void (async () => {
   // Painted — safe to show without a flash of empty content, and the moment
   // this panel starts accepting keys (after `SETTLE_KEYS_MS` — see the block
   // comment above the keydown listener).
+  if (notice) setStatus(notice);
   paintCard();
+  // The copy a clipboard capture asked for, on a panel shown only to say the
+  // notice. Copy never promotes (`run`'s rule): the panel is up, so Save is
+  // the person's. The notice is put back after, over Copy's own "Copied" line.
+  if (copyOnLoad) {
+    await run("copy");
+    if (notice) setStatus(notice);
+  }
   // Only NOW, and deliberately not awaited: the panel is on screen and idle
   // until a person acts, so the drag file that a drag-out would otherwise
   // have to wait for happens in time nobody is using. Nothing downstream

@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { LOOKS, lookWrite, wallpaperLookWrite } from "@transform/backgrounds.js";
 import {
-  captureLook, isRememberedBackground, wantsWallpaper, WINDOW_SHOT_LOOKS,
+  captureLook, isRememberedBackground, presentFlags, wantsWallpaper, WINDOW_SHOT_LOOKS,
 } from "../src/window-look.js";
 
 const byId = (id: string) => LOOKS.find((l) => l.id === id)!;
@@ -46,5 +46,17 @@ describe("isRememberedBackground", () => {
     expect(isRememberedBackground(lookWrite(byId("window-only")))).toBe(false);
     expect(isRememberedBackground(lookWrite(byId("window-shadow")))).toBe(false);
     expect(isRememberedBackground(wallpaperLookWrite("w.png"))).toBe(false);
+  });
+});
+
+describe("presentFlags (STC-628)", () => {
+  const NOTICE = "Couldn't read your wallpaper, so this shot uses Clean.";
+  test("the panel preference is kept when there is nothing to say", () => {
+    expect(presentFlags("panel")).toEqual({ silent: false, copy: false });
+    expect(presentFlags("clipboard")).toEqual({ silent: true, copy: false });
+  });
+  test("a notice shows the panel, and clipboard mode still copies", () => {
+    expect(presentFlags("panel", NOTICE)).toEqual({ silent: false, copy: false });
+    expect(presentFlags("clipboard", NOTICE)).toEqual({ silent: false, copy: true });
   });
 });

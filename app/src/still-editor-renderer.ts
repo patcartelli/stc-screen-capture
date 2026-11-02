@@ -42,6 +42,7 @@ declare global {
       writeShot(dir: string, redactions: unknown, look?: LookWrite): Promise<{ ok: boolean; redactions: number }>;
       exportStill(req: Record<string, unknown>): Promise<any>;
       getSettings(): Promise<{ still: ExportOptions; saveFolder: string | null }>;
+      fetchWallpaper(dir: string): Promise<{ ok: true; file: string } | { ok: false; notice: string }>;
     };
   }
 }
