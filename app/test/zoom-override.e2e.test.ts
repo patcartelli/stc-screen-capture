@@ -83,8 +83,9 @@ describe("dragging a rect", () => {
     expect(o.windowId).toBe(WINDOW_ID);
     expect(o.rect.x).toBeCloseTo(0.2, 1);
     expect(o.rect.y).toBeCloseTo(0.2, 1);
+    // Frame-shaped (STC-629): a drag is sized by its longer axis.
     expect(o.rect.width).toBeCloseTo(0.5, 1);
-    expect(o.rect.height).toBeCloseTo(0.4, 1);
+    expect(o.rect.height).toBeCloseTo(0.5, 1);
   }, 30_000);
 
   test("a bare click (no drag) still writes a default-sized rect", async () => {
