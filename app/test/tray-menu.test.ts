@@ -141,7 +141,8 @@ describe("menu item icons (STC-597)", () => {
     expect(trayTemplate({ shortcuts: DEFAULT_SHORTCUTS }).some((i) => i.id === "move-pill")).toBe(false);
     const items = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS, recording: true });
     const at = items.findIndex((i) => i.id === "move-pill");
-    expect(items[at - 1]?.id).toBe("action:self-timer");
+    // After the last action in the list (Pick Color since STC-627).
+    expect(items[at - 1]?.id).toBe(`action:${BINDABLE_ACTIONS[BINDABLE_ACTIONS.length - 1]}`);
     expect(items.findIndex((i) => i.id === "action:record")).toBeLessThan(at);
     expect(items[at]!.label).toBe(MOVE_PILL_LABEL);
     expect(items[at]!.submenu!.map((i) => i.id)).toEqual(PILL_SPOTS.map((s) => `pill:${s.spot}`));

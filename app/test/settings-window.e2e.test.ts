@@ -67,7 +67,7 @@ describe("the Settings window", () => {
     const sections: Record<string, string[]> = {
       capture: ["App", "After a shot", "Recording"],
       camera: ["Preview", "Shape", "Style"],
-      shortcuts: ["Shots", "Recording"],
+      shortcuts: ["Shots", "Tools", "Recording"],
       output: ["Locations", "Storage", "GIF"],
       advanced: ["Diagnostics"],
     };

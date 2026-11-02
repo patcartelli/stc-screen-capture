@@ -113,7 +113,8 @@ describe("planning a whole set", () => {
 
   test("no default collides with a system binding", () => {
     // The ticket's own requirement, checked rather than asserted in a comment.
-    for (const a of Object.values(DEFAULT_SHORTCUTS)) {
+    // `null` is a deliberately unbound action (pick-color, STC-627).
+    for (const a of Object.values(DEFAULT_SHORTCUTS).filter((x) => x !== null)) {
       expect(parseAccelerator(a!).ok, a!).toBe(true);
     }
   });
@@ -253,7 +254,7 @@ describe("stills are Shot (STC-398)", () => {
     // DEFAULT_SHORTCUTS now also carries `record` (STC-388) — a fifth,
     // brand-new key, not a rename of any of the four above.
     expect(Object.keys(DEFAULT_SHORTCUTS).sort())
-      .toEqual(["display", "record", "region", "self-timer", "window"]);
+      .toEqual(["display", "pick-color", "record", "region", "self-timer", "window"]);
   });
 
   test("a binding stored before the rename still plans onto its action", () => {
@@ -279,7 +280,7 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
   test("SHOT_ACTIONS is DERIVED, so the two lists cannot disagree", () => {
     // Not a second literal: every shot action must appear in the wider list,
     // in the same relative order, and nothing else may be in it.
-    expect(SHOT_ACTIONS).toEqual(BINDABLE_ACTIONS.filter((a) => a !== "record"));
+    expect(SHOT_ACTIONS).toEqual(BINDABLE_ACTIONS.filter((a) => a !== "record" && a !== "pick-color"));
     expect(new Set(BINDABLE_ACTIONS).size).toBe(BINDABLE_ACTIONS.length);
   });
 
@@ -297,7 +298,7 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
   });
 
   test("every default is ⌘⌥+<digit>, 1-5 in the table's order, and plans without a problem", () => {
-    const digits = BINDABLE_ACTIONS.map((a) => {
+    const digits = BINDABLE_ACTIONS.filter((a) => a !== "pick-color").map((a) => {
       const acc = DEFAULT_SHORTCUTS[a];
       expect(acc, `${a} has no default binding`).toBeTruthy();
       const m = /^Alt\+Command\+(\d)$/.exec(acc!);
@@ -414,8 +415,9 @@ describe("what a variant's line says (STC-415)", () => {
 
 describe("resetting to the new defaults (STC-582)", () => {
   test("STC-415's whole row, and the hyperkey row, are offered", () => {
-    expect(shortcutsToReset(STC415_DEFAULT_SHORTCUTS)).toEqual([...BINDABLE_ACTIONS]);
-    expect(shortcutsToReset(LEGACY_DEFAULT_SHORTCUTS)).toEqual([...BINDABLE_ACTIONS]);
+    const old = BINDABLE_ACTIONS.filter((a) => a !== "pick-color");
+    expect(shortcutsToReset(STC415_DEFAULT_SHORTCUTS)).toEqual(old);
+    expect(shortcutsToReset(LEGACY_DEFAULT_SHORTCUTS)).toEqual(old);
     expect(resetToNewDefaults(STC415_DEFAULT_SHORTCUTS)).toEqual(DEFAULT_SHORTCUTS);
   });
 
@@ -441,7 +443,9 @@ describe("resetting to the new defaults (STC-582)", () => {
 
 describe("superseded defaults (STC-415)", () => {
   test("every superseded default is a real accelerator and none is a current default", () => {
-    for (const a of BINDABLE_ACTIONS) {
+    // pick-color shipped unbound (STC-627): no default has ever been superseded.
+    expect(SUPERSEDED_DEFAULT_SHORTCUTS["pick-color"]).toEqual([]);
+    for (const a of BINDABLE_ACTIONS.filter((x) => x !== "pick-color")) {
       expect(SUPERSEDED_DEFAULT_SHORTCUTS[a].length, a).toBeGreaterThan(0);
       for (const old of SUPERSEDED_DEFAULT_SHORTCUTS[a]) {
         expect(parseAccelerator(old).ok, `${a}: ${old}`).toBe(true);
