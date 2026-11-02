@@ -15,9 +15,11 @@
 import { createServer } from "vite";
 import { chromium } from "playwright";
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
-const sessionDir = process.argv[2];
+// The take's folder, or any file in it: pointing at display.mp4 is the natural mistake.
+const arg = process.argv[2];
+const sessionDir = arg && /\.(mp4|json|m4a)$/.test(arg) ? dirname(arg) : arg;
 const headed = process.argv.includes("--headed");
 if (!sessionDir || !existsSync(join(sessionDir, "display.mp4"))) {
   console.error("usage: node scripts/scrub-timing-one.mjs <sessionDir> [--headed]");
@@ -34,7 +36,7 @@ const server = await createServer({
     configureServer(s) {
       s.middlewares.use("/session", (req, res, next) => {
         const name = (req.url || "").split("?")[0].replace(/^\//, "");
-        if (!["anchors.json", "events.json", "display.mp4", "camera.mp4"].includes(name)) return next();
+        if (!["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a"].includes(name)) return next();
         if (!existsSync(join(sessionDir, name))) { res.statusCode = 404; res.end(); return; }
         res.setHeader("content-type", name.endsWith(".json") ? "application/json" : "video/mp4");
         res.end(readFileSync(join(sessionDir, name)));
@@ -62,11 +64,11 @@ try {
               `camera ${take.camera ? "yes" : "no"}, zoom overrides ${take.zoomBlocks}` +
               `${headed ? "" : "  (headless)"}`);
   const f = (n, d = 1) => n.toFixed(d).padStart(7);
-  console.log("\ndrag                        moves painted  /s   settle  render  decode  compos  maxDec  dec/pt restarts");
+  console.log("\ndrag                        moves painted  /s   settle  render  decode  compos  maxDec  dec/pt restarts flushes peakBuf");
   for (const r of results) {
     console.log(`${r.name.padEnd(27)} ${String(r.moves).padStart(5)} ${String(r.painted).padStart(7)}` +
                 `${f(r.paintedPerS)} ${f(r.settleMs, 0)}ms${f(r.renderMs, 2)}${f(r.decodeMs)}${f(r.compositeMs, 2)}` +
-                `${f(r.maxDecodeMs, 0)}${f(r.decodedPerPaint)}${String(r.decoderRestarts).padStart(9)}`);
+                `${f(r.maxDecodeMs, 0)}${f(r.decodedPerPaint)}${String(r.decoderRestarts).padStart(9)}${String(r.flushes).padStart(8)}${String(r.peakBuffered).padStart(8)}`);
   }
   console.log("\n(render/decode/compos are mean ms per painted frame; dec/pt = frames decoded per painted frame)");
   out = 0;

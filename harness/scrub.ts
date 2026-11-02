@@ -28,10 +28,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const cameraMp4 = anchors.files?.camera
     ? await fetch(`${dir}/${anchors.files.camera}`).then((r) => r.arrayBuffer())
     : undefined;
+  // Unused here, but loadSession refuses a claimed track that was not supplied.
+  const micM4a = anchors.files?.mic
+    ? await fetch(`${dir}/${anchors.files.mic}`).then((r) => r.arrayBuffer())
+    : undefined;
+  const systemM4a = anchors.files?.system
+    ? await fetch(`${dir}/${anchors.files.system}`).then((r) => r.arrayBuffer())
+    : undefined;
   const session = await loadSession({
     anchors, events,
     displayMp4: memorySource(displayMp4, "display.mp4"),
     cameraMp4: cameraMp4 && memorySource(cameraMp4, "camera.mp4"),
+    micM4a, systemM4a,
   });
   const durationNs = session.frames[session.frames.length - 1] ?? 0;
   const project = parseProject(projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
@@ -91,8 +99,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       compositeMs: per("composite"),
       maxDecodeMs: after.drawMs.maxDecode,
       decodedPerPaint: painted ? (after.display.framesDecoded - before.display.framesDecoded) / painted : 0,
+      flushes: after.display.flushes - before.display.flushes,
       decoderRestarts: after.display.decoderGenerations - before.display.decoderGenerations,
       lateFrames: after.lateFrames - before.lateFrames,
+      peakBuffered: after.display.peakBuffered,
     });
   }
   player.close();
