@@ -13,6 +13,7 @@ import { loadTake, type TakeIO } from "./session-io.js";
 import { exportSession } from "@transform/export";
 import { exportGif } from "@transform/gif-export";
 import { cleanGifSettings } from "@transform/gif-options";
+import { cleanExportRate } from "@transform/export-rate";
 import { EMBED_CSS_WIDTH, outputSizeFor, isCaptureSize } from "@transform/output-size";
 
 declare global {
@@ -83,6 +84,8 @@ void (async () => {
     const chat = smaller ? { ...project, output: { ...project.output, ...size } } : project;
     const result = await exportSession(session, chat, {
       captureId,
+      // STC-614: the editor's Frame rate; absent (every panel Copy) is 60.
+      rate: cleanExportRate(params.get("rate")),
       onProgress: (done, total) => {
         const now = performance.now();
         if (now - last < PROGRESS_EVERY_MS && done < total) return;

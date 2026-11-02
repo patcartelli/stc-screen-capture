@@ -1369,6 +1369,12 @@
             <label class="label" for="outsize">Size</label>
             <select id="outsize"></select>
           </div>
+          <!-- STC-614: an MP4's rate, export-time like Type. A GIF shows its
+               own Frame rate row below instead, the app's GIF setting. -->
+          <div class="row" id="exportraterow">
+            <label class="label" for="exportrate">Frame rate</label>
+            <select id="exportrate"></select>
+          </div>
           <div class="row" id="gifraterow" hidden>
             <label class="label" for="gifrate">Frame rate</label>
             <select id="gifrate"></select>
