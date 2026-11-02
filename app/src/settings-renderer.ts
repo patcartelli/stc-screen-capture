@@ -23,6 +23,7 @@ import {
 } from "@transform/pip-style.js";
 import type { ToastInput } from "./toast-message.js";
 import { buildDropdown } from "./settings-dropdown.js";
+import { WINDOW_SHOT_LOOKS, type WindowShotLook } from "./window-look.js";
 
 interface SettingsView {
   shutterSound: boolean;
@@ -31,6 +32,7 @@ interface SettingsView {
   thumbnail: { corner: "top-left" | "top-right" | "bottom-left" | "bottom-right"; skip: boolean };
   showDiagnostics: boolean;
   iconPlacement: IconPlacement;
+  windowShotLook: WindowShotLook;
   share: { destination: string | null };
   gif: GifSettings;
 }
@@ -190,6 +192,11 @@ const CORNERS: readonly { value: SettingsView["thumbnail"]["corner"]; label: str
 ];
 const thumbCornerSel = buildDropdown($("thumbcorner") as HTMLButtonElement, CORNERS, (picked) => {
   void save("the panel corner", () => patchThumbnail({ corner: picked as SettingsView["thumbnail"]["corner"] }));
+});
+
+// What a fresh window capture looks like; the options are window-look.ts's own.
+const windowLookSel = buildDropdown($("windowshotlook") as HTMLButtonElement, WINDOW_SHOT_LOOKS, (picked) => {
+  void save("the window shot look", () => bridge.setSettings({ windowShotLook: picked as WindowShotLook }));
 });
 
 /**
@@ -578,6 +585,7 @@ async function loadSettings(): Promise<void> {
   iconPlacementSel.set(s.iconPlacement);
   markSegment(afterShot, s.thumbnail.skip ? "clipboard" : "panel");
   thumbCornerSel.set(s.thumbnail.corner);
+  windowLookSel.set(s.windowShotLook);
   shutterBox.checked = s.shutterSound;
   // A stored value that is not offered (a number typed into the file) leaves
   // nothing selected rather than misreporting itself.

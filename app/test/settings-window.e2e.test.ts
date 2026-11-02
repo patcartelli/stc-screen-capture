@@ -65,7 +65,7 @@ describe("the Settings window", () => {
     const win = await launch(fresh());
     const settings = await openSettings(app!, win);
     const sections: Record<string, string[]> = {
-      capture: ["App", "After a shot", "Recording"],
+      capture: ["App", "After a shot", "Window shots", "Recording"],
       camera: ["Preview", "Shape", "Style"],
       shortcuts: ["Shots", "Recording"],
       output: ["Locations", "Storage", "GIF"],
@@ -118,6 +118,26 @@ describe("the Settings window", () => {
     await pickDropdown(settings, "gifwidth", "original");
     await expect.poll(() => settingsJson(opts.userData).gif, { timeout: 15_000 })
       .toEqual({ fps: 30, maxWidth: "original" });
+  }, 60_000);
+
+  test("STC-628: the Window shot look row persists the pick and names it", async () => {
+    const opts = fresh();
+    const win = await launch(opts);
+    const settings = await openSettings(app!, win);
+    await expect.poll(() => settings.getAttribute("#windowshotlook", "data-value"), { timeout: 10_000 }).toBe("wallpaper");
+    await settings.click("#windowshotlook");
+    const menu = settings.locator("#settings-menu");
+    expect(await menu.locator(".row").allTextContents())
+      .toEqual(["Just the window", "Window with shadow", "Capture background", "Desktop wallpaper"]);
+    expect(await menu.locator('.row[aria-checked="true"]').getAttribute("data-key")).toBe("wallpaper");
+    await settings.click('#settings-menu .row[data-key="window-shadow"]');
+    // The trigger is named by its label AND its value (aria-labelledby on itself).
+    expect(await settings.textContent("#windowshotlook")).toBe("Window with shadow");
+    expect(await settings.evaluate(() => {
+      const el = document.getElementById("windowshotlook")!;
+      return el.getAttribute("aria-labelledby")!.split(" ").map((id) => document.getElementById(id)!.textContent).join(" ");
+    })).toBe("Window shot look Window with shadow");
+    await expect.poll(() => settingsJson(opts.userData).windowShotLook, { timeout: 15_000 }).toBe("window-shadow");
   }, 60_000);
 
   // "5 or more options: dropdown, the record bar component" (Row pattern spec):
