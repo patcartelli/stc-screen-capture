@@ -5,7 +5,7 @@ import {
 import { parseShot, type Background, type Redaction, type Shot } from "@transform/shot";
 import { decorationForMode } from "@transform/still-decorate";
 import { DEFAULT_EXPORT_OPTIONS, stillIsBlocked, type ExportOptions } from "@transform/still-export";
-import { normaliseRegion, undoLast } from "@transform/still-redact";
+import { decideRedactKey, normaliseRegion, undoLast } from "@transform/still-redact";
 import { iconSvg } from "./icons.js";
 import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 
@@ -75,6 +75,11 @@ let regions: Redaction[] = [];
 /** Where the capture sits inside the view canvas, in view pixels — the same role `thumbnail-renderer.ts`'s `contentInView` played. */
 let contentInView: { x: number; y: number; width: number; height: number } | undefined;
 let dragFrom: { x: number; y: number } | undefined;
+/**
+ * The box the keyboard acts on (STC-576), an index into `regions`. Shown only
+ * while the canvas has the focus, because only then do the keys reach it.
+ */
+let selected: number | undefined;
 
 /** The smallest drag that counts as a region, in view pixels — see `thumbnail-renderer.ts`'s identical constant and reasoning. */
 const MIN_DRAG_VIEW_PX = 3;
@@ -143,6 +148,7 @@ function paintView(marquee?: { x: number; y: number; width: number; height: numb
   if (!view) return;
   view.clearRect(0, 0, canvas.width, canvas.height);
   view.drawImage(composite, 0, 0, canvas.width, canvas.height);
+  paintSelection(view);
   if (!marquee) return;
   view.save();
   view.strokeStyle = "#ffffff";
@@ -153,17 +159,48 @@ function paintView(marquee?: { x: number; y: number; width: number; height: numb
 }
 
 /**
+ * The selected box's outline (STC-576), in the shared `--focus` colour, drawn
+ * only while the canvas holds the focus. A canvas has no DOM for its boxes, so
+ * this is the focus ring a box would otherwise have. Solid, never animated.
+ */
+function paintSelection(view: CanvasRenderingContext2D): void {
+  if (selected === undefined || !contentInView || document.activeElement !== canvas) return;
+  const r = regions[selected];
+  if (!r) return;
+  const c = contentInView;
+  view.save();
+  view.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--focus").trim() || "#4c8dff";
+  view.lineWidth = 2;
+  view.strokeRect(c.x + r.x * c.width - 1, c.y + r.y * c.height - 1, r.width * c.width + 2, r.height * c.height + 2);
+  view.restore();
+}
+
+/**
  * Persist the regions (STC-297's original reasoning, still true here):
  * written on every change rather than on the way out, because a redaction
  * the user drew must not depend on them finding a "Save" button — Done just
  * closes the window.
+ *
+ * Coalesced (STC-576): a held arrow key changes the boxes many times a
+ * second, so while one write is out the next waits, and only the newest
+ * `regions` is written after it. Every change still reaches the disk; only
+ * the ones a later change replaced before they were sent are skipped.
  */
-async function persistDecoration(): Promise<void> {
-  try {
-    await window.stillEditor.writeShot(dir, regions);
-  } catch (e: any) {
-    setHint(`Could not store that: ${e?.message ?? e}`);
-  }
+let persisting: Promise<void> | undefined;
+let persistAgain = false;
+function persistDecoration(): Promise<void> {
+  if (persisting) { persistAgain = true; return persisting; }
+  persisting = (async () => {
+    do {
+      persistAgain = false;
+      try {
+        await window.stillEditor.writeShot(dir, regions);
+      } catch (e: any) {
+        setHint(`Could not store that: ${e?.message ?? e}`);
+      }
+    } while (persistAgain);
+  })().finally(() => { persisting = undefined; });
+  return persisting;
 }
 
 /** Pointer position in VIEW pixels, the space the marquee is drawn in. */
@@ -208,15 +245,51 @@ canvas.addEventListener("pointerup", (e) => {
   );
   if (!region) { paintView(); return; }
   regions = [...regions, region];
+  // A drawn box is the one the keys act on next, as a placed one is.
+  selected = regions.length - 1;
   void draw();
   void persistDecoration();
   setHint(regionCountText());
   updateUndoState();
 });
 
+// ── the keyboard path (STC-576) ──────────────────────────────────────────────
+// The canvas is a Tab stop. `decideRedactKey` decides what a key does; a key it
+// does not claim (⌘Z, ⌘S, Tab, Escape) falls through to the document handler
+// below untouched.
+
+/** What the keys can do right now, for the hint line (polite live region). */
+function keyboardHint(): string {
+  if (regions.length === 0) return "Return places a box.";
+  if (selected === undefined) return `${regionCountText()} ] selects one, Return places another.`;
+  return `Box ${selected + 1} of ${regions.length}. Arrows move it, ⌥ arrows resize, Delete removes, ] next.`;
+}
+
+canvas.addEventListener("keydown", (e) => {
+  if (!shot || !contentInView) return;
+  // The capture's own size: a resize's floor is MIN_REDACTION_PX CAPTURE
+  // pixels, whatever size this window shows it at.
+  const r = decideRedactKey(e, { regions, selected }, { width: shot.frame.width, height: shot.frame.height });
+  if (!r) return;
+  e.preventDefault();
+  regions = [...r.regions];
+  selected = r.selected;
+  if (r.changed) {
+    void draw();
+    void persistDecoration();
+    updateUndoState();
+  } else {
+    paintView();
+  }
+  setHint(keyboardHint());
+});
+canvas.addEventListener("focus", () => { paintView(); setHint(keyboardHint()); });
+canvas.addEventListener("blur", () => { paintView(); setHint(regionCountText()); });
+
 function undo(): void {
   if (regions.length === 0) return;
   regions = undoLast(regions);
+  if (selected !== undefined && selected >= regions.length) selected = regions.length ? regions.length - 1 : undefined;
   void draw();
   void persistDecoration();
   setHint(regionCountText());

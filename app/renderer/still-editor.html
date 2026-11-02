@@ -23,6 +23,9 @@
       min-height: 0; padding: 16px;
     }
     #stagecanvas { max-width: 100%; max-height: 100%; display: block; cursor: crosshair; }
+    /* STC-576: the canvas is a Tab stop for keyboard redaction; the selected
+       box draws its own --focus outline inside it. */
+    #stagecanvas:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
     /* ── the toolbar (STC-443): hairline icon buttons, same language the
        video editor's own transport will use. Undo/Save/Done, in that
@@ -116,7 +119,9 @@
   </style>
 </head>
 <body>
-  <div id="stage"><canvas id="stagecanvas"></canvas></div>
+  <div id="stage"><canvas id="stagecanvas" tabindex="0" role="application"
+    aria-label="Redaction canvas. Return places a box, ] and [ select one, arrows move it, Option arrows resize it, Delete removes it."
+    aria-describedby="hint"></canvas></div>
   <div id="looks" hidden>
     <span class="label" id="lookslabel">Background</span>
     <div id="lookgrid" role="radiogroup" aria-labelledby="lookslabel"></div>
@@ -126,7 +131,7 @@
     </div>
   </div>
   <div id="toolbar">
-    <span id="hint">Drag a box over anything private.</span>
+    <span id="hint" aria-live="polite">Drag a box over anything private.</span>
     <button id="undo" class="iconbtn" aria-label="Undo" title="Undo the last box (⌘Z)">
       <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 14 4 9 9 4"></polyline><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path></svg>
     </button>

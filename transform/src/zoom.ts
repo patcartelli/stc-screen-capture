@@ -252,6 +252,16 @@ export const DEFAULT_ZOOM_PRESET: ZoomPreset = "standard";
 export interface ZoomSim {
   /** How far into the zoom we are at sim tick n: 0 is fully out, 1 fully in. */
   amountAt(n: number): number;
+  /**
+   * `amountAt` at many ticks, in any order, in ONE forward pass (STC-620).
+   *
+   * It runs the same `step` over the same checkpoints, so every answer is
+   * bit-identical to `amountAt` at that tick; the pass only avoids restarting
+   * from a checkpoint for each one, which is what makes a dense curve (the
+   * editor's Zoom lane, hundreds of samples per ramp) cost a few ticks per
+   * sample instead of up to `ZOOM_CHECKPOINT_INTERVAL`.
+   */
+  amountsAt(ticks: readonly number[]): number[];
 }
 
 /**
@@ -270,7 +280,7 @@ export function createZoomSim(
   windows: readonly ZoomWindow[],
   easing: ZoomEasing = ZOOM_PRESETS[DEFAULT_ZOOM_PRESET],
 ): ZoomSim {
-  if (windows.length === 0) return { amountAt: () => 0 };
+  if (windows.length === 0) return { amountAt: () => 0, amountsAt: (ticks) => ticks.map(() => 0) };
 
   interface State { z: number; v: number }
   const checkpoints: State[] = [{ z: 0, v: 0 }];
@@ -285,20 +295,48 @@ export function createZoomSim(
     return { z: s.z + v * DT, v };
   }
 
+  /** One tick forward from `cur` (at `tick - 1`), recording a checkpoint when it is the next one due. */
+  function advance(cur: State, tick: number): State {
+    const next = step(cur, tick);
+    if (tick % ZOOM_CHECKPOINT_INTERVAL === 0
+        && tick / ZOOM_CHECKPOINT_INTERVAL === checkpoints.length) {
+      checkpoints.push(next);
+    }
+    return next;
+  }
+
   function stateAt(n: number): State {
     const k = Math.min(Math.floor(n / ZOOM_CHECKPOINT_INTERVAL), checkpoints.length - 1);
     let cur = checkpoints[k]!;
     let tick = k * ZOOM_CHECKPOINT_INTERVAL;
     while (tick < n) {
       tick++;
-      cur = step(cur, tick);
-      if (tick % ZOOM_CHECKPOINT_INTERVAL === 0
-          && tick / ZOOM_CHECKPOINT_INTERVAL === checkpoints.length) {
-        checkpoints.push(cur);
-      }
+      cur = advance(cur, tick);
     }
     return cur;
   }
 
-  return { amountAt: (n: number) => stateAt(Math.max(0, n)).z };
+  function amountsAt(ticks: readonly number[]): number[] {
+    const order = ticks.map((_, i) => i).sort((a, b) => ticks[a]! - ticks[b]!);
+    const out = new Array<number>(ticks.length);
+    let cur: State | undefined;
+    let tick = 0;
+    for (const i of order) {
+      const n = Math.max(0, ticks[i]!);
+      const k = Math.min(Math.floor(n / ZOOM_CHECKPOINT_INTERVAL), checkpoints.length - 1);
+      const from = k * ZOOM_CHECKPOINT_INTERVAL;
+      // Carry on from where the last answer left off when that is on the way
+      // to `n`; restart from a checkpoint only when it is nearer, or when
+      // `n` is behind us (equal ticks reuse the state as it is).
+      if (cur === undefined || tick > n || from > tick) { cur = checkpoints[k]!; tick = from; }
+      while (tick < n) {
+        tick++;
+        cur = advance(cur, tick);
+      }
+      out[i] = cur.z;
+    }
+    return out;
+  }
+
+  return { amountAt: (n: number) => stateAt(Math.max(0, n)).z, amountsAt };
 }
