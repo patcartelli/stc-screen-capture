@@ -1042,11 +1042,15 @@ void (async () => {
   if (notice) setStatus(notice);
   paintCard();
   // The copy a clipboard capture asked for, on a panel shown only to say the
-  // notice. Copy never promotes (`run`'s rule): the panel is up, so Save is
-  // the person's. The notice is put back after, over Copy's own "Copied" line.
+  // notice. Unlike the silent branch, this does NOT save: from here on the
+  // shot behaves as a panel-mode shot and reaches the library when Save is
+  // pressed, because `panel:save` closes the panel and would take the notice
+  // with it (STC-628 spec). The notice is put back after, over Copy's "Copied" line;
+  // a copy that failed keeps its own line, with the notice after it, so
+  // nobody is told about the wallpaper and left believing it copied.
   if (copyOnLoad) {
-    await run("copy");
-    if (notice) setStatus(notice);
+    const copied = await run("copy");
+    if (notice) setStatus(copied ? notice : `${statusEl.textContent ?? ""} ${notice}`.trim());
   }
   // Only NOW, and deliberately not awaited: the panel is on screen and idle
   // until a person acts, so the drag file that a drag-out would otherwise

@@ -9,6 +9,7 @@ import { pageWithUrl, clickThatCloses } from "./_windows.js";
 import { readRequests, exportRequests } from "./_still-log.js";
 import { parseShot } from "../../transform/src/shot.js";
 import { WALLPAPER_NOTICE } from "../src/window-look.js";
+import { RAW_SUBDIR } from "../src/takes.js";
 import { LOOKS, lookWrite, wallpaperLookWrite } from "../../transform/src/backgrounds.js";
 
 /**
@@ -48,7 +49,7 @@ async function launch(settings: Record<string, unknown>, extraEnv: Record<string
   await stubQuitDialog(app);
   const win = await app.firstWindow();
   await win.waitForSelector("#titlebar");
-  return { win, temp, stillLog, userData };
+  return { win, temp, stillLog, userData, recordings };
 }
 
 async function overlayWindow(ms = 15_000): Promise<Page> {
@@ -116,7 +117,8 @@ describe("window shot looks (STC-628)", () => {
   }, 120_000);
 
   test("an unreadable wallpaper uses Clean and shows the panel even in clipboard mode, which still copies", async () => {
-    const { win, temp, stillLog } = await launch({ thumbnail: { skip: true } }, { STC_FAKE_WALLPAPER: "fail" });
+    const { win, temp, stillLog, recordings } =
+      await launch({ thumbnail: { skip: true } }, { STC_FAKE_WALLPAPER: "fail" });
     await shootWindow(win);
 
     const panel = await pageWithUrl(app!, "thumbnail.html");
@@ -125,6 +127,15 @@ describe("window shot looks (STC-628)", () => {
     // The copy the clipboard preference asked for still happened.
     await expect.poll(() => exportRequests(stillLog).some((x) => x.clipboard === true),
                       { timeout: 15_000 }).toBe(true);
+
+    // From here it is a panel-mode shot: NOT saved the way the silent path
+    // saves after its copy, because `panel:save` would close the panel and the
+    // notice with it. Given the silent path's own save a moment to have
+    // happened, the panel is still up and the shot is still in temp storage.
+    await sleep(1_000);
+    expect(await panelVisible()).toBe(true);
+    const raw = join(recordings, RAW_SUBDIR);
+    expect(existsSync(raw) ? readdirSync(raw) : []).toEqual([]);
 
     const { shot } = onlyShot(temp);
     expect(shot.decoration.mode).toBe("window-shadow-background");
