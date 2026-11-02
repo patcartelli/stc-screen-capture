@@ -117,6 +117,18 @@ describe("closeApp (STC-449)", () => {
       expect(out).not.toContain("[quit] teardown");
     });
 
+    test("STC-624: [tray] lines are printed too, between the window lines they came among", async () => {
+      const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const { app } = crashedApp("SIGSEGV", [
+        WINDOW_LOG[0]!,
+        "[tray] 16:45:15.120 destroy via runQuitTeardown",
+        WINDOW_LOG[2]!,
+      ], ["[tray] 16:45:15.123 set-menu idle via build <- update"]);
+      await closeApp(app);
+      const out = write.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toMatch(/quit \+0ms.*\n.*\[tray\] .* destroy via runQuitTeardown\n.*#3 destroyed: closed\n.*set-menu idle via build <- update\n/);
+    });
+
     test("a clean exit prints none of it", async () => {
       const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       const { app } = crashedApp(null, WINDOW_LOG);

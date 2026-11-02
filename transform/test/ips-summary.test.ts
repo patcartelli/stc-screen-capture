@@ -72,6 +72,31 @@ describe("summarizeIps", () => {
     expect(lines).toContain("     0 AppKit -[NSException raise]+0");
   });
 
+  // STC-624: macOS named `TrayIconCocoa::SetContextMenu` after the nearest
+  // export, `v8::BackingStore::MaxByteLength()+58716`. Only the raw offset and
+  // the image's UUID and base resolve it, and the `.ips` expired before anyone
+  // could read them out of the artifact.
+  test("keeps a symbolicated frame's raw offset, and names each image for atos", () => {
+    const misnamed = {
+      ...body,
+      usedImages: [
+        { name: "Electron Framework", uuid: "4c4c4c4c-5555-3144-a1a1-000000000001", base: 0x10a000000, arch: "arm64" },
+        { name: "AppKit" },
+      ],
+      threads: [body.threads[0], {
+        triggered: true,
+        queue: "com.apple.main-thread",
+        frames: [{ imageIndex: 0, imageOffset: 0x2a19f84, symbol: "v8::BackingStore::MaxByteLength()", symbolLocation: 58716 }],
+      }],
+    };
+    const lines = summarizeIps(`${header}\n${JSON.stringify(misnamed)}`, "r.ips");
+    expect(lines).toContain("     0 Electron Framework v8::BackingStore::MaxByteLength()+58716 @0x2a19f84");
+    expect(lines.slice(-2)).toEqual([
+      "  images (for atos):",
+      "    Electron Framework uuid 4c4c4c4c-5555-3144-a1a1-000000000001 base 0x10a000000 arm64",
+    ]);
+  });
+
   test("a report it cannot parse still prints something, and never throws", () => {
     const lines = summarizeIps("Process: Electron [4242]\nException Type: EXC_BAD_ACCESS\n", "old.crash");
     expect(lines[0]).toMatch(/^== old\.crash: not an \.ips JSON report/);

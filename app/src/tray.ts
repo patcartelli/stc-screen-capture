@@ -5,6 +5,7 @@ import {
   type TrayContext, type TrayItemId,
 } from "./tray-menu.js";
 import { trayGlyphMask, type TrayGlyph } from "./tray-icons.js";
+import { logTray } from "./tray-log.js";
 
 /**
  * The menu-bar item (STC-292) — Electron only, decisions elsewhere.
@@ -69,9 +70,12 @@ export function installTray(
   onSelect: (id: TrayItemId) => void,
 ): TrayHandle {
   const tray = new Tray(icon());
+  logTray("create");
   tray.setToolTip(TRAY_TOOLTIP);
 
   const build = (c: TrayContext): void => {
+    // STC-624: a menu rebuild is what crashed at quit; say who asked for it.
+    logTray("set-menu", `${c.recording ? "recording" : "idle"}${c.busy ? " busy" : ""}`);
     tray.setContextMenu(Menu.buildFromTemplate(trayTemplate(c).map((item) => (
       item.type === "separator"
         ? { type: "separator" as const }
@@ -104,9 +108,12 @@ export function installTray(
   (globalThis as Record<string, unknown>).__stcTrayOnSelect = onSelect;
 
   return {
-    update: (c) => { if (!tray.isDestroyed()) build(c); },
+    update: (c) => {
+      if (tray.isDestroyed()) logTray("skip-destroyed");
+      else build(c);
+    },
     destroy: () => {
-      if (!tray.isDestroyed()) tray.destroy();
+      if (!tray.isDestroyed()) { logTray("destroy"); tray.destroy(); }
       delete (globalThis as Record<string, unknown>).__stcTray;
       delete (globalThis as Record<string, unknown>).__stcTrayOnSelect;
     },
