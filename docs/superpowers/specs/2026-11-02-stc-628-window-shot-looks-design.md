@@ -52,7 +52,7 @@ of wallpaper all round. **"The background acts as a frame."**
   heavier shadow belongs to Dark. *(Claude's call.)*
 - `still-render.ts` draws a supplied image stretched to the canvas
   (`drawImage(image, 0, 0, width, height)`); it must change to cover-crop for this
-  kind. That is a renderer change, so `TRANSFORM_VERSION`/gate rules apply.
+  kind. Stills carry no `TRANSFORM_VERSION`; the still gate is what holds it.
 
 ## Speed (Claude's call)
 
