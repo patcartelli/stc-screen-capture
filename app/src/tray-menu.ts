@@ -16,8 +16,11 @@ import {
   type BindableAction, type Shortcuts,
 } from "./hotkeys.js";
 import type { TrayGlyph } from "./tray-icons.js";
+import { PILL_SPOTS, type PillSpot } from "./pill.js";
 
-export type TrayItemId = `action:${BindableAction}` | "library" | "editor" | "settings" | "about" | "quit" | "separator";
+export type TrayItemId =
+  | `action:${BindableAction}` | `pill:${PillSpot}` | "move-pill"
+  | "library" | "editor" | "settings" | "about" | "quit" | "separator";
 
 /**
  * Which glyph each action's menu item draws (STC-597). Keyed by
@@ -68,7 +71,12 @@ export interface TrayItem {
    */
   fires?: boolean;
   enabled?: boolean;
+  /** A submenu instead of a click (Move Pill, STC-576). */
+  submenu?: TrayItem[];
 }
+
+/** The Move Pill submenu's label. Exported so the test and the menu agree. */
+export const MOVE_PILL_LABEL = "Move Pill";
 
 /** The accelerator on Settings…, Electron's spelling; ⌘, on a Mac. */
 export const SETTINGS_ACCELERATOR = "CommandOrControl+,";
@@ -117,6 +125,16 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
       ...(accelerator ? { accelerator } : {}),
     };
   });
+  // STC-576: the keyboard's way to move the pill, which can never hold the
+  // keyboard itself (`pill.ts`'s `PillSpot`). Only while a take records,
+  // because only then is there a pill, and right under Stop Recording, the
+  // other thing the pill does.
+  if (ctx.recording === true) {
+    items.push({
+      id: "move-pill", label: MOVE_PILL_LABEL,
+      submenu: PILL_SPOTS.map(({ spot, label }) => ({ id: `pill:${spot}` as TrayItemId, label })),
+    });
+  }
   items.push({ id: "separator", type: "separator" });
   items.push({ id: "library", label: "Open Library", icon: "library" });
   // STC-582: the editor has no default hotkey, so the menu is one of its doors.

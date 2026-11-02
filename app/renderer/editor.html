@@ -451,10 +451,15 @@
     #ruler:active { cursor: grabbing; }
     #ruler:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 3px; }
     /* The zoom buttons (STC-484), in the ruler's label cell since STC-605. */
-    .zoomctl { display: flex; align-items: center; gap: 1px; height: 100%; }
-    .zoombtn { min-width: 16px; height: 16px; padding: 0; border: none; border-radius: 3px; background: transparent;
+    .zoomctl { display: flex; align-items: center; gap: 0; height: 100%; }
+    .zoombtn { min-width: 13px; height: 16px; padding: 0; border: none; border-radius: 3px; background: transparent;
                color: var(--lane-label); font: 10px/1 var(--font-readout); cursor: pointer; }
-    .zoombtn.fit { padding: 0 4px; }
+    .zoombtn.fit { padding: 0 2px; }
+    .zoombtn svg { display: block; margin: 0 auto; }
+    /* The playhead glyph, in the playhead's own bone (STC-621): the dim label
+       grey made it read as a stray mark beside Fit. */
+    #zoomplayhead { color: var(--bone); }
+    #zoomplayhead:hover:not(:disabled) { color: #fff; }
     .zoombtn:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
     .zoombtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .zoombtn:disabled { opacity: .35; cursor: default; }
@@ -475,7 +480,11 @@
        renderRulerTicks) and a label is counter-scaled by --inv, which
        applySpanTransform sets alongside the transform. */
     #ruler-ticks { position: absolute; left: 0; right: 0; top: 6px; height: 8px; pointer-events: none; }
-    .ruler-tick { position: absolute; top: 0; height: 8px; background: rgba(255, 255, 255, .25); }
+    /* 1px wide on screen at any zoom (STC-621): the shared transform stretches
+       X, so the tick undoes it with --inv, the way a label does. It used to be
+       a width of 1/scale px with a floor, which thickened it past ~20x. */
+    .ruler-tick { position: absolute; top: 0; width: 1px; height: 8px; background: rgba(255, 255, 255, .25);
+                  transform: scaleX(var(--inv, 1)); transform-origin: 0 0; }
     .ruler-tick.minor { top: 4px; height: 4px; }
     .ruler-label { position: absolute; top: -5px; margin-left: calc(4px * var(--inv, 1));
                    transform: scaleX(var(--inv, 1)); transform-origin: 0 0;
@@ -535,6 +544,19 @@
                 gap: 6px; height: 28px; padding: 0 4px 0 8px; border: 1px solid color-mix(in srgb, var(--zoom) 70%, transparent);
                 border-radius: 7px; background: rgba(10, 10, 12, .92); white-space: nowrap;
                 font: 400 10px/1 var(--font-readout); }
+    /* STC-621: the off-screen playhead marker, at the lanes' edge, at the TOP of
+       the strip so the section chips (vertically centred) stay clear of it.
+       No transition: a span change is a jump, so there is nothing to switch
+       off for reduced motion. */
+    #playheadchip { position: absolute; top: 1px; z-index: 3; display: flex; align-items: center; height: 14px;
+                    padding: 0 6px; border: 1px solid color-mix(in srgb, var(--bone) 55%, transparent);
+                    border-radius: 5px; background: rgba(10, 10, 12, .92); color: var(--bone);
+                    font: 400 10px/1 var(--font-readout); white-space: nowrap; cursor: pointer; }
+    #playheadchip[hidden] { display: none; }
+    #playheadchip[data-side="before"] { left: 2px; }
+    #playheadchip[data-side="after"] { right: 2px; }
+    #playheadchip:hover { background: rgba(40, 40, 46, .96); }
+    #playheadchip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #zoomchip[hidden], body:not([data-section="zoom"]) #zoomchip { display: none; }
     #zoomchip button { height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent;
                        color: var(--text-dim); font: inherit; cursor: pointer; }
@@ -661,32 +683,54 @@
        never need to know the visible span. The silhouette itself is drawn
        into #zoom-curve; this layer only carries the click target and the
        selection/hover ring. */
-    .zoomblock { position: absolute; top: 0; height: 100%; min-width: 6px;
+    /* STC-621: this whole layer sits under the zoom's scaleX, which stretches
+       every horizontal measure by the zoom. Anything with a fixed on-screen
+       size (the minimum width, borders, radii, the dot, the handles below) is
+       written as `calc(N px * var(--inv, 1))`; editor.ts's applySpanTransform
+       sets --inv on #override-blocks. A radius is `horizontal / vertical`. */
+    .zoomblock { position: absolute; top: 0; height: 100%; min-width: calc(6px * var(--inv, 1));
                  background: transparent; border: none; padding: 0; margin: 0;
-                 cursor: pointer; border-radius: 3px; }
+                 cursor: pointer; border-radius: calc(3px * var(--inv, 1)) / 3px; }
     .zoomblock:hover { background: color-mix(in srgb, var(--zoom) 15%, transparent); }
     /* STC-606 (Figma 171:561): the open block is ringed in bone, its two
-       timing edges drawn as brass bars (the .manualhandle grips below). */
-    .zoomblock.selected { outline: 1px solid color-mix(in srgb, var(--bone) 70%, transparent); outline-offset: -1px; }
-    .zoomblock.overridden::after { content: ""; position: absolute; left: 2px; right: 2px;
-                                    bottom: 1px; height: 2px; background: var(--zoom); border-radius: 1px; }
+       timing edges drawn as brass bars (the .manualhandle grips below). The
+       ring is a border on ::before: an `outline` cannot take a per-side width. */
+    .zoomblock.selected::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+                                  border: 1px solid color-mix(in srgb, var(--bone) 70%, transparent);
+                                  border-left-width: calc(1px * var(--inv, 1));
+                                  border-right-width: calc(1px * var(--inv, 1));
+                                  border-radius: inherit; }
+    .zoomblock.overridden::after { content: ""; position: absolute; left: calc(2px * var(--inv, 1));
+                                    right: calc(2px * var(--inv, 1)); bottom: 1px; height: 2px;
+                                    background: var(--zoom); border-radius: calc(1px * var(--inv, 1)) / 1px; }
     /* A window with no derived counterpart at all (STC-331) — dashed rather
        than solid, the one visual cue distinguishing "authored from nothing"
        from "tuning something auto-zoom already opened". #manualdraft reuses
-       this plus .selected, since it is only ever shown while being edited. */
-    .zoomblock.manual { border: 1px dashed var(--zoom); background: color-mix(in srgb, var(--zoom) 8%, transparent); }
+       this plus .selected, since it is only ever shown while being edited.
+       Four gradient lines instead of `border: dashed`, whose dash length is
+       measured along the stretched axis. */
+    .zoomblock.manual { background-color: color-mix(in srgb, var(--zoom) 8%, transparent);
+                        background-image:
+                          repeating-linear-gradient(to right, var(--zoom) 0 calc(4px * var(--inv, 1)), transparent 0 calc(7px * var(--inv, 1))),
+                          repeating-linear-gradient(to right, var(--zoom) 0 calc(4px * var(--inv, 1)), transparent 0 calc(7px * var(--inv, 1))),
+                          repeating-linear-gradient(to bottom, var(--zoom) 0 4px, transparent 0 7px),
+                          repeating-linear-gradient(to bottom, var(--zoom) 0 4px, transparent 0 7px);
+                        background-size: 100% 1px, 100% 1px, calc(1px * var(--inv, 1)) 100%, calc(1px * var(--inv, 1)) 100%;
+                        background-position: 0 0, 0 100%, 0 0, 100% 0;
+                        background-repeat: no-repeat; }
     #manualdraft[hidden] { display: none; }
     /* The two edges a window's own timing is dragged from — a manual
        window's (STC-331) or, since STC-329, a DERIVED window's own retime —
        pinned to the block's edges via negative offsets (so they sit HALF
        outside a narrow block rather than being squeezed inside it) exactly
        the way .timeline .handle sits astride the trim lane's own edges. */
-    .manualhandle { position: absolute; top: 0; width: 8px; height: 100%; margin: 0; padding: 0;
+    .manualhandle { position: absolute; top: 0; width: calc(8px * var(--inv, 1)); height: 100%; margin: 0; padding: 0;
                     border: none; background: transparent; cursor: ew-resize; }
-    .manualhandle.start { left: -4px; }
-    .manualhandle.end { right: -4px; }
-    .manualhandle::after { content: ""; position: absolute; left: 2.5px; top: 0; width: 3px; height: 100%;
-                           border-radius: 1.5px; background: var(--zoom); }
+    .manualhandle.start { left: calc(-4px * var(--inv, 1)); }
+    .manualhandle.end { right: calc(-4px * var(--inv, 1)); }
+    .manualhandle::after { content: ""; position: absolute; left: calc(2.5px * var(--inv, 1)); top: 0;
+                           width: calc(3px * var(--inv, 1)); height: 100%;
+                           border-radius: calc(1.5px * var(--inv, 1)) / 1.5px; background: var(--zoom); }
     .manualhandle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     /* STC-605: the Clip lane is the activity bars now (#clip-activity), so the
        old 4px kept track is not drawn. #kept keeps its geometry: the scrubber
@@ -696,7 +740,7 @@
     .timeline .ticks { position: absolute; left: 0; right: 0; top: 2px; height: 12px;
                        pointer-events: none; opacity: .5;
                        background-image: repeating-linear-gradient(to right,
-                         currentColor 0 1px, transparent 1px var(--tick-px, 12px));
+                         currentColor 0 calc(1px * var(--inv, 1)), transparent calc(1px * var(--inv, 1)) var(--tick-px, 12px));
                        -webkit-mask-image: linear-gradient(to bottom, black 0 4px, transparent 4px);
                        mask-image: linear-gradient(to bottom, black 0 4px, transparent 4px); }
     .timeline .ticks[hidden] { display: none; }
@@ -940,6 +984,10 @@
         <button type="button" class="zoombtn" id="zoomin" aria-label="Zoom in" title="Zoom in (⌘=)">+</button>
         <button type="button" class="zoombtn fit" id="zoomfit" aria-label="Fit the whole take"
                 title="Fit the whole take (⌘0)">Fit</button>
+        <button type="button" class="zoombtn" id="zoomplayhead" aria-label="Go to playhead"
+                title="Go to playhead (G): bring the view to it, same zoom">
+          <svg viewBox="0 0 12 14" width="10" height="12" aria-hidden="true"><path d="M2 1.5h8v3.4L6 8.4 2 4.9z" fill="currentColor"/><path d="M6 8v5.5" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+        </button>
       </div>
       <!-- STC-444 slice 2: adaptive ticks, drawn by editor.ts's
            renderRulerTicks. STC-605 adds a time label at the major ticks
@@ -961,6 +1009,9 @@
       <div id="overlay-strip">
         <div id="strip-content"><div id="strip-bookmarks"></div></div>
         <div id="strip-overlays">
+          <!-- STC-621: shown only while the playhead is out of the visible span;
+               a click brings the view to it (the same zoom, centred). -->
+          <button type="button" id="playheadchip" class="overlayctl" title="Go to playhead (G)" hidden></button>
           <div id="rangechip" class="exportonly" aria-live="polite"></div>
           <div id="zoomchip" class="overlayctl" role="group" aria-label="Zoom block" hidden>
             <button type="button" id="chipamount" class="chipamount"
