@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { launchWithTakeInEditor, inkiness, openMore } from "./_editor-fixture.js";
 import { closeApp, APP_CLOSE_MS } from "./_quit-fixture.js";
-import { pipRect, PIP_SNAP_MARGIN_PX } from "../../transform/src/pip-style.js";
+import { pipRect, pipMargin } from "../../transform/src/pip-style.js";
 
 /**
  * The editor's Camera popover (STC-461): the shared inspector's first host and
@@ -56,13 +56,13 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
     await editorWin.mouse.down();
     // Aim a few OUTPUT pixels short of the snapped spot; the snap must finish the job.
     const scale = stage.width / output.width;
-    await editorWin.mouse.move(stage.x + (PIP_SNAP_MARGIN_PX + 4) * scale + box.width / 2,
-                               stage.y + (PIP_SNAP_MARGIN_PX + 3) * scale + box.height / 2, { steps: 8 });
+    await editorWin.mouse.move(stage.x + (pipMargin(output) + 4) * scale + box.width / 2,
+                               stage.y + (pipMargin(output) + 3) * scale + box.height / 2, { steps: 8 });
     await editorWin.mouse.up();
     await expect.poll(() => savedPip(takeDir)?.style, { timeout: 10_000 }).toBeDefined();
     const style = savedPip(takeDir).style;
     const r = pipRect(style, { width: output.width, height: output.height }, { width: cam.width, height: cam.height });
-    expect([r.x, r.y]).toEqual([PIP_SNAP_MARGIN_PX, PIP_SNAP_MARGIN_PX]);
+    expect([r.x, r.y]).toEqual([pipMargin(output), pipMargin(output)]);
     // STC-604: the Camera section is a pane section, not a popover. The drag
     // leaves it open and the Anchor row names the place the snap landed on.
     expect(await editorWin.evaluate(() => !document.getElementById("pippanel")!.hidden)).toBe(true);
@@ -80,7 +80,7 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
     await expect.poll(() => savedPip(takeDir)?.style, { timeout: 10_000 }).toBeDefined();
     const at = () => pipRect(savedPip(takeDir).style, { width: output.width, height: output.height },
       { width: cam.width, height: cam.height });
-    await expect.poll(() => [at().x, at().y], { timeout: 10_000 }).toEqual([PIP_SNAP_MARGIN_PX, PIP_SNAP_MARGIN_PX]);
+    await expect.poll(() => [at().x, at().y], { timeout: 10_000 }).toEqual([pipMargin(output), pipMargin(output)]);
 
     // Snap off: a drag a few SCREEN pixels off an anchor stays where it was
     // dropped. Done from the CENTRE anchor, away from the stage's top-left
@@ -89,7 +89,7 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
     // pulled back onto the anchor; `dragCenter`'s unit test holds that rule.
     await editorWin.selectOption("#pipanchor", "center");
     await expect.poll(() => editorWin.inputValue("#pipanchor"), { timeout: 10_000 }).toBe("center");
-    await expect.poll(() => at().x, { timeout: 10_000 }).toBeGreaterThan(PIP_SNAP_MARGIN_PX);
+    await expect.poll(() => at().x, { timeout: 10_000 }).toBeGreaterThan(pipMargin(output));
     const x0 = at().x;
     const y0 = at().y;
     await editorWin.uncheck("#pipsnap");
