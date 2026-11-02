@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
-  clipActivity, zoomCurve, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT, formatBlockTime, zoomAmountLabel, trimRangeParts,
-  activityIn, activityLabel,
+  clipActivity, zoomCurveSamples, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT, formatBlockTime, zoomAmountLabel,
+  trimRangeParts, activityIn, activityLabel, ZOOM_LANE_FLOOR, ZOOM_LANE_REACH_NS, ZOOM_LANE_DENSE_STEP_NS,
 } from "../src/timeline-activity.js";
 import type { SessionEvent } from "@transform/types.js";
+import { createZoomSim, ZOOM_PRESETS, type ZoomEasing, type ZoomWindow } from "@transform/zoom.js";
+import { tickOf, tickTimeNs } from "@transform/time.js";
 
 const S = 1_000_000_000;
 
@@ -51,27 +53,101 @@ describe("clipActivity", () => {
   });
 });
 
-describe("zoomCurve", () => {
-  test("a span samples only that part of the take, end to end (STC-484)", () => {
-    const seen: number[] = [];
-    zoomCurve((t) => { seen.push(t); return 0; }, 100 * S, 5, 20 * S, 40 * S);
-    expect(seen).toEqual([20 * S, 25 * S, 30 * S, 35 * S, 40 * S]);
+describe("zoomCurveSamples (STC-620)", () => {
+  const win = (startNs: number, endNs: number): ZoomWindow => ({ startNs, endNs, events: [] });
+  /** The sim's own curve, read the way render() reads it: one answer per time. */
+  const sampler = (windows: ZoomWindow[], easing: ZoomEasing) => {
+    const sim = createZoomSim(windows, easing);
+    return (tNs: readonly number[]) => sim.amountsAt(tNs.map(tickOf));
+  };
+  const D = 713 * S; // the ticket's 11:53 take
+  const PX = 1000;
+
+  /** Linear interpolation of the drawn polygon at `t`, as the canvas would fill it. */
+  const drawnAt = (c: { tNs: number[]; amount: number[] }, t: number): number => {
+    let i = 0;
+    while (i < c.tNs.length - 1 && c.tNs[i + 1]! < t) i++;
+    const t0 = c.tNs[i]!, t1 = c.tNs[i + 1] ?? t0;
+    if (t1 === t0) return c.amount[i]!;
+    return c.amount[i]! + ((c.amount[i + 1]! - c.amount[i]!) * (t - t0)) / (t1 - t0);
+  };
+
+  test("nothing to draw without a window, and nothing outside a block's zone", () => {
+    const none = zoomCurveSamples({ amountsAt: () => [], windows: [], startNs: 0, endNs: D, baseSamples: PX });
+    expect(none.tNs).toEqual([]);
+    const windows = [win(100 * S, 103 * S)];
+    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.snappy), windows, startNs: 0, endNs: D, baseSamples: PX });
+    expect(c.tNs.length).toBeGreaterThan(0);
+    expect(c.tNs[0]!).toBeGreaterThan(99 * S);
+    expect(c.tNs[c.tNs.length - 1]!).toBeLessThanOrEqual(103 * S + ZOOM_LANE_REACH_NS);
   });
 
-  test("samples a constant function at a constant value", () => {
-    expect(zoomCurve(() => 0.5, 10 * S, 5)).toEqual([0.5, 0.5, 0.5, 0.5, 0.5]);
+  test("the samples are strictly increasing, inside the span, and each has a value", () => {
+    const windows = [win(100 * S, 103 * S), win(102 * S, 110 * S), win(500 * S, 501 * S)];
+    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.standard), windows, startNs: 50 * S, endNs: 600 * S, baseSamples: PX });
+    expect(c.amount).toHaveLength(c.tNs.length);
+    for (let i = 1; i < c.tNs.length; i++) expect(c.tNs[i]!).toBeGreaterThan(c.tNs[i - 1]!);
+    const TICK = 8_333_334;
+    expect(c.tNs[0]!).toBeGreaterThanOrEqual(50 * S - TICK);
+    expect(c.tNs[c.tNs.length - 1]!).toBeLessThanOrEqual(600 * S);
+    // Each time is the start of a sim tick, so its value is exactly the sim's there.
+    for (const t of c.tNs) expect(tickTimeNs(tickOf(t))).toBe(t);
   });
 
-  test("the first and last samples land on the take's own ends", () => {
-    const seen: number[] = [];
-    zoomCurve((tNs) => { seen.push(tNs); return tNs; }, 10 * S, 3);
-    expect(seen[0]).toBe(0);
-    expect(seen[seen.length - 1]).toBe(10 * S);
+  test("a Fast ramp on a 12 minute take at full zoom is covered by many samples (the old lane had none)", () => {
+    // snappy's IN shoulder is the fastest: omega 18*sqrt(2), back under 1% in ~0.26 s.
+    const windows = [win(300 * S, 310 * S)];
+    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.snappy), windows, startNs: 0, endNs: D, baseSamples: PX });
+    const onRamp = c.tNs.filter((t) => t >= 300 * S && t <= 300 * S + 260_000_000);
+    expect(onRamp.length).toBeGreaterThanOrEqual(12);
+    // The old lane: 480 samples over 713 s is one per ~1.49 s, so a ramp this
+    // fast fell between two of them.
+    expect(D / 480).toBeGreaterThan(1.4 * S);
   });
 
-  test("refuses to divide by a sample count under 2, clamping to 2", () => {
-    expect(zoomCurve(() => 0, S, 1)).toHaveLength(2);
-    expect(zoomCurve(() => 0, S, 0)).toHaveLength(2);
+  test("the drawn curve stays within 0.02 of the true one at every instant, for every preset and direction", () => {
+    for (const name of ["calm", "standard", "snappy"] as const) {
+      const easing = ZOOM_PRESETS[name];
+      const windows = [win(120 * S, 124 * S), win(400 * S, 401 * S)];
+      const exact = sampler(windows, easing);
+      const c = zoomCurveSamples({ amountsAt: exact, windows, startNs: 0, endNs: D, baseSamples: PX });
+      let worst = 0;
+      const ranges: [number, number][] = [[119 * S, 124 * S + ZOOM_LANE_REACH_NS], [399 * S, 401 * S + ZOOM_LANE_REACH_NS]];
+      for (const [lo, hi] of ranges) {
+        // At every sim tick: the sim is a 120 Hz staircase, so a tick's start
+        // is the only instant it has a value, and the drawn polygon has to
+        // pass through those (between samples it interpolates).
+        const probe: number[] = [];
+        for (let n = tickOf(lo); n <= tickOf(hi); n++) probe.push(tickTimeNs(n));
+        const truth = exact(probe);
+        probe.forEach((t, i) => { worst = Math.max(worst, Math.abs(drawnAt(c, t) - truth[i]!)); });
+      }
+      expect(worst, name).toBeLessThan(0.02);
+    }
+  });
+
+  test("zoomed in to about a minute, the pixel rate carries it and the dense run is skipped", () => {
+    const windows = [win(300 * S, 310 * S)];
+    const spacing = (60 * S) / (PX - 1);
+    expect(spacing).toBeLessThan(ZOOM_LANE_DENSE_STEP_NS * 5); // sanity: close to the dense step
+    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.calm), windows, startNs: 290 * S, endNs: 350 * S, baseSamples: 4000 });
+    // 4000 px over 60 s is 15 ms apart: finer than the dense step, so no extras.
+    const gaps = c.tNs.slice(1).map((t, i) => t - c.tNs[i]!);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(ZOOM_LANE_DENSE_STEP_NS);
+  });
+
+  test("the cost is bounded: a hundred blocks across the whole take stay under 60 000 samples", () => {
+    const windows = Array.from({ length: 100 }, (_, i) => win((10 + i * 7) * S, (12 + i * 7) * S));
+    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.standard), windows, startNs: 0, endNs: D, baseSamples: PX });
+    expect(c.tNs.length).toBeLessThan(60_000);
+  });
+
+  test("the reach covers every preset's ease-out tail (a slower preset must fail here, not draw a clipped tail)", () => {
+    for (const name of ["calm", "standard", "snappy"] as const) {
+      const sim = createZoomSim([win(0, 10 * S)], ZOOM_PRESETS[name]);
+      const [after] = sim.amountsAt([tickOf(10 * S + ZOOM_LANE_REACH_NS)]);
+      expect(after!, name).toBeLessThan(ZOOM_LANE_FLOOR);
+    }
   });
 });
 

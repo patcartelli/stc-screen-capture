@@ -276,22 +276,14 @@ function windowsFor(session: Session): ZoomWindow[] {
   return windows;
 }
 
-export function render(project: Project, session: Session, tNs: number): FrameState {
-  let sim = simCache.get(session);
-  if (!sim) {
-    sim = createCursorSim(session.events);
-    simCache.set(session, sim);
-  }
-
-  const zoom = project.zoom ?? DEFAULT_ZOOM;
-  // Video framing (STC-396). The picture is an INSET of the output; everything
-  // placed in output pixels below is placed relative to that rect. With no
-  // framing `frame` IS the whole output and `sized` IS project.output, so every
-  // number below is exactly what version 13 computed.
-  const cap = session.anchors.capture;
-  const layout = framingLayout(project.framing, project.output, cap.width / cap.height);
-  const frame: Rect = layout?.content ?? outputRect(project.output);
-  const sized: Size = layout ? { width: frame.width, height: frame.height } : project.output;
+/**
+ * The resolved zoom windows and one sim per easing group, for this project.
+ * The ONE place either is built: `render()` and `zoomAmountSampler` both come
+ * here, which is what keeps the editor's Zoom lane from ever disagreeing with
+ * the frame it sits under or the export.
+ */
+function zoomSimsFor(project: Project, session: Session, zoom: NonNullable<Project["zoom"]>):
+    { windows: CombinedZoomWindow[]; groupSims: Map<string, ZoomSim> } {
   // resolvedWindows (STC-329) applies `removed`/`retime` to the RAW,
   // override-independent memo — cheap, and NOT itself memoised, so it always
   // reflects the CURRENT project.overrides rather than whichever one first
@@ -316,6 +308,59 @@ export function render(project: Project, session: Session, tNs: number): FrameSt
     }
     byKey.set(overridesKey, groupSims);
   }
+  return { windows, groupSims };
+}
+
+/**
+ * Where the zoom amount is read for MANY instants at once (STC-620): the
+ * editor's Zoom lane draws a curve of it. Every answer is exactly the
+ * `zoom.amount` `render()` reports at that time — same windows, same sims,
+ * same `enabled`/`intensity` — only computed in one forward pass per easing
+ * group (`ZoomSim.amountsAt`) instead of a whole frame per sample.
+ */
+export interface ZoomAmountSampler {
+  /** The zoom amount at each time, in the order given. */
+  amountsAt(tNs: readonly number[]): number[];
+  /** Every resolved window's bounds: where the curve can leave zero. */
+  windows: readonly { startNs: number; endNs: number }[];
+}
+
+export function zoomAmountSampler(project: Project, session: Session): ZoomAmountSampler {
+  const zoom = project.zoom ?? DEFAULT_ZOOM;
+  const { windows, groupSims } = zoomSimsFor(project, session, zoom);
+  return {
+    windows: windows.map((w) => ({ startNs: w.startNs, endNs: w.endNs })),
+    amountsAt(tNs) {
+      const amounts = tNs.map(() => 0);
+      if (!zoom.enabled) return amounts;
+      const ticks = tNs.map(tickOf);
+      for (const groupSim of groupSims.values()) {
+        const a = groupSim.amountsAt(ticks);
+        for (let i = 0; i < amounts.length; i++) amounts[i] = Math.max(amounts[i]!, a[i]!);
+      }
+      for (let i = 0; i < amounts.length; i++) amounts[i] = amounts[i]! * zoom.intensity;
+      return amounts;
+    },
+  };
+}
+
+export function render(project: Project, session: Session, tNs: number): FrameState {
+  let sim = simCache.get(session);
+  if (!sim) {
+    sim = createCursorSim(session.events);
+    simCache.set(session, sim);
+  }
+
+  const zoom = project.zoom ?? DEFAULT_ZOOM;
+  // Video framing (STC-396). The picture is an INSET of the output; everything
+  // placed in output pixels below is placed relative to that rect. With no
+  // framing `frame` IS the whole output and `sized` IS project.output, so every
+  // number below is exactly what version 13 computed.
+  const cap = session.anchors.capture;
+  const layout = framingLayout(project.framing, project.output, cap.width / cap.height);
+  const frame: Rect = layout?.content ?? outputRect(project.output);
+  const sized: Size = layout ? { width: frame.width, height: frame.height } : project.output;
+  const { windows, groupSims } = zoomSimsFor(project, session, zoom);
 
   const tick = tickOf(tNs);
   const frameIndex = frameIndexAt(session.frames, tNs);
