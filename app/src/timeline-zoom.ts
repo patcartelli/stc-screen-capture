@@ -58,6 +58,27 @@ export function isMinSpan(span: Span, durationNs: number): boolean {
   return span.endNs - span.startNs <= durationNs * MIN_SPAN_FRACTION + 1e-6;
 }
 
+/**
+ * The CSS `scaleX(scale) translateX(translatePct%)` that stretches the
+ * FULL-DURATION track so only `span` shows (editor.ts's applySpanTransform).
+ *
+ * Order matters and was wrong until STC-621. In a transform list the LAST
+ * function applies first, so the translate happens in the track's own,
+ * unscaled pixels and the scale then stretches it: x' = scale * (x + t). The
+ * span's start sits at x = (startNs / durationNs) * W, so t is that, negated,
+ * as a share of the track's width W: `-startNs / durationNs`. It was
+ * `-startNs / spanWidth`, which is the same thing only at Fit or when the span
+ * starts at 0, and otherwise throws every transformed layer (ruler, bookmarks,
+ * blocks, the playhead's own position) off by a factor of the zoom while the
+ * canvas lanes, which are redrawn rather than transformed, stayed right: the
+ * "parallax" on a wheel pan, and a playhead that vanished when the view moved.
+ */
+export function spanTransform(span: Span, durationNs: number): { scale: number; translatePct: number } {
+  const width = Math.max(1, span.endNs - span.startNs);
+  if (!(durationNs > 0)) return { scale: 1, translatePct: 0 };
+  return { scale: durationNs / width, translatePct: -(span.startNs / durationNs) * 100 };
+}
+
 /** A span of `width` starting at `start`, slid back inside the take. */
 function placed(start: number, width: number, durationNs: number): Span {
   const s = Math.max(0, Math.min(durationNs - width, start));
@@ -124,14 +145,26 @@ export function playheadSide(span: Span, tNs: number): PlayheadSide | null {
   return null;
 }
 
-/** The least slide that puts `tNs` inside the span, with a small margin. */
-export function revealSpan(span: Span, durationNs: number, tNs: number): Span {
-  const side = playheadSide(span, tNs);
-  if (side === null || !(durationNs > 0)) return span;
+/**
+ * The least slide that keeps `tNs` in view with a small margin.
+ *
+ * Out of view, it comes back to `REVEAL_MARGIN_FRACTION` inside the edge it
+ * left by. With `fromNs` (where the playhead was), a move that is still in view
+ * but is heading INTO that margin at an edge also slides, by exactly what it
+ * moved: a held arrow key scrolls the view a frame per step instead of
+ * waiting for the playhead to leave and then jumping a margin's worth. A move
+ * away from an edge never slides the view, whatever zone it ends in.
+ */
+export function revealSpan(span: Span, durationNs: number, tNs: number, fromNs?: number): Span {
+  if (!(durationNs > 0)) return span;
   const width = span.endNs - span.startNs;
   if (!(width > 0)) return span;
   const margin = width * REVEAL_MARGIN_FRACTION;
-  return placed(side === "after" ? tNs + margin - width : tNs - margin, width, durationNs);
+  const later = tNs > span.endNs - margin && (tNs > span.endNs || (fromNs !== undefined && tNs > fromNs));
+  if (later) return placed(tNs + margin - width, width, durationNs);
+  const earlier = tNs < span.startNs + margin && (tNs < span.startNs || (fromNs !== undefined && tNs < fromNs));
+  if (earlier) return placed(tNs - margin, width, durationNs);
+  return span;
 }
 
 /** The same zoom, centred on `tNs` (as far as the take's ends allow). */

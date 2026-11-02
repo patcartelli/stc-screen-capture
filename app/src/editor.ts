@@ -109,7 +109,7 @@ import {
 import { autoSlug, exportManifestName, exportMediaName, slugIsValid } from "./share.js";
 import {
   centreSpan, followSpan, isFit, isMinSpan, overviewBox, panBy, playheadKeyIntent, playheadSide, revealSpan,
-  timelineZoomKeyIntent, wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
+  spanTransform, timelineZoomKeyIntent, wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
 import {
   clipActivity, zoomCurve, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts, activityIn, activityLabel,
@@ -224,9 +224,7 @@ function visibleSpan(): { start: number; end: number } {
 
 function applySpanTransform(): void {
   const durationNs = player?.durationNs ?? 0;
-  const span = Math.max(1, spanEnd - spanStart);
-  const scale = durationNs > 0 ? durationNs / span : 1;
-  const translatePct = durationNs > 0 ? -(spanStart / span) * 100 : 0;
+  const { scale, translatePct } = spanTransform({ startNs: spanStart, endNs: spanEnd }, durationNs);
   const transform = `scaleX(${scale}) translateX(${translatePct}%)`;
   ($("timeline") as HTMLElement).style.transform = transform;
   // STC-484: what the transform stretches, the trim brackets and the playhead
@@ -316,7 +314,6 @@ function renderRulerTicks(): void {
   const durationNs = player.durationNs;
   if (!(durationNs > 0)) return;
   const span = Math.max(1, spanEnd - spanStart);
-  const scale = durationNs / span;
   const visibleS = span / 1e9;
   const pxPerSecond = width / Math.max(1e-9, visibleS);
 
@@ -336,7 +333,6 @@ function renderRulerTicks(): void {
   }
 
   const durationS = durationNs / 1e9;
-  const tickWidthPx = Math.max(0.05, 1 / scale);
   const frag = document.createDocumentFragment();
 
   // Render minor ticks first (so they appear behind major ticks in z-order)
@@ -349,7 +345,6 @@ function renderRulerTicks(): void {
       const div = document.createElement("div");
       div.className = "ruler-tick minor";
       div.style.left = `${Math.min(100, (t / durationS) * 100)}%`;
-      div.style.width = `${tickWidthPx}px`;
       frag.appendChild(div);
     }
   }
@@ -364,7 +359,6 @@ function renderRulerTicks(): void {
     const div = document.createElement("div");
     div.className = "ruler-tick";
     div.style.left = left;
-    div.style.width = `${tickWidthPx}px`;
     frag.appendChild(div);
     if (k % labelEvery !== 0) continue;
     const label = document.createElement("span");
@@ -455,8 +449,10 @@ function currentSpan(): { startNs: number; endNs: number } {
 /** An explicit move to `tNs` (a key, a jump): slide the view if it left it. */
 function revealPlayhead(tNs: number): void {
   const durationNs = player?.durationNs ?? 0;
-  if (durationNs <= 0) return;
-  setSpan(revealSpan(currentSpan(), durationNs, tNs), "reveal");
+  if (durationNs <= 0 || !player) return;
+  // The playhead's place BEFORE this move (seek() updates it synchronously, so
+  // callers reveal first), for revealSpan's heading-into-the-margin rule.
+  setSpan(revealSpan(currentSpan(), durationNs, tNs, player.currentNs), "reveal");
 }
 
 /** "Go to playhead": the same zoom, centred on it. */
@@ -723,7 +719,11 @@ function updateTicks(): void {
     return;
   }
   ticks.removeAttribute("hidden");
-  ticks.style.setProperty("--tick-px", `${(width / lastFrame(player.durationNs)) * stride}px`);
+  // `width` is the transformed track, so the spacing is on-screen px; #ticks
+  // sits INSIDE the transform, so the gradient wants it in the track's own px
+  // (times --inv) or every tick and gap would be stretched by the zoom (STC-621).
+  const inv = spanEnd > spanStart && player.durationNs > 0 ? (spanEnd - spanStart) / player.durationNs : 1;
+  ticks.style.setProperty("--tick-px", `${(width / lastFrame(player.durationNs)) * stride * inv}px`);
 }
 
 window.addEventListener("resize", () => { if (player) { updateTicks(); renderRulerTicks(); } });

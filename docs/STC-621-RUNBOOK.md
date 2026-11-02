@@ -4,6 +4,8 @@ Run from `accounts/stc-621-playhead-reachable-when-zoomed` until it merges (not 
 `master` yet). `npm run app:start`, open a take of a minute or more, press `+` four
 times so about a fifth of it shows.
 
+**Read this first:** testing this PR found that the timeline's CSS transform had been wrong since STC-373 (see `spanTransform` in `timeline-zoom.ts`), which made the ruler, bookmarks, blocks and the playhead drift from the lanes whenever the view did not start at 0. Items 1-3 below are only meaningful with that fixed; start by wheel-panning a zoomed view and checking the ruler ticks, the zoom blocks and the Clip bars all move together.
+
 What CI covers: the pure decisions (`app/test/timeline-zoom.test.ts`: `revealSpan`,
 `centreSpan`, `followSpan`, `playheadSide`, `playheadKeyIntent`) and the wired
 behaviour on the 5 s fixture (`app/test/playhead-reach.e2e.test.ts`: a key jump,

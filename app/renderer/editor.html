@@ -473,7 +473,11 @@
        renderRulerTicks) and a label is counter-scaled by --inv, which
        applySpanTransform sets alongside the transform. */
     #ruler-ticks { position: absolute; left: 0; right: 0; top: 6px; height: 8px; pointer-events: none; }
-    .ruler-tick { position: absolute; top: 0; height: 8px; background: rgba(255, 255, 255, .25); }
+    /* 1px wide on screen at any zoom (STC-621): the shared transform stretches
+       X, so the tick undoes it with --inv, the way a label does. It used to be
+       a width of 1/scale px with a floor, which thickened it past ~20x. */
+    .ruler-tick { position: absolute; top: 0; width: 1px; height: 8px; background: rgba(255, 255, 255, .25);
+                  transform: scaleX(var(--inv, 1)); transform-origin: 0 0; }
     .ruler-tick.minor { top: 4px; height: 4px; }
     .ruler-label { position: absolute; top: -5px; margin-left: calc(4px * var(--inv, 1));
                    transform: scaleX(var(--inv, 1)); transform-origin: 0 0;
@@ -707,7 +711,7 @@
     .timeline .ticks { position: absolute; left: 0; right: 0; top: 2px; height: 12px;
                        pointer-events: none; opacity: .5;
                        background-image: repeating-linear-gradient(to right,
-                         currentColor 0 1px, transparent 1px var(--tick-px, 12px));
+                         currentColor 0 calc(1px * var(--inv, 1)), transparent calc(1px * var(--inv, 1)) var(--tick-px, 12px));
                        -webkit-mask-image: linear-gradient(to bottom, black 0 4px, transparent 4px);
                        mask-image: linear-gradient(to bottom, black 0 4px, transparent 4px); }
     .timeline .ticks[hidden] { display: none; }

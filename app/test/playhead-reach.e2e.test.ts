@@ -73,12 +73,79 @@ describe("a key that moves the playhead pulls the view along", () => {
     await expect.poll(() => playheadShown(win), { timeout: 10_000 }).toBe(true);
   }, 90_000);
 
+  test("holding a step key scrolls the view a frame at a time, never in a jump", async () => {
+    const win = await openZoomedIn();
+    // About 59 of the 300 frames show at 5x; the 5% margin is ~3 frames, so
+    // 75 steps from frame 0 cross the right edge well before they end.
+    let last = await spanLeftPct(win);
+    let biggest = 0;
+    for (let f = 1; f <= 75; f++) {
+      await win.keyboard.press("ArrowRight");
+      await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(f);
+      const now = await spanLeftPct(win);
+      biggest = Math.max(biggest, now - last);
+      last = now;
+    }
+    expect(last).toBeGreaterThan(0); // the view did follow
+    // One frame is 1/300 of the take, 0.333%. The old margin jump was ~1.3%.
+    expect(biggest).toBeLessThan(0.6);
+    await expect.poll(() => playheadShown(win), { timeout: 10_000 }).toBe(true);
+  }, 90_000);
+
   test("a step that stays in view does not move the view", async () => {
     const win = await openZoomedIn();
     const left = await spanLeftPct(win);
     await win.keyboard.press("ArrowRight");
     await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(1);
     expect(await spanLeftPct(win)).toBe(left);
+  }, 60_000);
+});
+
+describe("the playhead is drawn where the view says it is", () => {
+  /** Where the bone line is across the Clip lane, as a share of the lane. */
+  const drawnShare = (win: Page): Promise<number> => win.evaluate(() => {
+    const lane = document.querySelector(".laneviewport.clip")!.getBoundingClientRect();
+    const ph = document.getElementById("playhead")!.getBoundingClientRect();
+    return ((ph.left + ph.width / 2) - lane.left) / lane.width;
+  });
+
+  test("after the view moves to a late playhead, the line sits at that instant's place in the span", async () => {
+    const win = await openZoomedIn();
+    await win.keyboard.press("End");
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBe(LAST_FRAME);
+    await expect.poll(() => playheadShown(win), { timeout: 10_000 }).toBe(true);
+    const left = (await spanLeftPct(win)) / 100;
+    const width = (await spanWidthPct(win)) / 100;
+    // The last frame is at 299/300 of the take; the lane pads 6px each side.
+    const expected = (299 / 300 - left) / width;
+    expect(await drawnShare(win)).toBeGreaterThan(expected - 0.03);
+    expect(await drawnShare(win)).toBeLessThan(expected + 0.03);
+  }, 90_000);
+
+  test("panning the ruler keeps the line on its instant, not on the zoom's multiple of it", async () => {
+    const win = await openZoomedIn();
+    await moveSilently(win, 150);
+    await win.focus("#ruler");
+    for (let i = 0; i < 4; i++) await win.keyboard.press("ArrowRight");
+    await win.click("#zoomplayhead");
+    await expect.poll(() => playheadShown(win), { timeout: 10_000 }).toBe(true);
+    const share = await drawnShare(win);
+    // Centred (the take is long enough either side), give or take the lane's padding.
+    expect(share).toBeGreaterThan(0.4);
+    expect(share).toBeLessThan(0.6);
+  }, 90_000);
+});
+
+describe("ticks keep their size when zoomed in", () => {
+  test("a ruler tick is about 1px wide on screen at the deepest zoom", async () => {
+    const win = await openZoomedIn();
+    // 1.5^4 is ~5x; keep going to the 1/64 floor, where the old floor on the width made a tick ~3px.
+    for (let i = 0; i < 8 && !(await win.isDisabled("#zoomin")); i++) await win.click("#zoomin");
+    expect(await win.isDisabled("#zoomin")).toBe(true);
+    const widths = await win.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("#ruler-ticks .ruler-tick")].map((t) => t.getBoundingClientRect().width));
+    expect(widths.length).toBeGreaterThan(0);
+    for (const w of widths) expect(w).toBeLessThan(1.5);
   }, 60_000);
 });
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   BUTTON_ZOOM_STEP, FOLLOW_LANDING_FRACTION, MIN_SPAN_FRACTION, REVEAL_MARGIN_FRACTION, centreSpan,
   fitSpan, followSpan, grabOffset, isFit, isMinSpan, overviewBox, overviewSpanFor, panBy,
-  playheadKeyIntent, playheadSide, revealSpan, timelineZoomKeyIntent, wheelIntent, zoomAbout,
+  playheadKeyIntent, playheadSide, revealSpan, spanTransform, timelineZoomKeyIntent, wheelIntent, zoomAbout,
   zoomByIntent, zoomReadout,
 } from "../src/timeline-zoom.js";
 
@@ -198,6 +198,42 @@ describe("revealSpan", () => {
     }
   });
 
+  describe("with where the playhead was (a held arrow key)", () => {
+    test("stepping into the margin at the right edge scrolls so the playhead sits a margin in", () => {
+      const at = 80 * S - margin + 0.1 * S; // just inside the margin, in view
+      const next = revealSpan(span, D, at, at - 0.1 * S);
+      expect(next.endNs - next.startNs).toBeCloseTo(width, 3);
+      expect(next.endNs).toBeCloseTo(at + margin, 3);
+    });
+    test("repeated one-frame steps move the view one frame each, never a margin's worth", () => {
+      const frame = S / 60;
+      let view = span;
+      let t = 80 * S - margin - 5 * frame;
+      for (let i = 0; i < 30; i++) {
+        const prevStart = view.startNs;
+        view = revealSpan(view, D, t + frame, t);
+        t += frame;
+        expect(view.startNs - prevStart).toBeLessThanOrEqual(frame + 1e-3);
+      }
+      expect(t).toBeGreaterThan(80 * S - margin); // it did cross into the margin
+      expect(view.endNs).toBeGreaterThanOrEqual(t); // and the playhead stayed in view
+    });
+    test("the same at the left edge, stepping backwards", () => {
+      const at = 20 * S + margin - 0.1 * S;
+      const next = revealSpan(span, D, at, at + 0.1 * S);
+      expect(next.startNs).toBeCloseTo(at - margin, 3);
+    });
+    test("a step AWAY from an edge never moves the view, even inside its margin", () => {
+      const inLeftMargin = 20 * S + margin / 2;
+      expect(revealSpan(span, D, inLeftMargin + 0.05 * S, inLeftMargin)).toBe(span);
+      const inRightMargin = 80 * S - margin / 2;
+      expect(revealSpan(span, D, inRightMargin - 0.05 * S, inRightMargin)).toBe(span);
+    });
+    test("without a previous position it is the old rule: only a playhead out of view moves it", () => {
+      expect(revealSpan(span, D, 80 * S - margin / 2)).toBe(span);
+    });
+  });
+
   test("a degenerate span or take changes nothing", () => {
     const flat = { startNs: 5, endNs: 5 };
     expect(revealSpan(flat, D, 10 * S)).toBe(flat);
@@ -277,5 +313,38 @@ describe("playheadKeyIntent", () => {
     for (const key of ["=", "+", "-", "_", "0", "g"]) {
       expect(timelineZoomKeyIntent({ key, metaKey: false })).toBeNull();
     }
+  });
+});
+
+// ---- the CSS transform every layer shares (STC-621) -------------------------
+
+describe("spanTransform", () => {
+  /** Where CSS puts a track point `x` (0..W): `scaleX(s) translateX(t%)` is s * (x + t/100 * W). */
+  const placedAt = (x: number, t: { scale: number; translatePct: number }, W: number) =>
+    t.scale * (x + (t.translatePct / 100) * W);
+  const W = 1000;
+  const xOf = (ns: number) => (ns / D) * W;
+
+  test.each([
+    ["Fit", { startNs: 0, endNs: D }],
+    ["from the start", { startNs: 0, endNs: 20 * S }],
+    ["a pan", { startNs: 50 * S, endNs: 70 * S }],
+    ["against the end", { startNs: 80 * S, endNs: D }],
+    ["narrow, late", { startNs: 91 * S, endNs: 91 * S + D / 64 }],
+  ])("%s: the span's start lands at the left edge and its end at the right", (_n, span) => {
+    const t = spanTransform(span, D);
+    expect(placedAt(xOf(span.startNs), t, W)).toBeCloseTo(0, 6);
+    expect(placedAt(xOf(span.endNs), t, W)).toBeCloseTo(W, 6);
+  });
+
+  test("the control: the formula it replaced puts a panned span nowhere near", () => {
+    // translate by startNs / SPAN WIDTH, as editor.ts did from STC-373 to STC-621.
+    const span = { startNs: 50 * S, endNs: 70 * S };
+    const old = { scale: D / (span.endNs - span.startNs), translatePct: -(span.startNs / (span.endNs - span.startNs)) * 100 };
+    expect(Math.abs(placedAt(xOf(span.startNs), old, W))).toBeGreaterThan(W);
+  });
+
+  test("an empty take is the identity", () => {
+    expect(spanTransform({ startNs: 0, endNs: 0 }, 0)).toEqual({ scale: 1, translatePct: 0 });
   });
 });
