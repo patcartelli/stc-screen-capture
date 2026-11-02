@@ -290,6 +290,19 @@ function cleanLastBackgroundLook(v: unknown): LookWrite | null {
   } catch { return null; }
 }
 
+/**
+ * `recorder:setSettings`'s first step: the keys only main writes. Destructured
+ * rather than deleted, so each is named here and a reader can see exactly which
+ * do not survive a renderer's patch.
+ */
+export function stripMainOnly(patch: Partial<Settings> | undefined): Partial<Settings> {
+  const {
+    saveFolder: _mainsAlone, capturePrimed: _alsoMains, shortcutsOffered: _mainsOffered,
+    libraryWindow: _mainsToo, lastBackgroundLook: _mainsLook, ...rest
+  } = { ...(patch ?? {}) };
+  return rest;
+}
+
 export const DEFAULT_SETTINGS: Settings = {
   camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false, recordKeys: false,
   showClicks: true,

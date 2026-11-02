@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, chmodSync, mkdirS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  readSettings, writeSettings, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
+  readSettings, writeSettings, stripMainOnly, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
   DEFAULT_THUMBNAIL_SETTINGS,
 } from "../src/settings.js";
 import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS } from "../src/hotkeys.js";
@@ -836,5 +836,18 @@ describe("the window shot look (STC-628)", () => {
       writeFileSync(join(e, "settings.json"), JSON.stringify({ lastBackgroundLook: bad }));
       expect(readSettings(e).lastBackgroundLook).toBeNull();
     }
+  });
+});
+
+describe("stripMainOnly (recorder:setSettings)", () => {
+  test("drops every main-only key and passes the rest through", () => {
+    const dark = lookWrite(LOOKS.find((l) => l.id === "dark")!);
+    const out = stripMainOnly({
+      saveFolder: "/x", capturePrimed: true, shortcutsOffered: true,
+      libraryWindow: { x: 0, y: 0, width: 1, height: 1 }, lastBackgroundLook: dark,
+      windowShotLook: "background", previewMuted: true,
+    });
+    expect(out).toEqual({ windowShotLook: "background", previewMuted: true });
+    expect(stripMainOnly(undefined)).toEqual({});
   });
 });

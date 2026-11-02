@@ -2,7 +2,7 @@ import {
   app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage, clipboard,
   powerMonitor, nativeTheme, type IpcMainInvokeEvent,
 } from "electron";
-import { readSettings, writeSettings, type Settings } from "./settings.js";
+import { readSettings, stripMainOnly, writeSettings, type Settings } from "./settings.js";
 import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, resetOfferText, resetToNewDefaults, planShortcuts, planOutcomeVariants, isShotAction,
   type Outcome, type OutcomeVariantReport,
@@ -1665,12 +1665,7 @@ async function reclaimSpace(parent: BrowserWindow | undefined = win): Promise<{ 
  * `lastBackgroundLook` (STC-628) the same: it is written when a shot is made.
  */
 ipcMain.handle("recorder:setSettings", async (e, patch: Partial<Settings>): Promise<Settings> => {
-  // Destructured rather than deleted, so `saveFolder` is named here and a
-  // reader can see exactly which keys do not survive.
-  const {
-    saveFolder: _mainsAlone, capturePrimed: _alsoMains, shortcutsOffered: _mainsOffered, libraryWindow: _mainsToo, lastBackgroundLook: _mainsLook, ...withoutMainsKeys
-  } = { ...(patch ?? {}) };
-  const clean: Partial<Settings> = withoutMainsKeys as Partial<Settings>;
+  const clean: Partial<Settings> = stripMainOnly(patch);
   if (clean.share) {
     // Same rule, same reason (STC-242): `share.destination` is a folder in the
     // user's own site repo, and a renderer that could name it could make this
