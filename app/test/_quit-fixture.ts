@@ -103,6 +103,15 @@ export function diedFromCrash(signal: NodeJS.Signals | null): boolean {
     || signal === "SIGILL" || signal === "SIGTRAP";
 }
 
+/**
+ * The lines a crash prints, in the order the app wrote them: STC-534's
+ * `[window]` log and STC-624's `[tray]` log. One list, so a tray rebuild shows
+ * up between the window events it happened among.
+ */
+export function isCrashLogLine(line: string): boolean {
+  return line.includes("[window]") || line.includes("[tray]");
+}
+
 /** Processes `watchWindowLog` is printing for, so `closeApp` does not print twice. */
 const watchedProcs = new WeakSet<object>();
 /** Processes `closeApp` has started closing: a death after this is not mid-test. */
@@ -125,7 +134,7 @@ export function watchWindowLog(app: ElectronApplication): void {
   watchedProcs.add(proc);
   const windowLines: string[] = [];
   proc.stderr?.on("data", (chunk: Buffer | string) => {
-    for (const line of String(chunk).split("\n")) if (line.includes("[window]")) windowLines.push(line.trim());
+    for (const line of String(chunk).split("\n")) if (isCrashLogLine(line)) windowLines.push(line.trim());
   });
   // `close`, not `exit`: it fires once stdio has ended, so the last lines are in.
   proc.once("close", (code: number | null, signal: NodeJS.Signals | null) => {
@@ -174,7 +183,7 @@ export async function closeApp(app: ElectronApplication | undefined, hookBoundMs
   const windowLines: string[] = [];
   const onData = (chunk: Buffer | string) => {
     for (const line of String(chunk).split("\n")) {
-      if (line.includes("[window]")) windowLines.push(line.trim());
+      if (isCrashLogLine(line)) windowLines.push(line.trim());
       if (line.includes("[quit]")) quitLines.push(line.trim());
       // STC-496: a resize refused because the app is quitting. It is rare by
       // design and names the caller that crashed CI, so it is printed however
