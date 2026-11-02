@@ -84,6 +84,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     private var keysRecorded = 0
     private var keysDropped = 0
     private var stoppingBegan = false
+    /// Whether `stop()` found a display stream to tear down (or a restart between two),
+    /// and so owns the display's teardown. False for a stop that landed before `begin`
+    /// made one: `abandonIfStoppedDuringStart` tears that one down instead (STC-305).
+    private var stopTookDisplay = false
     /// STC-530: anchors.partial.json. Its own serial queue — the capture callbacks only
     /// REQUEST a write (`notePartialChange`), never perform one, the rule `IO.stat`
     /// follows: nothing here may back-pressure the capture graph.
@@ -657,6 +661,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     CFMachPortInvalidate(tap)
                     self.abandonAudioTracks()
                     self.finishStart(.failure(CaptureError.streamFailed(err)))
+                } else if self.abandonIfStoppedDuringStart(tap: tap) {
+                    // STC-305: the stop already answered, and nothing it ran
+                    // could reach this stream, tap or writer. The start is
+                    // still answered once, and App says `stopped-during-start`.
+                    self.finishStart(.success(self.describe()))
                 } else {
                     self.runEventTap(tap)
                     self.startKeyInjection()
@@ -710,6 +719,40 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             abandonAudioTracks()
             finishStart(.failure(error))
         }
+    }
+
+    /// STC-305: the display stream came up after `stop()` had already begun. Returns
+    /// whether it had; on false the start goes on as normal.
+    ///
+    /// The tap is never handed to its thread: `stop()` stopped whatever run loop it could
+    /// see, and a tap thread started now would run for the rest of the process's life,
+    /// holding the session. What else is torn down depends on what that stop saw. If the
+    /// stream was already assigned, the stop owns its teardown and is finishing the writer,
+    /// so nothing more is touched here: a second `stopCapture`/`finishWriting` is STC-254's
+    /// crash. If the stop landed while `SCShareableContent` was still answering, it found
+    /// no stream and no writer, answered, and wrote the sidecars, and nothing will ever stop
+    /// what `begin` started after it: App's stray-success branch calls `stop()` again, but
+    /// that returns the first stop's stats. Those are torn down here. Frames that arrived in
+    /// between were refused (`stoppingBegan`), so that writer holds nothing and is cancelled
+    /// rather than finished.
+    private func abandonIfStoppedDuringStart(tap: CFMachPort) -> Bool {
+        lock.lock()
+        guard stoppingBegan else { lock.unlock(); return false }
+        let orphaned = !stopTookDisplay
+        let s = orphaned ? stream : nil
+        if orphaned { stream = nil }
+        lock.unlock()
+        CFMachPortInvalidate(tap)
+        guard orphaned else {
+            IO.log("start: stop arrived while the stream was starting; the tap is not started (STC-305)")
+            return true
+        }
+        abandonAudioTracks()
+        s?.stopCapture { _ in }
+        gate.closeAndMarkFinished()
+        writer?.cancelWriting()
+        IO.log("start: stop arrived before the stream existed; tore down the stream and writer it started after (STC-305)")
+        return true
     }
 
     /// STC-233 / STC-418 / STC-590: opens the mic and, when asked, the system-audio stream.
@@ -778,7 +821,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         if stoppingBegan {
             lock.unlock()
-            t.cancel()
+            discardUnresumedTimer(t)
             return
         }
         windowWatcher = t
@@ -886,7 +929,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         if stoppingBegan {
             lock.unlock()
-            t.cancel()
+            discardUnresumedTimer(t)
             return
         }
         windowTracker = t
@@ -991,7 +1034,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         if stoppingBegan {
             lock.unlock()
-            t.cancel()
+            discardUnresumedTimer(t)
             return
         }
         diskWatcher = t
@@ -1015,7 +1058,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         if stoppingBegan {
             lock.unlock()
-            t.cancel()
+            discardUnresumedTimer(t)
             return
         }
         holdTimer = t
@@ -2843,6 +2886,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // skipped as "never started".
         let displayStream = stream
         let midRestart = restarting
+        stopTookDisplay = displayStream != nil || midRestart
         lock.unlock()
         if let run = openRun { IO.send("warning", run.warning) }
 
