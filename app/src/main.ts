@@ -302,7 +302,18 @@ function send(channel: string, payload: unknown): void {
  * its panel stayed invisible under the selected chip until the user changed it.
  */
 function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<string> {
-  return promoteTake(process.env, saveFolder, dir, () => send("library:changed", undefined));
+  return promoteTake(process.env, saveFolder, dir, libraryChanged);
+}
+
+/**
+ * Tell the library window its folder gained an item (STC-519, STC-489). Sent
+ * AFTER the file is in place, so the rescan it causes finds it: a promotion,
+ * a GIF saved beside it, an editor export. The window rescans on nothing else
+ * that main writes, so a write that skips this stays invisible until some
+ * unrelated rescan.
+ */
+function libraryChanged(): void {
+  send("library:changed", undefined);
 }
 
 /**
@@ -3327,6 +3338,7 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
     throw new Error(`refusing to overwrite "${name}" — it belongs to a different capture`);
   }
   await writeFile(dest, Buffer.from(bytes));
+  libraryChanged();
   return dest;
 });
 
@@ -3361,6 +3373,7 @@ ipcMain.handle("export:writeGif", async (e, bytes: ArrayBuffer) => {
     throw err;
   }
   lastSavedGif = dest;
+  libraryChanged();
   return { path: dest, name };
 });
 
@@ -3977,6 +3990,8 @@ ipcMain.handle("panel:save", async (e, dir: string, format: unknown) => {
         await rename(partial, dest);
         partial = undefined;
         lastSavedGif = dest;
+        // The promotion above already rescanned, before this GIF existed.
+        libraryChanged();
         showNotice({ title: "Saved GIF", tone: "success", body: name, action: { id: "reveal-saved-gif", label: "Show in Finder" } });
       } catch (err: any) {
         gifError = String(err?.message ?? err);
