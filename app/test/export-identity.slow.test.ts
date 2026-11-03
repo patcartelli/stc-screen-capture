@@ -98,6 +98,8 @@ async function launchWithTake() {
       // STC-502: launch shows no window. This project does not load
       // `_e2e-setup.ts`, which is what sets this for the e2e suite.
       STC_OPEN_LIBRARY_ON_LAUNCH: "1",
+      // STC-637: the editor's Export hashes only when asked.
+      STC_EXPORT_HASH: "1",
     },
   });
   const mainWin = await app.firstWindow();

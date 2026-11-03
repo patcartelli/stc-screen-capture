@@ -85,7 +85,7 @@ describe("the Settings window", () => {
     await expect.poll(() => settings.locator("#shortcuts-recording .shortcut").count(), { timeout: 10_000 }).toBe(1);
     expect(await settings.locator("#shortcuts-recording #shortcut-record").count()).toBe(1);
     expect(await settings.locator("#shortcuts-shots #shortcut-record").count()).toBe(0);
-    expect(await settings.locator("#shortcuts-shots .shortcut").count()).toBe(4);
+    expect(await settings.locator("#shortcuts-shots .shortcut").count()).toBe(5);   // + Shot Previous Area (STC-570)
     expect(await settings.textContent("#pane-shortcuts .note"))
       .toBe("Registered means Capture holds the key. Another app can still share it.");
   }, 60_000);

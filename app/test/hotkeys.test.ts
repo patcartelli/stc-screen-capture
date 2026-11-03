@@ -5,7 +5,7 @@ import {
   type OutcomeVariantReport,
   acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction,
   parseAccelerator, planShortcuts,
-  type ShortcutReport, type Shortcuts,
+  type ShortcutReport, type Shortcuts, type BindableAction,
 } from "../src/hotkeys.js";
 
 /**
@@ -99,6 +99,10 @@ describe("parsing an accelerator", () => {
   });
 });
 
+/** Shipped unbound: pick-color (STC-627) and previous-area (STC-570). Neither has a default key to collide, vary or supersede. */
+const UNBOUND_BY_DEFAULT: readonly BindableAction[] = ["pick-color", "previous-area"];
+const BOUND_SHOTS = SHOT_ACTIONS.filter((a) => !UNBOUND_BY_DEFAULT.includes(a));
+
 describe("planning a whole set", () => {
   const plan = (s: Partial<Shortcuts>) =>
     planShortcuts({ ...DEFAULT_SHORTCUTS, ...s });
@@ -108,7 +112,9 @@ describe("planning a whole set", () => {
     // is planned exactly like the rest.
     const p = plan({});
     expect(p.map((x) => x.problem)).toEqual(BINDABLE_ACTIONS.map(() => undefined));
-    expect(new Set(p.map((x) => x.accelerator)).size).toBe(BINDABLE_ACTIONS.length);
+    const bound = p.filter((x) => x.accelerator !== null);
+    expect(bound.length).toBe(BINDABLE_ACTIONS.length - UNBOUND_BY_DEFAULT.length);
+    expect(new Set(bound.map((x) => x.accelerator)).size).toBe(bound.length);
   });
 
   test("no default collides with a system binding", () => {
@@ -250,11 +256,11 @@ describe("stills are Shot (STC-398)", () => {
   test("the action IDS are untouched, so stored bindings still resolve", () => {
     // Exactly the keys a pre-rename settings.json holds. If this list ever has
     // to change, it needs a settings migration — not a relabel.
-    expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer"]);
+    expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer", "previous-area"]);
     // DEFAULT_SHORTCUTS now also carries `record` (STC-388) — a fifth,
     // brand-new key, not a rename of any of the four above.
     expect(Object.keys(DEFAULT_SHORTCUTS).sort())
-      .toEqual(["display", "pick-color", "record", "region", "self-timer", "window"]);
+      .toEqual(["display", "pick-color", "previous-area", "record", "region", "self-timer", "window"]);
   });
 
   test("a binding stored before the rename still plans onto its action", () => {
@@ -281,11 +287,12 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
     // Not a second literal: every shot action must appear in the wider list,
     // in the same relative order, and nothing else may be in it.
     expect(SHOT_ACTIONS).toEqual(BINDABLE_ACTIONS.filter((a) => a !== "record" && a !== "pick-color"));
+    // previous-area (STC-570) is a shot: captureStill takes it and the ⇧ variants apply.
     expect(new Set(BINDABLE_ACTIONS).size).toBe(BINDABLE_ACTIONS.length);
   });
 
   test("the four persisted shot ids are unchanged — renaming one costs a hotkey", () => {
-    expect([...SHOT_ACTIONS]).toEqual(["region", "window", "display", "self-timer"]);
+    expect([...SHOT_ACTIONS].slice(0, 4)).toEqual(["region", "window", "display", "self-timer"]);
   });
 
   test("Record's default is ⌘⌥4, and the ⇧⌘8 and ⇧⌘6 it shipped on are superseded (STC-582)", () => {
@@ -298,7 +305,7 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
   });
 
   test("every default is ⌘⌥+<digit>, 1-5 in the table's order, and plans without a problem", () => {
-    const digits = BINDABLE_ACTIONS.filter((a) => a !== "pick-color").map((a) => {
+    const digits = BINDABLE_ACTIONS.filter((a) => !UNBOUND_BY_DEFAULT.includes(a)).map((a) => {
       const acc = DEFAULT_SHORTCUTS[a];
       expect(acc, `${a} has no default binding`).toBeTruthy();
       const m = /^Alt\+Command\+(\d)$/.exec(acc!);
@@ -348,7 +355,7 @@ describe("the capture-time outcome variants (STC-415)", () => {
   test("every default shot gets its clipboard variant; Record gets none", () => {
     const v = planOutcomeVariants(planShortcuts(DEFAULT_SHORTCUTS));
     expect(v.map((x) => x.action)).not.toContain("record");
-    for (const action of SHOT_ACTIONS) {
+    for (const action of BOUND_SHOTS) {
       for (const outcome of OUTCOMES) {
         const hit = v.find((x) => x.action === action && x.outcome === outcome);
         expect(hit, `${action}/${outcome}`).toBeDefined();
@@ -360,13 +367,27 @@ describe("the capture-time outcome variants (STC-415)", () => {
     const all = [
       ...planShortcuts(DEFAULT_SHORTCUTS).map((p) => p.accelerator),
       ...v.map((x) => x.accelerator),
-    ];
+    ].filter((x) => x !== null);   // an unbound action is not a key
     expect(new Set(all).size).toBe(all.length);
+  });
+
+  test("Shot Previous Area ships unbound, and once bound plans, collides and varies like any shot (STC-570)", () => {
+    expect(DEFAULT_SHORTCUTS["previous-area"]).toBeNull();
+    expect(ACTION_LABELS["previous-area"]).toBe("Shot Previous Area");
+    expect(isShotAction("previous-area")).toBe(true);
+    const bound: Shortcuts = { ...DEFAULT_SHORTCUTS, "previous-area": "Alt+Command+6" };
+    const plans = planShortcuts(bound);
+    expect(plans.find((p) => p.action === "previous-area")).toEqual({ action: "previous-area", accelerator: "Alt+Command+6" });
+    const hit = planOutcomeVariants(plans).find((v) => v.action === "previous-area" && v.outcome === "clipboard");
+    expect(hit?.accelerator).toBe(outcomeAccelerator("Alt+Command+6", "clipboard"));
+    // The usual collision check: onto Shot Area's key, the LATER action is refused.
+    const clash = planShortcuts({ ...DEFAULT_SHORTCUTS, "previous-area": DEFAULT_SHORTCUTS.region });
+    expect(clash.find((p) => p.action === "previous-area")?.problem).toBe("duplicate");
   });
 
   test("on the old hyperkey defaults every variant is reported as held, never registered", () => {
     const v = planOutcomeVariants(planShortcuts(LEGACY_DEFAULT_SHORTCUTS));
-    expect(v.length).toBe(SHOT_ACTIONS.length * OUTCOMES.length);
+    expect(v.length).toBe(BOUND_SHOTS.length * OUTCOMES.length);
     for (const x of v) expect(x).toMatchObject({ accelerator: null, problem: "held" });
   });
 
@@ -415,7 +436,7 @@ describe("what a variant's line says (STC-415)", () => {
 
 describe("resetting to the new defaults (STC-582)", () => {
   test("STC-415's whole row, and the hyperkey row, are offered", () => {
-    const old = BINDABLE_ACTIONS.filter((a) => a !== "pick-color");
+    const old = BINDABLE_ACTIONS.filter((a) => !UNBOUND_BY_DEFAULT.includes(a));
     expect(shortcutsToReset(STC415_DEFAULT_SHORTCUTS)).toEqual(old);
     expect(shortcutsToReset(LEGACY_DEFAULT_SHORTCUTS)).toEqual(old);
     expect(resetToNewDefaults(STC415_DEFAULT_SHORTCUTS)).toEqual(DEFAULT_SHORTCUTS);
@@ -445,7 +466,8 @@ describe("superseded defaults (STC-415)", () => {
   test("every superseded default is a real accelerator and none is a current default", () => {
     // pick-color shipped unbound (STC-627): no default has ever been superseded.
     expect(SUPERSEDED_DEFAULT_SHORTCUTS["pick-color"]).toEqual([]);
-    for (const a of BINDABLE_ACTIONS.filter((x) => x !== "pick-color")) {
+    expect(SUPERSEDED_DEFAULT_SHORTCUTS["previous-area"]).toEqual([]);
+    for (const a of BINDABLE_ACTIONS.filter((x) => !UNBOUND_BY_DEFAULT.includes(x))) {
       expect(SUPERSEDED_DEFAULT_SHORTCUTS[a].length, a).toBeGreaterThan(0);
       for (const old of SUPERSEDED_DEFAULT_SHORTCUTS[a]) {
         expect(parseAccelerator(old).ok, `${a}: ${old}`).toBe(true);

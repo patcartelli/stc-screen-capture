@@ -370,8 +370,8 @@ describe("the capture-time outcome variants (STC-415, ⇧ since STC-582)", () =>
     expect(await win.textContent("#shortcut-region-clipboard")).toBe("⌥⇧⌘1");
     // Record has no outcome to choose.
     expect(await win.locator("#shortcut-record-clipboard").count()).toBe(0);
-    // The variants sit INSIDE their action's row: four shot rows, then Record's group.
-    expect(await win.locator("#shortcuts-shots > .shortcut").count()).toBe(4);
+    // The variants sit INSIDE their action's row: five shot rows (Shot Previous Area, unbound, is the fifth; STC-570), then Record's group.
+    expect(await win.locator("#shortcuts-shots > .shortcut").count()).toBe(5);
     expect(await win.locator("#shortcuts-recording > .shortcut").count()).toBe(1);
   }, 120_000);
 

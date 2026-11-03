@@ -161,6 +161,7 @@ describe("reliable channel — fd3, request/response with sequence numbers", () 
       expect(Number.isInteger(d.id) && d.id > 0, `id ${d.id}`).toBe(true);
       expect(typeof d.main).toBe("boolean");
       expect(typeof d.name).toBe("string");
+      expect(typeof d.uuid, `uuid on display ${d.id}`).toBe("string");     // STC-570; "" if CoreGraphics has none
       for (const k of ["pointW", "pointH", "pixelW", "pixelH", "originX", "originY"]) {
         expect(typeof d[k], `${k} on display ${d.id}`).toBe("number");
       }
