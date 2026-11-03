@@ -64,13 +64,14 @@ try {
               `camera ${take.camera ? "yes" : "no"}, zoom overrides ${take.zoomBlocks}` +
               `${headed ? "" : "  (headless)"}`);
   const f = (n, d = 1) => n.toFixed(d).padStart(7);
-  console.log("\ndrag                        moves painted  /s   settle  render  decode  compos  maxDec  dec/pt restarts flushes peakBuf");
+  console.log("\ndrag                        moves painted  /s   settle  render  decode  compos  maxDec  dec/pt restarts flushes peakBuf  kept keptMB");
   for (const r of results) {
     console.log(`${r.name.padEnd(27)} ${String(r.moves).padStart(5)} ${String(r.painted).padStart(7)}` +
                 `${f(r.paintedPerS)} ${f(r.settleMs, 0)}ms${f(r.renderMs, 2)}${f(r.decodeMs)}${f(r.compositeMs, 2)}` +
-                `${f(r.maxDecodeMs, 0)}${f(r.decodedPerPaint)}${String(r.decoderRestarts).padStart(9)}${String(r.flushes).padStart(8)}${String(r.peakBuffered).padStart(8)}`);
+                `${f(r.maxDecodeMs, 0)}${f(r.decodedPerPaint)}${String(r.decoderRestarts).padStart(9)}${String(r.flushes).padStart(8)}${String(r.peakBuffered).padStart(8)}` +
+                `${String(r.keptHits).padStart(6)}${f(r.peakKeptMB, 0)}`);
   }
-  console.log("\n(render/decode/compos are mean ms per painted frame; dec/pt = frames decoded per painted frame)");
+  console.log("\n(render/decode/compos are mean ms per painted frame; dec/pt = frames decoded per painted frame;\n kept = paints served by a frame already decoded behind the playhead, keptMB = the most those frames held, STC-635)");
   out = 0;
 } catch (e) {
   console.error(String(e?.stack ?? e));
