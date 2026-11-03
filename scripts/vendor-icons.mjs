@@ -84,10 +84,12 @@ const MAP = {
   "editor": "movie_edit",
   // STC-627: the color picker.
   "color": "colorize",
+  // STC-570: Shot Previous Area.
+  "previous-area": "history",
 };
 
 /** The glyphs the menu-bar menu draws, rasterised into app/src/tray-icons.ts. */
-const TRAY = ["area", "window", "display", "record", "record-stop", "timer", "library", "editor", "settings", "color"];
+const TRAY = ["area", "window", "display", "record", "record-stop", "timer", "library", "editor", "settings", "color", "previous-area"];
 /** 16 pt at 1x and 2x: the two representations a menu asks for. */
 const TRAY_SIZES = [16, 32];
 const RESVG = "@resvg/resvg-js@2.6.2";

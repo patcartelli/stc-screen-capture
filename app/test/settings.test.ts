@@ -8,6 +8,7 @@ import {
 } from "../src/settings.js";
 import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
+import { NO_PREVIOUS_AREAS, rememberArea } from "../src/previous-area.js";
 import { DEFAULT_GIF_SETTINGS } from "@transform/gif-options.js";
 import { LOOKS, lookWrite, wallpaperLookWrite } from "@transform/backgrounds.js";
 import { DEFAULT_PIP_STYLE } from "@transform/pip-style.js";
@@ -25,7 +26,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -67,7 +68,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -123,7 +124,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -304,7 +305,7 @@ describe("the capture shortcuts", () => {
       region: "Alt+Command+1", window: "Alt+Command+2", display: "Alt+Command+3",
       record: "Alt+Command+4",
       "self-timer": "Alt+Command+5",
-      "pick-color": null,
+      "pick-color": null, "previous-area": null,
     });
   });
 
@@ -402,7 +403,7 @@ describe("the Record binding (STC-388)", () => {
       region: "Control+Alt+Shift+Command+1", window: "Control+Alt+Shift+Command+2",
       display: "Control+Alt+Shift+Command+3", record: DEFAULT_SHORTCUTS.record,
       "self-timer": "Control+Alt+Shift+Command+5",
-      "pick-color": null,
+      "pick-color": null, "previous-area": null,
     });
   });
 
@@ -423,7 +424,7 @@ describe("the Record binding (STC-388)", () => {
       region: "Control+Alt+Shift+Command+1", window: "Shift+Command+2",
       display: "Control+Alt+Shift+Command+3", record: "Control+Alt+Shift+Command+4",
       "self-timer": "Shift+Command+7",
-      "pick-color": null,
+      "pick-color": null, "previous-area": null,
     });
   });
 
@@ -442,7 +443,7 @@ describe("the Record binding (STC-388)", () => {
       display: "Alt+Shift+R",
       record: "Control+Alt+Shift+Command+4",
       "self-timer": "Shift+Command+7",
-      "pick-color": null,
+      "pick-color": null, "previous-area": null,
     };
     writeFileSync(join(d, "settings.json"), JSON.stringify({ shortcuts: stored }));
     expect(readSettings(d).shortcuts).toEqual(stored);
@@ -843,12 +844,34 @@ describe("the window shot look (STC-628)", () => {
   });
 });
 
+describe("the previous area (STC-570)", () => {
+  const display = { id: 1, uuid: "UUID-A", width: 1512, height: 982 };
+  const crop = { x: 100, y: 200, width: 400, height: 300 };
+
+  test("never stored: nothing remembered", () => {
+    expect(readSettings(dir()).previousAreas).toEqual(NO_PREVIOUS_AREAS);
+  });
+  test("a relaunch keeps it, and an unrelated write leaves it alone", () => {
+    const d = dir();
+    const areas = rememberArea(NO_PREVIOUS_AREAS, display, crop);
+    writeSettings(d, { previousAreas: areas });
+    writeSettings(d, { camera: true });
+    expect(readSettings(d).previousAreas).toEqual(areas);
+  });
+  test("a malformed stored value is treated as never stored", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ previousAreas: { last: 3, byDisplay: 7 } }));
+    expect(readSettings(d).previousAreas).toEqual(NO_PREVIOUS_AREAS);
+  });
+});
+
 describe("stripMainOnly (recorder:setSettings)", () => {
   test("drops every main-only key and passes the rest through", () => {
     const dark = lookWrite(LOOKS.find((l) => l.id === "dark")!);
     const out = stripMainOnly({
       saveFolder: "/x", capturePrimed: true, shortcutsOffered: true,
       libraryWindow: { x: 0, y: 0, width: 1, height: 1 }, lastBackgroundLook: dark,
+      previousAreas: rememberArea(NO_PREVIOUS_AREAS, { id: 1, uuid: "U", width: 100, height: 100 }, { x: 0, y: 0, width: 10, height: 10 }),
       windowShotLook: "background", previewMuted: true,
     });
     expect(out).toEqual({ windowShotLook: "background", previewMuted: true });

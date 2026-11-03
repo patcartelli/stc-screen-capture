@@ -3,6 +3,7 @@ import {
   powerMonitor, nativeTheme, type IpcMainInvokeEvent,
 } from "electron";
 import { readSettings, stripMainOnly, writeSettings, type Settings } from "./settings.js";
+import { rememberArea, resolvePreviousArea, type ConnectedDisplay } from "./previous-area.js";
 import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, resetOfferText, resetToNewDefaults, planShortcuts, planOutcomeVariants, isShotAction,
   type Outcome, type OutcomeVariantReport,
@@ -1956,7 +1957,11 @@ async function recordFlowBody(
     // `region` ONLY when this is not a full-display take: a crop covering the
     // whole screen takes the helper's crop path instead of its full-display
     // one. One expression, so the two paths cannot be chosen by two rules.
-    if (!options.fullDisplay) startParams.region = { ...outcome.crop };
+    if (!options.fullDisplay) {
+      startParams.region = { ...outcome.crop };
+      // STC-570: a recorded region is the "previous area" too.
+      void rememberRegion(outcome.displayId, outcome.crop);
+    }
   }
 
   // STC-433: check the overlay's own pick against the helper's current
@@ -2258,7 +2263,9 @@ async function captureStill(action: ShotAction, source: CaptureSource, afterShot
       // The self-timer picks its scope through the SAME overlay, opened in
       // region mode — the overlay's own toggle still reaches window mode, so
       // "scope is chosen during the flow" costs it no second picker.
-      : await selectRegionOrWindow(action === "self-timer" ? "region" : action, thumbExcluded);
+      : action === "previous-area"
+        ? await retakePreviousArea(thumbExcluded)
+        : await selectRegionOrWindow(action === "self-timer" ? "region" : action, thumbExcluded);
     if (outcome === undefined) return { ok: false, cancelled: true, source };
 
     // STC-391. Scope first, countdown second — the ticket makes them separate
@@ -2401,6 +2408,7 @@ async function selectRegionOrWindow(
     windows, mode: action, dist: here, renderer: join(here, "..", "renderer"),
   });
   if (outcome.kind === "cancelled") return undefined;
+  if (outcome.kind === "region") void rememberRegion(outcome.displayId, outcome.crop);
   return outcome.kind === "region"
     // `displayId` is Electron's, which on macOS is the CGDirectDisplayID the
     // helper matches against. If that ever stops being true the helper answers
@@ -2413,6 +2421,54 @@ async function selectRegionOrWindow(
         params: { kind: "display-crop", displayId: outcome.displayId,
                   crop: outcome.crop, excludeWindowIds: [...excludeWindowIds, ...thumbExcluded] } }
     : { kind: "window", params: { kind: "window", windowId: outcome.windowId } };
+}
+
+/**
+ * The displays the helper sees, with the UUID that outlives a reconnect (STC-570).
+ * Empty when the helper cannot say, which makes a retake fall back to the overlay.
+ */
+async function connectedDisplays(): Promise<ConnectedDisplay[]> {
+  try {
+    const reply = await sup!.devices() as { displays?: unknown };
+    if (!Array.isArray(reply.displays)) return [];
+    return reply.displays.flatMap((d: any): ConnectedDisplay[] =>
+      typeof d?.id === "number" && typeof d?.uuid === "string" && d.uuid !== ""
+        && typeof d?.pointW === "number" && typeof d?.pointH === "number"
+        ? [{ id: d.id, uuid: d.uuid, width: d.pointW, height: d.pointH }] : []);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Remember a region a shot or a recording was just aimed at. Never throws and
+ * is never awaited by a capture: losing the memory costs a drag, not a shot.
+ */
+async function rememberRegion(displayId: number, crop: { x: number; y: number; width: number; height: number }): Promise<void> {
+  try {
+    const display = (await connectedDisplays()).find((d) => d.id === displayId);
+    const dir = app.getPath("userData");
+    const before = readSettings(dir).previousAreas;
+    const after = rememberArea(before, display, crop);
+    if (after !== before) writeSettings(dir, { previousAreas: after });
+  } catch (e) {
+    console.error("[previous-area] could not remember the region:", e);
+  }
+}
+
+/**
+ * Shot Previous Area (STC-570): the last region again with no drag, or the
+ * normal overlay when it no longer fits a connected display. Never a clipped or
+ * off-screen rectangle.
+ */
+async function retakePreviousArea(
+  thumbExcluded: number[],
+): Promise<{ kind: string; params: CaptureParams } | undefined> {
+  const answer = resolvePreviousArea(readSettings(app.getPath("userData")).previousAreas, await connectedDisplays());
+  if (answer.kind === "overlay") return selectRegionOrWindow("region", thumbExcluded);
+  return { kind: "region",
+           params: { kind: "display-crop", displayId: answer.displayId,
+                     crop: answer.crop, excludeWindowIds: thumbExcluded } };
 }
 
 /**
