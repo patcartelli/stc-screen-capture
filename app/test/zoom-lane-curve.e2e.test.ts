@@ -39,6 +39,13 @@ async function setSpeed(win: Page, side: "in" | "out", speed: "calm" | "snappy")
 async function done(win: Page): Promise<void> {
   await win.click("#overridedone");
   await win.waitForSelector("#overridebar", { state: "hidden", timeout: 10_000 });
+  // The bar is hidden in the same step that SCHEDULES the lane's redraw for
+  // the next animation frame (resetEditingState's scheduleLaneRedraw), so a
+  // read now can still see the curve from before the edit. Measured on CI
+  // (master c5f650e and #439): "Slow" read back as the old default speed and
+  // the gap to Fast came out 5 px. Two frames: the one it was scheduled for,
+  // and one after it has drawn.
+  await win.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 }
 
 /**
