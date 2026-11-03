@@ -49,6 +49,12 @@ function agree(p: Project): void {
   const got = sampler.amountsAt(times);
   expect(got).toHaveLength(times.length);
   times.forEach((t, i) => expect(got[i], `t=${t / MS}ms`).toBe(render(p, session, t).zoom.amount));
+  // STC-636: the lane's height is the crop's magnification, from the same crop.
+  const mags = sampler.magnificationsAt(times, got);
+  times.forEach((t, i) => {
+    const crop = render(p, session, t).zoom.crop;
+    expect(mags[i], `t=${t / MS}ms`).toBe(1 / Math.max(crop.width, crop.height));
+  });
 }
 
 describe("zoomAmountSampler reads exactly what render() reports", () => {
@@ -79,6 +85,24 @@ describe("zoomAmountSampler reads exactly what render() reports", () => {
     // The windows it reports are the resolved ones: the manual window is among them.
     const sampler = zoomAmountSampler(project({ overrides }), session);
     expect(sampler.windows.some((w) => w.startNs === 12_000 * MS && w.endNs === 15_000 * MS)).toBe(true);
+  });
+
+  test("magnification follows a block's region (STC-636): 1 outside, its own amount at the plateau", () => {
+    const quarter = { x: 0.1, y: 0.1, width: 0.25, height: 0.25 };
+    const overrides: ZoomOverride[] = [
+      { kind: "geometry", windowId: "1700000000", rect: quarter } as ZoomOverride,
+      { kind: "geometry", windowId: "8700000000", rect: RECT, follow: true } as ZoomOverride,
+      { kind: "geometry", windowId: "19700000000", easing: { in: "snappy" } } as ZoomOverride,
+    ];
+    const p = project({ overrides });
+    agree(p);
+    const sampler = zoomAmountSampler(p, session);
+    const at = [0, 3500 * MS, 10_500 * MS];
+    const m = sampler.magnificationsAt(at, sampler.amountsAt(at));
+    expect(m[0]).toBe(1);
+    expect(m[1]).toBeCloseTo(4, 2);
+    // A following block keeps its size, so its magnification is its region's.
+    expect(m[2]).toBeCloseTo(2.5, 2);
   });
 
   test("the order of the times does not matter", () => {

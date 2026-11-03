@@ -141,8 +141,10 @@ export function overridesWithoutManual(overrides: readonly ZoomOverride[] | unde
 /**
  * `overrides` with `edit` committed into it. Never mutates its input.
  *
- * Derived window: an empty `rect` means "no geometry override" (unchanged
- * since STC-330). A `retime` entry (STC-329) is written or cleared
+ * Derived window: an empty `rect` means "zoom where stage 2 says". With no
+ * speed either it writes no geometry override (unchanged since STC-330); with
+ * a speed it writes one carrying only `easing` (project-20, STC-630), which
+ * used to be dropped silently. A `retime` entry (STC-329) is written or cleared
  * independently: dragging the rect must not discard a prior retime, and
  * dragging an edge must not discard a prior geometry override. Whether a
  * retime is needed is decided against the window's TRUE derived bounds,
@@ -184,13 +186,17 @@ export function committedOverrides(
   const id = edit.windowId;
   const withoutGeometry = overridesWithoutWindow(overrides, id);
   const easing = normalizeEasing(pairOf(edit.easing));
+  // A speed with no rect (STC-630) is an entry of its own: the block stays
+  // where stage 2 puts it and plays at that speed (project-20).
   const withGeometry = edit.rect
     ? [...withoutGeometry, {
         kind: "geometry" as const, windowId: id, rect: edit.rect,
         ...(easing !== undefined ? { easing } : {}),
         ...(edit.follow ? { follow: true as const } : {}),
       }]
-    : withoutGeometry;
+    : easing !== undefined
+      ? [...withoutGeometry, { kind: "geometry" as const, windowId: id, easing }]
+      : withoutGeometry;
 
   const raw = zoomWindows(events).find((w) => windowId(w) === id);
   const withoutRetime = overridesWithoutRetime(withGeometry, id);

@@ -136,7 +136,8 @@ export function manualWindows(overrides: readonly ZoomOverride[] | undefined): C
  * then the whole frame, `FULL_FRAME_UV`). A manual window's own rect wins
  * outright and is never `undefined` — there is nothing else for it to fall
  * back to, unlike a geometry override which may simply not exist for a
- * given derived window.
+ * given derived window, or (project-20, STC-630) exist to carry only a
+ * speed, with no rect: either way `undefined`, so stage 2 places it.
  */
 export function resolvedCrop(
   overrides: readonly ZoomOverride[] | undefined,
