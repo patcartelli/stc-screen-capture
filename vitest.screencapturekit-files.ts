@@ -12,9 +12,9 @@
  * Retrying in the test was tried twice and held in neither form; not
  * overlapping is the fix. `docs/TICKET-LOG.md`'s STC-470 row has the numbers.
  *
- * Only four helper commands reach ScreenCaptureKit — `start`,
- * `capture-still`, `windows` and `prime-capture` (STC-522); `devices` does
- * not. App launch does only on a Mac where Screen Recording is granted and the
+ * Only five helper commands reach ScreenCaptureKit — `start`,
+ * `capture-still`, `windows`, `prime-capture` (STC-522) and `wallpaper`
+ * (STC-628); `devices` does not. App launch does only on a Mac where Screen Recording is granted and the
  * throwaway stream has not yet run (`permissions.ts` rule 8) — never on CI, and
  * never under the e2e suite's `STC_ASSUME_PERMISSIONS=granted`. The files
  * below are every unit test that sends one to the real binary.

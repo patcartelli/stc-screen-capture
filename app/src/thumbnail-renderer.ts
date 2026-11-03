@@ -10,7 +10,7 @@ import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still
 import {
   actionsFor, closesPanel, lockedWhileCopying, lockedWhileConverting, offersFormat, type PanelAction, type PanelTake,
 } from "./panel-actions.js";
-import { composeStill, stillPixelBytes } from "./still-compose.js";
+import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 import {
   INITIAL_GIF_STATE, reduceGif, effectOfPick, formatOf, gifLabel, copySaveEnabled,
   type GifState, type GifEvent, type OutputFormat,
@@ -180,6 +180,13 @@ const stillShot: Shot | null =
  */
 // Never for a recording: it has no Copy to run (STC-487 §3.2).
 const silent = take.kind === "shot" && params.get("silent") === "1";
+/**
+ * STC-628: a fresh shot's one line to say (the wallpaper fallback), and
+ * whether to copy as a silent panel would have — set together when the notice
+ * overrode a clipboard capture's `silent` (`presentFlags`, `window-look.ts`).
+ */
+const notice = take.kind === "shot" ? params.get("notice") ?? "" : "";
+const copyOnLoad = take.kind === "shot" && params.get("copy") === "1";
 /** Which way this panel leaves the screen — see `discardDirection`. */
 const corner = parseCorner(params.get("corner"));
 
@@ -201,6 +208,8 @@ const CARD_BOX: Size = {
 };
 
 let frame: ImageBitmap | undefined;
+/** The image/wallpaper file behind the shot's background, loaded once beside the frame (STC-628). */
+let background: ImageBitmap | undefined;
 /** The full-resolution composite, kept apart from the (scaled-down) view canvas. */
 let composite: HTMLCanvasElement | undefined;
 /**
@@ -277,7 +286,7 @@ async function draw(): Promise<void> {
   // default `native` scale, which is why a hand-rolled copy of this in the
   // still editor survived unnoticed. It also creates the context with the
   // shot's own colour space, which that copy had dropped entirely.
-  const { canvas: out, plan } = composeStill(shot, frame, settings);
+  const { canvas: out, plan } = composeStill(shot, frame, settings, background);
   composite = out;
 
   // Fill the pane rather than shrinking to fit inside it (STC-426 revision):
@@ -1007,6 +1016,7 @@ void (async () => {
   }
   const bytes = await window.thumb.getFrame(dir, stillShot.frame.file);
   frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  background = await loadShotBackground(stillShot, (name) => window.thumb.getFrame(dir, name));
   await draw();
   markReady();
   // A silent panel is never shown, so there is nothing to paint FOR: it
@@ -1032,7 +1042,19 @@ void (async () => {
   // Painted — safe to show without a flash of empty content, and the moment
   // this panel starts accepting keys (after `SETTLE_KEYS_MS` — see the block
   // comment above the keydown listener).
+  if (notice) setStatus(notice);
   paintCard();
+  // The copy a clipboard capture asked for, on a panel shown only to say the
+  // notice. Unlike the silent branch, this does NOT save: from here on the
+  // shot behaves as a panel-mode shot and reaches the library when Save is
+  // pressed, because `panel:save` closes the panel and would take the notice
+  // with it (STC-628 spec). The notice is put back after, over Copy's "Copied" line;
+  // a copy that failed keeps its own line, with the notice after it, so
+  // nobody is told about the wallpaper and left believing it copied.
+  if (copyOnLoad) {
+    const copied = await run("copy");
+    if (notice) setStatus(copied ? notice : `${statusEl.textContent ?? ""} ${notice}`.trim());
+  }
   // Only NOW, and deliberately not awaited: the panel is on screen and idle
   // until a person acts, so the drag file that a drag-out would otherwise
   // have to wait for happens in time nobody is using. Nothing downstream

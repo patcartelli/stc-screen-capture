@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'">
   <title>Redact</title>
   <link rel="stylesheet" href="tokens.css">
   <style>
@@ -79,6 +79,12 @@
       width: 44px; height: 30px; border-radius: 5px; box-sizing: border-box;
       border: 1px solid var(--border-strong); position: relative; overflow: hidden;
     }
+    .look .chip { background-size: cover; background-position: center; }
+    .look .chip .glyph {
+      width: 18px; height: 18px; fill: currentColor; color: var(--text-dim);
+      position: absolute; inset: 0; margin: auto;
+    }
+    .look .chip.has-image .glyph { display: none; }
     /* The two no-background options show a window on the page's own colour. */
     .look[data-look="window-only"] .chip,
     .look[data-look="window-shadow"] .chip { background: var(--surface-hover); }

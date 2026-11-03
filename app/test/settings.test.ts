@@ -3,12 +3,13 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, chmodSync, mkdirS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  readSettings, writeSettings, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
+  readSettings, writeSettings, stripMainOnly, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
   DEFAULT_THUMBNAIL_SETTINGS,
 } from "../src/settings.js";
 import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
 import { DEFAULT_GIF_SETTINGS } from "@transform/gif-options.js";
+import { LOOKS, lookWrite, wallpaperLookWrite } from "@transform/backgrounds.js";
 import { DEFAULT_PIP_STYLE } from "@transform/pip-style.js";
 
 /**
@@ -24,7 +25,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -66,7 +67,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -122,7 +123,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -813,5 +814,44 @@ describe("STC-395: GIF settings", () => {
     writeSettings(d, { gif: { fps: 10, maxWidth: 480 } });
     writeSettings(d, { gif: { ...readSettings(d).gif, fps: 20 } });
     expect(readSettings(d).gif).toEqual({ fps: 20, maxWidth: 480 });
+  });
+});
+
+describe("the window shot look (STC-628)", () => {
+  test("defaults to wallpaper; garbage falls back; a valid pick persists", () => {
+    expect(readSettings(dir()).windowShotLook).toBe("wallpaper");
+    const e = dir();
+    writeFileSync(join(e, "settings.json"), JSON.stringify({ windowShotLook: "sparkle" }));
+    expect(readSettings(e).windowShotLook).toBe("wallpaper");
+    const d = dir();
+    expect(writeSettings(d, { windowShotLook: "background" }).windowShotLook).toBe("background");
+    expect(readSettings(d).windowShotLook).toBe("background");
+  });
+  test("lastBackgroundLook: null by default; keeps a background look; rejects wallpaper, plain and garbage", () => {
+    expect(readSettings(dir()).lastBackgroundLook).toBeNull();
+    const dark = lookWrite(LOOKS.find((l) => l.id === "dark")!);
+    const d = dir();
+    writeSettings(d, { lastBackgroundLook: dark });
+    expect(readSettings(d).lastBackgroundLook).toEqual(dark);
+    writeSettings(d, { previewMuted: true });
+    expect(readSettings(d).lastBackgroundLook).toEqual(dark);
+    for (const bad of [wallpaperLookWrite("w.png"), lookWrite(LOOKS.find((l) => l.id === "window-only")!), { mode: 3 }, "x"]) {
+      const e = dir();
+      writeFileSync(join(e, "settings.json"), JSON.stringify({ lastBackgroundLook: bad }));
+      expect(readSettings(e).lastBackgroundLook).toBeNull();
+    }
+  });
+});
+
+describe("stripMainOnly (recorder:setSettings)", () => {
+  test("drops every main-only key and passes the rest through", () => {
+    const dark = lookWrite(LOOKS.find((l) => l.id === "dark")!);
+    const out = stripMainOnly({
+      saveFolder: "/x", capturePrimed: true, shortcutsOffered: true,
+      libraryWindow: { x: 0, y: 0, width: 1, height: 1 }, lastBackgroundLook: dark,
+      windowShotLook: "background", previewMuted: true,
+    });
+    expect(out).toEqual({ windowShotLook: "background", previewMuted: true });
+    expect(stripMainOnly(undefined)).toEqual({});
   });
 });
