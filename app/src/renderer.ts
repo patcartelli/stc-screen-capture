@@ -128,6 +128,7 @@ import {
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
 import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS } from "./stop-copy.js";
+import { latestOnly } from "./latest-only.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { withMeshBackground } from "@transform/still-mesh";
@@ -790,9 +791,12 @@ async function onPlaceholderAction(a: PlaceholderAction): Promise<void> {
 // later refresh that outlasts UPDATING_SHOW_AFTER_MS says the grid is catching
 // up. A fast refresh shows neither.
 let libraryDrawn = false;
+// STC-489: scans overlap and answer out of order; only the newest is drawn.
+const beginScan = latestOnly();
 
 async function refreshTakes(): Promise<void> {
   const host = $("takes");
+  const isCurrent = beginScan();
   let slow: ReturnType<typeof setTimeout> | undefined;
   if (!libraryDrawn) renderPlaceholderOnly(host, LOADING_PLACEHOLDER);
   else slow = setTimeout(() => showUpdating(host, UPDATING_NOTE), UPDATING_SHOW_AFTER_MS);
@@ -802,12 +806,15 @@ async function refreshTakes(): Promise<void> {
   } finally {
     clearTimeout(slow);
   }
-  libraryFilter = list.filter;
-  lastList = list;
+  if (!isCurrent()) return;
   const empty = !list.items.length && !list.invalid.length && !(list.folder && list.folder.state !== "ok");
-  emptyContext = empty && list.filter === "all"
+  const context = empty && list.filter === "all"
     ? await placeholderContext()
     : { folder: "", shotKey: null, recordKey: null };
+  if (!isCurrent()) return;
+  libraryFilter = list.filter;
+  lastList = list;
+  emptyContext = context;
   libraryDrawn = true;
   drawLibrary();
 }
