@@ -53,7 +53,9 @@ describe("export from the app, through the editor's export dialog (STC-373)", ()
 
     const m = JSON.parse(readFileSync(manifest, "utf8"));
     expect(m.frames).toBeGreaterThan(0);
-    expect(m.preEncodeHash).toMatch(/^[0-9a-f]{64}$/);
+    // STC-637: a user's export does not hash (it tripled the export's time);
+    // only export-identity.slow.test.ts asks, with STC_EXPORT_HASH=1.
+    expect(m.preEncodeHash).toBeUndefined();
   }, 900_000);
 
   test("export honours the trim window", async () => {

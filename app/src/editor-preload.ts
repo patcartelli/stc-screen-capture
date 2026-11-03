@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld("editor", {
     ipcRenderer.invoke("preview:chunk", name, offset, length),
   writeProject: (bytes: ArrayBuffer) => ipcRenderer.invoke("preview:writeProject", bytes),
   writeExport: (name: string, bytes: ArrayBuffer) => ipcRenderer.invoke("export:write", name, bytes),
+  // STC-637: true only under the identity test (STC_EXPORT_HASH=1).
+  exportHashFrames: () => ipcRenderer.invoke("export:hashFrames"),
+  // STC-637: no timer throttling while an export runs, even behind another window.
+  setExportBusy: (busy: boolean) => ipcRenderer.invoke("export:busy", busy === true),
   // STC-413: the open take's stable identity, so the export path can tag the
   // MP4 it writes without reaching node:fs itself.
   captureId: () => ipcRenderer.invoke("take:captureId"),
