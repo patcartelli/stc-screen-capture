@@ -46,5 +46,7 @@
               // panel and the still editor, both excluded above.
               "app/src/still-compose.ts",
               // STC-488: a renderer module (imports @transform/session).
-              "app/src/session-io.ts"]
+              "app/src/session-io.ts",
+              // STC-608: the swatch grid shared by the still and video editors.
+              "app/src/look-grid.ts"]
 }

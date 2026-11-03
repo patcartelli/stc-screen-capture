@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { recorder } from "./_canvas-recorder.js";
-import { renderStill, gradientLine, shadowParkDistance, type StillRenderContext } from "../src/still-render.js";
+import { gradientLine } from "../src/framing.js";
+import { renderStill, shadowParkDistance, type StillRenderContext } from "../src/still-render.js";
 import { layoutStill, PRESET_SHADOW } from "../src/still-decorate.js";
 import { parseShot, type Shot } from "../src/shot.js";
 import { REDACTION_FILL_ON_LIGHT, REDACTION_FILL_ON_DARK } from "../src/still-redact.js";
@@ -65,14 +66,14 @@ const drawImages = (ops: string[]) => ops.filter((o) => o.startsWith("drawImage(
 
 describe("gradientLine", () => {
   test("0 degrees runs bottom to top, CSS's convention", () => {
-    const l = gradientLine(100, 100, 0);
+    const l = gradientLine(0, 100, 100);
     expect(l.x0).toBeCloseTo(50, 6);
     expect(l.y0).toBeCloseTo(100, 6);
     expect(l.y1).toBeCloseTo(0, 6);
   });
 
   test("90 degrees runs left to right", () => {
-    const l = gradientLine(100, 100, 90);
+    const l = gradientLine(90, 100, 100);
     expect(l.x0).toBeCloseTo(0, 6);
     expect(l.x1).toBeCloseTo(100, 6);
     expect(l.y0).toBeCloseTo(50, 6);
@@ -80,7 +81,7 @@ describe("gradientLine", () => {
 
   test("the line spans the whole box, so the end stops reach the corners", () => {
     // At 45 degrees across a square the projection is the diagonal's length.
-    const l = gradientLine(100, 100, 45);
+    const l = gradientLine(45, 100, 100);
     expect(Math.hypot(l.x1 - l.x0, l.y1 - l.y0)).toBeCloseTo(Math.sqrt(2) * 100, 6);
   });
 });

@@ -1,4 +1,8 @@
 import type { Rect, Size } from "./spaces.js";
+import {
+  BASE_SHADOW_OPACITY, DARK_SHADOW_OPACITY, LINEAR_STOPS_MAX, LINEAR_STOPS_MIN, LOOK_FILLS,
+  type LookFill,
+} from "./looks.js";
 
 /**
  * Video framing (STC-396): static chrome around a moving picture — a
@@ -34,7 +38,7 @@ export type FramingPreset = "clean" | "dark" | "solid";
 
 export type FramingBackground =
   | { kind: "solid"; color: string }
-  | { kind: "linear"; colors: [string, string]; angleDeg: number };
+  | { kind: "linear"; colors: string[]; angleDeg: number };
 
 export interface FramingShadow { offsetYPct: number; blurPct: number; opacity: number }
 
@@ -61,22 +65,26 @@ export const FRAMING_PADDING_MAX = 0.25;
 export const FRAMING_RADIUS_MAX = 0.1;
 export const DEFAULT_SOLID_COLOR = "#3b4252";
 
-const SHADOW: FramingShadow = { offsetYPct: 0.012, blurPct: 0.03, opacity: 0.32 };
+const SHADOW: FramingShadow = { offsetYPct: 0.012, blurPct: 0.03, opacity: BASE_SHADOW_OPACITY };
+
+/** A catalogue fill as a framing background, copied so no preset shares an array with the catalogue. */
+const fromCatalogue = (f: LookFill): FramingBackground =>
+  f.kind === "linear" ? { kind: "linear", colors: [...f.colors], angleDeg: f.angleDeg } : { ...f };
 
 export const FRAMING_PRESETS: Readonly<Record<FramingPreset, {
   paddingPct: number; radiusPct: number; shadow: FramingShadow; background: FramingBackground;
 }>> = {
   clean: {
     paddingPct: 0.06, radiusPct: 0.012, shadow: { ...SHADOW },
-    background: { kind: "linear", colors: ["#e9edf2", "#cfd6e0"], angleDeg: 135 },
+    background: fromCatalogue(LOOK_FILLS.clean),
   },
   dark: {
-    paddingPct: 0.06, radiusPct: 0.012, shadow: { ...SHADOW, opacity: 0.55 },
-    background: { kind: "linear", colors: ["#2a3040", "#0d1017"], angleDeg: 135 },
+    paddingPct: 0.06, radiusPct: 0.012, shadow: { ...SHADOW, opacity: DARK_SHADOW_OPACITY },
+    background: fromCatalogue(LOOK_FILLS.dark),
   },
   solid: {
     paddingPct: 0.06, radiusPct: 0.012, shadow: { ...SHADOW },
-    background: { kind: "solid", color: DEFAULT_SOLID_COLOR },
+    background: fromCatalogue(LOOK_FILLS.solid),
   },
 };
 
@@ -124,10 +132,11 @@ export function framingProblem(raw: unknown): string | undefined {
     const solid = isObj(b) && b.kind === "solid" && onlyKeys(b, ["kind", "color"])
       && typeof b.color === "string" && HEX.test(b.color);
     const linear = isObj(b) && b.kind === "linear" && onlyKeys(b, ["kind", "colors", "angleDeg"])
-      && Array.isArray(b.colors) && b.colors.length === 2
+      && Array.isArray(b.colors)
+      && b.colors.length >= LINEAR_STOPS_MIN && b.colors.length <= LINEAR_STOPS_MAX
       && b.colors.every((c) => typeof c === "string" && HEX.test(c))
       && inRange(b.angleDeg, -360, 360);
-    if (!solid && !linear) return "framing.background must be a solid or two-stop linear fill";
+    if (!solid && !linear) return "framing.background must be a solid or a 2 to 8 stop linear fill";
   }
   return undefined;
 }
@@ -208,7 +217,7 @@ export function framingLayout(
  * Canvas `createLinearGradient` endpoints for a CSS-style angle: 0 is
  * bottom-to-top, 90 left-to-right, 135 top-left to bottom-right, the line
  * passing through the centre and long enough that the corners take the end
- * stops exactly.
+ * stops exactly. The one definition: stills and video both draw through it.
  */
 export function gradientLine(angleDeg: number, w: number, h: number):
   { x0: number; y0: number; x1: number; y1: number } {

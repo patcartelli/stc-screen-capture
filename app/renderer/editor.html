@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; worker-src 'self'">
   <title>Capture</title>
   <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="look-grid.css">
   <link rel="stylesheet" href="pip-inspector.css">
   <style>
     /* Fonts, type ramp and light/dark color tokens live in tokens.css now
@@ -301,6 +302,9 @@
     #pane .row > input[type="color"] { width: 22px; height: 22px; padding: 0; border: 1px solid var(--border);
                                        border-radius: 6px; background: none; flex: none; margin-left: auto; }
     #pane .row > input[type="color"] + .value { min-width: 0; }
+    /* STC-608: the Background looks, two rows of four across the pane. The
+       swatches are look-grid.css's, shared with the still editor. */
+    #framelooks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 4px; padding: 12px 0; }
     #pane .value { flex: none; min-width: 6ch; text-align: right; color: var(--text);
                    font-size: var(--type-value-sm); line-height: 22px; }
     /* The value is also the reset: clickable only while the level differs from
@@ -796,10 +800,12 @@
 
     /* ── the Export section: legibility + the viewer's eye, one place (STC-604
        folded the export dialog into the pane) ─────────────────────────────── */
-    #pane input[type="number"], #pane input[type="text"] {
+    /* Custom's colour fields are look-grid.css's .look-custom-input, the
+       still editor's field, so they are left out of the pane's own. */
+    #pane input[type="number"], #pane input[type="text"]:not(.look-custom-input) {
       font: 400 12px/18px "Geist Mono", ui-monospace, monospace; color: var(--text); text-align: right;
       background: rgba(255, 255, 255, .06); border: 0; border-radius: 8px; padding: 5px 10px; min-width: 0; }
-    #pane input[type="number"]:focus-visible, #pane input[type="text"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    #pane input[type="number"]:focus-visible, #pane input[type="text"]:not(.look-custom-input):focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #embedwidth { width: 6em; }
     #textpt { width: 5em; }
     #shareslug { width: 11em; }
@@ -1164,21 +1170,18 @@
       <div>
         <p class="panelabel">Background</p>
         <div class="group">
-          <div class="row">
-            <span class="label" id="framepreset-label">Style</span>
-            <!-- The camera section's segmented look (pip-inspector.css). None is
-                 a fourth segment: the frame has no off switch of its own. -->
-            <div id="framepreset" class="pip-segmented" role="radiogroup" aria-labelledby="framepreset-label">
-              <button type="button" role="radio" aria-checked="true" data-frame-preset="none">None</button>
-              <button type="button" role="radio" aria-checked="false" data-frame-preset="clean">Clean</button>
-              <button type="button" role="radio" aria-checked="false" data-frame-preset="dark">Dark</button>
-              <button type="button" role="radio" aria-checked="false" data-frame-preset="solid">Solid</button>
-            </div>
-          </div>
-          <div class="row" id="framecolorrow" hidden>
-            <label class="label" for="framecolor">Colour</label>
-            <input id="framecolor" type="color" value="#3b4252" hidden aria-label="Frame colour">
-            <span id="framecolorvalue" class="value mono"></span>
+          <!-- STC-608: the still editor's swatch grid (look-grid.ts), None
+               first: the frame has no off switch of its own. editor.ts mounts
+               the swatches. -->
+          <div id="framelooks" role="radiogroup" aria-label="Background"></div>
+          <!-- Custom's colours: one is a solid, two a gradient. Written on a
+               field's commit, and only when valid. -->
+          <div class="row" id="framecustomrow" hidden>
+            <span class="label">Colours</span>
+            <input id="framecustoma" class="look-custom-input" type="text" spellcheck="false" autocomplete="off" maxlength="7"
+                   placeholder="#rrggbb" aria-label="Custom colour, #rrggbb">
+            <input id="framecustomb" class="look-custom-input" type="text" spellcheck="false" autocomplete="off" maxlength="7"
+                   placeholder="#rrggbb" aria-label="Second colour, optional, #rrggbb">
           </div>
         </div>
       </div>
