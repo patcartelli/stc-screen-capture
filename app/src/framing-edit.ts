@@ -1,8 +1,8 @@
 import { customBackground, LOOKS } from "@transform/backgrounds";
 import {
-  DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, type Framing, type FramingBackground,
+  DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, wallpaperFraming, type Framing, type FramingBackground,
 } from "@transform/framing";
-import { BASE_SHADOW_OPACITY, DARK_SHADOW_OPACITY, LOOK_FILLS, type LookFill } from "@transform/looks";
+import { BASE_SHADOW_OPACITY, DARK_SHADOW_OPACITY, LOOK_FILLS, WINDOW_SHADOW_FILL, type LookFill } from "@transform/looks";
 
 /**
  * What the Frame section's Padding, Corners and Shadow rows mean (STC-604) —
@@ -71,13 +71,17 @@ export function backgroundOf(f: Framing): FramingBackground {
  * not move a take already framed. Aurora and Ember have no preset of their
  * own and ride on `clean`. "None" is no framing at all; "Custom" is any other
  * solid or two-stop fill, and is never a pick here (`withCustom` writes it).
+ * "window-shadow" and "wallpaper" are a window take's own (STC-626,
+ * `videoLooksFor` in window-look.ts): a plain white fill, and the take's picture.
  */
-export type VideoLookId = "none" | "clean" | "dark" | "solid" | "aurora" | "ember" | "custom";
+export type VideoLookId = "none" | "window-shadow" | "clean" | "dark" | "solid" | "aurora" | "ember" | "wallpaper" | "custom";
+
+export interface VideoLook { id: VideoLookId; label: string; fill?: LookFill }
 
 const stillLabel = (id: string): string => LOOKS.find((l) => l.id === id)!.label;
 
 /** Spec order. Labels are the stills' own; video's first look is None. */
-export const VIDEO_LOOKS: readonly { id: VideoLookId; label: string; fill?: LookFill }[] = [
+export const VIDEO_LOOKS: readonly VideoLook[] = [
   { id: "none", label: "None" },
   ...(["clean", "dark", "solid", "aurora", "ember"] as const).map((id) =>
     ({ id, label: stillLabel(id), fill: LOOK_FILLS[id] })),
@@ -108,7 +112,8 @@ export function withLook(was: Framing | undefined, id: Exclude<VideoLookId, "cus
   const next: Framing = {
     ...rest,
     preset: id === "dark" || id === "solid" ? id : "clean",
-    background: fillAsBackground(LOOK_FILLS[id]),
+    background: id === "wallpaper" ? wallpaperFraming()
+      : fillAsBackground(id === "window-shadow" ? WINDOW_SHADOW_FILL : LOOK_FILLS[id]),
   };
   if (was && !framingShadowOn(was)) next.shadow = was.shadow;
   else if (id === "dark") next.shadow = { ...FRAMING_PRESETS.dark.shadow };
@@ -139,15 +144,15 @@ export function customFraming(first: string, second?: string):
  * shadow is not. No match: a solid or two-stop fill is Custom; a fill the row
  * cannot show (a retuned three-stop one) selects nothing.
  */
-export function videoLookOf(f: Framing | undefined): VideoLookId | undefined {
+export function videoLookOf(f: Framing | undefined, looks: readonly VideoLook[] = VIDEO_LOOKS): VideoLookId | undefined {
   if (!f) return "none";
   const bg = backgroundOf(f);
   const opacity = shadowOf(f).opacity;
-  for (const look of VIDEO_LOOKS) {
+  for (const look of looks) {
     if (!look.fill || !sameFill(bg, look.fill)) continue;
     const own = look.id === "dark" ? DARK_SHADOW_OPACITY : BASE_SHADOW_OPACITY;
     if (opacity === 0 || opacity === own) return look.id;
   }
-  if (bg.kind === "wallpaper") return undefined;
+  if (bg.kind === "wallpaper") return looks.some((l) => l.id === "wallpaper") ? "wallpaper" : undefined;
   return bg.kind === "solid" || bg.colors.length === 2 ? "custom" : undefined;
 }

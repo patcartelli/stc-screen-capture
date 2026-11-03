@@ -2,7 +2,7 @@ import { LOOKS, lookWrite, wallpaperLookWrite, type LookWrite } from "@transform
 import { wallpaperFraming, type Framing, type FramingBackground } from "@transform/framing.js";
 import { LOOK_FILLS, WINDOW_SHADOW_FILL, type FillLookId } from "@transform/looks.js";
 import type { Rect } from "@transform/spaces.js";
-import { sameFill, withCustom, withLook } from "./framing-edit.js";
+import { sameFill, VIDEO_LOOKS, withCustom, withLook, type VideoLook } from "./framing-edit.js";
 
 /**
  * What a fresh window capture looks like (STC-628) — pure, node-free, no
@@ -118,4 +118,22 @@ export function displayOfWindow(
   const y = bounds.y + bounds.height / 2;
   const on = displays.find(({ bounds: d }) => x >= d.x && x < d.x + d.width && y >= d.y && y < d.y + d.height);
   return (on ?? displays[0])?.id;
+}
+
+/**
+ * The Frame control's swatches for a take of this scope (STC-626). A window
+ * take gets the same four looks a window shot has; every other scope keeps
+ * exactly the grid it had. None is Just the window here: the same empty framing.
+ */
+export function videoLooksFor(scopeKind: string | undefined): readonly VideoLook[] {
+  if (scopeKind !== "window") return VIDEO_LOOKS;
+  const label = (value: WindowShotLook) => WINDOW_SHOT_LOOKS.find((l) => l.value === value)!.label;
+  const named = VIDEO_LOOKS.filter((l) => l.id !== "none" && l.id !== "custom");
+  return [
+    { id: "none", label: label("window-only") },
+    { id: "window-shadow", label: label("window-shadow"), fill: WINDOW_SHADOW_FILL },
+    ...named,
+    { id: "wallpaper", label: LOOKS.find((l) => l.id === "wallpaper")!.label },
+    VIDEO_LOOKS.find((l) => l.id === "custom")!,
+  ];
 }

@@ -32,6 +32,7 @@ declare const editor: {
   closePreview: () => Promise<void>;
   readTakeFile: (name: string) => Promise<ArrayBuffer>;
   readTakeFileOptional: (name: string) => Promise<ArrayBuffer | null>;
+  fetchWallpaper: () => Promise<{ ok: true; file: string } | { ok: false; notice: string }>;
   takeFileSize: (name: string) => Promise<number>;
   readTakeChunk: (name: string, offset: number, length: number) => Promise<ArrayBuffer>;
   writeProject: (bytes: ArrayBuffer) => Promise<boolean>;
@@ -149,9 +150,13 @@ import {
 import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-inspector.js";
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
-  VIDEO_LOOKS, backgroundOf, customFraming, videoLookOf, withCustom, withLook, type VideoLookId,
+  VIDEO_LOOKS, backgroundOf, customFraming, videoLookOf, withCustom, withLook, type VideoLook, type VideoLookId,
 } from "./framing-edit.js";
-import { cssFill, mountLookGrid } from "./look-grid.js";
+import { videoLooksFor, WALLPAPER_TAKE_NOTICE } from "./window-look.js";
+import { WALLPAPER_FILE } from "@transform/looks";
+import { decodeWallpaper } from "@transform/wallpaper-image";
+import { cssFill, mountLookGrid, type LookGrid } from "./look-grid.js";
+import { iconSvg } from "./icons.js";
 import { homeRelative } from "./path-label.js";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -2319,6 +2324,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   openProject = project;
   customPicked = false;
   clearCustomFields();
+  showFrameLooksFor(anchors.scope?.kind);
   updateTitleMeta();
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
   openDisplay = { pointWidth: effectivePointWidth(anchors) };
@@ -3169,13 +3175,76 @@ window.addEventListener("keydown", (e) => {
 // Solid's). A take opens on what its document says.
 let customPicked = false;
 let frameLooksDisabled = false;
-const frameLooks = mountLookGrid($("framelooks"), VIDEO_LOOKS.map((look) => ({
+let frameLookList: readonly VideoLook[] = VIDEO_LOOKS;
+const mountFrameLooks = (looks: readonly VideoLook[]): LookGrid => mountLookGrid($("framelooks"), looks.map((look) => ({
   id: look.id,
   label: look.label,
-  fill: cssFill(look.fill),
+  // STC-626: Window with shadow draws the still's own chip, not its white fill.
+  fill: look.id === "window-shadow" ? "" : cssFill(look.fill),
   // None draws the still's "Window only" chip: a picture with nothing round it.
   ...(look.id === "none" ? { chip: "window" as const } : {}),
+  ...(look.id === "window-shadow" ? { chip: "window-shadow" as const } : {}),
+  ...(look.id === "wallpaper" ? { glyph: iconSvg("display", "glyph") } : {}),
 })), (id) => chooseFrameLook(id as VideoLookId));
+let frameLooks = mountFrameLooks(frameLookList);
+/** An object URL of the take's wallpaper, for the Wallpaper swatch's chip. Revoked when replaced. */
+let wallpaperChipUrl: string | undefined;
+
+/** The grid a take's scope gets (STC-626). The element is replaced so the old grid's key listener goes with it. */
+function showFrameLooksFor(scopeKind: string | undefined): void {
+  frameLookList = videoLooksFor(scopeKind);
+  const old = $("framelooks");
+  old.replaceWith(old.cloneNode(false));
+  frameLooks = mountFrameLooks(frameLookList);
+  setFrameNotice("");
+  void paintWallpaperChip();
+}
+
+function setFrameNotice(text: string): void {
+  const el = $("framenotice");
+  el.textContent = text;
+  el.hidden = text === "";
+}
+
+/** The Wallpaper chip shows the take's picture once it has one, the glyph before (the still editor's rule). */
+async function paintWallpaperChip(): Promise<void> {
+  const chip = frameLooks.element.querySelector<HTMLElement>('[data-look="wallpaper"] .chip');
+  if (wallpaperChipUrl) URL.revokeObjectURL(wallpaperChipUrl);
+  wallpaperChipUrl = undefined;
+  if (!chip) return;
+  const bytes = await editor.readTakeFileOptional(WALLPAPER_FILE).catch(() => null);
+  if (!bytes) return;
+  wallpaperChipUrl = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
+  chip.style.backgroundImage = `url("${wallpaperChipUrl}")`;
+  chip.classList.add("has-image");
+}
+
+/**
+ * The Wallpaper swatch (STC-626). A picture the take already has is kept; with
+ * none, main reads the desktop as it is now. One that cannot be read is Clean
+ * and says so, as a take recorded under this look is.
+ */
+async function chooseWallpaperLook(was: Framing | undefined): Promise<void> {
+  const session = openSession;
+  if (!session) return;
+  setFrameLooksDisabled(true);
+  try {
+    const got = await editor.fetchWallpaper();
+    const image = session.wallpaper
+      ?? (got.ok ? await decodeWallpaper(await editor.readTakeFileOptional(WALLPAPER_FILE)) : null);
+    if (openSession !== session) { if (image !== session.wallpaper) image?.close?.(); return; } // closed meanwhile
+    if (!image) {
+      setFrameNotice(WALLPAPER_TAKE_NOTICE);
+      await setFraming(withLook(was, "clean"));
+      return;
+    }
+    session.wallpaper = image;
+    await setFraming(withLook(was, "wallpaper"));
+    await paintWallpaperChip();
+  } finally {
+    setFrameLooksDisabled(false);
+  }
+}
 const customA = $("framecustoma") as HTMLInputElement;
 const customB = $("framecustomb") as HTMLInputElement;
 
@@ -3195,7 +3264,7 @@ function setFrameLooksDisabled(disabled: boolean): void {
 
 /** The swatch to show checked for framing `f` (undefined: a fill no swatch can show). */
 const frameLookOf = (f: Framing | undefined): VideoLookId | undefined =>
-  customPicked && f ? "custom" : videoLookOf(f);
+  customPicked && f ? "custom" : videoLookOf(f, frameLookList);
 
 /** The Custom chip shows the fill its fields describe, once they describe one (the still editor's rule). */
 function paintCustomChip(): void {
@@ -3294,6 +3363,16 @@ function chooseFrameLook(id: VideoLookId): void {
   const was = chosenFraming(openProject, heldFraming);
   if (id === frameLookOf(was)) return;
   const wasCustom = customPicked;
+  setFrameNotice("");
+  if (id === "wallpaper") {
+    customPicked = false;
+    void chooseWallpaperLook(was).catch((err: any) => {
+      customPicked = wasCustom;
+      updateFramingUI();
+      alertUser(String(err?.message ?? err));
+    });
+    return;
+  }
   let next: Framing | undefined;
   if (id === "custom") {
     customA.value = CUSTOM_START_COLOR;
