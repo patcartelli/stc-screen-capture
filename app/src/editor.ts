@@ -114,7 +114,7 @@ import {
 import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
-import { windowId, overrideFor, resolvedWindows, rectFromGesture } from "@transform/zoom-override";
+import { windowId, overrideFor, resolvedWindows, rectFromGesture, frameShaped } from "@transform/zoom-override";
 import { deriveZoomCrop } from "@transform/zoom-change";
 import {
   committedOverrides, overridesWithoutWindow, overridesWithoutManual, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft,
@@ -1309,10 +1309,6 @@ function defaultManualSpan(clickNs: number, durationNs: number): { startNs: numb
   return { startNs, endNs };
 }
 
-function aspectWH(): number {
-  return openCapture && openCapture.height > 0 ? openCapture.width / openCapture.height : 1;
-}
-
 /**
  * Client coordinates → CAPTURE UV. Valid only while editing, because that is
  * the one time #stage is guaranteed to be showing the whole frame at every
@@ -1602,7 +1598,9 @@ async function selectDerivedWindow(w: ZoomWindow): Promise<void> {
   const id = windowId(w);
   editingWindowId = id;
   const existing = overrideFor(openProject.overrides, w);
-  draftRect = existing?.rect ?? null;
+  // Frame-shaped (STC-629): an older rect of any shape is shown as the
+  // region it actually plays.
+  draftRect = existing?.rect ? frameShaped(existing.rect) : null;
   draftEasing = draftOf(existing?.easing);
   draftFollow = existing?.follow === true;
   // Seeded from `w`'s own (already RESOLVED, possibly already-retimed)
@@ -1629,7 +1627,7 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
   editingManualId = o.id;
   draftManualStart = o.startNs;
   draftManualEnd = o.endNs;
-  draftRect = o.rect;
+  draftRect = frameShaped(o.rect);
   draftEasing = draftOf(o.easing);
   draftFollow = o.follow === true;
   openProject.overrides = overridesWithoutManual(openProject.overrides, o.id);
@@ -1658,7 +1656,7 @@ async function createManualWindow(clickNs: number): Promise<void> {
   editingManualId = crypto.randomUUID();
   draftManualStart = startNs;
   draftManualEnd = endNs;
-  draftRect = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
+  draftRect = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 });
   draftEasing = { ...NO_SPEEDS };
   draftFollow = false;
   setAsideFraming();
@@ -1710,7 +1708,7 @@ $("rectoverlay").addEventListener("pointerdown", (e) => {
   // A bare pointerdown with no move is already a valid gesture — the click
   // default (rectFromGesture's own a === b case) — so the box appears
   // immediately rather than waiting for a move that may never come.
-  draftRect = rectFromGesture(dragAnchorUv, dragAnchorUv, aspectWH());
+  draftRect = rectFromGesture(dragAnchorUv, dragAnchorUv);
   drawOverrideBox(draftRect);
   syncOverrideBoxShown();
 });
@@ -1726,7 +1724,7 @@ $("rectoverlay").addEventListener("pointermove", (e) => {
     if (over !== overrideBoxHover) { overrideBoxHover = over; syncOverrideBoxShown(); }
     return;
   }
-  draftRect = rectFromGesture(dragAnchorUv, stageUv(pe.clientX, pe.clientY), aspectWH());
+  draftRect = rectFromGesture(dragAnchorUv, stageUv(pe.clientX, pe.clientY));
   drawOverrideBox(draftRect);
 });
 const endOverrideDrag = () => {
@@ -1776,7 +1774,7 @@ function startingRect(): Rect {
     const r = w ? deriveZoomCrop(w, openSession.changes, openSession.anchors, openSession.frames) : null;
     if (r) return r;
   }
-  return rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, aspectWH());
+  return rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 });
 }
 
 /** The inspector's Amount slider and the chip's amount, from draftRect. */

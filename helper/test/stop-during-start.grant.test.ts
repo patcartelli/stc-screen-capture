@@ -114,8 +114,16 @@ async function attemptRace(n: number): Promise<{ granted: boolean; started: Star
   // Not 30 s (the client's real request timeout this bug used to exhaust) —
   // bounded tight enough that a regression to "seq 1 never answered" fails
   // this test in seconds, not by waiting out the timeout it exists to catch.
-  const startOutcome = await waitFor(() => h.fd3.find((l) => l.seq === 1), 5_000, `seq 1 (start) outcome (attempt ${n})`);
-  const stopOutcome = await waitFor(() => h.fd3.find((l) => l.seq === 2), 5_000, `seq 2 (stop) outcome (attempt ${n})`);
+  // A crash is said as a crash. The helper died by SIGTRAP here on
+  // 2026-11-02 (a timer released unresumed, `TimerDiscard.swift`) and this
+  // test reported it only as "timeout waiting for seq 1", which sent the
+  // first search after slow starts rather than a dead process.
+  const answered = (seq: number) => () => {
+    if (h.crash) throw new Error(`helper died with signal ${h.crash} before answering seq ${seq} (attempt ${n})`);
+    return h.fd3.find((l) => l.seq === seq);
+  };
+  const startOutcome = await waitFor(answered(1), 5_000, `seq 1 (start) outcome (attempt ${n})`);
+  const stopOutcome = await waitFor(answered(2), 5_000, `seq 2 (stop) outcome (attempt ${n})`);
 
   if (startOutcome.ev === "error" && startOutcome.code === "no-displays") {
     return { granted: false, started: startOutcome as StartOutcome };
