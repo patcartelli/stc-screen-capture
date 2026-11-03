@@ -18,7 +18,7 @@ const load = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
  * TRANSFORM_VERSION, add a TRANSFORM_HISTORY entry saying what changed, then
  * update this fingerprint. Never update the fingerprint alone.
  *
- * It last moved at version 19 (STC-591): the PiP margin's 32 px and its
+ * It last moved at version 20 (STC-591): the PiP margin's 32 px and its
  * 1080 reference short side were added as inputs. (Version 18, STC-617, added
  * FOLLOW_DEAD_ZONE_FRACTION and FOLLOW_OMEGA; version 15, STC-461, added PIP_SHADOW
  * and DEFAULT_FRAMING; version 14, STC-396, added the framing presets, solid

@@ -142,8 +142,9 @@ export function resolvedCrop(
   overrides: readonly ZoomOverride[] | undefined,
   window: CombinedZoomWindow,
 ): Rect | undefined {
-  if (window.manual) return window.manual.rect;
-  return overrideFor(overrides, window)?.rect;
+  if (window.manual) return frameShaped(window.manual.rect);
+  const rect = overrideFor(overrides, window)?.rect;
+  return rect && frameShaped(rect);
 }
 
 /**
@@ -278,7 +279,7 @@ export function nearestWindow<T extends ZoomWindow>(
 // ---------------------------------------------------------------------------
 
 /**
- * Fraction of the capture's SHORT edge a click-placed rect covers, centred
+ * Fraction of the capture a click-placed rect covers on each axis, centred
  * on the click point. A round, generous-but-not-full number: big enough to
  * frame a paragraph or a toolbar without the user needing to drag for the
  * common case, small enough to still read as "zoomed in" rather than "the
@@ -317,39 +318,62 @@ export function clampRectToFrame(r: Rect): Rect {
 }
 
 /**
+ * A UV rect widened to the frame's own shape (STC-629): the short side grows
+ * to the long one about the same centre, and the result slides back inside
+ * the frame. A UV rect's pixel aspect is (uvWidth/uvHeight) times the
+ * frame's, and `compositor.ts` stretches the crop to fill a frame-shaped
+ * output, so only a UV square keeps the picture's proportions. Widening
+ * rather than narrowing keeps everything the region covered in view, the
+ * rule `zoom-change.ts`'s `finishCrop` already follows for stage 2.
+ *
+ * render() applies this to every tuned crop (`resolvedCrop`), so a rect saved
+ * before the editor locked its shape still renders unstretched. A rect that is
+ * already frame-shaped comes back unchanged.
+ */
+export function frameShaped(r: Rect): Rect {
+  if (r.width === r.height) return r;
+  const size = Math.min(1, Math.max(r.width, r.height));
+  const cx = r.x + r.width / 2;
+  const cy = r.y + r.height / 2;
+  return clampRectToFrame({ x: cx - size / 2, y: cy - size / 2, width: size, height: size });
+}
+
+/**
  * Two gesture points, in CAPTURE UV (0..1 over the whole frame — the same
  * space the canvas maps to 1:1 while a block is being edited, since editing
  * always shows the UNZOOMED frame; see `app/src/editor.ts`) → the rect an
  * override should carry.
  *
- * A drag whose extent (on its LONGER axis, so a mostly-horizontal or
+ * Every rect out is frame-shaped (a UV square, `frameShaped`'s note says
+ * why), so the box drawn is exactly what the zoom shows (STC-629). A drag
+ * whose extent (on its LONGER axis, so a mostly-horizontal or
  * mostly-vertical small drag is still judged the same way) clears
- * `MIN_DRAG_UV` is the drag itself, clamped to the frame. Anything smaller —
+ * `MIN_DRAG_UV` grows a box from `a` toward `b`, sized by that longer axis,
+ * and stops at the frame's edge. Anything smaller —
  * including a bare click, `a` === `b` — is a DEFAULT_OVERRIDE_RECT_FRACTION
- * square of the capture's short edge, centred on `a` and clamped to the
- * frame. Mirrors `still-redact.ts`'s `normaliseRegion` (drag → normalised
- * region, UV out) with the one deliberate difference the ticket asks for:
- * a small gesture here is a valid outcome, not a refusal.
+ * box centred on `a` and clamped to the frame. Mirrors `still-redact.ts`'s
+ * `normaliseRegion` (drag → normalised region, UV out) with the one
+ * deliberate difference the ticket asks for: a small gesture here is a valid
+ * outcome, not a refusal.
  */
 export function rectFromGesture(
-  a: { x: number; y: number }, b: { x: number; y: number }, aspectWH: number,
+  a: { x: number; y: number }, b: { x: number; y: number },
 ): Rect {
-  const dx = Math.abs(b.x - a.x);
-  const dy = Math.abs(b.y - a.y);
-  if (Math.max(dx, dy) < MIN_DRAG_UV) {
-    // Short edge, in UV: whichever axis the frame is narrower on. aspectWH
-    // is width/height in pixels; a UV square (equal x and y extent) is only
-    // a visual square once mapped through that aspect, so the SHORT edge's
-    // UV fraction is what DEFAULT_OVERRIDE_RECT_FRACTION means to look
-    // "the same size" on both a landscape and a portrait-ish capture.
-    const shortEdgeIsWidth = aspectWH <= 1;
-    const w = shortEdgeIsWidth ? DEFAULT_OVERRIDE_RECT_FRACTION : DEFAULT_OVERRIDE_RECT_FRACTION / aspectWH;
-    const h = shortEdgeIsWidth ? DEFAULT_OVERRIDE_RECT_FRACTION * aspectWH : DEFAULT_OVERRIDE_RECT_FRACTION;
-    return clampRectToFrame({ x: a.x - w / 2, y: a.y - h / 2, width: w, height: h });
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < MIN_DRAG_UV) {
+    const f = DEFAULT_OVERRIDE_RECT_FRACTION;
+    return clampRectToFrame({ x: a.x - f / 2, y: a.y - f / 2, width: f, height: f });
   }
-  const x0 = clamp01(Math.min(a.x, b.x));
-  const x1 = clamp01(Math.max(a.x, b.x));
-  const y0 = clamp01(Math.min(a.y, b.y));
-  const y1 = clamp01(Math.max(a.y, b.y));
-  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+  const ax = clamp01(a.x);
+  const ay = clamp01(a.y);
+  // Room from the anchor to the edge the drag is heading for, per axis.
+  const roomX = dx >= 0 ? 1 - ax : ax;
+  const roomY = dy >= 0 ? 1 - ay : ay;
+  const size = Math.min(Math.max(Math.abs(dx), Math.abs(dy)), roomX, roomY);
+  return {
+    x: dx >= 0 ? ax : ax - size,
+    y: dy >= 0 ? ay : ay - size,
+    width: size, height: size,
+  };
 }
