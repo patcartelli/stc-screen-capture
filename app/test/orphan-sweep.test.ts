@@ -157,6 +157,21 @@ describe("an untagged file blocks only bundles of its own kind", () => {
     expect(blocked).toEqual([]);
   });
 
+  test("a recording's own wallpaper.jpg, inside its folder, does not stop it being offered (STC-626)", async () => {
+    await writeFile(join(bundle, "wallpaper.jpg"), JPEG);
+    await rm(join(root, "login-bug.mp4"));
+    const { orphans, blocked } = await findOrphanedBundles(env, root);
+    expect(orphans.map((o) => o.dir)).toEqual([bundle]);
+    expect(blocked).toEqual([]);
+  });
+
+  test("a recording's own wallpaper.jpg does not make a live bundle look orphaned (STC-626)", async () => {
+    await writeFile(join(bundle, "wallpaper.jpg"), JPEG);
+    const { orphans, blocked } = await findOrphanedBundles(env, root);
+    expect(orphans).toEqual([]);
+    expect(blocked).toEqual([]);
+  });
+
   test("CONTROL: an untagged .mp4 DOES block a recording bundle, and is named", async () => {
     await rm(join(root, "login-bug.mp4"));
     await writeFile(join(root, "from-a-friend.mp4"), mp4Bytes());
