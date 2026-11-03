@@ -7,6 +7,7 @@ import type { LoadedSession } from "./session.js";
 import type { Project } from "./types.js";
 import { exportWindow, availableFrames } from "./trim.js";
 import { DEFAULT_EXPORT_RATE, exportRateStep, exportRateFrameCount, type ExportRate } from "./export-rate.js";
+import { DEFAULT_EXPORT_QUALITY, videoBitrate, audioBitrate, type ExportQuality } from "./export-quality.js";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import { withTimeout } from "./timeout.js";
 import { decodeAllAudio, decodeMicForMix, decodeSystemForMix } from "./decode-audio.js";
@@ -58,6 +59,21 @@ export interface ExportOptions {
    * stay in 60 fps GRID frames; 30 encodes every other one (export-rate.ts).
    */
   rate?: ExportRate;
+  /** STC-613: bits per pixel per frame, High (absent) to Low (export-quality.ts). */
+  quality?: ExportQuality;
+}
+
+/**
+ * Which audio tracks an export of this take writes, and how (STC-454's
+ * `exportAudioPlan`), from the take and its project. One place, so the
+ * editor's File size estimate (STC-613) reads the plan the export runs.
+ */
+export function exportAudioPlanFor(session: LoadedSession, project: Project, encode = true): ReturnType<typeof exportAudioPlan> {
+  return exportAudioPlan({
+    encode, hasMic: !!session.micAudio, hasSystem: !!session.systemAudio, cleanup: project.narrationCleanup,
+    micLevel: project.micLevel, micMuted: project.micMuted, systemMuted: project.systemAudioMuted,
+    limit: !!project.peakLimit?.enabled,
+  });
 }
 
 export interface ExportResult {
@@ -254,10 +270,7 @@ export async function exportSession(
   // STC-454 part 3: a MUTED track is not decoded at all — `plan.mic` and
   // `plan.system` say which tracks go in, and with neither the export has no
   // audio track, exactly like a take recorded without sound.
-  const plan = exportAudioPlan({
-    encode, hasMic: !!micAudio, hasSystem: !!session.systemAudio, cleanup, micLevel: project.micLevel,
-    micMuted: project.micMuted, systemMuted: project.systemAudioMuted, limit: !!project.peakLimit?.enabled,
-  });
+  const plan = exportAudioPlanFor(session, project, encode);
   const cleaning = plan.cleanMic;
   const mixing = plan.path === "mix";
   let mixMic: PcmTrack | null = null;
@@ -359,7 +372,9 @@ export async function exportSession(
       error: (e) => { encoderError = e instanceof Error ? e : new Error(String(e)); },
     });
     // High @ L5.2 (PHASE-0 §8). NOT L4.0: its 2 Mpixel coded-area cap rejects 4K.
-    encoder.configure({ codec: "avc1.640034", width, height, framerate: rate, bitrate: 12_000_000 });
+    // STC-613: the bitrate follows the size, the rate and the Quality; it was a flat 12 Mbps.
+    const bitrate = videoBitrate(width, height, rate, opts.quality ?? DEFAULT_EXPORT_QUALITY);
+    encoder.configure({ codec: "avc1.640034", width, height, framerate: rate, bitrate });
 
     if (audioParams) {
       audioEncoder = new AudioEncoder({
@@ -380,9 +395,9 @@ export async function exportSession(
       // about here either (every export frame is its own VideoFrame).
       audioEncoder.configure({
         codec: "mp4a.40.2", sampleRate: audioParams.sampleRate,
-        // The mix is always stereo; 192k matches what SystemAudioCapture
-        // records at. The mic-only path keeps its own 128k.
-        numberOfChannels: audioParams.numberOfChannels, bitrate: mixing ? 192_000 : 128_000,
+        // The mix is always stereo at 192k; the mic-only path keeps its own
+        // 128k (export-quality.ts, which the File size estimate reads too).
+        numberOfChannels: audioParams.numberOfChannels, bitrate: audioBitrate(plan.path),
       });
     }
   }
