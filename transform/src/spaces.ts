@@ -534,6 +534,20 @@ export function effectivePointWidthFromGeometry(
 /** The `project.pip` fields this needs. Mirrors `Pip` in `types.ts`. */
 export interface FixedCornerPip { widthPct: number; marginPx: number }
 
+/** The output short side at which a margin in "reference pixels" is exactly that many pixels (1080p). */
+export const PIP_MARGIN_REFERENCE_SHORT_PX = 1080;
+
+/**
+ * The buffer between the PiP and the edge of the content rect, in whole output
+ * pixels (STC-591). `referencePx` is the margin at a 1080-pixel short side, so
+ * 1080p output is unchanged and 4K gets twice as much. THE one definition: the
+ * fixed corner, the snap anchors and the placement clamp all call it, with
+ * the content rect's size (the whole output when there is no framing).
+ */
+export function pipMarginPx(output: Size, referencePx: number): number {
+  return Math.round(Math.min(output.width, output.height) * referencePx / PIP_MARGIN_REFERENCE_SHORT_PX);
+}
+
 /**
  * Today's fixed-corner PiP, as a UV rectangle over the output.
  *
@@ -557,10 +571,11 @@ export interface FixedCornerPip { widthPct: number; marginPx: number }
 export function fixedCornerPipUv(pip: FixedCornerPip, output: Size, camera: Size): Rect {
   const width = Math.round(output.width * pip.widthPct);
   const height = Math.round((width * camera.height) / camera.width);
+  const margin = pipMarginPx(output, pip.marginPx);
   return pixelsToUvRect(
     {
-      x: output.width - width - pip.marginPx,
-      y: output.height - height - pip.marginPx,
+      x: output.width - width - margin,
+      y: output.height - height - margin,
       width,
       height,
     },
