@@ -120,24 +120,33 @@ describe("clicking the lane's empty background authors a new window", () => {
 });
 
 describe("resizing a manual window by its edges", () => {
-  test("dragging the end handle later changes the committed endNs", async () => {
+  test("dragging the end handle changes the committed endNs, and stops at the next block", async () => {
     const { win, takeDir } = await openPreview();
-    // A click near the START of the lane (default span [~200ms, ~3000ms])
-    // leaves room for the end handle to move LATER — a click near the end
-    // (this file's usual CLICK_FRACTION) clamps the default endNs to the
-    // take's own duration already, which the next test's own failure first
-    // caught: there was nowhere left for "later" to go.
+    // A click near the START of the lane: the default span is trimmed to the
+    // free gap before the derived block, [~200ms, 1705ms] (STC-631).
     await clickEmptyLane(win, 0.1);
-    const before = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
-    await dragManualHandle(win, "end", 1.0); // drag to the very end of the lane
-    const after = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
-    expect(parseFloat(after)).toBeGreaterThan(parseFloat(before));
+    await dragManualHandle(win, "end", 0.15); // shorter: ~750ms
+    const shorter = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
+    await dragManualHandle(win, "end", 1.0); // toward the lane's end, across the derived block
+    const stopped = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
+    expect(parseFloat(stopped)).toBeGreaterThan(parseFloat(shorter));
 
     await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
-    // Dragged to the lane's own end — within a frame or two of the take's duration.
-    expect(o.endNs).toBeGreaterThan(4_900 * MS);
+    // It reached the derived block's start (1705ms) and went no further.
+    expect(o.endNs).toBeLessThanOrEqual(1_705 * MS + 34 * MS);
+    expect(o.endNs).toBeGreaterThan(1_600 * MS);
+  }, 30_000);
+
+  test("the start handle stops at the block before it instead of crossing it", async () => {
+    const { win, takeDir } = await openPreview();
+    await clickEmptyLane(win); // ~[4600ms, 5000ms], just after the derived block (ends 4505ms)
+    await dragManualHandle(win, "start", 0); // toward the lane's start, across the derived block
+    await pressOverrideDone(win);
+    await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
+    const [o] = readProject(takeDir).overrides;
+    expect(o.startNs).toBeGreaterThanOrEqual(4_505 * MS - 34 * MS);
   }, 30_000);
 
   test("the start handle cannot be dragged past the end handle minus the minimum duration", async () => {

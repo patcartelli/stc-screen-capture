@@ -115,7 +115,7 @@ import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
 import { windowId, overrideFor, resolvedWindows, manualWindows, rectFromGesture, frameShaped } from "@transform/zoom-override";
-import { placeNewBlock, refusalText, type Placement, type Span } from "./zoom-placement.js";
+import { clampEdge, placeNewBlock, refusalText, type Placement, type Span } from "./zoom-placement.js";
 import { deriveZoomCrop } from "@transform/zoom-change";
 import {
   committedOverrides, overridesWithoutWindow, overridesWithoutManual, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft,
@@ -276,6 +276,7 @@ function applySpanTransform(): void {
   // (frameAtClientX), so the misalignment would have reached further than
   // phase 1's read-only blocks ever did.
   ($("override-blocks") as HTMLElement).style.transform = transform;
+  hideZoomGhost(); // STC-631: its placement was for the old view; the next pointer move redraws it
   updateTicks();
   renderRulerTicks();
   renderBookmarks();
@@ -1367,6 +1368,7 @@ function drawOverrideBox(rect: Rect | null): void {
 function layoutOverrideBlocks(): void {
   const container = $("override-blocks-dynamic") as HTMLElement;
   container.replaceChildren();
+  hideZoomGhost(); // STC-631: a block was added, moved or removed; the old preview may be on it
   if (!player || !openSession) return;
   const d = player.durationNs || 1;
   for (const w of resolvedWindows(zoomWindows(openSession.events), openProject?.overrides)) {
@@ -1680,6 +1682,21 @@ function occupiedSpans(): Span[] {
   ].map((w) => ({ startNs: w.startNs, endNs: w.endNs }));
 }
 
+/**
+ * Every span EXCEPT the one being edited, for an edge drag (STC-631). The
+ * open edit is already stripped from the live overrides (see the header
+ * above), so the manual windows here never include it; a derived one is
+ * dropped by id.
+ */
+function neighbourSpans(): Span[] {
+  if (!openSession || !openProject) return [];
+  const overrides = openProject.overrides;
+  return [
+    ...resolvedWindows(zoomWindows(openSession.events), overrides).filter((w) => windowId(w) !== editingWindowId),
+    ...manualWindows(overrides),
+  ].map((w) => ({ startNs: w.startNs, endNs: w.endNs }));
+}
+
 /** Where a click at `clientX` would put a block, or why not. */
 function placementAt(clientX: number): Placement | null {
   if (!player) return null;
@@ -1746,11 +1763,13 @@ function onManualHandleDown(edge: "start" | "end", e: PointerEvent): void {
 function onManualHandleMove(e: PointerEvent): void {
   if (!resizingManualEdge || !player) return;
   const wanted = frameToNs(frameAtClientX(e.clientX), player.durationNs);
-  if (resizingManualEdge === "start") {
-    draftManualStart = Math.max(0, Math.min(wanted, draftManualEnd - MIN_MANUAL_WINDOW_NS));
-  } else {
-    draftManualEnd = Math.min(player.durationNs, Math.max(wanted, draftManualStart + MIN_MANUAL_WINDOW_NS));
-  }
+  // STC-631: an edge stops at the neighbouring block instead of crossing it —
+  // for a retimed derived window as much as a manual one.
+  const next = clampEdge(
+    resizingManualEdge, wanted, { startNs: draftManualStart, endNs: draftManualEnd },
+    neighbourSpans(), player.durationNs, MIN_MANUAL_WINDOW_NS,
+  );
+  if (resizingManualEdge === "start") draftManualStart = next; else draftManualEnd = next;
   updateManualDraftBlock();
 }
 function onManualHandleUp(): void { resizingManualEdge = undefined; }

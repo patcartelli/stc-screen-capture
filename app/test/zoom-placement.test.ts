@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { overlappingPairs, overlaps, placeNewBlock, refusalText } from "../src/zoom-placement.js";
+import { clampEdge, overlaps, placeNewBlock, refusalText } from "../src/zoom-placement.js";
 
 const S = 1_000_000_000;
 const MIN = 300_000_000;
@@ -46,15 +46,42 @@ describe("placeNewBlock", () => {
   });
 });
 
+describe("clampEdge", () => {
+  const D = 20 * S;
+  const span = { startNs: 5 * S, endNs: 8 * S };
+  const others = [{ startNs: 1 * S, endNs: 3 * S }, { startNs: 10 * S, endNs: 12 * S }];
+
+  test("an end dragged right stops at the next block's start, and can be dragged back", () => {
+    expect(clampEdge("end", 15 * S, span, others, D, MIN)).toBe(10 * S);
+    expect(clampEdge("end", 9 * S, span, others, D, MIN)).toBe(9 * S);
+  });
+
+  test("a start dragged left stops at the previous block's end", () => {
+    expect(clampEdge("start", 0, span, others, D, MIN)).toBe(3 * S);
+    expect(clampEdge("start", 4 * S, span, others, D, MIN)).toBe(4 * S);
+  });
+
+  test("with no neighbour the edge runs to the take's edge", () => {
+    expect(clampEdge("end", 99 * S, span, [], D, MIN)).toBe(D);
+    expect(clampEdge("start", -5 * S, span, [], D, MIN)).toBe(0);
+  });
+
+  test("an edge keeps the minimum length from the other edge", () => {
+    expect(clampEdge("end", 0, span, others, D, MIN)).toBe(5 * S + MIN);
+    expect(clampEdge("start", 99 * S, span, others, D, MIN)).toBe(8 * S - MIN);
+  });
+
+  test("a block the draft already overlaps is not a wall", () => {
+    const overlapping = [{ startNs: 6 * S, endNs: 7 * S }];
+    expect(clampEdge("end", 15 * S, span, overlapping, D, MIN)).toBe(15 * S);
+    expect(clampEdge("start", 0, span, overlapping, D, MIN)).toBe(0);
+  });
+});
+
 describe("overlap helpers", () => {
   test("touching edges do not overlap", () => {
     expect(overlaps({ startNs: 0, endNs: 5 }, { startNs: 5, endNs: 9 })).toBe(false);
     expect(overlaps({ startNs: 0, endNs: 6 }, { startNs: 5, endNs: 9 })).toBe(true);
-  });
-
-  test("overlappingPairs names every pair", () => {
-    const spans = [{ startNs: 0, endNs: 5 }, { startNs: 4, endNs: 8 }, { startNs: 7, endNs: 9 }, { startNs: 20, endNs: 21 }];
-    expect(overlappingPairs(spans)).toEqual([[0, 1], [1, 2]]);
   });
 
   test("each refusal has its own sentence", () => {

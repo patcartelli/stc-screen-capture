@@ -59,13 +59,28 @@ export function overlaps(a: Span, b: Span): boolean {
   return a.startNs < b.endNs && b.startNs < a.endNs;
 }
 
-/** The pairs of `spans` (by index) that overlap — what the lane must draw when a loaded project already has them. */
-export function overlappingPairs(spans: readonly Span[]): [number, number][] {
-  const out: [number, number][] = [];
-  for (let i = 0; i < spans.length; i++) {
-    for (let j = i + 1; j < spans.length; j++) {
-      if (overlaps(spans[i]!, spans[j]!)) out.push([i, j]);
-    }
+/**
+ * Where an edge being dragged may go (STC-631): `wanted` held inside the take,
+ * at least `minNs` from the block's other edge, and short of the nearest
+ * OTHER block on that side — so a drag stops at a neighbour instead of
+ * crossing it. `span` is the block's current draft and `others` every other
+ * block. Only blocks wholly on the edge's side bound it: one the draft
+ * already overlaps (a loaded project's) is not a wall to be stuck behind.
+ */
+export function clampEdge(
+  edge: "start" | "end",
+  wanted: number,
+  span: Span,
+  others: readonly Span[],
+  durationNs: number,
+  minNs: number,
+): number {
+  if (edge === "start") {
+    let lo = 0;
+    for (const o of others) if (o.endNs <= span.startNs) lo = Math.max(lo, o.endNs);
+    return Math.max(lo, Math.min(wanted, span.endNs - minNs));
   }
-  return out;
+  let hi = durationNs;
+  for (const o of others) if (o.startNs >= span.endNs) hi = Math.min(hi, o.startNs);
+  return Math.min(hi, Math.max(wanted, span.startNs + minNs));
 }
