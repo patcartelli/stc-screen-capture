@@ -1,6 +1,7 @@
 import type { Background } from "./shot.js";
 import type { AnnotationLayout, StillLayout } from "./still-decorate.js";
 import { drawCursor } from "./cursor-art.js";
+import { gradientLine } from "./framing.js";
 import { REDACTION_FILL_ON_LIGHT, fillForLuminance, meanLuminance } from "./still-redact.js";
 import { ANNOTATION_ACCENT, ANNOTATION_LINE_HEIGHT, annotationFont } from "./still-annotate.js";
 
@@ -76,25 +77,6 @@ const isGradient = (g: unknown): g is GradientLike =>
   !!g && typeof (g as GradientLike).addColorStop === "function";
 
 /**
- * Gradient endpoints for a CSS-style angle across a box.
- *
- * CSS's convention, because it is the one anybody writing a value into
- * `shot.json` by hand will assume: 0° points to the top, 90° to the right, and
- * the line is long enough that the first and last stops land exactly on the
- * box's corners rather than somewhere inside it.
- */
-export function gradientLine(width: number, height: number, angleDeg: number): {
-  x0: number; y0: number; x1: number; y1: number;
-} {
-  const rad = (angleDeg * Math.PI) / 180;
-  const dx = Math.sin(rad), dy = -Math.cos(rad);
-  // Half the projection of the box onto the gradient direction.
-  const half = (Math.abs(width * dx) + Math.abs(height * dy)) / 2;
-  const cx = width / 2, cy = height / 2;
-  return { x0: cx - dx * half, y0: cy - dy * half, x1: cx + dx * half, y1: cy + dy * half };
-}
-
-/**
  * The source rectangle that covers a `dstW` x `dstH` canvas from a `srcW` x
  * `srcH` image with no stretch: scaled until both axes are covered, then the
  * overflow on the longer axis cropped evenly from both sides (STC-628).
@@ -151,7 +133,7 @@ function paintBackground(ctx: StillRenderContext, bg: Background,
     ? ctx.createRadialGradient(width / 2, height / 2, 0,
                                width / 2, height / 2, Math.hypot(width, height) / 2)
     : (() => {
-        const l = gradientLine(width, height, bg.angleDeg ?? 180);
+        const l = gradientLine(bg.angleDeg ?? 180, width, height);
         return ctx.createLinearGradient(l.x0, l.y0, l.x1, l.y1);
       })();
 

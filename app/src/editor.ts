@@ -110,7 +110,8 @@ import {
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
 import type { Size } from "@transform/spaces";
 import { holdFraming, restoreFraming, withHeldFraming, chosenFraming, type FramingHold } from "./framing-hold.js";
-import { contentFraction, framingLayout, DEFAULT_SOLID_COLOR, type Framing, type FramingPreset } from "@transform/framing";
+import { contentFraction, framingLayout, type Framing } from "@transform/framing";
+import { CUSTOM_START_COLOR } from "@transform/backgrounds";
 import { render, zoomAmountSampler } from "@transform/render";
 import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, effectivePointWidth, legibility, legibilitySentence, zoomFactorForCrop,
@@ -148,8 +149,9 @@ import {
 import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-inspector.js";
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
-  framingColor, withColor,
+  VIDEO_LOOKS, backgroundOf, customFraming, videoLookOf, withCustom, withLook, type VideoLookId,
 } from "./framing-edit.js";
+import { cssFill, mountLookGrid } from "./look-grid.js";
 import { homeRelative } from "./path-label.js";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -2315,6 +2317,8 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 
   openSession = session;
   openProject = project;
+  customPicked = false;
+  clearCustomFields();
   updateTitleMeta();
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
   openDisplay = { pointWidth: effectivePointWidth(anchors) };
@@ -3153,30 +3157,71 @@ window.addEventListener("keydown", (e) => {
 }, { capture: true });
 
 // ---- framing (STC-396) -------------------------------------------------
-// A preset (or none) saved to the project. Preview and export both go through
+// A look (or none) saved to the project. Preview and export both go through
 // render(), so what is previewed is what exports.
-const framePresetButtons = (): HTMLButtonElement[] =>
-  [...$("framepreset").querySelectorAll<HTMLButtonElement>("[data-frame-preset]")];
-/** The Style control's value: the checked segment ("none" = no frame). */
-const framePresetValue = (): string =>
-  framePresetButtons().find((b) => b.getAttribute("aria-checked") === "true")?.dataset.framePreset ?? "none";
-function setFramePresetUI(value: string): void {
-  for (const b of framePresetButtons()) b.setAttribute("aria-checked", String(b.dataset.framePreset === value));
+
+// The Background looks (STC-608): the still editor's swatch grid
+// (look-grid.ts) over video's own looks (framing-edit.ts's VIDEO_LOOKS).
+// Which swatch shows is read back from the document (`videoLookOf`), with one
+// exception, the still editor's own: a Custom pick shows Custom until another
+// look is picked, even while its colours happen to be a look's (it starts on
+// Solid's). A take opens on what its document says.
+let customPicked = false;
+let frameLooksDisabled = false;
+const frameLooks = mountLookGrid($("framelooks"), VIDEO_LOOKS.map((look) => ({
+  id: look.id,
+  label: look.label,
+  fill: cssFill(look.fill),
+  // None draws the still's "Window only" chip: a picture with nothing round it.
+  ...(look.id === "none" ? { chip: "window" as const } : {}),
+})), (id) => chooseFrameLook(id as VideoLookId));
+const customA = $("framecustoma") as HTMLInputElement;
+const customB = $("framecustomb") as HTMLInputElement;
+
+/** A newly opened take starts with empty Custom fields, so one take's colour never shows on the next's chip. */
+function clearCustomFields(): void {
+  for (const el of [customA, customB]) {
+    el.value = "";
+    el.setAttribute("aria-invalid", "false");
+  }
 }
-function setFramePresetDisabled(disabled: boolean): void {
-  for (const b of framePresetButtons()) b.disabled = disabled;
+
+function setFrameLooksDisabled(disabled: boolean): void {
+  frameLooksDisabled = disabled;
+  frameLooks.setDisabled(disabled);
+  customA.disabled = customB.disabled = disabled;
+}
+
+/** The swatch to show checked for framing `f` (undefined: a fill no swatch can show). */
+const frameLookOf = (f: Framing | undefined): VideoLookId | undefined =>
+  customPicked && f ? "custom" : videoLookOf(f);
+
+/** The Custom chip shows the fill its fields describe, once they describe one (the still editor's rule). */
+function paintCustomChip(): void {
+  const chip = frameLooks.element.querySelector<HTMLElement>('[data-look="custom"] .chip');
+  const c = customFraming(customA.value, customB.value);
+  if (chip) chip.style.background = c.ok ? cssFill(c.background) : "";
 }
 
 function updateFramingUI(): void {
   const f = chosenFraming(openProject, heldFraming);
-  setFramePresetUI(f?.preset ?? "none");
-  // One swatch for every style (STC-604): the fill for Solid, the gradient's
-  // first colour for Clean and Dark. Nothing to colour with no frame.
-  const color = $("framecolor") as HTMLInputElement;
-  color.hidden = !f;
-  $("framecolorrow").hidden = !f;
-  color.value = f ? framingColor(f) : DEFAULT_SOLID_COLOR;
-  $("framecolorvalue").textContent = color.value.toUpperCase();
+  const look = frameLookOf(f);
+  frameLooks.setSelected(look);
+  // Custom's row shows its colours as the document draws them; a value typed
+  // and refused is dropped with its mark. Never the field being typed in: a
+  // write committed from one field resolves after the user may have moved to
+  // the other, and this redraw must not wipe what they are typing there.
+  $("framecustomrow").hidden = look !== "custom";
+  if (look === "custom" && f) {
+    const bg = backgroundOf(f);
+    const values = bg.kind === "solid" ? [bg.color, ""] : [bg.colors[0]!, bg.colors[1] ?? ""];
+    [customA, customB].forEach((el, i) => {
+      if (document.activeElement === el) return;
+      el.value = values[i]!;
+      el.setAttribute("aria-invalid", "false");
+    });
+  }
+  paintCustomChip();
   // Padding, corners and shadow adjust a frame, so they wait for one.
   const short = openProject ? Math.min(openProject.output.width, openProject.output.height) : 0;
   const pad = $("framepadding") as HTMLInputElement;
@@ -3238,43 +3283,59 @@ async function setFraming(next: Framing | undefined, persist = true): Promise<vo
   await player.seek(player.currentNs);   // repaint this frame with the new choice
 }
 
-function framingFromControls(): Framing | undefined {
-  const v = framePresetValue();
-  if (v === "none") return undefined;
-  const preset = v as FramingPreset;
+/**
+ * A swatch pick (framing-edit.ts's withLook / withCustom). Picking the checked
+ * swatch again does nothing. Custom starts on the still editor's starting
+ * colour; a rollback on a failed write redraws the grid.
+ */
+function chooseFrameLook(id: VideoLookId): void {
+  if (frameLooksDisabled || !openProject) return;
   const was = chosenFraming(openProject, heldFraming);
-  // A new style starts on its OWN colours: a colour edit belongs to the style
-  // it was made on, so it is not carried across (a custom Clean gradient must
-  // not turn Dark into Clean). Solid keeps a colour the user already gave it.
-  const next: Framing = preset === "solid"
-    ? { preset, color: was?.preset === "solid" ? framingColor(was) : DEFAULT_SOLID_COLOR }
-    : { preset };
-  // The numbers set in the Frame section (padding, corners, shadow) are the
-  // user's own, so a new style keeps them (STC-604).
-  if (was?.paddingPct !== undefined) next.paddingPct = was.paddingPct;
-  if (was?.radiusPct !== undefined) next.radiusPct = was.radiusPct;
-  if (was?.shadow !== undefined) next.shadow = was.shadow;
-  return next;
+  if (id === frameLookOf(was)) return;
+  const wasCustom = customPicked;
+  let next: Framing | undefined;
+  if (id === "custom") {
+    customA.value = CUSTOM_START_COLOR;
+    customB.value = "";
+    const c = customFraming(customA.value);
+    if (!c.ok) return;
+    next = withCustom(was, c.background);
+  } else {
+    next = withLook(was, id);
+  }
+  customPicked = id === "custom";
+  void setFraming(next).catch((err: any) => {
+    customPicked = wasCustom;
+    updateFramingUI();
+    alertUser(String(err?.message ?? err));
+  });
 }
 
-// The Colour swatch edits the chosen framing (framing-edit.ts's withColor):
-// the picture repaints while the picker moves, and the write is on its commit.
-function editFramingColor(persist: boolean): void {
-  const f = chosenFraming(openProject, heldFraming);
-  if (!f) return;
-  const hex = ($("framecolor") as HTMLInputElement).value;
-  void setFraming(withColor(f, hex), persist).catch((e: any) => alertUser(String(e?.message ?? e)));
-  $("framecolorvalue").textContent = hex.toUpperCase();
+// Custom's fields: each keystroke marks a bad value (as the still editor
+// does) and repaints the chip; the commit writes, and only a valid fill.
+function markCustomFields(): void {
+  const firstOk = customFraming(customA.value).ok;
+  const c = customFraming(customA.value, customB.value);
+  customA.setAttribute("aria-invalid", String(!firstOk));
+  customB.setAttribute("aria-invalid", String(firstOk && !c.ok));
+  paintCustomChip();
 }
-$("framecolor").addEventListener("input", () => editFramingColor(false));
-$("framecolor").addEventListener("change", () => editFramingColor(true));
-// The Style segments: a click picks one (a rollback on a failed write redraws it).
-$("framepreset").addEventListener("click", (e) => {
-  const seg = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-frame-preset]");
-  if (!seg || seg.disabled || seg.getAttribute("aria-checked") === "true") return;
-  setFramePresetUI(seg.dataset.framePreset!);
-  void setFraming(framingFromControls()).catch((err: any) => alertUser(String(err?.message ?? err)));
-});
+function commitCustomFields(): void {
+  markCustomFields();
+  const c = customFraming(customA.value, customB.value);
+  if (!c.ok || frameLooksDisabled || !openProject) return;
+  const wasCustom = customPicked;
+  customPicked = true;
+  void setFraming(withCustom(chosenFraming(openProject, heldFraming), c.background)).catch((err: any) => {
+    customPicked = wasCustom;
+    updateFramingUI();
+    alertUser(String(err?.message ?? err));
+  });
+}
+for (const el of [customA, customB]) {
+  el.addEventListener("input", markCustomFields);
+  el.addEventListener("change", commitCustomFields);
+}
 
 // Padding, corners and shadow edit the chosen framing (framing-edit.ts). The
 // sliders follow the editor's input/change split: `input` repaints, `change`
@@ -4188,8 +4249,7 @@ function setOutputBusy(busy: boolean): void {
   ($("outsize") as HTMLSelectElement).disabled = busy;
   for (const id of ["exporttype", "exportrate", "gifrate", "gifwidth"]) ($(id) as HTMLSelectElement).disabled = busy;
   ($("exportquality") as HTMLInputElement).disabled = busy;
-  setFramePresetDisabled(busy);
-  ($("framecolor") as HTMLInputElement).disabled = busy;
+  setFrameLooksDisabled(busy);
   for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = busy;
 }
 

@@ -7,6 +7,7 @@ import { decorationForMode } from "@transform/still-decorate";
 import { DEFAULT_EXPORT_OPTIONS, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { decideRedactKey, normaliseRegion, undoLast } from "@transform/still-redact";
 import { iconSvg } from "./icons.js";
+import { cssFill, mountLookGrid, type LookGrid } from "./look-grid.js";
 import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 
 /**
@@ -382,21 +383,12 @@ document.addEventListener("keydown", (e) => {
 
 // ── the background picker (STC-599) ──────────────────────────────────────────
 
-/** A swatch's fill as CSS. Approximate by design: the canvas draws the real one. */
-function cssFill(bg: Background | undefined): string {
-  const colors = bg?.colors ?? [];
-  if (!bg || colors.length === 0) return "";
-  if (bg.kind === "solid" || colors.length === 1) return colors[0]!;
-  const stops = colors.join(", ");
-  return bg.kind === "radial" ? `radial-gradient(circle, ${stops})` : `linear-gradient(${bg.angleDeg ?? 180}deg, ${stops})`;
-}
-
 let selectedLook: LookId | undefined;
 let writing = false;
 /** Writes queue behind each other: a second pick during a write must not read a stale document. */
 let writeChain: Promise<void> = Promise.resolve();
 
-const swatches = new Map<LookId, HTMLButtonElement>();
+let grid: LookGrid | undefined;
 
 /** The colour fields' current content as a fill, or the reason it is not one. */
 function customFromFields() {
@@ -404,21 +396,16 @@ function customFromFields() {
 }
 
 function paintSwatches(): void {
-  for (const [id, el] of swatches) {
-    el.setAttribute("aria-checked", String(id === selectedLook));
-    if (document.activeElement !== el) el.tabIndex = (selectedLook ?? "window-only") === id ? 0 : -1;
-    // aria-disabled, not `disabled`: a disabled button drops the keyboard focus,
-    // and a keyboard user would lose their place in the grid on every pick.
-    el.setAttribute("aria-disabled", String(writing));
-  }
+  grid?.setSelected(selectedLook);
+  grid?.setDisabled(writing);
   customFields.hidden = selectedLook !== "custom";
   customA.readOnly = customB.readOnly = writing;
   // The Custom chip shows the fill the fields describe, once they describe one.
-  const chip = swatches.get("custom")?.querySelector<HTMLElement>(".chip");
+  const chip = grid?.element.querySelector<HTMLElement>('[data-look="custom"] .chip');
   const c = customFromFields();
   if (chip) chip.style.background = c.ok ? cssFill(c.background) : "";
   // The Wallpaper chip shows the picture once one is loaded, the glyph before.
-  const wchip = swatches.get("wallpaper")?.querySelector<HTMLElement>(".chip");
+  const wchip = grid?.element.querySelector<HTMLElement>('[data-look="wallpaper"] .chip');
   if (wchip) {
     wchip.style.backgroundImage = wallpaperUrl ? `url("${wallpaperUrl}")` : "";
     wchip.classList.toggle("has-image", Boolean(wallpaperUrl));
@@ -572,46 +559,18 @@ function onCustomInput(): void {
 customA.addEventListener("input", onCustomInput);
 customB.addEventListener("input", onCustomInput);
 
-/** Arrow keys move the focus around the grid; Enter or Space (a click) picks. */
-lookGrid.addEventListener("keydown", (e) => {
-  const ids = [...swatches.keys()];
-  const at = ids.findIndex((id) => swatches.get(id) === document.activeElement);
-  let to: number;
-  if (e.key === "Home") to = 0;
-  else if (e.key === "End") to = ids.length - 1;
-  else if (e.key === "ArrowRight" || e.key === "ArrowDown") to = (at + 1) % ids.length;
-  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") to = (at - 1 + ids.length) % ids.length;
-  else return;
-  if (at < 0) return;
-  e.preventDefault();
-  const el = swatches.get(ids[to]!)!;
-  for (const s of swatches.values()) s.tabIndex = s === el ? 0 : -1;
-  el.focus();
-});
-
 function initLooks(): void {
   // A display-crop shot is an opaque rectangle: parseShot refuses every window
   // mode on it, so there is nothing to offer.
   if (!shot || shot.kind !== "window" || !shot.frame.alpha) return;
-  for (const look of LOOKS) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "look";
-    b.dataset.look = look.id;
-    b.setAttribute("role", "radio");
-    b.setAttribute("aria-label", look.label);
-    b.title = look.label;
-    const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.style.background = cssFill(look.background);
-    if (look.id === "wallpaper") chip.innerHTML = iconSvg("display", "glyph");
-    const text = document.createElement("span");
-    text.textContent = look.label;
-    b.append(chip, text);
-    b.addEventListener("click", () => choose(look.id));
-    swatches.set(look.id, b);
-    lookGrid.append(b);
-  }
+  grid = mountLookGrid(lookGrid, LOOKS.map((look) => ({
+    id: look.id,
+    label: look.label,
+    fill: cssFill(look.background),
+    ...(look.id === "wallpaper" ? { glyph: iconSvg("display", "glyph") } : {}),
+    ...(look.id === "window-only" ? { chip: "window" as const } : {}),
+    ...(look.id === "window-shadow" ? { chip: "window-shadow" as const } : {}),
+  })), (id) => choose(id as LookId));
   selectedLook = lookOf(shot.decoration);
   const bg = shot.decoration.background;
   if (selectedLook === "custom" && bg?.colors) {

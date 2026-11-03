@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
-  framingColor, withColor,
+  backgroundOf, VIDEO_LOOKS, withLook, withCustom, customFraming, videoLookOf,
 } from "../src/framing-edit.js";
 import {
   DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, framingProblem, type Framing,
@@ -54,50 +54,98 @@ describe("the Frame section's Padding, Corners and Shadow (STC-604)", () => {
   });
 });
 
-describe("the Colour row: one swatch for every style (STC-604)", () => {
-  test("the swatch shows the gradient's first colour for Clean and Dark, the fill for Solid", () => {
-    expect(framingColor({ preset: "clean" })).toBe("#e9edf2");
-    expect(framingColor({ preset: "dark" })).toBe("#2a3040");
-    expect(framingColor({ preset: "solid" })).toBe(DEFAULT_SOLID_COLOR);
-    expect(framingColor({ preset: "solid", color: "#112233" })).toBe("#112233");
+describe("backgroundOf: the fill a framing draws (what Custom's fields show)", () => {
+  test("an explicit background wins; else Solid's colour; else the preset's gradient", () => {
+    expect(backgroundOf({ preset: "clean" })).toEqual(FRAMING_PRESETS.clean.background);
+    expect(backgroundOf({ preset: "dark" })).toEqual(FRAMING_PRESETS.dark.background);
+    expect(backgroundOf({ preset: "solid" })).toEqual({ kind: "solid", color: DEFAULT_SOLID_COLOR });
+    expect(backgroundOf({ preset: "solid", color: "#112233" })).toEqual({ kind: "solid", color: "#112233" });
+    const own = { kind: "solid", color: "#000000" } as const;
+    expect(backgroundOf({ preset: "solid", color: "#112233", background: own })).toEqual(own);
   });
+});
 
-  test("editing Clean writes an explicit gradient: new first colour, the preset's second colour and angle", () => {
-    const out = withColor({ preset: "clean" }, "#112233");
-    const bg = FRAMING_PRESETS.clean.background;
-    expect(bg.kind).toBe("linear");
-    expect(out.background).toEqual({
-      kind: "linear", colors: ["#112233", bg.kind === "linear" ? bg.colors[1] : ""], angleDeg: bg.kind === "linear" ? bg.angleDeg : 0,
+describe("video looks (STC-608)", () => {
+  const ids = ["none", "clean", "dark", "solid", "aurora", "ember"] as const;
+  const made: (Framing | undefined)[] = [];
+  const keep = (f: Framing | undefined): Framing | undefined => { made.push(f); return f; };
+
+  test("each look round-trips through videoLookOf", () => {
+    for (const id of ids) expect(videoLookOf(keep(withLook(undefined, id)))).toBe(id);
+  });
+  test("the picker lists None first, then the stills' looks by their own labels", () => {
+    expect(VIDEO_LOOKS.map((l) => l.label)).toEqual(["None", "Clean", "Dark", "Solid", "Aurora", "Ember", "Custom"]);
+  });
+  test("aurora writes its three stops explicitly with preset clean", () => {
+    const f = keep(withLook(undefined, "aurora"))!;
+    expect(f.preset).toBe("clean");
+    expect(f.background).toEqual({ kind: "linear", colors: ["#050a12", "#0d4a52", "#5b3fd1"], angleDeg: 135 });
+    expect(f.color).toBeUndefined();
+  });
+  test("solid drops a stale colour and writes the fill", () => {
+    const f = keep(withLook({ preset: "solid", color: "#112233" }, "solid"))!;
+    expect(f).toEqual({ preset: "solid", background: { kind: "solid", color: "#3b4252" } });
+  });
+  test("dark writes its shadow; leaving dark drops it", () => {
+    const dark = keep(withLook(undefined, "dark"))!;
+    expect(dark.shadow).toEqual(FRAMING_PRESETS.dark.shadow);
+    expect(keep(withLook(dark, "aurora"))!.shadow).toBeUndefined();
+  });
+  test("shadow off survives every look", () => {
+    const off = withShadow(withLook(undefined, "dark")!, false);
+    const next = keep(withLook(off, "aurora"))!;
+    expect(framingShadowOn(next)).toBe(false);
+    expect(next.preset).toBe("clean");
+    expect(videoLookOf(next)).toBe("aurora");
+    // Back on, it is Aurora at the base strength, not Dark's 0.55.
+    expect(videoLookOf(withShadow(next, true))).toBe("aurora");
+  });
+  test("dark with the shadow off still reads as dark", () => {
+    expect(videoLookOf(keep(withShadow(withLook(undefined, "dark")!, false)))).toBe("dark");
+  });
+  test("padding and corners survive a look change", () => {
+    const f = withRadius(withPadding(clean, 0.1), 0.03);
+    expect(keep(withLook(f, "ember"))).toMatchObject({ paddingPct: 0.1, radiusPct: 0.03 });
+  });
+  test("pre-change documents", () => {
+    expect(videoLookOf(keep({ preset: "dark" }))).toBe("dark");
+    expect(videoLookOf(keep({ preset: "solid", color: "#3b4252" }))).toBe("solid");
+    expect(videoLookOf(keep({ preset: "solid", color: "#112233" }))).toBe("custom");
+    expect(videoLookOf(keep({
+      preset: "clean", background: { kind: "linear", colors: ["#112233", "#cfd6e0"], angleDeg: 135 },
+    }))).toBe("custom");
+  });
+  test("a retuned three-stop fill selects nothing", () => {
+    const f = withLook(undefined, "aurora")!;
+    const bg = f.background!;
+    if (bg.kind !== "linear") throw new Error("aurora is linear");
+    expect(videoLookOf(keep({ ...f, background: { ...bg, colors: ["#050a12", "#0d4a53", "#5b3fd1"] } }))).toBeUndefined();
+  });
+  test("a look's fill under another look's shadow is custom, not that look", () => {
+    const f = { ...withLook(undefined, "clean")!, shadow: { ...FRAMING_PRESETS.dark.shadow } };
+    expect(videoLookOf(keep(f))).toBe("custom");
+  });
+  test("custom keeps the document's preset", () => {
+    const f = keep(withCustom(withLook(undefined, "dark"), { kind: "solid", color: "#445566" }))!;
+    expect(f.preset).toBe("dark");
+    expect(f.shadow!.opacity).toBe(0.55);
+    expect(videoLookOf(f)).toBe("custom");
+  });
+  test("custom on no framing starts from clean", () => {
+    expect(keep(withCustom(undefined, { kind: "solid", color: "#445566" }))!.preset).toBe("clean");
+  });
+  test("customFraming", () => {
+    expect(customFraming("#112233")).toEqual({ ok: true, background: { kind: "solid", color: "#112233" } });
+    expect(customFraming("#112233", "#445566")).toEqual({
+      ok: true, background: { kind: "linear", colors: ["#112233", "#445566"], angleDeg: 135 },
     });
-    expect(out.preset).toBe("clean");
-    expect(framingColor(out)).toBe("#112233");
-  });
-
-  test("editing again changes only the first colour of the gradient already written", () => {
-    const once = withColor({ preset: "dark" }, "#aa0000");
-    const twice = withColor(once, "#00aa00");
-    const bg = twice.background!;
-    expect(bg.kind === "linear" && bg.colors[0]).toBe("#00aa00");
-    const preset = FRAMING_PRESETS.dark.background;
-    expect(bg.kind === "linear" && preset.kind === "linear" && bg.colors[1]).toBe(preset.kind === "linear" ? preset.colors[1] : "");
-  });
-
-  test("Solid with no explicit background is written the way it always was: `color`", () => {
-    expect(withColor({ preset: "solid" }, "#445566")).toEqual({ preset: "solid", color: "#445566" });
-  });
-
-  test("a solid background set on a gradient preset stays solid", () => {
-    const f: Framing = { preset: "clean", background: { kind: "solid", color: "#000000" } };
-    expect(withColor(f, "#ffffff").background).toEqual({ kind: "solid", color: "#ffffff" });
-  });
-
-  test("an edit keeps padding, corners and shadow, and every result is a framing the loader accepts", () => {
-    const f = withShadow(withRadius(withPadding({ preset: "clean" }, 0.1), 0.03), false);
-    const out = withColor(f, "#123456");
-    expect(out).toMatchObject({ paddingPct: 0.1, radiusPct: 0.03 });
-    expect(out.shadow).toEqual(f.shadow);
-    for (const x of [out, withColor({ preset: "dark" }, "#abcdef"), withColor({ preset: "solid" }, "#010203")]) {
-      expect(framingProblem(x)).toBeUndefined();
+    expect(customFraming("nope").ok).toBe(false);
+    for (const r of [customFraming("#112233"), customFraming("#112233", "#445566")]) {
+      if (r.ok) keep(withCustom(undefined, r.background));
     }
+  });
+  test("every result is a framing the loader accepts", () => {
+    expect(made.length).toBeGreaterThan(10);
+    for (const f of made) if (f) expect(framingProblem(f)).toBeUndefined();
   });
 });

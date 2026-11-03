@@ -246,6 +246,19 @@ describe("framing (STC-396)", () => {
     expect(idx(ops, "fillText(", keycastSave)).toBeGreaterThan(keycastSave);
   });
 
+  test("a three-stop framing background adds stops at 0, 0.5 and 1", () => {
+    const three = framingLayout({
+      preset: "clean",
+      background: { kind: "linear", colors: ["#050a12", "#0d4a52", "#5b3fd1"], angleDeg: 135 },
+    }, { width: W, height: H }, 16 / 9)!;
+    const { ctx, ops } = recorder();
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
+              { ...frameState({ visible: false }), framing: three }, W, H);
+    const stops = ops.filter((o) => o.startsWith("addColorStop("));
+    expect(stops.slice(0, 3)).toEqual([
+      "addColorStop(0,#050a12)", "addColorStop(0.5,#0d4a52)", "addColorStop(1,#5b3fd1)"]);
+  });
+
   test("a solid background fills with the colour, no gradient", () => {
     const solid = framingLayout({ preset: "solid", color: "#112233" }, { width: W, height: H }, 16 / 9)!;
     const { ctx, ops } = recorder();

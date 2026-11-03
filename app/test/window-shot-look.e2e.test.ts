@@ -265,4 +265,28 @@ describe("window shot looks (STC-628)", () => {
       expect(await checked(editor, "wallpaper")).toBe("false");
     }, 120_000);
   });
+
+  // STC-608: the shared grid (look-grid.ts) is one tab stop the arrows, Home
+  // and End move across, here as in the video editor's Frame tab.
+  test("the still editor's look grid is one tab stop and arrows move", async () => {
+    const { win } = await launch({ windowShotLook: "window-only" });
+    const { editor, dir } = await editorOnWindowShot(win);
+    await editor.waitForSelector('#lookgrid [data-look="window-only"][aria-checked="true"]');
+    const before = readFileSync(join(dir, "shot.json"), "utf8");
+    const focused = () => editor.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.look);
+    const tabStops = () => editor.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("#lookgrid [role=radio]")]
+        .filter((el) => el.getAttribute("tabindex") === "0").map((el) => el.dataset.look));
+
+    expect(await tabStops()).toEqual(["window-only"]);
+    await editor.focus('#lookgrid [data-look="window-only"]');
+    for (const [key, to] of [["ArrowRight", "window-shadow"], ["End", "custom"], ["Home", "window-only"]] as const) {
+      await editor.keyboard.press(key);
+      expect(await focused()).toBe(to);
+      expect(await tabStops()).toEqual([to]);
+    }
+    // Moving is not picking.
+    expect(await editor.getAttribute('#lookgrid [aria-checked="true"]', "data-look")).toBe("window-only");
+    expect(readFileSync(join(dir, "shot.json"), "utf8")).toBe(before);
+  }, 120_000);
 });
