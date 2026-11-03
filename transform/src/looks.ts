@@ -19,6 +19,10 @@
  * them. Padding, radius and shadow geometry are not shared: a still stores
  * points and video stores fractions of the short edge (see `backgrounds.ts`).
  * Values are provisional, judged on real captures.
+ *
+ * Retuning Clean or Dark here moves every preset-only document that wears it
+ * (stills with no explicit background, recordings framed before STC-608), so it
+ * is a `TRANSFORM_VERSION` change.
  */
 
 export type LookFill =

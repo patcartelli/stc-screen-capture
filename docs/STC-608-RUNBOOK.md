@@ -72,6 +72,9 @@ On the Frame tab and in the still editor's background picker:
 - [ ] The `--focus` ring shows on the focused swatch in light and dark; a pick does not lose the
   keyboard focus.
 - [ ] Custom's colour field keeps what you are typing while the preview redraws.
+- [ ] Video Custom commits on change (Enter, or leaving the field), unlike the still editor, which
+  applies as you type after a short pause. The difference is on purpose (a video write repaints the
+  preview); judge whether it reads as deliberate or as the field ignoring you.
 - [ ] Reduce Motion on: nothing animates on a pick.
 
 ## §4 What only a Mac can settle
