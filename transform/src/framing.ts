@@ -217,7 +217,7 @@ export function framingLayout(
  * Canvas `createLinearGradient` endpoints for a CSS-style angle: 0 is
  * bottom-to-top, 90 left-to-right, 135 top-left to bottom-right, the line
  * passing through the centre and long enough that the corners take the end
- * stops exactly.
+ * stops exactly. The one definition: stills and video both draw through it.
  */
 export function gradientLine(angleDeg: number, w: number, h: number):
   { x0: number; y0: number; x1: number; y1: number } {

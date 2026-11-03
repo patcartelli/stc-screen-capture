@@ -98,8 +98,8 @@ function drawChrome(
   } else {
     const l = gradientLine(bg.angleDeg, width, height);
     const g = ctx.createLinearGradient(l.x0, l.y0, l.x1, l.y1);
-    g.addColorStop(0, bg.colors[0]!);
-    g.addColorStop(1, bg.colors[1]!); // two stops only until STC-608 task 2 draws N
+    const last = bg.colors.length - 1;
+    bg.colors.forEach((c, i) => g.addColorStop(i / last, c));
     ctx.fillStyle = g;
   }
   ctx.fillRect(0, 0, width, height);
