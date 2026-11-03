@@ -14,6 +14,7 @@ import { exportSession } from "@transform/export";
 import { exportGif } from "@transform/gif-export";
 import { cleanGifSettings } from "@transform/gif-options";
 import { cleanExportRate } from "@transform/export-rate";
+import { cleanExportQuality } from "@transform/export-quality";
 import { EMBED_CSS_WIDTH, outputSizeFor, isCaptureSize } from "@transform/output-size";
 
 declare global {
@@ -86,6 +87,8 @@ void (async () => {
       captureId,
       // STC-614: the editor's Frame rate; absent (every panel Copy) is 60.
       rate: cleanExportRate(params.get("rate")),
+      // STC-613: the editor's Quality; absent (every panel Copy) is High.
+      quality: cleanExportQuality(params.get("quality") ?? undefined),
       onProgress: (done, total) => {
         const now = performance.now();
         if (now - last < PROGRESS_EVERY_MS && done < total) return;

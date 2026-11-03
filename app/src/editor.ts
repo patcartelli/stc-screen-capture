@@ -54,7 +54,7 @@ declare const editor: {
   setPipStyleDefault: (style: unknown) => Promise<unknown>;
   // STC-616: Copy to clipboard. `cancelled` is a field of its own (a cancel is
   // a decision, not a fault), checked before `!ok`.
-  copyToClipboard(type: ExportType, rate: ExportRate): Promise<{ ok: boolean; cancelled?: boolean; detail?: string }>;
+  copyToClipboard(type: ExportType, rate: ExportRate, quality: ExportQuality): Promise<{ ok: boolean; cancelled?: boolean; detail?: string }>;
   // STC-615: a GIF export lands in the save folder, untagged; main names it.
   writeGif(bytes: ArrayBuffer): Promise<{ path: string; name: string }>;
   setGifSettings(gif: Partial<GifSettings>): Promise<unknown>;
@@ -71,13 +71,17 @@ declare const editor: {
 import type { LoadedSession } from "@transform/session";
 import { loadTake, type TakeIO, type CountingSource } from "./session-io.js";
 import { PreviewPlayer } from "@transform/preview";
-import { exportSession } from "@transform/export";
+import { exportSession, exportAudioPlanFor } from "@transform/export";
 import { exportGif } from "@transform/gif-export";
 import { GIF_FPS_OPTIONS, GIF_WIDTH_OPTIONS, type GifSettings } from "@transform/gif-options";
 import {
   cleanExportType, exportButtonLabel, gifFormatNote, gifSavedLine, type ExportType,
 } from "./export-type.js";
 import { EXPORT_RATES, DEFAULT_EXPORT_RATE, cleanExportRate, type ExportRate } from "@transform/export-rate";
+import {
+  DEFAULT_EXPORT_QUALITY, QUALITY_LABELS, qualityIndex, qualityAtIndex, estimateExportBytes, formatSizeEstimate,
+  videoBitrate, type ExportQuality,
+} from "@transform/export-quality";
 import {
   levelFromSliderPct, sliderPctFromLevel, exportAudioPlan, type PcmTrack, type ExportDecoded,
   micLevelFromSliderPct, sliderPctFromMicLevel, formatLevelDb,
@@ -661,6 +665,7 @@ function updateTrimUI(): void {
     : `${fmtClock(w.startNs)}–${fmtClock(w.endNs)} · ${fmtClock(w.endNs - w.startNs)} · ${est}`;
   // The Export section's Length (STC-604): the window the export renders.
   $("exportlength").textContent = fmtClock(w.endNs - w.startNs);
+  updateFileSize();
   // STC-606: the strip's range chip reads the same window.
   const parts = trimRangeParts(w.startNs, w.endNs);
   $("rangechip").replaceChildren(...([["In", parts.in], ["Out", parts.out], ["", parts.length]] as const).map(([k, v]) => {
@@ -949,6 +954,9 @@ let waveRun = 0;
 
 /** Recompute the peaks from what the preview would play now. */
 function scheduleWaveform(): void {
+  // STC-613: every change that redraws the mix can move the export between
+  // its audio paths (a mute, cleanup, the limiter), and the File size reads it.
+  updateFileSize();
   const run = ++waveRun;
   const canvas = $("audio-waveform") as HTMLCanvasElement;
   const audio = previewAudio;
@@ -1909,6 +1917,8 @@ let gifSettings: GifSettings | undefined;
  * (export-rate.ts): never on the project, so a take opens at 60 fps.
  */
 let exportRate: ExportRate = DEFAULT_EXPORT_RATE;
+/** STC-613: an MP4's Quality, for Export and Copy. Export-time too: a take opens at High. */
+let exportQuality: ExportQuality = DEFAULT_EXPORT_QUALITY;
 
 for (const fps of EXPORT_RATES) {
   const o = document.createElement("option");
@@ -1935,6 +1945,10 @@ function updateExportTypeUI(): void {
   $("outsizerow").hidden = gif;
   $("exportraterow").hidden = gif;
   ($("exportrate") as HTMLSelectElement).value = String(exportRate);
+  $("exportqualityrow").hidden = gif;
+  $("exportsizerow").hidden = gif;
+  ($("exportquality") as HTMLInputElement).value = String(qualityIndex(exportQuality));
+  $("exportquality-out").textContent = QUALITY_LABELS[exportQuality];
   $("gifraterow").hidden = !gif;
   $("gifwidthrow").hidden = !gif;
   $("export").textContent = exportButtonLabel(exportType);
@@ -1956,6 +1970,11 @@ $("exporttype").addEventListener("change", () => {
 });
 $("exportrate").addEventListener("change", () => {
   exportRate = cleanExportRate(($("exportrate") as HTMLSelectElement).value);
+  updateExportTypeUI();
+});
+// `input`, not `change`: the readout and the File size follow the thumb as it moves.
+$("exportquality").addEventListener("input", () => {
+  exportQuality = qualityAtIndex(($("exportquality") as HTMLInputElement).value);
   updateExportTypeUI();
 });
 $("gifrate").addEventListener("change", () => {
@@ -2005,6 +2024,23 @@ function updateOutputSizeUI(): void {
     : known?.id === "capture" || (!known && sameAsCapture(out))
       ? "No rescale."
       : `Capture is ${openCapture.width}×${openCapture.height}.`;
+  updateFileSize();
+}
+
+/**
+ * STC-613: the Estimate group's File size — this Size, Frame rate and Quality,
+ * the audio the export would write, over the trimmed Length. An MP4's only;
+ * the row is hidden for a GIF.
+ */
+function updateFileSize(): void {
+  if (!openProject || !openSession || !player) return;
+  const w = exportWindow(openProject, player.durationNs, player.firstRenderableNs);
+  $("exportsize").textContent = formatSizeEstimate(estimateExportBytes({
+    width: openProject.output.width, height: openProject.output.height,
+    rate: exportRate, quality: exportQuality,
+    audio: exportAudioPlanFor(openSession, openProject).path,
+    durationNs: w.endNs - w.startNs,
+  }));
 }
 
 const sameAsCapture = (out: Size) =>
@@ -4078,6 +4114,7 @@ function setOutputBusy(busy: boolean): void {
   ($("copyclip") as HTMLButtonElement).disabled = busy;
   ($("outsize") as HTMLSelectElement).disabled = busy;
   for (const id of ["exporttype", "exportrate", "gifrate", "gifwidth"]) ($(id) as HTMLSelectElement).disabled = busy;
+  ($("exportquality") as HTMLInputElement).disabled = busy;
   setFramePresetDisabled(busy);
   ($("framecolor") as HTMLInputElement).disabled = busy;
   for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = busy;
@@ -4136,6 +4173,7 @@ async function runExport(): Promise<void> {
       captureId,
       decoded: decodedForExport(),
       rate: exportRate,
+      quality: exportQuality,
       signal: exportAbort.signal,
       onProgress: (done, total) => {
         progress.value = Math.round((done / total) * 1000);
@@ -4164,6 +4202,9 @@ async function runExport(): Promise<void> {
       output: exporting.output,
       // STC-614: what the file plays at; `output.fps` is the 60 fps grid it was sampled from.
       rate: exportRate,
+      // STC-613: the level, and the video bitrate it asked the encoder for.
+      quality: exportQuality,
+      videoBitrate: videoBitrate(exporting.output.width, exporting.output.height, exportRate, exportQuality),
       trim: projectForWrite(exporting, lastNs).trim ?? null,
       legibility: openDisplay ? (() => {
         const l = legibility(openDisplay!, exporting.textPt ?? DEFAULT_TEXT_PT, embedWidthPx, 1, frameFractionFor(exporting));
@@ -4228,7 +4269,7 @@ async function copyToClipboard(): Promise<void> {
     // The render window loads project.json itself. Most edits are saved as they
     // are made; this makes it certain, so a Copy is never one edit behind.
     await persistProject();
-    const r = await editor.copyToClipboard(exportType, exportRate);
+    const r = await editor.copyToClipboard(exportType, exportRate, exportQuality);
     if (r.ok) copyStatus("Copied. Paste anywhere.");
     else if (r.cancelled) copyStatus("Cancelled.");
     else {
