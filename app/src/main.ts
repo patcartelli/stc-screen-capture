@@ -3337,6 +3337,28 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
  * top-level file already carrying this bundle's id (if one exists) IS the
  * destination; only a bundle with no finished file yet gets the derived name.
  */
+/**
+ * STC-637: whether the editor's Export hashes every frame before the encoder.
+ * Only `export-identity.slow.test.ts` reads the hash, and it costs a pixel
+ * read-back, a SHA-256 and a software-rasterised canvas per frame: measured on
+ * a real 10-minute 4K take, 28.6 ms/frame with it against 8.6 without, three
+ * quarters of every export. So a user's export never pays it; the test asks.
+ */
+ipcMain.handle("export:hashFrames", async (): Promise<boolean> => process.env.STC_EXPORT_HASH === "1");
+
+/**
+ * STC-637: an export keeps its speed with the editor behind another window.
+ * Chromium throttles a background page's timers, and the frame loop yields on
+ * timers (the encoder's back-pressure wait, the decoder's wake, the progress
+ * yield): with another window in front, a 20 s export took 43.1 s instead of
+ * 17.0 s. Off for the export only, so a hidden editor otherwise stays as idle
+ * as any window. Main does not track the window's exports: the renderer's
+ * `finally` turns it back on, and a destroyed sender needs nothing.
+ */
+ipcMain.handle("export:busy", (e, busy: boolean) => {
+  if (!e.sender.isDestroyed()) e.sender.setBackgroundThrottling(busy !== true);
+});
+
 ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
