@@ -82,7 +82,7 @@ describe("ensureWallpaper (STC-626)", () => {
     const take = tempDir();
     writeFileSync(join(take, FILE), "from the take");
     let reads = 0;
-    const r = await ensureWallpaper(async () => { reads++; return { file: FILE }; }, take, 7, NOTICE);
+    const r = await ensureWallpaper(async () => { reads++; return { file: FILE }; }, take, async () => 7, NOTICE);
     expect(r).toEqual({ ok: true, file: FILE });
     expect(reads).toBe(0);
     expect(readFileSync(join(take, FILE), "utf8")).toBe("from the take");
@@ -91,22 +91,57 @@ describe("ensureWallpaper (STC-626)", () => {
 
   test("no file: the display's wallpaper is read into the take", async () => {
     const take = tempDir();
-    expect(await ensureWallpaper(realRead, take, 7, NOTICE)).toEqual({ ok: true, file: FILE });
+    expect(await ensureWallpaper(realRead, take, async () => 7, NOTICE)).toEqual({ ok: true, file: FILE });
     expect(existsSync(join(take, FILE))).toBe(true);
     rmSync(take, { recursive: true });
   });
 
   test("a read that fails answers with the notice", async () => {
     const take = tempDir();
-    const r = await ensureWallpaper(async () => { throw new Error("gone"); }, take, 7, NOTICE);
+    const r = await ensureWallpaper(async () => { throw new Error("gone"); }, take, async () => 7, NOTICE);
     expect(r).toEqual({ ok: false, notice: NOTICE });
+    rmSync(take, { recursive: true });
+  });
+
+  test("a picture already there needs no helper and no display: neither is even asked for", async () => {
+    const take = tempDir();
+    writeFileSync(join(take, FILE), "from the take");
+    const r = await ensureWallpaper(undefined, take, async () => { throw new Error("shot.json is unreadable"); }, NOTICE);
+    expect(r).toEqual({ ok: true, file: FILE });
+    rmSync(take, { recursive: true });
+  });
+
+  test("no picture and no helper answers with the notice", async () => {
+    const take = tempDir();
+    expect(await ensureWallpaper(undefined, take, async () => 7, NOTICE)).toEqual({ ok: false, notice: NOTICE });
     rmSync(take, { recursive: true });
   });
 
   test("an answer naming another file is a failed read", async () => {
     const take = tempDir();
-    const r = await ensureWallpaper(async () => ({ file: "other.jpg" }), take, 7, NOTICE);
+    const r = await ensureWallpaper(async () => ({ file: "other.jpg" }), take, async () => 7, NOTICE);
     expect(r).toEqual({ ok: false, notice: NOTICE });
     rmSync(take, { recursive: true });
+  });
+});
+
+/**
+ * Pinned at the source: main.ts cannot be imported here, and these two handlers
+ * are where the rule can be lost. A picture already in the folder must be kept
+ * without a helper and without reading the document, so nothing that can fail
+ * may run ahead of `ensureWallpaper`, which checks for the file first.
+ */
+describe("the two fetch handlers put the file check first (STC-626)", () => {
+  const main = readFileSync(join(__dirname, "..", "src", "main.ts"), "utf8");
+  const body = (channel: string) => {
+    const from = main.indexOf(`ipcMain.handle("${channel}"`);
+    expect(from, channel).toBeGreaterThan(-1);
+    return main.slice(from, main.indexOf("\n});", from));
+  };
+
+  test.each(["still:fetchWallpaper", "editor:fetchWallpaper"])("%s reaches ensureWallpaper with nothing that can fail ahead of it", (channel) => {
+    const ahead = body(channel).split("ensureWallpaper(")[0]!;
+    expect(ahead).not.toMatch(/if \(!sup\)/);
+    expect(ahead).not.toMatch(/readFile\(/);
   });
 });

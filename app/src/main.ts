@@ -4410,9 +4410,8 @@ ipcMain.handle("still:fetchWallpaper", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
-  if (!sup) return { ok: false, notice: WALLPAPER_NOTICE };
-  const shot = parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
-  return ensureWallpaper((d, id, f) => sup!.wallpaper(d, id, f), dir, shot.display.id, WALLPAPER_NOTICE);
+  return ensureWallpaper(sup && ((d, id, f) => sup!.wallpaper(d, id, f)), dir, async () =>
+    parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8"))).display.id, WALLPAPER_NOTICE);
 });
 
 /**
@@ -4422,9 +4421,8 @@ ipcMain.handle("still:fetchWallpaper", async (_e, dir: string) => {
 ipcMain.handle("editor:fetchWallpaper", async (e) => {
   const dir = getOpenTake(e);
   if (!dir) throw new Error("no take is open");
-  if (!sup) return { ok: false, notice: WALLPAPER_TAKE_NOTICE };
-  const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"));
-  return ensureWallpaper((d, id, f) => sup!.wallpaper(d, id, f), dir, anchors.display.id, WALLPAPER_TAKE_NOTICE);
+  return ensureWallpaper(sup && ((d, id, f) => sup!.wallpaper(d, id, f)), dir, async () =>
+    JSON.parse(await readFile(join(dir, "anchors.json"), "utf8")).display.id, WALLPAPER_TAKE_NOTICE);
 });
 
 ipcMain.handle("preview:read", async (e, name: string) => {

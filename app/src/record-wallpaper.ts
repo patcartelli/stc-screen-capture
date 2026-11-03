@@ -79,12 +79,13 @@ export function startWallpaperRead(read: ReadVerb, displayId: number | undefined
  * that display is gone. Otherwise the display's wallpaper is read now.
  */
 export async function ensureWallpaper(
-  read: ReadVerb, dir: string, displayId: number, notice: string,
+  read: ReadVerb | undefined, dir: string, displayId: () => Promise<number>, notice: string,
 ): Promise<{ ok: true; file: string } | { ok: false; notice: string }> {
   const existing = await stat(join(dir, WALLPAPER_FILE)).catch(() => undefined);
   if (existing?.isFile()) return { ok: true, file: WALLPAPER_FILE };
+  if (!read) return { ok: false, notice };
   try {
-    await askHelper(read, dir, displayId);
+    await askHelper(read, dir, await displayId());
     return { ok: true, file: WALLPAPER_FILE };
   } catch (e) {
     console.log("[wallpaper] could not read for the editor:", e);
