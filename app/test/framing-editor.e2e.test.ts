@@ -125,28 +125,41 @@ describe("the Frame section's Background looks (STC-608)", () => {
     await expect.poll(() => editorWin.isVisible("#framecustomrow"), { timeout: 10_000 }).toBe(true);
     await expect.poll(() => checkedLook(editorWin), { timeout: 10_000 }).toBe("custom");
 
-    // One colour is a solid; the write is on the field's commit (Tab blurs it).
+    // Each field is typed into and committed while it KEEPS the focus: the
+    // previous write's redraw can land at any point here (the disk is polled,
+    // and updateFramingUI runs only after main answers, STC-514), and the
+    // editor never rewrites the focused field. So this also covers a user who
+    // commits one field and starts typing in the other before the write
+    // resolves: a redraw that wiped the field would fail the next disk poll.
+    const commit = (id: string) => editorWin.evaluate((i) => {
+      document.getElementById(i)!.dispatchEvent(new Event("change", { bubbles: true }));
+    }, id);
+
+    // One colour is a solid; the write is on the field's commit.
     await editorWin.fill("#framecustoma", "#112233");
-    await editorWin.press("#framecustoma", "Tab");
+    await commit("framecustoma");
     await expect.poll(() => readProject(takeDir)?.framing?.background, { timeout: 10_000 })
       .toEqual({ kind: "solid", color: "#112233" });
 
     // A second colour makes it a linear fill at the Custom angle.
-    await expect.poll(() => editorWin.inputValue("#framecustoma"), { timeout: 10_000 }).toBe("#112233");
     await editorWin.fill("#framecustomb", "#445566");
-    await editorWin.press("#framecustomb", "Tab");
+    await commit("framecustomb");
     await expect.poll(() => readProject(takeDir)?.framing?.background, { timeout: 10_000 })
       .toEqual({ kind: "linear", colors: ["#112233", "#445566"], angleDeg: CUSTOM_ANGLE_DEG });
     await expect.poll(() => checkedLook(editorWin), { timeout: 10_000 }).toBe("custom");
 
-    // A bad value is marked and never reaches the document.
-    await expect.poll(() => editorWin.inputValue("#framecustomb"), { timeout: 10_000 }).toBe("#445566");
+    // A bad value is marked and never reaches the document. Moving to the
+    // first field blurs the second, whose native change may write the same
+    // linear fill again: byte-identical, so `before` holds either way.
     const before = readFileSync(join(takeDir, "project.json"), "utf8");
     await editorWin.fill("#framecustoma", "zz");
-    await editorWin.press("#framecustoma", "Tab");
+    await commit("framecustoma");
     await expect.poll(() => editorWin.getAttribute("#framecustoma", "aria-invalid"), { timeout: 10_000 }).toBe("true");
     await sleep(750);   // longer than a write takes to land; there must be none
     expect(readFileSync(join(takeDir, "project.json"), "utf8")).toBe(before);
+    // Still marked and still typed: no late redraw took the field back.
+    expect(await editorWin.getAttribute("#framecustoma", "aria-invalid")).toBe("true");
+    expect(await editorWin.inputValue("#framecustoma")).toBe("zz");
     expect(await checkedLook(editorWin)).toBe("custom");
   }, 180_000);
 

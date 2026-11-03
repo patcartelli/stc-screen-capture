@@ -3126,13 +3126,18 @@ function updateFramingUI(): void {
   const look = frameLookOf(f);
   frameLooks.setSelected(look);
   // Custom's row shows its colours as the document draws them; a value typed
-  // and refused is dropped with its mark.
+  // and refused is dropped with its mark. Never the field being typed in: a
+  // write committed from one field resolves after the user may have moved to
+  // the other, and this redraw must not wipe what they are typing there.
   $("framecustomrow").hidden = look !== "custom";
   if (look === "custom" && f) {
     const bg = backgroundOf(f);
-    customA.value = bg.kind === "solid" ? bg.color : bg.colors[0]!;
-    customB.value = bg.kind === "solid" ? "" : bg.colors[1] ?? "";
-    for (const el of [customA, customB]) el.setAttribute("aria-invalid", "false");
+    const values = bg.kind === "solid" ? [bg.color, ""] : [bg.colors[0]!, bg.colors[1] ?? ""];
+    [customA, customB].forEach((el, i) => {
+      if (document.activeElement === el) return;
+      el.value = values[i]!;
+      el.setAttribute("aria-invalid", "false");
+    });
   }
   paintCustomChip();
   // Padding, corners and shadow adjust a frame, so they wait for one.
