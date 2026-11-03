@@ -60,7 +60,7 @@ function backgroundOf(f: Framing): FramingBackground {
 /** The colour the swatch shows: the fill, or the gradient's first stop. */
 export function framingColor(f: Framing): string {
   const bg = backgroundOf(f);
-  return bg.kind === "solid" ? bg.color : bg.colors[0];
+  return bg.kind === "solid" ? bg.color : bg.colors[0]!;
 }
 
 /**
@@ -73,6 +73,6 @@ export function withColor(f: Framing, hex: string): Framing {
   const bg = backgroundOf(f);
   const background: FramingBackground = bg.kind === "solid"
     ? { kind: "solid", color: hex }
-    : { kind: "linear", colors: [hex, bg.colors[1]], angleDeg: bg.angleDeg };
+    : { kind: "linear", colors: [hex, ...bg.colors.slice(1)], angleDeg: bg.angleDeg };
   return { ...f, background };
 }

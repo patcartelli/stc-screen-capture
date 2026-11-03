@@ -3,6 +3,7 @@ import {
   framingLayout, framingProblem, cleanFraming, gradientLine, contentFraction,
   FRAMING_PRESETS, FRAMING_PADDING_MAX, DEFAULT_SOLID_COLOR,
 } from "../src/framing.js";
+import { LOOK_FILLS, DARK_SHADOW_OPACITY } from "../src/looks.js";
 
 const OUT = { width: 1920, height: 1080 };
 const ASPECT = 16 / 9;
@@ -139,5 +140,25 @@ describe("contentFraction", () => {
     const f = contentFraction({ preset: "clean" }, OUT, ASPECT);
     expect(f).toBeGreaterThan(0.8);
     expect(f).toBeLessThan(1);
+  });
+});
+
+describe("looks catalogue (STC-608)", () => {
+  const linear = (colors: string[]) => ({ preset: "clean", background: { kind: "linear", colors, angleDeg: 135 } });
+
+  test("framingProblem takes 2 to 8 linear stops", () => {
+    const hex = (n: number) => Array.from({ length: n }, (_, i) => `#0${i}0000`);
+    expect(framingProblem(linear(hex(3)))).toBeUndefined();
+    expect(framingProblem(linear(hex(8)))).toBeUndefined();
+    expect(framingProblem(linear(hex(1)))).toContain("2 to 8");
+    expect(framingProblem(linear(hex(9)))).toContain("2 to 8");
+    expect(typeof framingProblem(linear(["#000000", "nope", "#ffffff"]))).toBe("string");
+  });
+
+  test("FRAMING_PRESETS read the catalogue", () => {
+    expect(FRAMING_PRESETS.clean.background).toEqual(LOOK_FILLS.clean);
+    expect(FRAMING_PRESETS.dark.background).toEqual(LOOK_FILLS.dark);
+    expect(FRAMING_PRESETS.solid.background).toEqual(LOOK_FILLS.solid);
+    expect(FRAMING_PRESETS.dark.shadow.opacity).toBe(DARK_SHADOW_OPACITY);
   });
 });

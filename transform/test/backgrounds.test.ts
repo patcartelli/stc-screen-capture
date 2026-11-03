@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   LOOKS, WALLPAPER_FILE, wallpaperBackground, wallpaperLookWrite, customBackground, lookOf, lookWrite, applyLook, parseLookWrite, CUSTOM_START_COLOR,
 } from "../src/backgrounds.js";
+import { LOOK_FILLS } from "../src/looks.js";
 import { FRAMING_PRESETS, DEFAULT_SOLID_COLOR } from "../src/framing.js";
 import { PRESET_BACKGROUND, PRESET_SHADOW, decorationForMode } from "../src/still-decorate.js";
 import { parseShot, shotForWrite, defaultDecoration, type Shot } from "../src/shot.js";
@@ -180,5 +181,15 @@ describe("the Wallpaper look (STC-628)", () => {
   test("it stores in the same version as Clean", () => {
     const clean = parseShot({ ...shotForWrite(windowShot()), decoration: { ...applyLook(windowShot().decoration, lookWrite(look("clean"))) } });
     expect(shotForWrite(wearing(wallpaperLookWrite(f))).version).toBe(shotForWrite(clean).version);
+  });
+});
+
+describe("looks catalogue (STC-608)", () => {
+  test("aurora and ember read the catalogue", () => {
+    const find = (id: string) => LOOKS.find((l) => l.id === id)!;
+    const stops = (f: (typeof LOOK_FILLS)["aurora"]) => (f.kind === "linear" ? [...f.colors] : []);
+    expect(find("aurora").background).toEqual({ kind: "linear", colors: stops(LOOK_FILLS.aurora), angleDeg: 135 });
+    expect(find("ember").background).toEqual({ kind: "linear", colors: stops(LOOK_FILLS.ember), angleDeg: 160 });
+    expect(stops(LOOK_FILLS.aurora)).toHaveLength(3);
   });
 });

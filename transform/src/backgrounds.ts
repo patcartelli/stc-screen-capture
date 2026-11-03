@@ -1,4 +1,5 @@
-import { DEFAULT_SOLID_COLOR, FRAMING_PRESETS } from "./framing.js";
+import { DEFAULT_SOLID_COLOR } from "./framing.js";
+import { DARK_SHADOW_OPACITY, LOOK_FILLS, type LookFill } from "./looks.js";
 import type { Background, Decoration, DecorationMode, Shadow } from "./shot.js";
 import { decorationForMode, PRESET_BACKGROUND, PRESET_SHADOW } from "./still-decorate.js";
 
@@ -8,10 +9,11 @@ import { decorationForMode, PRESET_BACKGROUND, PRESET_SHADOW } from "./still-dec
  *
  * ## One place to tune
  *
- * Every value a swatch stands for lives here and nowhere else. `clean`, `dark`
- * and `solid` are READ from `FRAMING_PRESETS` (STC-396), so the stills cannot
- * drift from the video Frame control's colours or the dark preset's shadow
- * opacity; the house looks (Aurora, Ember) are defined once, below. A look
+ * Every FILL a swatch stands for lives in `looks.ts` (STC-608) and nowhere
+ * else: Clean, Dark, Solid, Aurora and Ember are all READ from `LOOK_FILLS`, as
+ * are video's `FRAMING_PRESETS` and the dark shadow opacity, so the stills
+ * cannot drift from the video Frame control. This file only says what a look
+ * means in `shot.json`. A look
  * costs the document nothing new: it is a `decoration.mode` plus, where the
  * mode's own default is not the look, an explicit `background` and `shadow` —
  * both already in shot-1, so no version bump (`shotForWrite` still decides).
@@ -67,12 +69,12 @@ export const CUSTOM_START_COLOR = DEFAULT_SOLID_COLOR;
 /** A custom two-colour fill runs at the same angle as video's clean/dark. */
 export const CUSTOM_ANGLE_DEG = 135;
 
-const darkShadow: Shadow = { ...PRESET_SHADOW, opacity: FRAMING_PRESETS.dark.shadow.opacity };
+const darkShadow: Shadow = { ...PRESET_SHADOW, opacity: DARK_SHADOW_OPACITY };
 
-const fromFraming = (b: (typeof FRAMING_PRESETS)["clean"]["background"]): Background =>
-  b.kind === "linear"
-    ? { kind: "linear", colors: [...b.colors], angleDeg: b.angleDeg }
-    : { kind: "solid", colors: [b.color] };
+const fromCatalogue = (f: LookFill): Background =>
+  f.kind === "linear"
+    ? { kind: "linear", colors: [...f.colors], angleDeg: f.angleDeg }
+    : { kind: "solid", colors: [f.color] };
 
 /**
  * The picker's swatches, in display order. Custom is last and its background
@@ -85,16 +87,15 @@ export const LOOKS: readonly Look[] = [
   // video's clean (held equal by a test), so a clean shot stays a plain one.
   { id: "clean", label: "Clean", mode: "window-shadow-background" },
   { id: "dark", label: "Dark", mode: "window-shadow-custom-background",
-    background: fromFraming(FRAMING_PRESETS.dark.background), shadow: darkShadow },
+    background: fromCatalogue(LOOK_FILLS.dark), shadow: darkShadow },
   { id: "solid", label: "Solid", mode: "window-shadow-custom-background",
-    background: fromFraming(FRAMING_PRESETS.solid.background) },
-  // House looks (Capture's Slate + Brass family). Stills only until video's
-  // validator takes more than two stops (STC-608). Provisional: judged on real
+    background: fromCatalogue(LOOK_FILLS.solid) },
+  // House looks (Capture's Slate + Brass family). Provisional: judged on real
   // window captures, light and dark windows both.
   { id: "aurora", label: "Aurora", mode: "window-shadow-custom-background",
-    background: { kind: "linear", colors: ["#050a12", "#0d4a52", "#5b3fd1"], angleDeg: 135 } },
+    background: fromCatalogue(LOOK_FILLS.aurora) },
   { id: "ember", label: "Ember", mode: "window-shadow-custom-background",
-    background: { kind: "linear", colors: ["#12061a", "#7a1f5c", "#ff7a3d"], angleDeg: 160 } },
+    background: fromCatalogue(LOOK_FILLS.ember) },
   // Background supplied at selection, like Custom: the file is the desktop wallpaper main saves beside the shot.
   { id: "wallpaper", label: "Wallpaper", mode: "window-shadow-custom-background" },
   { id: "custom", label: "Custom", mode: "window-shadow-custom-background" },
