@@ -270,3 +270,43 @@ describe("switching straight between a derived and a manual block", () => {
     expect(readProject(takeDir).overrides).toEqual([manual]);
   }, 60_000);
 });
+
+// STC-631: the lane says where a click would add a block, and never adds one
+// on top of another. Fixture: the derived block ends at 4505ms, a manual one
+// committed from a click at 0.98 occupies ~4.6s-5.0s, so the 95ms between
+// them (fraction 0.91) is a gap too small for a block.
+describe("adding a block from the lane (STC-631)", () => {
+  async function hoverLane(win: Page, fraction: number): Promise<void> {
+    await win.locator("#override-blocks").scrollIntoViewIfNeeded();
+    const box = await win.locator("#override-blocks").boundingBox();
+    if (!box) throw new Error("#override-blocks has no box");
+    await win.mouse.move(box.x + fraction * box.width - 3, box.y + box.height / 2);
+    await win.mouse.move(box.x + fraction * box.width, box.y + box.height / 2);
+  }
+
+  test("hovering free lane space previews the block a click would add", async () => {
+    const { win } = await openPreview();
+    await hoverLane(win, 0.98);
+    await expect.poll(() => win.isVisible("#zoomghost"), { timeout: 5_000 }).toBe(true);
+    expect(await win.textContent("#zoomghost-note")).toMatch(/click to add/i);
+    expect(await win.locator("#zoomghost").evaluate((el) => el.classList.contains("refused"))).toBe(false);
+  }, 30_000);
+
+  test("a spot with no room is refused: the lane says why, and a click adds nothing", async () => {
+    const { win, takeDir } = await openPreview();
+    await clickEmptyLane(win);
+    await pressOverrideDone(win);
+    await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
+
+    await hoverLane(win, 0.91);
+    await expect.poll(() => win.isVisible("#zoomghost-note"), { timeout: 5_000 }).toBe(true);
+    expect(await win.textContent("#zoomghost-note")).toMatch(/not enough room/i);
+    expect(await win.isHidden("#zoomghost")).toBe(true);
+
+    await clickEmptyLane(win, 0.91);
+    // Nothing opened and nothing was added.
+    expect(await win.isHidden("#overridebar")).toBe(true);
+    expect(await win.locator(".zoomblock.manual").count()).toBe(1);
+    expect(readProject(takeDir).overrides.length).toBe(1);
+  }, 30_000);
+});

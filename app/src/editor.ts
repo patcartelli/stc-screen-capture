@@ -114,7 +114,8 @@ import {
 import { TRANSFORM_VERSION } from "@transform/transform-version";
 import { productStamp } from "./product.js";
 import { zoomWindows, ZOOM_LEAD_NS, ZOOM_HOLD_NS, type ZoomPreset, type ZoomWindow } from "@transform/zoom";
-import { windowId, overrideFor, resolvedWindows, rectFromGesture, frameShaped } from "@transform/zoom-override";
+import { windowId, overrideFor, resolvedWindows, manualWindows, rectFromGesture, frameShaped } from "@transform/zoom-override";
+import { placeNewBlock, refusalText, type Placement, type Span } from "./zoom-placement.js";
 import { deriveZoomCrop } from "@transform/zoom-change";
 import {
   committedOverrides, overridesWithoutWindow, overridesWithoutManual, draftOf, NO_SPEEDS, type OverrideEdit, type SpeedDraft,
@@ -1649,10 +1650,10 @@ async function selectManualWindow(o: Extract<ZoomOverride, { kind: "manual" }>):
  * case), since a manual window's rect is REQUIRED and there is no
  * "nothing yet" state for it to start from.
  */
-async function createManualWindow(clickNs: number): Promise<void> {
+async function createManualWindow(span: Span): Promise<void> {
   if (!player || !openProject) return;
   await leaveCurrentEditForAnother();
-  const { startNs, endNs } = defaultManualSpan(clickNs, player.durationNs);
+  const { startNs, endNs } = span;
   editingManualId = crypto.randomUUID();
   draftManualStart = startNs;
   draftManualEnd = endNs;
@@ -1665,13 +1666,75 @@ async function createManualWindow(clickNs: number): Promise<void> {
   await player.seek(mid);
 }
 
+/**
+ * Every span a block occupies in the lane right now (STC-631): derived
+ * windows at their resolved position, committed manual ones, and the open
+ * edit at its draft bounds (`editedOverrides` commits it into the list).
+ */
+function occupiedSpans(): Span[] {
+  if (!openSession || !openProject) return [];
+  const overrides = editedOverrides() ?? openProject.overrides;
+  return [
+    ...resolvedWindows(zoomWindows(openSession.events), overrides),
+    ...manualWindows(overrides),
+  ].map((w) => ({ startNs: w.startNs, endNs: w.endNs }));
+}
+
+/** Where a click at `clientX` would put a block, or why not. */
+function placementAt(clientX: number): Placement | null {
+  if (!player) return null;
+  const pointerNs = frameToNs(frameAtClientX(clientX), player.durationNs);
+  return placeNewBlock(pointerNs, defaultManualSpan(pointerNs, player.durationNs), occupiedSpans(), MIN_MANUAL_WINDOW_NS);
+}
+
+function hideZoomGhost(): void {
+  $("zoomghost").hidden = true;
+  $("zoomghost-note").hidden = true;
+  $("override-blocks").classList.remove("can-add", "cannot-add");
+}
+
+function showZoomGhost(p: Placement, clientX: number): void {
+  const d = player?.durationNs || 1;
+  const lane = $("override-blocks");
+  const ghost = $("zoomghost");
+  const note = $("zoomghost-note");
+  ghost.classList.toggle("refused", !p.ok);
+  lane.classList.toggle("can-add", p.ok);
+  lane.classList.toggle("cannot-add", !p.ok);
+  const text = p.ok ? "Click to add a zoom" : refusalText(p.reason);
+  note.textContent = text;
+  note.hidden = false;
+  // A refusal has no block to draw: show the ghost only for a placement.
+  if (p.ok) {
+    ghost.style.left = `${(p.span.startNs / d) * 100}%`;
+    ghost.style.width = `${((p.span.endNs - p.span.startNs) / d) * 100}%`;
+    ghost.hidden = false;
+  } else {
+    ghost.hidden = true;
+  }
+  const viewport = lane.parentElement!.getBoundingClientRect();
+  const x = Math.min(Math.max(clientX - viewport.left + 10, 4), Math.max(4, viewport.width - note.offsetWidth - 4));
+  note.style.left = `${x}px`;
+}
+
+$("override-blocks").addEventListener("pointermove", (e) => {
+  // Over a block (or the draft and its handles) the pointer is the block's.
+  if (e.target !== e.currentTarget) { hideZoomGhost(); return; }
+  const p = placementAt((e as PointerEvent).clientX);
+  if (p) showZoomGhost(p, (e as PointerEvent).clientX); else hideZoomGhost();
+});
+$("override-blocks").addEventListener("pointerleave", hideZoomGhost);
+
 $("override-blocks").addEventListener("click", (e) => {
   // A block (derived, manual, or the draft block/its handles) owns its own
   // click — this only fires for the lane's empty background, which is the
   // "empty stretch" the ticket means.
   if (e.target !== e.currentTarget || !player) return;
-  const clickNs = frameToNs(frameAtClientX((e as MouseEvent).clientX), player.durationNs);
-  void createManualWindow(clickNs).catch((err: any) => alertUser(String(err?.message ?? err)));
+  const p = placementAt((e as MouseEvent).clientX);
+  // A refused click adds nothing; the note under the pointer already says why.
+  if (!p || !p.ok) return;
+  hideZoomGhost();
+  void createManualWindow(p.span).catch((err: any) => alertUser(String(err?.message ?? err)));
 });
 
 function onManualHandleDown(edge: "start" | "end", e: PointerEvent): void {
