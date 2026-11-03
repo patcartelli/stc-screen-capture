@@ -281,9 +281,9 @@ describe("switching straight between a derived and a manual block", () => {
 });
 
 // STC-631: the lane says where a click would add a block, and never adds one
-// on top of another. Fixture: the derived block ends at 4505ms, a manual one
-// committed from a click at 0.98 occupies ~4.6s-5.0s, so the 95ms between
-// them (fraction 0.91) is a gap too small for a block.
+// on top of another. The fixture's derived block is [1705ms, 4505ms]; a manual
+// block committed from an early click fills the free time up to it, leaving
+// a sliver at the take's start too small for a block.
 describe("adding a block from the lane (STC-631)", () => {
   async function hoverLane(win: Page, fraction: number): Promise<void> {
     await win.locator("#override-blocks").scrollIntoViewIfNeeded();
@@ -303,18 +303,20 @@ describe("adding a block from the lane (STC-631)", () => {
 
   test("a spot with no room is refused: the lane says why, and a click adds nothing", async () => {
     const { win, takeDir } = await openPreview();
-    await clickEmptyLane(win);
+    // A click at 0.1 (~500ms) adds [~200ms, 1705ms], trimmed to the derived
+    // block; the ~200ms sliver before it is under the 300ms floor.
+    await clickEmptyLane(win, 0.1);
     await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
 
-    // The middle of the gap, measured from the two blocks' real edges rather
-    // than a guessed fraction: a block's hit area would otherwise own the pointer.
+    // The middle of the sliver, measured from the lane's and the block's real
+    // edges rather than a guessed fraction: a block's hit area would
+    // otherwise own the pointer.
     const lane = (await win.locator("#override-blocks").boundingBox())!;
-    const derived = (await win.locator(DERIVED_BLOCK).boundingBox())!;
     const manual = (await win.locator("#override-blocks-dynamic .zoomblock.manual").boundingBox())!;
-    const gapMid = (derived.x + derived.width + manual.x) / 2;
+    const gapMid = (lane.x + manual.x) / 2;
     const gapFraction = (gapMid - lane.x) / lane.width;
-    expect(manual.x - (derived.x + derived.width), "the gap between the two blocks, px").toBeGreaterThan(2);
+    expect(manual.x - lane.x, "the sliver before the block, px").toBeGreaterThan(2);
 
     await hoverLane(win, gapFraction);
     const under = await win.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.id ?? "?", [gapMid, lane.y + lane.height / 2]);
