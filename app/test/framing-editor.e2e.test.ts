@@ -12,7 +12,7 @@ import { DARK_SHADOW_OPACITY, LOOK_FILLS } from "../../transform/src/looks.js";
  * editor's swatch grid (`#framelooks`, look-grid.ts) in the inspector pane,
  * None first and Custom last. Asserts: None is checked on an unframed take; a
  * look writes `project.json` with the look's own colours (Aurora's three stops
- * need project-20) and repaints the preview; None removes `framing` again;
+ * need project-21) and repaints the preview; None removes `framing` again;
  * padding, corners and shadow wait for a frame and survive a look change;
  * Custom shows its colour row, writes one colour as a solid and two as a
  * linear, and marks a bad value `aria-invalid` without writing it; the grid is
@@ -57,13 +57,13 @@ describe("the Frame section's Background looks (STC-608)", () => {
     expect(await editorWin.isHidden("#framecustomrow")).toBe(true);
     expect(await editorWin.textContent("#legibility")).not.toMatch(/inside the frame/);
 
-    // Aurora: three stops, so the document is project-20; it rides on `clean`.
+    // Aurora: three stops, so the document is project-21; it rides on `clean`.
     const aurora = LOOK_FILLS.aurora;
     if (aurora.kind !== "linear") throw new Error("Aurora is a linear fill");
     await editorWin.click(look("aurora"));
     await expect.poll(() => readProject(takeDir)?.framing, { timeout: 10_000 })
       .toEqual({ preset: "clean", background: aurora });
-    expect(readProject(takeDir).version).toBe(20);
+    expect(readProject(takeDir).version).toBe(21);
     await expect.poll(() => checkedLook(editorWin), { timeout: 10_000 }).toBe("aurora");
     await expect.poll(() => editorWin.textContent("#legibility"), { timeout: 10_000 }).toMatch(/inside the frame/);
     // The preview repaints with it: the gradient's last stop sits in the far corner.

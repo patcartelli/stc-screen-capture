@@ -14,8 +14,8 @@ npm run app:start
 
 - One catalogue, `transform/src/looks.ts`, owns the fill of Clean, Dark, Solid, Aurora and Ember. The
   still looks and the video framing presets both read it.
-- A recording can wear **Aurora** and **Ember** (three-stop gradients). `project-20` lets
-  `framing.background` be a linear fill of 2 to 8 stops; `versionFor` writes v20 only when a document
+- A recording can wear **Aurora** and **Ember** (three-stop gradients). `project-21` lets
+  `framing.background` be a linear fill of 2 to 8 stops; `versionFor` writes v21 only when a document
   needs it (more than two stops). Everything else stays at its older version.
 - The video editor's **Frame tab** picks from the still editor's swatch grid (None, Clean, Dark, Solid,
   Aurora, Ember, Custom), one component for both editors (`app/src/look-grid.ts`).
