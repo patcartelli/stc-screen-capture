@@ -9,6 +9,12 @@
  * the difference between Slow (~0.28 s to half) and Fast (~0.07 s) is plain.
  * On a long take the same ramps are under a pixel until you zoom in; that is
  * the unit tests' ground, not this file's.
+ *
+ * STC-636: the lane's height is the crop's magnification on a log scale (1x
+ * the floor, 2x halfway, 4x the top), not the ease's progress. So each block
+ * here is set to Amount 4x first: its plateau fills the lane and "half height"
+ * is the instant it is 2x in, still a point on each ramp. Left on Auto, this
+ * fixture's block plays at 2.0x and would peak at half height exactly.
  */
 import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication, type Page } from "playwright";
@@ -25,8 +31,13 @@ async function openBlock(): Promise<Page> {
   await expect.poll(() => win.locator(".zoomblock").count(), { timeout: 10_000 }).toBe(1);
   await win.click(".zoomblock");
   await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
-  // No region: an Auto block carries its speed on its own (STC-630).
+  await setAmount(win, 4);
   return win;
+}
+
+async function setAmount(win: Page, amount: number): Promise<void> {
+  await win.fill("#zoomamountrange", String(amount));
+  await win.dispatchEvent("#zoomamountrange", "input");
 }
 
 async function setSpeed(win: Page, side: "in" | "out", speed: "calm" | "snappy"): Promise<void> {
@@ -58,6 +69,40 @@ const halfHeightCrossings = (win: Page): Promise<{ rise: number; fall: number } 
     if (topRow(x) <= h * 0.5) { if (rise < 0) rise = x; fall = x; }
   }
   return rise < 0 ? null : { rise, fall };
+});
+
+/** The top-most drawn row anywhere on the lane, as a fraction of its height from the bottom. */
+const peakHeight = (win: Page): Promise<number> => win.evaluate(() => {
+  const c = document.getElementById("zoom-curve") as HTMLCanvasElement;
+  const { width: w, height: h } = c;
+  const data = c.getContext("2d")!.getImageData(0, 0, w, h).data;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) if (data[(y * w + x) * 4 + 3]! > 90) return (h - y) / h;
+  }
+  return 0;
+});
+
+describe("the Zoom lane's height is how far in the block zooms (STC-636)", () => {
+  test("a 4x block fills the lane; 1.5x is under a third of it; Auto (2.0x here) is about half", async () => {
+    const win = await openBlock();
+    await done(win);
+    await expect.poll(() => peakHeight(win), { timeout: 10_000 }).toBeGreaterThan(0.9);
+
+    await win.click(".zoomblock");
+    await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
+    await setAmount(win, 1.5);
+    await done(win);
+    // log(1.5) / log(4) = 0.29.
+    await expect.poll(() => peakHeight(win), { timeout: 10_000 }).toBeLessThan(0.36);
+    expect(await peakHeight(win)).toBeGreaterThan(0.2);
+
+    await win.click(".zoomblock");
+    await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
+    await win.click('#chipplace [data-place="auto"]');
+    await done(win);
+    await expect.poll(() => peakHeight(win), { timeout: 10_000 }).toBeGreaterThan(0.42);
+    expect(await peakHeight(win)).toBeLessThan(0.58);
+  }, 120_000);
 });
 
 describe("the Zoom lane shows a block's In and Out speeds", () => {

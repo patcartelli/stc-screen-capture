@@ -1,5 +1,6 @@
 import type { SessionEvent } from "@transform/types.js";
 import { tickOf, tickTimeNs } from "@transform/time.js";
+import { ZOOM_AMOUNT_MAX } from "./override-edit.js";
 
 /**
  * The editor's Clip lane signal (STC-373): pointer activity, weighted for
@@ -93,10 +94,43 @@ export const ZOOM_LANE_DENSE_STEP_NS = 16_666_667;
 /** How far before an edge the dense run starts, so the foot of a ramp is drawn from zero. */
 export const ZOOM_LANE_LEAD_NS = 4 * 8_333_334;
 
+/**
+ * The least a block that zooms at all rises to (STC-636, Patrick 2026-11-02:
+ * about 15%), so a very gentle zoom never draws as a hairline.
+ */
+export const ZOOM_LANE_PEAK_FLOOR = 0.15;
+
+/**
+ * The Zoom lane's height at one instant (STC-636): how far in the picture is,
+ * on a log scale, not how far through its ease the block is. 1x is the floor
+ * of the lane, 2x halfway, `ZOOM_AMOUNT_MAX` (4x) the top, so each doubling is
+ * the same step; a 4x block stands visibly taller than a 1.5x one, where the
+ * old 0..1 progress drew every block to full height.
+ *
+ * `magnification` is 1 / the crop's longer side (`ZoomAmountSampler`'s
+ * `magnificationsAt`), `amount` the ease progress at the same instant. The
+ * floor is applied as `ZOOM_LANE_PEAK_FLOOR × amount` rather than as a flat
+ * minimum: the block's plateau (amount 1) still sits at no less than the
+ * floor, but its ramps keep rising from zero instead of jumping to 15% on the
+ * first tick. A block whose crop is the whole frame (stage 2's trusted "don't
+ * zoom") has magnification 1 throughout and draws nothing, even while its
+ * ease runs.
+ *
+ * Never above `amount` for a block of at most 4x (log(1/(1-(1-c)a)) is convex
+ * in a, so it lies under its chord), which keeps `ZOOM_LANE_REACH_NS` a bound
+ * on the tail.
+ */
+export function zoomLaneHeight(magnification: number, amount: number): number {
+  if (!(magnification > 1) || !(amount > 0)) return 0;
+  const log = Math.log(magnification) / Math.log(ZOOM_AMOUNT_MAX);
+  return Math.min(1, Math.max(log, ZOOM_LANE_PEAK_FLOOR * Math.min(1, amount)));
+}
+
 export interface CurveSamples {
   /** Strictly increasing, each the start of a sim tick, within a tick of the span. */
   tNs: number[];
-  amount: number[];
+  /** The lane's value at each time: `zoomLaneHeight` in the editor (STC-636). */
+  value: number[];
 }
 
 /**
@@ -115,16 +149,18 @@ export interface CurveSamples {
  *    ramp is covered by ~8 samples even at its fastest, whatever the zoom.
  *    It is skipped when the pixel rate is already that fine.
  *
- * `amountsAt` is called ONCE with every time (ascending), so the caller can
+ * `valuesAt` is called ONCE with every time (ascending), so the caller can
  * read them in a single pass. Nothing here models the curve: the values come
- * from whatever `amountsAt` answers, which the editor makes `render()`'s own.
+ * from whatever `valuesAt` answers, which the editor makes `render()`'s own
+ * (its zoom amount and crop, as `zoomLaneHeight`, STC-636). Any value that is
+ * zero wherever the zoom amount is works: these zones are where it can rise.
  *
  * A ramp narrower than a pixel is still narrower than a pixel at a coarse
  * zoom: this makes the shape right (edge positions, peaks, ramp geometry), not
  * wider. Slow and Fast resolve when the span is about a minute.
  */
 export function zoomCurveSamples(args: {
-  amountsAt: (tNs: readonly number[]) => number[];
+  valuesAt: (tNs: readonly number[]) => number[];
   windows: readonly { startNs: number; endNs: number }[];
   /** The visible span. */
   startNs: number;
@@ -135,7 +171,7 @@ export function zoomCurveSamples(args: {
   const a = Math.max(0, args.startNs);
   const b = Math.max(a, args.endNs);
   const n = Math.max(2, Math.floor(args.baseSamples));
-  if (!(b > a) || args.windows.length === 0) return { tNs: [], amount: [] };
+  if (!(b > a) || args.windows.length === 0) return { tNs: [], value: [] };
   const spacing = (b - a) / (n - 1);
 
   // Zones, clipped to the span, merged.
@@ -186,7 +222,7 @@ export function zoomCurveSamples(args: {
     const snapped = tickTimeNs(tickOf(t));
     if (tNs.length === 0 || snapped > tNs[tNs.length - 1]!) tNs.push(snapped);
   }
-  return { tNs, amount: args.amountsAt(tNs) };
+  return { tNs, value: args.valuesAt(tNs) };
 }
 
 /**
@@ -239,12 +275,28 @@ export function trimRangeParts(startNs: number, endNs: number): { in: string; ou
 }
 
 /**
- * How far a block zooms in, from its drawn region (UV of the frame): the frame
- * over the region's longer side, to one decimal ("2.0×"). A block with no drawn
- * region zooms where stage 2 decides, so it reads "Auto".
+ * Who decides where a Zoom block sits (STC-636): stage 2 (`zoom-change.ts`,
+ * recomputed whenever the block plays) when it has no saved region, the user
+ * when it has one. A manual block always has one.
  */
-export function zoomAmountLabel(rect: { width: number; height: number } | null): string {
-  if (!rect) return "Auto";
-  const longer = Math.max(rect.width, rect.height);
-  return longer > 0 ? `${(1 / longer).toFixed(1)}×` : "Auto";
+export type ZoomPlace = "auto" | "fixed";
+
+export function zoomPlaceOf(rect: { width: number; height: number } | null): ZoomPlace {
+  return rect ? "fixed" : "auto";
+}
+
+/**
+ * How far a block zooms in, to one decimal ("2.0×"): the frame over the longer
+ * side of the region it zooms to. That is the saved region on a Fixed block
+ * and stage 2's on an Auto one (`autoRect`, `deriveZoomCrop`'s answer), so an
+ * Auto block shows the amount it really plays at (STC-636), never a word.
+ * Stage 2's null is its trusted "don't zoom", which is 1.0×.
+ */
+export function zoomAmountLabel(
+  rect: { width: number; height: number } | null,
+  autoRect: { width: number; height: number } | null = null,
+): string {
+  const r = rect ?? autoRect;
+  const longer = r ? Math.max(r.width, r.height) : 1;
+  return `${(1 / (longer > 0 ? longer : 1)).toFixed(1)}×`;
 }
