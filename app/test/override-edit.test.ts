@@ -83,6 +83,20 @@ describe("committedOverrides — a derived window (STC-330 geometry, STC-329 ret
     ]);
   });
 
+  // STC-630: this used to return [] — the speed was discarded without a word
+  // because a geometry entry needed a rect to ride on.
+  test("a speed with no rect is kept on a geometry entry of its own, with no rect (project-20)", () => {
+    expect(committedOverrides([], derived({ easing: { in: "calm", out: "" } }), events, "standard"))
+      .toEqual([{ kind: "geometry", windowId: id1, easing: { in: "calm" } }]);
+    expect(committedOverrides([], derived({ easing: SNAPPY }), events, undefined))
+      .toEqual([{ kind: "geometry", windowId: id1, easing: "snappy" }]);
+  });
+
+  test("a rectless speed never carries follow (it has no size to follow with)", () => {
+    const out = committedOverrides([], derived({ easing: SNAPPY, follow: true }), events, undefined);
+    expect(out).toEqual([{ kind: "geometry", windowId: id1, easing: "snappy" }]);
+  });
+
   test("neither: removes any prior geometry/retime for that window, keeps everything else", () => {
     const prior: ZoomOverride[] = [
       ...others,

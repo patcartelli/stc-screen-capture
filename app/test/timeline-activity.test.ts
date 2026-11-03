@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  clipActivity, zoomCurveSamples, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT, formatBlockTime, zoomAmountLabel,
+  clipActivity, zoomCurveSamples, laneBitmap, CLICK_WEIGHT, MOVE_WEIGHT, formatBlockTime, zoomAmountLabel, zoomPlaceOf, zoomLaneHeight, ZOOM_LANE_PEAK_FLOOR,
   trimRangeParts, activityIn, activityLabel, ZOOM_LANE_FLOOR, ZOOM_LANE_REACH_NS, ZOOM_LANE_DENSE_STEP_NS,
 } from "../src/timeline-activity.js";
 import type { SessionEvent } from "@transform/types.js";
@@ -64,19 +64,19 @@ describe("zoomCurveSamples (STC-620)", () => {
   const PX = 1000;
 
   /** Linear interpolation of the drawn polygon at `t`, as the canvas would fill it. */
-  const drawnAt = (c: { tNs: number[]; amount: number[] }, t: number): number => {
+  const drawnAt = (c: { tNs: number[]; value: number[] }, t: number): number => {
     let i = 0;
     while (i < c.tNs.length - 1 && c.tNs[i + 1]! < t) i++;
     const t0 = c.tNs[i]!, t1 = c.tNs[i + 1] ?? t0;
-    if (t1 === t0) return c.amount[i]!;
-    return c.amount[i]! + ((c.amount[i + 1]! - c.amount[i]!) * (t - t0)) / (t1 - t0);
+    if (t1 === t0) return c.value[i]!;
+    return c.value[i]! + ((c.value[i + 1]! - c.value[i]!) * (t - t0)) / (t1 - t0);
   };
 
   test("nothing to draw without a window, and nothing outside a block's zone", () => {
-    const none = zoomCurveSamples({ amountsAt: () => [], windows: [], startNs: 0, endNs: D, baseSamples: PX });
+    const none = zoomCurveSamples({ valuesAt: () => [], windows: [], startNs: 0, endNs: D, baseSamples: PX });
     expect(none.tNs).toEqual([]);
     const windows = [win(100 * S, 103 * S)];
-    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.snappy), windows, startNs: 0, endNs: D, baseSamples: PX });
+    const c = zoomCurveSamples({ valuesAt: sampler(windows, ZOOM_PRESETS.snappy), windows, startNs: 0, endNs: D, baseSamples: PX });
     expect(c.tNs.length).toBeGreaterThan(0);
     expect(c.tNs[0]!).toBeGreaterThan(99 * S);
     expect(c.tNs[c.tNs.length - 1]!).toBeLessThanOrEqual(103 * S + ZOOM_LANE_REACH_NS);
@@ -84,8 +84,8 @@ describe("zoomCurveSamples (STC-620)", () => {
 
   test("the samples are strictly increasing, inside the span, and each has a value", () => {
     const windows = [win(100 * S, 103 * S), win(102 * S, 110 * S), win(500 * S, 501 * S)];
-    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.standard), windows, startNs: 50 * S, endNs: 600 * S, baseSamples: PX });
-    expect(c.amount).toHaveLength(c.tNs.length);
+    const c = zoomCurveSamples({ valuesAt: sampler(windows, ZOOM_PRESETS.standard), windows, startNs: 50 * S, endNs: 600 * S, baseSamples: PX });
+    expect(c.value).toHaveLength(c.tNs.length);
     for (let i = 1; i < c.tNs.length; i++) expect(c.tNs[i]!).toBeGreaterThan(c.tNs[i - 1]!);
     const TICK = 8_333_334;
     expect(c.tNs[0]!).toBeGreaterThanOrEqual(50 * S - TICK);
@@ -97,7 +97,7 @@ describe("zoomCurveSamples (STC-620)", () => {
   test("a Fast ramp on a 12 minute take at full zoom is covered by many samples (the old lane had none)", () => {
     // snappy's IN shoulder is the fastest: omega 18*sqrt(2), back under 1% in ~0.26 s.
     const windows = [win(300 * S, 310 * S)];
-    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.snappy), windows, startNs: 0, endNs: D, baseSamples: PX });
+    const c = zoomCurveSamples({ valuesAt: sampler(windows, ZOOM_PRESETS.snappy), windows, startNs: 0, endNs: D, baseSamples: PX });
     const onRamp = c.tNs.filter((t) => t >= 300 * S && t <= 300 * S + 260_000_000);
     expect(onRamp.length).toBeGreaterThanOrEqual(12);
     // The old lane: 480 samples over 713 s is one per ~1.49 s, so a ramp this
@@ -110,7 +110,7 @@ describe("zoomCurveSamples (STC-620)", () => {
       const easing = ZOOM_PRESETS[name];
       const windows = [win(120 * S, 124 * S), win(400 * S, 401 * S)];
       const exact = sampler(windows, easing);
-      const c = zoomCurveSamples({ amountsAt: exact, windows, startNs: 0, endNs: D, baseSamples: PX });
+      const c = zoomCurveSamples({ valuesAt: exact, windows, startNs: 0, endNs: D, baseSamples: PX });
       let worst = 0;
       const ranges: [number, number][] = [[119 * S, 124 * S + ZOOM_LANE_REACH_NS], [399 * S, 401 * S + ZOOM_LANE_REACH_NS]];
       for (const [lo, hi] of ranges) {
@@ -130,7 +130,7 @@ describe("zoomCurveSamples (STC-620)", () => {
     const windows = [win(300 * S, 310 * S)];
     const spacing = (60 * S) / (PX - 1);
     expect(spacing).toBeLessThan(ZOOM_LANE_DENSE_STEP_NS * 5); // sanity: close to the dense step
-    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.calm), windows, startNs: 290 * S, endNs: 350 * S, baseSamples: 4000 });
+    const c = zoomCurveSamples({ valuesAt: sampler(windows, ZOOM_PRESETS.calm), windows, startNs: 290 * S, endNs: 350 * S, baseSamples: 4000 });
     // 4000 px over 60 s is 15 ms apart: finer than the dense step, so no extras.
     const gaps = c.tNs.slice(1).map((t, i) => t - c.tNs[i]!);
     expect(Math.max(...gaps)).toBeLessThanOrEqual(ZOOM_LANE_DENSE_STEP_NS);
@@ -138,7 +138,7 @@ describe("zoomCurveSamples (STC-620)", () => {
 
   test("the cost is bounded: a hundred blocks across the whole take stay under 60 000 samples", () => {
     const windows = Array.from({ length: 100 }, (_, i) => win((10 + i * 7) * S, (12 + i * 7) * S));
-    const c = zoomCurveSamples({ amountsAt: sampler(windows, ZOOM_PRESETS.standard), windows, startNs: 0, endNs: D, baseSamples: PX });
+    const c = zoomCurveSamples({ valuesAt: sampler(windows, ZOOM_PRESETS.standard), windows, startNs: 0, endNs: D, baseSamples: PX });
     expect(c.tNs.length).toBeLessThan(60_000);
   });
 
@@ -148,6 +148,60 @@ describe("zoomCurveSamples (STC-620)", () => {
       const [after] = sim.amountsAt([tickOf(10 * S + ZOOM_LANE_REACH_NS)]);
       expect(after!, name).toBeLessThan(ZOOM_LANE_FLOOR);
     }
+  });
+});
+
+describe("zoomLaneHeight (STC-636): magnification on a log scale", () => {
+  test("1x is the floor of the lane, 2x halfway, 4x the top", () => {
+    expect(zoomLaneHeight(1, 1)).toBe(0);
+    expect(zoomLaneHeight(2, 1)).toBeCloseTo(0.5, 12);
+    expect(zoomLaneHeight(4, 1)).toBeCloseTo(1, 12);
+    // Each doubling is the same step.
+    expect(zoomLaneHeight(Math.SQRT2 * 2, 1) - zoomLaneHeight(2, 1))
+      .toBeCloseTo(zoomLaneHeight(2, 1) - zoomLaneHeight(Math.SQRT2, 1), 12);
+  });
+
+  test("a 4x block stands taller than a 1.5x one", () => {
+    expect(zoomLaneHeight(4, 1)).toBeGreaterThan(zoomLaneHeight(1.5, 1) + 0.6);
+  });
+
+  test("a block that zooms at all peaks at no less than the floor", () => {
+    expect(ZOOM_LANE_PEAK_FLOOR).toBeCloseTo(0.15, 2);
+    expect(zoomLaneHeight(1.05, 1)).toBe(ZOOM_LANE_PEAK_FLOOR);
+    expect(zoomLaneHeight(1.2, 1)).toBe(ZOOM_LANE_PEAK_FLOOR);
+    // Above the floor the log rules.
+    expect(zoomLaneHeight(1.5, 1)).toBeCloseTo(Math.log(1.5) / Math.log(4), 12);
+  });
+
+  test("the floor scales with the ease, so a ramp rises from zero instead of jumping", () => {
+    // A 1.1x block a tenth of the way in: crop 1 - 0.0909 * 0.1.
+    const m = 1 / (1 - (1 - 1 / 1.1) * 0.1);
+    expect(zoomLaneHeight(m, 0.1)).toBeCloseTo(ZOOM_LANE_PEAK_FLOOR * 0.1, 12);
+    expect(zoomLaneHeight(m, 0.1)).toBeLessThan(ZOOM_LANE_PEAK_FLOOR);
+    // Rising through the ramp never steps down.
+    let last = 0;
+    for (let a = 0; a <= 1.0001; a += 0.05) {
+      const h = zoomLaneHeight(1 / (1 - (1 - 1 / 3) * a), a);
+      expect(h).toBeGreaterThanOrEqual(last);
+      last = h;
+    }
+  });
+
+  test("never above the ease, so ZOOM_LANE_REACH_NS still bounds the tail", () => {
+    for (const target of [1.1, 1.5, 2, 3, 4]) {
+      for (let a = 0.001; a <= 1; a += 0.013) {
+        const m = 1 / (1 - (1 - 1 / target) * a);
+        expect(zoomLaneHeight(m, a)).toBeLessThanOrEqual(a + 1e-12);
+      }
+    }
+  });
+
+  test("a block that does not zoom draws nothing while its ease runs; no ease, no height", () => {
+    expect(zoomLaneHeight(1, 0.7)).toBe(0);
+    expect(zoomLaneHeight(2, 0)).toBe(0);
+    expect(zoomLaneHeight(NaN, 1)).toBe(0);
+    // Never over the top of the lane.
+    expect(zoomLaneHeight(8, 1)).toBe(1);
   });
 });
 
@@ -185,12 +239,24 @@ describe("the Zoom section's readouts (STC-604)", () => {
     expect(formatBlockTime(26.0 * S)).toBe("0:26.0");
     expect(formatBlockTime(-5)).toBe("0:00.0");
   });
-  test("the amount is the frame over the region's longer side, Auto with no region", () => {
+  test("the amount is the frame over the region's longer side", () => {
     expect(zoomAmountLabel({ width: 0.5, height: 0.3 })).toBe("2.0×");
     expect(zoomAmountLabel({ width: 0.3, height: 0.5 })).toBe("2.0×");
     expect(zoomAmountLabel({ width: 0.4545, height: 0.4 })).toBe("2.2×");
-    expect(zoomAmountLabel(null)).toBe("Auto");
-    expect(zoomAmountLabel({ width: 0, height: 0 })).toBe("Auto");
+  });
+  test("an Auto block shows stage 2's amount, never a word (STC-636)", () => {
+    const stage2 = { width: 0.625, height: 0.6 };
+    expect(zoomAmountLabel(null, stage2)).toBe("1.6×");
+    // A saved region wins over stage 2's.
+    expect(zoomAmountLabel({ width: 0.25, height: 0.2 }, stage2)).toBe("4.0×");
+    // Stage 2's null is its "don't zoom": the whole frame, 1.0×.
+    expect(zoomAmountLabel(null, null)).toBe("1.0×");
+    expect(zoomAmountLabel(null)).toBe("1.0×");
+    expect(zoomAmountLabel({ width: 0, height: 0 })).toBe("1.0×");
+  });
+  test("Place is Auto with no saved region and Fixed with one (STC-636)", () => {
+    expect(zoomPlaceOf(null)).toBe("auto");
+    expect(zoomPlaceOf({ width: 0.5, height: 0.5 })).toBe("fixed");
   });
 });
 
