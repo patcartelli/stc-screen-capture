@@ -52,7 +52,7 @@
  * is frozen from this commit on.
  */
 export const BINDABLE_ACTIONS = [
-  "region", "window", "display", "record", "self-timer", "pick-color",
+  "region", "window", "display", "record", "self-timer", "pick-color", "previous-area",
 ] as const;
 
 export type BindableAction = (typeof BINDABLE_ACTIONS)[number];
@@ -112,6 +112,9 @@ export const ACTION_LABELS: Record<BindableAction, string> = {
   // for it. It is one shot, not a mode that stays on (STC-391).
   "self-timer": "Shot with Self-Timer",
   "pick-color": "Pick Color",
+  // STC-570. A shot, so it keeps the "Shot" word; "Previous Area" is CleanShot's
+  // name for the same thing and says which rectangle.
+  "previous-area": "Shot Previous Area",
 };
 
 /** `null` is a deliberately unbound action, which is not a failure. */
@@ -144,6 +147,8 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   // Unbound (STC-627): ⇧⌘5 is reserved for STC-569, and a global key taken
   // without being asked is worse than a menu item the user binds themselves.
   "pick-color": null,
+  // Unbound (STC-570): ⇧⌘5 is reserved for STC-569 and ⌘⌥ digits are spoken for.
+  "previous-area": null,
 };
 
 /**
@@ -157,6 +162,7 @@ export const LEGACY_DEFAULT_SHORTCUTS: Shortcuts = {
   record: `${HYPER}+4`,
   "self-timer": `${HYPER}+5`,
   "pick-color": null,
+  "previous-area": null,
 };
 
 /** STC-415's defaults, replaced by STC-582. */
@@ -167,6 +173,7 @@ export const STC415_DEFAULT_SHORTCUTS: Shortcuts = {
   record: "Shift+Command+8",
   "self-timer": "Shift+Command+7",
   "pick-color": null,
+  "previous-area": null,
 };
 
 /**
@@ -182,6 +189,7 @@ export const SUPERSEDED_DEFAULT_SHORTCUTS: Record<BindableAction, readonly strin
   record: [LEGACY_DEFAULT_SHORTCUTS.record!, "Shift+Command+6", STC415_DEFAULT_SHORTCUTS.record!],
   "self-timer": [LEGACY_DEFAULT_SHORTCUTS["self-timer"]!, STC415_DEFAULT_SHORTCUTS["self-timer"]!],
   "pick-color": [],
+  "previous-area": [],
 };
 
 /**

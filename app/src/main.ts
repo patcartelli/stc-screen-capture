@@ -3,6 +3,7 @@ import {
   powerMonitor, nativeTheme, type IpcMainInvokeEvent,
 } from "electron";
 import { readSettings, stripMainOnly, writeSettings, type Settings } from "./settings.js";
+import { rememberArea, resolvePreviousArea, type ConnectedDisplay } from "./previous-area.js";
 import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, resetOfferText, resetToNewDefaults, planShortcuts, planOutcomeVariants, isShotAction,
   type Outcome, type OutcomeVariantReport,
@@ -302,7 +303,18 @@ function send(channel: string, payload: unknown): void {
  * its panel stayed invisible under the selected chip until the user changed it.
  */
 function promoteIntoLibrary(saveFolder: string | null, dir: string): Promise<string> {
-  return promoteTake(process.env, saveFolder, dir, () => send("library:changed", undefined));
+  return promoteTake(process.env, saveFolder, dir, libraryChanged);
+}
+
+/**
+ * Tell the library window its folder gained an item (STC-519, STC-489). Sent
+ * AFTER the file is in place, so the rescan it causes finds it: a promotion,
+ * a GIF saved beside it, an editor export. The window rescans on nothing else
+ * that main writes, so a write that skips this stays invisible until some
+ * unrelated rescan.
+ */
+function libraryChanged(): void {
+  send("library:changed", undefined);
 }
 
 /**
@@ -1956,7 +1968,11 @@ async function recordFlowBody(
     // `region` ONLY when this is not a full-display take: a crop covering the
     // whole screen takes the helper's crop path instead of its full-display
     // one. One expression, so the two paths cannot be chosen by two rules.
-    if (!options.fullDisplay) startParams.region = { ...outcome.crop };
+    if (!options.fullDisplay) {
+      startParams.region = { ...outcome.crop };
+      // STC-570: a recorded region is the "previous area" too.
+      void rememberRegion(outcome.displayId, outcome.crop);
+    }
   }
 
   // STC-433: check the overlay's own pick against the helper's current
@@ -2258,7 +2274,9 @@ async function captureStill(action: ShotAction, source: CaptureSource, afterShot
       // The self-timer picks its scope through the SAME overlay, opened in
       // region mode — the overlay's own toggle still reaches window mode, so
       // "scope is chosen during the flow" costs it no second picker.
-      : await selectRegionOrWindow(action === "self-timer" ? "region" : action, thumbExcluded);
+      : action === "previous-area"
+        ? await retakePreviousArea(thumbExcluded)
+        : await selectRegionOrWindow(action === "self-timer" ? "region" : action, thumbExcluded);
     if (outcome === undefined) return { ok: false, cancelled: true, source };
 
     // STC-391. Scope first, countdown second — the ticket makes them separate
@@ -2401,6 +2419,7 @@ async function selectRegionOrWindow(
     windows, mode: action, dist: here, renderer: join(here, "..", "renderer"),
   });
   if (outcome.kind === "cancelled") return undefined;
+  if (outcome.kind === "region") void rememberRegion(outcome.displayId, outcome.crop);
   return outcome.kind === "region"
     // `displayId` is Electron's, which on macOS is the CGDirectDisplayID the
     // helper matches against. If that ever stops being true the helper answers
@@ -2413,6 +2432,54 @@ async function selectRegionOrWindow(
         params: { kind: "display-crop", displayId: outcome.displayId,
                   crop: outcome.crop, excludeWindowIds: [...excludeWindowIds, ...thumbExcluded] } }
     : { kind: "window", params: { kind: "window", windowId: outcome.windowId } };
+}
+
+/**
+ * The displays the helper sees, with the UUID that outlives a reconnect (STC-570).
+ * Empty when the helper cannot say, which makes a retake fall back to the overlay.
+ */
+async function connectedDisplays(): Promise<ConnectedDisplay[]> {
+  try {
+    const reply = await sup!.devices() as { displays?: unknown };
+    if (!Array.isArray(reply.displays)) return [];
+    return reply.displays.flatMap((d: any): ConnectedDisplay[] =>
+      typeof d?.id === "number" && typeof d?.uuid === "string" && d.uuid !== ""
+        && typeof d?.pointW === "number" && typeof d?.pointH === "number"
+        ? [{ id: d.id, uuid: d.uuid, width: d.pointW, height: d.pointH }] : []);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Remember a region a shot or a recording was just aimed at. Never throws and
+ * is never awaited by a capture: losing the memory costs a drag, not a shot.
+ */
+async function rememberRegion(displayId: number, crop: { x: number; y: number; width: number; height: number }): Promise<void> {
+  try {
+    const display = (await connectedDisplays()).find((d) => d.id === displayId);
+    const dir = app.getPath("userData");
+    const before = readSettings(dir).previousAreas;
+    const after = rememberArea(before, display, crop);
+    if (after !== before) writeSettings(dir, { previousAreas: after });
+  } catch (e) {
+    console.error("[previous-area] could not remember the region:", e);
+  }
+}
+
+/**
+ * Shot Previous Area (STC-570): the last region again with no drag, or the
+ * normal overlay when it no longer fits a connected display. Never a clipped or
+ * off-screen rectangle.
+ */
+async function retakePreviousArea(
+  thumbExcluded: number[],
+): Promise<{ kind: string; params: CaptureParams } | undefined> {
+  const answer = resolvePreviousArea(readSettings(app.getPath("userData")).previousAreas, await connectedDisplays());
+  if (answer.kind === "overlay") return selectRegionOrWindow("region", thumbExcluded);
+  return { kind: "region",
+           params: { kind: "display-crop", displayId: answer.displayId,
+                     crop: answer.crop, excludeWindowIds: thumbExcluded } };
 }
 
 /**
@@ -3281,6 +3348,28 @@ function rejectMalformedProjectDoc(doc: Record<string, any>): void {
  * top-level file already carrying this bundle's id (if one exists) IS the
  * destination; only a bundle with no finished file yet gets the derived name.
  */
+/**
+ * STC-637: whether the editor's Export hashes every frame before the encoder.
+ * Only `export-identity.slow.test.ts` reads the hash, and it costs a pixel
+ * read-back, a SHA-256 and a software-rasterised canvas per frame: measured on
+ * a real 10-minute 4K take, 28.6 ms/frame with it against 8.6 without, three
+ * quarters of every export. So a user's export never pays it; the test asks.
+ */
+ipcMain.handle("export:hashFrames", async (): Promise<boolean> => process.env.STC_EXPORT_HASH === "1");
+
+/**
+ * STC-637: an export keeps its speed with the editor behind another window.
+ * Chromium throttles a background page's timers, and the frame loop yields on
+ * timers (the encoder's back-pressure wait, the decoder's wake, the progress
+ * yield): with another window in front, a 20 s export took 43.1 s instead of
+ * 17.0 s. Off for the export only, so a hidden editor otherwise stays as idle
+ * as any window. Main does not track the window's exports: the renderer's
+ * `finally` turns it back on, and a destroyed sender needs nothing.
+ */
+ipcMain.handle("export:busy", (e, busy: boolean) => {
+  if (!e.sender.isDestroyed()) e.sender.setBackgroundThrottling(busy !== true);
+});
+
 ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
@@ -3327,6 +3416,7 @@ ipcMain.handle("export:write", async (e, name: string, bytes: ArrayBuffer) => {
     throw new Error(`refusing to overwrite "${name}" — it belongs to a different capture`);
   }
   await writeFile(dest, Buffer.from(bytes));
+  libraryChanged();
   return dest;
 });
 
@@ -3361,6 +3451,7 @@ ipcMain.handle("export:writeGif", async (e, bytes: ArrayBuffer) => {
     throw err;
   }
   lastSavedGif = dest;
+  libraryChanged();
   return { path: dest, name };
 });
 
@@ -3977,6 +4068,8 @@ ipcMain.handle("panel:save", async (e, dir: string, format: unknown) => {
         await rename(partial, dest);
         partial = undefined;
         lastSavedGif = dest;
+        // The promotion above already rescanned, before this GIF existed.
+        libraryChanged();
         showNotice({ title: "Saved GIF", tone: "success", body: name, action: { id: "reveal-saved-gif", label: "Show in Finder" } });
       } catch (err: any) {
         gifError = String(err?.message ?? err);

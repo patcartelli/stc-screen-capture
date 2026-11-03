@@ -36,6 +36,10 @@ declare const editor: {
   readTakeChunk: (name: string, offset: number, length: number) => Promise<ArrayBuffer>;
   writeProject: (bytes: ArrayBuffer) => Promise<boolean>;
   writeExport: (name: string, bytes: ArrayBuffer) => Promise<string>;
+  /** STC-637: hash the frames (the identity test) or not (everyone else). */
+  exportHashFrames: () => Promise<boolean>;
+  /** STC-637: background throttling off while an export runs. */
+  setExportBusy: (busy: boolean) => Promise<void>;
   captureId: () => Promise<string>;
   exportStill(req: {
     bytes: ArrayBuffer; width: number; height: number; alpha: boolean; colorSpace?: string;
@@ -4270,6 +4274,8 @@ async function runExport(): Promise<void> {
   const started = performance.now();
   const exporting: Project = structuredClone(withHeldFraming(openProject, heldFraming));
   try {
+    // STC-637: behind another window the loop ran ~10x slower per frame.
+    await editor.setExportBusy(true);
     if (exportType === "gif") {
       // STC-615: STC-395's sink, over the same trim, framing and zoom as the
       // MP4. The options are read now, once, as the panel's conversion does.
@@ -4297,8 +4303,11 @@ async function runExport(): Promise<void> {
     try { captureId = await editor.captureId(); }
     catch (e) { console.error("[export] could not resolve a capture id:", e); }
 
+    // STC-637: the pre-encode hash is the identity test's, and it tripled the
+    // export's time (main.ts's `export:hashFrames`).
+    const hash = await editor.exportHashFrames();
     const result = await exportSession(openSession, exporting, {
-      hash: true,
+      hash,
       captureId,
       decoded: decodedForExport(),
       rate: exportRate,
@@ -4322,7 +4331,8 @@ async function runExport(): Promise<void> {
       version: 1,
       transform: { version: TRANSFORM_VERSION },
       frames: result.frames,
-      preEncodeHash: result.hash,
+      // Only when hashed (STC-637); absent is "not computed", never a hash of "".
+      ...(hash ? { preEncodeHash: result.hash } : {}),
       encodedBytes: result.encodedBytes,
       micEncodedChunks: result.micEncodedChunks,
       audioOutputChunks: result.audioOutputChunks,
@@ -4349,6 +4359,7 @@ async function runExport(): Promise<void> {
     status.textContent = "Failed.";
     alertUser(`Export failed: ${e?.message ?? e}`);
   } finally {
+    void editor.setExportBusy(false).catch(() => {});
     exportAbort = undefined;
     setOutputBusy(false);
     updateFramingUI();   // padding, corners and shadow wait for a frame again

@@ -6,6 +6,7 @@ import {
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import { cleanIconPlacement, DEFAULT_ICON_PLACEMENT, type IconPlacement } from "./icon-placement.js";
 import { cleanWindowBounds, type Rect } from "./window-size.js";
+import { NO_PREVIOUS_AREAS, cleanPreviousAreas, type PreviousAreas } from "./previous-area.js";
 import {
   DEFAULT_EXPORT_OPTIONS, DEFAULT_FILENAME_TEMPLATE, clampQuality, parseFormat, parseScale,
   type ExportOptions,
@@ -141,6 +142,8 @@ export interface Settings {
    * for Settings alone never writes it.
    */
   libraryWindow: Rect | null;
+  /** The last region picked, per display (STC-570). Main writes it; a renderer's patch never does. */
+  previousAreas: PreviousAreas;
   /** What a fresh window capture looks like (STC-628). */
   windowShotLook: WindowShotLook;
   /**
@@ -298,7 +301,7 @@ function cleanLastBackgroundLook(v: unknown): LookWrite | null {
 export function stripMainOnly(patch: Partial<Settings> | undefined): Partial<Settings> {
   const {
     saveFolder: _mainsAlone, capturePrimed: _alsoMains, shortcutsOffered: _mainsOffered,
-    libraryWindow: _mainsToo, lastBackgroundLook: _mainsLook, ...rest
+    libraryWindow: _mainsToo, lastBackgroundLook: _mainsLook, previousAreas: _mainsAreas, ...rest
   } = { ...(patch ?? {}) };
   return rest;
 }
@@ -311,6 +314,7 @@ export const DEFAULT_SETTINGS: Settings = {
   capturePrimed: false,
   shortcutsOffered: false,
   libraryWindow: null,
+  previousAreas: NO_PREVIOUS_AREAS,
   windowShotLook: "wallpaper",
   lastBackgroundLook: null,
   shortcuts: { ...DEFAULT_SHORTCUTS },
@@ -481,6 +485,7 @@ export function readSettings(dir: string): Settings {
     capturePrimed: doc.capturePrimed === true,
     shortcutsOffered: doc.shortcutsOffered === true,
     libraryWindow: cleanWindowBounds(doc.libraryWindow),
+    previousAreas: cleanPreviousAreas(doc.previousAreas),
     windowShotLook: cleanWindowShotLook(doc.windowShotLook),
     lastBackgroundLook: cleanLastBackgroundLook(doc.lastBackgroundLook),
     shortcuts: cleanShortcuts(doc.shortcuts),
@@ -534,6 +539,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     capturePrimed: merged.capturePrimed === true,
     shortcutsOffered: merged.shortcutsOffered === true,
     libraryWindow: cleanWindowBounds(merged.libraryWindow),
+    previousAreas: cleanPreviousAreas(merged.previousAreas),
     windowShotLook: cleanWindowShotLook(merged.windowShotLook),
     lastBackgroundLook: cleanLastBackgroundLook(merged.lastBackgroundLook),
     shortcuts: cleanShortcuts(merged.shortcuts),
