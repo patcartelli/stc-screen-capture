@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
-  framingColor, withColor,
+  framingColor, withColor, VIDEO_LOOKS, withLook, withCustom, customFraming, videoLookOf,
 } from "../src/framing-edit.js";
 import {
   DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, framingProblem, type Framing,
@@ -99,5 +99,87 @@ describe("the Colour row: one swatch for every style (STC-604)", () => {
     for (const x of [out, withColor({ preset: "dark" }, "#abcdef"), withColor({ preset: "solid" }, "#010203")]) {
       expect(framingProblem(x)).toBeUndefined();
     }
+  });
+});
+
+describe("video looks (STC-608)", () => {
+  const ids = ["none", "clean", "dark", "solid", "aurora", "ember"] as const;
+  const made: (Framing | undefined)[] = [];
+  const keep = (f: Framing | undefined): Framing | undefined => { made.push(f); return f; };
+
+  test("each look round-trips through videoLookOf", () => {
+    for (const id of ids) expect(videoLookOf(keep(withLook(undefined, id)))).toBe(id);
+  });
+  test("the picker lists None first, then the stills' looks by their own labels", () => {
+    expect(VIDEO_LOOKS.map((l) => l.label)).toEqual(["None", "Clean", "Dark", "Solid", "Aurora", "Ember", "Custom"]);
+  });
+  test("aurora writes its three stops explicitly with preset clean", () => {
+    const f = keep(withLook(undefined, "aurora"))!;
+    expect(f.preset).toBe("clean");
+    expect(f.background).toEqual({ kind: "linear", colors: ["#050a12", "#0d4a52", "#5b3fd1"], angleDeg: 135 });
+    expect(f.color).toBeUndefined();
+  });
+  test("solid drops a stale colour and writes the fill", () => {
+    const f = keep(withLook({ preset: "solid", color: "#112233" }, "solid"))!;
+    expect(f).toEqual({ preset: "solid", background: { kind: "solid", color: "#3b4252" } });
+  });
+  test("dark writes its shadow; leaving dark drops it", () => {
+    const dark = keep(withLook(undefined, "dark"))!;
+    expect(dark.shadow).toEqual(FRAMING_PRESETS.dark.shadow);
+    expect(keep(withLook(dark, "aurora"))!.shadow).toBeUndefined();
+  });
+  test("shadow off survives every look", () => {
+    const off = withShadow(withLook(undefined, "dark")!, false);
+    const next = keep(withLook(off, "aurora"))!;
+    expect(framingShadowOn(next)).toBe(false);
+    expect(videoLookOf(next)).toBe("aurora");
+  });
+  test("dark with the shadow off still reads as dark", () => {
+    expect(videoLookOf(keep(withShadow(withLook(undefined, "dark")!, false)))).toBe("dark");
+  });
+  test("padding and corners survive a look change", () => {
+    const f = withRadius(withPadding(clean, 0.1), 0.03);
+    expect(keep(withLook(f, "ember"))).toMatchObject({ paddingPct: 0.1, radiusPct: 0.03 });
+  });
+  test("pre-change documents", () => {
+    expect(videoLookOf(keep({ preset: "dark" }))).toBe("dark");
+    expect(videoLookOf(keep({ preset: "solid", color: "#3b4252" }))).toBe("solid");
+    expect(videoLookOf(keep({ preset: "solid", color: "#112233" }))).toBe("custom");
+    expect(videoLookOf(keep({
+      preset: "clean", background: { kind: "linear", colors: ["#112233", "#cfd6e0"], angleDeg: 135 },
+    }))).toBe("custom");
+  });
+  test("a retuned three-stop fill selects nothing", () => {
+    const f = withLook(undefined, "aurora")!;
+    const bg = f.background!;
+    if (bg.kind !== "linear") throw new Error("aurora is linear");
+    expect(videoLookOf(keep({ ...f, background: { ...bg, colors: ["#050a12", "#0d4a53", "#5b3fd1"] } }))).toBeUndefined();
+  });
+  test("a look's fill under another look's shadow is custom, not that look", () => {
+    const f = { ...withLook(undefined, "clean")!, shadow: { ...FRAMING_PRESETS.dark.shadow } };
+    expect(videoLookOf(keep(f))).toBe("custom");
+  });
+  test("custom keeps the document's preset", () => {
+    const f = keep(withCustom(withLook(undefined, "dark"), { kind: "solid", color: "#445566" }))!;
+    expect(f.preset).toBe("dark");
+    expect(f.shadow!.opacity).toBe(0.55);
+    expect(videoLookOf(f)).toBe("custom");
+  });
+  test("custom on no framing starts from clean", () => {
+    expect(keep(withCustom(undefined, { kind: "solid", color: "#445566" }))!.preset).toBe("clean");
+  });
+  test("customFraming", () => {
+    expect(customFraming("#112233")).toEqual({ ok: true, background: { kind: "solid", color: "#112233" } });
+    expect(customFraming("#112233", "#445566")).toEqual({
+      ok: true, background: { kind: "linear", colors: ["#112233", "#445566"], angleDeg: 135 },
+    });
+    expect(customFraming("nope").ok).toBe(false);
+    for (const r of [customFraming("#112233"), customFraming("#112233", "#445566")]) {
+      if (r.ok) keep(withCustom(undefined, r.background));
+    }
+  });
+  test("every result is a framing the loader accepts", () => {
+    expect(made.length).toBeGreaterThan(10);
+    for (const f of made) if (f) expect(framingProblem(f)).toBeUndefined();
   });
 });
