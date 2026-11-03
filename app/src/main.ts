@@ -880,14 +880,16 @@ function reconcileTrayRecording(): void {
 const takeLookNotices = new Map<string, string>();
 
 async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): Promise<boolean> {
+  // STC-626: a wallpaper that could not be read, held until now because a mid-take
+  // line would be filmed. Taken out here so unreadable anchors do not lose it too.
+  const lookNotice = takeLookNotices.get(dir);
+  takeLookNotices.delete(dir);
   let recording: { durationMs: number; scope: string; reason?: string; action?: StopAction } =
-    { durationMs: 0, scope: "Screen" };
+    { durationMs: 0, scope: "Screen", reason: lookNotice };
   try {
     const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"));
     // STC-237: a mic or camera that ended early is a second sentence after the stop's own.
-    // STC-626: and a wallpaper that could not be read, held until now because a mid-take line would be filmed.
-    const reason = [panelReason(anchors.stop), trackLossLine(anchors), takeLookNotices.get(dir)].filter(Boolean).join(" ") || undefined;
-    takeLookNotices.delete(dir);
+    const reason = [panelReason(anchors.stop), trackLossLine(anchors), lookNotice].filter(Boolean).join(" ") || undefined;
     recording = { durationMs: recordingDurationMs(anchors), scope: recordingScopeLabel(anchors),
                   reason, action: panelAction(anchors.stop) };
   } catch (e) {

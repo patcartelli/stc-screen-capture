@@ -117,6 +117,13 @@ describe("ensureWallpaper (STC-626)", () => {
     rmSync(take, { recursive: true });
   });
 
+  test("a document that cannot be read rejects: it is not a wallpaper that could not be read", async () => {
+    const take = tempDir();
+    await expect(ensureWallpaper(realRead, take, async () => { throw new Error("no shot.json"); }, NOTICE))
+      .rejects.toThrow("no shot.json");
+    rmSync(take, { recursive: true });
+  });
+
   test("an answer naming another file is a failed read", async () => {
     const take = tempDir();
     const r = await ensureWallpaper(async () => ({ file: "other.jpg" }), take, async () => 7, NOTICE);

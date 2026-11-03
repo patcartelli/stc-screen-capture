@@ -84,8 +84,11 @@ export async function ensureWallpaper(
   const existing = await stat(join(dir, WALLPAPER_FILE)).catch(() => undefined);
   if (existing?.isFile()) return { ok: true, file: WALLPAPER_FILE };
   if (!read) return { ok: false, notice };
+  // Outside the try: a document that cannot be read is its own refusal, for the
+  // caller to report, and is not a wallpaper that could not be read.
+  const display = await displayId();
   try {
-    await askHelper(read, dir, await displayId());
+    await askHelper(read, dir, display);
     return { ok: true, file: WALLPAPER_FILE };
   } catch (e) {
     console.log("[wallpaper] could not read for the editor:", e);
