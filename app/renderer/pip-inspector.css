@@ -60,6 +60,16 @@
 #pipframewindow { position: absolute; cursor: grab; outline: 1px solid #fff; touch-action: none;
                   box-shadow: 0 0 0 9999px rgba(0,0,0,.55); }
 #pipframewindow:active { cursor: grabbing; }
+/* STC-497: thirds. Clipped to the window's own shape (rect, square, circle).
+   Each line is white with a dark halo, so it keeps 3:1 on a light frame and on
+   a dark one. Editing aid only: nothing here reaches render(). */
+#pipguides { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; }
+#pipguides[hidden] { display: none; }
+#pipguides i { position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+#pipguides i.v { top: 0; bottom: 0; width: 1px; }
+#pipguides i.h { left: 0; right: 0; height: 1px; }
+#pipguidesbtn[aria-pressed="true"] { color: var(--section-accent); }
+#pipguidesbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 /* Settings sheet's mock frame (STC-461): a 16:9 stand-in for the output, and
    the box that is the PiP. No camera is opened to set a preference. */
