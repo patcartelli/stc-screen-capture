@@ -12,9 +12,10 @@
  *
  * STC-636: the lane's height is the crop's magnification on a log scale (1x
  * the floor, 2x halfway, 4x the top), not the ease's progress. So each block
- * here is set to Amount 4x first: its plateau fills the lane and "half height"
- * is the instant it is 2x in, still a point on each ramp. Left on Auto, this
- * fixture's block plays at 2.0x and would peak at half height exactly.
+ * here is set to Amount 4x first, and the crossing read is the height of a 4x
+ * block HALFWAY THROUGH its ease (`MID_EASE`), the same instants this file read
+ * before. Higher up the ramp (2x, two thirds through) a Slow push in has not
+ * fully settled when the block ends, so the fall moved with the In speed.
  */
 import { describe, test, expect, afterEach } from "vitest";
 import { type ElectronApplication, type Page } from "playwright";
@@ -50,11 +51,14 @@ async function done(win: Page): Promise<void> {
   await win.waitForSelector("#overridebar", { state: "hidden", timeout: 10_000 });
 }
 
+/** A 4x block's lane height halfway through its ease: crop 1 - 0.75 * 0.5, on log4. */
+const MID_EASE = Math.log(1 / (1 - 0.75 * 0.5)) / Math.log(4);
+
 /**
- * Where the lane's top edge crosses half height: the first and the last canvas
+ * Where the lane's top edge crosses `MID_EASE`: the first and the last canvas
  * column at or above it. null while nothing is drawn.
  */
-const halfHeightCrossings = (win: Page): Promise<{ rise: number; fall: number } | null> => win.evaluate(() => {
+const halfHeightCrossings = (win: Page): Promise<{ rise: number; fall: number } | null> => win.evaluate((mid) => {
   const c = document.getElementById("zoom-curve") as HTMLCanvasElement;
   const ctx = c.getContext("2d")!;
   const { width: w, height: h } = c;
@@ -66,10 +70,10 @@ const halfHeightCrossings = (win: Page): Promise<{ rise: number; fall: number } 
   };
   let rise = -1, fall = -1;
   for (let x = 0; x < w; x++) {
-    if (topRow(x) <= h * 0.5) { if (rise < 0) rise = x; fall = x; }
+    if (topRow(x) <= h * (1 - mid)) { if (rise < 0) rise = x; fall = x; }
   }
   return rise < 0 ? null : { rise, fall };
-});
+}, MID_EASE);
 
 /** The top-most drawn row anywhere on the lane, as a fraction of its height from the bottom. */
 const peakHeight = (win: Page): Promise<number> => win.evaluate(() => {

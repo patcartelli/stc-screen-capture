@@ -283,8 +283,8 @@ describe("the Zoom chip", () => {
     expect(await win.textContent("#chipamount")).toBe("2.0×");
     expect(await win.locator("#overridebox").getAttribute("hidden")).not.toBeNull();
     await done(win);
-    await expect.poll(() => project(takeDir)?.overrides?.[0]?.easing, { timeout: 10_000 })
-      .toEqual({ in: "snappy", out: "snappy" });
+    // Both sides the same is saved as the one preset name.
+    await expect.poll(() => project(takeDir)?.overrides?.[0]?.easing, { timeout: 10_000 }).toBe("snappy");
     expect(project(takeDir)?.overrides?.[0]?.rect).toBeUndefined();
     expect(project(takeDir)?.version).toBe(20);
     // The inspector's Place sets it too, and reopening reads it back.
