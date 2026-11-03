@@ -242,6 +242,12 @@ describe("playback follows the playhead", () => {
     await win.keyboard.press("Space");
     await expect.poll(() => win.evaluate(() => document.getElementById("playpause")!.hasAttribute("data-playing")),
       { timeout: 10_000 }).toBe(true);
+    // `data-playing` is set by the Play itself (updateShuttleUI), before the
+    // player's first tick, and following starts AT that tick (`playing &&
+    // !wasPlaying` in onTime). A pan that lands first is undone by it: the
+    // tick turns following on and flips the page back to 0. Seen on CI (#439:
+    // left 14.8 -> 0). Wait until playback has actually moved the playhead.
+    await expect.poll(() => frameOf(win), { timeout: 10_000 }).toBeGreaterThan(0);
     // Pan well past the playhead before it reaches the first page's edge.
     await win.focus("#ruler");
     for (let i = 0; i < 3; i++) await win.keyboard.press("ArrowRight");

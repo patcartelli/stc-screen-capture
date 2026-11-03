@@ -291,6 +291,26 @@ try {
   }
   ok("both background modes cover every pixel");
 
+  // ── a wallpaper is cover-cropped (STC-628) ───────────────────────────────
+  {
+    const p = by["window-shadow-background+wallpaper"];
+    if (!p) fail("no wallpaper probe — the harness stopped rendering one");
+    else {
+      const want = [[230, 57, 70], [42, 157, 143], [38, 77, 228], [244, 194, 13]];
+      const names = ["top-left", "top-right", "bottom-left", "bottom-right"];
+      let bad = 0;
+      for (const [i, w] of want.entries()) {
+        const c = p.corners[i];
+        if (Math.abs(c.r - w[0]) > 3 || Math.abs(c.g - w[1]) > 3 || Math.abs(c.b - w[2]) > 3) {
+          bad++;
+          fail(`wallpaper: ${names[i]} corner is rgb(${c.r},${c.g},${c.b}), expected its own ` +
+               `quadrant's rgb(${w.join(",")}) — a stretched picture shows the magenta edge strips here`);
+        }
+      }
+      if (bad === 0) ok("a wallpaper is centred and cover-cropped: each corner shows its own quadrant, no stretch");
+    }
+  }
+
   // ── canvas presets ───────────────────────────────────────────────────────
   for (const [preset, ratio] of [["16:9", 16 / 9], ["4:3", 4 / 3], ["1:1", 1]]) {
     const p = by[`window-only@${preset}`];

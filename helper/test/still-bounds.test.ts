@@ -45,3 +45,26 @@ describe("the still chain (STC-289)", () => {
     expect(stillMs()).toBeGreaterThanOrEqual(LATENCY_TARGET_MS * 10);
   });
 });
+
+/**
+ * STC-628: a window shot reads the wallpaper beside its capture and waits for
+ * it, BOUNDED, before answering. A wallpaper is never allowed to turn a still
+ * into a `still-timeout`: the wait gives up with `wallpaperError` well inside
+ * the still's own backstop, leaving the capture itself the same allowance the
+ * backstop already gives it over the latency target.
+ */
+describe("the wallpaper chain (STC-628)", () => {
+  const stillMs = () => swiftConstant("helper/src/Still.swift", "timeoutSeconds");
+  const joinMs = () => swiftConstant("helper/src/Wallpaper.swift", "joinTimeoutSeconds");
+  const verbMs = () => swiftConstant("helper/src/Wallpaper.swift", "verbTimeoutSeconds");
+
+  test("a slow wallpaper gives up before the still's backstop would fire", () => {
+    expect(joinMs()).toBeGreaterThan(0);
+    expect(joinMs() + LATENCY_TARGET_MS * 10).toBeLessThanOrEqual(stillMs());
+  });
+
+  test("the wallpaper verb answers before the client stops listening", () => {
+    expect(verbMs()).toBeGreaterThan(0);
+    expect(verbMs() + REPLY_AND_IPC_MS).toBeLessThanOrEqual(DEFAULT_REQUEST_TIMEOUT_MS);
+  });
+});

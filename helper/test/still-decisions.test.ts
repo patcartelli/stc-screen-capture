@@ -28,6 +28,8 @@ describe("still decisions (STC-289)", () => {
       label: "still",
       sources: [
         "helper/src/StillDecisions.swift",
+        // STC-628: the wallpaper's request, cache key and window choice.
+        "helper/src/WallpaperDecisions.swift",
         // AnchorsDoc.swift's anchorsDocument(...) now takes a [PauseInterval]
         // (STC-240), declared in PauseDecisions.swift — needed to compile
         // even though this harness never calls anchorsDocument itself.

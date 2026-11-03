@@ -2,7 +2,7 @@ import {
   app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage, clipboard,
   powerMonitor, nativeTheme, type IpcMainInvokeEvent,
 } from "electron";
-import { readSettings, writeSettings, type Settings } from "./settings.js";
+import { readSettings, stripMainOnly, writeSettings, type Settings } from "./settings.js";
 import {
   SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, resetOfferText, resetToNewDefaults, planShortcuts, planOutcomeVariants, isShotAction,
   type Outcome, type OutcomeVariantReport,
@@ -21,8 +21,13 @@ import {
   type CompositedStill, type ExportTarget,
 } from "./still-io.js";
 import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
-import { parseShot, shotForWrite } from "@transform/shot.js";
-import { applyLook, parseLookWrite } from "@transform/backgrounds.js";
+import { parseShot, shotForWrite, type Decoration } from "@transform/shot.js";
+import { applyLook, parseLookWrite, WALLPAPER_FILE, type LookWrite } from "@transform/backgrounds.js";
+import {
+  captureLook, isRememberedBackground, presentFlags, wantsWallpaper, WALLPAPER_NOTICE, type WindowShotLook,
+} from "./window-look.js";
+import { rewriteShot, writeShotLook } from "./shot-write.js";
+import { stillFrameNameAllowed } from "./still-frame-name.js";
 import { CAPTURE_DOC_FILE } from "@transform/capture-doc.js";
 import { isProjectVersion } from "@transform/project-version.js";
 import { ZOOM_PRESET_NAMES } from "@transform/zoom.js";
@@ -1670,14 +1675,10 @@ async function reclaimSpace(parent: BrowserWindow | undefined = win): Promise<{ 
  * `false` and the throwaway stream would run again at the next launch.
  * `libraryWindow` (STC-560) the same way: an echo would put back the place the
  * window had when the sheet loaded, over the one its `close` just wrote.
+ * `lastBackgroundLook` (STC-628) the same: it is written when a shot is made.
  */
 ipcMain.handle("recorder:setSettings", async (e, patch: Partial<Settings>): Promise<Settings> => {
-  // Destructured rather than deleted, so `saveFolder` is named here and a
-  // reader can see exactly which keys do not survive.
-  const {
-    saveFolder: _mainsAlone, capturePrimed: _alsoMains, shortcutsOffered: _mainsOffered, libraryWindow: _mainsToo, ...withoutMainsKeys
-  } = { ...(patch ?? {}) };
-  const clean: Partial<Settings> = withoutMainsKeys as Partial<Settings>;
+  const clean: Partial<Settings> = stripMainOnly(patch);
   if (clean.share) {
     // Same rule, same reason (STC-242): `share.destination` is a folder in the
     // user's own site repo, and a renderer that could name it could make this
@@ -2286,7 +2287,13 @@ async function captureStill(action: ShotAction, source: CaptureSource, afterShot
     const root = tempTakesRoot(process.env);
     const existing = existsSync(root) ? readdirSync(root) : [];
     const dir = newTempTakeDir(process.env, new Date(), existing);
-    const r = await sup.captureStill({ dir, ...outcome.params });
+    // STC-628: a window shot's look is read at capture time, like every other
+    // preference here. Only the Wallpaper look asks the helper to read the
+    // desktop beside the window; a region or display shot never does.
+    const { windowShotLook, lastBackgroundLook } = readSettings(app.getPath("userData"));
+    const askWallpaper = outcome.kind === "window" && wantsWallpaper(windowShotLook);
+    const r = await sup.captureStill({ dir, ...outcome.params, ...(askWallpaper ? { wallpaper: true } : {}) });
+    const { shot, notice } = await applyWindowShotLook(dir, r, windowShotLook, lastBackgroundLook);
     // The sound is the ONLY feedback a full-display hotkey capture gives — no
     // overlay was ever on screen — so it is played on every successful shot,
     // for the same reason macOS plays one. Not awaited: the shot is already on
@@ -2310,11 +2317,17 @@ async function captureStill(action: ShotAction, source: CaptureSource, afterShot
     try {
       const settingsNow = readSettings(app.getPath("userData"));
       const { thumbnail } = settingsNow;
+      // A notice (STC-628's wallpaper fallback) must be seen, so it shows the
+      // panel even for a clipboard capture, which then still copies.
+      const { silent, copy } = presentFlags(
+        afterShot === "clipboard" || (afterShot === undefined && thumbnail.skip) ? "clipboard" : "panel", notice);
       presentThumbnail({
-        dir, shot: r.shot, corner: thumbnail.corner,
+        dir, shot, corner: thumbnail.corner,
         take: { kind: "shot", origin: "fresh" },
         dist: here, rendererDir: join(here, "..", "renderer"),
-        ...(afterShot === "clipboard" || (afterShot === undefined && thumbnail.skip) ? { silent: true } : {}),
+        ...(silent ? { silent: true } : {}),
+        ...(copy ? { copy: true } : {}),
+        ...(notice ? { notice } : {}),
       });
     } catch (e) {
       console.error("[thumbnail] could not present:", e);
@@ -2322,7 +2335,7 @@ async function captureStill(action: ShotAction, source: CaptureSource, afterShot
     // The helper's reply is a JSON line, so its fields arrive as `unknown`;
     // named here rather than spread, so a renamed field is a type error and not
     // a silently absent one.
-    return { ok: true, dir, kind: outcome.kind, shot: r.shot,
+    return { ok: true, dir, kind: outcome.kind, shot,
              file: r.file as string | undefined,
              warning: r.alphaWarning as string | undefined, source };
   } catch (e: any) {
@@ -2335,6 +2348,35 @@ async function captureStill(action: ShotAction, source: CaptureSource, afterShot
     // without presenting a new one has to put the stack back.
     showThumbnailsAfterCapture();
     tray?.update({ shortcuts, busy: false, recording: sup?.state === "recording" });
+  }
+}
+
+/**
+ * Put the user's window shot look on a fresh capture (STC-628). Only a window
+ * shot whose frame has alpha gets one — the helper wrote those as
+ * `window-only`; a region, a display or an opaque window is left as written.
+ *
+ * Returns the document to present (the rewritten one, or the helper's own when
+ * nothing changed) and the fallback line, if any. Never throws: the shot is
+ * already on disk, and a look that cannot be written keeps the `window-only`
+ * shot, logged, rather than costing the capture.
+ */
+async function applyWindowShotLook(
+  dir: string, r: Record<string, unknown>, look: WindowShotLook, lastBackground: LookWrite | null,
+): Promise<{ shot: unknown; notice?: string }> {
+  const helperShot = r.shot as { decoration?: { mode?: unknown } } | undefined;
+  if (helperShot?.decoration?.mode !== "window-only") return { shot: r.shot };
+  const read = r.wallpaper as { file?: unknown } | undefined;
+  const wallpaper = typeof read?.file === "string" ? { file: read.file }
+    : typeof r.wallpaperError === "string" ? { error: r.wallpaperError } : undefined;
+  if (wallpaper && "error" in wallpaper) console.log(`[wallpaper] could not read: ${wallpaper.error}`);
+  const { write, notice } = captureLook(look, lastBackground, wallpaper);
+  try {
+    return { shot: shotForWrite(await writeShotLook(dir, write)), ...(notice ? { notice } : {}) };
+  } catch (e) {
+    // No notice either: it would say the shot uses Clean, and it does not.
+    console.error("[still] could not apply the window shot look; keeping window-only:", e);
+    return { shot: r.shot };
   }
 }
 
@@ -4155,7 +4197,7 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
   if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to read a path outside the recordings folder");
   }
-  if (!/^[A-Za-z0-9._-]+\.png$/.test(name) || name.includes("..")) {
+  if (!stillFrameNameAllowed(name)) {
     throw new Error(`refusing to read "${name}"`);
   }
   const buf = await readFile(join(dir, name));
@@ -4201,34 +4243,67 @@ ipcMain.handle("still:frame", async (_e, dir: string, name: string) => {
  * replaces Dark's explicit fill instead of being overridden by it. When given,
  * `look.mode` is the mode and the separate `mode` argument is not consulted.
  */
-ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown, look?: unknown) => {
+ipcMain.handle("still:writeShot", async (_e, dir: string, redactions: unknown, mode: unknown, look?: unknown, remember?: unknown) => {
   const { saveFolder } = readSettings(app.getPath("userData"));
   if (!insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
-  const file = join(dir, "shot.json");
-  const stored = parseShot(JSON.parse(await readFile(file, "utf8")));
-  const base = look === undefined ? stored.decoration : applyLook(stored.decoration, parseLookWrite(look));
-  const next = parseShot({
-    ...stored,
-    decoration: {
-      ...base,
-      redactions,
-      ...(look === undefined && mode !== undefined ? { mode } : {}),
-    },
-  });
-  // Through `shotForWrite`, which decides the VERSION: a shot with no
-  // annotations stays shot-1 and must not carry the v2-only key, since shot-1
-  // declares additionalProperties: false and a document that fails its own
-  // schema is the defect this project has now paid for three times.
-  await writeFile(file, JSON.stringify(shotForWrite(next), null, 2));
-  // The library's cached thumbnail (STC-294) was rendered from the document
-  // that just changed, so it now shows a decoration this shot no longer has.
-  // Dropped rather than re-rendered: this process has no canvas, and the grid
-  // renders a missing one the next time the tile is on screen. A failure here
-  // costs a stale picture, never the regions that were just written.
-  await rm(join(dir, THUMBNAIL_FILE), { force: true }).catch(() => {});
+  if (remember !== undefined && typeof remember !== "boolean") throw new Error("remember must be a boolean");
+  const write = look === undefined ? undefined : parseLookWrite(look);
+  // `rewriteShot` (shot-write.ts) is the merge, the `parseShot` check, the
+  // version rule and the thumbnail drop, shared with a fresh capture's look.
+  const next = await rewriteShot(dir, (stored) => ({
+    ...(write === undefined ? stored.decoration : applyLook(stored.decoration, write)),
+    redactions,
+    ...(write === undefined && mode !== undefined ? { mode } : {}),
+  } as Decoration));
+  // STC-628: the last Capture-backgrounds swatch picked here is what the next
+  // "Capture background" window shot wears. Main's alone, like
+  // `capturePrimed`: `recorder:setSettings` strips it (`stripMainOnly`), so
+  // this write, after `parseShot` accepted the look, is its only way in.
+  // `remember: false` is the editor's own fallback write (a wallpaper that
+  // could not be read): the user never picked that Clean. A settings failure
+  // must not reject the IPC, since shot.json has changed already.
+  if (write !== undefined && remember !== false && isRememberedBackground(write)) {
+    try {
+      writeSettings(app.getPath("userData"), { lastBackgroundLook: write });
+    } catch (e) {
+      console.log("[settings] could not remember the background look:", e);
+    }
+  }
   return { ok: true, redactions: next.decoration.redactions.length };
+});
+
+/**
+ * The wallpaper as it is NOW, for the still editor's Wallpaper swatch on a shot
+ * that has no wallpaper file (STC-628). Read from the display named in the
+ * shot's own `display`, by the helper's `wallpaper` verb, into the shot's
+ * folder as `WALLPAPER_FILE`; the editor then loads it through `still:frame`
+ * and writes the look through `still:writeShot` like any other swatch.
+ *
+ * Never rejects for a wallpaper that cannot be read: the answer is the same
+ * fallback line a fresh capture's panel shows, for the editor to say.
+ */
+ipcMain.handle("still:fetchWallpaper", async (_e, dir: string) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
+    throw new Error("refusing to write a path outside the recordings folder");
+  }
+  // A shot that already has its capture-time picture keeps it: re-picking
+  // Wallpaper must not replace it with today's desktop, or fall back to Clean
+  // when that display is gone.
+  const existing = await stat(join(dir, WALLPAPER_FILE)).catch(() => undefined);
+  if (existing?.isFile()) return { ok: true, file: WALLPAPER_FILE };
+  if (!sup) return { ok: false, notice: WALLPAPER_NOTICE };
+  const shot = parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
+  try {
+    const r = await sup.wallpaper(dir, shot.display.id, WALLPAPER_FILE);
+    if (r.file !== WALLPAPER_FILE) throw new Error(`helper answered ${JSON.stringify(r)}`);
+    return { ok: true, file: WALLPAPER_FILE };
+  } catch (e) {
+    console.log("[wallpaper] could not read for the editor:", e);
+    return { ok: false, notice: WALLPAPER_NOTICE };
+  }
 });
 
 ipcMain.handle("preview:read", async (e, name: string) => {

@@ -152,6 +152,8 @@ export interface StillProbe {
   fullyOpaque: boolean;
   /** Distinct colours along the top row, which only the background reaches. */
   topRowColours: number;
+  /** The canvas's four corners, inset 2 px, in TL, TR, BL, BR order. Wallpaper probe only (STC-628). */
+  corners?: Px[];
   /** The capture's own colour, so an assertion can compare against the right one. */
   fill: { r: number; g: number; b: number };
   /**
@@ -169,10 +171,12 @@ export interface StillProbe {
   arrowCross?: Px[];
 }
 
+const WALLPAPER_QUADRANTS = ["#e63946", "#2a9d8f", "#264de4", "#f4c20d"];   // TL, TR, BL, BR
+
 function render(mode: DecorationMode, canvasPreset: string,
                 annotations: unknown[] = [],
                 fill: { r: number; g: number; b: number } = FILL,
-                background?: Background):
+                background?: Background, backdrop?: unknown):
                 { probe: StillProbe; data: ImageData } {
   const shot = shotFor(mode, canvasPreset, annotations, background);
   const layout = layoutStill(shot);
@@ -186,7 +190,7 @@ function render(mode: DecorationMode, canvasPreset: string,
   // A mesh goes through `withMeshBackground`, the function the app's
   // `still-compose.ts` calls, so this is the app's path and not a copy.
   withMeshBackground(layout.background, cv.width, cv.height, (background) =>
-    renderStill(ctx as never, { frame: makeCapture(fill), background }, layout));
+    renderStill(ctx as never, { frame: makeCapture(fill), background: backdrop ?? background }, layout));
 
   const data = ctx.getImageData(0, 0, cv.width, cv.height);
   const { content } = layout;
@@ -230,6 +234,8 @@ function render(mode: DecorationMode, canvasPreset: string,
       outsideCorner,
       canvasCorner: pixelAt(data, 0, 0),
       fringe, shadowRay, fullyOpaque, fill, topRowColours: topRow.size,
+      ...(backdrop ? { corners: [[2, 2], [cv.width - 3, 2], [2, cv.height - 3],
+                                 [cv.width - 3, cv.height - 3]].map(([x, y]) => pixelAt(data, x!, y!)) } : {}),
       ...(annotations.length > 0 ? { arrowCross: arrowCrossSection(data, content) } : {}),
     },
   };
@@ -453,6 +459,27 @@ window.__stillGate = async () => {
   const m2 = render("window-shadow-background", "natural", [], FILL, mesh).probe.hash;
   const meshParity = [false, true].map((grain) => meshParityAt({ ...mesh, grain }, 320, 200));
   mark("still gate: mesh rendered");
+
+  // STC-628: a wallpaper is cover-cropped, not stretched. A 1600x1000 picture
+  // in four quadrants, with its outer 300 px each side painted magenta, behind
+  // a SQUARE canvas: cover keeps the middle 1000 px and shows no magenta, so
+  // each canvas corner reads its own quadrant. A stretch would put magenta in
+  // every corner.
+  const wp = document.createElement("canvas");
+  wp.width = 1600;
+  wp.height = 1000;
+  const wctx = wp.getContext("2d")!;
+  for (const [i, c] of WALLPAPER_QUADRANTS.entries()) {
+    wctx.fillStyle = c;
+    wctx.fillRect((i % 2) * 800, Math.floor(i / 2) * 500, 800, 500);
+  }
+  wctx.fillStyle = "#ff00ff";
+  wctx.fillRect(0, 0, 300, 1000);
+  wctx.fillRect(1300, 0, 300, 1000);
+  const wallpaperProbe = render("window-shadow-background", "1:1", [], FILL,
+                                { kind: "wallpaper", colors: ["#000000"] }, wp).probe;
+  wallpaperProbe.mode = "window-shadow-background+wallpaper";
+  probes.push(wallpaperProbe);
 
   return { probes, repeat: { first: a, second: b }, meshRepeat: { first: meshProbe.hash, second: m2 },
            meshParity, fill: FILL, cornerRadius: CORNER_RADIUS };

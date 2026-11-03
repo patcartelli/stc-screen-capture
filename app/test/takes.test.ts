@@ -125,6 +125,16 @@ describe("duplicateTake (STC-345)", () => {
     expect(readdirSync(dest).sort()).toEqual(["frame.png", "shot.json"]);
   });
 
+  // STC-628: a wallpaper shot names its picture by `background.file`, a file
+  // beside the document, so a copy without it would draw the fallback colour.
+  test("keeps a wallpaper shot's wallpaper", async () => {
+    const src = makeSource("2026-09-10_10-00-00",
+      { "shot.json": "{}", "frame.png": "pixels", "wallpaper.jpg": "desktop", "thumb.png": "cached" });
+    const dest = await duplicateTake(env, null, src, "thumb.png");
+    expect(readdirSync(dest).sort()).toEqual(["frame.png", "shot.json", "wallpaper.jpg"]);
+    expect(readFileSync(join(dest, "wallpaper.jpg"), "utf8")).toBe("desktop");
+  });
+
   /**
    * The regression. Two duplicates of the SAME source, fired together —
    * exactly a double-click on one tile's Duplicate button — must produce TWO

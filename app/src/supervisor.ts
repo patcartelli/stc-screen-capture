@@ -115,6 +115,16 @@ export class HelperSupervisor {
   }
 
   /**
+   * Read a display's wallpaper into `dir` as `file` (STC-628), for the still
+   * editor's Wallpaper swatch on a shot that has none. State-free like
+   * `captureStill`. Rejects with `wallpaper-unavailable` when it cannot.
+   */
+  async wallpaper(dir: string, displayId: number, file: string): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("wallpaper", { dir, displayId, file });
+  }
+
+  /**
    * The system eyedropper loupe (STC-627). State-free, so a pick during a
    * take cannot disturb it. Waits as long as the person holds the loupe up.
    */

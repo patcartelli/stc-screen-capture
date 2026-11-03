@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
@@ -40,13 +40,15 @@ function collect(stream: Readable, sink: Line[]): void {
 
 const live: ChildProcess[] = [];
 
-function spawnHelper(opts: { fd3?: boolean; drainStdout?: boolean; statsIntervalMs?: number } = {}): Helper {
+function spawnHelper(opts: {
+  fd3?: boolean; drainStdout?: boolean; statsIntervalMs?: number; env?: Record<string, string>;
+} = {}): Helper {
   const withFd3 = opts.fd3 ?? true;
   const drain = opts.drainStdout ?? true;
   const stdio: any[] = ["pipe", "pipe", "pipe"];
   if (withFd3) stdio.push("pipe");
   const argv = opts.statsIntervalMs ? ["--stats-interval-ms", String(opts.statsIntervalMs)] : [];
-  const proc = spawn(BIN, argv, { stdio });
+  const proc = spawn(BIN, argv, { stdio, env: { ...process.env, ...opts.env } });
   live.push(proc);
   const out: Line[] = [];
   const fd3: Line[] = [];
@@ -424,5 +426,63 @@ describe("capture-still — validation answers on fd3 before anything touches Sc
     h.send({ cmd: "status", seq: 37 });
     const s = await waitFor(() => h.fd3.find((l) => l.seq === 37), 5000, "status after prime");
     expect(s.state).toBe("idle");
+  }, 20_000);
+});
+
+describe("wallpaper — the still editor's way to read a display's wallpaper (STC-628)", () => {
+  // Refused by parseWallpaperRequest before anything is read, so no grant is
+  // needed. The file rule is capture-still's plus `.jpg`: the wallpaper is
+  // always JPEG, and still:frame lets exactly that name through.
+  const cases: Array<[string, object, string]> = [
+    ["no dir", { cmd: "wallpaper", displayId: 1 }, "missing-dir"],
+    ["no display", { cmd: "wallpaper", dir: tmpSession() }, "missing-display-id"],
+    ["file that is a path", { cmd: "wallpaper", dir: tmpSession(), displayId: 1, file: "../wallpaper.jpg" }, "bad-file"],
+    ["file that is not a jpg", { cmd: "wallpaper", dir: tmpSession(), displayId: 1, file: "wallpaper.heic" }, "bad-file"],
+    ["a png (the wallpaper is always JPEG)", { cmd: "wallpaper", dir: tmpSession(), displayId: 1, file: "wallpaper.png" }, "bad-file"],
+  ];
+  for (const [name, cmd, code] of cases) {
+    test(`${name} -> ${code}`, async () => {
+      const h = spawnHelper();
+      await waitFor(() => find(h.fd3, "ready"));
+      h.send({ ...cmd, seq: 41 });
+      const r = await waitFor(() => h.fd3.find((l) => l.seq === 41), 5000, `seq 41 (${name})`);
+      expect(r.ev).toBe("error");
+      expect(r.code).toBe(code);
+      expect(typeof r.detail).toBe("string");
+      expect(h.out.some((l) => l.seq === 41)).toBe(false);
+    });
+  }
+
+  test("STC_CAPTURE_FAULT=wallpaper-unavailable answers wallpaper-unavailable and writes nothing", async () => {
+    const h = spawnHelper({ env: { STC_CAPTURE_FAULT: "wallpaper-unavailable" } });
+    await waitFor(() => find(h.fd3, "ready"));
+    const dir = tmpSession();
+    h.send({ cmd: "wallpaper", dir, displayId: 1, seq: 42 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 42), 5000, "faulted wallpaper");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("wallpaper-unavailable");
+    expect(String(r.detail)).toContain("STC_CAPTURE_FAULT=wallpaper-unavailable");
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("a well-formed request is answered reliably, granted or not", async () => {
+    // Agnostic about the grant and the Mac's wallpaper: ungranted with a
+    // dynamic picture (a CI runner) it is wallpaper-unavailable; a static
+    // picture can be read from its file with no grant at all.
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    const dir = tmpSession();
+    h.send({ cmd: "wallpaper", dir, displayId: 1, seq: 43 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 43), 12_000, "wallpaper outcome");
+    expect(["wallpaper", "error"]).toContain(r.ev);
+    if (r.ev === "error") {
+      expect(r.code).toBe("wallpaper-unavailable");
+      expect(readdirSync(dir)).toEqual([]);
+    } else {
+      expect(r.file).toBe("wallpaper.jpg");
+      expect(typeof r.source).toBe("string");
+      expect(readdirSync(dir)).toEqual(["wallpaper.jpg"]);
+    }
+    expect(h.out.some((l) => l.seq === 43)).toBe(false);
   }, 20_000);
 });
