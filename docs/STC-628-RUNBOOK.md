@@ -1,14 +1,18 @@
 # STC-628 runbook — window shot looks, with the desktop wallpaper
 
-**Branch:** `accounts/stc-628-window-shot-looks`. Not on `master` yet; run it from there until it merges.
+**Branch:** merged to `master` (#437, 2026-11-03). Run it from `master`.
 
 ```
-git fetch origin
-git checkout accounts/stc-628-window-shot-looks && git pull
+git checkout master && git pull
 npm ci
 helper/build.sh
 npm run app:start
 ```
+
+**Rebuild the helper after every pull that touches `helper/src/`.** `app:start` never rebuilds it. On
+2026-11-03 a helper built before the merge ignored the wallpaper request: every window shot fell back
+to Clean with no wallpaper file and nothing in the log, and it read as a §4 failure. `strings
+helper/build/stc-helper | grep wallpaper-unavailable` finds nothing in a stale build.
 
 ## What changed
 
@@ -124,7 +128,9 @@ Custom keeps its colours.
 ## §7 Sign-off
 
 **Done 2026-11-03 (Patrick):** every look in light and dark settled, the 9% margin kept, and a
-dynamic/aerial wallpaper shot passed (§2). §3 and §4 have not been run.
+dynamic/aerial wallpaper shot passed (§2). §3 approved. §4 passed on a plain extra desktop Space with
+a static wallpaper (after rebuilding a stale helper, see the top). A full-screen app Space was not
+run, so that case stays unverified.
 
 On a **real capture**, take a window shot in each of the four looks with a **light** window and again
 with a **dark** window (eight shots). Export each (PNG at least; HEIC or JPEG for one) and compare it
