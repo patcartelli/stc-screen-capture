@@ -225,12 +225,12 @@ describe("PiP placement and track bounds", () => {
   });
 
   test("PiP sits in the bottom-right corner at the configured size", () => {
-    const { project, session } = pipSession();   // 3840x2160, widthPct 0.125, margin 32
+    const { project, session } = pipSession();   // 3840x2160, widthPct 0.125, margin 32 at 1080 = 64 here (STC-591)
     const pip = render(project, session, CAM_FIRST).pip!;
     expect(pip.width).toBe(480);                 // 3840 * 0.125
     expect(pip.height).toBe(270);                // 480 * 720/1280
-    expect(pip.x).toBe(3840 - 480 - 32);
-    expect(pip.y).toBe(2160 - 270 - 32);
+    expect(pip.x).toBe(3840 - 480 - 64);
+    expect(pip.y).toBe(2160 - 270 - 64);
   });
 
   test("the PiP holds the last frame at or before t, never interpolating", () => {

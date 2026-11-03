@@ -1442,6 +1442,14 @@
             <label class="label" for="exportrate">Frame rate</label>
             <select id="exportrate"></select>
           </div>
+          <!-- STC-613: an MP4's Quality, export-time like Type and Frame rate:
+               bits per pixel per frame, so the bitrate follows Size and rate.
+               A GIF has no bitrate and hides it. -->
+          <div class="row" id="exportqualityrow">
+            <label class="label" for="exportquality">Quality</label>
+            <div class="fader"><input id="exportquality" type="range" min="0" max="2" step="1" aria-label="Quality"></div>
+            <span id="exportquality-out" class="value mono"></span>
+          </div>
           <div class="row" id="gifraterow" hidden>
             <label class="label" for="gifrate">Frame rate</label>
             <select id="gifrate"></select>
@@ -1495,6 +1503,12 @@
       <div>
         <p class="panelabel">Estimate</p>
         <div class="group">
+          <!-- STC-613: (video + audio bitrate) x Length, export-quality.ts. An
+               MP4 only: a GIF's size has no bitrate to follow. -->
+          <div class="row" id="exportsizerow">
+            <span class="label">File size</span>
+            <span id="exportsize" class="value mono"></span>
+          </div>
           <!-- The export's length: the trimmed window the export will render
                (exportWindow), so it follows the trim handles. -->
           <div class="row">
