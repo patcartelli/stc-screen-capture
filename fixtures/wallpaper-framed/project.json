@@ -1,0 +1,23 @@
+{
+  "version": 22,
+  "output": {
+    "fps": 60,
+    "width": 640,
+    "height": 360
+  },
+  "cursor": {
+    "style": "default",
+    "scale": 1
+  },
+  "transform": {
+    "version": 20
+  },
+  "framing": {
+    "preset": "clean",
+    "background": {
+      "kind": "wallpaper",
+      "file": "wallpaper.jpg",
+      "color": "#e9edf2"
+    }
+  }
+}
