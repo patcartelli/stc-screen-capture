@@ -565,6 +565,7 @@
     #zoomchip .chipamount { padding: 0 2px; color: var(--zoom); font-size: 11px; cursor: ew-resize; touch-action: none; }
     #zoomchip .chipseg { display: flex; padding: 2px; border-radius: 5px; background: rgba(255, 255, 255, .05); }
     #zoomchip .chipseg button[aria-checked="true"] { color: var(--text); background: rgba(255, 255, 255, .12); }
+    #zoomchip .chipseg button:disabled { opacity: .4; cursor: default; }
     #zoomchip .chipdelete { display: grid; place-items: center; width: 22px; padding: 0; color: var(--rec); }
     #zoomchip .chipdelete:hover { color: var(--rec); background: color-mix(in srgb, var(--rec) 16%, transparent); }
     #zoomchip .chipdelete svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3;
@@ -1014,8 +1015,15 @@
           <button type="button" id="playheadchip" class="overlayctl" title="Go to playhead (G)" hidden></button>
           <div id="rangechip" class="exportonly" aria-live="polite"></div>
           <div id="zoomchip" class="overlayctl" role="group" aria-label="Zoom block" hidden>
+            <!-- STC-636: who places the block (Place) and how far in (Amount) are
+                 two controls. Amount always shows a number: stage 2's on an Auto
+                 block. Setting it saves a region, so Place turns Fixed. -->
+            <div class="chipseg" id="chipplace" role="radiogroup" aria-label="Place: who decides where the block zooms">
+              <button type="button" role="radio" data-place="auto" title="Auto: placed by what changes on screen">Auto</button>
+              <button type="button" role="radio" data-place="fixed" title="Fixed: the region you set">Fixed</button>
+            </div>
             <button type="button" id="chipamount" class="chipamount"
-                    title="Amount: drag sideways, or use the arrow keys">Auto</button>
+                    title="Amount: drag sideways, or use the arrow keys">1.0×</button>
             <div class="chipseg" id="chipside" role="radiogroup" aria-label="Which side the speed sets">
               <button type="button" role="radio" data-side="in">In</button>
               <button type="button" role="radio" data-side="out">Out</button>
@@ -1334,10 +1342,18 @@
           <div class="group">
             <!-- STC-606: Amount is editable (Patrick, 2026-10-30). It IS the drawn
                  region's size, so the slider resizes the region about its centre. -->
+            <!-- STC-636: Place is who decides where (stage 2, or the saved region). -->
+            <div class="row">
+              <label class="label" for="zoomplace">Place</label>
+              <select id="zoomplace">
+                <option value="auto">Auto</option>
+                <option value="fixed">Fixed</option>
+              </select>
+            </div>
             <div class="row">
               <label class="label" for="zoomamountrange">Amount</label>
               <div class="fader"><input id="zoomamountrange" type="range" min="1.1" max="4" step="0.1" aria-label="Amount"></div>
-              <span id="zoomamount" class="value mono" title="How far the block zooms in: the frame divided by the drawn region">Auto</span>
+              <span id="zoomamount" class="value mono" title="How far the block zooms in: the frame divided by the region it zooms to">1.0×</span>
             </div>
             <!-- STC-619: the push in and the release out are set separately, so a
                  block can zoom in slowly and out fast. Slow / Medium / Fast are the

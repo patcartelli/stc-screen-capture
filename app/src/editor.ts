@@ -136,7 +136,8 @@ import {
   spanTransform, timelineZoomKeyIntent, wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
 import {
-  clipActivity, zoomCurveSamples, ZOOM_LANE_FLOOR, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts,
+  clipActivity, zoomCurveSamples, zoomLaneHeight, ZOOM_LANE_FLOOR, laneBitmap, formatBlockTime, zoomAmountLabel,
+  zoomPlaceOf, type ZoomPlace, trimRangeParts,
   activityIn, activityLabel,
 } from "./timeline-activity.js";
 import {
@@ -1140,10 +1141,17 @@ function drawZoomLane(): void {
   // pass at the samples zoomCurveSamples picks (dense at block edges, a pixel
   // apart inside blocks, none where the zoom is out) rather than a whole
   // render() at 480 evenly spaced instants.
+  // STC-636: the height is how far in the picture is (the crop's
+  // magnification, log scale), not the ease's 0..1 progress, so a 4x block
+  // stands taller than a 1.5x one. zoomLaneHeight owns the scale and floor.
   const vis = visibleSpan();
   const sampler = zoomAmountSampler(openProject, openSession);
-  const { tNs: sampleT, amount: curve } = zoomCurveSamples({
-    amountsAt: sampler.amountsAt,
+  const { tNs: sampleT, value: curve } = zoomCurveSamples({
+    valuesAt: (tNs) => {
+      const amounts = sampler.amountsAt(tNs);
+      const mags = sampler.magnificationsAt(tNs, amounts);
+      return amounts.map((a, i) => zoomLaneHeight(mags[i]!, a));
+    },
     windows: sampler.windows,
     startNs: vis.start,
     endNs: vis.end,
@@ -1156,8 +1164,7 @@ function drawZoomLane(): void {
   // brass gradient, 0.5 alpha at its top edge fading to 0.04 at the floor,
   // and outlined along its top in brass at 0.85. --zoom-fill owns the fill;
   // --zoom keeps the override-selection accents. The dither STC-566 tried is
-  // retired. amount is not clamped to [0, 1] (zoom.ts's own note): it is
-  // clipped to the lane's height rather than pretending it cannot exceed 1.
+  // retired. A height is clipped to the lane rather than assumed to fit.
   const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#d6b25e";
   const top = 2 * scale;
   const yAt = (v: number): number => h - Math.max(0, Math.min(1, v)) * (h - top);
@@ -1347,7 +1354,6 @@ document.addEventListener("pointerover", (e) => {
 });
 
 function drawOverrideBox(rect: Rect | null): void {
-  $("zoomamount").textContent = zoomAmountLabel(rect);
   syncZoomAmount();
   const box = $("overridebox") as HTMLElement;
   if (!rect) { box.setAttribute("hidden", ""); return; }
@@ -1491,7 +1497,7 @@ function openOverrideEditorUI(): void {
   ($("overrideout") as HTMLSelectElement).value = draftEasing.out;
   ($("zoomfollow") as HTMLInputElement).checked = draftFollow;
   const clear = $("overrideclear") as HTMLButtonElement;
-  clear.disabled = !draftRect;
+  clear.disabled = !draftRect && !(editingWindowId && (draftEasing.in || draftEasing.out));
   clear.textContent = editingManualId ? "Delete window" : "Remove override";
   // STC-329: a derived window's OWN delete — hidden for a manual one, whose
   // single delete action stays #overrideclear (there is no crop to reset a
@@ -1758,7 +1764,8 @@ $("overrideout").addEventListener("change", () => {
 // ---- the Zoom chip (STC-606, Figma 171:561) --------------------------------
 //
 // The open block's chip, in the overlay strip above it (Patrick, 2026-10-30):
-// the amount (drag sideways or arrow keys), In / Out / Both choosing which side
+// Place, Auto or Fixed (STC-636), the amount (drag sideways or arrow keys),
+// In / Out / Both choosing which side
 // Slow / Med / Fast sets, and delete. It edits the same draft as the Zoom
 // section's rows (draftRect, draftEasing), so Done, Escape and every mid-edit
 // save treat a chip edit exactly as an inspector one (override-edit.ts's
@@ -1770,18 +1777,33 @@ function editingBlock(): boolean {
   return editingWindowId !== null || editingManualId !== null;
 }
 
+/** The region stage 2 zooms the open derived block to (null: "don't zoom",
+ *  or a manual block, which has no stage 2). Remembered per block and bounds,
+ *  since the chip asks on every drag step. The bounds are the block's
+ *  current ones, as render()'s resolvedWindows gives stage 2 a retimed block. */
+let autoRectMemo: { key: string; rect: Rect | null } | null = null;
+function autoRect(): Rect | null {
+  if (!editingWindowId || !openSession) return null;
+  const key = `${editingWindowId}:${draftManualStart}:${draftManualEnd}`;
+  if (autoRectMemo?.key !== key) {
+    const w = zoomWindows(openSession.events).find((x) => windowId(x) === editingWindowId);
+    const at = w ? { ...w, startNs: draftManualStart, endNs: draftManualEnd } : null;
+    autoRectMemo = {
+      key,
+      rect: at ? deriveZoomCrop(at, openSession.changes, openSession.anchors, openSession.frames) : null,
+    };
+  }
+  return autoRectMemo.rect;
+}
+
 /** Where an Auto block (no drawn region) starts when its amount is first set:
  *  the region stage 2 would zoom to, else a default box at the centre. */
 function startingRect(): Rect {
-  if (editingWindowId && openSession) {
-    const w = zoomWindows(openSession.events).find((x) => windowId(x) === editingWindowId);
-    const r = w ? deriveZoomCrop(w, openSession.changes, openSession.anchors, openSession.frames) : null;
-    if (r) return r;
-  }
-  return rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 });
+  return autoRect() ?? rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 });
 }
 
-/** The inspector's Amount slider and the chip's amount, from draftRect. */
+/** The inspector's Place and Amount, and the chip's (STC-636), from draftRect.
+ *  Amount is a number on an Auto block too: stage 2's. */
 function syncZoomAmount(): void {
   const range = $("zoomamountrange") as HTMLInputElement;
   const editing = editingBlock();
@@ -1789,9 +1811,47 @@ function syncZoomAmount(): void {
   const a = editing ? amountOf(draftRect ?? startingRect()) : ZOOM_AMOUNT_MIN;
   range.value = String(Math.round(a * 10) / 10);
   range.style.setProperty("--fill-pct", `${((Number(range.value) - ZOOM_AMOUNT_MIN) / (ZOOM_AMOUNT_MAX - ZOOM_AMOUNT_MIN)) * 100}%`);
-  $("chipamount").textContent = zoomAmountLabel(draftRect);
+  const label = zoomAmountLabel(draftRect, editing ? autoRect() : null);
+  $("chipamount").textContent = label;
+  $("zoomamount").textContent = label;
+  // A manual block has no stage 2 to hand its place to: it is always Fixed.
+  const place = zoomPlaceOf(draftRect);
+  const canAuto = editingWindowId !== null;
+  for (const b of $("chipplace").querySelectorAll<HTMLButtonElement>("[data-place]")) {
+    b.setAttribute("aria-checked", String(b.dataset.place === place));
+    if (b.dataset.place === "auto") b.disabled = !canAuto;
+  }
+  const select = $("zoomplace") as HTMLSelectElement;
+  select.value = place;
+  select.disabled = !editing;
+  (select.querySelector('option[value="auto"]') as HTMLOptionElement).disabled = !canAuto;
 }
 
+/**
+ * Place (STC-636). Fixed saves the region stage 2 zooms to now (its amount, its
+ * place), which the block then keeps; Auto drops the saved region so stage 2
+ * decides again. Auto keeps the block's speed: a speed with no region is a
+ * valid override (STC-630, project-20). Follow needs a region, so it goes too.
+ */
+function setZoomPlace(place: ZoomPlace): void {
+  if (!editingBlock() || zoomPlaceOf(draftRect) === place) return;
+  if (place === "auto") {
+    if (!editingWindowId) return;
+    draftRect = null;
+    draftFollow = false;
+    ($("zoomfollow") as HTMLInputElement).checked = false;
+  } else {
+    draftRect = startingRect();
+  }
+  ($("overrideclear") as HTMLButtonElement).disabled = !draftRect && !(draftEasing.in || draftEasing.out);
+  drawOverrideBox(draftRect);
+  if (draftRect) ($("overridebox") as HTMLElement).setAttribute("data-shown", "");
+  layoutOverrideBlocks();
+}
+
+/** Amount on an Auto block saves stage 2's region at the new amount, so the
+ *  block stops following stage 2 and Place shows Fixed (STC-636, Patrick
+ *  2026-11-02: option (a), no rectless magnification field). */
 function setZoomAmount(amount: number): void {
   if (!editingBlock()) return;
   draftRect = rectAtAmount(draftRect ?? startingRect(), amount);
@@ -1821,6 +1881,13 @@ function layoutZoomChip(): void {
   chip.style.left = `${Math.min(max, Math.max(2, mid - chip.offsetWidth / 2))}px`;
 }
 
+$("chipplace").addEventListener("click", (e) => {
+  const place = (e.target as HTMLElement).closest<HTMLElement>("[data-place]")?.dataset.place as ZoomPlace | undefined;
+  if (place) setZoomPlace(place);
+});
+$("zoomplace").addEventListener("change", () => {
+  setZoomPlace(($("zoomplace") as HTMLSelectElement).value as ZoomPlace);
+});
 $("chipside").addEventListener("click", (e) => {
   const side = (e.target as HTMLElement).closest<HTMLElement>("[data-side]")?.dataset.side as ChipSide | undefined;
   if (!side) return;
@@ -1892,6 +1959,8 @@ $("zoomamountrange").addEventListener("input", () => {
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
   draftFollow = false;
+  // A speed alone is an override now (STC-630), so Remove override takes it too.
+  draftEasing = { ...NO_SPEEDS };
   void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 $("overridedelete").addEventListener("click", () => {
