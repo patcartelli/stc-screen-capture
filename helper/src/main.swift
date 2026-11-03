@@ -378,6 +378,11 @@ final class App {
                     // identity keeps a stale session's completion from ever
                     // being mistaken for the one `self` is currently tracking.
                     guard self.state == .starting, self.capture === session else {
+                        // Since `CaptureSession.stop()` coalesces, this returns the
+                        // first stop's stats and tears nothing down. A stream that
+                        // came up after that stop was already torn down inside the
+                        // session (`abandonIfStoppedDuringStart`) before this success
+                        // was sent. Kept for a stale session nothing has stopped yet.
                         session.stop(reason: "stopped-during-start") { _ in }
                         IO.send("error", seq: seq,
                                 ["code": "stopped-during-start",

@@ -264,7 +264,7 @@ describe("render reads overrides", () => {
 
   // windowId for the derived window: startNs = 2000ms - 300ms lead = 1700ms.
   const WINDOW_ID = String(1700 * MS);
-  const TARGET = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+  const TARGET = { x: 0.1, y: 0.2, width: 0.3, height: 0.3 }; // frame-shaped, so render keeps it as is (STC-629)
 
   const projectWith = (overrides: Project["overrides"]): Project =>
     ({ ...defaultProject(1920, 1080), overrides });
@@ -374,7 +374,7 @@ describe("render reads removed/retime overrides on a derived window (STC-329)", 
   } as unknown as Session;
 
   const WINDOW_ID = String(1700 * MS);
-  const TARGET = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+  const TARGET = { x: 0.1, y: 0.2, width: 0.3, height: 0.3 }; // frame-shaped, so render keeps it as is (STC-629)
   const projectWith = (overrides: Project["overrides"]): Project =>
     ({ ...defaultProject(1920, 1080), overrides });
 
@@ -480,7 +480,7 @@ describe("render reads removed/retime overrides on a derived window (STC-329)", 
 
 describe("render reads a manual window with no derived counterpart (STC-331)", () => {
   const MS = 1_000_000;
-  const TARGET = { x: 0.15, y: 0.25, width: 0.2, height: 0.3 };
+  const TARGET = { x: 0.15, y: 0.25, width: 0.3, height: 0.3 }; // frame-shaped (STC-629)
 
   // No clicks or drags at all — stage 1 opens ZERO windows on its own, which
   // is exactly the case this ticket exists for: "when auto-zoom correctly
