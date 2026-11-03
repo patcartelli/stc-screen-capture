@@ -90,7 +90,8 @@ const fillAsBackground = (f: LookFill): FramingBackground =>
     : { kind: "solid", color: f.color };
 
 const sameFill = (a: FramingBackground, b: LookFill): boolean =>
-  a.kind === "solid"
+  a.kind === "wallpaper" ? false
+  : a.kind === "solid"
     ? b.kind === "solid" && a.color === b.color
     : b.kind === "linear" && a.angleDeg === b.angleDeg
       && a.colors.length === b.colors.length && a.colors.every((c, i) => c === b.colors[i]);
@@ -147,5 +148,6 @@ export function videoLookOf(f: Framing | undefined): VideoLookId | undefined {
     const own = look.id === "dark" ? DARK_SHADOW_OPACITY : BASE_SHADOW_OPACITY;
     if (opacity === 0 || opacity === own) return look.id;
   }
+  if (bg.kind === "wallpaper") return undefined;
   return bg.kind === "solid" || bg.colors.length === 2 ? "custom" : undefined;
 }

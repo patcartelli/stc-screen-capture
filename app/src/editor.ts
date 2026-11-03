@@ -3214,7 +3214,7 @@ function updateFramingUI(): void {
   $("framecustomrow").hidden = look !== "custom";
   if (look === "custom" && f) {
     const bg = backgroundOf(f);
-    const values = bg.kind === "solid" ? [bg.color, ""] : [bg.colors[0]!, bg.colors[1] ?? ""];
+    const values = bg.kind === "linear" ? [bg.colors[0]!, bg.colors[1] ?? ""] : [bg.color, ""];
     [customA, customB].forEach((el, i) => {
       if (document.activeElement === el) return;
       el.value = values[i]!;

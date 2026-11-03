@@ -1,7 +1,7 @@
 import type { Rect, Size } from "./spaces.js";
 import {
   BASE_SHADOW_OPACITY, DARK_SHADOW_OPACITY, LINEAR_STOPS_MAX, LINEAR_STOPS_MIN, LOOK_FILLS,
-  type LookFill,
+  WALLPAPER_FILE, type LookFill,
 } from "./looks.js";
 
 /**
@@ -38,7 +38,13 @@ export type FramingPreset = "clean" | "dark" | "solid";
 
 export type FramingBackground =
   | { kind: "solid"; color: string }
-  | { kind: "linear"; colors: string[]; angleDeg: number };
+  | { kind: "linear"; colors: string[]; angleDeg: number }
+  /**
+   * The desktop wallpaper, read once for the take and kept in its folder
+   * (STC-626). `file` is always `WALLPAPER_FILE`. `color` is what every sink
+   * draws when the picture cannot be, so a lost file degrades alike in all of them.
+   */
+  | { kind: "wallpaper"; file: string; color: string };
 
 export interface FramingShadow { offsetYPct: number; blurPct: number; opacity: number }
 
@@ -102,6 +108,12 @@ const inRange = (v: unknown, lo: number, hi: number): boolean =>
 const onlyKeys = (o: Record<string, unknown>, keys: string[]): boolean =>
   Object.keys(o).every((k) => keys.includes(k));
 
+/** The take's wallpaper as a background (STC-626). Its fallback is Clean's first stop, as a still's is. */
+export function wallpaperFraming(): FramingBackground {
+  const clean = LOOK_FILLS.clean as Extract<LookFill, { kind: "linear" }>; // Clean is a linear fill; looks.test.ts pins it
+  return { kind: "wallpaper", file: WALLPAPER_FILE, color: clean.colors[0]! };
+}
+
 /** The reason a `framing` value is not acceptable, or undefined when it is. */
 export function framingProblem(raw: unknown): string | undefined {
   if (!isObj(raw)) return "framing must be an object";
@@ -136,7 +148,11 @@ export function framingProblem(raw: unknown): string | undefined {
       && b.colors.length >= LINEAR_STOPS_MIN && b.colors.length <= LINEAR_STOPS_MAX
       && b.colors.every((c) => typeof c === "string" && HEX.test(c))
       && inRange(b.angleDeg, -360, 360);
-    if (!solid && !linear) return "framing.background must be a solid or a 2 to 8 stop linear fill";
+    const wallpaper = isObj(b) && b.kind === "wallpaper" && onlyKeys(b, ["kind", "file", "color"])
+      && b.file === WALLPAPER_FILE && typeof b.color === "string" && HEX.test(b.color);
+    if (!solid && !linear && !wallpaper) {
+      return "framing.background must be a solid, a 2 to 8 stop linear fill, or the take's wallpaper";
+    }
   }
   return undefined;
 }

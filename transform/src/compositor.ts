@@ -93,7 +93,7 @@ function drawChrome(
   ctx: OffscreenCanvasRenderingContext2D, f: FramingLayout, width: number, height: number,
 ): void {
   const bg = f.background;
-  if (bg.kind === "solid") {
+  if (bg.kind === "solid" || bg.kind === "wallpaper") {
     ctx.fillStyle = bg.color;
   } else {
     const l = gradientLine(bg.angleDeg, width, height);
