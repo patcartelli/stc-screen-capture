@@ -89,7 +89,7 @@ const fillAsBackground = (f: LookFill): FramingBackground =>
     ? { kind: "linear", colors: [...f.colors], angleDeg: f.angleDeg }
     : { kind: "solid", color: f.color };
 
-const sameFill = (a: FramingBackground, b: LookFill): boolean =>
+export const sameFill = (a: FramingBackground, b: LookFill): boolean =>
   a.kind === "wallpaper" ? false
   : a.kind === "solid"
     ? b.kind === "solid" && a.color === b.color

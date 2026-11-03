@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { recordTimeProject, defaultStyleForTake } from "../src/take-project.js";
 import { DEFAULT_PIP_STYLE, type PipStyle } from "@transform/pip-style.js";
+import { wallpaperFraming } from "@transform/framing.js";
 import { parseProject, projectForWrite } from "../../transform/src/trim.js";
 import { TRANSFORM_VERSION } from "../../transform/src/transform-version.js";
 
@@ -51,5 +52,41 @@ describe("the PiP default seeds a take (STC-461)", () => {
   test("show-clicks alone is byte-for-byte what it was", () => {
     expect(recordTimeProject({ showClicks: false, pipStyle: null }))
       .toBe(JSON.stringify({ version: 13, showClicks: false }, null, 2) + "\n");
+  });
+});
+
+describe("recordTimeProject's framing (STC-626)", () => {
+  const base = { showClicks: true, pipStyle: null };
+  const seed = (over: object) => JSON.parse(recordTimeProject({ ...base, ...over } as any)!);
+
+  test("no look and clicks on still writes nothing", () => {
+    expect(recordTimeProject({ ...base, framing: null })).toBeNull();
+  });
+  test("a fill is a v15 seed", () => {
+    const framing = { preset: "clean", background: { kind: "solid", color: "#ffffff" } };
+    expect(seed({ framing })).toEqual({ version: 15, framing });
+  });
+  test("a look of more than two stops is v21", () => {
+    const framing = { preset: "clean", background: { kind: "linear", colors: ["#111111", "#222222", "#333333"], angleDeg: 135 } };
+    expect(seed({ framing }).version).toBe(21);
+  });
+  test("wallpaper is v22", () => {
+    expect(seed({ framing: { preset: "clean", background: wallpaperFraming() } }).version).toBe(22);
+  });
+  test("the highest choice sets the version and every choice is kept", () => {
+    const framing = { preset: "clean", background: wallpaperFraming() };
+    const doc = seed({ framing, pipStyle: DEFAULT_PIP_STYLE, showClicks: false });
+    expect(doc.version).toBe(22);
+    expect(doc.showClicks).toBe(false);
+    expect(doc.pip.style).toEqual(DEFAULT_PIP_STYLE);
+    expect(doc.framing).toEqual(framing);
+  });
+  test("a fill with clicks off stays v15, carrying both", () => {
+    const framing = { preset: "clean", background: { kind: "solid", color: "#ffffff" } };
+    expect(seed({ framing, showClicks: false })).toEqual({ version: 15, showClicks: false, framing });
+  });
+  test("parseProject takes the seed's framing", () => {
+    const framing = { preset: "clean", background: wallpaperFraming() };
+    expect(parseProject(seed({ framing }), 1920, 1080, 5e9).framing).toEqual(framing);
   });
 });
