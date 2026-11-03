@@ -298,12 +298,23 @@ describe("adding a block from the lane (STC-631)", () => {
     await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
 
-    await hoverLane(win, 0.91);
+    // The middle of the gap, measured from the two blocks' real edges rather
+    // than a guessed fraction: a block's hit area would otherwise own the pointer.
+    const lane = (await win.locator("#override-blocks").boundingBox())!;
+    const derived = (await win.locator(DERIVED_BLOCK).boundingBox())!;
+    const manual = (await win.locator("#override-blocks-dynamic .zoomblock.manual").boundingBox())!;
+    const gapMid = (derived.x + derived.width + manual.x) / 2;
+    const gapFraction = (gapMid - lane.x) / lane.width;
+    expect(manual.x - (derived.x + derived.width), "the gap between the two blocks, px").toBeGreaterThan(2);
+
+    await hoverLane(win, gapFraction);
+    const under = await win.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.id ?? "?", [gapMid, lane.y + lane.height / 2]);
+    expect(under, "what the pointer is over in the gap").toBe("override-blocks");
     await expect.poll(() => win.isVisible("#zoomghost-note"), { timeout: 5_000 }).toBe(true);
     expect(await win.textContent("#zoomghost-note")).toMatch(/not enough room/i);
     expect(await win.isHidden("#zoomghost")).toBe(true);
 
-    await clickEmptyLane(win, 0.91);
+    await clickEmptyLane(win, gapFraction);
     // Nothing opened and nothing was added.
     expect(await win.isHidden("#overridebar")).toBe(true);
     expect(await win.locator(".zoomblock.manual").count()).toBe(1);
