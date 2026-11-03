@@ -305,8 +305,6 @@
     /* STC-608: the Background looks, two rows of four across the pane. The
        swatches are look-grid.css's, shared with the still editor. */
     #framelooks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 4px; padding: 12px 0; }
-    #framecustomrow input { width: 7.5em; }
-    #framecustomrow input[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--warn); }
     #pane .value { flex: none; min-width: 6ch; text-align: right; color: var(--text);
                    font-size: var(--type-value-sm); line-height: 22px; }
     /* The value is also the reset: clickable only while the level differs from
@@ -802,10 +800,12 @@
 
     /* ── the Export section: legibility + the viewer's eye, one place (STC-604
        folded the export dialog into the pane) ─────────────────────────────── */
-    #pane input[type="number"], #pane input[type="text"] {
+    /* Custom's colour fields are look-grid.css's .look-custom-input, the
+       still editor's field, so they are left out of the pane's own. */
+    #pane input[type="number"], #pane input[type="text"]:not(.look-custom-input) {
       font: 400 12px/18px "Geist Mono", ui-monospace, monospace; color: var(--text); text-align: right;
       background: rgba(255, 255, 255, .06); border: 0; border-radius: 8px; padding: 5px 10px; min-width: 0; }
-    #pane input[type="number"]:focus-visible, #pane input[type="text"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    #pane input[type="number"]:focus-visible, #pane input[type="text"]:not(.look-custom-input):focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #embedwidth { width: 6em; }
     #textpt { width: 5em; }
     #shareslug { width: 11em; }
@@ -1178,9 +1178,9 @@
                field's commit, and only when valid. -->
           <div class="row" id="framecustomrow" hidden>
             <span class="label">Colours</span>
-            <input id="framecustoma" type="text" spellcheck="false" autocomplete="off" maxlength="7"
+            <input id="framecustoma" class="look-custom-input" type="text" spellcheck="false" autocomplete="off" maxlength="7"
                    placeholder="#rrggbb" aria-label="Custom colour, #rrggbb">
-            <input id="framecustomb" type="text" spellcheck="false" autocomplete="off" maxlength="7"
+            <input id="framecustomb" class="look-custom-input" type="text" spellcheck="false" autocomplete="off" maxlength="7"
                    placeholder="#rrggbb" aria-label="Second colour, optional, #rrggbb">
           </div>
         </div>

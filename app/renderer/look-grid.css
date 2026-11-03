@@ -31,3 +31,12 @@
 @media (prefers-reduced-motion: reduce) {
   .look:active:not([aria-disabled="true"]) { transform: none; background: var(--border); }
 }
+
+/* Custom's colour fields, in both editors: one or two #rrggbb. */
+.look-custom-input {
+  width: 72px; padding: 4px 6px; border-radius: 6px; box-sizing: border-box;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+  font: inherit; font-size: var(--type-meta); font-family: var(--mono, ui-monospace, monospace);
+}
+.look-custom-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.look-custom-input[aria-invalid="true"] { border-color: var(--warn, #c0392b); }
