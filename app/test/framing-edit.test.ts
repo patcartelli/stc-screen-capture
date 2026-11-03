@@ -132,7 +132,10 @@ describe("video looks (STC-608)", () => {
     const off = withShadow(withLook(undefined, "dark")!, false);
     const next = keep(withLook(off, "aurora"))!;
     expect(framingShadowOn(next)).toBe(false);
+    expect(next.preset).toBe("clean");
     expect(videoLookOf(next)).toBe("aurora");
+    // Back on, it is Aurora at the base strength, not Dark's 0.55.
+    expect(videoLookOf(withShadow(next, true))).toBe("aurora");
   });
   test("dark with the shadow off still reads as dark", () => {
     expect(videoLookOf(keep(withShadow(withLook(undefined, "dark")!, false)))).toBe("dark");
