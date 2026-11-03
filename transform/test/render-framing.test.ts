@@ -3,6 +3,7 @@ import { DEFAULT_ZOOM, defaultProject } from "../src/trim.js";
 import { render } from "../src/render.js";
 import { framingLayout } from "../src/framing.js";
 import { DEFAULT_PIP_STYLE, pipRect, styleFromFixedCorner } from "../src/pip-style.js";
+import { pipMarginPx } from "../src/spaces.js";
 import type { Project, Session, SessionEvent } from "../src/types.js";
 
 const MS = 1_000_000;
@@ -84,9 +85,32 @@ describe("render() with framing", () => {
     expect(fs.pip).not.toBeNull();
     expect(fs.pip!.x).toBeGreaterThanOrEqual(c.x);
     expect(fs.pip!.y).toBeGreaterThanOrEqual(c.y);
-    expect(fs.pip!.x + fs.pip!.width).toBe(c.x + c.width - 32);
-    expect(fs.pip!.y + fs.pip!.height).toBe(c.y + c.height - 32);
+    // The margin scales with the content rect's short side (STC-591); 32 at 1080.
+    const m = pipMarginPx({ width: c.width, height: c.height }, 32);
+    expect(fs.pip!.x + fs.pip!.width).toBe(c.x + c.width - m);
+    expect(fs.pip!.y + fs.pip!.height).toBe(c.y + c.height - m);
   });
+
+  // STC-591: the picture's corners are rounded and the PiP is clipped to the picture, so the
+  // default corner's own corner point must lie inside the arc, not just inside the rect.
+  for (const preset of ["clean", "dark", "solid"] as const) {
+    for (const [w, h] of [[1920, 1080], [3840, 2160], [1232, 693]] as const) {
+      test(`the default PiP's corner is not clipped by the ${preset} picture's rounded corner at ${w}x${h}`, () => {
+        const p = { ...defaultProject(w, h), zoom: noZoom, framing: { preset },
+          pip: { enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32 } } as Project;
+        const fs = render(p, session(true), 3000 * MS);
+        const c = fs.framing!.content;
+        const r = fs.framing!.radius;
+        const pip = fs.pip!;
+        // Distance from the content rect's bottom-right corner, then from the arc's centre.
+        const dx = c.x + c.width - (pip.x + pip.width);
+        const dy = c.y + c.height - (pip.y + pip.height);
+        expect(Math.min(dx, dy)).toBeGreaterThan(0);
+        const inside = dx >= r || dy >= r || Math.hypot(r - dx, r - dy) <= r;
+        expect(inside).toBe(true);
+      });
+    }
+  }
 
   // STC-461 merged with STC-396: a STYLED PiP is UV over the content rect too.
   test("a styled PiP is placed in UV over the content rect, offset by its origin", () => {

@@ -9,7 +9,8 @@ import {
   MIN_ZOOM_DELTA_FRACTION, CROP_PAD_FRACTION, VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION,
   CURSOR_DEAD_ZONE_UV,
 } from "./zoom-change.js";
-import { PIP_SHADOW, DEFAULT_FRAMING } from "./pip-style.js";
+import { PIP_SHADOW, DEFAULT_FRAMING, PIP_SNAP_MARGIN_PX } from "./pip-style.js";
+import { PIP_MARGIN_REFERENCE_SHORT_PX } from "./spaces.js";
 import {
   KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
   KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
@@ -224,8 +225,19 @@ import { FOLLOW_DEAD_ZONE_FRACTION, FOLLOW_OMEGA } from "./zoom-follow.js";
  * only frame-shaped boxes. A document whose rects are all UV squares renders
  * exactly what version 18 did. No constant moved, so the fingerprint is
  * unchanged.
+ *
+ * ## Version 20: the PiP keeps a margin that scales with the output (STC-591)
+ *
+ * The PiP's buffer from the edge of the content rect is `pipMarginPx` (spaces.ts): the
+ * project's `marginPx` (32 for every document written so far) read as pixels at a 1080-pixel
+ * short side and scaled to the output, rounded to whole pixels. 1080p output is unchanged; 4K
+ * gets 64. The fixed corner, the snap anchors and the placement clamp all use it, so even a
+ * free drag, or a styled PiP saved flush against an edge, now stops at the margin. Applies to
+ * every project: render() does not branch on `project.transform.version`. A document whose
+ * output short side is 1080 and whose PiP sat at least the margin from every edge renders
+ * exactly what version 19 did. The fingerprint moved: the margin constants reach the pixels.
  */
-export const TRANSFORM_VERSION = 19;
+export const TRANSFORM_VERSION = 20;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -248,6 +260,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 17, since: "2026-10-26", changed: "no PiP before the screen's first frame (STC-578): the camera is warmed during the countdown, so its first frame can land before the display's, and the PiP was drawn over the black painted for 'no screen frame yet' for up to three output frames. render() now returns no PiP while the screen has no frame. A take whose screen starts at or before its camera draws exactly what version 16 did. No constant reaches the pixels, so the fingerprint is unchanged" },
   { version: 18, since: "2026-10-30", changed: "a zoom block can follow the cursor (STC-617): project-19's follow:true on a geometry or manual override keeps the block's rect SIZE and moves its place with the pointer (zoom-follow.ts). The crop opens centred on the cursor at the block's start, a goal centre moves only once the pointer leaves the middle FOLLOW_DEAD_ZONE_FRACTION (0.5) of the crop, and the crop chases it on one critically damped FOLLOW_OMEGA (8 rad/s) spring, clamped inside the frame and frozen after the block's end. Stepped per 120 Hz tick from the block's first tick with checkpoints, so a seek and a continuous run agree. A document with no following block renders exactly what version 17 did. The fingerprint moved: the follow constants reach the pixels" },
   { version: 19, since: "2026-11-02", changed: "no zoom block stretches the picture (STC-629): the compositor stretches the crop over a frame-shaped output, so only a UV-square crop keeps the picture's proportions. Stage 2's crops already were (STC-387); a drawn or manual rect was any shape, and the click-default box was square in pixels. render() now widens every tuned rect to a UV square about its centre, slid inside the frame (zoom-override.ts's frameShaped), Follow included, and the editor draws only frame-shaped boxes. A document whose rects are all UV squares renders exactly what version 18 did. No constant reaches the pixels, so the fingerprint is unchanged" },
+  { version: 20, since: "2026-11-02", changed: "the PiP keeps a margin that scales with the output (STC-591): its buffer from the content rect's edge is pipMarginPx (spaces.ts) — marginPx read as pixels at a 1080-pixel short side, scaled and rounded, so 1080p is unchanged and 4K gets 64. The fixed corner, the snap anchors and the pipRect clamp share it, so a free drag or a styled PiP saved flush now stops at the margin. Applies to every project. The fingerprint moved: the margin constants reach the pixels" },
 ];
 
 /**
@@ -273,6 +286,8 @@ export function transformFingerprint(): string {
       VIEWPORT_MIN_FRACTION, VIEWPORT_MAX_FRACTION, CURSOR_DEAD_ZONE_UV,
     },
     pip: [PIP_SHADOW, DEFAULT_FRAMING],
+    // STC-591: the PiP's buffer from the content rect's edge, scaled to the output.
+    pipMargin: [PIP_SNAP_MARGIN_PX, PIP_MARGIN_REFERENCE_SHORT_PX],
     keycast: [KEYCAST_HOLD_TICKS, KEYCAST_FADE_TICKS, KEYCAST_FONT_FAMILY, KEYCAST_FONT_WEIGHT,
       KEYCAST_FONT_FRACTION, KEYCAST_MIN_FONT_PX, KEYCAST_BOTTOM_FRACTION, KEYCAST_PAD_X_EM,
       KEYCAST_PAD_Y_EM, KEYCAST_SIDE_MARGIN_PX, KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR,
