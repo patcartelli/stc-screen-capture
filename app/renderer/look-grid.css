@@ -1,0 +1,33 @@
+/* The background swatch grid (STC-608), shared by the still and video editors.
+   look-grid.ts builds the DOM; the tokens come from tokens.css. */
+.look {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 3px; border: 1px solid transparent; border-radius: 8px;
+  background: none; color: var(--text-dim); cursor: pointer;
+  font: inherit; font-size: var(--type-meta);
+}
+.look .chip {
+  width: 44px; height: 30px; border-radius: 5px; box-sizing: border-box;
+  border: 1px solid var(--border-strong); position: relative; overflow: hidden;
+  background-size: cover; background-position: center;
+}
+.look .chip .glyph {
+  width: 18px; height: 18px; fill: currentColor; color: var(--text-dim);
+  position: absolute; inset: 0; margin: auto;
+}
+.look .chip.has-image .glyph { display: none; }
+/* The no-background options show a window on the page's own colour. */
+.look .chip[data-chip] { background: var(--surface-hover); }
+.look .chip[data-chip]::after {
+  content: ""; position: absolute; inset: 7px 9px; border-radius: 2px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+}
+.look .chip[data-chip="window-shadow"]::after { box-shadow: 0 3px 5px rgba(0,0,0,.35); }
+.look:hover:not([aria-disabled="true"]) { background: var(--surface-hover); color: var(--text); }
+.look:active:not([aria-disabled="true"]) { transform: scale(.96); }
+.look:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.look[aria-checked="true"] { border-color: var(--accent); color: var(--text); }
+.look[aria-disabled="true"] { opacity: .4; cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  .look:active:not([aria-disabled="true"]) { transform: none; background: var(--border); }
+}
