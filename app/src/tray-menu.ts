@@ -20,7 +20,7 @@ import { PILL_SPOTS, type PillSpot } from "./pill.js";
 
 export type TrayItemId =
   | `action:${BindableAction}` | `pill:${PillSpot}` | "move-pill"
-  | "library" | "editor" | "settings" | "about" | "quit" | "separator";
+  | "library" | "editor" | "open-image" | "settings" | "about" | "quit" | "separator";
 
 /**
  * Which glyph each action's menu item draws (STC-597). Keyed by
@@ -78,6 +78,9 @@ export interface TrayItem {
 
 /** The Move Pill submenu's label. Exported so the test and the menu agree. */
 export const MOVE_PILL_LABEL = "Move Pill";
+
+/** The menu-bar door to the still editor for an image this app did not capture (STC-575). */
+export const OPEN_IMAGE_LABEL = "Open Image…";
 
 /** The accelerator on Settings…, Electron's spelling; ⌘, on a Mac. */
 export const SETTINGS_ACCELERATOR = "CommandOrControl+,";
@@ -140,6 +143,8 @@ export function trayTemplate(ctx: TrayContext): TrayItem[] {
   items.push({ id: "library", label: "Open Library", icon: "library" });
   // STC-582: the editor has no default hotkey, so the menu is one of its doors.
   items.push({ id: "editor", label: "Open Latest in Editor", icon: "editor" });
+  // STC-575: any image on disk, imported as a new shot.
+  items.push({ id: "open-image", label: OPEN_IMAGE_LABEL, icon: "open-image" });
   items.push({ id: "separator", type: "separator" });
   // The app items (STC-551). No "Check for Updates…": the app has no updater
   // and this ticket does not build one.

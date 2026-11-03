@@ -42,7 +42,7 @@ import {
   autoSlug, DEFAULT_EMBED_TEMPLATE, embedSnippet, exportManifestName, planPublish,
   publicSrc, type PublishPlan,
 } from "./share.js";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "node:fs";
 import {
@@ -62,6 +62,8 @@ import { readFile, writeFile, stat, open, copyFile, rm, mkdir, readdir, rename }
 import { HelperSupervisor } from "./supervisor.js";
 import type { HelperLine } from "./helper-client.js";
 import { newTakeDir, takesRoot, setTakeLabel, insideTakesRoot, duplicateTake, renameCapture } from "./takes.js";
+import { importImage, IMPORT_FILTER } from "./image-import.js";
+import { OPEN_IMAGE_LABEL } from "./tray-menu.js";
 import {
   tempTakesRoot, newTempTakeDir, insideTempTakesRoot, promoteTake,
   purgeStaleTempTakes, listTempTakes, migrateLegacyTempTakes, findOrphanedBundles,
@@ -556,6 +558,32 @@ async function openLatestInEditor(): Promise<void> {
 }
 
 /**
+ * "Open Image…" (STC-575): pick a png/jpg, import it as a NEW shot (a copy; the
+ * original is never edited, see `image-import.ts`) and open that in the still
+ * editor. A cancelled picker does nothing; a file the app cannot read says so.
+ */
+async function openImageInEditor(): Promise<void> {
+  app.focus({ steal: true });
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: OPEN_IMAGE_LABEL, properties: ["openFile"], filters: [IMPORT_FILTER],
+  });
+  const file = filePaths[0];
+  if (canceled || !file) return;
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  try {
+    const dir = await importImage(process.env, saveFolder, file, async (f) => {
+      const img = nativeImage.createFromPath(f);
+      const { width, height } = img.getSize();
+      if (width < 1 || height < 1) throw new Error(`“${basename(f)}” could not be read as an image.`);
+      return extname(f).toLowerCase() === ".png" ? { width, height } : { width, height, png: img.toPNG() };
+    });
+    openStillEditor({ dir, dist: here, rendererDir: join(here, "..", "renderer") });
+  } catch (e: any) {
+    await dialog.showMessageBox({ type: "warning", message: "Couldn’t open that image", detail: String(e?.message ?? e) });
+  }
+}
+
+/**
  * Puts the menu-bar item up with whatever state the app is in now. Called at
  * launch and again whenever the "Show icon in" preference brings the item back
  * (STC-502), so the rebuilt menu says Stop if a take is live.
@@ -565,6 +593,7 @@ function mountTray(): TrayHandle {
   return installTray(ctx, (id) => {
     if (id === "library") return openLibrary();
     if (id === "editor") return void openLatestInEditor().catch((e) => console.error("[editor] open latest failed:", e));
+    if (id === "open-image") return void openImageInEditor().catch((e) => console.error("[editor] open image failed:", e));
     if (id === "quit") return app.quit();
     // The same door the overlay bar's Settings control uses (STC-551).
     if (id === "settings") return openSettings();
