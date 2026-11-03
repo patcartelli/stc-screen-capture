@@ -1,4 +1,4 @@
-import { fixedCornerPipUv, outputRect, uvRectToPixels, type Point, type Rect, type Size } from "./spaces.js";
+import { fixedCornerPipUv, outputRect, pipMarginPx, uvRectToPixels, type Point, type Rect, type Size } from "./spaces.js";
 
 /**
  * Every decision about a customised PiP (STC-461) — no DOM, no canvas, no clock.
@@ -60,7 +60,7 @@ export const PIP_FRAMING_ZOOM_MAX = 3;
 export const PIP_BORDER_PT_MIN = 0.5;
 export const PIP_BORDER_PT_MAX = 12;
 export const PIP_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
-/** Output pixels — the fixed corner's own margin, so a snapped corner is where the old PiP sat. */
+/** The fixed corner's own margin at a 1080-pixel short side. It scales with the output (`pipMargin`, STC-591), so a snapped corner is where the fixed PiP sits. */
 export const PIP_SNAP_MARGIN_PX = 32;
 /** SCREEN pixels; the caller converts into output pixels for its own zoom level. */
 export const PIP_SNAP_THRESHOLD_SCREEN_PX = 12;
@@ -152,9 +152,22 @@ export function pipSize(style: PipStyle, output: Size, camera: Size): Size {
  * because it places a DECODED FRAME (render.ts's pipStateAt says why). */
 export function pipRect(style: PipStyle, output: Size, camera: Size): Rect {
   const { width, height } = pipSize(style, output, camera);
-  const x = clamp(Math.round(style.center.x * output.width - width / 2), 0, Math.max(0, output.width - width));
-  const y = clamp(Math.round(style.center.y * output.height - height / 2), 0, Math.max(0, output.height - height));
+  const m = pipMargin(output);
+  const [x0, x1] = placeRange(output.width, width, m);
+  const [y0, y1] = placeRange(output.height, height, m);
+  const x = clamp(Math.round(style.center.x * output.width - width / 2), x0, x1);
+  const y = clamp(Math.round(style.center.y * output.height - height / 2), y0, y1);
   return { x, y, width, height };
+}
+
+/** The buffer from the content rect's edge, in output pixels (STC-591). `output` is the content rect's size. */
+export function pipMargin(output: Size): number {
+  return pipMarginPx(output, PIP_SNAP_MARGIN_PX);
+}
+
+/** Where a PiP's top-left may sit on one axis: `margin` in from each edge, or edge to edge when it does not fit that way. */
+function placeRange(extent: number, size: number, margin: number): [number, number] {
+  return extent - size - margin >= margin ? [margin, extent - size - margin] : [0, Math.max(0, extent - size)];
 }
 
 function shapeAspect(shape: PipShape, camera: Size): number {
@@ -293,14 +306,25 @@ function nearestWithin(candidates: readonly number[], v: number, threshold: numb
  * screen threshold for the stage's current scale.
  */
 export function snapCenter(center: Point, size: Size, output: Size, thresholdPx: number): Point {
-  const m = PIP_SNAP_MARGIN_PX;
+  const m = pipMargin(output);
   const xs = [m + size.width / 2, output.width / 2, output.width - m - size.width / 2];
   const ys = [m + size.height / 2, output.height / 2, output.height - m - size.height / 2];
   const px = center.x * output.width;
   const py = center.y * output.height;
   const sx = nearestWithin(xs, px, thresholdPx);
   const sy = nearestWithin(ys, py, thresholdPx);
-  return { x: (sx ?? px) / output.width, y: (sy ?? py) / output.height };
+  return keepMargin({ x: (sx ?? px) / output.width, y: (sy ?? py) / output.height }, size, output);
+}
+
+/** A centre pulled in so the PiP keeps `pipMargin` from every edge; unchanged on an axis it cannot fit that way (STC-591). */
+function keepMargin(center: Point, size: Size, output: Size): Point {
+  const m = pipMargin(output);
+  const [x0, x1] = placeRange(output.width, size.width, m);
+  const [y0, y1] = placeRange(output.height, size.height, m);
+  return {
+    x: clamp(center.x * output.width, x0 + size.width / 2, x1 + size.width / 2) / output.width,
+    y: clamp(center.y * output.height, y0 + size.height / 2, y1 + size.height / 2) / output.height,
+  };
 }
 
 /**
@@ -308,7 +332,7 @@ export function snapCenter(center: Point, size: Size, output: Size, thresholdPx:
  * onto a nearby anchor unless the Snap to edges row is off (STC-604).
  */
 export function dragCenter(raw: Point, size: Size, output: Size, thresholdPx: number, snap: boolean): Point {
-  return snap ? snapCenter(raw, size, output, thresholdPx) : raw;
+  return snap ? snapCenter(raw, size, output, thresholdPx) : keepMargin(raw, size, output);
 }
 
 /** The nine anchors (STC-604's Anchor row), row by row. Each is `snapCenter`'s per-axis stop. */
@@ -321,7 +345,7 @@ export type PipAnchor = (typeof PIP_ANCHORS)[number];
 export const PIP_ANCHOR_TOLERANCE_PX = 1;
 
 function anchorStops(size: Size, output: Size): { xs: number[]; ys: number[] } {
-  const m = PIP_SNAP_MARGIN_PX;
+  const m = pipMargin(output);
   return {
     xs: [m + size.width / 2, output.width / 2, output.width - m - size.width / 2],
     ys: [m + size.height / 2, output.height / 2, output.height - m - size.height / 2],

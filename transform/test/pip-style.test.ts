@@ -4,7 +4,7 @@ import {
   isDefaultPipStyle, pipStylesEqual, DEFAULT_PIP_STYLE, DEFAULT_PIP_FIXED, DEFAULT_FRAMING,
   PIP_WIDTH_MAX, PIP_FRAMING_ZOOM_MAX, type PipStyle,
   PIP_PRESETS, editPipStyle, snapCenter, resizeFromCorner, panFraming, zoomFraming,
-  PIP_SNAP_MARGIN_PX, PIP_WIDTH_MIN, DEFAULT_BORDER, inspectorSide, inspectorLeftPx,
+  PIP_SNAP_MARGIN_PX, pipMargin, PIP_WIDTH_MIN, DEFAULT_BORDER, inspectorSide, inspectorLeftPx,
   PIP_ANCHORS, anchorCenter, anchorOf, dragCenter, PIP_CIRCLE_HANDLE_FRACTION,
 } from "../src/pip-style.js";
 import { fixedCornerPipUv, uvRectToPixels, outputRect, roundRect } from "../src/spaces.js";
@@ -194,6 +194,80 @@ describe("snapCenter — nine anchors, per axis", () => {
   });
   test("dead centre is an anchor", () => {
     expect(toPx(snapCenter({ x: 0.503, y: 0.497 }, size, out, 12))).toEqual({ x: 960, y: 540 });
+  });
+});
+
+describe("the PiP's margin scales with the output (STC-591)", () => {
+  const sizeAt = (out: { width: number; height: number }) => pipSize(style({ width: 0.2 }), out, CAM);
+
+  test("1080p keeps 32 px; 4K gets 64; it follows the SHORT side", () => {
+    expect(pipMargin({ width: 1920, height: 1080 })).toBe(32);
+    expect(pipMargin({ width: 3840, height: 2160 })).toBe(64);
+    expect(pipMargin({ width: 1080, height: 1920 })).toBe(32);
+    expect(pipMargin({ width: 3840, height: 1080 })).toBe(32);
+    expect(Number.isInteger(pipMargin({ width: 1232, height: 693 }))).toBe(true);
+  });
+
+  for (const out of [{ width: 1920, height: 1080 }, { width: 3840, height: 2160 }, { width: 1232, height: 693 }, { width: 1080, height: 1920 }]) {
+    describe(`${out.width}x${out.height}, Snap to edges off`, () => {
+      const size = sizeAt(out);
+      const m = pipMargin(out);
+      const at = (px: number, py: number) => dragCenter({ x: px / out.width, y: py / out.height }, size, out, 12, false);
+      const rectOf = (c: { x: number; y: number }) => pipRect(style({ width: 0.2, center: c }), out, CAM);
+
+      test("a drag into each corner and edge stops at the margin", () => {
+        for (const [px, py] of [[0, 0], [out.width, 0], [0, out.height], [out.width, out.height],
+          [0, out.height / 2], [out.width, out.height / 2], [out.width / 2, 0], [out.width / 2, out.height]]) {
+          const r = rectOf(at(px!, py!));
+          expect(r.x).toBeGreaterThanOrEqual(m);
+          expect(r.y).toBeGreaterThanOrEqual(m);
+          expect(out.width - (r.x + r.width)).toBeGreaterThanOrEqual(m);
+          expect(out.height - (r.y + r.height)).toBeGreaterThanOrEqual(m);
+        }
+      });
+      test("each of the four edges lands exactly on the margin", () => {
+        expect(rectOf(at(0, out.height / 2)).x).toBe(m);
+        expect(rectOf(at(out.width, out.height / 2)).x + size.width).toBe(out.width - m);
+        expect(rectOf(at(out.width / 2, 0)).y).toBe(m);
+        expect(rectOf(at(out.width / 2, out.height)).y + size.height).toBe(out.height - m);
+      });
+      test("a centre already inside the margins is not moved", () => {
+        const c = { x: 0.4, y: 0.6 };
+        expect(dragCenter(c, size, out, 12, false)).toEqual(c);
+      });
+    });
+  }
+
+  test("a style saved flush against an edge renders at the margin", () => {
+    const out = { width: 3840, height: 2160 };
+    const size = sizeAt(out);
+    const r = pipRect(style({ width: 0.2, center: { x: size.width / 2 / out.width, y: 0.5 } }), out, CAM);
+    expect(r.x).toBe(64);
+  });
+
+  test("the snap anchors and the Anchor row agree with it", () => {
+    const out = { width: 3840, height: 2160 };
+    const size = sizeAt(out);
+    const br = anchorCenter("bottom-right", size, out);
+    expect([br.x * out.width + size.width / 2, br.y * out.height + size.height / 2]).toEqual([out.width - 64, out.height - 64]);
+    expect(pipRect(style({ width: 0.2, center: br }), out, CAM)).toMatchObject({
+      x: out.width - 64 - size.width, y: out.height - 64 - size.height });
+    for (const a of PIP_ANCHORS) expect(anchorOf(anchorCenter(a, size, out), size, out)).toBe(a);
+  });
+
+  test("a PiP too big to keep the margin on an axis falls back to edge to edge there", () => {
+    const out = { width: 400, height: 225 };
+    const big = pipSize(style({ width: PIP_WIDTH_MAX }), out, { width: 1080, height: 1920 });
+    const r = pipRect(style({ width: PIP_WIDTH_MAX, center: { x: 0.5, y: 0.5 } }), out, { width: 1080, height: 1920 });
+    expect(r.y).toBe(Math.round((out.height - big.height) / 2));
+    expect(r.y).toBeGreaterThanOrEqual(0);
+  });
+
+  test("the fixed corner at 4K sits 64 px in, and the style that mirrors it sits there too", () => {
+    const out = { width: 3840, height: 2160 };
+    const r = roundRect(uvRectToPixels(fixedCornerPipUv(DEFAULT_PIP, out, CAM), outputRect(out)));
+    expect([out.width - (r.x + r.width), out.height - (r.y + r.height)]).toEqual([64, 64]);
+    expect(pipRect(styleFromFixedCorner(DEFAULT_PIP, out, CAM), out, CAM)).toEqual(r);
   });
 });
 

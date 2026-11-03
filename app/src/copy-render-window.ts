@@ -20,6 +20,7 @@ import { rename, rm, writeFile, mkdir } from "node:fs/promises";
 import { PARTIAL_SUFFIX } from "./recording-copy.js";
 import type { GifSettings } from "@transform/gif-options.js";
 import { DEFAULT_EXPORT_RATE, type ExportRate } from "@transform/export-rate.js";
+import { DEFAULT_EXPORT_QUALITY, type ExportQuality } from "@transform/export-quality.js";
 
 export type CopyOutcome =
   | { ok: true; path: string }
@@ -42,6 +43,8 @@ export interface CopyJobOptions {
   gif?: GifSettings;
   /** STC-614: an mp4's frame rate; absent = 60. The editor's Copy follows its Frame rate. */
   rate?: ExportRate;
+  /** STC-613: an mp4's Quality; absent = High. The editor's Copy follows its Quality. */
+  quality?: ExportQuality;
   dist: string;
   rendererDir: string;
   /** Test seam (STC_COPY_RENDER_DELAY_MS): the render waits this long before loading. */
@@ -115,15 +118,17 @@ ipcMain.handle("copy:write", (e, bytes: Uint8Array) => {
 
 const formatOf = (o: CopyJobOptions): "mp4" | "gif" => o.format ?? "mp4";
 const rateOf = (o: CopyJobOptions): ExportRate => o.rate ?? DEFAULT_EXPORT_RATE;
+const qualityOf = (o: CopyJobOptions): ExportQuality => o.quality ?? DEFAULT_EXPORT_QUALITY;
 
 export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   const existing = jobs.get(opts.takeDir);
   // STC-395: a duplicate must be asking for the SAME file. A GIF caller handed
   // a live mp4 job's outcome would paste a video (and vice versa). The panel
   // never asks for both at once; main refuses here too. STC-614: nor may a
-  // 30 fps caller be handed a 60 fps file.
+  // 30 fps caller be handed a 60 fps file, nor (STC-613) a Low one a High one.
   if (existing?.state === "live"
-    && (formatOf(existing.opts) !== formatOf(opts) || rateOf(existing.opts) !== rateOf(opts))) {
+    && (formatOf(existing.opts) !== formatOf(opts) || rateOf(existing.opts) !== rateOf(opts)
+      || qualityOf(existing.opts) !== qualityOf(opts))) {
     return Promise.resolve({ ok: false, detail: "another render of this take is running" });
   }
   // One caller per take is the contract: a duplicate gets the running job's
@@ -233,6 +238,7 @@ export function startCopyRender(opts: CopyJobOptions): Promise<CopyOutcome> {
   if (opts.delayMs) query.delayMs = String(opts.delayMs);
   if (opts.size === "project") query.size = "project";
   if (rateOf(opts) !== DEFAULT_EXPORT_RATE) query.rate = String(rateOf(opts));
+  if (qualityOf(opts) !== DEFAULT_EXPORT_QUALITY) query.quality = qualityOf(opts);
   if (opts.format === "gif" && opts.gif) {
     query.format = "gif";
     query.fps = String(opts.gif.fps);
