@@ -114,7 +114,9 @@ describe("the Zoom lane shows a block's In and Out speeds", () => {
     const win = await openBlock();
     await setSpeed(win, "in", "calm");
     await done(win);
-    await expect.poll(() => halfHeightCrossings(win), { timeout: 10_000 }).not.toBeNull();
+    // Wait for the committed 4x block: while it was open the lane drew stage
+    // 2's 2.0x block, which also crosses MID_EASE, but earlier on its way out.
+    await expect.poll(() => peakHeight(win), { timeout: 10_000 }).toBeGreaterThan(0.9);
     const slow = (await halfHeightCrossings(win))!;
 
     await win.click(".zoomblock");
@@ -133,7 +135,9 @@ describe("the Zoom lane shows a block's In and Out speeds", () => {
     const win = await openBlock();
     await setSpeed(win, "out", "calm");
     await done(win);
-    await expect.poll(() => halfHeightCrossings(win), { timeout: 10_000 }).not.toBeNull();
+    // Wait for the committed 4x block: while it was open the lane drew stage
+    // 2's 2.0x block, which also crosses MID_EASE, but earlier on its way out.
+    await expect.poll(() => peakHeight(win), { timeout: 10_000 }).toBeGreaterThan(0.9);
     const slow = (await halfHeightCrossings(win))!;
 
     await win.click(".zoomblock");
