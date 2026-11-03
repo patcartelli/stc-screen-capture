@@ -38,6 +38,11 @@ import { colorSpaceFor, planRender, type ExportOptions, type RenderPlan } from "
  *    Its palette is sRGB hex, so a P3 context converts it on `drawImage`
  *    exactly as it converts every other background's colours.
  *
+ * 4. **An image or wallpaper background** (STC-628) is the caller's decoded
+ *    `background` bitmap (`loadShotBackground`, once per shot open, beside the
+ *    frame); `renderStill` cover-crops it. None loaded means the background's
+ *    first colour, which is also what a missing file looks like.
+ *
  * Callers still own the fallback-to-PNG decision (`stillIsBlocked`, when a
  * stored format cannot carry the alpha a mode needs) and the shot they pass
  * in — a live decoration in progress, an already-persisted document, or a
@@ -48,6 +53,7 @@ export function composeStill(
   shot: Shot,
   frame: ImageBitmap,
   options: ExportOptions,
+  background?: ImageBitmap,
 ): { canvas: HTMLCanvasElement; plan: RenderPlan } {
   const layout = layoutStill(shot);
   const pxPerPoint = pxPerPointOf(shot);
@@ -64,9 +70,29 @@ export function composeStill(
   // against the frame, and reading an existing composite would read pixels an
   // earlier fill had already replaced.
   const redactionFills = sampleRedactionFills(frame, shot.frame, shot.decoration.redactions);
-  withMeshBackground(plan.layout.background, canvas.width, canvas.height, (background) =>
-    renderStill(ctx as never, { frame, redactionFills, background }, plan.layout));
+  withMeshBackground(plan.layout.background, canvas.width, canvas.height, (mesh) =>
+    renderStill(ctx as never, { frame, redactionFills, background: mesh ?? background }, plan.layout));
   return { canvas, plan };
+}
+
+/**
+ * The decoded file behind an `image`/`wallpaper` background (STC-628), read
+ * through the same `getFrame` bridge the frame comes through. NEVER throws: a
+ * rejected read or an undecodable file is `undefined`, and `paintBackground`
+ * then draws the background's colour. Decoded without a MIME type, since the
+ * wallpaper is a JPEG and a frame is a PNG.
+ */
+export async function loadShotBackground(
+  shot: Shot,
+  getFrame: (name: string) => Promise<ArrayBuffer>,
+): Promise<ImageBitmap | undefined> {
+  const b = shot.decoration.background;
+  if (!b || (b.kind !== "image" && b.kind !== "wallpaper") || !b.file) return undefined;
+  try {
+    return await createImageBitmap(new Blob([await getFrame(b.file)]));
+  } catch {
+    return undefined;
+  }
 }
 
 /** The raw RGBA bytes of a composed canvas, ready for `still:export`'s `bytes`. */
