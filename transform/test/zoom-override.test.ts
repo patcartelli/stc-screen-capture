@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   windowId, overrideFor, resolvedCrop, resolvedEasing, groupByEasing, nearestWindow,
-  manualWindows, resolvedWindows, rectFromGesture, DEFAULT_OVERRIDE_RECT_FRACTION, MIN_DRAG_UV,
+  manualWindows, resolvedWindows, rectFromGesture, frameShaped, DEFAULT_OVERRIDE_RECT_FRACTION, MIN_DRAG_UV,
   type CombinedZoomWindow,
 } from "../src/zoom-override.js";
 import { createZoomSim, inWindow, ZOOM_PRESETS, type ZoomPreset, type ZoomWindow } from "../src/zoom.js";
@@ -168,35 +168,48 @@ describe("nearestWindow", () => {
 });
 
 describe("rectFromGesture", () => {
-  test("a bare click (a === b) produces a default-sized rect centred on the click", () => {
-    const r = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, 16 / 9);
-    // 16:9 (landscape): height is the short edge, so it gets the fraction
-    // directly; width is divided by the aspect so the rect is SQUARE in real
-    // pixels (a UV square on a landscape frame would be visually wide).
+  // STC-629: every rect this returns is a UV square. Only a UV square has the
+  // frame's own proportions, and the compositor stretches the crop to fill a
+  // frame-shaped output, so any other shape stretches the picture.
+  test("a bare click (a === b) produces a frame-shaped default rect centred on the click", () => {
+    const r = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 });
+    expect(r.width).toBeCloseTo(DEFAULT_OVERRIDE_RECT_FRACTION, 10);
     expect(r.height).toBeCloseTo(DEFAULT_OVERRIDE_RECT_FRACTION, 10);
-    expect(r.width).toBeCloseTo(DEFAULT_OVERRIDE_RECT_FRACTION / (16 / 9), 10);
     expect(r.x + r.width / 2).toBeCloseTo(0.5, 10);
     expect(r.y + r.height / 2).toBeCloseTo(0.5, 10);
   });
 
   test("a drag under MIN_DRAG_UV on both axes is treated as a click", () => {
-    const r = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5 + MIN_DRAG_UV / 2, y: 0.5 }, 1);
+    const r = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5 + MIN_DRAG_UV / 2, y: 0.5 });
     expect(r.width).toBeCloseTo(DEFAULT_OVERRIDE_RECT_FRACTION, 10);
     expect(r.height).toBeCloseTo(DEFAULT_OVERRIDE_RECT_FRACTION, 10);
   });
 
-  test("a real drag produces the normalised drag rect, order-independent", () => {
-    const a = rectFromGesture({ x: 0.2, y: 0.3 }, { x: 0.6, y: 0.7 }, 1);
-    const b = rectFromGesture({ x: 0.6, y: 0.7 }, { x: 0.2, y: 0.3 }, 1);
-    expect(a.x).toBeCloseTo(0.2, 10);
-    expect(a.y).toBeCloseTo(0.3, 10);
-    expect(a.width).toBeCloseTo(0.4, 10);
-    expect(a.height).toBeCloseTo(0.4, 10);
-    expect(b).toEqual(a);
+  test("a drag grows a frame-shaped box from its anchor, sized by its longer axis", () => {
+    const r = rectFromGesture({ x: 0.2, y: 0.3 }, { x: 0.6, y: 0.5 });
+    expect(r.x).toBeCloseTo(0.2, 10);
+    expect(r.y).toBeCloseTo(0.3, 10);
+    expect(r.width).toBeCloseTo(0.4, 10);
+    expect(r.height).toBeCloseTo(0.4, 10);
+  });
+
+  test("a drag up and to the left grows the box that way from the anchor", () => {
+    const r = rectFromGesture({ x: 0.6, y: 0.7 }, { x: 0.5, y: 0.4 });
+    expect(r.x + r.width).toBeCloseTo(0.6, 10);
+    expect(r.y + r.height).toBeCloseTo(0.7, 10);
+    expect(r.width).toBeCloseTo(0.3, 10);
+    expect(r.height).toBeCloseTo(0.3, 10);
+  });
+
+  test("a drag that would carry the box past an edge stops at the edge, still frame-shaped", () => {
+    const r = rectFromGesture({ x: 0.7, y: 0.2 }, { x: 0.9, y: 0.8 });
+    expect(r.width).toBeCloseTo(0.3, 10);
+    expect(r.height).toBeCloseTo(0.3, 10);
+    expect(r.x + r.width).toBeLessThanOrEqual(1 + 1e-9);
   });
 
   test("a click-default near the frame edge clamps into the frame rather than overflowing", () => {
-    const r = rectFromGesture({ x: 0.02, y: 0.02 }, { x: 0.02, y: 0.02 }, 1);
+    const r = rectFromGesture({ x: 0.02, y: 0.02 }, { x: 0.02, y: 0.02 });
     expect(r.x).toBeGreaterThanOrEqual(0);
     expect(r.y).toBeGreaterThanOrEqual(0);
     expect(r.x + r.width).toBeLessThanOrEqual(1 + 1e-9);
@@ -204,14 +217,35 @@ describe("rectFromGesture", () => {
   });
 
   test("a drag that leaves the frame clamps to it", () => {
-    const r = rectFromGesture({ x: -0.2, y: -0.2 }, { x: 1.3, y: 1.3 }, 1);
+    const r = rectFromGesture({ x: -0.2, y: -0.2 }, { x: 1.3, y: 1.3 });
     expect(r).toEqual({ x: 0, y: 0, width: 1, height: 1 });
   });
+});
 
-  test("a portrait-ish aspect makes width the short edge", () => {
-    const r = rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, 9 / 16);
-    expect(r.width).toBeCloseTo(DEFAULT_OVERRIDE_RECT_FRACTION, 10);
-    expect(r.height).toBeCloseTo(DEFAULT_OVERRIDE_RECT_FRACTION * (9 / 16), 10);
+describe("frameShaped (STC-629)", () => {
+  test("widens the short side to the long one, about the same centre", () => {
+    const r = frameShaped({ x: 0.1, y: 0.2, width: 0.3, height: 0.4 });
+    expect(r.x).toBeCloseTo(0.05, 10);
+    expect(r.y).toBeCloseTo(0.2, 10);
+    expect(r.width).toBeCloseTo(0.4, 10);
+    expect(r.height).toBeCloseTo(0.4, 10);
+  });
+
+  test("a rect that is already frame-shaped is returned unchanged", () => {
+    const r = { x: 0.25, y: 0.25, width: 0.4, height: 0.4 };
+    expect(frameShaped(r)).toEqual(r);
+  });
+
+  test("slides back inside the frame when widening would cross an edge", () => {
+    const r = frameShaped({ x: 0, y: 0.1, width: 0.1, height: 0.5 });
+    expect(r.x).toBe(0);
+    expect(r.y).toBeCloseTo(0.1, 10);
+    expect(r.width).toBe(0.5);
+    expect(r.height).toBe(0.5);
+  });
+
+  test("never exceeds the whole frame", () => {
+    expect(frameShaped({ x: 0, y: 0.2, width: 1, height: 0.3 })).toEqual({ x: 0, y: 0, width: 1, height: 1 });
   });
 });
 
@@ -247,11 +281,19 @@ describe("manualWindows", () => {
 
 describe("resolvedCrop / resolvedEasing with a manual window", () => {
   test("a manual window's own rect and easing win outright, with no overrides-table lookup", () => {
-    const [win] = manualWindows([manual("m1", 0, 1000, { x: 0.3, y: 0.4, width: 0.1, height: 0.2 }, "calm")]);
+    const [win] = manualWindows([manual("m1", 0, 1000, { x: 0.3, y: 0.4, width: 0.2, height: 0.2 }, "calm")]);
     // Overrides table has nothing matching windowId "0" — proves the crop
     // came from `.manual`, not from an accidental geometry-style lookup.
-    expect(resolvedCrop(undefined, win!)).toEqual({ x: 0.3, y: 0.4, width: 0.1, height: 0.2 });
+    expect(resolvedCrop(undefined, win!)).toEqual({ x: 0.3, y: 0.4, width: 0.2, height: 0.2 });
     expect(resolvedEasing(undefined, win!, "snappy")).toEqual({ in: "calm", out: "calm" });
+  });
+
+  test("an odd-shaped saved rect resolves frame-shaped (STC-629)", () => {
+    const [win] = manualWindows([manual("m1", 0, 1000, { x: 0.3, y: 0.4, width: 0.1, height: 0.2 }, "calm")]);
+    const r = resolvedCrop(undefined, win!)!;
+    expect(r.width).toBeCloseTo(0.2, 10);
+    expect(r.height).toBeCloseTo(0.2, 10);
+    expect(r.x + r.width / 2).toBeCloseTo(0.35, 10);
   });
 
   test("a derived window (no .manual) is unaffected — falls through to the existing geometry lookup", () => {
