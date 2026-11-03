@@ -2404,6 +2404,7 @@ async function closeTake(): Promise<void> {
   scheduleWaveform(); // no sound now: cancels any run in flight and clears the drawing
   player?.close();
   player = undefined;
+  openSession?.wallpaper?.close?.();
   openSession = undefined;
   openVideoSources = undefined;
   openProject = undefined;

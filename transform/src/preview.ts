@@ -372,7 +372,8 @@ export class PreviewPlayer {
       const t2 = performance.now();
       composite(this.ctx as unknown as OffscreenCanvasRenderingContext2D,
                 frame, cameraFrame, fs,
-                this.effectiveOutput.width, this.effectiveOutput.height);
+                this.effectiveOutput.width, this.effectiveOutput.height,
+                this.session.wallpaper ?? null);
       const t3 = performance.now();
       const d = this.drawMs;
       d.render += t1 - t0;

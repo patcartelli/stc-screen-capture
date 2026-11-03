@@ -11,6 +11,8 @@ import { loadSession, type LoadedSession } from "@transform/session";
 import type { ByteSource } from "@transform/chunk-reader";
 import { parseProject } from "@transform/trim";
 import type { Project } from "@transform/types";
+import { WALLPAPER_FILE } from "@transform/looks";
+import { decodeWallpaper } from "@transform/wallpaper-image";
 
 export interface TakeIO {
   read(name: string): Promise<ArrayBuffer>;
@@ -94,5 +96,10 @@ export async function loadTake(io: TakeIO): Promise<LoadedTake> {
     // recorded no frames (STC-541), and its default project must carry no PiP.
     session.anchors.camera?.present === true,
   );
+  // STC-626: here, so the editor and the hidden Copy window draw the same picture.
+  // Only for a framing that draws it. A read failure is the same as no file.
+  if (project.framing?.background?.kind === "wallpaper") {
+    session.wallpaper = await decodeWallpaper(await io.readOptional(WALLPAPER_FILE).catch(() => null));
+  }
   return { session, project, anchors, sources: { display: displaySrc, camera: cameraSrc } };
 }

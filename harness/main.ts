@@ -49,7 +49,7 @@ async function runPreview(
   mark(`preview: hashing ${tsNs.length} sampled t (getImageData is synchronous)`);
   for (const t of tsNs) {
     const fs = render(project, session, t);
-    composite(ctx, fs.frameIndex === null ? null : bitmaps[fs.frameIndex]!, null, fs, width, height);
+    composite(ctx, fs.frameIndex === null ? null : bitmaps[fs.frameIndex]!, null, fs, width, height, null);
     hashes.push(await sha256(ctx.getImageData(0, 0, width, height).data));
     if (hashes.length % 50 === 0) mark(`preview: ${hashes.length}/${tsNs.length} hashed`);
   }
@@ -89,7 +89,7 @@ async function runExport(
   for (let k = 0; k < EXPORT_FRAMES; k++) {
     const t = exportTimeNs(k);
     const fs = render(project, session, t);
-    composite(ctx, fs.frameIndex === null ? null : bitmaps[fs.frameIndex]!, null, fs, width, height);
+    composite(ctx, fs.frameIndex === null ? null : bitmaps[fs.frameIndex]!, null, fs, width, height, null);
     hashes.push(await sha256(ctx.getImageData(0, 0, width, height).data));
     const vf = new VideoFrame(ctx.canvas, { timestamp: Math.round(t / 1000) });
     encoder.encode(vf, { keyFrame: k % 60 === 0 });
