@@ -121,7 +121,10 @@ Desktop wallpaper selected. Pick Capture background with no swatch ever picked: 
 a swatch (say Ember) in the still editor, then shoot with Capture background: it uses Ember, and
 Custom keeps its colours.
 
-## §7 Sign-off (the ticket stays open until you do this)
+## §7 Sign-off
+
+**Done 2026-11-03 (Patrick):** every look in light and dark settled, the 9% margin kept, and a
+dynamic/aerial wallpaper shot passed (§2). §3 and §4 have not been run.
 
 On a **real capture**, take a window shot in each of the four looks with a **light** window and again
 with a **dark** window (eight shots). Export each (PNG at least; HEIC or JPEG for one) and compare it
