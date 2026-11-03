@@ -162,8 +162,9 @@ describe("the rect tool on a manual window", () => {
     const [o] = readProject(takeDir).overrides;
     expect(o.rect.x).toBeCloseTo(0.2, 1);
     expect(o.rect.y).toBeCloseTo(0.2, 1);
+    // Frame-shaped (STC-629): a drag is sized by its longer axis.
     expect(o.rect.width).toBeCloseTo(0.4, 1);
-    expect(o.rect.height).toBeCloseTo(0.3, 1);
+    expect(o.rect.height).toBeCloseTo(0.4, 1);
   }, 30_000);
 });
 
