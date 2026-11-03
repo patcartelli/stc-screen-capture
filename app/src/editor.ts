@@ -2314,6 +2314,7 @@ async function openTakeOrThrow(dir: string): Promise<void> {
   openSession = session;
   openProject = project;
   customPicked = false;
+  clearCustomFields();
   updateTitleMeta();
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
   openDisplay = { pointWidth: effectivePointWidth(anchors) };
@@ -3172,6 +3173,14 @@ const frameLooks = mountLookGrid($("framelooks"), VIDEO_LOOKS.map((look) => ({
 })), (id) => chooseFrameLook(id as VideoLookId));
 const customA = $("framecustoma") as HTMLInputElement;
 const customB = $("framecustomb") as HTMLInputElement;
+
+/** A newly opened take starts with empty Custom fields, so one take's colour never shows on the next's chip. */
+function clearCustomFields(): void {
+  for (const el of [customA, customB]) {
+    el.value = "";
+    el.setAttribute("aria-invalid", "false");
+  }
+}
 
 function setFrameLooksDisabled(disabled: boolean): void {
   frameLooksDisabled = disabled;
