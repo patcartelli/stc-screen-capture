@@ -239,12 +239,19 @@ describe("the Zoom chip", () => {
 
   test("the amount: arrow keys and the slider resize the region about its centre, and it is saved", async () => {
     const { win, takeDir } = await openBlock();
-    expect(await win.textContent("#chipamount")).toBe("Auto");
+    // STC-636: an Auto block shows stage 2's real amount (fixtures/basic's
+    // block: a 0.5 x 0.5 crop, so 2.0×), with Place on Auto.
+    expect(await win.textContent("#chipamount")).toBe("2.0×");
+    expect(await win.textContent("#zoomamount")).toBe("2.0×");
+    expect(await win.getAttribute('#chipplace [data-place="auto"]', "aria-checked")).toBe("true");
     await win.focus("#chipamount");
     await win.keyboard.press("ArrowUp");
     const first = await win.textContent("#chipamount");
-    expect(first).toMatch(/^\d\.\d×$/);
+    expect(first).toBe("2.1×");
     expect(await win.textContent("#zoomamount")).toBe(first);
+    // Setting Amount saved a region, and Place says so (decision (a)).
+    expect(await win.getAttribute('#chipplace [data-place="fixed"]', "aria-checked")).toBe("true");
+    expect(await win.inputValue("#zoomplace")).toBe("fixed");
     // The arrow key stayed with the chip: the playhead did not move.
     const frame = await win.evaluate(() => (document.getElementById("scrub") as HTMLInputElement).value);
     await win.keyboard.press("ArrowUp");
@@ -258,6 +265,39 @@ describe("the Zoom chip", () => {
       const r = project(takeDir)?.overrides?.[0]?.rect;
       return r ? Math.round(10 / Math.max(r.width, r.height)) / 10 : undefined;
     }, { timeout: 10_000 }).toBe(3);
+  }, 60_000);
+
+  test("Place: Fixed keeps stage 2's region, Auto drops it and keeps the speed (STC-636)", async () => {
+    const { win, takeDir } = await openBlock();
+    await win.click('#chipspeed [data-speed="snappy"]');
+    await win.click('#chipplace [data-place="fixed"]');
+    // Fixed starts where stage 2 zooms: the same amount.
+    expect(await win.textContent("#chipamount")).toBe("2.0×");
+    expect(await win.textContent("#overridereadout")).toMatch(/^2\.0× · \d+×\d+$/);
+    await win.fill("#zoomamountrange", "3");
+    await win.dispatchEvent("#zoomamountrange", "input");
+    expect(await win.textContent("#chipamount")).toBe("3.0×");
+    // Back to Auto: the region goes, the amount is stage 2's again.
+    await win.click('#chipplace [data-place="auto"]');
+    expect(await win.getAttribute('#chipplace [data-place="auto"]', "aria-checked")).toBe("true");
+    expect(await win.textContent("#chipamount")).toBe("2.0×");
+    expect(await win.locator("#overridebox").getAttribute("hidden")).not.toBeNull();
+    await done(win);
+    // Both sides the same is saved as the one preset name.
+    await expect.poll(() => project(takeDir)?.overrides?.[0]?.easing, { timeout: 10_000 }).toBe("snappy");
+    expect(project(takeDir)?.overrides?.[0]?.rect).toBeUndefined();
+    expect(project(takeDir)?.version).toBe(20);
+    // The inspector's Place sets it too, and reopening reads it back.
+    await win.click(".zoomblock");
+    await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
+    expect(await win.inputValue("#zoomplace")).toBe("auto");
+    await win.selectOption("#zoomplace", "fixed");
+    expect(await win.getAttribute('#chipplace [data-place="fixed"]', "aria-checked")).toBe("true");
+    await done(win);
+    await expect.poll(() => {
+      const r = project(takeDir)?.overrides?.[0]?.rect;
+      return r ? Math.round(10 / Math.max(r.width, r.height)) / 10 : undefined;
+    }, { timeout: 10_000 }).toBe(2);
   }, 60_000);
 
   test("delete removes the block, and a press on the chip never grabs the playhead", async () => {
