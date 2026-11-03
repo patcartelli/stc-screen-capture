@@ -123,6 +123,7 @@ describe("the Zoom lane shows a block's In and Out speeds", () => {
     await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
     await setSpeed(win, "in", "snappy");
     await done(win);
+    await expect.poll(() => peakHeight(win), { timeout: 10_000 }).toBeGreaterThan(0.9);
     await expect.poll(async () => (await halfHeightCrossings(win))?.rise ?? slow.rise, { timeout: 10_000 })
       .toBeLessThan(slow.rise);
     const fast = (await halfHeightCrossings(win))!;
@@ -144,6 +145,7 @@ describe("the Zoom lane shows a block's In and Out speeds", () => {
     await win.waitForSelector("#overridebar", { state: "visible", timeout: 10_000 });
     await setSpeed(win, "out", "snappy");
     await done(win);
+    await expect.poll(() => peakHeight(win), { timeout: 10_000 }).toBeGreaterThan(0.9);
     await expect.poll(async () => (await halfHeightCrossings(win))?.fall ?? slow.fall, { timeout: 10_000 })
       .toBeLessThan(slow.fall);
     const fast = (await halfHeightCrossings(win))!;
