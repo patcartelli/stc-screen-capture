@@ -1,12 +1,14 @@
 import {
-  CUSTOM_START_COLOR, LOOKS, applyLook, customBackground, lookOf, lookWrite,
+  CUSTOM_START_COLOR, LOOKS, applyLook, customBackground, lookOf, lookWrite, wallpaperLookWrite,
   type LookId, type LookWrite,
 } from "@transform/backgrounds";
 import { parseShot, type Background, type Redaction, type Shot } from "@transform/shot";
 import { decorationForMode } from "@transform/still-decorate";
 import { DEFAULT_EXPORT_OPTIONS, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { decideRedactKey, normaliseRegion, undoLast } from "@transform/still-redact";
-import { composeStill, stillPixelBytes } from "./still-compose.js";
+import { iconSvg } from "./icons.js";
+import { cssFill, mountLookGrid, type LookGrid } from "./look-grid.js";
+import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 
 /**
  * The still editor's view (STC-300) — v1's whole job is Redact, moved here
@@ -39,9 +41,10 @@ declare global {
       // crosses the process boundary.
       getShot(dir: string): Promise<Shot>;
       getFrame(dir: string, name: string): Promise<ArrayBuffer>;
-      writeShot(dir: string, redactions: unknown, look?: LookWrite): Promise<{ ok: boolean; redactions: number }>;
+      writeShot(dir: string, redactions: unknown, look?: LookWrite, remember?: boolean): Promise<{ ok: boolean; redactions: number }>;
       exportStill(req: Record<string, unknown>): Promise<any>;
       getSettings(): Promise<{ still: ExportOptions; saveFolder: string | null }>;
+      fetchWallpaper(dir: string): Promise<{ ok: true; file: string } | { ok: false; notice: string }>;
     };
   }
 }
@@ -63,6 +66,11 @@ const dir = new URLSearchParams(location.search).get("dir") ?? "";
 
 let shot: Shot | undefined;
 let frame: ImageBitmap | undefined;
+/** The image/wallpaper file behind the shot's background (STC-628), and the name it was read from. */
+let background: ImageBitmap | undefined;
+let backgroundFile: string | undefined;
+/** An object URL of the wallpaper's bytes, for the Wallpaper swatch's chip. Revoked when replaced. */
+let wallpaperUrl: string | undefined;
 let composite: HTMLCanvasElement | undefined;
 let regions: Redaction[] = [];
 /** Where the capture sits inside the view canvas, in view pixels — the same role `thumbnail-renderer.ts`'s `contentInView` played. */
@@ -119,7 +127,7 @@ async function draw(): Promise<void> {
   // checked here because nothing compared this window's colours to the
   // panel's.
   const { canvas: out, plan } = composeStill(decorated, frame,
-    { ...DEFAULT_EXPORT_OPTIONS, scale: "native" });
+    { ...DEFAULT_EXPORT_OPTIONS, scale: "native" }, background);
   composite = out;
 
   // Never cropped, unlike the panel's own resting view (STC-426): every edge
@@ -326,11 +334,11 @@ async function saveFinished(): Promise<void> {
     const settings = (await window.stillEditor.getSettings()).still;
     const decorated = decoratedShot();
     let options: ExportOptions = { ...settings };
-    let composed = composeStill(decorated, frame, options);
+    let composed = composeStill(decorated, frame, options, background);
     let fellBackToPng = false;
     if (stillIsBlocked(composed.plan)) {
       options = { ...options, format: "png" };
-      composed = composeStill(decorated, frame, options);
+      composed = composeStill(decorated, frame, options, background);
       fellBackToPng = true;
     }
 
@@ -375,21 +383,12 @@ document.addEventListener("keydown", (e) => {
 
 // ── the background picker (STC-599) ──────────────────────────────────────────
 
-/** A swatch's fill as CSS. Approximate by design: the canvas draws the real one. */
-function cssFill(bg: Background | undefined): string {
-  const colors = bg?.colors ?? [];
-  if (!bg || colors.length === 0) return "";
-  if (bg.kind === "solid" || colors.length === 1) return colors[0]!;
-  const stops = colors.join(", ");
-  return bg.kind === "radial" ? `radial-gradient(circle, ${stops})` : `linear-gradient(${bg.angleDeg ?? 180}deg, ${stops})`;
-}
-
 let selectedLook: LookId | undefined;
 let writing = false;
 /** Writes queue behind each other: a second pick during a write must not read a stale document. */
 let writeChain: Promise<void> = Promise.resolve();
 
-const swatches = new Map<LookId, HTMLButtonElement>();
+let grid: LookGrid | undefined;
 
 /** The colour fields' current content as a fill, or the reason it is not one. */
 function customFromFields() {
@@ -397,19 +396,20 @@ function customFromFields() {
 }
 
 function paintSwatches(): void {
-  for (const [id, el] of swatches) {
-    el.setAttribute("aria-checked", String(id === selectedLook));
-    if (document.activeElement !== el) el.tabIndex = (selectedLook ?? "window-only") === id ? 0 : -1;
-    // aria-disabled, not `disabled`: a disabled button drops the keyboard focus,
-    // and a keyboard user would lose their place in the grid on every pick.
-    el.setAttribute("aria-disabled", String(writing));
-  }
+  grid?.setSelected(selectedLook);
+  grid?.setDisabled(writing);
   customFields.hidden = selectedLook !== "custom";
   customA.readOnly = customB.readOnly = writing;
   // The Custom chip shows the fill the fields describe, once they describe one.
-  const chip = swatches.get("custom")?.querySelector<HTMLElement>(".chip");
+  const chip = grid?.element.querySelector<HTMLElement>('[data-look="custom"] .chip');
   const c = customFromFields();
   if (chip) chip.style.background = c.ok ? cssFill(c.background) : "";
+  // The Wallpaper chip shows the picture once one is loaded, the glyph before.
+  const wchip = grid?.element.querySelector<HTMLElement>('[data-look="wallpaper"] .chip');
+  if (wchip) {
+    wchip.style.backgroundImage = wallpaperUrl ? `url("${wallpaperUrl}")` : "";
+    wchip.classList.toggle("has-image", Boolean(wallpaperUrl));
+  }
 }
 
 /** The sentence from main, without Electron's "Error invoking remote method" wrapper. */
@@ -419,37 +419,106 @@ function reasonOf(e: unknown): string {
 }
 
 /**
+ * Load the shot's background file again if `background.file` is not the one
+ * already decoded, or when `force` and there is a file (STC-628). Closes the
+ * bitmap it replaces. Never throws. True when the bitmap changed.
+ */
+async function refreshBackground(force = false): Promise<boolean> {
+  if (!shot) return false;
+  const file = shot.decoration.background?.file;
+  // `force` is a stored look write: a wallpaper pick re-fetches into the SAME
+  // name (`wallpaper.jpg`), so the name alone cannot say the bytes are new.
+  if (file === backgroundFile && !(force && file)) return false;
+  let bytes: ArrayBuffer | undefined;
+  const next = await loadShotBackground(shot, async (name) => (bytes = await window.stillEditor.getFrame(dir, name)));
+  background?.close();
+  background = next;
+  backgroundFile = file;
+  if (wallpaperUrl) URL.revokeObjectURL(wallpaperUrl);
+  wallpaperUrl = next && bytes && shot.decoration.background?.kind === "wallpaper"
+    ? URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" })) : undefined;
+  paintSwatches();
+  return true;
+}
+
+/** True when the look was stored; false when it was refused or the write failed (the hint says why). */
+async function storeLook(id: LookId, write: LookWrite, remember = true): Promise<boolean> {
+  if (!shot) return false;
+  const before = { shot, selected: selectedLook };
+  try {
+    shot = parseShot({ ...shot, decoration: applyLook(shot.decoration, write) });
+  } catch (e) {
+    setHint(`Could not use that background: ${reasonOf(e)}`);
+    return false;
+  }
+  selectedLook = id;
+  paintSwatches();
+  void draw();
+  const label = LOOKS.find((l) => l.id === id)?.label ?? "Background";
+  try {
+    await window.stillEditor.writeShot(dir, regions, write, remember);
+    // The write is what puts a wallpaper's file in the bundle, so it is read
+    // only now; until then the draw above shows the colour.
+    if (await refreshBackground(true)) void draw();
+    setHint(`Background: ${label}.`);
+    return true;
+  } catch (e) {
+    shot = before.shot;
+    selectedLook = before.selected;
+    await refreshBackground(true);
+    void draw();
+    setHint(`Could not store that background: ${reasonOf(e)}`);
+    return false;
+  }
+}
+
+/** Run `job` behind every earlier write, with the swatches `aria-disabled` for its whole length. */
+function queueWrite(job: () => Promise<void>): void {
+  writing = true;
+  paintSwatches();
+  writeChain = writeChain.then(job).finally(() => {
+    writing = false;
+    paintSwatches();
+  });
+}
+
+/**
  * Apply a look: the preview first, then the disk. A write that main refuses
  * puts the previous look back and says why in the hint line, so what is shown
  * is always what is stored.
  */
 function applyChoice(id: LookId, write: LookWrite): void {
   if (!shot) return;
-  const before = { shot, selected: selectedLook };
-  try {
-    shot = parseShot({ ...shot, decoration: applyLook(shot.decoration, write) });
-  } catch (e) {
-    setHint(`Could not use that background: ${reasonOf(e)}`);
+  queueWrite(async () => { await storeLook(id, write); });
+}
+
+/**
+ * Wallpaper (STC-628). A shot that already wears one just selects it; any
+ * other shot first has main read the desktop into its folder. A read that
+ * fails writes Clean and says so; one that throws leaves the look as it was.
+ */
+function chooseWallpaper(): void {
+  if (!shot) return;
+  const stored = shot.decoration.background;
+  if (stored?.kind === "wallpaper" && stored.file && background) {
+    applyChoice("wallpaper", wallpaperLookWrite(stored.file));
     return;
   }
-  selectedLook = id;
-  writing = true;
-  paintSwatches();
-  void draw();
-  const label = LOOKS.find((l) => l.id === id)?.label ?? "Background";
-  writeChain = writeChain.then(async () => {
+  queueWrite(async () => {
+    let fetched;
     try {
-      await window.stillEditor.writeShot(dir, regions, write);
-      setHint(`Background: ${label}.`);
+      fetched = await window.stillEditor.fetchWallpaper(dir);
     } catch (e) {
-      shot = before.shot;
-      selectedLook = before.selected;
-      void draw();
-      setHint(`Could not store that background: ${reasonOf(e)}`);
-    } finally {
-      writing = false;
-      paintSwatches();
+      setHint(`Could not read your wallpaper: ${reasonOf(e)}`);
+      return;
     }
+    if (fetched.ok) { await storeLook("wallpaper", wallpaperLookWrite(fetched.file)); return; }
+    // remember = false: the user never picked Clean, so it must not become the
+    // next "Capture background" shot's look.
+    const stored = await storeLook("clean", lookWrite(LOOKS.find((l) => l.id === "clean")!), false);
+    // main's WALLPAPER_NOTICE, not retyped here. A Clean write that failed keeps
+    // its own hint, with the notice after it.
+    setHint(stored ? fetched.notice : `${hint.textContent} ${fetched.notice}`);
   });
 }
 
@@ -468,6 +537,7 @@ function choose(id: LookId): void {
     applyChoice("custom", lookWrite(look, c.background));
     return;
   }
+  if (id === "wallpaper") { chooseWallpaper(); return; }
   applyChoice(id, lookWrite(look));
 }
 
@@ -489,45 +559,18 @@ function onCustomInput(): void {
 customA.addEventListener("input", onCustomInput);
 customB.addEventListener("input", onCustomInput);
 
-/** Arrow keys move the focus around the grid; Enter or Space (a click) picks. */
-lookGrid.addEventListener("keydown", (e) => {
-  const ids = [...swatches.keys()];
-  const at = ids.findIndex((id) => swatches.get(id) === document.activeElement);
-  let to: number;
-  if (e.key === "Home") to = 0;
-  else if (e.key === "End") to = ids.length - 1;
-  else if (e.key === "ArrowRight" || e.key === "ArrowDown") to = (at + 1) % ids.length;
-  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") to = (at - 1 + ids.length) % ids.length;
-  else return;
-  if (at < 0) return;
-  e.preventDefault();
-  const el = swatches.get(ids[to]!)!;
-  for (const s of swatches.values()) s.tabIndex = s === el ? 0 : -1;
-  el.focus();
-});
-
 function initLooks(): void {
   // A display-crop shot is an opaque rectangle: parseShot refuses every window
   // mode on it, so there is nothing to offer.
   if (!shot || shot.kind !== "window" || !shot.frame.alpha) return;
-  for (const look of LOOKS) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "look";
-    b.dataset.look = look.id;
-    b.setAttribute("role", "radio");
-    b.setAttribute("aria-label", look.label);
-    b.title = look.label;
-    const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.style.background = cssFill(look.background);
-    const text = document.createElement("span");
-    text.textContent = look.label;
-    b.append(chip, text);
-    b.addEventListener("click", () => choose(look.id));
-    swatches.set(look.id, b);
-    lookGrid.append(b);
-  }
+  grid = mountLookGrid(lookGrid, LOOKS.map((look) => ({
+    id: look.id,
+    label: look.label,
+    fill: cssFill(look.background),
+    ...(look.id === "wallpaper" ? { glyph: iconSvg("display", "glyph") } : {}),
+    ...(look.id === "window-only" ? { chip: "window" as const } : {}),
+    ...(look.id === "window-shadow" ? { chip: "window-shadow" as const } : {}),
+  })), (id) => choose(id as LookId));
   selectedLook = lookOf(shot.decoration);
   const bg = shot.decoration.background;
   if (selectedLook === "custom" && bg?.colors) {
@@ -554,6 +597,10 @@ void (async () => {
   updateUndoState();
   const bytes = await window.stillEditor.getFrame(dir, shot.frame.file);
   frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  // Through the chain like every later load, so a look picked meanwhile cannot
+  // be overtaken by this one's bitmap.
+  writeChain = writeChain.then(async () => { await refreshBackground(); });
+  await writeChain;
   await draw();
   initLooks();
   setHint(regions.length === 0 ? "Drag a box over anything private." : regionCountText());

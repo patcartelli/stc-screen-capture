@@ -125,6 +125,14 @@ export interface PresentOptions {
    */
   silent?: boolean;
   /**
+   * Copy to the clipboard once composited, on a panel that IS shown (STC-628):
+   * a clipboard capture whose `notice` overrode `silent` for that one shot
+   * still copies, as `presentFlags` (`window-look.ts`) decides.
+   */
+  copy?: boolean;
+  /** One line the panel says the moment it loads, in `#status` (STC-628's wallpaper fallback). */
+  notice?: string;
+  /**
    * What the panel is showing — `panel-actions.ts`'s own type, not a second
    * spelling of it. Decides which of the four actions the card draws
    * (`actionsFor`) and what Save and Trash MEAN. Required, not optional,
@@ -563,6 +571,8 @@ class ThumbnailSession {
         // off-screen is a property of where the panel was put.
         corner: opts.corner,
         ...(opts.silent ? { silent: "1" } : {}),
+        ...(opts.copy ? { copy: "1" } : {}),
+        ...(opts.notice ? { notice: opts.notice } : {}),
       },
     });
     this.win.webContents.on("ipc-message", (_e, channel, ev: ThumbEvent) => {

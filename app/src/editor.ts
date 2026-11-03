@@ -36,6 +36,10 @@ declare const editor: {
   readTakeChunk: (name: string, offset: number, length: number) => Promise<ArrayBuffer>;
   writeProject: (bytes: ArrayBuffer) => Promise<boolean>;
   writeExport: (name: string, bytes: ArrayBuffer) => Promise<string>;
+  /** STC-637: hash the frames (the identity test) or not (everyone else). */
+  exportHashFrames: () => Promise<boolean>;
+  /** STC-637: background throttling off while an export runs. */
+  setExportBusy: (busy: boolean) => Promise<void>;
   captureId: () => Promise<string>;
   exportStill(req: {
     bytes: ArrayBuffer; width: number; height: number; alpha: boolean; colorSpace?: string;
@@ -106,7 +110,8 @@ import {
 import { outputSizeFor, outputOptions, selectedOption, type OutputOption } from "@transform/output-size";
 import type { Size } from "@transform/spaces";
 import { holdFraming, restoreFraming, withHeldFraming, chosenFraming, type FramingHold } from "./framing-hold.js";
-import { contentFraction, framingLayout, DEFAULT_SOLID_COLOR, type Framing, type FramingPreset } from "@transform/framing";
+import { contentFraction, framingLayout, type Framing } from "@transform/framing";
+import { CUSTOM_START_COLOR } from "@transform/backgrounds";
 import { render, zoomAmountSampler } from "@transform/render";
 import {
   DEFAULT_TEXT_PT, EMBED_TARGETS, effectivePointWidth, legibility, legibilitySentence, zoomFactorForCrop,
@@ -133,7 +138,8 @@ import {
   spanTransform, timelineZoomKeyIntent, wheelIntent, zoomAbout, zoomByIntent, zoomReadout, type ZoomIntent,
 } from "./timeline-zoom.js";
 import {
-  clipActivity, zoomCurveSamples, ZOOM_LANE_FLOOR, laneBitmap, formatBlockTime, zoomAmountLabel, trimRangeParts,
+  clipActivity, zoomCurveSamples, zoomLaneHeight, ZOOM_LANE_FLOOR, laneBitmap, formatBlockTime, zoomAmountLabel,
+  zoomPlaceOf, type ZoomPlace, trimRangeParts,
   activityIn, activityLabel,
 } from "./timeline-activity.js";
 import {
@@ -144,8 +150,9 @@ import {
 import { buildPipInspector, pipSummary, type PipInspectorContext } from "./pip-inspector.js";
 import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
-  framingColor, withColor,
+  VIDEO_LOOKS, backgroundOf, customFraming, videoLookOf, withCustom, withLook, type VideoLookId,
 } from "./framing-edit.js";
+import { cssFill, mountLookGrid } from "./look-grid.js";
 import { homeRelative } from "./path-label.js";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -1138,10 +1145,17 @@ function drawZoomLane(): void {
   // pass at the samples zoomCurveSamples picks (dense at block edges, a pixel
   // apart inside blocks, none where the zoom is out) rather than a whole
   // render() at 480 evenly spaced instants.
+  // STC-636: the height is how far in the picture is (the crop's
+  // magnification, log scale), not the ease's 0..1 progress, so a 4x block
+  // stands taller than a 1.5x one. zoomLaneHeight owns the scale and floor.
   const vis = visibleSpan();
   const sampler = zoomAmountSampler(openProject, openSession);
-  const { tNs: sampleT, amount: curve } = zoomCurveSamples({
-    amountsAt: sampler.amountsAt,
+  const { tNs: sampleT, value: curve } = zoomCurveSamples({
+    valuesAt: (tNs) => {
+      const amounts = sampler.amountsAt(tNs);
+      const mags = sampler.magnificationsAt(tNs, amounts);
+      return amounts.map((a, i) => zoomLaneHeight(mags[i]!, a));
+    },
     windows: sampler.windows,
     startNs: vis.start,
     endNs: vis.end,
@@ -1154,8 +1168,7 @@ function drawZoomLane(): void {
   // brass gradient, 0.5 alpha at its top edge fading to 0.04 at the floor,
   // and outlined along its top in brass at 0.85. --zoom-fill owns the fill;
   // --zoom keeps the override-selection accents. The dither STC-566 tried is
-  // retired. amount is not clamped to [0, 1] (zoom.ts's own note): it is
-  // clipped to the lane's height rather than pretending it cannot exceed 1.
+  // retired. A height is clipped to the lane rather than assumed to fit.
   const fillColor = getComputedStyle(document.documentElement).getPropertyValue("--zoom-fill").trim() || "#d6b25e";
   const top = 2 * scale;
   const yAt = (v: number): number => h - Math.max(0, Math.min(1, v)) * (h - top);
@@ -1345,7 +1358,6 @@ document.addEventListener("pointerover", (e) => {
 });
 
 function drawOverrideBox(rect: Rect | null): void {
-  $("zoomamount").textContent = zoomAmountLabel(rect);
   syncZoomAmount();
   const box = $("overridebox") as HTMLElement;
   if (!rect) { box.setAttribute("hidden", ""); return; }
@@ -1490,7 +1502,7 @@ function openOverrideEditorUI(): void {
   ($("overrideout") as HTMLSelectElement).value = draftEasing.out;
   ($("zoomfollow") as HTMLInputElement).checked = draftFollow;
   const clear = $("overrideclear") as HTMLButtonElement;
-  clear.disabled = !draftRect;
+  clear.disabled = !draftRect && !(editingWindowId && (draftEasing.in || draftEasing.out));
   clear.textContent = editingManualId ? "Delete window" : "Remove override";
   // STC-329: a derived window's OWN delete — hidden for a manual one, whose
   // single delete action stays #overrideclear (there is no crop to reset a
@@ -1836,7 +1848,8 @@ $("overrideout").addEventListener("change", () => {
 // ---- the Zoom chip (STC-606, Figma 171:561) --------------------------------
 //
 // The open block's chip, in the overlay strip above it (Patrick, 2026-10-30):
-// the amount (drag sideways or arrow keys), In / Out / Both choosing which side
+// Place, Auto or Fixed (STC-636), the amount (drag sideways or arrow keys),
+// In / Out / Both choosing which side
 // Slow / Med / Fast sets, and delete. It edits the same draft as the Zoom
 // section's rows (draftRect, draftEasing), so Done, Escape and every mid-edit
 // save treat a chip edit exactly as an inspector one (override-edit.ts's
@@ -1848,18 +1861,33 @@ function editingBlock(): boolean {
   return editingWindowId !== null || editingManualId !== null;
 }
 
+/** The region stage 2 zooms the open derived block to (null: "don't zoom",
+ *  or a manual block, which has no stage 2). Remembered per block and bounds,
+ *  since the chip asks on every drag step. The bounds are the block's
+ *  current ones, as render()'s resolvedWindows gives stage 2 a retimed block. */
+let autoRectMemo: { key: string; rect: Rect | null } | null = null;
+function autoRect(): Rect | null {
+  if (!editingWindowId || !openSession) return null;
+  const key = `${editingWindowId}:${draftManualStart}:${draftManualEnd}`;
+  if (autoRectMemo?.key !== key) {
+    const w = zoomWindows(openSession.events).find((x) => windowId(x) === editingWindowId);
+    const at = w ? { ...w, startNs: draftManualStart, endNs: draftManualEnd } : null;
+    autoRectMemo = {
+      key,
+      rect: at ? deriveZoomCrop(at, openSession.changes, openSession.anchors, openSession.frames) : null,
+    };
+  }
+  return autoRectMemo.rect;
+}
+
 /** Where an Auto block (no drawn region) starts when its amount is first set:
  *  the region stage 2 would zoom to, else a default box at the centre. */
 function startingRect(): Rect {
-  if (editingWindowId && openSession) {
-    const w = zoomWindows(openSession.events).find((x) => windowId(x) === editingWindowId);
-    const r = w ? deriveZoomCrop(w, openSession.changes, openSession.anchors, openSession.frames) : null;
-    if (r) return r;
-  }
-  return rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 });
+  return autoRect() ?? rectFromGesture({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 });
 }
 
-/** The inspector's Amount slider and the chip's amount, from draftRect. */
+/** The inspector's Place and Amount, and the chip's (STC-636), from draftRect.
+ *  Amount is a number on an Auto block too: stage 2's. */
 function syncZoomAmount(): void {
   const range = $("zoomamountrange") as HTMLInputElement;
   const editing = editingBlock();
@@ -1867,9 +1895,47 @@ function syncZoomAmount(): void {
   const a = editing ? amountOf(draftRect ?? startingRect()) : ZOOM_AMOUNT_MIN;
   range.value = String(Math.round(a * 10) / 10);
   range.style.setProperty("--fill-pct", `${((Number(range.value) - ZOOM_AMOUNT_MIN) / (ZOOM_AMOUNT_MAX - ZOOM_AMOUNT_MIN)) * 100}%`);
-  $("chipamount").textContent = zoomAmountLabel(draftRect);
+  const label = zoomAmountLabel(draftRect, editing ? autoRect() : null);
+  $("chipamount").textContent = label;
+  $("zoomamount").textContent = label;
+  // A manual block has no stage 2 to hand its place to: it is always Fixed.
+  const place = zoomPlaceOf(draftRect);
+  const canAuto = editingWindowId !== null;
+  for (const b of $("chipplace").querySelectorAll<HTMLButtonElement>("[data-place]")) {
+    b.setAttribute("aria-checked", String(b.dataset.place === place));
+    if (b.dataset.place === "auto") b.disabled = !canAuto;
+  }
+  const select = $("zoomplace") as HTMLSelectElement;
+  select.value = place;
+  select.disabled = !editing;
+  (select.querySelector('option[value="auto"]') as HTMLOptionElement).disabled = !canAuto;
 }
 
+/**
+ * Place (STC-636). Fixed saves the region stage 2 zooms to now (its amount, its
+ * place), which the block then keeps; Auto drops the saved region so stage 2
+ * decides again. Auto keeps the block's speed: a speed with no region is a
+ * valid override (STC-630, project-20). Follow needs a region, so it goes too.
+ */
+function setZoomPlace(place: ZoomPlace): void {
+  if (!editingBlock() || zoomPlaceOf(draftRect) === place) return;
+  if (place === "auto") {
+    if (!editingWindowId) return;
+    draftRect = null;
+    draftFollow = false;
+    ($("zoomfollow") as HTMLInputElement).checked = false;
+  } else {
+    draftRect = startingRect();
+  }
+  ($("overrideclear") as HTMLButtonElement).disabled = !draftRect && !(draftEasing.in || draftEasing.out);
+  drawOverrideBox(draftRect);
+  if (draftRect) ($("overridebox") as HTMLElement).setAttribute("data-shown", "");
+  layoutOverrideBlocks();
+}
+
+/** Amount on an Auto block saves stage 2's region at the new amount, so the
+ *  block stops following stage 2 and Place shows Fixed (STC-636, Patrick
+ *  2026-11-02: option (a), no rectless magnification field). */
 function setZoomAmount(amount: number): void {
   if (!editingBlock()) return;
   draftRect = rectAtAmount(draftRect ?? startingRect(), amount);
@@ -1899,6 +1965,13 @@ function layoutZoomChip(): void {
   chip.style.left = `${Math.min(max, Math.max(2, mid - chip.offsetWidth / 2))}px`;
 }
 
+$("chipplace").addEventListener("click", (e) => {
+  const place = (e.target as HTMLElement).closest<HTMLElement>("[data-place]")?.dataset.place as ZoomPlace | undefined;
+  if (place) setZoomPlace(place);
+});
+$("zoomplace").addEventListener("change", () => {
+  setZoomPlace(($("zoomplace") as HTMLSelectElement).value as ZoomPlace);
+});
 $("chipside").addEventListener("click", (e) => {
   const side = (e.target as HTMLElement).closest<HTMLElement>("[data-side]")?.dataset.side as ChipSide | undefined;
   if (!side) return;
@@ -1970,6 +2043,8 @@ $("zoomamountrange").addEventListener("input", () => {
 $("overrideclear").addEventListener("click", () => {
   draftRect = null;
   draftFollow = false;
+  // A speed alone is an override now (STC-630), so Remove override takes it too.
+  draftEasing = { ...NO_SPEEDS };
   void closeOverrideEditor().catch((e: any) => alertUser(String(e?.message ?? e)));
 });
 $("overridedelete").addEventListener("click", () => {
@@ -2324,6 +2399,8 @@ async function openTakeOrThrow(dir: string): Promise<void> {
 
   openSession = session;
   openProject = project;
+  customPicked = false;
+  clearCustomFields();
   updateTitleMeta();
   openCapture = { width: anchors.capture.width, height: anchors.capture.height };
   openDisplay = { pointWidth: effectivePointWidth(anchors) };
@@ -3162,30 +3239,71 @@ window.addEventListener("keydown", (e) => {
 }, { capture: true });
 
 // ---- framing (STC-396) -------------------------------------------------
-// A preset (or none) saved to the project. Preview and export both go through
+// A look (or none) saved to the project. Preview and export both go through
 // render(), so what is previewed is what exports.
-const framePresetButtons = (): HTMLButtonElement[] =>
-  [...$("framepreset").querySelectorAll<HTMLButtonElement>("[data-frame-preset]")];
-/** The Style control's value: the checked segment ("none" = no frame). */
-const framePresetValue = (): string =>
-  framePresetButtons().find((b) => b.getAttribute("aria-checked") === "true")?.dataset.framePreset ?? "none";
-function setFramePresetUI(value: string): void {
-  for (const b of framePresetButtons()) b.setAttribute("aria-checked", String(b.dataset.framePreset === value));
+
+// The Background looks (STC-608): the still editor's swatch grid
+// (look-grid.ts) over video's own looks (framing-edit.ts's VIDEO_LOOKS).
+// Which swatch shows is read back from the document (`videoLookOf`), with one
+// exception, the still editor's own: a Custom pick shows Custom until another
+// look is picked, even while its colours happen to be a look's (it starts on
+// Solid's). A take opens on what its document says.
+let customPicked = false;
+let frameLooksDisabled = false;
+const frameLooks = mountLookGrid($("framelooks"), VIDEO_LOOKS.map((look) => ({
+  id: look.id,
+  label: look.label,
+  fill: cssFill(look.fill),
+  // None draws the still's "Window only" chip: a picture with nothing round it.
+  ...(look.id === "none" ? { chip: "window" as const } : {}),
+})), (id) => chooseFrameLook(id as VideoLookId));
+const customA = $("framecustoma") as HTMLInputElement;
+const customB = $("framecustomb") as HTMLInputElement;
+
+/** A newly opened take starts with empty Custom fields, so one take's colour never shows on the next's chip. */
+function clearCustomFields(): void {
+  for (const el of [customA, customB]) {
+    el.value = "";
+    el.setAttribute("aria-invalid", "false");
+  }
 }
-function setFramePresetDisabled(disabled: boolean): void {
-  for (const b of framePresetButtons()) b.disabled = disabled;
+
+function setFrameLooksDisabled(disabled: boolean): void {
+  frameLooksDisabled = disabled;
+  frameLooks.setDisabled(disabled);
+  customA.disabled = customB.disabled = disabled;
+}
+
+/** The swatch to show checked for framing `f` (undefined: a fill no swatch can show). */
+const frameLookOf = (f: Framing | undefined): VideoLookId | undefined =>
+  customPicked && f ? "custom" : videoLookOf(f);
+
+/** The Custom chip shows the fill its fields describe, once they describe one (the still editor's rule). */
+function paintCustomChip(): void {
+  const chip = frameLooks.element.querySelector<HTMLElement>('[data-look="custom"] .chip');
+  const c = customFraming(customA.value, customB.value);
+  if (chip) chip.style.background = c.ok ? cssFill(c.background) : "";
 }
 
 function updateFramingUI(): void {
   const f = chosenFraming(openProject, heldFraming);
-  setFramePresetUI(f?.preset ?? "none");
-  // One swatch for every style (STC-604): the fill for Solid, the gradient's
-  // first colour for Clean and Dark. Nothing to colour with no frame.
-  const color = $("framecolor") as HTMLInputElement;
-  color.hidden = !f;
-  $("framecolorrow").hidden = !f;
-  color.value = f ? framingColor(f) : DEFAULT_SOLID_COLOR;
-  $("framecolorvalue").textContent = color.value.toUpperCase();
+  const look = frameLookOf(f);
+  frameLooks.setSelected(look);
+  // Custom's row shows its colours as the document draws them; a value typed
+  // and refused is dropped with its mark. Never the field being typed in: a
+  // write committed from one field resolves after the user may have moved to
+  // the other, and this redraw must not wipe what they are typing there.
+  $("framecustomrow").hidden = look !== "custom";
+  if (look === "custom" && f) {
+    const bg = backgroundOf(f);
+    const values = bg.kind === "solid" ? [bg.color, ""] : [bg.colors[0]!, bg.colors[1] ?? ""];
+    [customA, customB].forEach((el, i) => {
+      if (document.activeElement === el) return;
+      el.value = values[i]!;
+      el.setAttribute("aria-invalid", "false");
+    });
+  }
+  paintCustomChip();
   // Padding, corners and shadow adjust a frame, so they wait for one.
   const short = openProject ? Math.min(openProject.output.width, openProject.output.height) : 0;
   const pad = $("framepadding") as HTMLInputElement;
@@ -3247,43 +3365,59 @@ async function setFraming(next: Framing | undefined, persist = true): Promise<vo
   await player.seek(player.currentNs);   // repaint this frame with the new choice
 }
 
-function framingFromControls(): Framing | undefined {
-  const v = framePresetValue();
-  if (v === "none") return undefined;
-  const preset = v as FramingPreset;
+/**
+ * A swatch pick (framing-edit.ts's withLook / withCustom). Picking the checked
+ * swatch again does nothing. Custom starts on the still editor's starting
+ * colour; a rollback on a failed write redraws the grid.
+ */
+function chooseFrameLook(id: VideoLookId): void {
+  if (frameLooksDisabled || !openProject) return;
   const was = chosenFraming(openProject, heldFraming);
-  // A new style starts on its OWN colours: a colour edit belongs to the style
-  // it was made on, so it is not carried across (a custom Clean gradient must
-  // not turn Dark into Clean). Solid keeps a colour the user already gave it.
-  const next: Framing = preset === "solid"
-    ? { preset, color: was?.preset === "solid" ? framingColor(was) : DEFAULT_SOLID_COLOR }
-    : { preset };
-  // The numbers set in the Frame section (padding, corners, shadow) are the
-  // user's own, so a new style keeps them (STC-604).
-  if (was?.paddingPct !== undefined) next.paddingPct = was.paddingPct;
-  if (was?.radiusPct !== undefined) next.radiusPct = was.radiusPct;
-  if (was?.shadow !== undefined) next.shadow = was.shadow;
-  return next;
+  if (id === frameLookOf(was)) return;
+  const wasCustom = customPicked;
+  let next: Framing | undefined;
+  if (id === "custom") {
+    customA.value = CUSTOM_START_COLOR;
+    customB.value = "";
+    const c = customFraming(customA.value);
+    if (!c.ok) return;
+    next = withCustom(was, c.background);
+  } else {
+    next = withLook(was, id);
+  }
+  customPicked = id === "custom";
+  void setFraming(next).catch((err: any) => {
+    customPicked = wasCustom;
+    updateFramingUI();
+    alertUser(String(err?.message ?? err));
+  });
 }
 
-// The Colour swatch edits the chosen framing (framing-edit.ts's withColor):
-// the picture repaints while the picker moves, and the write is on its commit.
-function editFramingColor(persist: boolean): void {
-  const f = chosenFraming(openProject, heldFraming);
-  if (!f) return;
-  const hex = ($("framecolor") as HTMLInputElement).value;
-  void setFraming(withColor(f, hex), persist).catch((e: any) => alertUser(String(e?.message ?? e)));
-  $("framecolorvalue").textContent = hex.toUpperCase();
+// Custom's fields: each keystroke marks a bad value (as the still editor
+// does) and repaints the chip; the commit writes, and only a valid fill.
+function markCustomFields(): void {
+  const firstOk = customFraming(customA.value).ok;
+  const c = customFraming(customA.value, customB.value);
+  customA.setAttribute("aria-invalid", String(!firstOk));
+  customB.setAttribute("aria-invalid", String(firstOk && !c.ok));
+  paintCustomChip();
 }
-$("framecolor").addEventListener("input", () => editFramingColor(false));
-$("framecolor").addEventListener("change", () => editFramingColor(true));
-// The Style segments: a click picks one (a rollback on a failed write redraws it).
-$("framepreset").addEventListener("click", (e) => {
-  const seg = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-frame-preset]");
-  if (!seg || seg.disabled || seg.getAttribute("aria-checked") === "true") return;
-  setFramePresetUI(seg.dataset.framePreset!);
-  void setFraming(framingFromControls()).catch((err: any) => alertUser(String(err?.message ?? err)));
-});
+function commitCustomFields(): void {
+  markCustomFields();
+  const c = customFraming(customA.value, customB.value);
+  if (!c.ok || frameLooksDisabled || !openProject) return;
+  const wasCustom = customPicked;
+  customPicked = true;
+  void setFraming(withCustom(chosenFraming(openProject, heldFraming), c.background)).catch((err: any) => {
+    customPicked = wasCustom;
+    updateFramingUI();
+    alertUser(String(err?.message ?? err));
+  });
+}
+for (const el of [customA, customB]) {
+  el.addEventListener("input", markCustomFields);
+  el.addEventListener("change", commitCustomFields);
+}
 
 // Padding, corners and shadow edit the chosen framing (framing-edit.ts). The
 // sliders follow the editor's input/change split: `input` repaints, `change`
@@ -4197,8 +4331,7 @@ function setOutputBusy(busy: boolean): void {
   ($("outsize") as HTMLSelectElement).disabled = busy;
   for (const id of ["exporttype", "exportrate", "gifrate", "gifwidth"]) ($(id) as HTMLSelectElement).disabled = busy;
   ($("exportquality") as HTMLInputElement).disabled = busy;
-  setFramePresetDisabled(busy);
-  ($("framecolor") as HTMLInputElement).disabled = busy;
+  setFrameLooksDisabled(busy);
   for (const id of ["framepadding", "frameradius", "frameshadow"]) ($(id) as HTMLInputElement).disabled = busy;
 }
 
@@ -4223,6 +4356,8 @@ async function runExport(): Promise<void> {
   const started = performance.now();
   const exporting: Project = structuredClone(withHeldFraming(openProject, heldFraming));
   try {
+    // STC-637: behind another window the loop ran ~10x slower per frame.
+    await editor.setExportBusy(true);
     if (exportType === "gif") {
       // STC-615: STC-395's sink, over the same trim, framing and zoom as the
       // MP4. The options are read now, once, as the panel's conversion does.
@@ -4250,8 +4385,11 @@ async function runExport(): Promise<void> {
     try { captureId = await editor.captureId(); }
     catch (e) { console.error("[export] could not resolve a capture id:", e); }
 
+    // STC-637: the pre-encode hash is the identity test's, and it tripled the
+    // export's time (main.ts's `export:hashFrames`).
+    const hash = await editor.exportHashFrames();
     const result = await exportSession(openSession, exporting, {
-      hash: true,
+      hash,
       captureId,
       decoded: decodedForExport(),
       rate: exportRate,
@@ -4275,7 +4413,8 @@ async function runExport(): Promise<void> {
       version: 1,
       transform: { version: TRANSFORM_VERSION },
       frames: result.frames,
-      preEncodeHash: result.hash,
+      // Only when hashed (STC-637); absent is "not computed", never a hash of "".
+      ...(hash ? { preEncodeHash: result.hash } : {}),
       encodedBytes: result.encodedBytes,
       micEncodedChunks: result.micEncodedChunks,
       audioOutputChunks: result.audioOutputChunks,
@@ -4302,6 +4441,7 @@ async function runExport(): Promise<void> {
     status.textContent = "Failed.";
     alertUser(`Export failed: ${e?.message ?? e}`);
   } finally {
+    void editor.setExportBusy(false).catch(() => {});
     exportAbort = undefined;
     setOutputBusy(false);
     updateFramingUI();   // padding, corners and shadow wait for a frame again

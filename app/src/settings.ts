@@ -6,6 +6,7 @@ import {
 import { clampCountdownMs, DEFAULT_COUNTDOWN_MS } from "./countdown.js";
 import { cleanIconPlacement, DEFAULT_ICON_PLACEMENT, type IconPlacement } from "./icon-placement.js";
 import { cleanWindowBounds, type Rect } from "./window-size.js";
+import { NO_PREVIOUS_AREAS, cleanPreviousAreas, type PreviousAreas } from "./previous-area.js";
 import {
   DEFAULT_EXPORT_OPTIONS, DEFAULT_FILENAME_TEMPLATE, clampQuality, parseFormat, parseScale,
   type ExportOptions,
@@ -18,6 +19,8 @@ import {
   DEFAULT_EMBED_TEMPLATE,
 } from "./share.js";
 import { type GifSettings, DEFAULT_GIF_SETTINGS, cleanGifSettings } from "@transform/gif-options.js";
+import { parseLookWrite, type LookWrite } from "@transform/backgrounds.js";
+import { isRememberedBackground, type WindowShotLook, WINDOW_SHOT_LOOKS } from "./window-look.js";
 import { cleanPipStyle, DEFAULT_PIP_STYLE, type PipStyle } from "@transform/pip-style.js";
 
 /**
@@ -139,6 +142,15 @@ export interface Settings {
    * for Settings alone never writes it.
    */
   libraryWindow: Rect | null;
+  /** The last region picked, per display (STC-570). Main writes it; a renderer's patch never does. */
+  previousAreas: PreviousAreas;
+  /** What a fresh window capture looks like (STC-628). */
+  windowShotLook: WindowShotLook;
+  /**
+   * The last Capture-backgrounds look a shot used (STC-628), or null. Main's
+   * alone, like `capturePrimed`: `recorder:setSettings` strips it.
+   */
+  lastBackgroundLook: LookWrite | null;
   /**
    * The global capture shortcuts (STC-292), as Electron accelerators. `null`
    * for an action the user deliberately unbound — which is a preference like
@@ -269,6 +281,31 @@ export const DEFAULT_STILL_SETTINGS: StillSettings = {
   ...DEFAULT_EXPORT_OPTIONS,
 };
 
+const cleanWindowShotLook = (v: unknown): WindowShotLook =>
+  WINDOW_SHOT_LOOKS.find((l) => l.value === v)?.value ?? "wallpaper";
+
+/** Must parse as a look AND be a Capture background; anything else is never remembered. */
+function cleanLastBackgroundLook(v: unknown): LookWrite | null {
+  if (v === null || v === undefined) return null;
+  try {
+    const w = parseLookWrite(v);
+    return isRememberedBackground(w) ? w : null;
+  } catch { return null; }
+}
+
+/**
+ * `recorder:setSettings`'s first step: the keys only main writes. Destructured
+ * rather than deleted, so each is named here and a reader can see exactly which
+ * do not survive a renderer's patch.
+ */
+export function stripMainOnly(patch: Partial<Settings> | undefined): Partial<Settings> {
+  const {
+    saveFolder: _mainsAlone, capturePrimed: _alsoMains, shortcutsOffered: _mainsOffered,
+    libraryWindow: _mainsToo, lastBackgroundLook: _mainsLook, previousAreas: _mainsAreas, ...rest
+  } = { ...(patch ?? {}) };
+  return rest;
+}
+
 export const DEFAULT_SETTINGS: Settings = {
   camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null, systemAudio: false, recordKeys: false,
   showClicks: true,
@@ -277,6 +314,9 @@ export const DEFAULT_SETTINGS: Settings = {
   capturePrimed: false,
   shortcutsOffered: false,
   libraryWindow: null,
+  previousAreas: NO_PREVIOUS_AREAS,
+  windowShotLook: "wallpaper",
+  lastBackgroundLook: null,
   shortcuts: { ...DEFAULT_SHORTCUTS },
   shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
   gif: { ...DEFAULT_GIF_SETTINGS },
@@ -445,6 +485,9 @@ export function readSettings(dir: string): Settings {
     capturePrimed: doc.capturePrimed === true,
     shortcutsOffered: doc.shortcutsOffered === true,
     libraryWindow: cleanWindowBounds(doc.libraryWindow),
+    previousAreas: cleanPreviousAreas(doc.previousAreas),
+    windowShotLook: cleanWindowShotLook(doc.windowShotLook),
+    lastBackgroundLook: cleanLastBackgroundLook(doc.lastBackgroundLook),
     shortcuts: cleanShortcuts(doc.shortcuts),
     shutterSound: typeof doc.shutterSound === "boolean"
       ? doc.shutterSound : DEFAULT_SETTINGS.shutterSound,
@@ -496,6 +539,9 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     capturePrimed: merged.capturePrimed === true,
     shortcutsOffered: merged.shortcutsOffered === true,
     libraryWindow: cleanWindowBounds(merged.libraryWindow),
+    previousAreas: cleanPreviousAreas(merged.previousAreas),
+    windowShotLook: cleanWindowShotLook(merged.windowShotLook),
+    lastBackgroundLook: cleanLastBackgroundLook(merged.lastBackgroundLook),
     shortcuts: cleanShortcuts(merged.shortcuts),
     still: cleanStill(merged.still),
     thumbnail: cleanThumbnail(merged.thumbnail),

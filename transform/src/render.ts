@@ -321,6 +321,15 @@ function zoomSimsFor(project: Project, session: Session, zoom: NonNullable<Proje
 export interface ZoomAmountSampler {
   /** The zoom amount at each time, in the order given. */
   amountsAt(tNs: readonly number[]): number[];
+  /**
+   * How far in the picture is at each time (STC-636): 1 / the longer side of
+   * the crop `render()` reports there, so 1 is the whole frame and 2 is a
+   * crop half the frame's size. `amounts` must be `amountsAt(tNs)`: the crop
+   * is the block's target blended by that amount, and the lane already has
+   * them. A following block (STC-617) pans but keeps its size, so its target's
+   * place does not matter here and no follow sim is stepped.
+   */
+  magnificationsAt(tNs: readonly number[], amounts: readonly number[]): number[];
   /** Every resolved window's bounds: where the curve can leave zero. */
   windows: readonly { startNs: number; endNs: number }[];
 }
@@ -330,6 +339,16 @@ export function zoomAmountSampler(project: Project, session: Session): ZoomAmoun
   const { windows, groupSims } = zoomSimsFor(project, session, zoom);
   return {
     windows: windows.map((w) => ({ startNs: w.startNs, endNs: w.endNs })),
+    magnificationsAt(tNs, amounts) {
+      return tNs.map((t, i) => {
+        const near = nearestWindow(windows, t);
+        const target = near
+          ? resolvedCrop(project.overrides, near) ?? derivedCropFor(session, near) ?? FULL_FRAME_UV
+          : FULL_FRAME_UV;
+        const crop = lerpRect(FULL_FRAME_UV, target, amounts[i] ?? 0);
+        return 1 / Math.max(crop.width, crop.height);
+      });
+    },
     amountsAt(tNs) {
       const amounts = tNs.map(() => 0);
       if (!zoom.enabled) return amounts;

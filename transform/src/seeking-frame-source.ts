@@ -36,10 +36,24 @@ export class SeekingFrameSource {
   private readonly keyIndices: number[];
   private peakBuffered = 0;
   private decoderGenerations = 0;
+  /** Every frame the decoder emitted, wanted or not: a seek mid-group decodes its way there. */
+  private framesDecoded = 0;
+  /** Flushes mid-seek; each leaves the decoder needing a keyframe, so the next seek restarts. */
+  private flushes = 0;
   /** A flushed decoder refuses delta chunks until it sees a keyframe again. */
   private needsKeyframe = false;
 
-  private static readonly FEED_AHEAD = 8;
+  /**
+   * How far past the target to feed: H.264's largest decoded-picture buffer,
+   * 16 frames (STC-632). The capture's stream carries no reorder hint, so a
+   * decoder may hold that many frames before emitting one, and VideoToolbox
+   * does. At 8 the target never came out without a flush, a flushed decoder
+   * needs a keyframe, and so every seek, one frame forward included,
+   * re-decoded its whole group: 15 painted frames/s on a drag. Measured on a
+   * 2226x1884 take with scripts/scrub-timing-one.mjs: 12 still flushed on
+   * most seeks, 16 never did, and forward drags painted at 60/s.
+   */
+  private static readonly FEED_AHEAD = 16;
   private readonly reader: ChunkReader;
 
   constructor(private readonly video: DemuxedVideo) {
@@ -113,6 +127,7 @@ export class SeekingFrameSource {
       output: (frame) => {
         this.pending.push(frame);
         this.nextOutIndex++;
+        this.framesDecoded++;
         this.peakBuffered = Math.max(this.peakBuffered, this.pending.length + (this.current ? 1 : 0));
         this.wake?.();
       },
@@ -190,6 +205,7 @@ export class SeekingFrameSource {
       await withTimeout(d.flush(), 30_000, "decoder flush at end of stream")
         .catch((e) => { this.failure = e instanceof Error ? e : new Error(String(e)); });
       this.needsKeyframe = true;
+      this.flushes++;
       return this.pending.length > 0;
     }
 
@@ -232,6 +248,8 @@ export class SeekingFrameSource {
     return {
       peakBuffered: this.peakBuffered,
       decoderGenerations: this.decoderGenerations,
+      framesDecoded: this.framesDecoded,
+      flushes: this.flushes,
       liveFrames: this.pending.length + (this.current ? 1 : 0),
     };
   }

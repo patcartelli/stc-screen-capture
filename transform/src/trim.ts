@@ -382,10 +382,12 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
     if (!raw || typeof raw !== "object") continue;
     const d = raw as Record<string, unknown>;
     if (d.kind === "geometry") {
+      // No rect at all (project-20, STC-630) is an Auto block with its own
+      // speed; a rect that is THERE but malformed still drops the entry.
       const rect = cleanOverrideRect(d.rect);
-      if (!rect) continue;
+      if (d.rect !== undefined && !rect) continue;
       if (typeof d.windowId !== "string" || !d.windowId) continue;
-      const entry: ZoomOverride = { kind: "geometry", windowId: d.windowId, rect };
+      const entry: ZoomOverride = { kind: "geometry", windowId: d.windowId, ...(rect ? { rect } : {}) };
       // A name, or (project-17, STC-619) separate in/out speeds; anything else
       // drops the easing alone, never the entry. Rewritten in its smallest
       // form (equal sides are the preset's name), so a hand-edited pair of
@@ -394,8 +396,12 @@ function cleanOverrides(v: unknown): ZoomOverride[] {
         const e = normalizeEasing(speedsOf(d.easing));
         if (e !== undefined) entry.easing = e;
       }
-      // project-19 (STC-617): only `true` means anything; anything else is a fixed crop.
-      if (d.follow === true) entry.follow = true;
+      // project-19 (STC-617): only `true` means anything; anything else is a
+      // fixed crop. A rectless entry has no size to follow with.
+      if (d.follow === true && rect) entry.follow = true;
+      // Rectless and speedless says nothing; carrying it would only hold the
+      // document at v20 for no reason.
+      if (!rect && entry.easing === undefined) continue;
       out.push(entry);
     } else if (d.kind === "manual") {
       const rect = cleanOverrideRect(d.rect);
@@ -439,7 +445,22 @@ function hasFollow(project: Project): boolean {
   return !!project.overrides?.some((o) => (o.kind === "geometry" || o.kind === "manual") && o.follow === true);
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 {
+/** An Auto block with its own speed and no rect (STC-630): the one thing v20 expresses. */
+function hasRectlessGeometry(project: Project): boolean {
+  return !!project.overrides?.some((o) => o.kind === "geometry" && !o.rect);
+}
+
+/** A linear framing background of more than two stops (STC-608): the one thing v21 expresses. */
+export function hasMultiStopFraming(project: Project): boolean {
+  const bg = project.framing?.background;
+  return bg?.kind === "linear" && bg.colors.length > 2;
+}
+
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 {
+  // v21 (STC-608) is a framing background of 3-8 stops; the framing itself is
+  // carried by the `version >= 15` line below like every other framing field.
+  if (hasMultiStopFraming(project)) return 21;
+  if (hasRectlessGeometry(project)) return 20;
   // v19 (STC-617) is a block that follows the cursor; its overrides are
   // carried by the `version >= 6` line below like every other override field.
   if (hasFollow(project)) return 19;

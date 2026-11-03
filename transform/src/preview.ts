@@ -58,6 +58,13 @@ export class PreviewPlayer {
   private viewOutput: { width: number; height: number } | null = null;
   private renderedFrames = 0;
   private cameraRenderedFrames = 0;
+  /**
+   * Where each painted frame's time went (STC-632), summed since the player
+   * was made: `render()`, the frame sources (read + decode, both tracks), and
+   * `composite()`. Diagnostics only: nothing decides on them, and a caller
+   * wanting one drag's cost reads them before and after it.
+   */
+  private readonly drawMs = { render: 0, decode: 0, composite: 0, maxDecode: 0, maxTotal: 0 };
 
   onTime: ((tNs: number, playing: boolean) => void) | undefined;
   /**
@@ -111,6 +118,8 @@ export class PreviewPlayer {
       lateFrames: this.lateFrames,
       renderedFrames: this.renderedFrames,
       cameraRenderedFrames: this.cameraRenderedFrames,
+      drawMs: { ...this.drawMs },
+      display: this.source.stats,
     };
   }
 
@@ -216,8 +225,15 @@ export class PreviewPlayer {
         if (this.playing && !this.closed) this.anchor(true);
       }, SEEK_SETTLE_MS);
     }
-    await this.draw();
+    // The POSITION is reported now, the picture follows when it is painted
+    // (STC-632). The editor moves the playhead and the readout here, and this
+    // used to run after the draw: a drag's seeks coalesce into the draw in
+    // flight, whose promise settles only once no redraw is wanted, so while
+    // the pointer outran a 4K decode the playhead did not move at all and then
+    // jumped. Scrubber rule 3 is that the playhead is where the pointer is.
+    // The tick already reports this way: position first, `void this.draw()`.
     this.onTime?.(this.tNs, this.playing);
+    await this.draw();
   }
 
   /**
@@ -339,7 +355,9 @@ export class PreviewPlayer {
     try {
       const tick = tickOf(this.tNs);
       const t = tickTimeNs(tick);
+      const t0 = performance.now();
       const fs = render(this.renderProject, this.session, t);
+      const t1 = performance.now();
       // render()'s answer, not re-derived here — see export.ts.
       const idx = fs.frameIndex;
       // Both decoders are driven concurrently. They are independent decoders
@@ -351,9 +369,17 @@ export class PreviewPlayer {
         fs.pip && this.cameraSource ? this.cameraSource.frameAt(fs.pip.frameIndex) : null,
       ]);
       if (this.closed) return;
+      const t2 = performance.now();
       composite(this.ctx as unknown as OffscreenCanvasRenderingContext2D,
                 frame, cameraFrame, fs,
                 this.effectiveOutput.width, this.effectiveOutput.height);
+      const t3 = performance.now();
+      const d = this.drawMs;
+      d.render += t1 - t0;
+      d.decode += t2 - t1;
+      d.composite += t3 - t2;
+      d.maxDecode = Math.max(d.maxDecode, t2 - t1);
+      d.maxTotal = Math.max(d.maxTotal, t3 - t0);
       this.renderedFrames++;
       if (cameraFrame) this.cameraRenderedFrames++;
     } finally {

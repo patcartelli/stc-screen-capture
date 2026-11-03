@@ -3,6 +3,7 @@ import type {
 } from "./shot.js";
 import type { CursorShape } from "./types.js";
 import type { Size } from "./spaces.js";
+import { LOOK_FILLS, type LookFill } from "./looks.js";
 import {
   pxPerPoint as pxPerPointFrom, regionPointToPixels, uvRectToPixels, uvToPixels,
 } from "./spaces.js";
@@ -136,11 +137,10 @@ export const PRESET_SHADOW: Readonly<Shadow> = {
 };
 
 /** Provisional — see PRESET_PADDING_PCT. A quiet neutral, not a statement. */
-export const PRESET_BACKGROUND: Readonly<Background> = {
-  kind: "linear",
-  colors: ["#e9edf2", "#cfd6e0"],
-  angleDeg: 135,
-};
+export const PRESET_BACKGROUND: Readonly<Background> = (() => {
+  const clean = LOOK_FILLS.clean as Extract<LookFill, { kind: "linear" }>; // Clean is a linear fill; looks.test.ts pins it
+  return { kind: "linear", colors: [...clean.colors], angleDeg: clean.angleDeg };
+})();
 
 /**
  * The decoration a mode means, filled in from the presets.

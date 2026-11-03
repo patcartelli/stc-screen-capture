@@ -633,6 +633,9 @@ describe("the playhead is grabbable along its full height (STC-605)", () => {
     await win.click(".zoomblock");
     await expect.poll(() => win.isVisible("#overridebar"), { timeout: 10_000 }).toBe(true);
     await win.click("#overridedone");
+    // Done commits before the block leaves the edit state; until then the
+    // first .zoomblock is the open one (#manualdraft), which is going away.
+    await win.waitForSelector("#overridebar", { state: "hidden", timeout: 10_000 });
     await win.click(".zoomblock");
     await expect.poll(() => win.isVisible("#overridebar"), { timeout: 10_000 }).toBe(true);
   }, 60_000);

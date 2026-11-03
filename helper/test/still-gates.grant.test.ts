@@ -369,6 +369,82 @@ describe("STC-301 gate 3: capture latency", () => {
       "the frame is much larger than ~20 MP, the budget is the thing to revisit (STC-383).")
       .toBeLessThan(STILL_END_TO_END_MS);
   }, 180_000);
+
+  /**
+   * STC-628: the default window shot reads the wallpaper beside its capture,
+   * so it is on the quick path, and it is held to the SAME two budgets — the
+   * spec forbids moving them. A window shot, because only a window shot reads
+   * the wallpaper. The wallpaper must actually be read (a `wallpaperError`
+   * fails the gate rather than passing it fast), and each sample says where
+   * it came from. There is no cache: every sample captures the wallpaper
+   * window afresh and encodes a full-resolution JPEG, which is the case the
+   * budgets have to hold.
+   */
+  test("a window shot with the wallpaper is inside both budgets", async () => {
+    skipUnless(await probe());
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"), 10_000, "ready");
+    const list = await h.request({ cmd: "windows" });
+    expect(list.ev, JSON.stringify(list)).toBe("windows");
+    // STC_GATE3_DISPLAY=<id> shoots a window on that display, so each
+    // display's wallpaper size can be measured on its own.
+    const onDisplay = process.env.STC_GATE3_DISPLAY ? Number(process.env.STC_GATE3_DISPLAY) : undefined;
+    // STC-625 replaced the `fullyVisible` flag with `visible`, the window's
+    // uncovered rects: a window nothing covers is one rect equal to its frame.
+    type Rect = { x: number; y: number; width: number; height: number };
+    const whole = (w: Rect & { visible: Rect[] }) =>
+      w.visible?.length === 1 && w.visible[0]!.x === w.x && w.visible[0]!.y === w.y
+      && w.visible[0]!.width === w.width && w.visible[0]!.height === w.height;
+    const win = (list.windows as Array<Rect & { id: number; visible: Rect[]; app?: string; displayId?: number }>)
+      .find((w) => whole(w) && (onDisplay === undefined || w.displayId === onDisplay));
+    if (!win) throw new Error("SKIP-WINDOW: no fully visible window to shoot; open one and run again.");
+    process.stderr.write(
+      `[gate 3 wallpaper] shooting window ${win.id} (${win.app ?? "?"}) on display ${win.displayId ?? "?"}\n`);
+
+    const walls: number[] = [];
+    const buffers: number[] = [];
+    for (let i = 0; i < GATE_3_SAMPLES; i++) {
+      const dir = tmpDir("stc-lat-wp-");
+      const t0 = performance.now();
+      const r = await h.request({ cmd: "capture-still", dir, kind: "window", windowId: win.id, wallpaper: true });
+      const wall = performance.now() - t0;
+      expect(r.ev, JSON.stringify(r)).toBe("still");
+      expect(r.wallpaperError, `the wallpaper was not read: ${r.wallpaperError}`).toBeUndefined();
+      expect(r.wallpaper?.file).toBe("wallpaper.jpg");
+      expect(existsSync(join(dir, "wallpaper.jpg"))).toBe(true);
+      // The document is untouched: the wallpaper is the app's to use.
+      expect((r.shot as any).decoration.mode).toBe("window-only");
+
+      const captureMs = timingMs(r, "captureMs");
+      const writeMs = timingMs(r, "writeMs");
+      const wallpaperMs = timingMs(r, "wallpaperMs");
+      const totalMs = timingMs(r, "totalMs");
+      process.stderr.write(
+        `[gate 3 wallpaper] sample ${i}: wall ${wall.toFixed(1)} ms` +
+        ` | verb-to-buffer ${captureMs.toFixed(1)}` +
+        ` | PNG encode ${(writeMs - captureMs).toFixed(1)}` +
+        ` | waiting on the wallpaper ${(wallpaperMs - writeMs).toFixed(1)}` +
+        ` | total ${totalMs.toFixed(1)}` +
+        ` || wallpaper ${r.wallpaper.source} read in ${Number(r.wallpaper.ms).toFixed(1)}\n`);
+      walls.push(wall);
+      buffers.push(captureMs);
+    }
+    h.kill();
+
+    report("wallpaper: verb to buffer (captureMs)", buffers, STILL_BUDGET_MS);
+    report("wallpaper: verb to answer (wall)", walls, STILL_END_TO_END_MS);
+    const buffer = steadyMedian(buffers);
+    const wall = steadyMedian(walls);
+    expect(buffer.value,
+      `with the wallpaper on, steady-state verb-to-buffer was ${buffer.value.toFixed(1)} ms, over ` +
+      `${STILL_BUDGET_MS} ms. Settled half ${buffer.samples.map((n) => n.toFixed(1)).join(", ")}.`)
+      .toBeLessThan(STILL_BUDGET_MS);
+    expect(wall.value,
+      `with the wallpaper on, steady-state verb-to-answer was ${wall.value.toFixed(1)} ms, over ` +
+      `${STILL_END_TO_END_MS} ms. Settled half ${wall.samples.map((n) => n.toFixed(1)).join(", ")}. ` +
+      "The per-sample lines say whether the wait was on the wallpaper, and which source it came from.")
+      .toBeLessThan(STILL_END_TO_END_MS);
+  }, 180_000);
 });
 
 describe("STC-301 gate 6: a still taken during a recording", () => {

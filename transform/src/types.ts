@@ -285,16 +285,21 @@ export interface Zoom {
  * `follow: true` (project-19, STC-617) on a `geometry` or `manual` entry makes
  * the block follow the cursor: its rect supplies only the crop's SIZE, and
  * `zoom-follow.ts` decides where it sits at each tick. Written only when true.
+ *
+ * A `geometry` entry with no `rect` (project-20, STC-630) is an Auto block
+ * with its own speed: stage 2 still decides where it zooms, and the entry
+ * carries only `easing`, which it then always has. It never has `follow`,
+ * which takes its size from the rect.
  */
 export type ZoomOverride =
-  | { kind: "geometry"; windowId: string; rect: { x: number; y: number; width: number; height: number }; easing?: EasingSpec; follow?: true }
+  | { kind: "geometry"; windowId: string; rect?: { x: number; y: number; width: number; height: number }; easing?: EasingSpec; follow?: true }
   | { kind: "manual"; id: string; startNs: number; endNs: number; rect: { x: number; y: number; width: number; height: number }; easing: CompleteEasing; follow?: true }
   | { kind: "removed"; windowId: string }
   | { kind: "retime"; windowId: string; startNs?: number; endNs?: number };
 
 /** Mirrors schema/project-1.schema.json and schema/project-2.schema.json. */
 export interface Project {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21;
   output: { fps: 60; width: number; height: number };
   /**
    * Which transform this edit was authored against (project-3, STC-308).

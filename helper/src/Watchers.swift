@@ -116,7 +116,12 @@ final class Watchers {
                         // space CGEvent coordinates and anchors.display use
                         // (STC-247); a picker shows the name, a test checks
                         // anchors against the origin.
-                        displays.append(["id": id, "main": CGDisplayIsMain(id) != 0,
+                        // STC-570: the display's UUID, which survives the reconnects
+                        // that change the numeric id. "" when CoreGraphics has none.
+                        var uuid = ""
+                        if let ref = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue(),
+                           let str = CFUUIDCreateString(nil, ref) as String? { uuid = str }
+                        displays.append(["id": id, "main": CGDisplayIsMain(id) != 0, "uuid": uuid,
                                          "name": names[id] ?? "Display \(id)",
                                          "pointW": b.size.width, "pointH": b.size.height,
                                          "pixelW": m?.pixelWidth ?? 0, "pixelH": m?.pixelHeight ?? 0,

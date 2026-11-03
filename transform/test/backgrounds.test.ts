@@ -1,10 +1,13 @@
 import { describe, test, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
-  LOOKS, customBackground, lookOf, lookWrite, applyLook, parseLookWrite, CUSTOM_START_COLOR,
+  LOOKS, WALLPAPER_FILE, wallpaperBackground, wallpaperLookWrite, customBackground, lookOf, lookWrite, applyLook, parseLookWrite, CUSTOM_START_COLOR,
 } from "../src/backgrounds.js";
+import { LOOK_FILLS } from "../src/looks.js";
 import { FRAMING_PRESETS, DEFAULT_SOLID_COLOR } from "../src/framing.js";
 import { PRESET_BACKGROUND, PRESET_SHADOW, decorationForMode } from "../src/still-decorate.js";
-import { parseShot, defaultDecoration, type Shot } from "../src/shot.js";
+import { parseShot, shotForWrite, defaultDecoration, type Shot } from "../src/shot.js";
 
 const windowShot = (decoration: Record<string, unknown> = {}): Shot => parseShot({
   version: 1, kind: "window", capturedAtNs: "1", timebase: { numer: 125, denom: 3 },
@@ -56,7 +59,7 @@ describe("the picker's looks come from video's presets (STC-599)", () => {
 });
 
 describe("lookOf recovers the swatch from what a document draws", () => {
-  test.each(LOOKS.filter((l) => l.id !== "custom"))("$id round-trips", (l) => {
+  test.each(LOOKS.filter((l) => l.id !== "custom" && l.id !== "wallpaper"))("$id round-trips", (l) => {
     const shot = windowShot();
     expect(lookOf(applyLook(shot.decoration, lookWrite(l)))).toBe(l.id);
   });
@@ -139,5 +142,54 @@ describe("parseLookWrite is shape only", () => {
     expect(() => parseLookWrite({ mode: "window-shadow", background: [], shadow: null })).toThrow();
     expect(() => parseLookWrite({ mode: "window-shadow" })).toThrow();
     expect(() => parseLookWrite("x")).toThrow();
+  });
+});
+
+describe("the Wallpaper look (STC-628)", () => {
+  const f = WALLPAPER_FILE;
+  const wearing = (w: ReturnType<typeof wallpaperLookWrite>) => {
+    const s = windowShot();
+    return parseShot({ ...shotForWrite(s), decoration: { ...applyLook(s.decoration, w), mode: w.mode } });
+  };
+
+  test("lookOf recognises it, and a linear custom fill is still Custom", () => {
+    const s = windowShot();
+    expect(lookOf(applyLook(s.decoration, wallpaperLookWrite(f)))).toBe("wallpaper");
+    expect(lookOf(applyLook(s.decoration, lookWrite(look("custom"), { kind: "linear", colors: ["#112233", "#445566"], angleDeg: 135 })))).toBe("custom");
+  });
+
+  test("lookWrite with the wallpaper background equals wallpaperLookWrite", () => {
+    expect(lookWrite(look("wallpaper"), wallpaperBackground(f))).toEqual(wallpaperLookWrite(f));
+  });
+
+  test("the fallback colour is Clean's first, and the shadow is the mode default", () => {
+    expect(wallpaperBackground(f)).toEqual({ kind: "wallpaper", file: f, colors: [PRESET_BACKGROUND.colors![0]] });
+    expect(wallpaperLookWrite(f)).toMatchObject({ mode: "window-shadow-custom-background", shadow: null });
+    const drawn = decorationForMode("window-shadow-custom-background", wearing(wallpaperLookWrite(f)).decoration).shadow;
+    expect(drawn).toEqual(decorationForMode("window-shadow-background", {}).shadow);
+  });
+
+  // JPEG, not PNG (Patrick, 2026-11-02): a PNG of a gradient wallpaper cost
+  // ~300-590 ms to encode per shot. One name, written by the helper and named
+  // here; the two are held together so neither can drift alone.
+  test("the file is wallpaper.jpg, the same name the helper writes", () => {
+    expect(f).toBe("wallpaper.jpg");
+    const swift = readFileSync(join(__dirname, "..", "..", "helper", "src", "StillDecisions.swift"), "utf8");
+    expect(swift.match(/static let wallpaperFile = "([^"]+)"/)?.[1]).toBe(f);
+  });
+
+  test("it stores in the same version as Clean", () => {
+    const clean = parseShot({ ...shotForWrite(windowShot()), decoration: { ...applyLook(windowShot().decoration, lookWrite(look("clean"))) } });
+    expect(shotForWrite(wearing(wallpaperLookWrite(f))).version).toBe(shotForWrite(clean).version);
+  });
+});
+
+describe("looks catalogue (STC-608)", () => {
+  test("aurora and ember read the catalogue", () => {
+    const find = (id: string) => LOOKS.find((l) => l.id === id)!;
+    const stops = (f: (typeof LOOK_FILLS)["aurora"]) => (f.kind === "linear" ? [...f.colors] : []);
+    expect(find("aurora").background).toEqual({ kind: "linear", colors: stops(LOOK_FILLS.aurora), angleDeg: 135 });
+    expect(find("ember").background).toEqual({ kind: "linear", colors: stops(LOOK_FILLS.ember), angleDeg: 160 });
+    expect(stops(LOOK_FILLS.aurora)).toHaveLength(3);
   });
 });

@@ -128,11 +128,12 @@ import {
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
 import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS } from "./stop-copy.js";
+import { latestOnly } from "./latest-only.js";
 import { decorationForMode, layoutStill } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { withMeshBackground } from "@transform/still-mesh";
 import { colorSpaceFor, stillIsBlocked, type ExportOptions } from "@transform/still-export";
-import { composeStill, stillPixelBytes } from "./still-compose.js";
+import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 import type { Shot } from "@transform/shot";
 import type { GifSettings } from "@transform/gif-options";
 import { PERMISSION_ACTION_LABELS, type Grant, type PermissionsState, type RowAction } from "./permissions.js";
@@ -483,7 +484,9 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
   const shot = await recorder.getShot(dir);
   const bytes = await recorder.getFrame(dir, shot.frame.file);
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  let background: ImageBitmap | undefined;
   try {
+    background = await loadShotBackground(shot, (name) => recorder.getFrame(dir, name));
     // The stored decoration, filled in from the mode's presets exactly as the
     // panel does — so a shot never opened since capture still shows what it
     // would export.
@@ -502,8 +505,8 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
     // against the frame, and reading the composite would read pixels a
     // previous fill had already replaced.
     const fills = sampleRedactionFills(frame, shot.frame, decorated.decoration.redactions);
-    withMeshBackground(layout.background, full.width, full.height, (background) =>
-      renderStill(ctx as never, { frame, redactionFills: fills, background }, layout));
+    withMeshBackground(layout.background, full.width, full.height, (mesh) =>
+      renderStill(ctx as never, { frame, redactionFills: fills, background: mesh ?? background }, layout));
 
     const small = document.createElement("canvas");
     small.width = Math.max(1, Math.round(full.width * fit));
@@ -521,6 +524,7 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
     // ~30 MB at 4K, and 500 of them is the tab-killer this repo already
     // documents. Closed on every path, including the failing one.
     frame.close();
+    background?.close();
   }
 }
 
@@ -708,14 +712,15 @@ async function copyStillImage(item: LibraryItem): Promise<void> {
   const shot = await recorder.getShot(dir);
   const bytes = await recorder.getFrame(dir, shot.frame.file);
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  const background = await loadShotBackground(shot, (name) => recorder.getFrame(dir, name));
   try {
     const decorated = { ...shot, decoration: decorationForMode(shot.decoration.mode, shot.decoration) };
     let options: ExportOptions = { ...(await recorder.getSettings()).still } as ExportOptions;
-    let composed = composeStill(decorated, frame, options);
+    let composed = composeStill(decorated, frame, options, background);
     // A stored JPEG under a style with transparency: PNG, as the panel does.
     if (stillIsBlocked(composed.plan)) {
       options = { ...options, format: "png" };
-      composed = composeStill(decorated, frame, options);
+      composed = composeStill(decorated, frame, options, background);
     }
     const { canvas, plan } = composed;
     const r = await recorder.exportStill({
@@ -732,6 +737,7 @@ async function copyStillImage(item: LibraryItem): Promise<void> {
     alertUser(`Copied “${item.label ?? item.id}” to the clipboard.`);
   } finally {
     frame.close();
+    background?.close();
   }
 }
 
@@ -785,9 +791,12 @@ async function onPlaceholderAction(a: PlaceholderAction): Promise<void> {
 // later refresh that outlasts UPDATING_SHOW_AFTER_MS says the grid is catching
 // up. A fast refresh shows neither.
 let libraryDrawn = false;
+// STC-489: scans overlap and answer out of order; only the newest is drawn.
+const beginScan = latestOnly();
 
 async function refreshTakes(): Promise<void> {
   const host = $("takes");
+  const isCurrent = beginScan();
   let slow: ReturnType<typeof setTimeout> | undefined;
   if (!libraryDrawn) renderPlaceholderOnly(host, LOADING_PLACEHOLDER);
   else slow = setTimeout(() => showUpdating(host, UPDATING_NOTE), UPDATING_SHOW_AFTER_MS);
@@ -797,12 +806,15 @@ async function refreshTakes(): Promise<void> {
   } finally {
     clearTimeout(slow);
   }
-  libraryFilter = list.filter;
-  lastList = list;
+  if (!isCurrent()) return;
   const empty = !list.items.length && !list.invalid.length && !(list.folder && list.folder.state !== "ok");
-  emptyContext = empty && list.filter === "all"
+  const context = empty && list.filter === "all"
     ? await placeholderContext()
     : { folder: "", shotKey: null, recordKey: null };
+  if (!isCurrent()) return;
+  libraryFilter = list.filter;
+  lastList = list;
+  emptyContext = context;
   libraryDrawn = true;
   drawLibrary();
 }

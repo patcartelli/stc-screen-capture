@@ -1,5 +1,7 @@
 # STC-604 runbook — the editor's inspector pane
 
+> Superseded by STC-608: the Style row and Colour tint are gone; see docs/STC-608-RUNBOOK.md.
+
 What only a person with the real editor can settle. The five sections were built
 from Figma Capture-SK-016 v2 (Frame 171:78, Zoom 171:561, Camera 171:1066, Audio
 171:1546, Export 171:2050) and checked only as **rendered snapshots with sample
