@@ -4,6 +4,8 @@ import { join } from "node:path";
 import AjvImport from "ajv";
 import { defaultProject, parseProject, projectForWrite } from "../src/trim.js";
 import { PROJECT_VERSIONS } from "../src/project-version.js";
+import { LOOK_FILLS } from "../src/looks.js";
+import type { Framing } from "../src/framing.js";
 
 const Ajv = (AjvImport as any).default ?? AjvImport;
 const root = join(__dirname, "..", "..");
@@ -75,5 +77,43 @@ describe("project-15 framing (STC-396)", () => {
     expect(p.keycast).toEqual({ show: false });
     expect(p.showClicks).toBe(false);
     expect(p.framing).toBeUndefined();
+  });
+});
+
+describe("project-20 multi-stop framing (STC-608)", () => {
+  const validate20 = new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, "schema/project-20.schema.json"), "utf8")));
+  const auroraFill = LOOK_FILLS.aurora;
+  if (auroraFill.kind !== "linear") throw new Error("aurora is a linear look");
+  const aurora = { kind: "linear" as const, colors: [...auroraFill.colors], angleDeg: auroraFill.angleDeg };
+  const framed = (background: Framing["background"]) =>
+    ({ ...defaultProject(640, 360), framing: { preset: "clean" as const, background } });
+
+  test("a three-stop framing writes v20 and validates", () => {
+    const out = projectForWrite(framed(aurora), DUR);
+    expect(out.version).toBe(20);
+    expect(validate20(out), JSON.stringify(validate20.errors, null, 2)).toBe(true);
+  });
+
+  test("a two-stop or solid framing stays at 15", () => {
+    expect(projectForWrite(framed({ kind: "linear", colors: ["#000000", "#ffffff"], angleDeg: 90 }), DUR).version).toBe(15);
+    expect(projectForWrite(framed({ kind: "solid", color: "#123456" }), DUR).version).toBe(15);
+  });
+
+  test("v20 is readable and keeps a three-stop framing", () => {
+    const written = projectForWrite(framed(aurora), DUR);
+    expect(parseProject(written, 640, 360, DUR).framing).toEqual(written.framing);
+  });
+
+  test("a three-stop framing in a v19 document still loads", () => {
+    const written = { ...projectForWrite(framed(aurora), DUR), version: 19 };
+    const bg = parseProject(written, 640, 360, DUR).framing?.background;
+    expect(bg?.kind === "linear" && bg.colors.length).toBe(3);
+  });
+
+  test("the v20 schema refuses nine stops", () => {
+    const written = projectForWrite(framed(aurora), DUR);
+    const nine = { ...written, framing: { ...written.framing, background: { ...aurora, colors: Array(9).fill("#000000") } } };
+    expect(validate20(nine)).toBe(false);
   });
 });

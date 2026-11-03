@@ -439,7 +439,16 @@ function hasFollow(project: Project): boolean {
   return !!project.overrides?.some((o) => (o.kind === "geometry" || o.kind === "manual") && o.follow === true);
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 {
+/** A linear framing background of more than two stops (STC-608): the one thing v20 expresses. */
+export function hasMultiStopFraming(project: Project): boolean {
+  const bg = project.framing?.background;
+  return bg?.kind === "linear" && bg.colors.length > 2;
+}
+
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 {
+  // v20 (STC-608) is a framing background of 3-8 stops; the framing itself is
+  // carried by the `version >= 15` line below like every other framing field.
+  if (hasMultiStopFraming(project)) return 20;
   // v19 (STC-617) is a block that follows the cursor; its overrides are
   // carried by the `version >= 6` line below like every other override field.
   if (hasFollow(project)) return 19;
