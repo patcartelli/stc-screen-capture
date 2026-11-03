@@ -395,7 +395,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         t.schedule(deadline: .now() + CameraStall.checkIntervalSeconds, repeating: CameraStall.checkIntervalSeconds)
         t.setEventHandler { [weak self] in self?.checkStall() }
         lock.lock()
-        if stopped { lock.unlock(); t.cancel(); return }
+        if stopped { lock.unlock(); discardUnresumedTimer(t); return }
         stallTimer = t
         lock.unlock()
         t.resume()
@@ -443,7 +443,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         t.schedule(deadline: .now() + HOLD_FRAME_CHECK_INTERVAL_SECONDS, repeating: HOLD_FRAME_CHECK_INTERVAL_SECONDS)
         t.setEventHandler { [weak self] in self?.holdIfStill() }
         lock.lock()
-        if stopped { lock.unlock(); t.cancel(); return }
+        if stopped { lock.unlock(); discardUnresumedTimer(t); return }
         holdTimer = t
         lock.unlock()
         t.resume()
