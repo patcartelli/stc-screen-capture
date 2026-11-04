@@ -72,6 +72,8 @@ const browser = await chromium.launch({
   headless: true,
   ...(forceSoftwareRender() ? { args: SOFTWARE_RENDER_ARGS } : {}),
 });
+// Which Chrome this run got. CI's is unpinned and can change with no commit (STC-640).
+console.log(`browser: chrome ${browser.version()}`);
 const page = await browser.newPage();
 // STC-259 Mode B: a blocked renderer kills every in-page bound, so the page's
 // checkpoints are collected out here. Also installs the wedge fault injection.

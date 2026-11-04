@@ -17,6 +17,8 @@ const server = await createServer({ configFile: "harness/vite.config.ts" });
 await server.listen(5199);
 
 const browser = await chromium.launch({ channel: "chrome", headless: true });
+// Which Chrome this run got. CI's is unpinned and can change with no commit (STC-640).
+console.log(`browser: chrome ${browser.version()}`);
 const page = await browser.newPage();
 
 // Mode B: the renderer's main thread blocks, so nothing inside the page can

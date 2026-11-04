@@ -273,6 +273,70 @@ describe("gate teardown is bounded in EVERY gate", () => {
   });
 });
 
+describe("every gate says which browser it ran on", () => {
+  // On 2026-11-03 CI's Chrome moved from 156 to 157 with no commit and the
+  // determinism gate went red everywhere. It looked intermittent and was blamed
+  // on the PR that merged first, partly because the four video gates did not
+  // print a version. A gate's log has to name its browser, and has to do it
+  // before anything can wedge: a run that never returns from the page is exactly
+  // the run someone reads the log of (STC-640).
+  const VIDEO_GATES = ["gate.mjs", "seek-gate.mjs", "export-gate.mjs", "identity-gate.mjs"];
+
+  const browserLineProblem = (src: string): string | null => {
+    const code = withoutComments(src);
+    const launch = code.indexOf("chromium.launch(");
+    const line = code.search(/console\.log\(`browser: [^`]*\$\{browser\.version\(\)\}`\)/);
+    const page = code.indexOf("browser.newPage(");
+    if (launch < 0) return "launches no browser";
+    if (line < 0) return "prints no browser version";
+    if (line < launch) return "prints the version before the browser exists";
+    if (page >= 0 && line > page) return "prints the version after opening a page";
+    return null;
+  };
+
+  // Read from package.json, as the bounds tests do, so a new gate cannot be the
+  // one that was missed.
+  const gateScripts = () => {
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    return Object.entries(pkg.scripts as Record<string, string>)
+      .filter(([name]) => /^gate(:|$)/.test(name) && name !== "gate:once")
+      .map(([, cmd]) => cmd.match(/scripts\/([a-z-]+\.mjs)(?!.*scripts\/)/)?.[1])
+      .filter((x): x is string => !!x);
+  };
+
+  test("every gate npm runs prints its version right after launching", () => {
+    const gates = gateScripts();
+    expect(gates, "the list must reach every video gate, or this checks nothing")
+      .toEqual(expect.arrayContaining(VIDEO_GATES));
+    for (const f of gates) {
+      expect(browserLineProblem(readFileSync(join(root, "scripts", f), "utf8")), `scripts/${f}`)
+        .toBeNull();
+    }
+  });
+
+  test("a video gate names the channel it launched", () => {
+    for (const f of VIDEO_GATES) {
+      const code = withoutComments(readFileSync(join(root, "scripts", f), "utf8"));
+      expect(code, `scripts/${f} launches real Chrome`).toMatch(/channel: "chrome"/);
+      expect(code, `scripts/${f} must say so in its version line`)
+        .toContain("console.log(`browser: chrome ${browser.version()}`)");
+    }
+  });
+
+  test("the check can fail", () => {
+    const launch = 'const browser = await chromium.launch({ channel: "chrome" });\n';
+    const line = "console.log(`browser: chrome ${browser.version()}`);\n";
+    const page = "const page = await browser.newPage();\n";
+    expect(browserLineProblem(launch + line + page)).toBeNull();
+    expect(browserLineProblem(launch + page)).toBe("prints no browser version");
+    expect(browserLineProblem(launch + "// " + line + page), "prose is not a version line")
+      .toBe("prints no browser version");
+    expect(browserLineProblem(launch + page + line)).toBe("prints the version after opening a page");
+    expect(browserLineProblem(line + launch + page)).toBe("prints the version before the browser exists");
+    expect(browserLineProblem(line + page)).toBe("launches no browser");
+  });
+});
+
 describe("bounded()", () => {
   // The lazy label exists so a caller can fold in state that only exists once
   // the bound fires — how far a run got, which probe was last. seek-gate
