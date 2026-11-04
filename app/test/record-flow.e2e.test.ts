@@ -381,11 +381,18 @@ describe("expand", () => {
     await send(overlay, { t: "pointerdown", at: { x: b.x + 200, y: b.y + 200 } });
     await expect.poll(() => overlay.getAttribute("#bar", "hidden"), { timeout: 15_000 }).toBeNull();
 
+    // Watched from before the press, not polled for: the class lives 220 ms
+    // (overlay.ts), and a poll on a loaded runner can miss all of it.
+    await overlay.evaluate(() => {
+      const el = document.getElementById("marquee")!;
+      new MutationObserver(() => {
+        if (el.classList.contains("expand-transition")) (window as any).__expandAnimated = true;
+      }).observe(el, { attributes: true, attributeFilter: ["class"] });
+    });
     await send(overlay, { t: "control", id: "expand" });
     await expect.poll(() => overlay.evaluate(() => {
-      const el = document.getElementById("marquee")!;
       const state = (window as any).__overlayState;
-      return el.classList.contains("expand-transition") && state.mode === "region";
+      return (window as any).__expandAnimated === true && state.mode === "region";
     }), { timeout: 15_000 }).toBe(true);
     expect(await overlay.evaluate(() => (window as any).__overlayState.rect)).toEqual(b);
   }, 120_000);
