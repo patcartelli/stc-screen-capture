@@ -8,6 +8,7 @@ import { composite } from "@transform/compositor";
 import type { Project, Session } from "@transform/types";
 import { parseProject } from "@transform/trim";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
+import { muxVideoChunk } from "@transform/mux-video-chunk";
 import { withTimeout } from "@transform/timeout";
 import { applyDecoderPreference } from "./decoder.js";
 import { decoderPreference } from "@transform/decoder-preference";
@@ -74,7 +75,7 @@ async function runExport(
     fastStart: "in-memory",
   });
   const encoder = new VideoEncoder({
-    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    output: (chunk, meta) => muxVideoChunk(muxer, chunk, meta, 60),
     error: (e) => { throw e; },
   });
   // THE top suspect for Mode B: configure() is synchronous, and CI reports its
