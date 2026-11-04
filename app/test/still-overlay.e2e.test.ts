@@ -181,10 +181,16 @@ describe("the selection overlay", () => {
       () => readdirSync(tempTakes).length,
       { timeout: 15_000 },
     ).toBe(1);
+    // Polled, not read once: main rewrites shot.json with the window's look
+    // after the helper writes it, and that write is not atomic on purpose
+    // (shot-write.ts), so a read that lands inside it sees empty JSON.
     const dirs = readdirSync(tempTakes);
-    const shot = parseShot(JSON.parse(readFileSync(join(tempTakes, dirs[0]!, "shot.json"), "utf8")));
-    expect(shot.kind).toBe("window");
-    expect(shot.window?.id).toBe(4711);
+    const readShot = () => {
+      try { return parseShot(JSON.parse(readFileSync(join(tempTakes, dirs[0]!, "shot.json"), "utf8"))); }
+      catch { return null; }
+    };
+    await expect.poll(() => readShot()?.kind, { timeout: 15_000 }).toBe("window");
+    expect(readShot()?.window?.id).toBe(4711);
   }, 120_000);
 
   test("a window with only a corner showing is hovered there and captured whole (STC-625)", async () => {

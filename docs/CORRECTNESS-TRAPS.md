@@ -1735,14 +1735,16 @@ configuration. Don't re-discover these.
   `installAtLaunch`**, which sets a marker, reads it back, and asks again (bounded) only on exactly
   this error. `stubQuitDialog` and `crash-recovery.e2e`'s dialog stub both use it. The first CI run
   after `stubQuitDialog` alone was fixed failed all 9 `crash-recovery` tests on the same error.
-- **CI's Chrome is whatever Google serves that hour, so a browser change can turn master red with no
-  commit, and it looks like the last PR's fault (STC-640).** `npx playwright install chrome` deletes
-  `/Applications/Google Chrome.app` and installs `dl.google.com`'s current stable; there is no version
-  in that URL. On 2026-11-03 that moved 156.0.8078.80 to 157.0.8103.39 between two master pushes,
-  `npm run gate` failed (STC-639), and the failure was first read as intermittent and blamed on
-  STC-608, the first push on the new browser. **When a gate goes red on a commit that cannot explain
-  it, compare the `browser:` line with the last green run first.** Every gate prints one right after
-  launch, and `gate-bounds.test.ts` refuses a gate without it. Two limits: `test:slow`'s export-gate
-  run comes BEFORE the `Install Chrome` step, so it uses the runner image's Chrome, and its output is
-  captured rather than printed. And no CI Chrome is what ships: Electron 43.4.1 is Chromium 150, so a
-  gate failing on Chrome 157 is news about a future Electron, not about today's app.
+- **`npx playwright install chrome` installs whatever Google serves that hour, so CI no longer uses it
+  (STC-640).** It deletes `/Applications/Google Chrome.app` and installs `dl.google.com`'s current
+  stable, with no version in the URL. On 2026-11-03 that moved 156.0.8078.80 to 157.0.8103.39 between
+  two master pushes, `npm run gate` failed (STC-639), and the failure was first read as intermittent
+  and blamed on STC-608, the first push on the new browser. The required job now runs Chrome for
+  Testing at `PINNED_CHROME` (`scripts/gate-browser.mjs`), and `chrome-canary.yml` runs the same video
+  gates on current stable, outside the required checks. **A red canary means a browser change is
+  coming, not that master is broken.** Read its `browser:` line and summary, fix the code, then bump
+  the pin. Three things to keep: the install must stay before `Test`, because `token-parity.test.ts`
+  launches Chrome there and `test:slow`'s export gate used to run on the runner image's Chrome before
+  any install step; anything new on CI that launches real Chrome goes through `gateBrowser()`; and no
+  CI Chrome is what ships. Electron 43.4.1 is Chromium 150, so a gate failing on a newer Chrome is news
+  about a future Electron, not about today's app.
