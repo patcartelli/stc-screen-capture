@@ -53,31 +53,40 @@ async function recordWindow(win: Page, temp: string): Promise<string> {
   return join(temp, readdirSync(temp)[0]!);
 }
 
-const seed = (dir: string) => JSON.parse(readFileSync(join(dir, "project.json"), "utf8"));
+/** The seed once it is whole, or undefined. Main creates the file and then writes it, so an empty file is "not yet". */
+function readSeed(dir: string) {
+  try { return JSON.parse(readFileSync(join(dir, "project.json"), "utf8")); }
+  catch { return undefined; }
+}
+
+async function seedOf(dir: string) {
+  await expect.poll(() => readSeed(dir) !== undefined, { timeout: 15_000 }).toBe(true);
+  return readSeed(dir);
+}
 
 describe("a new take's look (STC-626)", () => {
   test("a window take under the default look keeps its wallpaper and is seeded with it", async () => {
     const { win, temp } = await launch();
     const dir = await recordWindow(win, temp);
-    await expect.poll(() => existsSync(join(dir, "project.json")), { timeout: 15_000 }).toBe(true);
+    const seed = await seedOf(dir);
     expect(existsSync(join(dir, "wallpaper.jpg"))).toBe(true);
-    expect(seed(dir).version).toBe(22);
-    expect(seed(dir).framing.background).toEqual(wallpaperFraming());
+    expect(seed.version).toBe(22);
+    expect(seed.framing.background).toEqual(wallpaperFraming());
   }, 90_000);
 
   test("Window with shadow is seeded white, and reads no wallpaper", async () => {
     const { win, temp } = await launch({ windowShotLook: "window-shadow" });
     const dir = await recordWindow(win, temp);
-    await expect.poll(() => existsSync(join(dir, "project.json")), { timeout: 15_000 }).toBe(true);
-    expect(seed(dir).framing.background).toEqual({ kind: "solid", color: "#ffffff" });
+    const seed = await seedOf(dir);
+    expect(seed.framing.background).toEqual({ kind: "solid", color: "#ffffff" });
     expect(existsSync(join(dir, "wallpaper.jpg"))).toBe(false);
   }, 90_000);
 
   test("a wallpaper that cannot be read is Clean, and the panel says so", async () => {
     const { win, temp } = await launch({}, { STC_FAKE_WALLPAPER: "fail" });
     const dir = await recordWindow(win, temp);
-    await expect.poll(() => existsSync(join(dir, "project.json")), { timeout: 15_000 }).toBe(true);
-    expect(seed(dir).framing.background.kind).toBe("linear");
+    const seed = await seedOf(dir);
+    expect(seed.framing.background.kind).toBe("linear");
     await pressStop(win);
     const panel = await pageWithUrl(app!, "thumbnail.html");
     await expect.poll(() => panel.textContent("#takereason"), { timeout: 15_000 }).toContain(WALLPAPER_TAKE_NOTICE);
@@ -89,6 +98,6 @@ describe("a new take's look (STC-626)", () => {
     await expect.poll(() => recorderState(win), { timeout: 15_000 }).toBe("recording");
     const dir = join(temp, readdirSync(temp)[0]!);
     expect(existsSync(join(dir, "wallpaper.jpg"))).toBe(false);
-    if (existsSync(join(dir, "project.json"))) expect(seed(dir).framing).toBeUndefined();
+    if (existsSync(join(dir, "project.json"))) expect((await seedOf(dir)).framing).toBeUndefined();
   }, 90_000);
 });
