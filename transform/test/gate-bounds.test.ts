@@ -9,6 +9,7 @@ import {
   TEST_STEP_MS, PRE_TEST_MS, attachCheckpointTrail,
 } from "../../scripts/gate-bounds.mjs";
 import { ATTEMPTS, ATTEMPT_MS } from "../../scripts/gate-retry.mjs";
+import { PINNED_CHROME, gateBrowser } from "../../scripts/gate-browser.mjs";
 import * as bounds from "../../scripts/gate-bounds.mjs";
 import { isEnvironmentFailure } from "../../scripts/gate-retry.mjs";
 
@@ -314,12 +315,13 @@ describe("every gate says which browser it ran on", () => {
     }
   });
 
-  test("a video gate names the channel it launched", () => {
+  test("a video gate launches through gateBrowser and labels the line with it", () => {
     for (const f of VIDEO_GATES) {
       const code = withoutComments(readFileSync(join(root, "scripts", f), "utf8"));
-      expect(code, `scripts/${f} launches real Chrome`).toMatch(/channel: "chrome"/);
-      expect(code, `scripts/${f} must say so in its version line`)
-        .toContain("console.log(`browser: chrome ${browser.version()}`)");
+      expect(code, `scripts/${f} must not choose its own browser`).not.toMatch(/channel: "chrome"/);
+      expect(code, `scripts/${f} launches what gateBrowser says`).toMatch(/\.\.\.launch,?/);
+      expect(code, `scripts/${f} must say which it got`)
+        .toContain("console.log(`browser: ${label} ${browser.version()}`)");
     }
   });
 
@@ -334,6 +336,80 @@ describe("every gate says which browser it ran on", () => {
     expect(browserLineProblem(launch + page + line)).toBe("prints the version after opening a page");
     expect(browserLineProblem(line + launch + page)).toBe("prints the version before the browser exists");
     expect(browserLineProblem(line + page)).toBe("launches no browser");
+  });
+});
+
+describe("CI's Chrome is pinned, and a canary watches stable", () => {
+  // STC-640. A pin only helps if nothing in the job gets around it, and a canary
+  // only helps if it runs what the pin no longer runs and can never block a merge.
+  const workflow = (name: string) =>
+    readFileSync(join(root, ".github", "workflows", name), "utf8")
+      .split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+
+  // Every gate command, in order of text, with its env prefix and arguments.
+  const gateCommands = (yml: string) =>
+    [...yml.matchAll(/(?:[A-Z_]+=\S+ )?npm run gate(?::[a-z]+)?(?: -- \S+)?/g)].map((m) => m[0]);
+
+  test("no env var means the machine's Chrome; the env var means that exact binary", () => {
+    expect(gateBrowser({})).toEqual({ label: "chrome", launch: { channel: "chrome" } });
+    expect(gateBrowser({ STC_GATE_CHROME: "/x/chrome" }))
+      .toEqual({ label: "chrome-for-testing", launch: { executablePath: "/x/chrome" } });
+  });
+
+  test("the pin is an exact version, in one place", () => {
+    expect(PINNED_CHROME).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    for (const f of ["ci.yml", "chrome-canary.yml"]) {
+      expect(workflow(f), `${f} must not carry its own copy of the version`).not.toContain(PINNED_CHROME);
+    }
+    expect(readFileSync(join(root, "scripts", "install-pinned-chrome.mjs"), "utf8"))
+      .toContain("PINNED_CHROME");
+  });
+
+  test("the required job installs only the pin, before anything launches Chrome", () => {
+    const ci = workflow("ci.yml");
+    expect(ci, "an unpinned install replaces /Applications' Chrome, and the job floats again")
+      .not.toMatch(/playwright install chrome\b/);
+    const at = (s: string) => ci.indexOf(s);
+    expect(at("node scripts/install-pinned-chrome.mjs")).toBeGreaterThan(-1);
+    expect(at("node scripts/install-pinned-chrome.mjs"), "token-parity.test.ts launches Chrome in Test")
+      .toBeLessThan(at("- name: Test\n"));
+  });
+
+  test("a test that launches real Chrome goes through gateBrowser", () => {
+    const src = withoutComments(readFileSync(join(root, "app", "test", "token-parity.test.ts"), "utf8"));
+    expect(src).not.toMatch(/channel: "chrome"/);
+    expect(src).toContain("gateBrowser()");
+  });
+
+  test("the canary floats, and cannot be the required check", () => {
+    const canary = workflow("chrome-canary.yml");
+    expect(canary).toMatch(/playwright install chrome\b/);
+    expect(canary, "the canary must not run the pin").not.toMatch(/install-pinned-chrome|STC_GATE_CHROME/);
+    expect(canary).toMatch(/^ {2}schedule:/m);
+    expect(canary, "a push trigger would put a Chrome release back on master's commits")
+      .not.toMatch(/^ {2}push:/m);
+    expect(canary, "`test` is master's required check").not.toMatch(/^ {2}test:/m);
+  });
+
+  test("the canary runs every gate that the pin takes off current Chrome", () => {
+    // The still and framing gates run bundled Chromium, which neither job floats.
+    const pinnedGates = gateCommands(workflow("ci.yml")).filter((c) => !/gate:(still|framing)/.test(c));
+    expect(pinnedGates.length, "the pattern must find the gates, or this checks nothing")
+      .toBeGreaterThanOrEqual(6);
+    expect(gateCommands(workflow("chrome-canary.yml")).sort()).toEqual(pinnedGates.sort());
+  });
+
+  test("the canary's job cap clears the bounds of the gates it runs", () => {
+    const canary = workflow("chrome-canary.yml");
+    const cap = Number(canary.match(/^ {4}timeout-minutes:\s*(\d+)\s*$/m)?.[1]) * 60_000;
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    const worst = gateCommands(canary).reduce((sum, c) => {
+      const npmName = c.match(/npm run (gate(?::[a-z]+)?)/)![1]!;
+      const script = (pkg.scripts[npmName] as string).match(/scripts\/([a-z-]+\.mjs)$/)![1]!;
+      return sum + GATE_PROCESS_MS[script]! * (GATE_ATTEMPTS[script] ?? 1);
+    }, 0);
+    expect(worst).toBeGreaterThan(0);
+    expect(cap - worst, "setup plus 5 min of margin").toBeGreaterThanOrEqual(5 * 60_000 + PRE_TEST_MS);
   });
 });
 

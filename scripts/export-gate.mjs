@@ -10,6 +10,7 @@
  */
 import { createServer } from "vite";
 import { chromium } from "playwright";
+import { gateBrowser } from "./gate-browser.mjs";
 import { SOFTWARE_RENDER_ARGS, forceSoftwareRender } from "./render-backend.mjs";
 import { bounded, closeQuietly, EVAL_MS, isBoundFailure, instrumentPage } from "./gate-bounds.mjs";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
@@ -67,13 +68,14 @@ await server.listen(5200);
 // scripts/render-backend.mjs. This gate's own comparisons all happen inside
 // this one browser and are unaffected, so it only pins when a caller comparing
 // against ANOTHER engine asks it to.
+const { label, launch } = gateBrowser();
 const browser = await chromium.launch({
-  channel: "chrome",
+  ...launch,
   headless: true,
   ...(forceSoftwareRender() ? { args: SOFTWARE_RENDER_ARGS } : {}),
 });
-// Which Chrome this run got. CI's is unpinned and can change with no commit (STC-640).
-console.log(`browser: chrome ${browser.version()}`);
+// Which Chrome this run got, so a browser change is never a guess (STC-640).
+console.log(`browser: ${label} ${browser.version()}`);
 const page = await browser.newPage();
 // STC-259 Mode B: a blocked renderer kills every in-page bound, so the page's
 // checkpoints are collected out here. Also installs the wedge fault injection.
