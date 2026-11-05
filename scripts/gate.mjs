@@ -9,6 +9,7 @@
 // are not contractually deterministic; the gate lives before the encoder.
 import { createServer } from "vite";
 import { chromium } from "playwright";
+import { gateBrowser } from "./gate-browser.mjs";
 import {
   bounded, closeQuietly, instrumentPage, EVAL_MS, ENCODER_MS, GATE_DECODER_PREFERENCE,
 } from "./gate-bounds.mjs";
@@ -16,7 +17,10 @@ import {
 const server = await createServer({ configFile: "harness/vite.config.ts" });
 await server.listen(5199);
 
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const { label, launch } = gateBrowser();
+const browser = await chromium.launch({ ...launch, headless: true });
+// Which Chrome this run got, so a browser change is never a guess (STC-640).
+console.log(`browser: ${label} ${browser.version()}`);
 const page = await browser.newPage();
 
 // Mode B: the renderer's main thread blocks, so nothing inside the page can
