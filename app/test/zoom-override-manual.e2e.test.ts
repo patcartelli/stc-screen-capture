@@ -120,24 +120,33 @@ describe("clicking the lane's empty background authors a new window", () => {
 });
 
 describe("resizing a manual window by its edges", () => {
-  test("dragging the end handle later changes the committed endNs", async () => {
+  test("dragging the end handle changes the committed endNs, and stops at the next block", async () => {
     const { win, takeDir } = await openPreview();
-    // A click near the START of the lane (default span [~200ms, ~3000ms])
-    // leaves room for the end handle to move LATER — a click near the end
-    // (this file's usual CLICK_FRACTION) clamps the default endNs to the
-    // take's own duration already, which the next test's own failure first
-    // caught: there was nowhere left for "later" to go.
+    // A click near the START of the lane: the default span is trimmed to the
+    // free gap before the derived block, [~200ms, 1705ms] (STC-631).
     await clickEmptyLane(win, 0.1);
-    const before = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
-    await dragManualHandle(win, "end", 1.0); // drag to the very end of the lane
-    const after = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
-    expect(parseFloat(after)).toBeGreaterThan(parseFloat(before));
+    await dragManualHandle(win, "end", 0.15); // shorter: ~750ms
+    const shorter = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
+    await dragManualHandle(win, "end", 1.0); // toward the lane's end, across the derived block
+    const stopped = await win.evaluate(() => (document.getElementById("manualdraft") as HTMLElement).style.width);
+    expect(parseFloat(stopped)).toBeGreaterThan(parseFloat(shorter));
 
     await pressOverrideDone(win);
     await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
     const [o] = readProject(takeDir).overrides;
-    // Dragged to the lane's own end — within a frame or two of the take's duration.
-    expect(o.endNs).toBeGreaterThan(4_900 * MS);
+    // It reached the derived block's start (1705ms) and went no further.
+    expect(o.endNs).toBeLessThanOrEqual(1_705 * MS + 34 * MS);
+    expect(o.endNs).toBeGreaterThan(1_600 * MS);
+  }, 30_000);
+
+  test("the start handle stops at the block before it instead of crossing it", async () => {
+    const { win, takeDir } = await openPreview();
+    await clickEmptyLane(win); // ~[4600ms, 5000ms], just after the derived block (ends 4505ms)
+    await dragManualHandle(win, "start", 0); // toward the lane's start, across the derived block
+    await pressOverrideDone(win);
+    await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
+    const [o] = readProject(takeDir).overrides;
+    expect(o.startNs).toBeGreaterThanOrEqual(4_505 * MS - 34 * MS);
   }, 30_000);
 
   test("the start handle cannot be dragged past the end handle minus the minimum duration", async () => {
@@ -269,4 +278,57 @@ describe("switching straight between a derived and a manual block", () => {
     await expect.poll(() => win.isHidden("#overridebar"), { timeout: 10_000 }).toBe(true);
     expect(readProject(takeDir).overrides).toEqual([manual]);
   }, 60_000);
+});
+
+// STC-631: the lane says where a click would add a block, and never adds one
+// on top of another. The fixture's derived block is [1705ms, 4505ms]; a manual
+// block committed from an early click fills the free time up to it, leaving
+// a sliver at the take's start too small for a block.
+describe("adding a block from the lane (STC-631)", () => {
+  async function hoverLane(win: Page, fraction: number): Promise<void> {
+    await win.locator("#override-blocks").scrollIntoViewIfNeeded();
+    const box = await win.locator("#override-blocks").boundingBox();
+    if (!box) throw new Error("#override-blocks has no box");
+    await win.mouse.move(box.x + fraction * box.width - 3, box.y + box.height / 2);
+    await win.mouse.move(box.x + fraction * box.width, box.y + box.height / 2);
+  }
+
+  test("hovering free lane space previews the block a click would add", async () => {
+    const { win } = await openPreview();
+    await hoverLane(win, 0.98);
+    await expect.poll(() => win.isVisible("#zoomghost"), { timeout: 5_000 }).toBe(true);
+    expect(await win.textContent("#zoomghost-note")).toMatch(/click to add/i);
+    expect(await win.locator("#zoomghost").evaluate((el) => el.classList.contains("refused"))).toBe(false);
+  }, 30_000);
+
+  test("a spot with no room is refused: the lane says why, and a click adds nothing", async () => {
+    const { win, takeDir } = await openPreview();
+    // A click at 0.1 (~500ms) adds [~200ms, 1705ms], trimmed to the derived
+    // block; the ~200ms sliver before it is under the 300ms floor.
+    await clickEmptyLane(win, 0.1);
+    await pressOverrideDone(win);
+    await expect.poll(() => readProject(takeDir).overrides?.length, { timeout: 10_000 }).toBe(1);
+
+    // The middle of the sliver, measured from the lane's and the block's real
+    // edges rather than a guessed fraction: a block's hit area would
+    // otherwise own the pointer.
+    const lane = (await win.locator("#override-blocks").boundingBox())!;
+    const manual = (await win.locator("#override-blocks-dynamic .zoomblock.manual").boundingBox())!;
+    const gapMid = (lane.x + manual.x) / 2;
+    const gapFraction = (gapMid - lane.x) / lane.width;
+    expect(manual.x - lane.x, "the sliver before the block, px").toBeGreaterThan(2);
+
+    await hoverLane(win, gapFraction);
+    const under = await win.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.id ?? "?", [gapMid, lane.y + lane.height / 2]);
+    expect(under, "what the pointer is over in the gap").toBe("override-blocks");
+    await expect.poll(() => win.isVisible("#zoomghost-note"), { timeout: 5_000 }).toBe(true);
+    expect(await win.textContent("#zoomghost-note")).toMatch(/not enough room/i);
+    expect(await win.isHidden("#zoomghost")).toBe(true);
+
+    await clickEmptyLane(win, gapFraction);
+    // Nothing opened and nothing was added.
+    expect(await win.isHidden("#overridebar")).toBe(true);
+    expect(await win.locator(".zoomblock.manual").count()).toBe(1);
+    expect(readProject(takeDir).overrides.length).toBe(1);
+  }, 30_000);
 });
