@@ -62,7 +62,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   const mid = durationNs / 2;
   const span = Math.min(10e9, durationNs / 4);
+  // The cold rows come first and cover spans nothing has decoded yet: the
+  // backward rows after them retrace what the forward row just decoded, so
+  // they measure scrubbing back over a span, with frames kept (STC-635).
+  const late = durationNs * 0.9;
   const plan: DragSpec[] = drags ?? [
+    { name: "cold backward 10 s in 2 s", fromNs: late, toNs: late - span, ms: 2000 },
+    { name: "cold slow backward 2 s/2 s", fromNs: late - span - 4e9, toNs: late - span - 6e9, ms: 2000 },
     { name: "forward 10 s in 2 s", fromNs: mid - span, toNs: mid, ms: 2000 },
     { name: "backward 10 s in 2 s", fromNs: mid, toNs: mid - span, ms: 2000 },
     { name: "slow forward 2 s in 2 s", fromNs: mid, toNs: mid + 2e9, ms: 2000 },
@@ -103,6 +109,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       decoderRestarts: after.display.decoderGenerations - before.display.decoderGenerations,
       lateFrames: after.lateFrames - before.lateFrames,
       peakBuffered: after.display.peakBuffered,
+      keptHits: after.display.behindHits - before.display.behindHits,
+      peakKeptMB: after.display.peakBehindBytes / (1024 * 1024),
     });
   }
   player.close();

@@ -4,6 +4,7 @@
  */
 import { createServer } from "vite";
 import { chromium } from "playwright";
+import { gateBrowser } from "./gate-browser.mjs";
 import { readFileSync } from "node:fs";
 import {
   bounded, closeQuietly, isBoundFailure, instrumentPage, SEEK_MS,
@@ -25,7 +26,10 @@ const server = await createServer({
   }}],
 });
 await server.listen(5204);
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const { label, launch } = gateBrowser();
+const browser = await chromium.launch({ ...launch, headless: true });
+// Which Chrome this run got, so a browser change is never a guess (STC-640).
+console.log(`browser: ${label} ${browser.version()}`);
 const page = await browser.newPage();
 // STC-259 Mode B: a blocked renderer kills every in-page bound, so the page's
 // checkpoints are collected out here. Also installs the wedge fault injection.

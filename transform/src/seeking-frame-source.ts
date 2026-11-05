@@ -21,6 +21,10 @@ import { ChunkReader } from "./chunk-reader.js";
  *     resets only when the target is genuinely unreachable by going forward.
  *  3. Close frames in the output callback path, retaining at most one. At 4K a
  *     frame is ~30 MB, so even a short backlog is hundreds of megabytes.
+ *     STC-635 relaxes this one deliberately, and only behind a byte cap: the
+ *     frames the decoder already passed are kept (`behind`), up to
+ *     the source's byte budget, because a step backward is otherwise a restart at
+ *     the keyframe that re-decodes the whole group to keep its last frame.
  */
 export class SeekingFrameSource {
   private decoder: VideoDecoder | null = null;
@@ -54,9 +58,32 @@ export class SeekingFrameSource {
    * most seeks, 16 never did, and forward drags painted at 60/s.
    */
   private static readonly FEED_AHEAD = 16;
+
+  /**
+   * How many bytes of already-decoded frames a source may keep (STC-635).
+   * A backward drag restarts at the keyframe on every step and re-decodes the
+   * group to keep its last frame: on a 10-minute 4K take that was 25 frames
+   * and 80 ms per painted frame, 13 painted/s. Kept frames turn every step
+   * back within reach into a lookup, so a drag restarts once per stretch the
+   * cache covers, not once per step.
+   *
+   * 512 MiB is about 41 frames at 4K (NV12, 12.4 MB each), just under one
+   * keyframe group of the capture's 45. The camera's is a quarter of that,
+   * the same ~41 frames at 1080p. Measured on the Mac, 2026-11-03, with
+   * scripts/scrub-timing-one.mjs: a backward drag at playback speed on a
+   * 10-minute 4K take went from 13 to 51 painted/s.
+   */
+  static readonly DISPLAY_BEHIND_BYTES = 512 * 1024 * 1024;
+  static readonly CAMERA_BEHIND_BYTES = 128 * 1024 * 1024;
+  private readonly behind = new Map<number, VideoFrame>();
+  private behindBytes = 0;
+  private frameBytes = 0;
+  private behindHits = 0;
+  private peakBehindBytes = 0;
   private readonly reader: ChunkReader;
 
-  constructor(private readonly video: DemuxedVideo) {
+  constructor(private readonly video: DemuxedVideo,
+              private readonly behindBudgetBytes = SeekingFrameSource.DISPLAY_BEHIND_BYTES) {
     this.keyIndices = video.chunks
       .map((c, i) => (c.type === "key" ? i : -1))
       .filter((i) => i >= 0);
@@ -93,6 +120,10 @@ export class SeekingFrameSource {
   private async seek(index: number, mine: number): Promise<VideoFrame | null> {
     if (this.failure) throw this.failure;
     if (index === this.currentIndex && this.current) return this.current;
+    // A kept frame leaves the decoder where it is, so a drag that turns
+    // forward again continues from there rather than from the keyframe.
+    const kept = this.behind.get(index);
+    if (kept) { this.behindHits++; return kept; }
 
     const key = this.governingKey(index);
     // Forward from here is only valid if we are already past the governing
@@ -100,7 +131,7 @@ export class SeekingFrameSource {
     // the keyframe — decided from position, never from "the queue looked empty".
     const canContinue = this.decoder !== null && !this.needsKeyframe &&
                         this.currentIndex < index && this.nextOutIndex > key;
-    if (!canContinue) this.restartAt(key);
+    if (!canContinue) this.restartAt(key, index);
 
     while (this.currentIndex < index) {
       if (mine !== this.ticket) return null;          // a newer seek wants the decoder
@@ -108,7 +139,7 @@ export class SeekingFrameSource {
 
       if (this.pending.length > 0) {
         const next = this.pending.shift()!;
-        this.current?.close();
+        if (this.current) this.keepBehind(this.current, this.currentIndex, index);
         this.current = next;
         this.currentIndex = this.nextOutIndex - this.pending.length - 1;
         continue;
@@ -118,8 +149,36 @@ export class SeekingFrameSource {
     return this.current;
   }
 
-  private restartAt(key: number): void {
-    this.current?.close();
+  /**
+   * Keep a frame the decoder has moved past, then evict down to the budget,
+   * farthest from `target` first: a drag wants what is next to the playhead,
+   * on either side, since it may turn round.
+   */
+  private keepBehind(frame: VideoFrame, index: number, target: number): void {
+    if (this.behind.has(index)) { frame.close(); return; }
+    if (this.frameBytes === 0) {
+      // A format allocationSize() cannot size is counted as RGBA, the
+      // largest it could be, so the cap errs towards keeping fewer.
+      try { this.frameBytes = frame.allocationSize(); }
+      catch { this.frameBytes = frame.codedWidth * frame.codedHeight * 4; }
+    }
+    this.behind.set(index, frame);
+    this.behindBytes += this.frameBytes;
+    while (this.behindBytes > this.behindBudgetBytes && this.behind.size > 0) {
+      let far = index, farDist = -1;
+      for (const i of this.behind.keys()) {
+        const dist = Math.abs(i - target);
+        if (dist > farDist) { far = i; farDist = dist; }
+      }
+      this.behind.get(far)!.close();
+      this.behind.delete(far);
+      this.behindBytes -= this.frameBytes;
+    }
+    this.peakBehindBytes = Math.max(this.peakBehindBytes, this.behindBytes);
+  }
+
+  private restartAt(key: number, target: number): void {
+    if (this.current) this.keepBehind(this.current, this.currentIndex, target);
     this.current = null;
     for (const f of this.pending.splice(0)) f.close();
     if (this.decoder && this.decoder.state !== "closed") this.decoder.close();
@@ -223,6 +282,9 @@ export class SeekingFrameSource {
   close(): void {
     this.current?.close();
     this.current = null;
+    for (const f of this.behind.values()) f.close();
+    this.behind.clear();
+    this.behindBytes = 0;
     for (const f of this.pending.splice(0)) f.close();
     if (this.decoder && this.decoder.state !== "closed") this.decoder.close();
     this.decoder = null;
@@ -250,7 +312,10 @@ export class SeekingFrameSource {
       decoderGenerations: this.decoderGenerations,
       framesDecoded: this.framesDecoded,
       flushes: this.flushes,
-      liveFrames: this.pending.length + (this.current ? 1 : 0),
+      liveFrames: this.pending.length + (this.current ? 1 : 0) + this.behind.size,
+      behindHits: this.behindHits,
+      behindFrames: this.behind.size,
+      peakBehindBytes: this.peakBehindBytes,
     };
   }
 }
