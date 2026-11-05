@@ -91,7 +91,9 @@ export class PreviewPlayer {
     // requests (ticket/chain), so the one-in-flight-per-decoder rule holds by
     // construction — sharing one decoder across two tracks is exactly the
     // accident PHASE-0 §4b warns about.
-    this.cameraSource = session.cameraVideo ? new SeekingFrameSource(session.cameraVideo) : null;
+    this.cameraSource = session.cameraVideo
+      ? new SeekingFrameSource(session.cameraVideo, SeekingFrameSource.CAMERA_BEHIND_BYTES)
+      : null;
   }
 
   get durationNs(): number {

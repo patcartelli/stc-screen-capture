@@ -96,6 +96,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # A fixed Chrome for the whole job, so a Chrome release cannot turn master
+      # red with no commit (STC-640). Before Test because token-parity.test.ts
+      # launches it, and test:slow's export gate too. Real Chrome rather than
+      # bundled Chromium: the bundled build lacks H.264, and every sink here is
+      # H.264 end to end. Bump it in scripts/gate-browser.mjs;
+      # chrome-canary.yml runs the same gates on current stable.
+      - name: Install pinned Chrome
+        run: node scripts/install-pinned-chrome.mjs
+
       # STC-496: after an Electron crash, macOS shows a modal "reopen windows?"
       # alert on that bundle's NEXT launch (`NSPersistentUIRestorer
       # promptToIgnorePersistentStateWithCrashHistory:`, before the app is
@@ -126,8 +135,6 @@ jobs:
         env:
           STC_E2E_DIAG_OUT: ${{ github.workspace }}/e2e-diag
 
-      # Real Chrome, not bundled Chromium: the bundled build lacks H.264, and
-      # every sink in this project is H.264 end to end.
       # test:slow is the cross-implementation check — a UI export and a CLI
       # export of the same take must agree byte-for-byte before the encoder. It
       # has caught two real divergences (the trim/project defect, and the
@@ -155,14 +162,9 @@ jobs:
         timeout-minutes: 12
         run: npm run test:slow -- app/test/export-identity.slow.test.ts
 
-      - name: Install Chrome
-        run: npx playwright install chrome
-
-      # The still gate is the one gate that launches BUNDLED Chromium rather
-      # than `channel: "chrome"`, because it decodes no video and so does not
-      # need H.264 — which is what the four video gates install real Chrome
-      # for. `playwright install chrome` fetches the CHANNEL only, so without
-      # this the still gate dies before it runs a single assertion:
+      # The still and framing gates launch BUNDLED Chromium rather than the
+      # pinned Chrome, because they decode no video and so do not need H.264.
+      # Without this they die before a single assertion:
       # "Executable doesn't exist at .../chromium_headless_shell-<build>".
       - name: Install Chromium (still gate)
         run: npx playwright install chromium
