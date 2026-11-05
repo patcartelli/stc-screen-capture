@@ -40,6 +40,22 @@ export const LOOK_FILLS: Readonly<Record<FillLookId, LookFill>> = {
   ember: { kind: "linear", colors: ["#12061a", "#7a1f5c", "#ff7a3d"], angleDeg: 160 },
 };
 
+/**
+ * What Window with shadow falls on in a recording (STC-626, Patrick 2026-11-03).
+ * A still's shadow lands on real transparency; an MP4 has none, so video paints
+ * this. Not in LOOK_FILLS, because stills have no such look.
+ */
+export const WINDOW_SHADOW_FILL = { kind: "solid", color: "#ffffff" } as const;
+
+/**
+ * Where the helper saves the desktop wallpaper, beside a shot's `frame.png`
+ * (STC-628) and in a window take's folder (STC-626). JPEG, not PNG: a PNG of a
+ * gradient wallpaper took ~300-590 ms to encode per shot (Patrick, 2026-11-02).
+ * Held equal to the helper's `StillRequest.wallpaperFile` by backgrounds.test.ts;
+ * `still:frame` lets exactly this name through beside its `*.png`.
+ */
+export const WALLPAPER_FILE = "wallpaper.jpg";
+
 /** The shadow opacity every look wears except Dark, which is deeper against a dark fill. */
 export const BASE_SHADOW_OPACITY = 0.32;
 export const DARK_SHADOW_OPACITY = 0.55;

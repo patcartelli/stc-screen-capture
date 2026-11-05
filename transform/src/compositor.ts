@@ -2,6 +2,8 @@ import type { FrameState, PipDraw, PipState } from "./render.js";
 import { PIP_SHADOW } from "./pip-style.js";
 import { isWholeFrame, uvRectToPixels, type Rect } from "./spaces.js";
 import { gradientLine, type FramingLayout } from "./framing.js";
+import type { DrawableImage } from "./session.js";
+import { coverRect } from "./still-render.js";
 import { CLICK_HIGHLIGHT_PT, drawCircle, drawCursor } from "./cursor-art.js";
 import { KEYCAST_BG_ALPHA, KEYCAST_BG_RGB, KEYCAST_TEXT_COLOR, keycastFont, keycastFontPx, keycastLayout, keycastText } from "./keycast.js";
 
@@ -91,18 +93,26 @@ function drawSource(
  */
 function drawChrome(
   ctx: OffscreenCanvasRenderingContext2D, f: FramingLayout, width: number, height: number,
+  wallpaper: DrawableImage | null,
 ): void {
   const bg = f.background;
-  if (bg.kind === "solid") {
+  if (bg.kind === "wallpaper" && wallpaper) {
+    const r = coverRect(wallpaper.width, wallpaper.height, width, height);
+    ctx.save();
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(wallpaper as unknown as CanvasImageSource, r.sx, r.sy, r.sw, r.sh, 0, 0, width, height);
+    ctx.restore();
+  } else if (bg.kind === "solid" || bg.kind === "wallpaper") {
     ctx.fillStyle = bg.color;
+    ctx.fillRect(0, 0, width, height);
   } else {
     const l = gradientLine(bg.angleDeg, width, height);
     const g = ctx.createLinearGradient(l.x0, l.y0, l.x1, l.y1);
     const last = bg.colors.length - 1;
     bg.colors.forEach((c, i) => g.addColorStop(i / last, c));
     ctx.fillStyle = g;
+    ctx.fillRect(0, 0, width, height);
   }
-  ctx.fillRect(0, 0, width, height);
 
   if (f.shadow.opacity > 0 && f.shadow.blur > 0) {
     const c = f.content;
@@ -151,11 +161,12 @@ export function composite(
   fs: FrameState,
   width: number,
   height: number,
+  wallpaper: DrawableImage | null,
 ): void {
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, width, height);
   const framing = fs.framing;
-  if (framing) drawChrome(ctx, framing, width, height);
+  if (framing) drawChrome(ctx, framing, width, height, wallpaper);
   if (frame) {
     if (framing) {
       const c = framing.content;

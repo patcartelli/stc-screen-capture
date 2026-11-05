@@ -196,7 +196,7 @@ const thumbCornerSel = buildDropdown($("thumbcorner") as HTMLButtonElement, CORN
 
 // What a fresh window capture looks like; the options are window-look.ts's own.
 const windowLookSel = buildDropdown($("windowshotlook") as HTMLButtonElement, WINDOW_SHOT_LOOKS, (picked) => {
-  void save("the window shot look", () => bridge.setSettings({ windowShotLook: picked as WindowShotLook }));
+  void save("the window look", () => bridge.setSettings({ windowShotLook: picked as WindowShotLook }));
 });
 
 /**

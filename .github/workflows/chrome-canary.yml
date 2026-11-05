@@ -22,7 +22,7 @@ jobs:
   canary:
     runs-on: macos-15
     # Must clear the gates' process bounds with margin; gate-bounds.test.ts asserts it.
-    timeout-minutes: 75
+    timeout-minutes: 85
     steps:
       - uses: actions/checkout@v5
 
@@ -75,6 +75,20 @@ jobs:
           cp fixtures/pip/anchors.json fixtures/pip/events.json \
              fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
           STC_IDENTITY_FRAMING=clean npm run gate:identity -- "$CAM"
+
+      - name: Sink identity, wallpaper
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          WP="$(mktemp -d)/2026-01-01_00-00-02"
+          mkdir -p "$WP"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$WP/"
+          cp fixtures/wallpaper-framed/project.json fixtures/wallpaper-framed/wallpaper.jpg "$WP/"
+          npm run gate:identity -- "$WP" || status=1
+          rm "$WP/wallpaper.jpg"
+          npm run gate:identity -- "$WP" || status=1
+          exit "$status"
 
       - name: Compare with the pin
         if: ${{ !cancelled() }}

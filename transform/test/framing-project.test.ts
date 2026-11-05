@@ -5,7 +5,7 @@ import AjvImport from "ajv";
 import { defaultProject, parseProject, projectForWrite } from "../src/trim.js";
 import { PROJECT_VERSIONS } from "../src/project-version.js";
 import { LOOK_FILLS } from "../src/looks.js";
-import type { Framing } from "../src/framing.js";
+import { wallpaperFraming, type Framing } from "../src/framing.js";
 
 const Ajv = (AjvImport as any).default ?? AjvImport;
 const root = join(__dirname, "..", "..");
@@ -122,5 +122,36 @@ describe("project-21 multi-stop framing (STC-608)", () => {
     const written = projectForWrite(framed(aurora), DUR);
     const nine = { ...written, framing: { ...written.framing, background: { ...aurora, colors: Array(9).fill("#000000") } } };
     expect(validate21(nine)).toBe(false);
+  });
+});
+
+describe("project-22: a wallpaper framing background (STC-626)", () => {
+  const schema = (v: number) => new Ajv({ allErrors: true, strict: true })
+    .compile(JSON.parse(readFileSync(join(root, `schema/project-${v}.schema.json`), "utf8")));
+  const framed = (background: Framing["background"]) =>
+    projectForWrite({ ...defaultProject(640, 360), framing: { preset: "clean", background } }, DUR);
+
+  test("22 is a readable version", () => {
+    expect(PROJECT_VERSIONS).toContain(22);
+  });
+
+  test("a wallpaper background writes a schema-valid v22", () => {
+    const out = framed(wallpaperFraming());
+    expect(out.version).toBe(22);
+    const validate = schema(22);
+    expect(validate(out), JSON.stringify(validate.errors, null, 2)).toBe(true);
+  });
+
+  test("project-21 refuses it", () => {
+    expect(schema(21)({ ...framed(wallpaperFraming()), version: 21 })).toBe(false);
+  });
+
+  test("Window with shadow's white stays v15", () => {
+    expect(framed({ kind: "solid", color: "#ffffff" }).version).toBe(15);
+  });
+
+  test("it survives a parse", () => {
+    const back = parseProject(framed(wallpaperFraming()), 640, 360, DUR);
+    expect(back.framing?.background).toEqual(wallpaperFraming());
   });
 });

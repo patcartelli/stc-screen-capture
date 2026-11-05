@@ -409,6 +409,13 @@ describe("anchors-7 carries a refit geometry timeline (STC-235)", () => {
 });
 
 describe("the styled-PiP fixture (STC-461)", () => {
+  test("fixtures/wallpaper-framed's project.json conforms to project-22 (STC-626)", () => {
+    const schema = JSON.parse(readFileSync(join(root, "schema/project-22.schema.json"), "utf8"));
+    const validate = new Ajv({ allErrors: true, strict: true }).compile(schema);
+    const ok = validate(load("fixtures/wallpaper-framed/project.json"));
+    expect(ok, JSON.stringify(validate.errors, null, 2)).toBe(true);
+  });
+
   test("fixtures/pip-styled's project.json conforms to project-16 (STC-461)", () => {
     const validate = compile("schema/project-16.schema.json");
     const ok = validate(load("fixtures/pip-styled/project.json"));

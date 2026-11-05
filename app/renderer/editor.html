@@ -304,6 +304,7 @@
     #pane .row > input[type="color"] + .value { min-width: 0; }
     /* STC-608: the Background looks, two rows of four across the pane. The
        swatches are look-grid.css's, shared with the still editor. */
+    #framenotice { margin: 0 0 12px; font-size: var(--type-meta); color: var(--warn); }
     #framelooks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 4px; padding: 12px 0; }
     #pane .value { flex: none; min-width: 6ch; text-align: right; color: var(--text);
                    font-size: var(--type-value-sm); line-height: 22px; }
@@ -1174,6 +1175,7 @@
                first: the frame has no off switch of its own. editor.ts mounts
                the swatches. -->
           <div id="framelooks" role="radiogroup" aria-label="Background"></div>
+          <p id="framenotice" role="status" hidden></p>
           <!-- Custom's colours: one is a solid, two a gradient. Written on a
                field's commit, and only when valid. -->
           <div class="row" id="framecustomrow" hidden>

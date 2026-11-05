@@ -220,6 +220,19 @@ jobs:
              fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
           STC_IDENTITY_FRAMING=clean npm run gate:identity -- "$CAM"
 
+      # STC-626: framed by the take's wallpaper, then with the file gone, where
+      # both sinks must draw the fallback colour. Media from fixtures/pip.
+      - name: Sink identity, wallpaper
+        run: |
+          WP="$(mktemp -d)/2026-01-01_00-00-02"
+          mkdir -p "$WP"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$WP/"
+          cp fixtures/wallpaper-framed/project.json fixtures/wallpaper-framed/wallpaper.jpg "$WP/"
+          npm run gate:identity -- "$WP"
+          rm "$WP/wallpaper.jpg"
+          npm run gate:identity -- "$WP"
+
       # The decorated still (STC-291). Asserts PROPERTIES of the rendered
       # pixels — alpha zero outside the window's real shape, no dark fringe on
       # the corner curve, a shadow that decreases to zero, a background with no
