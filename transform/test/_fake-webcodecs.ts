@@ -5,13 +5,22 @@
  * it lets a Node test see is the part the gates cannot aim at: what the
  * sources feed, in what order, and what they do while waiting for bytes.
  */
-export interface FakeFrame { timestamp: number; closed: boolean; close(): void }
-export interface FakeWebCodecs { fed: { timestamp: number; data: Uint8Array }[]; restore(): void }
+export interface FakeFrame { timestamp: number; closed: boolean; close(): void; allocationSize(): number }
+export interface FakeWebCodecs {
+  fed: { timestamp: number; data: Uint8Array }[];
+  /** Every frame the decoders emitted, so a test can see none was left open. */
+  outputs: FakeFrame[];
+  restore(): void;
+}
+
+/** What `allocationSize()` reports for every fake frame. */
+export const FAKE_FRAME_BYTES = 100;
 
 export function installFakeWebCodecs(): FakeWebCodecs {
   const g = globalThis as any;
   const saved = { VideoDecoder: g.VideoDecoder, EncodedVideoChunk: g.EncodedVideoChunk };
   const fed: FakeWebCodecs["fed"] = [];
+  const outputs: FakeFrame[] = [];
 
   g.EncodedVideoChunk = class {
     type: string; timestamp: number; data: Uint8Array;
@@ -33,12 +42,14 @@ export function installFakeWebCodecs(): FakeWebCodecs {
       setTimeout(() => {
         if (this.state === "closed") return;
         this.decodeQueueSize--;
-        const f: FakeFrame = { timestamp: chunk.timestamp, closed: false, close() { this.closed = true; } };
+        const f: FakeFrame = { timestamp: chunk.timestamp, closed: false,
+                               close() { this.closed = true; }, allocationSize: () => FAKE_FRAME_BYTES };
+        outputs.push(f);
         this.cb.output(f);
       }, 0);
     }
     flush() { return new Promise<void>((r) => setTimeout(r, 1)); }
     close() { this.state = "closed"; }
   };
-  return { fed, restore: () => Object.assign(g, saved) };
+  return { fed, outputs, restore: () => Object.assign(g, saved) };
 }
