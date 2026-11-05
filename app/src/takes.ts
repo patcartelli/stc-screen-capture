@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { writeFile, readdir, mkdir, copyFile, stat, rename } from "node:fs/promises";
+import { writeFile, readdir, mkdir, copyFile, stat, rename, rm } from "node:fs/promises";
 import { join, resolve, sep, basename, extname } from "node:path";
 
 /**
@@ -239,6 +239,37 @@ export async function duplicateTake(env: NodeJS.ProcessEnv, saveFolder: string |
       const from = join(dir, entry);
       if (!(await stat(from)).isFile()) continue;
       await copyFile(from, join(dest, entry));
+    }
+    return dest;
+  } finally {
+    duplicating.delete(name);
+  }
+}
+
+/**
+ * Make a new shot directory and fill it (STC-575), under the same in-process
+ * claim `duplicateTake` takes — two imports, or an import and a duplicate,
+ * landing in one second must not pick the same name (STC-345).
+ *
+ * `populate` writes the files; whatever it leaves is the take, so it must
+ * write `shot.json` LAST (the library's scan reads a directory with a
+ * `shot.json` as a shot, so a half-built one must not look like one). A throw
+ * removes the directory: an import that failed leaves nothing behind.
+ */
+export async function createTake(env: NodeJS.ProcessEnv, saveFolder: string | null,
+                                 populate: (dest: string) => Promise<void>): Promise<string> {
+  const root = rawRoot(env, saveFolder);
+  const existing = existsSync(root) ? await readdir(root) : [];
+  const dest = newTakeDir(env, saveFolder, new Date(), [...existing, ...duplicating]);
+  const name = basename(dest);
+  duplicating.add(name);
+  try {
+    await mkdir(dest, { recursive: true });
+    try {
+      await populate(dest);
+    } catch (e) {
+      await rm(dest, { recursive: true, force: true }).catch(() => {});
+      throw e;
     }
     return dest;
   } finally {
