@@ -120,6 +120,12 @@ export interface Settings {
    */
   previewMuted: boolean;
   /**
+   * Draw rule-of-thirds guides over the camera while framing it (STC-497): an
+   * editing aid only, never in render(), a preview or an export. Sticky app
+   * preference; off by default.
+   */
+  framingGuides: boolean;
+  /**
    * Whether this Mac has had its one throwaway ScreenCaptureKit stream
    * (STC-522, `permissions.ts` rule 8): macOS's "bypass the private window
    * picker" consent is raised by the first STREAM, so Capture starts one at
@@ -311,6 +317,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showClicks: true,
   pipStyle: { ...DEFAULT_PIP_STYLE, center: { ...DEFAULT_PIP_STYLE.center } },
   previewMuted: false,
+  framingGuides: false,
   capturePrimed: false,
   shortcutsOffered: false,
   libraryWindow: null,
@@ -482,6 +489,7 @@ export function readSettings(dir: string): Settings {
     showClicks: doc.showClicks !== false,
     pipStyle: cleanStoredPipStyle(doc.pipStyle),
     previewMuted: doc.previewMuted === true,
+    framingGuides: doc.framingGuides === true,
     capturePrimed: doc.capturePrimed === true,
     shortcutsOffered: doc.shortcutsOffered === true,
     libraryWindow: cleanWindowBounds(doc.libraryWindow),
@@ -536,6 +544,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     showClicks: merged.showClicks !== false,
     pipStyle: cleanStoredPipStyle(merged.pipStyle),
     previewMuted: merged.previewMuted === true,
+    framingGuides: merged.framingGuides === true,
     capturePrimed: merged.capturePrimed === true,
     shortcutsOffered: merged.shortcutsOffered === true,
     libraryWindow: cleanWindowBounds(merged.libraryWindow),
