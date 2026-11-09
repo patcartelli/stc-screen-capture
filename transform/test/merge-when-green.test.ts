@@ -22,11 +22,20 @@ import { join } from "node:path";
 const root = join(__dirname, "..", "..");
 const SCRIPT = join(root, "scripts", "merge-when-green.mjs");
 
+const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+/** One `gh run list` row: a green run of the required CI workflow unless overridden. */
+const ciRun = (o: { databaseId?: number; workflowName?: string; conclusion?: string }) => ({
+  databaseId: 1, headSha: HEAD_SHA, workflowName: "CI", status: "completed", conclusion: "success", ...o,
+});
+
 /** A stub `gh` whose behaviour per subcommand is baked in by the test. */
 function stubGh(opts: {
   mergeExit: number; mergeStderr?: string; stateAfterMerge: string; deleteExit?: number;
   /** Head SHA returned from the SECOND `pr view` on, simulating a push mid-wait. */
   headMovesTo?: string;
+  /** What `gh run list` returns. Defaults to one green run of the CI workflow. */
+  runs?: object[];
 }) {
   const dir = mkdtempSync(join(tmpdir(), "gh-stub-"));
   const flag = join(dir, "merged");
@@ -45,7 +54,7 @@ case "$1 $2" in
     if [ -f ${flag} ]; then S=${opts.stateAfterMerge}; else S=OPEN; fi
     echo "{\\"headRefOid\\":\\"$H\\",\\"state\\":\\"$S\\",\\"mergeable\\":\\"MERGEABLE\\",\\"title\\":\\"t\\",\\"headRefName\\":\\"feature\\",\\"mergedAt\\":\\"2026-01-01T00:00:00Z\\"}" ;;
   "run list")
-    echo '[{"databaseId":1,"headSha":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef","status":"completed","conclusion":"success"}]' ;;
+    echo '${JSON.stringify(opts.runs ?? [ciRun({})])}' ;;
   "pr merge")
     touch ${flag}
     echo "$@" > ${argvLog}
@@ -146,5 +155,41 @@ describe("merge-when-green exit code", () => {
     expect(r.code, r.out).toBe(0);
     expect(mergeArgv(stub)).toMatch(
       /--match-head-commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/);
+  });
+
+  /**
+   * STC-640 added a second workflow, `Chrome canary`, which runs on a PR when
+   * its own file changes and is deliberately NOT a required check. The script
+   * took the first run for the head SHA whatever its workflow, so merging PR
+   * #457 printed `CI passed (run 42084112688)`: the canary's run id, not the
+   * `test` job's. Both were green that time. Here the canary is green and the
+   * required CI run is red, and the script must read CI's answer.
+   */
+  test("a green canary run does not stand in for a red CI run", () => {
+    const stub = stubGh({
+      mergeExit: 0, stateAfterMerge: "MERGED",
+      runs: [
+        ciRun({ databaseId: 42084112688, workflowName: "Chrome canary" }),
+        ciRun({ databaseId: 42084112564, conclusion: "failure" }),
+      ],
+    });
+    const r = run(stub);
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/CI failure \(run 42084112564\)/);
+    expect(mergeArgv(stub), "gh pr merge must never have been called").toBe("");
+  });
+
+  test("a red canary run does not block a green CI run", () => {
+    // The other direction: the canary is not required, so its red is no veto.
+    const stub = stubGh({
+      mergeExit: 0, stateAfterMerge: "MERGED",
+      runs: [
+        ciRun({ databaseId: 42084112688, workflowName: "Chrome canary", conclusion: "failure" }),
+        ciRun({ databaseId: 42084112564 }),
+      ],
+    });
+    const r = run(stub);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toMatch(/CI passed \(run 42084112564\)/);
   });
 });
