@@ -195,7 +195,7 @@ export async function* compositeFrames(
         opts.stats.peakBuffered = Math.max(opts.stats.peakBuffered,
           source.bufferedCount + (cameraSource?.bufferedCount ?? 0));
       }
-      composite(ctx, frame, cameraFrame, fs, width, height);
+      composite(ctx, frame, cameraFrame, fs, width, height, session.wallpaper ?? null);
       yield { i, k, tNs, ctx };
     }
   } finally {

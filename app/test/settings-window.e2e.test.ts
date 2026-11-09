@@ -65,7 +65,7 @@ describe("the Settings window", () => {
     const win = await launch(fresh());
     const settings = await openSettings(app!, win);
     const sections: Record<string, string[]> = {
-      capture: ["App", "After a shot", "Window shots", "Recording"],
+      capture: ["App", "After a shot", "Windows", "Recording"],
       camera: ["Preview", "Shape", "Style"],
       shortcuts: ["Shots", "Tools", "Recording"],
       output: ["Locations", "Storage", "GIF"],
@@ -120,7 +120,7 @@ describe("the Settings window", () => {
       .toEqual({ fps: 30, maxWidth: "original" });
   }, 60_000);
 
-  test("STC-628: the Window shot look row persists the pick and names it", async () => {
+  test("STC-628: the Window look row persists the pick and names it", async () => {
     const opts = fresh();
     const win = await launch(opts);
     const settings = await openSettings(app!, win);
@@ -136,7 +136,7 @@ describe("the Settings window", () => {
     expect(await settings.evaluate(() => {
       const el = document.getElementById("windowshotlook")!;
       return el.getAttribute("aria-labelledby")!.split(" ").map((id) => document.getElementById(id)!.textContent).join(" ");
-    })).toBe("Window shot look Window with shadow");
+    })).toBe("Window look Window with shadow");
     await expect.poll(() => settingsJson(opts.userData).windowShotLook, { timeout: 15_000 }).toBe("window-shadow");
   }, 60_000);
 

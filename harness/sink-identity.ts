@@ -8,6 +8,7 @@ import { SeekingFrameSource } from "@transform/seeking-frame-source";
 import { composite } from "@transform/compositor";
 import type { Project } from "@transform/types";
 import { parseProject } from "@transform/trim";
+import { decodeWallpaper } from "@transform/wallpaper-image";
 import { framingProblem } from "@transform/framing";
 import { applyDecoderPreference } from "./decoder.js";
 
@@ -79,6 +80,12 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       projectRaw, anchors.capture.width, anchors.capture.height, durationNs,
       anchors.camera?.present === true,
     );
+    // STC-626: through the same decode the app uses. Absent is a real case, the
+    // gate's fallback control: both sinks must then draw the fallback colour.
+    const wallpaper = project.framing?.background?.kind === "wallpaper"
+      ? await decodeWallpaper(await fetch(`${dir}/wallpaper.jpg`).then((r) => (r.ok ? r.arrayBuffer() : null)))
+      : null;
+
 
     // STC-396: `?framing=clean` frames the take for this run, so the two sinks
     // are compared on the framed path too (scripts/identity-gate.mjs passes it).
@@ -155,17 +162,17 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
       const idx = frameIndexAt(session.frames, t);
       const frame = idx === null ? null : await fwd.frameAt(idx);
       const cam = fs.pip && fwdCam ? await fwdCam.frameAt(fs.pip.frameIndex) : null;
-      composite(fwdCtx, frame, cam, fs, width, height);
+      composite(fwdCtx, frame, cam, fs, width, height, wallpaper);
       exportHash.set(k, await hashCanvas(fwdCtx, width, height));
 
-      composite(blindCtx, frame, null, fs, width, height);
+      composite(blindCtx, frame, null, fs, width, height, wallpaper);
       blindHash.set(k, await hashCanvas(blindCtx, width, height));
       if (fs.pip) pipFrames++;
       if (fs.pip && cam) pipDrawnFrames++;
       if (fs.keycast) keycastFrames++;
 
       if (fs.zoom.amount > ZOOM_BLIND_THRESHOLD) {
-        composite(zoomBlindCtx, frame, cam, { ...fs, zoom: zoomFullFrame }, width, height);
+        composite(zoomBlindCtx, frame, cam, { ...fs, zoom: zoomFullFrame }, width, height, wallpaper);
         zoomBlindHash.set(k, await hashCanvas(zoomBlindCtx, width, height));
       }
     }
@@ -185,7 +192,7 @@ async function hashCanvas(ctx: OffscreenCanvasRenderingContext2D, w: number, h: 
         idx === null ? null : seek.frameAt(idx),
         fs.pip && seekCam ? seekCam.frameAt(fs.pip.frameIndex) : null,
       ]);
-      composite(prevCtx, frame, cam, fs, width, height);
+      composite(prevCtx, frame, cam, fs, width, height, wallpaper);
       const h = await hashCanvas(prevCtx, width, height);
       if (h !== exportHash.get(k)) mismatches.push(`frame ${k} (t=${(t / 1e6).toFixed(1)}ms)`);
     }

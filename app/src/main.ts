@@ -25,7 +25,8 @@ import { colorSpaceFor, type ExportOptions } from "@transform/still-export.js";
 import { parseShot, shotForWrite, type Decoration } from "@transform/shot.js";
 import { applyLook, parseLookWrite, WALLPAPER_FILE, type LookWrite } from "@transform/backgrounds.js";
 import {
-  captureLook, isRememberedBackground, presentFlags, wantsWallpaper, WALLPAPER_NOTICE, type WindowShotLook,
+  captureLook, displayOfWindow, isRememberedBackground, presentFlags, recordingLook, wantsWallpaper,
+  WALLPAPER_NOTICE, WALLPAPER_TAKE_NOTICE, type WindowShotLook,
 } from "./window-look.js";
 import { rewriteShot, writeShotLook } from "./shot-write.js";
 import { stillFrameNameAllowed } from "./still-frame-name.js";
@@ -76,6 +77,7 @@ import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuried
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import { openOverlay, closeOverlay, overlayIsOpen, HIDE_SETTLE_MS } from "./overlay-session.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
+import { ensureWallpaper, startWallpaperRead } from "./record-wallpaper.js";
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
 import type { WindowInfo } from "./selection.js";
 import type { OptionsState } from "./record-options.js";
@@ -292,7 +294,7 @@ const COPY_CANCEL_AT_QUIT_MS = 5_000;
 // loaded from file://, and Chromium refuses cross-origin fetches from a file
 // origin to any non-http scheme. Serving the app itself over a custom scheme
 // would fix that, but IPC removes the origin question altogether.
-const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a", "project.json"]);
+const TAKE_FILES = new Set(["anchors.json", "events.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a", "project.json", WALLPAPER_FILE]);
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -904,13 +906,19 @@ function reconcileTrayRecording(): void {
  * recording's Copy is a render with progress (STC-488) that wants the panel
  * to show it (decided with Patrick, 2026-09-30).
  */
+const takeLookNotices = new Map<string, string>();
+
 async function presentRecordingPanel(dir: string, origin: "fresh" | "library"): Promise<boolean> {
+  // STC-626: a wallpaper that could not be read, held until now because a mid-take
+  // line would be filmed. Taken out here so unreadable anchors do not lose it too.
+  const lookNotice = takeLookNotices.get(dir);
+  takeLookNotices.delete(dir);
   let recording: { durationMs: number; scope: string; reason?: string; action?: StopAction } =
-    { durationMs: 0, scope: "Screen" };
+    { durationMs: 0, scope: "Screen", reason: lookNotice };
   try {
     const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"));
     // STC-237: a mic or camera that ended early is a second sentence after the stop's own.
-    const reason = [panelReason(anchors.stop), trackLossLine(anchors)].filter(Boolean).join(" ") || undefined;
+    const reason = [panelReason(anchors.stop), trackLossLine(anchors), lookNotice].filter(Boolean).join(" ") || undefined;
     recording = { durationMs: recordingDurationMs(anchors), scope: recordingScopeLabel(anchors),
                   reason, action: panelAction(anchors.stop) };
   } catch (e) {
@@ -1921,6 +1929,12 @@ function writeBarOptions(options: OptionsState): void {
 
 /** The flow proper. Split out so `recordFlowActive` has exactly one `finally`
  * covering every step it needs to cover. */
+/** The display the picked window is on, in the id the helper uses (Electron's is the CGDirectDisplayID on macOS). */
+function windowDisplayId(windows: readonly WindowInfo[], windowId: number): number | undefined {
+  const bounds = windows.find((w) => w.id === windowId)?.bounds;
+  return bounds && displayOfWindow(bounds, screen.getAllDisplays());
+}
+
 async function recordFlowBody(
   source: RecordSource, stored: Settings, mics: MicInfo[], cameras: DeviceLike[], windows: WindowInfo[],
 ): Promise<RecordResult> {
@@ -2062,6 +2076,12 @@ async function recordFlowBody(
     onOver: showLibraryAfterTake,
   });
 
+  // STC-626: a window take under the Desktop wallpaper look. Begun here so the
+  // read overlaps the countdown, and finished before `start` (record-wallpaper.ts).
+  const pendingWallpaper = outcome.kind === "window" && wantsWallpaper(stored.windowShotLook)
+    ? startWallpaperRead((d, id, f) => sup!.wallpaper(d, id, f), windowDisplayId(windows, outcome.windowId))
+    : undefined;
+
   // Record ALWAYS counts down (STC-391) — it is what makes Record feel weightier
   // than a shot. After the overlay has gone, never during it.
   const ms = clampCountdownMs(stored.countdownMs);
@@ -2082,6 +2102,7 @@ async function recordFlowBody(
     });
     if (!countdownFired(counted.outcome)) {
       if (options.camera === true) void sup?.releaseCamera().catch(() => {});
+      pendingWallpaper?.discard();
       discardPill(); return { ok: false, cancelled: true };
     }
   }
@@ -2112,17 +2133,26 @@ async function recordFlowBody(
     const root = tempTakesRoot(process.env);
     const existing = existsSync(root) ? readdirSync(root) : [];
     const dir = newTempTakeDir(process.env, new Date(), existing);
+    await pendingWallpaper?.settled;
     const r = await sup!.startRecording(dir, startParams);
     // `start` has answered: the pill may show now, off the confirmed state.
     pillStarted(sup!, { micMuted: startParams.micDeviceUid == null });
     // Only after a successful start: a refused one leaves no take to describe.
+    // STC-626: a window take is born wearing the Settings look. A failed read
+    // is said on the panel after the take, never during it, where it would be filmed.
+    const look = outcome.kind === "window"
+      ? recordingLook(stored.windowShotLook, stored.lastBackgroundLook, await pendingWallpaper?.moveInto(dir))
+      : {};
+    if (look.notice) takeLookNotices.set(dir, look.notice);
     await writeRecordTimeProject(dir, {
       showClicks: options.showClicks,
       pipStyle: defaultStyleForTake(stored.pipStyle, options.camera === true),
+      framing: look.framing ?? null,
     });
     console.log(`[record] started from ${source}`);
     return { ok: true, dir, info: r };
   } catch (e: any) {
+    pendingWallpaper?.discard();
     // Nothing is recording, so nothing should be off screen for it. Its
     // `onOver` brings the library back (STC-550).
     if (sup?.state !== "recording") discardPill();
@@ -4411,21 +4441,19 @@ ipcMain.handle("still:fetchWallpaper", async (_e, dir: string) => {
   if (typeof dir !== "string" || !insideCaptureRoot(process.env, saveFolder, dir)) {
     throw new Error("refusing to write a path outside the recordings folder");
   }
-  // A shot that already has its capture-time picture keeps it: re-picking
-  // Wallpaper must not replace it with today's desktop, or fall back to Clean
-  // when that display is gone.
-  const existing = await stat(join(dir, WALLPAPER_FILE)).catch(() => undefined);
-  if (existing?.isFile()) return { ok: true, file: WALLPAPER_FILE };
-  if (!sup) return { ok: false, notice: WALLPAPER_NOTICE };
-  const shot = parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8")));
-  try {
-    const r = await sup.wallpaper(dir, shot.display.id, WALLPAPER_FILE);
-    if (r.file !== WALLPAPER_FILE) throw new Error(`helper answered ${JSON.stringify(r)}`);
-    return { ok: true, file: WALLPAPER_FILE };
-  } catch (e) {
-    console.log("[wallpaper] could not read for the editor:", e);
-    return { ok: false, notice: WALLPAPER_NOTICE };
-  }
+  return ensureWallpaper(sup && ((d, id, f) => sup!.wallpaper(d, id, f)), dir, async () =>
+    parseShot(JSON.parse(await readFile(join(dir, "shot.json"), "utf8"))).display.id, WALLPAPER_NOTICE);
+});
+
+/**
+ * The editor's Wallpaper swatch (STC-626): the take's own picture, or the
+ * desktop as it is now, read from the display the take recorded.
+ */
+ipcMain.handle("editor:fetchWallpaper", async (e) => {
+  const dir = getOpenTake(e);
+  if (!dir) throw new Error("no take is open");
+  return ensureWallpaper(sup && ((d, id, f) => sup!.wallpaper(d, id, f)), dir, async () =>
+    JSON.parse(await readFile(join(dir, "anchors.json"), "utf8")).display.id, WALLPAPER_TAKE_NOTICE);
 });
 
 ipcMain.handle("preview:read", async (e, name: string) => {
