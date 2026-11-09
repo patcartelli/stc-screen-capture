@@ -43,8 +43,32 @@ import { readFileSync } from "node:fs";
  */
 const SLACK_MIN = Number(process.env.STC_MERGE_SLACK_MIN ?? 15);
 
+const CI_FILE = "ci.yml";
+const ciYml = () => readFileSync(new URL(`../.github/workflows/${CI_FILE}`, import.meta.url), "utf8");
+
+/**
+ * The required workflow's NAME, read from ci.yml for the same reason the timeout
+ * is: written down twice, the two copies drift. It is what `gh run list` reports
+ * as `workflowName`, and the only run this script may decide on.
+ *
+ * Any run for the head SHA used to do. STC-640 added `Chrome canary`, which runs
+ * on a PR when its own file changes and is deliberately NOT required, and the
+ * first run listed won: merging PR #457 printed the canary's run id as "CI
+ * passed". Both were green that time; a green canary over a red `test` would
+ * have merged, and a red canary over a green `test` would have refused.
+ */
+function ciWorkflowName() {
+  const m = ciYml().match(/^name:\s*["']?([^"'\n#]+?)["']?\s*(?:#.*)?$/m);
+  if (!m) {
+    console.error(`could not read the workflow name from .github/workflows/${CI_FILE}`);
+    console.error("  the run this script decides on is chosen by it and must not be guessed");
+    process.exit(2);
+  }
+  return m[1];
+}
+
 function ciJobTimeoutMin() {
-  const yml = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const yml = ciYml();
   // Every timeout-minutes in the file, not just the first: the bound we must
   // clear is the longest thing that can hold the run open.
   const found = [...yml.matchAll(/^\s*timeout-minutes:\s*(\d+)/gm)].map((m) => Number(m[1]));
@@ -73,6 +97,7 @@ if (state !== "OPEN") { console.error(`PR #${pr} is ${state}, not OPEN`); proces
 console.log(`PR #${pr}: ${title}`);
 console.log(`head ${headRefOid.slice(0, 8)}, mergeable: ${mergeable}`);
 
+const CI_NAME = ciWorkflowName();
 const CI_MIN = ciJobTimeoutMin();
 const WAIT_MIN = CI_MIN + SLACK_MIN;
 // Print both bounds and the clearance between them. A bound nobody can see is
@@ -119,9 +144,13 @@ for (;;) {
     process.exit(1);
   }
 
-  const runs = JSON.parse(gh("run", "list", "--commit", headRefOid, "--limit", "20",
-    "--json", "databaseId,headSha,status,conclusion"));
-  const run = runs.find((r) => r.headSha === headRefOid);
+  //
+  // And only the REQUIRED workflow's run (see ciWorkflowName): filtered
+  // server-side by workflow file and checked again by name here, the same
+  // belt-and-braces as the SHA.
+  const runs = JSON.parse(gh("run", "list", "--commit", headRefOid, "--workflow", CI_FILE,
+    "--limit", "20", "--json", "databaseId,headSha,workflowName,status,conclusion"));
+  const run = runs.find((r) => r.headSha === headRefOid && r.workflowName === CI_NAME);
   if (run) lastRun = run;
 
   if (!run) {
