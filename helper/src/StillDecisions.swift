@@ -42,6 +42,7 @@ enum StillKind: String {
 
 struct StillRequest: Equatable {
     /// The shot's own directory; `file` and `shot.json` are written inside it.
+    /// Empty for `recognize-text` (STC-572), which writes nothing.
     let dir: String
     let kind: StillKind
     /// display-crop: which display. nil means the first one ScreenCaptureKit
@@ -165,7 +166,23 @@ func parseStillRequest(_ cmd: [String: Any]) -> Result<StillRequest, StillReques
     guard !file.isEmpty, !file.contains("/"), file != ".", file != ".." else {
         return .failure(.badFile(file))
     }
+    return parseScope(cmd, kind: kind, dir: dir, file: file, wallpaper: cmd["wallpaper"] as? Bool ?? false)
+}
 
+/// `recognize-text` (STC-572): the scope `capture-still` takes (a display crop
+/// or a window, and the windows to leave out) with no directory and no file,
+/// because the frame never leaves memory. `dir`, `file` and `wallpaper` are
+/// not read: there is nothing for them to name.
+func parseTextRequest(_ cmd: [String: Any]) -> Result<StillRequest, StillRequestError> {
+    let kindRaw = cmd["kind"] as? String ?? StillKind.displayCrop.rawValue
+    guard let kind = StillKind(rawValue: kindRaw) else { return .failure(.badKind(kindRaw)) }
+    return parseScope(cmd, kind: kind, dir: "", file: StillRequest.defaultFile, wallpaper: false)
+}
+
+/// What gets captured. Shared by `capture-still` and `recognize-text`, so the
+/// two cannot disagree about what a region or a window is.
+private func parseScope(_ cmd: [String: Any], kind: StillKind, dir: String, file: String,
+                        wallpaper: Bool) -> Result<StillRequest, StillRequestError> {
     var crop: StillRect? = nil
     if let c = cmd["crop"] {
         switch parseRect(c) {
@@ -187,7 +204,6 @@ func parseStillRequest(_ cmd: [String: Any]) -> Result<StillRequest, StillReques
     case .window:
         guard crop == nil else { return .failure(.cropOnWindow) }
         guard let wid = id32(cmd["windowId"]) else { return .failure(.missingWindowId) }
-        let wallpaper = cmd["wallpaper"] as? Bool ?? false
         // The wallpaper lands beside the frame under its own fixed name; a
         // frame given that name would be overwritten by it.
         if wallpaper && file == StillRequest.wallpaperFile { return .failure(.badFile(file)) }

@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_REQUEST_TIMEOUT_MS } from "../../app/src/helper-client.js";
+import { TEXT_REQUEST_TIMEOUT_MS } from "../../app/src/supervisor.js";
 
 const root = join(__dirname, "..", "..");
 
@@ -66,5 +67,24 @@ describe("the wallpaper chain (STC-628)", () => {
   test("the wallpaper verb answers before the client stops listening", () => {
     expect(verbMs()).toBeGreaterThan(0);
     expect(verbMs() + REPLY_AND_IPC_MS).toBeLessThanOrEqual(DEFAULT_REQUEST_TIMEOUT_MS);
+  });
+});
+
+/**
+ * STC-572: `recognize-text` has its own, longer bound, because Vision's first
+ * call by a new binary took ~40 s on hardware. It must clear that, and the
+ * client must still be listening when it answers.
+ */
+describe("the text chain (STC-572)", () => {
+  const textMs = () => swiftConstant("helper/src/Still.swift", "textTimeoutSeconds");
+  /** Measured 2026-11-03, docs/STC-572-RUNBOOK.md §1. */
+  const COLD_VISION_MS = 42_600;
+
+  test("the bound clears a cold Vision call", () => {
+    expect(textMs()).toBeGreaterThan(COLD_VISION_MS);
+  });
+
+  test("the helper answers before the client stops listening", () => {
+    expect(textMs() + REPLY_AND_IPC_MS).toBeLessThanOrEqual(TEXT_REQUEST_TIMEOUT_MS);
   });
 });

@@ -398,6 +398,51 @@ describe("capture-still — validation answers on fd3 before anything touches Sc
     expect(s.state).toBe("idle");
   }, 20_000);
 
+  test("recognize-text refuses a bad scope with capture-still's codes (STC-572)", async () => {
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "recognize-text", kind: "region", seq: 34 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 34), 5000, "recognize-text refusal");
+    expect(r.ev).toBe("error");
+    expect(r.code).toBe("bad-kind");
+    expect(h.out.some((l) => l.seq === 34)).toBe(false);
+  });
+
+  test("recognize-text answers reliably, granted or not, and writes no directory (STC-572)", async () => {
+    // Agnostic about the grant, like the still above. With one, the answer is
+    // `text-recognized` with a list of lines, and nothing is written: the
+    // request names no dir, so there is nowhere it could write to.
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "recognize-text", crop: { x: 0, y: 0, width: 200, height: 100 }, seq: 35 });
+    // A cold binary's first Vision call takes ~40 s (StillCapture.textTimeoutSeconds).
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 35), 62_000, "recognize-text outcome");
+    expect(["text-recognized", "error"]).toContain(r.ev);
+    if (r.ev === "error") {
+      expect(["no-displays", "still-unsupported", "capture-failed"]).toContain(r.code);
+    } else {
+      expect(Array.isArray(r.lines)).toBe(true);
+      expect(r.dir).toBeUndefined();
+    }
+    expect(h.out.some((l) => l.seq === 35)).toBe(false);
+  }, 70_000);
+
+  test("warm-text answers reliably and is safe to send twice (STC-572)", async () => {
+    // Vision needs no grant, so this answers on CI too. Two at once: the
+    // second is told a warm-up is already running rather than starting one.
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "warm-text", seq: 36 });
+    h.send({ cmd: "warm-text", seq: 37 });
+    const a = await waitFor(() => h.fd3.find((l) => l.seq === 36), 62_000, "warm-text outcome");
+    const b = await waitFor(() => h.fd3.find((l) => l.seq === 37), 62_000, "second warm-text outcome");
+    expect(a.ev).toBe("text-warmed");
+    expect(a.lines).toBe(1);
+    expect(b.ev).toBe("text-warmed");
+    expect(b.already).toBe(true);
+    expect(h.out.some((l) => l.seq === 36 || l.seq === 37)).toBe(false);
+  }, 70_000);
+
   test("windows answers reliably, granted or not", async () => {
     const h = spawnHelper();
     await waitFor(() => find(h.fd3, "ready"));
