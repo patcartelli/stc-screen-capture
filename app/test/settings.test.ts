@@ -26,7 +26,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -68,7 +68,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -124,7 +124,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -261,6 +261,22 @@ describe("the preview mute (STC-454)", () => {
     writeSettings(d, { previewMuted: true });
     writeSettings(d, { systemAudio: true });
     expect(readSettings(d).previewMuted).toBe(true);
+  });
+});
+
+describe("the framing guides (STC-497)", () => {
+  test("default off; survives a relaunch; only a literal true is on", () => {
+    expect(DEFAULT_SETTINGS.framingGuides).toBe(false);
+    const d = dir();
+    expect(writeSettings(d, { framingGuides: true }).framingGuides).toBe(true);
+    expect(readSettings(d).framingGuides).toBe(true);
+    writeSettings(d, { systemAudio: true });
+    expect(readSettings(d).framingGuides).toBe(true);
+    for (const bad of ["true", 1, null, {}]) {
+      const e = dir();
+      writeFileSync(join(e, "settings.json"), JSON.stringify({ framingGuides: bad }));
+      expect(readSettings(e).framingGuides, `stored ${JSON.stringify(bad)}`).toBe(false);
+    }
   });
 });
 

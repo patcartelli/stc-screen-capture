@@ -16,6 +16,8 @@ interface AppSettings {
   still: StillSettingsView;
   /** STC-454: the preview's mute button, an app setting. */
   previewMuted?: boolean;
+  /** STC-497: thirds guides on the reframe window. */
+  framingGuides?: boolean;
   // STC-444 slice 3: the export dialog shows this read-only (the picker
   // itself moved to the main window's Preferences), so a take can be
   // published without a second door back to a folder picker this window
@@ -56,6 +58,7 @@ declare const editor: {
   }>;
   getSettings: () => Promise<AppSettings>;
   setPreviewMuted: (muted: boolean) => Promise<unknown>;
+  setFramingGuides: (on: boolean) => Promise<unknown>;
   setPipStyleDefault: (style: unknown) => Promise<unknown>;
   // STC-616: Copy to clipboard. `cancelled` is a field of its own (a cancel is
   // a decision, not a fault), checked before `!ok`.
@@ -3236,6 +3239,24 @@ $("pipframing").addEventListener("wheel", (e) => {
   setFramingZoom((reframing.real.framing?.zoom ?? 1) * Math.exp(-e.deltaY / 500));
 }, { passive: false });
 $("pipframedone").addEventListener("click", commitReframe);
+
+// STC-497: thirds guides. An editing aid, so this touches only the DOM and the
+// app setting, never the project, render() or an export.
+let framingGuides = false;
+function drawFramingGuides(): void {
+  $("pipguides").hidden = !framingGuides;
+  $("pipguidesbtn").setAttribute("aria-pressed", String(framingGuides));
+}
+function toggleFramingGuides(): void {
+  framingGuides = !framingGuides;
+  drawFramingGuides();
+  void editor.setFramingGuides(framingGuides).catch(() => {});
+}
+$("pipguidesbtn").addEventListener("click", toggleFramingGuides);
+void editor.getSettings().then((s) => {
+  framingGuides = s.framingGuides === true;
+  drawFramingGuides();
+}).catch(() => {});
 // Capture phase + stopImmediatePropagation: Escape here ends the reframe and
 // nothing else (not the override editor's, not the frame menu's, not the timeline's).
 window.addEventListener("keydown", (e) => {

@@ -905,7 +905,7 @@
     <!-- STC-461: Reframe. The live project shows the whole camera frame large
          and centred; #pipframewindow is the crop, in the PiP's shape, with the
          rest dimmed. The surface STC-497's guides draw inside. -->
-    <div id="pipframing" hidden><div id="pipframewindow"></div></div>
+    <div id="pipframing" hidden><div id="pipframewindow"><div id="pipguides" hidden aria-hidden="true"><i class="v" style="left:33.333%"></i><i class="v" style="left:66.667%"></i><i class="h" style="top:33.333%"></i><i class="h" style="top:66.667%"></i></div></div></div>
     <svg id="stageplay" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2 12.6 8 5 12.8Z" fill="currentColor"/></svg>
   </div>
   </div><!-- /.stagebox -->
@@ -1164,6 +1164,7 @@
   <div class="overridebar" id="pipframebar" hidden>
     <span>Drag to reframe</span>
     <label>Zoom <input id="pipzoom" type="range" min="1" max="3" step="0.05"></label>
+    <button id="pipguidesbtn" aria-pressed="false" title="Rule-of-thirds guides">Guides</button>
     <button id="pipframedone">Done</button>
   </div>
 
