@@ -106,7 +106,7 @@ import {
 } from "./window-size.js";
 import { startQuitWindowLog, startWindowLog, WINDOW_LOG_ENV, WINDOW_LOG_AT_LAUNCH } from "./quit-window-log.js";
 import { pickOutcome, pickFailure, type PickOutcome } from "./color-pick.js";
-import { textOutcome, textFailure, type TextOutcome } from "./ocr-text.js";
+import { textOutcome, textFailure, READING_TEXT_TOAST, TEXT_SLOW_MS, type TextOutcome } from "./ocr-text.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
   ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
@@ -2690,10 +2690,15 @@ async function captureTextAndAnnounce(): Promise<void> {
     const selected = await selectRegionOrWindow("region", thumbExcluded, { textOnly: true });
     if (selected === undefined) return;
     let outcome: TextOutcome;
+    // Vision's first use after a new helper build is ~45 s: say so rather than
+    // sit silent. The result's toast replaces this one.
+    const slow = setTimeout(() => showNotice(READING_TEXT_TOAST), TEXT_SLOW_MS);
     try {
       outcome = textOutcome(await sup.recognizeText(selected.params) as Record<string, unknown>);
     } catch (err: any) {
       outcome = textFailure(String(err?.detail || err?.code || err?.message || err));
+    } finally {
+      clearTimeout(slow);
     }
     if (outcome.kind === "copied") clipboard.writeText(outcome.text);
     if (outcome.kind === "failed") console.error("[text] capture failed:", outcome.toast.body);

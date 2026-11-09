@@ -68,6 +68,19 @@ export function textOutcome(reply: Record<string, unknown> | undefined): TextOut
   return { kind: "copied", text, toast: { title: "Text copied", body: firstLine(text), tone: "success" } };
 }
 
+/**
+ * How long a recognition may run before the user is told it is still going.
+ * A warm one takes 0.1-0.6 s; the first after a new helper build (and so after
+ * every update) takes ~40-45 s, and silence that long reads as broken
+ * (Patrick, 2026-11-09). The result's own toast replaces this one.
+ */
+export const TEXT_SLOW_MS = 1500;
+
+export const READING_TEXT_TOAST: ToastMessage = {
+  title: "Reading text…",
+  body: "The first use after an update can take up to a minute.",
+};
+
 /** A visible message for a capture or recognition that failed. */
 export function textFailure(detail: string): TextOutcome & { kind: "failed" } {
   return { kind: "failed", toast: { title: "Couldn't capture text", body: detail } };

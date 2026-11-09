@@ -38,6 +38,7 @@ Settings > Shortcuts > Tools > Capture Text: record a key. Press it from another
 |---|---|
 | the overlay appears | the same overlay as Shot Area |
 | drag over a paragraph | toast "Text copied" with the first line; paste shows every line, breaks kept |
+| first use after a fresh `helper/build.sh` | "Reading text…" appears after ~1.5 s, then "Text copied" replaces it |
 | drag over empty desktop | toast "No text copied"; the clipboard still holds what it held before |
 | Esc on the overlay | no toast, clipboard unchanged |
 | press the key while the overlay is up | nothing (one overlay at a time) |

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { clipboardText, firstLine, textOutcome, textFailure, TOAST_LINE_MAX } from "../src/ocr-text.js";
+import { clipboardText, firstLine, textOutcome, textFailure, TOAST_LINE_MAX, TEXT_SLOW_MS, READING_TEXT_TOAST } from "../src/ocr-text.js";
 import { parseToastMessage } from "../src/toast-message.js";
 
 /** Canned Vision output, shaped as the helper's `recognize-text` reply sends it. */
@@ -82,5 +82,13 @@ describe("textOutcome", () => {
     ]) {
       expect(parseToastMessage(o.toast)).toEqual(o.toast);
     }
+  });
+
+  test("the slow-read notice (Patrick, 2026-11-09): waits past a warm read, and is not a check mark", () => {
+    // A warm Vision call is 0.1-0.6 s; the notice must not flash on those.
+    expect(TEXT_SLOW_MS).toBeGreaterThan(600);
+    expect(TEXT_SLOW_MS).toBeLessThanOrEqual(2000);
+    expect(READING_TEXT_TOAST.title).toBe("Reading text…");
+    expect(READING_TEXT_TOAST.tone).toBeUndefined();
   });
 });
