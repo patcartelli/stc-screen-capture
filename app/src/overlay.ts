@@ -42,6 +42,8 @@ interface OverlayPayload {
   preview?: SelectionOutcome;
   /** STC-388 — absent on a shot overlay, which never leaves "select". */
   phase?: "select" | "options";
+  /** STC-572 — an area only: the legend offers no window mode. */
+  regionOnly?: boolean;
   options?: OptionsState;
   bar?: BarLayout;
   /**
@@ -161,9 +163,9 @@ function hide(...els: HTMLElement[]): void {
   for (const el of els) el.style.display = "none";
 }
 
-function renderLegend(mode: string, phase: OverlayPayload["phase"]): void {
+function renderLegend(mode: string, phase: OverlayPayload["phase"], regionOnly?: boolean): void {
   // The words are legend.ts's; this only draws them.
-  legend.replaceChildren(...legendItems(mode, phase).map((item) => {
+  legend.replaceChildren(...legendItems(mode, phase, regionOnly).map((item) => {
     const el = document.createElement("span");
     el.className = "item";
     for (const key of item.keys) {
@@ -328,7 +330,7 @@ function render(p: OverlayPayload): void {
   const { state } = p;
   document.body.classList.toggle("window-mode", state.mode === "window");
   document.body.classList.toggle("has-selection", state.rect !== undefined);
-  renderLegend(state.mode, p.phase);
+  renderLegend(state.mode, p.phase, p.regionOnly);
   renderBar(p);
 
   if (state.mode === "window") {

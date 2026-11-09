@@ -2474,9 +2474,15 @@ interface CaptureParams { kind: string; [k: string]: unknown }
 async function selectRegionOrWindow(
   action: Extract<ShotAction, "region" | "window">,
   thumbExcluded: number[],
+  /**
+   * Capture Text (STC-572): an area only, so no window list and no Space to
+   * window mode, and the area is not remembered for Shot Previous Area, which
+   * retakes shots.
+   */
+  { textOnly = false }: { textOnly?: boolean } = {},
 ): Promise<{ kind: string; params: CaptureParams } | undefined> {
   let windows: WindowInfo[] = [];
-  try {
+  if (!textOnly) try {
     windows = windowsFromReply(await sup!.listWindows());
   } catch {
     // Without a Screen Recording grant the helper cannot enumerate anything.
@@ -2486,10 +2492,10 @@ async function selectRegionOrWindow(
   }
 
   const { outcome, excludeWindowIds } = await openOverlay({
-    windows, mode: action, dist: here, renderer: join(here, "..", "renderer"),
+    windows, mode: action, regionOnly: textOnly, dist: here, renderer: join(here, "..", "renderer"),
   });
   if (outcome.kind === "cancelled") return undefined;
-  if (outcome.kind === "region") void rememberRegion(outcome.displayId, outcome.crop);
+  if (outcome.kind === "region" && !textOnly) void rememberRegion(outcome.displayId, outcome.crop);
   return outcome.kind === "region"
     // `displayId` is Electron's, which on macOS is the CGDirectDisplayID the
     // helper matches against. If that ever stops being true the helper answers
@@ -2668,7 +2674,7 @@ async function pickColorAndAnnounce(): Promise<void> {
 /**
  * Capture Text (STC-572): Shot Area's overlay, then the helper recognises the
  * selection in memory. Recognised text goes on the clipboard and a toast shows
- * its first line; nothing recognised says "No text found" and leaves the
+ * its first line; nothing recognised says "No text copied" and leaves the
  * clipboard alone. Nothing is written to disk, so nothing reaches the library.
  * Shares `capturing` with `captureStill`: one overlay at a time, whichever
  * action raised it. Never throws, for the same reason `captureStill` does not.
@@ -2681,7 +2687,7 @@ async function captureTextAndAnnounce(): Promise<void> {
   try {
     if (await permissionsBlock("still")) return;
     const thumbExcluded = await hideThumbnailForCapture();
-    const selected = await selectRegionOrWindow("region", thumbExcluded);
+    const selected = await selectRegionOrWindow("region", thumbExcluded, { textOnly: true });
     if (selected === undefined) return;
     let outcome: TextOutcome;
     try {

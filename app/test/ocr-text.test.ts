@@ -59,14 +59,14 @@ describe("textOutcome", () => {
     });
   });
 
-  test("nothing recognised is 'No text found', and nothing is copied", () => {
+  test("nothing recognised is 'No text copied', and nothing is copied", () => {
     const o = textOutcome({ lines: [] });
     expect(o.kind).toBe("empty");
-    expect(o.toast.title).toBe("No text found");
+    expect(o.toast.title).toBe("No text copied");
     expect("text" in o).toBe(false);
   });
 
-  test("whitespace-only lines are 'No text found' too", () => {
+  test("whitespace-only lines are 'No text copied' too", () => {
     expect(textOutcome({ lines: [line("  ")] }).kind).toBe("empty");
   });
 

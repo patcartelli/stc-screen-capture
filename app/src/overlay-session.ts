@@ -283,6 +283,8 @@ export interface OpenOptions {
    * this decides where the interaction STARTS, not what it can do.
    */
   mode?: Mode;
+  /** An area only, no window mode (STC-572's Capture Text). */
+  regionOnly?: boolean;
   /** Where the overlay's HTML and preload live. Injected so tests can point elsewhere. */
   dist: string;
   renderer: string;
@@ -362,7 +364,8 @@ class OverlaySession {
 
   constructor(private readonly opts: OpenOptions) {
     this.state = initialState(opts.mode ?? "region");
-    this.ctx = { displays: screen.getAllDisplays().map(toDisplayInfo), windows: opts.windows };
+    this.ctx = { displays: screen.getAllDisplays().map(toDisplayInfo), windows: opts.windows,
+                 regionOnly: opts.regionOnly };
     this.promise = new Promise<OverlayResult>((res) => { this.settle = res; });
     this.options = {
       micDeviceUid: opts.initialOptions?.micDeviceUid ?? null,
@@ -524,6 +527,7 @@ class OverlaySession {
       state: this.state,
       preview: confirm(this.state, this.ctx),
       phase: this.phase,
+      regionOnly: this.ctx.regionOnly,
       options: this.phase === "options" ? this.options : undefined,
       bar: layout,
       // The same anchor the layout above was built from — never `state.rect`

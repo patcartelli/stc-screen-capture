@@ -369,6 +369,13 @@ describe("window mode", () => {
     expect(back.rect).toEqual(withRect.rect);
   });
 
+  test("a region-only overlay (STC-572, Capture Text) ignores Space and stays an area", () => {
+    const withRect = run(drag([100, 100], [300, 300])).state;
+    const after = reduce(withRect, { t: "key", key: " " }, { ...ctx, regionOnly: true }).state;
+    expect(after.mode).toBe("region");
+    expect(after).toEqual(withRect);
+  });
+
   test("toggling into window mode highlights whatever the pointer is already over", () => {
     const { state } = run([
       { t: "pointermove", at: { x: 250, y: 200 } },

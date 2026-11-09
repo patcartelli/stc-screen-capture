@@ -16,7 +16,7 @@
  * ## States
  *
  * copied (text on the clipboard, a toast with its first line), empty (nothing
- * recognised: "No text found" and the clipboard is NOT touched), failed (a
+ * recognised: "No text copied" and the clipboard is NOT touched), failed (a
  * toast says why). A cancelled overlay never reaches here: it shows nothing.
  */
 import type { ToastMessage } from "./toast-message.js";
@@ -63,7 +63,7 @@ export function textOutcome(reply: Record<string, unknown> | undefined): TextOut
   }
   const text = clipboardText(lines);
   if (text === "") {
-    return { kind: "empty", toast: { title: "No text found", body: "The clipboard is unchanged." } };
+    return { kind: "empty", toast: { title: "No text copied", body: "The clipboard is unchanged." } };
   }
   return { kind: "copied", text, toast: { title: "Text copied", body: firstLine(text), tone: "success" } };
 }

@@ -13,7 +13,7 @@ Sections 2-4 are **host**: they need a real display and a Screen Recording grant
 
 - **Action:** "Capture Text", unbound by default (Settings > Shortcuts > Tools, under Pick Color), and in the menu bar. It opens the same overlay as Shot Area (`selectRegionOrWindow`, region mode; the overlay's own toggle still reaches window mode).
 - **Helper:** `recognize-text` takes `capture-still`'s scope (`parseTextRequest`, sharing `parseScope` with `parseStillRequest`), captures through the same `StillCapture`, then runs Vision on the frame in memory (`TextRecognize.swift`: `.accurate`, language correction, automatic language detection). **No directory, nothing written**, so nothing can reach the library.
-- **App:** `app/src/ocr-text.ts` is the pure step: Vision's lines, in Vision's order, trailing whitespace off, blank lines dropped, joined with `\n`. Never reflowed (Patrick, 2026-11-03). Recognised text goes on the clipboard with a toast showing the first line (cut at 80 characters). Nothing recognised says "No text found" and does **not** touch the clipboard. A failure says "Couldn't capture text" and why.
+- **App:** `app/src/ocr-text.ts` is the pure step: Vision's lines, in Vision's order, trailing whitespace off, blank lines dropped, joined with `\n`. Never reflowed (Patrick, 2026-11-03). Recognised text goes on the clipboard with a toast showing the first line (cut at 80 characters). Nothing recognised says "No text copied" and does **not** touch the clipboard. A failure says "Couldn't capture text" and why.
 - **Warm-up:** main sends `warm-text` whenever a helper comes up (Patrick, 2026-11-03), because of §1.
 
 ## 1. The cold-Vision measurement (done, 2026-11-03, this Mac)
@@ -38,7 +38,7 @@ Settings > Shortcuts > Tools > Capture Text: record a key. Press it from another
 |---|---|
 | the overlay appears | the same overlay as Shot Area |
 | drag over a paragraph | toast "Text copied" with the first line; paste shows every line, breaks kept |
-| drag over empty desktop | toast "No text found"; the clipboard still holds what it held before |
+| drag over empty desktop | toast "No text copied"; the clipboard still holds what it held before |
 | Esc on the overlay | no toast, clipboard unchanged |
 | press the key while the overlay is up | nothing (one overlay at a time) |
 | menu bar > Capture Text | same as the key |
