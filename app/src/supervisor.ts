@@ -14,6 +14,13 @@ import type { SupervisorState } from "./supervisor-state.js";
 // type conceptually belongs, just not where it is safe to physically live.
 export type { SupervisorState };
 
+/**
+ * How long `recognize-text` is waited for (STC-572): longer than the default,
+ * because the helper's own bound (`StillCapture.textTimeoutSeconds`, 60 s)
+ * must answer first. `still-bounds.test.ts` holds the two together.
+ */
+export const TEXT_REQUEST_TIMEOUT_MS = 65_000;
+
 export interface SupervisorOptions extends SpawnOptions {
   /** restarts tolerated inside `restartWindowMs` before giving up */
   maxRestarts?: number;
@@ -91,6 +98,25 @@ export class HelperSupervisor {
   async captureStill(params: Record<string, unknown>): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");
     return this.client.request("capture-still", params);
+  }
+
+  /**
+   * Capture Text (STC-572): `captureStill`'s scope, recognised in memory by
+   * Vision. Writes nothing. State-free for the same reasons, and inside the
+   * same `StillCapture.timeoutSeconds` bound.
+   */
+  async recognizeText(params: Record<string, unknown>): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("recognize-text", params, { timeoutMs: TEXT_REQUEST_TIMEOUT_MS });
+  }
+
+  /**
+   * Pay Vision's first-call cost now (STC-572): ~40 s on a new binary, which
+   * is every app update. Sent whenever a helper comes up; nothing waits on it.
+   */
+  async warmText(): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("warm-text", {}, { timeoutMs: 3 * 60_000 });
   }
 
   /**

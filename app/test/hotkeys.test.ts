@@ -3,7 +3,7 @@ import {
   ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, SUPERSEDED_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED, STC415_DEFAULT_SHORTCUTS, shortcutsToReset, resetToNewDefaults, resetOfferText,
   OUTCOMES, OUTCOME_MODIFIERS, OUTCOME_LABELS, outcomeAccelerator, planOutcomeVariants, explainVariant,
   type OutcomeVariantReport,
-  acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction,
+  acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction, isToolAction, TOOL_ACTIONS,
   parseAccelerator, planShortcuts,
   type ShortcutReport, type Shortcuts, type BindableAction,
 } from "../src/hotkeys.js";
@@ -100,7 +100,7 @@ describe("parsing an accelerator", () => {
 });
 
 /** Shipped unbound: pick-color (STC-627) and previous-area (STC-570). Neither has a default key to collide, vary or supersede. */
-const UNBOUND_BY_DEFAULT: readonly BindableAction[] = ["pick-color", "previous-area"];
+const UNBOUND_BY_DEFAULT: readonly BindableAction[] = ["pick-color", "previous-area", "capture-text"];
 const BOUND_SHOTS = SHOT_ACTIONS.filter((a) => !UNBOUND_BY_DEFAULT.includes(a));
 
 describe("planning a whole set", () => {
@@ -119,7 +119,7 @@ describe("planning a whole set", () => {
 
   test("no default collides with a system binding", () => {
     // The ticket's own requirement, checked rather than asserted in a comment.
-    // `null` is a deliberately unbound action (pick-color, STC-627).
+    // `null` is a deliberately unbound action (the tools, STC-627 and STC-572).
     for (const a of Object.values(DEFAULT_SHORTCUTS).filter((x) => x !== null)) {
       expect(parseAccelerator(a!).ok, a!).toBe(true);
     }
@@ -244,8 +244,10 @@ describe("showing a binding", () => {
  */
 describe("stills are Shot (STC-398)", () => {
   test("no label calls a still a Capture — the app itself is Capture now", () => {
-    for (const [action, label] of Object.entries(ACTION_LABELS)) {
-      expect(label, `${action} still says Capture`).not.toMatch(/capture/i);
+    // Tools are not stills. "Capture Text" is STC-572's own name (Patrick,
+    // 2026-11-02) for an action that keeps nothing, so it is outside the rule.
+    for (const action of BINDABLE_ACTIONS.filter((a) => !isToolAction(a))) {
+      expect(ACTION_LABELS[action], `${action} still says Capture`).not.toMatch(/capture/i);
     }
   });
 
@@ -260,7 +262,7 @@ describe("stills are Shot (STC-398)", () => {
     // DEFAULT_SHORTCUTS now also carries `record` (STC-388) — a fifth,
     // brand-new key, not a rename of any of the four above.
     expect(Object.keys(DEFAULT_SHORTCUTS).sort())
-      .toEqual(["display", "pick-color", "previous-area", "record", "region", "self-timer", "window"]);
+      .toEqual(["capture-text", "display", "pick-color", "previous-area", "record", "region", "self-timer", "window"]);
   });
 
   test("a binding stored before the rename still plans onto its action", () => {
@@ -286,7 +288,7 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
   test("SHOT_ACTIONS is DERIVED, so the two lists cannot disagree", () => {
     // Not a second literal: every shot action must appear in the wider list,
     // in the same relative order, and nothing else may be in it.
-    expect(SHOT_ACTIONS).toEqual(BINDABLE_ACTIONS.filter((a) => a !== "record" && a !== "pick-color"));
+    expect(SHOT_ACTIONS).toEqual(BINDABLE_ACTIONS.filter((a) => a !== "record" && !isToolAction(a)));
     // previous-area (STC-570) is a shot: captureStill takes it and the ⇧ variants apply.
     expect(new Set(BINDABLE_ACTIONS).size).toBe(BINDABLE_ACTIONS.length);
   });
@@ -464,8 +466,8 @@ describe("resetting to the new defaults (STC-582)", () => {
 
 describe("superseded defaults (STC-415)", () => {
   test("every superseded default is a real accelerator and none is a current default", () => {
-    // pick-color shipped unbound (STC-627): no default has ever been superseded.
-    expect(SUPERSEDED_DEFAULT_SHORTCUTS["pick-color"]).toEqual([]);
+    // The tools shipped unbound (STC-627, STC-572): no default has ever been superseded.
+    for (const t of TOOL_ACTIONS) expect(SUPERSEDED_DEFAULT_SHORTCUTS[t]).toEqual([]);
     expect(SUPERSEDED_DEFAULT_SHORTCUTS["previous-area"]).toEqual([]);
     for (const a of BINDABLE_ACTIONS.filter((x) => !UNBOUND_BY_DEFAULT.includes(x))) {
       expect(SUPERSEDED_DEFAULT_SHORTCUTS[a].length, a).toBeGreaterThan(0);

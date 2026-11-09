@@ -106,6 +106,7 @@ import {
 } from "./window-size.js";
 import { startQuitWindowLog, startWindowLog, WINDOW_LOG_ENV, WINDOW_LOG_AT_LAUNCH } from "./quit-window-log.js";
 import { pickOutcome, pickFailure, type PickOutcome } from "./color-pick.js";
+import { textOutcome, textFailure, READING_TEXT_TOAST, TEXT_SLOW_MS, type TextOutcome } from "./ocr-text.js";
 import { TOAST_ACTION_URLS, isToastActionId, parseToastMessage, type ToastInput } from "./toast-message.js";
 import {
   ensureCaptureId, readBundleId, captureIdRepairNotice, type CaptureIdRepair,
@@ -617,6 +618,7 @@ function mountTray(): TrayHandle {
     // call `captureStill` bare, so its refusal was dropped AND an open window
     // never heard about the shot at all (STC-465 review).
     if (action === "pick-color") return void pickColorAndAnnounce();
+    if (action === "capture-text") return void captureTextAndAnnounce();
     if (isShotAction(action)) void captureAndAnnounce(action, "menu-bar");
   });
 }
@@ -803,6 +805,15 @@ function startSupervisor(): void {
     statsIntervalMs: 500,
   });
   sup.on("ready", (l) => send("helper:ready", l));
+  // STC-572: Vision's first call by a new helper binary takes ~40 s, so pay
+  // it in the background on every helper start (cheap once it has been paid).
+  // Nothing waits on it, and a failure only means the first Capture Text is slow.
+  sup.on("ready", () => {
+    const helper = sup;
+    void helper?.warmText()
+      .then((r) => console.log(`[text] Vision warmed in ${Math.round(Number(r.ms ?? 0))} ms`))
+      .catch((e) => console.error("[text] Vision warm-up failed:", e?.detail ?? e?.message ?? e));
+  });
   // STC-539: the diagnostics table is off screen for the whole take (the
   // library is hidden for it, STC-550), which is exactly when the camera's
   // count matters, so it goes to stdout too.
@@ -2463,9 +2474,15 @@ interface CaptureParams { kind: string; [k: string]: unknown }
 async function selectRegionOrWindow(
   action: Extract<ShotAction, "region" | "window">,
   thumbExcluded: number[],
+  /**
+   * Capture Text (STC-572): an area only, so no window list and no Space to
+   * window mode, and the area is not remembered for Shot Previous Area, which
+   * retakes shots.
+   */
+  { textOnly = false }: { textOnly?: boolean } = {},
 ): Promise<{ kind: string; params: CaptureParams } | undefined> {
   let windows: WindowInfo[] = [];
-  try {
+  if (!textOnly) try {
     windows = windowsFromReply(await sup!.listWindows());
   } catch {
     // Without a Screen Recording grant the helper cannot enumerate anything.
@@ -2475,10 +2492,10 @@ async function selectRegionOrWindow(
   }
 
   const { outcome, excludeWindowIds } = await openOverlay({
-    windows, mode: action, dist: here, renderer: join(here, "..", "renderer"),
+    windows, mode: action, regionOnly: textOnly, dist: here, renderer: join(here, "..", "renderer"),
   });
   if (outcome.kind === "cancelled") return undefined;
-  if (outcome.kind === "region") void rememberRegion(outcome.displayId, outcome.crop);
+  if (outcome.kind === "region" && !textOnly) void rememberRegion(outcome.displayId, outcome.crop);
   return outcome.kind === "region"
     // `displayId` is Electron's, which on macOS is the CGDirectDisplayID the
     // helper matches against. If that ever stops being true the helper answers
@@ -2655,6 +2672,47 @@ async function pickColorAndAnnounce(): Promise<void> {
 }
 
 /**
+ * Capture Text (STC-572): Shot Area's overlay, then the helper recognises the
+ * selection in memory. Recognised text goes on the clipboard and a toast shows
+ * its first line; nothing recognised says "No text copied" and leaves the
+ * clipboard alone. Nothing is written to disk, so nothing reaches the library.
+ * Shares `capturing` with `captureStill`: one overlay at a time, whichever
+ * action raised it. Never throws, for the same reason `captureStill` does not.
+ */
+async function captureTextAndAnnounce(): Promise<void> {
+  if (!sup) return void showNotice(textFailure("The capture helper is not running.").toast);
+  if (capturing || overlayIsOpen() || countdownIsOpen()) return;
+  capturing = true;
+  tray?.update({ shortcuts, busy: true, recording: sup?.state === "recording" });
+  try {
+    if (await permissionsBlock("still")) return;
+    const thumbExcluded = await hideThumbnailForCapture();
+    const selected = await selectRegionOrWindow("region", thumbExcluded, { textOnly: true });
+    if (selected === undefined) return;
+    let outcome: TextOutcome;
+    // Vision's first use after a new helper build is ~45 s: say so rather than
+    // sit silent. The result's toast replaces this one.
+    const slow = setTimeout(() => showNotice(READING_TEXT_TOAST), TEXT_SLOW_MS);
+    try {
+      outcome = textOutcome(await sup.recognizeText(selected.params) as Record<string, unknown>);
+    } catch (err: any) {
+      outcome = textFailure(String(err?.detail || err?.code || err?.message || err));
+    } finally {
+      clearTimeout(slow);
+    }
+    if (outcome.kind === "copied") clipboard.writeText(outcome.text);
+    if (outcome.kind === "failed") console.error("[text] capture failed:", outcome.toast.body);
+    showNotice(outcome.toast);
+  } catch (e) {
+    console.error("[text] capture failed:", e);
+  } finally {
+    capturing = false;
+    showThumbnailsAfterCapture();
+    tray?.update({ shortcuts, busy: false, recording: sup?.state === "recording" });
+  }
+}
+
+/**
  * A shot, asked for over the library window's bridge. Like `recorder:start`, no
  * button calls it since STC-584; the e2e suite does. It is announced as the
  * hotkey's and the menu bar's are, since the window no longer says it.
@@ -2692,6 +2750,7 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
       ok = globalShortcut.register(plan.accelerator, () => {
         if (plan.action === "record") return void onRecordHotkey();
         if (plan.action === "pick-color") return void pickColorAndAnnounce();
+        if (plan.action === "capture-text") return void captureTextAndAnnounce();
         if (isShotAction(plan.action)) void captureAndAnnounce(plan.action, "hotkey");
       });
     } catch {

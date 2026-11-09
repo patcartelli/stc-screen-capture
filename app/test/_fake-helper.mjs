@@ -493,6 +493,10 @@ process.stdin.on("data", (chunk) => {
       case "camera-release":
         send("camera-released", { seq });
         break;
+      // STC-572: main warms Vision whenever a helper comes up. Nothing to warm here.
+      case "warm-text":
+        send("text-warmed", { seq, ms: 0 });
+        break;
       case "quit":
         send("bye", { seq });
         process.exit(0);

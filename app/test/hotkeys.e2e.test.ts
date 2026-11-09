@@ -89,7 +89,7 @@ describe("the capture shortcuts", () => {
     // `isRegistered` asks Electron, not our own report — the point of the
     // assertion is that something outside this app agreed to the binding.
     await launch();
-    // pick-color ships unbound (STC-627): null is no key to register.
+    // The tools ship unbound (STC-627, STC-572): null is no key to register.
     for (const accelerator of Object.values(DEFAULT_SHORTCUTS).filter((a) => a !== null)) {
       expect(await isRegistered(accelerator!), accelerator!).toBe(true);
     }
@@ -187,7 +187,7 @@ describe("the capture shortcuts", () => {
 
     await win.click("#resetshortcuts");
     await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌥⌘1");
-    // pick-color ships unbound (STC-627): null is no key to register.
+    // The tools ship unbound (STC-627, STC-572): null is no key to register.
     for (const accelerator of Object.values(DEFAULT_SHORTCUTS).filter((a) => a !== null)) {
       expect(await isRegistered(accelerator!), accelerator!).toBe(true);
     }

@@ -88,10 +88,12 @@ const MAP = {
   "previous-area": "history",
   // STC-575: Open Image….
   "open-image": "add_photo_alternate",
+  // STC-572: Capture Text.
+  "text": "document_scanner",
 };
 
 /** The glyphs the menu-bar menu draws, rasterised into app/src/tray-icons.ts. */
-const TRAY = ["area", "window", "display", "record", "record-stop", "timer", "library", "editor", "settings", "color", "previous-area", "open-image"];
+const TRAY = ["area", "window", "display", "record", "record-stop", "timer", "library", "editor", "settings", "color", "previous-area", "open-image", "text"];
 /** 16 pt at 1x and 2x: the two representations a menu asks for. */
 const TRAY_SIZES = [16, 32];
 const RESVG = "@resvg/resvg-js@2.6.2";

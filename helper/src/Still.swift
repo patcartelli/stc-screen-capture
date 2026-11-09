@@ -42,7 +42,9 @@ enum StillError: Error, CustomStringConvertible {
     case cropOutsideDisplay
     case captureFailed(Error?)
     case writeFailed(String)
-    case timedOut(lastStep: String)
+    case timedOut(lastStep: String, seconds: Double)
+    /// STC-572: Vision refused the frame.
+    case recognizeFailed(Error)
 
     var code: String {
         switch self {
@@ -54,6 +56,7 @@ enum StillError: Error, CustomStringConvertible {
         case .captureFailed:      return "capture-failed"
         case .writeFailed:        return "write-failed"
         case .timedOut:           return "still-timeout"
+        case .recognizeFailed:    return "recognize-failed"
         }
     }
 
@@ -68,8 +71,9 @@ enum StillError: Error, CustomStringConvertible {
         case .cropOutsideDisplay: return "the crop does not overlap the display"
         case .captureFailed(let e): return "screenshot failed: \(e.map { "\($0)" } ?? "no image and no error")"
         case .writeFailed(let why): return "could not write the shot: \(why)"
-        case .timedOut(let step):
-            return "still did not complete within \(Int(StillCapture.timeoutSeconds)) s (last step: \(step))"
+        case .timedOut(let step, let seconds):
+            return "still did not complete within \(Int(seconds)) s (last step: \(step))"
+        case .recognizeFailed(let e): return "text recognition failed: \(e)"
         }
     }
 }
@@ -94,7 +98,15 @@ enum StillCursor {
     }
 }
 
-/// One `capture-still` request, start to answer.
+/// Where a captured frame goes. A shot is written to its directory; text
+/// (STC-572) is recognised in memory and the frame is dropped, so nothing of
+/// it ever reaches the disk.
+enum StillOutput {
+    case shot(dir: URL)
+    case text
+}
+
+/// One `capture-still` (or `recognize-text`) request, start to answer.
 final class StillCapture {
     /// How long a still may take before it is answered with `still-timeout`.
     /// Covers the WHOLE request: content enumeration, the screenshot, the PNG
@@ -104,8 +116,19 @@ final class StillCapture {
     /// slow capture, and the answer names the step it was on.
     static let timeoutSeconds: Double = 10
 
+    /// `recognize-text`'s bound (STC-572). Vision's first call by a new binary
+    /// took ~40 s on hardware (TextRecognize.swift). `warm-text` pays that at
+    /// launch, but a Capture Text pressed while it is still warming pays it
+    /// too, so this bound has to clear it rather than answer `still-timeout`.
+    static let textTimeoutSeconds: Double = 60
+
+    private var bound: Double {
+        if case .text = output { return Self.textTimeoutSeconds }
+        return Self.timeoutSeconds
+    }
+
     let request: StillRequest
-    let dir: URL
+    let output: StillOutput
     private let startNs: UInt64
 
     private let lock = NSLock()
@@ -123,11 +146,16 @@ final class StillCapture {
     /// A window shot that asked for its wallpaper. Its content is fetched WITH
     /// desktop windows, because the wallpaper window is one; the window it
     /// captures is looked up by id, so nothing else about the shot changes.
-    private var wantsWallpaper: Bool { request.kind == .window && request.wallpaper }
+    private var wantsWallpaper: Bool { request.kind == .window && request.wallpaper && shotDir != nil }
 
-    init(request: StillRequest, dir: URL) {
+    private var shotDir: URL? {
+        if case .shot(let dir) = output { return dir }
+        return nil
+    }
+
+    init(request: StillRequest, output: StillOutput) {
         self.request = request
-        self.dir = dir
+        self.output = output
         self.startNs = Clock.nowNs()
     }
 
@@ -160,10 +188,10 @@ final class StillCapture {
         // Armed before the first callback API, so it covers the whole request
         // (the STC-258 lesson: a backstop armed after content enumeration
         // bounds only the part after it answers).
-        DispatchQueue.global().asyncAfter(deadline: .now() + Self.timeoutSeconds) { [weak self] in
+        DispatchQueue.global().asyncAfter(deadline: .now() + bound) { [weak self] in
             guard let self else { return }
             self.lock.lock(); let s = self.step; self.lock.unlock()
-            self.finish(.failure(.timedOut(lastStep: s)))
+            self.finish(.failure(.timedOut(lastStep: s, seconds: self.bound)))
         }
 
 
@@ -242,7 +270,7 @@ final class StillCapture {
             geometry = displayGeometry(id: display.displayID,
                                        pointWidth: display.width, pointHeight: display.height)
             // Started now, so it runs while the window is captured and encoded.
-            if wantsWallpaper {
+            if wantsWallpaper, let dir = shotDir {
                 let read = WallpaperRead(displayId: display.displayID, content: content,
                                          dir: dir, file: StillRequest.wallpaperFile)
                 lock.lock(); wallpaperRead = read; lock.unlock()
@@ -289,8 +317,13 @@ final class StillCapture {
             self.mark("captureMs")
             guard let image else { self.finish(.failure(.captureFailed(error))); return }
             DispatchQueue.global(qos: .userInitiated).async {
-                self.write(image: image, capturedAtNs: capturedAtNs, geometry: geometry,
-                        crop: crop, window: window, cursor: cursor)
+                switch self.output {
+                case .shot(let dir):
+                    self.write(image: image, to: dir, capturedAtNs: capturedAtNs, geometry: geometry,
+                               crop: crop, window: window, cursor: cursor)
+                case .text:
+                    self.recognize(image: image)
+                }
             }
         }
     }
@@ -312,7 +345,21 @@ final class StillCapture {
         }
     }
 
-    private func write(image: CGImage, capturedAtNs: UInt64, geometry: DisplayGeometry,
+    /// STC-572: Vision over the frame, in memory. The frame is released with
+    /// this call; the reply carries the lines and nothing else of the image.
+    private func recognize(image: CGImage) {
+        at("recognize")
+        switch recognizeText(in: image) {
+        case .failure(let e):
+            finish(.failure(.recognizeFailed(e)))
+        case .success(let lines):
+            mark("recognizeMs")
+            lock.lock(); let t = timing; lock.unlock()
+            finish(.success(["lines": lines, "width": image.width, "height": image.height, "timing": t]))
+        }
+    }
+
+    private func write(image: CGImage, to dir: URL, capturedAtNs: UInt64, geometry: DisplayGeometry,
                        crop: StillRect?, window: StillWindowInfo?, cursor: StillCursorSample?) {
         at("write")
         let url = dir.appendingPathComponent(request.file)
@@ -400,7 +447,7 @@ enum WindowList {
             c?(r)
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + StillCapture.timeoutSeconds) {
-            answer(.failure(.timedOut(lastStep: "windows")))
+            answer(.failure(.timedOut(lastStep: "windows", seconds: StillCapture.timeoutSeconds)))
         }
         SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { content, err in
             guard let content, !content.displays.isEmpty else {

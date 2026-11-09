@@ -52,7 +52,7 @@
  * is frozen from this commit on.
  */
 export const BINDABLE_ACTIONS = [
-  "region", "window", "display", "record", "self-timer", "pick-color", "previous-area",
+  "region", "window", "display", "record", "self-timer", "pick-color", "previous-area", "capture-text",
 ] as const;
 
 export type BindableAction = (typeof BINDABLE_ACTIONS)[number];
@@ -64,13 +64,23 @@ export type RecordAction = "record";
  * Stills (STC-398): it names the OUTCOME rather than the timing, and all four
  * produce a shot — `self-timer` after a countdown, the rest immediately.
  */
-export type ShotAction = Exclude<BindableAction, RecordAction | PickColorAction>;
+export type ShotAction = Exclude<BindableAction, RecordAction | ToolAction>;
 
-/** The color picker (STC-627): neither a shot nor a take, and unbound by default. */
-export type PickColorAction = "pick-color";
+/**
+ * Tools: neither a shot nor a take, nothing reaches the library, and unbound
+ * by default. The color picker (STC-627) and Capture Text (STC-572). Settings
+ * lists them under Tools, in this order.
+ */
+export const TOOL_ACTIONS = ["pick-color", "capture-text"] as const;
+
+export type ToolAction = (typeof TOOL_ACTIONS)[number];
+
+export function isToolAction(a: BindableAction): a is ToolAction {
+  return (TOOL_ACTIONS as readonly string[]).includes(a);
+}
 
 export function isShotAction(a: BindableAction): a is ShotAction {
-  return a !== "record" && a !== "pick-color";
+  return a !== "record" && !isToolAction(a);
 }
 
 /** DERIVED, never restated — see `BINDABLE_ACTIONS`. */
@@ -115,6 +125,8 @@ export const ACTION_LABELS: Record<BindableAction, string> = {
   // STC-570. A shot, so it keeps the "Shot" word; "Previous Area" is CleanShot's
   // name for the same thing and says which rectangle.
   "previous-area": "Shot Previous Area",
+  // The ticket's own name (STC-572). Not "Shot": nothing is kept.
+  "capture-text": "Capture Text",
 };
 
 /** `null` is a deliberately unbound action, which is not a failure. */
@@ -149,6 +161,8 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   "pick-color": null,
   // Unbound (STC-570): ⇧⌘5 is reserved for STC-569 and ⌘⌥ digits are spoken for.
   "previous-area": null,
+  // Unbound too (STC-572, Patrick 2026-11-03): ⇧⌘5 is reserved for STC-569.
+  "capture-text": null,
 };
 
 /**
@@ -163,6 +177,7 @@ export const LEGACY_DEFAULT_SHORTCUTS: Shortcuts = {
   "self-timer": `${HYPER}+5`,
   "pick-color": null,
   "previous-area": null,
+  "capture-text": null,
 };
 
 /** STC-415's defaults, replaced by STC-582. */
@@ -174,6 +189,7 @@ export const STC415_DEFAULT_SHORTCUTS: Shortcuts = {
   "self-timer": "Shift+Command+7",
   "pick-color": null,
   "previous-area": null,
+  "capture-text": null,
 };
 
 /**
@@ -190,6 +206,7 @@ export const SUPERSEDED_DEFAULT_SHORTCUTS: Record<BindableAction, readonly strin
   "self-timer": [LEGACY_DEFAULT_SHORTCUTS["self-timer"]!, STC415_DEFAULT_SHORTCUTS["self-timer"]!],
   "pick-color": [],
   "previous-area": [],
+  "capture-text": [],
 };
 
 /**

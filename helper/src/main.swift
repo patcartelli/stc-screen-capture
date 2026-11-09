@@ -169,6 +169,18 @@ final class App {
             IO.send("camera-released", seq: seq, [:])
         case "capture-still":
             captureStill(cmd, seq: seq)
+        case "recognize-text":
+            recognizeText(cmd, seq: seq)
+        case "warm-text":
+            // STC-572. State-free; a second while one runs answers at once.
+            TextWarm.run { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let o): IO.send("text-warmed", seq: seq, o)
+                    case .failure(let e): IO.send("error", seq: seq, ["code": "warm-failed", "detail": "\(e)"])
+                    }
+                }
+            }
         case "copy-file":
             // STC-488. State-free, like export-still: copying a finished
             // render must never be refused because a take happens to be running.
@@ -462,7 +474,7 @@ final class App {
         do { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
         catch { IO.send("error", seq: seq, ["code": "mkdir-failed", "detail": "\(error)"]); return }
 
-        let still = StillCapture(request: req, dir: url)
+        let still = StillCapture(request: req, output: .shot(dir: url))
         stills[ObjectIdentifier(still)] = still
         still.run { [weak self] result in
             DispatchQueue.main.async {
@@ -473,6 +485,30 @@ final class App {
                 case .failure(let e):
                     IO.send("error", seq: seq, ["code": e.code, "detail": e.description])
                     if !dirExistedBefore { App.removeIfNothingWorthKeeping(url) }
+                }
+            }
+        }
+    }
+
+    /// `recognize-text` (STC-572): `capture-still`'s scope and capture, then
+    /// Vision in memory. No directory, nothing written; state-free for the
+    /// same reasons as a still.
+    private func recognizeText(_ cmd: [String: Any], seq: Int?) {
+        let req: StillRequest
+        switch parseTextRequest(cmd) {
+        case .failure(let e):
+            IO.send("error", seq: seq, ["code": e.code, "detail": e.description]); return
+        case .success(let r):
+            req = r
+        }
+        let still = StillCapture(request: req, output: .text)
+        stills[ObjectIdentifier(still)] = still
+        still.run { [weak self] result in
+            DispatchQueue.main.async {
+                self?.stills[ObjectIdentifier(still)] = nil
+                switch result {
+                case .success(let o): IO.send("text-recognized", seq: seq, o)
+                case .failure(let e): IO.send("error", seq: seq, ["code": e.code, "detail": e.description])
                 }
             }
         }

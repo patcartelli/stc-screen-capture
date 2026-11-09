@@ -17,7 +17,8 @@ export interface LegendItem {
   label: string;
 }
 
-export function legendItems(mode: string, phase: "select" | "options" | undefined): LegendItem[] {
+export function legendItems(mode: string, phase: "select" | "options" | undefined,
+                            regionOnly = false): LegendItem[] {
   if (phase === "options") {
     return [
       { keys: [], label: "Adjust selection" },
@@ -25,6 +26,8 @@ export function legendItems(mode: string, phase: "select" | "options" | undefine
       { keys: ["Esc"], label: "cancel" },
     ];
   }
+  // Capture Text (STC-572) is an area only: no Space, so no window to name.
+  if (regionOnly) return [{ keys: ["Drag"], label: "region" }, { keys: ["Esc"], label: "cancel" }];
   return mode === "window"
     ? [
         { keys: ["Click"], label: "select window" },

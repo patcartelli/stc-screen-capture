@@ -207,6 +207,11 @@ export interface SelectionContext {
    * match is the one a click would hit.
    */
   windows: WindowInfo[];
+  /**
+   * An area and nothing else (STC-572's Capture Text): Space does not switch to
+   * window mode, so the overlay never offers a window pick.
+   */
+  regionOnly?: boolean;
 }
 
 export interface Reduction {
@@ -538,6 +543,7 @@ export function reduce(state: SelectionState, ev: SelectionEvent,
         case " ": {
           // Space toggles, matching the macOS screenshot muscle memory. The
           // marquee is KEPT across the toggle so a mis-press costs nothing.
+          if (ctx.regionOnly) return { state };
           const mode: Mode = state.mode === "region" ? "window" : "region";
           const hoveredWindowId = mode === "window" && state.pointer
             ? windowUnderPoint(ctx.windows, state.pointer)?.id

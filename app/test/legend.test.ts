@@ -14,6 +14,11 @@ describe("legend (STC-598)", () => {
     expect(words("region", undefined)).toEqual(words("region", "select"));
   });
 
+  test("a region-only overlay (STC-572, Capture Text) never mentions window mode", () => {
+    const text = legendItems("region", "select", true).map((i) => [...i.keys, i.label].join(" "));
+    expect(text).toEqual(["Drag region", "Esc cancel"]);
+  });
+
   test("options phase says Click, never Return: Return only re-confirms the selection", () => {
     for (const mode of ["window", "region"]) {
       const text = words(mode, "options");

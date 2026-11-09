@@ -58,6 +58,30 @@ check("file is a name beside shot.json, never a path",
 check("file cannot be empty", parse(["dir": "/tmp/x", "file": ""]), "err:bad-file")
 check("file can be renamed", parse(["dir": "/tmp/x", "file": "grab.png"]), "ok:display-crop:grab.png")
 
+// ── recognize-text (STC-572): the same scope, no directory ──────────────────
+func parseText(_ cmd: [String: Any]) -> String {
+    switch parseTextRequest(cmd) {
+    case .success(let r): return "ok:\(r.kind.rawValue):dir=\(r.dir):wallpaper=\(r.wallpaper)"
+    case .failure(let e): return "err:\(e.code)"
+    }
+}
+check("recognize-text needs no dir", parseText([:]), "ok:display-crop:dir=:wallpaper=false")
+check("recognize-text ignores a dir rather than writing to it",
+      parseText(["dir": "/tmp/x"]), "ok:display-crop:dir=:wallpaper=false")
+check("recognize-text refuses an unknown kind", parseText(["kind": "region"]), "err:bad-kind")
+check("recognize-text refuses a window with a crop",
+      parseText(["kind": "window", "windowId": 12, "crop": ["x": 0, "y": 0, "width": 10, "height": 10]]),
+      "err:crop-on-window")
+check("recognize-text refuses a bad crop",
+      parseText(["crop": ["x": 0, "y": 0, "width": 0, "height": 10]]), "err:bad-crop")
+check("recognize-text never reads a wallpaper",
+      parseText(["kind": "window", "windowId": 12, "wallpaper": true]), "ok:window:dir=:wallpaper=false")
+if case .success(let r) = parseTextRequest(["displayId": 3, "crop": ["x": 1, "y": 2, "width": 30, "height": 40],
+                                            "excludeWindowIds": [7]]) {
+    check("recognize-text keeps capture-still's display, crop and exclusions",
+          "\(r.displayId ?? 0) \(r.crop?.width ?? 0)x\(r.crop?.height ?? 0) \(r.excludeWindowIds)", "3 30.0x40.0 [7]")
+} else { check("recognize-text parses a display crop", "failure", "success") }
+
 if case .success(let r) = parseStillRequest(["dir": "/tmp/x", "displayId": 3,
                                               "crop": ["x": 10, "y": 20.5, "width": 300, "height": 200]]) {
     check("displayId is carried", r.displayId ?? 0, UInt32(3))
