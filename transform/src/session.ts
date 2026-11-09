@@ -41,6 +41,22 @@ export interface LoadedSession extends Session {
   micAudio?: DemuxedAudio;
   /** STC-418. Present only when anchors.system.present is true and systemM4a was supplied. */
   systemAudio?: DemuxedAudio;
+  /**
+   * STC-626. The take's decoded wallpaper, for a framing that draws it; null or
+   * absent draws the background's fallback colour. Set by whoever loads the
+   * take (`session-io.ts`), never by `loadSession`, which runs in main too.
+   */
+  wallpaper?: DrawableImage | null;
+}
+
+/**
+ * A decoded picture, structurally: `ImageBitmap` is a DOM type and this file
+ * reaches the node typecheck (the same reason as `capture-colour.ts`).
+ */
+export interface DrawableImage {
+  readonly width: number;
+  readonly height: number;
+  close?(): void;
 }
 
 /**

@@ -48,6 +48,13 @@ describe("the menu", () => {
     expect(editor.accelerator).toBeUndefined();
   });
 
+  test("Open Image… is on the menu, with no hotkey (STC-575)", () => {
+    const item = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS }).find((i) => i.id === "open-image")!;
+    expect(item.label).toBe("Open Image…");
+    expect(item.accelerator).toBeUndefined();
+    expect(item.enabled).not.toBe(false);
+  });
+
   test("app items sit in a group above Quit, set off by a divider (STC-551)", () => {
     const id = ids({ shortcuts: DEFAULT_SHORTCUTS });
     const tail = id.slice(id.indexOf("settings") - 1);

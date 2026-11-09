@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
+import { gateBrowser } from "../../scripts/gate-browser.mjs";
 
 const RENDERER = fileURLToPath(new URL("../renderer/", import.meta.url));
 const read = (f: string) => readFileSync(join(RENDERER, f), "utf8");
@@ -115,7 +116,7 @@ describe("source: tokens.css", () => {
 describe("pixels: tokens are applied", () => {
   let browser: Browser;
   beforeAll(async () => {
-    browser = await chromium.launch({ channel: "chrome", headless: true });
+    browser = await chromium.launch({ ...gateBrowser().launch, headless: true });
   });
   afterAll(async () => {
     await browser?.close();

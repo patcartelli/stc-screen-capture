@@ -1,0 +1,104 @@
+name: Chrome canary
+
+# The required job runs Chrome at a fixed version (scripts/gate-browser.mjs), so
+# a Chrome release can no longer turn master red with no commit. This is what
+# keeps that from hiding the next change: the same video gates, on whatever
+# stable Google serves today. Red here means a browser change is coming; it does
+# not mean master is broken, and it must not block a merge, so this stays out of
+# the required checks. gate-bounds.test.ts holds this file to all of that.
+#
+# It runs on a PR only when this file changes, so an edit gets its first run
+# before it lands.
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/chrome-canary.yml
+
+jobs:
+  # Not `test`: that name is master's required check.
+  canary:
+    runs-on: macos-15
+    # Must clear the gates' process bounds with margin; gate-bounds.test.ts asserts it.
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install current stable Chrome
+        run: npx playwright install chrome
+
+      # Every gate runs even after one fails: which gates a release breaks is the finding.
+      - name: Determinism gate (fixture)
+        if: ${{ !cancelled() }}
+        run: npm run gate
+
+      - name: Seek gate (fixture)
+        if: ${{ !cancelled() }}
+        run: npm run gate:seek
+
+      - name: Export and identity gates (fixture session)
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          TAKE="$(mktemp -d)/2026-01-01_00-00-00"
+          mkdir -p "$TAKE"
+          cp fixtures/basic/anchors.json fixtures/basic/events.json fixtures/basic/display.mp4 "$TAKE/"
+          npm run gate:export -- "$TAKE" || status=1
+          CAM="$(mktemp -d)/2026-01-01_00-00-00"
+          mkdir -p "$CAM"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
+          npm run gate:identity -- "$CAM" || status=1
+          STY="$(mktemp -d)/2026-01-01_00-00-00"
+          mkdir -p "$STY"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$STY/"
+          cp fixtures/pip-styled/project.json "$STY/"
+          npm run gate:identity -- "$STY" || status=1
+          exit "$status"
+
+      - name: Sink identity, framed
+        if: ${{ !cancelled() }}
+        run: |
+          CAM="$(mktemp -d)/2026-01-01_00-00-01"
+          mkdir -p "$CAM"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$CAM/"
+          STC_IDENTITY_FRAMING=clean npm run gate:identity -- "$CAM"
+
+      - name: Sink identity, wallpaper
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          WP="$(mktemp -d)/2026-01-01_00-00-02"
+          mkdir -p "$WP"
+          cp fixtures/pip/anchors.json fixtures/pip/events.json \
+             fixtures/pip/display.mp4 fixtures/pip/camera.mp4 "$WP/"
+          cp fixtures/wallpaper-framed/project.json fixtures/wallpaper-framed/wallpaper.jpg "$WP/"
+          npm run gate:identity -- "$WP" || status=1
+          rm "$WP/wallpaper.jpg"
+          npm run gate:identity -- "$WP" || status=1
+          exit "$status"
+
+      - name: Compare with the pin
+        if: ${{ !cancelled() }}
+        env:
+          OUTCOME: ${{ job.status }}
+        run: |
+          stable="$("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version)"
+          pinned="$(node --input-type=module -e 'import { PINNED_CHROME } from "./scripts/gate-browser.mjs"; console.log(PINNED_CHROME)')"
+          line="$stable: gates $OUTCOME. Required CI is pinned at $pinned (scripts/gate-browser.mjs)."
+          echo "$line" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$OUTCOME" != "success" ]; then
+            echo "::error title=Chrome canary::$line Master is not affected; fix this before bumping the pin."
+          fi

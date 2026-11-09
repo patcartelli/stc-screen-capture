@@ -33,7 +33,7 @@ function stateFor(framing: Framing | undefined, pointer?: { x: number; y: number
 async function render(framing: Framing | undefined, pointer?: { x: number; y: number }) {
   const canvas = new OffscreenCanvas(W, H);
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
-  composite(ctx, await frameBitmap(), null, stateFor(framing, pointer), W, H);
+  composite(ctx, await frameBitmap(), null, stateFor(framing, pointer), W, H, null);
   return ctx.getImageData(0, 0, W, H);
 }
 

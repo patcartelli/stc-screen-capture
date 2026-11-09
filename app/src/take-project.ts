@@ -35,8 +35,15 @@
  * is seeded only when it differs from the default AND the take was started with
  * the camera on, and never with a framing: framing is per take, and absent
  * means centred.
+ *
+ * ## The window look (STC-626)
+ *
+ * A window take is born wearing the Settings look, so `framing` is seeded too;
+ * the editor owns it after. Other scopes pass none. A look reaches the version
+ * that can express it: 22 for wallpaper, 21 for more than two stops, else 15.
  */
 
+import type { Framing } from "@transform/framing.js";
 import { DEFAULT_PIP_FIXED, isDefaultPipStyle, type PipStyle } from "@transform/pip-style.js";
 
 
@@ -44,6 +51,13 @@ export interface RecordTimeChoices {
   showClicks: boolean;
   /** Already filtered by `defaultStyleForTake`: null = seed nothing. */
   pipStyle: PipStyle | null;
+  /** The window look, from `recordingLook`. Absent or null = seed nothing. */
+  framing?: Framing | null;
+}
+
+function framingVersion(f: Framing): number {
+  if (f.background?.kind === "wallpaper") return 22;
+  return f.background?.kind === "linear" && f.background.colors.length > 2 ? 21 : 15;
 }
 
 /** The style a new take starts with, or null when there is nothing to say. */
@@ -59,6 +73,7 @@ export function recordTimeProject(choices: RecordTimeChoices): string | null {
   let version = 0;
   if (!choices.showClicks) { body.showClicks = false; version = 13; }
   if (choices.pipStyle) { body.pip = { ...DEFAULT_PIP_FIXED, style: choices.pipStyle }; version = 16; }
+  if (choices.framing) { body.framing = choices.framing; version = Math.max(version, framingVersion(choices.framing)); }
   if (version === 0) return null;
   return JSON.stringify({ version, ...body }, null, 2) + "\n";
 }

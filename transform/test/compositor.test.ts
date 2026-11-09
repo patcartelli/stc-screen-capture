@@ -3,7 +3,9 @@ import { composite } from "../src/compositor.js";
 import { FULL_FRAME_UV, type FrameState } from "../src/render.js";
 import { CIRCLE_PT, CLICK_HIGHLIGHT_PT } from "../src/cursor-art.js";
 import { recorder } from "./_canvas-recorder.js";
-import { framingLayout } from "../src/framing.js";
+import { framingLayout, wallpaperFraming } from "../src/framing.js";
+import { coverRect } from "../src/still-render.js";
+import { decodeWallpaper } from "../src/wallpaper-image.js";
 
 /**
  * Node has no canvas, so this cannot check pixels — the browser gates do that,
@@ -27,7 +29,7 @@ function frameState(over: Partial<FrameState["cursor"]> = {}): FrameState {
 
 function draw(fs: FrameState) {
   const { ctx, ops } = recorder();
-  composite(ctx as unknown as OffscreenCanvasRenderingContext2D, null, null, fs, 640, 360);
+  composite(ctx as unknown as OffscreenCanvasRenderingContext2D, null, null, fs, 640, 360, null);
   return ops;
 }
 
@@ -46,7 +48,7 @@ describe("auto-zoom stage 1 draws the source, and the stub changes nothing", () 
   ): string[] {
     const { ctx, ops } = recorder();
     const fs: FrameState = { ...frameState(), zoom: { amount: 1, crop } };
-    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, frame, null, fs, 640, 360);
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, frame, null, fs, 640, 360, null);
     return ops.filter((o) => o.startsWith("drawImage"));
   }
 
@@ -154,7 +156,7 @@ describe("the styled PiP (STC-461) — drawing order", () => {
   const drawOps = (draw?: import("../src/render.js").PipDraw) => {
     const { ctx, ops } = recorder();
     const fs: FrameState = { ...frameState({ visible: false }), pip: { ...base, draw } };
-    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, null, cam, fs, 640, 360);
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, null, cam, fs, 640, 360, null);
     return ops;
   };
   test("no draw block: the single five-argument call, byte for byte the old one", () => {
@@ -204,7 +206,7 @@ describe("framing (STC-396)", () => {
     const { ctx, ops } = recorder();
     (ctx as unknown as { measureText: unknown }).measureText = () => ({ width: 50 });
     composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
-              { ...frameState(over), framing: layout, ...extra }, W, H);
+              { ...frameState(over), framing: layout, ...extra }, W, H, null);
     return ops;
   }
   const idx = (ops: string[], prefix: string, from = 0) => ops.findIndex((o, i) => i >= from && o.startsWith(prefix));
@@ -253,7 +255,7 @@ describe("framing (STC-396)", () => {
     }, { width: W, height: H }, 16 / 9)!;
     const { ctx, ops } = recorder();
     composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
-              { ...frameState({ visible: false }), framing: three }, W, H);
+              { ...frameState({ visible: false }), framing: three }, W, H, null);
     const stops = ops.filter((o) => o.startsWith("addColorStop("));
     expect(stops.slice(0, 3)).toEqual([
       "addColorStop(0,#050a12)", "addColorStop(0.5,#0d4a52)", "addColorStop(1,#5b3fd1)"]);
@@ -263,7 +265,7 @@ describe("framing (STC-396)", () => {
     const solid = framingLayout({ preset: "solid", color: "#112233" }, { width: W, height: H }, 16 / 9)!;
     const { ctx, ops } = recorder();
     composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
-              { ...frameState({ visible: false }), framing: solid }, W, H);
+              { ...frameState({ visible: false }), framing: solid }, W, H, null);
     expect(ops.some((o) => o.startsWith("createLinearGradient"))).toBe(false);
     expect(ops).toContain("fillStyle=#112233");
   });
@@ -272,7 +274,7 @@ describe("framing (STC-396)", () => {
     const { ctx, ops } = recorder();
     const crop = { x: 0.1, y: 0.2, width: 0.5, height: 0.5 };
     composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
-              { ...frameState({ visible: false }), zoom: { amount: 1, crop }, framing: layout }, W, H);
+              { ...frameState({ visible: false }), zoom: { amount: 1, crop }, framing: layout }, W, H, null);
     expect(ops.some((o) => o === `drawImage(${String(bitmap)},128,144,640,360,${c.x},${c.y},${c.width},${c.height})`)).toBe(true);
   });
 
@@ -288,7 +290,7 @@ describe("framing (STC-396)", () => {
   test.each([["opacity", { opacity: 0 }], ["blur", { blur: 0 }]])("a zero %s skips the shadow entirely", (_n, over) => {
     const { ctx, ops } = recorder();
     composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
-              { ...frameState({ visible: false }), framing: { ...layout, shadow: { ...layout.shadow, ...over } } }, W, H);
+              { ...frameState({ visible: false }), framing: { ...layout, shadow: { ...layout.shadow, ...over } } }, W, H, null);
     expect(ops.some((o) => o.startsWith("shadow"))).toBe(false);
     const n = (k: string) => ops.filter((o) => o === k).length;
     expect(n("save()")).toBe(n("restore()"));
@@ -297,8 +299,58 @@ describe("framing (STC-396)", () => {
   test("framing: null draws exactly the pre-framing sequence (no clip, no gradient, no shadow)", () => {
     const { ctx, ops } = recorder();
     composite(ctx as unknown as OffscreenCanvasRenderingContext2D, bitmap, null,
-              { ...frameState({ visible: false }), framing: null }, W, H);
+              { ...frameState({ visible: false }), framing: null }, W, H, null);
     expect(ops.some((o) => o.startsWith("clip(") || o.startsWith("createLinearGradient") || o.startsWith("shadow"))).toBe(false);
     expect(ops).toContain(`drawImage(${String(bitmap)},0,0,${W},${H})`);
+  });
+});
+
+describe("a wallpaper background (STC-626)", () => {
+  const W = 640;
+  const H = 360;
+  const layout = framingLayout({ preset: "clean", background: wallpaperFraming() }, { width: W, height: H }, 16 / 9)!;
+  const fs = { ...frameState({ visible: false }), framing: layout };
+  const drawn = (image: { width: number; height: number } | null) => {
+    const { ctx, ops } = recorder();
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, null, null, fs, W, H, image);
+    return ops;
+  };
+
+  test("the picture is cover-cropped over the whole output, never stretched", () => {
+    const image = { width: 4000, height: 2000 };
+    const r = coverRect(4000, 2000, W, H);
+    expect(drawn(image)).toContain(`drawImage(${String(image)},${r.sx},${r.sy},${r.sw},${r.sh},0,0,${W},${H})`);
+  });
+
+  test("the shadow lands on top of the picture", () => {
+    const ops = drawn({ width: 4000, height: 2000 });
+    const at = (needle: string) => ops.findIndex((o) => o.startsWith(needle));
+    expect(at("drawImage(")).toBeLessThan(at("shadowColor="));
+  });
+
+  test("with no picture every sink draws the fallback colour", () => {
+    const ops = drawn(null);
+    expect(ops.some((o) => o.startsWith("drawImage("))).toBe(false);
+    const fill = ops.lastIndexOf(`fillRect(0,0,${W},${H})`);
+    expect(ops[fill - 1]).toBe("fillStyle=#e9edf2");
+  });
+
+  test("another background ignores a picture it was handed", () => {
+    const solid = framingLayout({ preset: "solid" }, { width: W, height: H }, 16 / 9)!;
+    const { ctx, ops } = recorder();
+    composite(ctx as unknown as OffscreenCanvasRenderingContext2D, null, null,
+              { ...fs, framing: solid }, W, H, { width: 10, height: 10 });
+    expect(ops.some((o) => o.startsWith("drawImage("))).toBe(false);
+  });
+});
+
+describe("decodeWallpaper (STC-626)", () => {
+  test("no bytes is no picture, not an error", async () => {
+    await expect(decodeWallpaper(undefined)).resolves.toBeNull();
+    await expect(decodeWallpaper(null)).resolves.toBeNull();
+  });
+
+  test("bytes that will not decode are no picture, not an error", async () => {
+    await expect(decodeWallpaper(new ArrayBuffer(4))).resolves.toBeNull();
   });
 });

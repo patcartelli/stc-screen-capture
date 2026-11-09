@@ -3,6 +3,7 @@ import {
   framingPadding, framingRadius, framingShadowOn, withPadding, withRadius, withShadow, radiusPx,
   backgroundOf, VIDEO_LOOKS, withLook, withCustom, customFraming, videoLookOf,
 } from "../src/framing-edit.js";
+import { videoLooksFor } from "../src/window-look.js";
 import {
   DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_PRESETS, FRAMING_RADIUS_MAX, framingProblem, type Framing,
 } from "@transform/framing";
@@ -147,5 +148,56 @@ describe("video looks (STC-608)", () => {
   test("every result is a framing the loader accepts", () => {
     expect(made.length).toBeGreaterThan(10);
     for (const f of made) if (f) expect(framingProblem(f)).toBeUndefined();
+  });
+});
+
+describe("a window take's looks (STC-626)", () => {
+  const windowLooks = videoLooksFor("window");
+  const WHITE = { preset: "clean", background: { kind: "solid", color: "#ffffff" } } as Framing;
+
+  test("other scopes get exactly today's grid", () => {
+    for (const scope of ["display", "region", undefined]) expect(videoLooksFor(scope)).toEqual(VIDEO_LOOKS);
+  });
+
+  test("a window take's grid, in order, with its own first label", () => {
+    expect(windowLooks.map((l) => l.id)).toEqual(
+      ["none", "window-shadow", "clean", "dark", "solid", "aurora", "ember", "wallpaper", "custom"]);
+    expect(windowLooks[0]!.label).toBe("Just the window");
+    expect(windowLooks[1]!.label).toBe("Window with shadow");
+    expect(windowLooks[7]!.label).toBe("Wallpaper");
+  });
+
+  test("every look round-trips through the document", () => {
+    for (const { id } of windowLooks) {
+      if (id === "custom") continue;
+      const f = withLook(undefined, id);
+      expect(videoLookOf(f, windowLooks), id).toBe(id);
+      if (f) expect(framingProblem(f), id).toBeUndefined();
+    }
+  });
+
+  test("white reads as Window with shadow only where that look exists", () => {
+    expect(videoLookOf(WHITE, windowLooks)).toBe("window-shadow");
+    expect(videoLookOf(WHITE)).toBe("custom");
+  });
+
+  test("a wallpaper framing on a grid without the swatch selects nothing, and still draws", () => {
+    const f = withLook(undefined, "wallpaper")!;
+    expect(videoLookOf(f)).toBeUndefined();
+    expect(backgroundOf(f).kind).toBe("wallpaper");
+  });
+
+  test("leaving wallpaper keeps padding and corners, and a shadow switched off stays off", () => {
+    const f = withShadow(withRadius(withPadding(withLook(undefined, "wallpaper")!, 0.1), 0.05), false);
+    const next = withLook(f, "clean")!;
+    expect(framingPadding(next)).toBe(0.1);
+    expect(framingRadius(next)).toBe(0.05);
+    expect(framingShadowOn(next)).toBe(false);
+    expect(videoLookOf(next, windowLooks)).toBe("clean");
+  });
+
+  test("Custom on wallpaper replaces it with the typed fill", () => {
+    const f = withCustom(withLook(undefined, "wallpaper"), { kind: "solid", color: "#123456" });
+    expect(videoLookOf(f, windowLooks)).toBe("custom");
   });
 });

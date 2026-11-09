@@ -1,9 +1,9 @@
 import { describe, test, expect } from "vitest";
 import {
   framingLayout, framingProblem, cleanFraming, gradientLine, contentFraction,
-  FRAMING_PRESETS, FRAMING_PADDING_MAX, DEFAULT_SOLID_COLOR,
+  FRAMING_PRESETS, FRAMING_PADDING_MAX, DEFAULT_SOLID_COLOR, wallpaperFraming, type Framing,
 } from "../src/framing.js";
-import { LOOK_FILLS, DARK_SHADOW_OPACITY } from "../src/looks.js";
+import { LOOK_FILLS, DARK_SHADOW_OPACITY, WALLPAPER_FILE, WINDOW_SHADOW_FILL } from "../src/looks.js";
 
 const OUT = { width: 1920, height: 1080 };
 const ASPECT = 16 / 9;
@@ -160,5 +160,38 @@ describe("looks catalogue (STC-608)", () => {
     expect(FRAMING_PRESETS.dark.background).toEqual(LOOK_FILLS.dark);
     expect(FRAMING_PRESETS.solid.background).toEqual(LOOK_FILLS.solid);
     expect(FRAMING_PRESETS.dark.shadow.opacity).toBe(DARK_SHADOW_OPACITY);
+  });
+});
+
+describe("a wallpaper background (STC-626)", () => {
+  const good = { preset: "clean", background: wallpaperFraming() };
+
+  test("the background names the one file and Clean's first stop", () => {
+    expect(wallpaperFraming()).toEqual({ kind: "wallpaper", file: WALLPAPER_FILE, color: "#e9edf2" });
+    expect(WALLPAPER_FILE).toBe("wallpaper.jpg");
+  });
+
+  test("framingProblem accepts it", () => {
+    expect(framingProblem(good)).toBeUndefined();
+  });
+
+  test.each([
+    ["a path out of the take", { kind: "wallpaper", file: "../wallpaper.jpg", color: "#e9edf2" }],
+    ["another file", { kind: "wallpaper", file: "other.jpg", color: "#e9edf2" }],
+    ["no fallback colour", { kind: "wallpaper", file: "wallpaper.jpg" }],
+    ["a fallback that is not #rrggbb", { kind: "wallpaper", file: "wallpaper.jpg", color: "red" }],
+    ["an undeclared key", { kind: "wallpaper", file: "wallpaper.jpg", color: "#e9edf2", x: 1 }],
+  ])("framingProblem refuses %s", (_name, background) => {
+    expect(framingProblem({ preset: "clean", background })).toMatch(/framing\.background/);
+  });
+
+  test("framingLayout carries it through untouched", () => {
+    const l = framingLayout(good as Framing, { width: 1920, height: 1080 }, 16 / 9)!;
+    expect(l.background).toEqual(wallpaperFraming());
+  });
+
+  test("the white behind Window with shadow stays out of the catalogue stills read", () => {
+    expect(WINDOW_SHADOW_FILL).toEqual({ kind: "solid", color: "#ffffff" });
+    expect(Object.values(LOOK_FILLS)).not.toContainEqual(WINDOW_SHADOW_FILL);
   });
 });
