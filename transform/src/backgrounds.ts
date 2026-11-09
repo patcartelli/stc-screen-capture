@@ -50,14 +50,7 @@ export interface Look {
   shadow?: Shadow;
 }
 
-/**
- * Where the helper saves the desktop wallpaper, beside `frame.png` (STC-628).
- * JPEG, not PNG: a PNG of a gradient wallpaper took ~300-590 ms to encode per
- * shot (Patrick, 2026-11-02). Held equal to the helper's
- * `StillRequest.wallpaperFile` by backgrounds.test.ts; `still:frame` lets
- * exactly this name through beside its `*.png`.
- */
-export const WALLPAPER_FILE = "wallpaper.jpg";
+export { WALLPAPER_FILE } from "./looks.js";
 
 /** The wallpaper background; its one colour is the fill drawn while the image cannot be (Clean's first stop). */
 export function wallpaperBackground(file: string): Background {

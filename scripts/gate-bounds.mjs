@@ -168,9 +168,11 @@ export const TEST_STEP_MS = 45 * 60_000;
 
 /**
  * Everything from the job's start to the start of `Test`: checkout,
- * setup-node, `npm ci`, build helper, typecheck. NOT process-bounded, so this
- * term alone is an estimate. It is small enough that an estimate is fine: the
- * same 17 runs put it at 32-79 s, and 3 min is ~2.3x the slowest.
+ * setup-node, `npm ci`, build helper, typecheck, install pinned Chrome. NOT
+ * process-bounded, so this term alone is an estimate. It is small enough that an
+ * estimate is fine: the same 17 runs put it at 32-79 s before the Chrome install
+ * moved here, and the install it replaced took 41 s, so 3 min is ~1.5x the
+ * slowest. The install's download is bounded at 150 s by its own curl.
  */
 export const PRE_TEST_MS = 3 * 60_000;
 

@@ -456,7 +456,14 @@ export function hasMultiStopFraming(project: Project): boolean {
   return bg?.kind === "linear" && bg.colors.length > 2;
 }
 
-function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 {
+/** A wallpaper framing background (STC-626): the one thing v22 expresses. */
+export function hasWallpaperFraming(project: Project): boolean {
+  return project.framing?.background?.kind === "wallpaper";
+}
+
+function versionFor(project: Project): 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 {
+  // v22 (STC-626) is a wallpaper background, carried like v21's by the framing line.
+  if (hasWallpaperFraming(project)) return 22;
   // v21 (STC-608) is a framing background of 3-8 stops; the framing itself is
   // carried by the `version >= 15` line below like every other framing field.
   if (hasMultiStopFraming(project)) return 21;

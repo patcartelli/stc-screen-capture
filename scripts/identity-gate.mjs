@@ -6,6 +6,7 @@
  */
 import { createServer } from "vite";
 import { chromium } from "playwright";
+import { gateBrowser } from "./gate-browser.mjs";
 import { bounded, closeQuietly, EVAL_MS, isBoundFailure, instrumentPage } from "./gate-bounds.mjs";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -36,19 +37,24 @@ const server = await createServer({
       // they fall through to vite, the page's fetch resolves with vite's HTML,
       // r.json() throws, and the take loads camera-less — a clean PASS that
       // tested nothing.
-      if (!["anchors.json", "events.json", "project.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a"].includes(n)) return next();
+      if (!["anchors.json", "events.json", "project.json", "display.mp4", "camera.mp4", "mic.m4a", "system.m4a", "wallpaper.jpg"].includes(n)) return next();
       const f = join(sessionDir, n);
       // A camera-less take genuinely has no camera.mp4, and the page only asks
       // for it when anchors.files.camera is set — so a miss here means the
       // anchors and the directory disagree, which is worth failing loudly on.
+      // wallpaper.jpg is the exception (STC-626): only a framing asks for it, and
+      // its absence is the control, both sinks drawing the fallback colour.
       if (!existsSync(f)) { res.statusCode = 404; res.end(`no ${n} in this take`); return; }
-      res.setHeader("content-type", n.endsWith(".json") ? "application/json" : "video/mp4");
+      res.setHeader("content-type", n.endsWith(".json") ? "application/json" : n.endsWith(".jpg") ? "image/jpeg" : "video/mp4");
       res.end(readFileSync(f));
     });
   }}],
 });
 await server.listen(5205);
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const { label, launch } = gateBrowser();
+const browser = await chromium.launch({ ...launch, headless: true });
+// Which Chrome this run got, so a browser change is never a guess (STC-640).
+console.log(`browser: ${label} ${browser.version()}`);
 const page = await browser.newPage();
 // STC-259 Mode B: a blocked renderer kills every in-page bound, so the page's
 // checkpoints are collected out here. Also installs the wedge fault injection.

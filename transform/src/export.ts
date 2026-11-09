@@ -1,4 +1,5 @@
 import { mixLimit } from "./peak-limit.js";
+import { muxVideoChunk } from "./mux-video-chunk.js";
 import { render } from "./render.js";
 import { exportFrameTimeNs } from "./time.js";
 import { ForwardFrameSource } from "./frame-source.js";
@@ -194,7 +195,7 @@ export async function* compositeFrames(
         opts.stats.peakBuffered = Math.max(opts.stats.peakBuffered,
           source.bufferedCount + (cameraSource?.bufferedCount ?? 0));
       }
-      composite(ctx, frame, cameraFrame, fs, width, height);
+      composite(ctx, frame, cameraFrame, fs, width, height, session.wallpaper ?? null);
       yield { i, k, tNs, ctx };
     }
   } finally {
@@ -368,7 +369,7 @@ export async function exportSession(
       firstTimestampBehavior: "cross-track-offset",
     });
     encoder = new VideoEncoder({
-      output: (chunk, meta) => muxer!.addVideoChunk(chunk, meta),
+      output: (chunk, meta) => muxVideoChunk(muxer!, chunk, meta, rate),
       error: (e) => { encoderError = e instanceof Error ? e : new Error(String(e)); },
     });
     // High @ L5.2 (PHASE-0 §8). NOT L4.0: its 2 Mpixel coded-area cap rejects 4K.

@@ -8,6 +8,7 @@ import { composite } from "@transform/compositor";
 import type { Project, Session } from "@transform/types";
 import { parseProject } from "@transform/trim";
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
+import { muxVideoChunk } from "@transform/mux-video-chunk";
 import { withTimeout } from "@transform/timeout";
 import { applyDecoderPreference } from "./decoder.js";
 import { decoderPreference } from "@transform/decoder-preference";
@@ -49,7 +50,7 @@ async function runPreview(
   mark(`preview: hashing ${tsNs.length} sampled t (getImageData is synchronous)`);
   for (const t of tsNs) {
     const fs = render(project, session, t);
-    composite(ctx, fs.frameIndex === null ? null : bitmaps[fs.frameIndex]!, null, fs, width, height);
+    composite(ctx, fs.frameIndex === null ? null : bitmaps[fs.frameIndex]!, null, fs, width, height, null);
     hashes.push(await sha256(ctx.getImageData(0, 0, width, height).data));
     if (hashes.length % 50 === 0) mark(`preview: ${hashes.length}/${tsNs.length} hashed`);
   }
@@ -74,7 +75,7 @@ async function runExport(
     fastStart: "in-memory",
   });
   const encoder = new VideoEncoder({
-    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    output: (chunk, meta) => muxVideoChunk(muxer, chunk, meta, 60),
     error: (e) => { throw e; },
   });
   // THE top suspect for Mode B: configure() is synchronous, and CI reports its
@@ -89,7 +90,7 @@ async function runExport(
   for (let k = 0; k < EXPORT_FRAMES; k++) {
     const t = exportTimeNs(k);
     const fs = render(project, session, t);
-    composite(ctx, fs.frameIndex === null ? null : bitmaps[fs.frameIndex]!, null, fs, width, height);
+    composite(ctx, fs.frameIndex === null ? null : bitmaps[fs.frameIndex]!, null, fs, width, height, null);
     hashes.push(await sha256(ctx.getImageData(0, 0, width, height).data));
     const vf = new VideoFrame(ctx.canvas, { timestamp: Math.round(t / 1000) });
     encoder.encode(vf, { keyFrame: k % 60 === 0 });
